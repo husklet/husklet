@@ -223,30 +223,46 @@ impl Filesystem {
             .map(|overlay| Arc::clone(&overlay.upper_ownership));
         let extracted = archive.entries()?.try_for_each(|item| {
             let mut entry = item?;
-            let relative = Path::entry(&entry.path()?)?.as_path().to_owned();
-            let owner = if copy_uid_gid {
-                Some(hl_images::snapshot::Ownership {
-                    uid: u32::try_from(entry.header().uid()?)
-                        .map_err(|_| Error::InvalidSpec("archive uid exceeds u32".into()))?,
-                    gid: u32::try_from(entry.header().gid()?)
-                        .map_err(|_| Error::InvalidSpec("archive gid exceeds u32".into()))?,
-                })
-            } else {
-                Some(hl_images::snapshot::Ownership { uid: 0, gid: 0 })
-            };
-            Self::extract_entry(&root, &mut entry)?;
-            if let (Some(base), Some(ownership), Some(owner)) = (&destination_relative, ownership.as_ref(), owner) {
-                ownership
-                    .lock()
-                    .map_err(|_| Error::Corrupt("rootfs ownership lock is poisoned".into()))?
-                    .set(base.join(relative), owner)?;
-            }
-            Ok(())
+            Self::extract_owned_entry(
+                &root,
+                destination_relative.as_deref(),
+                ownership.as_deref(),
+                &mut entry,
+                copy_uid_gid,
+            )
         });
         if let Some(generation) = &self.generation {
             generation.bump()?;
         }
         extracted
+    }
+
+    fn extract_owned_entry<R: Read>(
+        root: &FsPath,
+        destination_relative: Option<&FsPath>,
+        ownership: Option<&Mutex<hl_images::snapshot::Ownerships>>,
+        entry: &mut tar::Entry<'_, R>,
+        copy_uid_gid: bool,
+    ) -> Result<()> {
+        let relative = Path::entry(&entry.path()?)?.as_path().to_owned();
+        let owner = if copy_uid_gid {
+            hl_images::snapshot::Ownership {
+                uid: u32::try_from(entry.header().uid()?)
+                    .map_err(|_| Error::InvalidSpec("archive uid exceeds u32".into()))?,
+                gid: u32::try_from(entry.header().gid()?)
+                    .map_err(|_| Error::InvalidSpec("archive gid exceeds u32".into()))?,
+            }
+        } else {
+            hl_images::snapshot::Ownership { uid: 0, gid: 0 }
+        };
+        Self::extract_entry(root, entry)?;
+        if let (Some(base), Some(ownership)) = (destination_relative, ownership) {
+            ownership
+                .lock()
+                .map_err(|_| Error::Corrupt("rootfs ownership lock is poisoned".into()))?
+                .set(base.join(relative), owner)?;
+        }
+        Ok(())
     }
 
     fn extract_entry<R: Read>(root: &FsPath, entry: &mut tar::Entry<'_, R>) -> Result<()> {
