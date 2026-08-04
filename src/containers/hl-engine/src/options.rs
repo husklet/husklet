@@ -231,9 +231,9 @@ mod tests {
 
     #[test]
     fn registry_matches_retained() {
-        assert_eq!(DEFINITIONS.len(), 39);
+        assert_eq!(DEFINITIONS.len(), 40);
         assert_eq!(DEFINITIONS[0].name, "HL_CHECKPOINT");
-        assert_eq!(DEFINITIONS[38].ownership, Ownership::DebugOnly);
+        assert_eq!(DEFINITIONS[39].ownership, Ownership::DebugOnly);
     }
 
     #[test]
