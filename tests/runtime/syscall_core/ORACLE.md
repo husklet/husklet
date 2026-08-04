@@ -23,6 +23,9 @@ its family dispatch into:
 - `time.c`: dynamic-clock lookup and `svc_time`;
 - `mem.c`: `guest_bad_ptr`, `svc_vm_iov_copy`, and `svc_mem`;
 - `net.c`: socket-address/message bounce handling and `svc_net`;
+- `container/netns.c`: `cmsg_l2m`, `cmsg_m2l`,
+  `cmsg_tmpfds_close`, `cmsg_inflight_hold`, `cmsg_inflight_finish`, and
+  `cmsg_import_ofd_trailer` for SCM_RIGHTS framing and lifetime;
 - `proc.c`: `svc_proc`.
 
 The call boundary in `src/core/dispatch.c::run_guest` and architecture syscall
@@ -37,6 +40,14 @@ the behavior exercised here.
   cursor/status state. Duplication and fork retain the OFD, while last close
   releases locks and watches. Descriptor generation prevents a reused number
   from reviving a stale epoll registration.
+- SCM_RIGHTS sends retain the transferred open-file description independently
+  of the sender's descriptor. A successful receive installs one newly owned
+  descriptor atomically; truncation or conversion failure closes temporary
+  descriptors instead of leaking them. The canonical send-then-close sequence
+  therefore keeps the file alive and preserves its shared offset until the
+  receiver closes its installed descriptor. On macOS, explicit in-flight
+  holds bridge XNU's different Unix-rights garbage-collection behavior; Linux
+  uses the kernel's native retention.
 - Guest-copy projections are bounded and pinned for the operation. They preserve
   an accessible prefix, so a later invalid page yields a partial result instead
   of discarding completed I/O. Table locks are not held across host I/O.
@@ -91,6 +102,7 @@ execute it; this status is preserved rather than converted into a false pass.
 | epoll, poll/select, signalfd and wake ordering | `hl-event`; `hl-runtime` | implemented |
 | pipe packet/size and wake semantics | `hl-ipc` | implemented |
 | abstract sockets and message flags | `hl-network`; engine `execution/network` | implemented |
+| SCM_RIGHTS record queue, OFD retention and atomic descriptor installation | `hl-network/src/ancillary`, `hl-descriptor/src/transfer.rs`, `hl-runtime/src/network/message.rs`, engine native message adapter | implemented and directly exercised by `scmrights` |
 | signals, queues and process/task identity | `hl-task`; engine `execution/task` | implemented |
 | clocks and deadlines | `hl-time`; engine `execution/task` | implemented |
 | mappings and protection | `hl-memory`; engine virtual-memory adapter | divergent on the retained macOS `mprotect` acceptance row |

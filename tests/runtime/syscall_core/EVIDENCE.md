@@ -2,7 +2,9 @@
 
 ## Boundary
 
-The retained `core/syscall` inventory contributes 42 cases and 83 ISA rows.
+This folder's retained `core/syscall` subset contributes 43 cases and 85 ISA
+rows; the complete retained manifest has 58 cases and 115 rows, with the other
+registrations already owned by focused runtime categories.
 Every case targets AArch64 and x86-64 except `clockabstime`, which is AArch64
 only. IDs, target selection, exit status, timeout, compiler flags, and empty
 argument/environment contracts are preserved in `test.yaml`.
@@ -28,23 +30,29 @@ HL_COMPAT_JOBS=18 target/debug/testing oracle syscall_core --check --jobs 18 \
 
 Result:
 
-- 81 active rows compiled with the retained `-static-pie -O2 -pthread -lm`
+- 83 active rows compiled with the retained `-static-pie -O2 -pthread -lm`
   contract (`fd-shadow-contention` intentionally omits `-lm`);
-- all 81 active rows passed QEMU with byte-exact stdout and exit status 0;
+- all 83 active rows passed QEMU with byte-exact stdout and exit status 0;
 - two `mprotect` rows were skipped with the manifest's explicit unsupported
   status;
 - both `mprotect` sources were then compiled manually with the same per-ISA
   flags and passed their QEMU golden output, proving the oracle fixture itself
   is sound while preserving the separate macOS product exclusion;
-- all 83 expected executable artifacts were produced under the generated target
+- all 85 expected executable artifacts were produced under the generated target
   directory.
+
+The final two active rows are retained case `scmrights`. Its child sends an
+open file description over an AF_UNIX socket and closes its original
+descriptor before the parent receives it. Both guest ISAs returned
+`scmrights got_fd=1 data=fd-passed-ok`, proving the native oracle retained the
+descriptor and its file offset across the handoff.
 
 Compiler warnings originate in the retained byte-exact C sources and were not
 “fixed” by changing migration evidence.
 
 ## Integrity and repository scope
 
-- 42 C files and 42 golden files were compared against their mapped retained
+- 43 C files and 43 golden files were compared against their mapped retained
   originals; every SHA-256 digest matched.
 - The category contains only sources, goldens, `test.yaml`, and these audit
   documents. Generated binaries and result tables remain under `target/`.
@@ -53,4 +61,4 @@ Compiler warnings originate in the retained byte-exact C sources and were not
 - The retained `../engine` tree was not modified.
 
 This proves migration and Linux-QEMU oracle fidelity. It does not yet prove all
-83 rows through the Rust product engine; that is the next acceptance boundary.
+85 rows through the Rust product engine; that is the next acceptance boundary.
