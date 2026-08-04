@@ -5,22 +5,26 @@ pub(in super::super) struct WaitQuery {
     condition: Option<String>,
 }
 
+impl WaitQuery {
+    fn condition(&self) -> ApiResult<hl_container::WaitCondition> {
+        match self.condition.as_deref() {
+            None | Some("" | "not-running") => Ok(hl_container::WaitCondition::NotRunning),
+            Some("next-exit") => Ok(hl_container::WaitCondition::NextExit),
+            Some("removed") => Ok(hl_container::WaitCondition::Removed),
+            Some(value) => Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                format!("unsupported wait condition {value:?}"),
+            )),
+        }
+    }
+}
+
 pub(in super::super) async fn wait(
     State(state): State<DockerState>,
     Path(id): Path<String>,
     Query(query): Query<WaitQuery>,
 ) -> ApiResult<Json<Wait>> {
-    let condition = match query.condition.as_deref().unwrap_or("not-running") {
-        "not-running" => hl_container::WaitCondition::NotRunning,
-        "next-exit" => hl_container::WaitCondition::NextExit,
-        "removed" => hl_container::WaitCondition::Removed,
-        value => {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("unsupported wait condition {value:?}"),
-            ));
-        }
-    };
+    let condition = query.condition()?;
     let result = state
         .containers
         .wait_for(&id, condition)
@@ -62,4 +66,48 @@ pub(in super::super) async fn remove(
     };
     result.map_err(ApiError::container)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait_condition_defaults_when_omitted_or_empty() {
+        for condition in [None, Some(String::new()), Some("not-running".into())] {
+            assert_eq!(
+                WaitQuery { condition }.condition().unwrap(),
+                hl_container::WaitCondition::NotRunning
+            );
+        }
+    }
+
+    #[test]
+    fn wait_condition_accepts_documented_values_and_rejects_unknown_values() {
+        assert_eq!(
+            WaitQuery {
+                condition: Some("next-exit".into())
+            }
+            .condition()
+            .unwrap(),
+            hl_container::WaitCondition::NextExit
+        );
+        assert_eq!(
+            WaitQuery {
+                condition: Some("removed".into())
+            }
+            .condition()
+            .unwrap(),
+            hl_container::WaitCondition::Removed
+        );
+        assert_eq!(
+            WaitQuery {
+                condition: Some("invalid".into())
+            }
+            .condition()
+            .unwrap_err()
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
 }
