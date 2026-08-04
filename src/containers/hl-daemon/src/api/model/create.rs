@@ -220,8 +220,8 @@ mod stop_timeout_tests {
             "DnsOptions": ["ndots:2"]
         }))
         .unwrap();
-        assert_eq!(host.dns[0], "192.0.2.53".parse().unwrap());
-        assert_eq!(host.dns[1], "2001:db8::53".parse().unwrap());
+        assert_eq!(host.dns[0], "192.0.2.53".parse::<std::net::IpAddr>().unwrap());
+        assert_eq!(host.dns[1], "2001:db8::53".parse::<std::net::IpAddr>().unwrap());
         assert_eq!(host.dns_search, ["service.test"]);
         assert_eq!(host.dns_options, ["ndots:2"]);
 

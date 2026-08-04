@@ -70,14 +70,20 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     assert_eq!(durable.spec.publish[0].port.guest, 8080);
     assert_eq!(
         durable.spec.resolver.nameservers(),
-        ["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()]
+        [
+            "192.0.2.53".parse::<std::net::IpAddr>().unwrap(),
+            "2001:db8::53".parse::<std::net::IpAddr>().unwrap(),
+        ]
     );
     assert_eq!(durable.spec.resolver.search(), ["service.test"]);
     assert_eq!(durable.spec.resolver.options(), ["ndots:2", "timeout:1"]);
     let inspected = client.containers().inspect(&created.id).await.unwrap();
     assert_eq!(
         inspected.host_config.dns,
-        ["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()]
+        [
+            "192.0.2.53".parse::<std::net::IpAddr>().unwrap(),
+            "2001:db8::53".parse::<std::net::IpAddr>().unwrap(),
+        ]
     );
     assert_eq!(inspected.host_config.dns_search, ["service.test"]);
     assert_eq!(inspected.host_config.dns_options, ["ndots:2", "timeout:1"]);

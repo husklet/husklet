@@ -325,7 +325,10 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
     assert_eq!(settings.hosts.get("database"), Some(&"203.0.113.9".parse().unwrap()));
     assert_eq!(
         settings.resolver.nameservers(),
-        ["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()]
+        [
+            "192.0.2.53".parse::<std::net::IpAddr>().unwrap(),
+            "2001:db8::53".parse::<std::net::IpAddr>().unwrap(),
+        ]
     );
     assert_eq!(settings.resolver.search(), ["service.test"]);
     assert_eq!(settings.resolver.options(), ["ndots:2", "timeout:1"]);

@@ -108,13 +108,13 @@ impl Networks {
         Ok(())
     }
 
-    /// Lists every durable network in name order.
+    /// Lists every durable network in name and ID order.
     ///
     /// # Errors
     /// Returns persistence or record-decoding failures.
     pub async fn list(&self) -> Result<Vec<Network>> {
         let mut values = self.storage.list().await?;
-        values.sort_by(|left, right| left.name.cmp(&right.name));
+        values.sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.id.cmp(&right.id)));
         Ok(values)
     }
 
@@ -450,19 +450,29 @@ impl Networks {
     }
 
     async fn resolve_network(&self, reference: &str) -> Result<Network> {
-        let matches = self
-            .storage
-            .list()
-            .await?
-            .into_iter()
-            .filter(|network| {
-                network.name == reference
-                    || network.id.as_str() == reference
-                    || network.id.as_str().starts_with(reference)
-            })
+        let networks = self.storage.list().await?;
+        if let Some(network) = networks.iter().find(|network| network.id.as_str() == reference) {
+            return Ok(network.clone());
+        }
+        let names = networks
+            .iter()
+            .filter(|network| network.name == reference)
             .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [network] => Ok(network.clone()),
+        match names.as_slice() {
+            [network] => return Ok((*network).clone()),
+            [] => {}
+            _ => {
+                return Err(Error::InvalidNetwork(format!(
+                    "network reference {reference:?} is ambiguous"
+                )));
+            }
+        }
+        let prefixes = networks
+            .iter()
+            .filter(|network| network.id.as_str().starts_with(reference))
+            .collect::<Vec<_>>();
+        match prefixes.as_slice() {
+            [network] => Ok((*network).clone()),
             [] => Err(Error::NetworkNotFound(reference.into())),
             _ => Err(Error::InvalidNetwork(format!(
                 "network reference {reference:?} is ambiguous"
