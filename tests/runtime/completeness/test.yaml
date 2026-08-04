@@ -1,0 +1,1670 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+build:
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags: []
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
+cases:
+  - id: runtime/completeness/arm64-crypto-aes
+    targets: [arm64]
+    build: { source: aarch64/crypto_aes.c, output: arm64-crypto-aes, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-crypto-aes }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/crypto_aes.out }
+  - id: runtime/completeness/arm64-crypto-sha1
+    targets: [arm64]
+    build: { source: aarch64/crypto_sha1.c, output: arm64-crypto-sha1, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-crypto-sha1 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/crypto_sha1.out }
+  - id: runtime/completeness/arm64-crypto-sha256
+    targets: [arm64]
+    build: { source: aarch64/crypto_sha256.c, output: arm64-crypto-sha256, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-crypto-sha256 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/crypto_sha256.out }
+  - id: runtime/completeness/arm64-crc32
+    targets: [arm64]
+    build: { source: aarch64/crc32.c, output: arm64-crc32, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-crc32 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/crc32.out }
+  - id: runtime/completeness/arm64-lse
+    targets: [arm64]
+    build: { source: aarch64/lse.c, output: arm64-lse, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-lse }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/lse.out }
+  - id: runtime/completeness/arm64-fp16
+    targets: [arm64]
+    build: { source: aarch64/fp16.c, output: arm64-fp16, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-fp16 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/fp16.out }
+  - id: runtime/completeness/arm64-dotprod
+    targets: [arm64]
+    build: { source: aarch64/dotprod.c, output: arm64-dotprod, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-dotprod }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/dotprod.out }
+  - id: runtime/completeness/arm64-i8mm
+    targets: [arm64]
+    build: { source: aarch64/i8mm.c, output: arm64-i8mm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-i8mm }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/i8mm.out }
+  - id: runtime/completeness/arm64-bf16
+    targets: [arm64]
+    build: { source: aarch64/bf16.c, output: arm64-bf16, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-bf16 }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/bf16.out }
+  - id: runtime/completeness/arm64-int
+    targets: [arm64]
+    build: { source: aarch64/neon_int.c, output: arm64-int, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-int }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_int.out }
+  - id: runtime/completeness/arm64-fp
+    targets: [arm64]
+    build: { source: aarch64/neon_fp.c, output: arm64-fp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-fp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_fp.out }
+  - id: runtime/completeness/arm64-reduce
+    targets: [arm64]
+    build: { source: aarch64/neon_reduce.c, output: arm64-reduce, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-reduce }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_reduce.out }
+  - id: runtime/completeness/arm64-tbl
+    targets: [arm64]
+    build: { source: aarch64/neon_tbl.c, output: arm64-tbl, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-tbl }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_tbl.out }
+  - id: runtime/completeness/arm64-shift
+    targets: [arm64]
+    build: { source: aarch64/neon_shift.c, output: arm64-shift, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-shift }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_shift.out }
+  - id: runtime/completeness/arm64-widen
+    targets: [arm64]
+    build: { source: aarch64/neon_widen.c, output: arm64-widen, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-widen }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_widen.out }
+  - id: runtime/completeness/arm64-perm
+    targets: [arm64]
+    build: { source: aarch64/neon_perm.c, output: arm64-perm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-perm }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_perm.out }
+  - id: runtime/completeness/arm64-cmp
+    targets: [arm64]
+    build: { source: aarch64/neon_cmp.c, output: arm64-cmp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-cmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_cmp.out }
+  - id: runtime/completeness/arm64-abs
+    targets: [arm64]
+    build: { source: aarch64/neon_abs.c, output: arm64-abs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-abs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_abs.out }
+  - id: runtime/completeness/arm64-minmax
+    targets: [arm64]
+    build: { source: aarch64/neon_minmax.c, output: arm64-minmax, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-minmax }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_minmax.out }
+  - id: runtime/completeness/arm64-cvt
+    targets: [arm64]
+    build: { source: aarch64/neon_cvt.c, output: arm64-cvt, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-cvt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_cvt.out }
+  - id: runtime/completeness/arm64-bitfield
+    targets: [arm64]
+    build: { source: aarch64/bitfield.c, output: arm64-bitfield, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-bitfield }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/bitfield.out }
+  - id: runtime/completeness/arm64-ldpstp
+    targets: [arm64]
+    build: { source: aarch64/ldpstp.c, output: arm64-ldpstp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-ldpstp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/ldpstp.out }
+  - id: runtime/completeness/arm64-indexed
+    targets: [arm64]
+    build: { source: aarch64/neon_indexed.c, output: arm64-indexed, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-indexed }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_indexed.out }
+  - id: runtime/completeness/arm64-dc-zva-model
+    targets: [arm64]
+    build: { source: aarch64/dc_zva.c, output: arm64-dc-zva-model, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-dc-zva-model }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/dc_zva.out }
+  - id: runtime/completeness/amd64-avx
+    targets: [amd64]
+    build: { source: x86_64/avx.c, output: amd64-avx, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-avx }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/avx.out }
+  - id: runtime/completeness/amd64-avx2
+    targets: [amd64]
+    build: { source: x86_64/avx2.c, output: amd64-avx2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-avx2 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/avx2.out }
+  - id: runtime/completeness/amd64-fma
+    targets: [amd64]
+    build: { source: x86_64/fma.c, output: amd64-fma, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-fma }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/fma.out }
+  - id: runtime/completeness/amd64-fma-nan
+    targets: [amd64]
+    build: { source: x86_64/fma_nan.c, output: amd64-fma-nan, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-fma-nan }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/fma_nan.out }
+  - id: runtime/completeness/amd64-f16c
+    targets: [amd64]
+    build: { source: x86_64/f16c.c, output: amd64-f16c, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-f16c }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/f16c.out }
+  - id: runtime/completeness/amd64-vmov-scalar-merge
+    targets: [amd64]
+    build: { source: x86_64/scalar_merge.c, output: amd64-vmov-scalar-merge, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-vmov-scalar-merge }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/scalar_merge.out }
+  - id: runtime/completeness/amd64-avx-sigreturn
+    targets: [amd64]
+    build: { source: x86_64/avx_sigreturn.c, output: amd64-avx-sigreturn, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-avx-sigreturn }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/avx_sigreturn.out }
+  - id: runtime/completeness/amd64-bmi1
+    targets: [amd64]
+    build: { source: x86_64/bmi1.c, output: amd64-bmi1, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-bmi1 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/bmi1.out }
+  - id: runtime/completeness/amd64-bmi2
+    targets: [amd64]
+    build: { source: x86_64/bmi2.c, output: amd64-bmi2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-bmi2 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/bmi2.out }
+  - id: runtime/completeness/amd64-popcnt
+    targets: [amd64]
+    build: { source: x86_64/popcnt.c, output: amd64-popcnt, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-popcnt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/popcnt.out }
+  - id: runtime/completeness/amd64-lzcnt
+    targets: [amd64]
+    build: { source: x86_64/lzcnt.c, output: amd64-lzcnt, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-lzcnt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/lzcnt.out }
+  - id: runtime/completeness/amd64-adx
+    targets: [amd64]
+    build: { source: x86_64/adx.c, output: amd64-adx, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-adx }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/adx.out }
+  - id: runtime/completeness/amd64-bittest
+    targets: [amd64]
+    build: { source: x86_64/bittest.c, output: amd64-bittest, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-bittest }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/bittest.out }
+  - id: runtime/completeness/amd64-shld
+    targets: [amd64]
+    build: { source: x86_64/shld.c, output: amd64-shld, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-shld }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/shld.out }
+  - id: runtime/completeness/amd64-aesni
+    targets: [amd64]
+    build: { source: x86_64/aesni.c, output: amd64-aesni, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-aesni }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/aesni.out }
+  - id: runtime/completeness/amd64-pclmul
+    targets: [amd64]
+    build: { source: x86_64/pclmul.c, output: amd64-pclmul, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-pclmul }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/pclmul.out }
+  - id: runtime/completeness/amd64-sha
+    targets: [amd64]
+    build: { source: x86_64/sha.c, output: amd64-sha, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sha }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sha.out }
+  - id: runtime/completeness/amd64-sha-kat
+    targets: [amd64]
+    build: { source: x86_64/sha_kat.c, output: amd64-sha-kat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sha-kat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sha_kat.out }
+  - id: runtime/completeness/amd64-crc32
+    targets: [amd64]
+    build: { source: x86_64/crc32.c, output: amd64-crc32, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-crc32 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/crc32.out }
+  - id: runtime/completeness/amd64-sse4x
+    targets: [amd64]
+    build: { source: x86_64/sse4x.c, output: amd64-sse4x, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sse4x }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sse4x.out }
+  - id: runtime/completeness/amd64-movbe
+    targets: [amd64]
+    build: { source: x86_64/movbe.c, output: amd64-movbe, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-movbe }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/movbe.out }
+  - id: runtime/completeness/amd64-trap-signals
+    targets: [amd64]
+    build: { source: x86_64/trap_signals.c, output: amd64-trap-signals, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-trap-signals }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/trap_signals.out }
+  - id: runtime/completeness/amd64-mmx-width
+    targets: [amd64]
+    build: { source: x86_64/mmx_width.c, output: amd64-mmx-width, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-mmx-width }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/mmx_width.out }
+  - id: runtime/completeness/amd64-cmpxchg16b
+    targets: [amd64]
+    build: { source: x86_64/cmpxchg16b.c, output: amd64-cmpxchg16b, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-cmpxchg16b }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/cmpxchg16b.out }
+  - id: runtime/completeness/amd64-rdtsc
+    targets: [amd64]
+    build: { source: x86_64/rdtsc.c, output: amd64-rdtsc, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-rdtsc }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/rdtsc.out }
+  - id: runtime/completeness/amd64-x87
+    targets: [amd64]
+    build: { source: x86_64/x87.c, output: amd64-x87, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/x87.out }
+  - id: runtime/completeness/amd64-x87-control
+    targets: [amd64]
+    build: { source: x86_64/x87_control.c, output: amd64-x87-control, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87-control }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/x87_control.out }
+  - id: runtime/completeness/amd64-repstring
+    targets: [amd64]
+    build: { source: x86_64/repstring.c, output: amd64-repstring, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-repstring }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/repstring.out }
+  - id: runtime/completeness/amd64-movnt
+    targets: [amd64]
+    build: { source: x86_64/movnt.c, output: amd64-movnt, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-movnt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/movnt.out }
+  - id: runtime/completeness/amd64-sbb-acc-imm
+    targets: [amd64]
+    build: { source: x86_64/sbb.c, output: amd64-sbb-acc-imm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sbb-acc-imm }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sbb.out }
+  - id: runtime/completeness/amd64-div
+    targets: [amd64]
+    build: { source: x86_64/div.c, output: amd64-div, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-div }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/div.out }
+  - id: runtime/completeness/amd64-memshift-cl
+    targets: [amd64]
+    build: { source: x86_64/memshift.c, output: amd64-memshift-cl, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-memshift-cl }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/memshift.out }
+  - id: runtime/completeness/amd64-movntps
+    targets: [amd64]
+    build: { source: x86_64/movntps.c, output: amd64-movntps, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-movntps }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/movntps.out }
+  - id: runtime/completeness/amd64-movseg
+    targets: [amd64]
+    build: { source: x86_64/movseg.c, output: amd64-movseg, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-movseg }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/movseg.out }
+  - id: runtime/completeness/amd64-rcl
+    targets: [amd64]
+    build: { source: x86_64/rcl.c, output: amd64-rcl, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-rcl }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/rcl.out }
+  - id: runtime/completeness/amd64-pfaf
+    targets: [amd64]
+    build: { source: x86_64/pfaf.c, output: amd64-pfaf, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-pfaf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/pfaf.out }
+  - id: runtime/completeness/amd64-flags
+    targets: [amd64]
+    build: { source: x86_64/flags.c, output: amd64-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/flags.out }
+  - id: runtime/completeness/amd64-x87b
+    targets: [amd64]
+    build: { source: x86_64/x87b.c, output: amd64-x87b, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87b }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/x87b.out }
+  - id: runtime/completeness/amd64-fxsave-mxcsr
+    targets: [amd64]
+    build: { source: x86_64/fxsave_mxcsr.c, output: amd64-fxsave-mxcsr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-fxsave-mxcsr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/fxsave_mxcsr.out }
+  - id: runtime/completeness/amd64-ntload
+    targets: [amd64]
+    build: { source: x86_64/ntload.c, output: amd64-ntload, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-ntload }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/ntload.out }
+  - id: runtime/completeness/amd64-vdsoclk
+    targets: [amd64]
+    build: { source: x86_64/vdsoclk.c, output: amd64-vdsoclk, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-vdsoclk }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/vdsoclk.out }
+  - id: runtime/completeness/amd64-xflags
+    targets: [amd64]
+    build: { source: x86_64/xflags.c, output: amd64-xflags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-xflags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/xflags.out }
+  - id: runtime/completeness/amd64-parity-edge
+    targets: [amd64]
+    build: { source: x86_64/parity_edge.c, output: amd64-parity-edge, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-parity-edge }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/parity_edge.out }
+  - id: runtime/completeness/amd64-bycl
+    targets: [amd64]
+    build: { source: x86_64/bycl.c, output: amd64-bycl, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-bycl }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/bycl.out }
+  - id: runtime/completeness/amd64-xflags-sig
+    targets: [amd64]
+    build: { source: x86_64/xflags_sig.c, output: amd64-xflags-sig, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-xflags-sig }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/xflags_sig.out }
+  - id: runtime/completeness/amd64-shflag
+    targets: [amd64]
+    build: { source: x86_64/shflag.c, output: amd64-shflag, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-shflag }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/shflag.out }
+  - id: runtime/completeness/amd64-sse2
+    targets: [amd64]
+    build: { source: x86_64/sse2.c, output: amd64-sse2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sse2 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sse2.out }
+  - id: runtime/completeness/amd64-sse3
+    targets: [amd64]
+    build: { source: x86_64/sse3.c, output: amd64-sse3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sse3 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sse3.out }
+  - id: runtime/completeness/amd64-ssse3
+    targets: [amd64]
+    build: { source: x86_64/ssse3.c, output: amd64-ssse3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-ssse3 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/ssse3.out }
+  - id: runtime/completeness/amd64-shuffle
+    targets: [amd64]
+    build: { source: x86_64/shuffle.c, output: amd64-shuffle, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-shuffle }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/shuffle.out }
+  - id: runtime/completeness/amd64-sse41
+    targets: [amd64]
+    build: { source: x86_64/sse41.c, output: amd64-sse41, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sse41 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sse41.out }
+  - id: runtime/completeness/amd64-sse42
+    targets: [amd64]
+    build: { source: x86_64/sse42.c, output: amd64-sse42, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sse42 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sse42.out }
+  - id: runtime/completeness/getresuid
+    targets: [arm64, amd64]
+    build: { source: syscall/getresuid.c, output: getresuid, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getresuid }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getresuid.out }
+  - id: runtime/completeness/getresuid-null
+    targets: [arm64, amd64]
+    build: { source: syscall/getresuid_null.c, output: getresuid-null, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getresuid-null }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getresuid-null.out }
+  - id: runtime/completeness/setfsuid
+    targets: [arm64, amd64]
+    build: { source: syscall/setfsuid.c, output: setfsuid, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/setfsuid }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/setfsuid.out }
+  - id: runtime/completeness/getgroups
+    targets: [arm64, amd64]
+    build: { source: syscall/getgroups.c, output: getgroups, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getgroups }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getgroups.out }
+  - id: runtime/completeness/openat2
+    targets: [arm64, amd64]
+    build: { source: syscall/openat2.c, output: openat2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/openat2 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/openat2.out }
+  - id: runtime/completeness/statx
+    targets: [arm64, amd64]
+    build: { source: syscall/statx.c, output: statx, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/statx }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/statx.out }
+  - id: runtime/completeness/faccessat2
+    targets: [arm64, amd64]
+    build: { source: syscall/faccessat2.c, output: faccessat2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/faccessat2 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/faccessat2.out }
+  - id: runtime/completeness/readlinkat
+    targets: [arm64, amd64]
+    build: { source: syscall/readlinkat.c, output: readlinkat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/readlinkat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/readlinkat.out }
+  - id: runtime/completeness/fchmodat
+    targets: [arm64, amd64]
+    build: { source: syscall/fchmodat.c, output: fchmodat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/fchmodat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/fchmodat.out }
+  - id: runtime/completeness/utimensat
+    targets: [arm64, amd64]
+    build: { source: syscall/utimensat.c, output: utimensat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/utimensat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/utimensat.out }
+  - id: runtime/completeness/copy_file_range
+    targets: [arm64, amd64]
+    build: { source: syscall/copy_range.c, output: copy_file_range, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/copy_file_range }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/copy_range.out }
+  - id: runtime/completeness/fallocate
+    targets: [arm64, amd64]
+    build: { source: syscall/fallocate.c, output: fallocate, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/fallocate }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/fallocate.out }
+  - id: runtime/completeness/name_to_handle_at
+    targets: [arm64, amd64]
+    build: { source: syscall/file_handle.c, output: name_to_handle_at, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/name_to_handle_at }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/file_handle.out }
+  - id: runtime/completeness/truncate
+    targets: [arm64, amd64]
+    build: { source: syscall/truncate.c, output: truncate, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/truncate }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/truncate.out }
+  - id: runtime/completeness/fsops
+    targets: [arm64, amd64]
+    build: { source: syscall/fsops.c, output: fsops, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/fsops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/fsops.out }
+  - id: runtime/completeness/s3db-durability-default
+    targets: [arm64, amd64]
+    build: { source: syscall/durability.c, output: s3db-durability-default, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/s3db-durability-default }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/s3db-durability-default.out }
+  - id: runtime/completeness/fstatfs
+    targets: [arm64, amd64]
+    build: { source: syscall/fstatfs.c, output: fstatfs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/fstatfs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/fstatfs.out }
+  - id: runtime/completeness/sync-family
+    targets: [arm64, amd64]
+    build: { source: syscall/sync_family.c, output: sync-family, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/sync-family }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/sync-family.out }
+  - id: runtime/completeness/ioctl-fio
+    targets: [arm64, amd64]
+    build: { source: syscall/ioctl_fio.c, output: ioctl-fio, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/ioctl-fio }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/ioctl-fio.out }
+  - id: runtime/completeness/flock
+    targets: [arm64, amd64]
+    build: { source: syscall/flock.c, output: flock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/flock }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/flock.out }
+  - id: runtime/completeness/fadvise
+    targets: [arm64, amd64]
+    build: { source: syscall/fadvise.c, output: fadvise, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/fadvise }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/fadvise.out }
+  - id: runtime/completeness/mremap
+    targets: [arm64, amd64]
+    build: { source: syscall/mremap.c, output: mremap, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/mremap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/mremap.out }
+  - id: runtime/completeness/mlock
+    targets: [arm64, amd64]
+    build: { source: syscall/mlock.c, output: mlock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/mlock }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/mlock.out }
+  - id: runtime/completeness/madvise
+    targets: [arm64, amd64]
+    build: { source: syscall/madvise2.c, output: madvise, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/madvise }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/madvise.out }
+  - id: runtime/completeness/mincore
+    targets: [arm64, amd64]
+    build: { source: syscall/mincore.c, output: mincore, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/mincore }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/mincore.out }
+  - id: runtime/completeness/membarrier
+    targets: [arm64, amd64]
+    build: { source: syscall/membarrier.c, output: membarrier, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/membarrier }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/membarrier.out }
+  - id: runtime/completeness/process-vm
+    targets: [arm64, amd64]
+    build: { source: syscall/process_vm.c, output: process-vm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/process-vm }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/process-vm.out }
+  - id: runtime/completeness/getrandom-flags
+    targets: [arm64, amd64]
+    build: { source: syscall/getrandom_flags.c, output: getrandom-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getrandom-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getrandom-flags.out }
+  - id: runtime/completeness/getentropy
+    targets: [arm64, amd64]
+    build: { source: syscall/getentropy.c, output: getentropy, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getentropy }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getentropy.out }
+  - id: runtime/completeness/auxval
+    targets: [arm64, amd64]
+    build: { source: syscall/auxval.c, output: auxval, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/auxval }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/auxval.out }
+  - id: runtime/completeness/cpu_discovery
+    targets: [arm64]
+    build: { source: syscall/cpu_discovery.c, output: cpu_discovery, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/completeness/cpu_discovery }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/cpu_features.out }
+  - id: runtime/completeness/pagesize
+    targets: [arm64, amd64]
+    build: { source: syscall/pagesize.c, output: pagesize, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pagesize }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pagesize.out }
+  - id: runtime/completeness/sysconf-nproc
+    targets: [arm64, amd64]
+    build: { source: syscall/sysconf_nproc.c, output: sysconf-nproc, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/sysconf-nproc }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/sysconf-nproc.out }
+  - id: runtime/completeness/close-range
+    targets: [arm64, amd64]
+    build: { source: syscall/close_range.c, output: close-range, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/close-range }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/close-range.out }
+  - id: runtime/completeness/close-range-flags
+    targets: [arm64, amd64]
+    build: { source: syscall/close_flags.c, output: close-range-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/close-range-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/close_flags.out }
+  - id: runtime/completeness/passcred-badfd
+    targets: [arm64, amd64]
+    build: { source: syscall/passcred_badfd.c, output: passcred-badfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/passcred-badfd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/passcred-badfd.out }
+  - id: runtime/completeness/seccomp-filter
+    targets: [arm64]
+    build: { source: syscall/seccomp_filter.c, output: seccomp-filter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/seccomp-filter }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/seccomp_filter.out }
+  - id: runtime/completeness/clone3
+    targets: [arm64, amd64]
+    build: { source: syscall/clone3.c, output: clone3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/clone3 }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/clone3.out }
+  - id: runtime/completeness/getrusage
+    targets: [arm64, amd64]
+    build: { source: syscall/getrusage.c, output: getrusage, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getrusage }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getrusage.out }
+  - id: runtime/completeness/prlimit64
+    targets: [arm64, amd64]
+    build: { source: syscall/prlimit64.c, output: prlimit64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/prlimit64 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/prlimit64.out }
+  - id: runtime/completeness/priority
+    targets: [arm64, amd64]
+    build: { source: syscall/priority.c, output: priority, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/priority }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/priority.out }
+  - id: runtime/completeness/getcpu
+    targets: [arm64, amd64]
+    build: { source: syscall/getcpu.c, output: getcpu, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getcpu }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getcpu.out }
+  - id: runtime/completeness/sched-affinity
+    targets: [arm64, amd64]
+    build: { source: syscall/sched_affinity.c, output: sched-affinity, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/sched-affinity }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/sched-affinity.out }
+  - id: runtime/completeness/sched-attr
+    targets: [arm64, amd64]
+    build: { source: syscall/sched_attr.c, output: sched-attr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/sched-attr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/sched-attr.out }
+  - id: runtime/completeness/capget
+    targets: [arm64, amd64]
+    build: { source: syscall/capget.c, output: capget, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/capget }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/capget.out }
+  - id: runtime/completeness/set-tid-address
+    targets: [arm64, amd64]
+    build: { source: syscall/tid_address.c, output: set-tid-address, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/set-tid-address }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/tid_address.out }
+  - id: runtime/completeness/unshare-setns
+    targets: [arm64, amd64]
+    build: { source: syscall/unshare_setns.c, output: unshare-setns, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/unshare-setns }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/unshare-setns.out }
+  - id: runtime/completeness/exec-newline-env
+    targets: [arm64, amd64]
+    build: { source: syscall/newline_env.c, output: exec-newline-env, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/exec-newline-env }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/newline_env.out }
+  - id: runtime/completeness/exec-null-env
+    targets: [arm64, amd64]
+    build: { source: syscall/null_env.c, output: exec-null-env, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/exec-null-env }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/null_env.out }
+  - id: runtime/completeness/pf-status-meta
+    targets: [arm64, amd64]
+    build: { source: syscall/status_meta.c, output: pf-status-meta, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-status-meta }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/status_meta.out }
+  - id: runtime/completeness/pf-proc-files
+    targets: [arm64, amd64]
+    build: { source: syscall/proc_files.c, output: pf-proc-files, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-proc-files }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/proc_files.out }
+  - id: runtime/completeness/pf-procstat-forks
+    targets: [arm64, amd64]
+    build: { source: syscall/fork_stats.c, output: pf-procstat-forks, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-procstat-forks }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/fork_stats.out }
+  - id: runtime/completeness/pf-cgroup-files
+    targets: [arm64, amd64]
+    build: { source: syscall/cgroup_files.c, output: pf-cgroup-files, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-cgroup-files }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/cgroup_files.out }
+  - id: runtime/completeness/pf-taskdir
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_taskdir.c, output: pf-taskdir, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-taskdir }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-taskdir.out }
+  - id: runtime/completeness/pf-selfdir
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_selfdir.c, output: pf-selfdir, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-selfdir }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-selfdir.out }
+  - id: runtime/completeness/pf-dirs
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_dirs.c, output: pf-dirs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-dirs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-dirs.out }
+  - id: runtime/completeness/pf-argv
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_argv.c, output: pf-argv, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-argv }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-argv.out }
+  - id: runtime/completeness/pf-devseed
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_devseed.c, output: pf-devseed, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-devseed }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-devseed.out }
+  - id: runtime/completeness/pf-fdclose
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_fdclose.c, output: pf-fdclose, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-fdclose }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-fdclose.out }
+  - id: runtime/completeness/pf-tty
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_tty.c, output: pf-tty, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-tty }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-tty.out }
+  - id: runtime/completeness/pf-environ
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_environ.c, output: pf-environ, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-environ }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-environ.out }
+  - id: runtime/completeness/pf-fdinfo
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_fdinfo.c, output: pf-fdinfo, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-fdinfo }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-fdinfo.out }
+  - id: runtime/completeness/pf-statfs
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_statfs.c, output: pf-statfs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-statfs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-statfs.out }
+  - id: runtime/completeness/pf-smaps
+    targets: [arm64, amd64]
+    build: { source: syscall/pf_smaps.c, output: pf-smaps, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-smaps }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pf-smaps.out }
+  - id: runtime/completeness/pf-maps-relro
+    targets: [arm64, amd64]
+    build: { source: syscall/maps_relro.c, output: pf-maps-relro, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-maps-relro }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/maps_relro.out }
+  - id: runtime/completeness/pf-net-unix
+    targets: [arm64, amd64]
+    build: { source: syscall/net_unix.c, output: pf-net-unix, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pf-net-unix }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/net_unix.out }
+  - id: runtime/completeness/rt-sigtimedwait
+    targets: [arm64, amd64]
+    build: { source: syscall/rt_sigtimedwait.c, output: rt-sigtimedwait, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/rt-sigtimedwait }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/rt-sigtimedwait.out }
+  - id: runtime/completeness/sigaltstack
+    targets: [arm64, amd64]
+    build: { source: syscall/sigaltstack.c, output: sigaltstack, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/sigaltstack }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/sigaltstack.out }
+  - id: runtime/completeness/rt-sigpending
+    targets: [arm64, amd64]
+    build: { source: syscall/rt_sigpending.c, output: rt-sigpending, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/rt-sigpending }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/rt-sigpending.out }
+  - id: runtime/completeness/pidfd-signal
+    targets: [arm64, amd64]
+    build: { source: syscall/pidfd_signal.c, output: pidfd-signal, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pidfd-signal }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pidfd-signal.out }
+  - id: runtime/completeness/pidfd-flags
+    targets: [arm64, amd64]
+    build: { source: syscall/pidfd_flags.c, output: pidfd-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pidfd-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pidfd-flags.out }
+  - id: runtime/completeness/pidfd-cap
+    targets: [arm64, amd64]
+    build: { source: syscall/pidfd_cap.c, output: pidfd-cap, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pidfd-cap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pidfd-cap.out }
+  - id: runtime/completeness/clock-getres
+    targets: [arm64, amd64]
+    build: { source: syscall/clock_getres.c, output: clock-getres, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/clock-getres }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/clock-getres.out }
+  - id: runtime/completeness/clock-variants
+    targets: [arm64, amd64]
+    build: { source: syscall/clock_variants.c, output: clock-variants, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/clock-variants }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/clock-variants.out }
+  - id: runtime/completeness/timer-create
+    targets: [arm64, amd64]
+    build: { source: syscall/timer_create.c, output: timer-create, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/timer-create }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/timer-create.out }
+  - id: runtime/completeness/itimer
+    targets: [arm64, amd64]
+    build: { source: syscall/itimer.c, output: itimer, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/itimer }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/itimer.out }
+  - id: runtime/completeness/adjtimex
+    targets: [arm64, amd64]
+    build: { source: syscall/adjtimex.c, output: adjtimex, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/adjtimex }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/adjtimex.out }
+  - id: runtime/completeness/io-uring-setup
+    targets: [arm64, amd64]
+    build: { source: syscall/uring_setup.c, output: io-uring-setup, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/io-uring-setup }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/uring_setup.out }
+  - id: runtime/completeness/io-uring-enter
+    targets: [arm64, amd64]
+    build: { source: syscall/uring_enter.c, output: io-uring-enter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/io-uring-enter }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/uring_enter.out }
+  - id: runtime/completeness/landlock
+    targets: [arm64, amd64]
+    build: { source: syscall/landlock.c, output: landlock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/landlock }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/landlock.out }
+  - id: runtime/completeness/mempolicy
+    targets: [arm64, amd64]
+    build: { source: syscall/mempolicy.c, output: mempolicy, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/mempolicy }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/mempolicy.out }
+  - id: runtime/completeness/memfd-secret
+    targets: [arm64, amd64]
+    build: { source: syscall/memfd_secret.c, output: memfd-secret, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/memfd-secret }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/memfd_secret.out }
+  - id: runtime/completeness/pidfd-getfd
+    targets: [arm64, amd64]
+    build: { source: syscall/pidfd_getfd.c, output: pidfd-getfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/pidfd-getfd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/pidfd_getfd.out }
+  - id: runtime/completeness/robust-list
+    targets: [arm64, amd64]
+    build: { source: syscall/robust_list.c, output: robust-list, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/robust-list }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/robust_list.out }
+  - id: runtime/completeness/kcmp
+    targets: [arm64, amd64]
+    build: { source: syscall/kcmp.c, output: kcmp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/kcmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/kcmp.out }
+  - id: runtime/completeness/getdents64
+    targets: [arm64, amd64]
+    build: { source: syscall/getdents64.c, output: getdents64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/getdents64 }
+    run: []
+    status: { unsupported: { reason: "excluded-macos: getdents64 enumeration over the synthetic /proc returns open_ok=0 on the macOS engine (procfs directory backend gap). Linux engine still runs+passes this.", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/getdents64.out }
+  - id: runtime/completeness/statx-attr
+    targets: [arm64, amd64]
+    build: { source: syscall/statx_attr.c, output: statx-attr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/statx-attr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/statx_attr.out }
+  - id: runtime/completeness/sched-getattr
+    targets: [arm64, amd64]
+    build: { source: syscall/sched_getattr.c, output: sched-getattr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/sched-getattr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/sched_getattr.out }
+  - id: runtime/completeness/futex-waitv
+    targets: [arm64, amd64]
+    build: { source: syscall/futex_waitv.c, output: futex-waitv, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/futex-waitv }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/futex_waitv.out }
+  - id: runtime/completeness/inotify
+    targets: [arm64, amd64]
+    build: { source: syscall/inotify.c, output: inotify, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/inotify }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/inotify.out }
+  - id: runtime/completeness/timerfd
+    targets: [arm64, amd64]
+    build: { source: syscall/timerfd.c, output: timerfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/timerfd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/timerfd.out }
+  - id: runtime/completeness/rseq
+    targets: [arm64, amd64]
+    build: { source: syscall/rseq.c, output: rseq, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/rseq }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/rseq.out }
+  - id: runtime/completeness/cachestat
+    targets: [arm64, amd64]
+    build: { source: syscall/cachestat.c, output: cachestat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/cachestat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared/cachestat.out }
+  - id: runtime/completeness/amd64-movq-mmx-xmm
+    targets: [amd64]
+    build: { source: x86_64/movq_bridge.c, output: amd64-movq-mmx-xmm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-movq-mmx-xmm }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/movq_bridge.out }
+  - id: runtime/completeness/amd64-cvt-mmx
+    targets: [amd64]
+    build: { source: x86_64/cvt_mmx.c, output: amd64-cvt-mmx, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-cvt-mmx }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/cvt_mmx.out }
+  - id: runtime/completeness/amd64-high-byte-reg
+    targets: [amd64]
+    build: { source: x86_64/high_byte.c, output: amd64-high-byte-reg, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-high-byte-reg }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/high_byte.out }
+  - id: runtime/completeness/amd64-div-overflow
+    targets: [amd64]
+    build: { source: x86_64/div_overflow.c, output: amd64-div-overflow, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-div-overflow }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/div_overflow.out }
+  - id: runtime/completeness/amd64-x87-compare-codes
+    targets: [amd64]
+    build: { source: x86_64/x87_compare.c, output: amd64-x87-compare-codes, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87-compare-codes }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/x87_compare.out }
+  - id: runtime/completeness/amd64-x87-stack-faults
+    targets: [amd64]
+    build: { source: x86_64/x87_faults.c, output: amd64-x87-stack-faults, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87-stack-faults }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/x87_faults.out }
+  - id: runtime/completeness/amd64-x87-fprem-loop
+    targets: [amd64]
+    build: { source: x86_64/fprem_loop.c, output: amd64-x87-fprem-loop, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87-fprem-loop }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/fprem_loop.out }
+  - id: runtime/completeness/amd64-x87-precision-rounding
+    targets: [amd64]
+    build: { source: x86_64/x87_rounding.c, output: amd64-x87-precision-rounding, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-x87-precision-rounding }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/x87_rounding.out }
+  - id: runtime/completeness/amd64-cvt-flags
+    targets: [amd64]
+    build: { source: x86_64/cvt_flags.c, output: amd64-cvt-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-cvt-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/cvt_flags.out }
+  - id: runtime/completeness/arm64-neon-misc
+    targets: [arm64]
+    build: { source: aarch64/neon_misc.c, output: arm64-neon-misc, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-neon-misc }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_misc.out }
+  - id: runtime/completeness/amd64-denorm-flags
+    targets: [amd64]
+    build: { source: x86_64/denorm_flags.c, output: amd64-denorm-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-denorm-flags }
+    run: []
+    status: { broken: { reason: "bounded QEMU oracle sweep diverges from the checked-in contract on at least one declared target", evidence: tests/runtime/completeness/ORACLE.md } }
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/denorm_flags.out }
+  - id: runtime/completeness/amd64-sse-rcp
+    targets: [amd64]
+    build: { source: x86_64/sse_rcp.c, output: amd64-sse-rcp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-sse-rcp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/sse_rcp.out }
+  - id: runtime/completeness/amd64-arch-prctl-ptrs
+    targets: [amd64]
+    build: { source: x86_64/arch_ptrs.c, output: amd64-arch-prctl-ptrs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-arch-prctl-ptrs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/arch_ptrs.out }
+  - id: runtime/completeness/arm64-neon-recip
+    targets: [arm64]
+    build: { source: aarch64/neon_recip.c, output: arm64-neon-recip, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/arm64-neon-recip }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/aarch64/neon_recip.out }
+  - id: runtime/completeness/amd64-scalar-lane-flags
+    targets: [amd64]
+    build: { source: x86_64/lane_flags.c, output: amd64-scalar-lane-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    artifact: { destination: /opt/husklet/completeness/amd64-scalar-lane-flags }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    timeout: 120
+    expect: { exit: 0, stdout: golden/x86_64/lane_flags.out }
