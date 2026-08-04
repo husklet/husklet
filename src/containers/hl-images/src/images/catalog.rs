@@ -106,6 +106,41 @@ impl Images {
         Ok(graphs)
     }
 
+    /// Returns one coherent inventory of immutable targets and their visible names.
+    ///
+    /// Each backing catalog is captured from one metadata generation. A workspace and its external
+    /// fallback are independent durable stores, so their snapshots are overlaid deterministically but
+    /// are not one cross-store transaction. Workspace names shadow equal external names, while aliases
+    /// for the same target are retained.
+    ///
+    /// # Errors
+    /// Returns an error when either catalog cannot be read.
+    pub fn inventory(&self) -> Result<Vec<Graph>> {
+        let local_graphs = self.metadata.catalog_snapshot()?;
+        let local_names = local_graphs
+            .iter()
+            .flat_map(|graph| graph.names.iter().cloned())
+            .collect::<HashSet<_>>();
+        let mut inventory = local_graphs
+            .into_iter()
+            .map(|graph| (graph.target.digest().to_string(), graph))
+            .collect::<BTreeMap<_, _>>();
+        let Some(fallback) = &self.fallback else {
+            return Ok(inventory.into_values().collect());
+        };
+        for mut graph in fallback.inventory()? {
+            graph.names.retain(|name| !local_names.contains(name));
+            let digest = graph.target.digest().to_string();
+            if let Some(local) = inventory.get_mut(&digest) {
+                local.names.append(&mut graph.names);
+                local.build_cache &= graph.build_cache;
+            } else {
+                inventory.insert(digest, graph);
+            }
+        }
+        Ok(inventory.into_values().collect())
+    }
+
     pub(super) fn mirror(&self, image: &Image) -> Result<()> {
         self.mirror_target(&image.target)
     }
@@ -255,5 +290,104 @@ impl Images {
     /// Returns an error when a catalog update cannot be committed.
     pub fn force_remove(&self, image: &Image) -> Result<Vec<Image>> {
         self.metadata.remove_target(&image.target.digest().to_string())
+    }
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+
+    fn descriptor(digit: char) -> Descriptor {
+        serde_json::from_value(serde_json::json!({
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": format!("sha256:{}", digit.to_string().repeat(64)),
+            "size": 23
+        }))
+        .unwrap()
+    }
+
+    fn image(name: &str, target: Descriptor) -> Image {
+        Image {
+            name: name.parse().unwrap(),
+            target,
+        }
+    }
+
+    #[test]
+    fn inventory_overlays_names_and_coalesces_equal_targets() {
+        let workspace_root = tempfile::tempdir().unwrap();
+        let external_root = tempfile::tempdir().unwrap();
+        let workspace = Images::open(workspace_root.path()).unwrap();
+        let external = Images::open(external_root.path()).unwrap();
+        let common = descriptor('1');
+        workspace
+            .metadata
+            .put(image("workspace.test/common:local", common.clone()))
+            .unwrap();
+        external
+            .metadata
+            .put(image("external.test/common:remote", common))
+            .unwrap();
+        external
+            .metadata
+            .put(image("example.test/shadow:latest", descriptor('2')))
+            .unwrap();
+        workspace
+            .metadata
+            .put(image("example.test/shadow:latest", descriptor('3')))
+            .unwrap();
+
+        let inventory = Images::workspace(workspace, external).inventory().unwrap();
+        assert_eq!(inventory.len(), 3);
+        let common = inventory
+            .iter()
+            .find(|graph| graph.target.digest().to_string().ends_with('1'))
+            .unwrap();
+        assert_eq!(
+            common.names,
+            BTreeSet::from([
+                "external.test/common:remote".into(),
+                "workspace.test/common:local".into(),
+            ])
+        );
+        let shadowed = inventory
+            .iter()
+            .find(|graph| graph.target.digest().to_string().ends_with('2'))
+            .unwrap();
+        assert!(shadowed.names.is_empty());
+        let local = inventory
+            .iter()
+            .find(|graph| graph.target.digest().to_string().ends_with('3'))
+            .unwrap();
+        assert_eq!(local.names, BTreeSet::from(["example.test/shadow:latest".into()]));
+    }
+
+    #[test]
+    fn inventory_never_splits_one_catalog_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let images = Images::open(root.path()).unwrap();
+        let name = "example.test/race:latest";
+        images.metadata.put(image(name, descriptor('1'))).unwrap();
+        let writer = images.clone();
+        let writing = std::thread::spawn(move || {
+            for index in 0..100 {
+                writer
+                    .metadata
+                    .put(image(name, descriptor(if index % 2 == 0 { '1' } else { '2' })))
+                    .unwrap();
+            }
+        });
+        let canonical = name.parse::<Reference>().unwrap().to_string();
+        for _ in 0..100 {
+            let inventory = images.inventory().unwrap();
+            assert_eq!(
+                inventory
+                    .iter()
+                    .filter(|graph| graph.names.contains(&canonical))
+                    .count(),
+                1
+            );
+        }
+        writing.join().unwrap();
     }
 }

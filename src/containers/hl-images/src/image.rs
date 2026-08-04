@@ -323,6 +323,26 @@ impl FsImageStore {
             .collect())
     }
 
+    pub(crate) fn catalog_snapshot(&self) -> Result<Vec<Graph>> {
+        self.refresh()?;
+        let state = self
+            .state
+            .read()
+            .map_err(|_| Error::InvalidMetadata("image metadata lock poisoned".into()))?;
+        let mut graphs = state.graphs.clone();
+        for graph in graphs.values_mut() {
+            graph.names.clear();
+        }
+        for image in state.images.values() {
+            let digest = image.target.digest().to_string();
+            let graph = graphs
+                .get_mut(&digest)
+                .ok_or_else(|| Error::InvalidMetadata(format!("image name has no graph target {digest}")))?;
+            graph.names.insert(image.name.to_string());
+        }
+        Ok(graphs.into_values().collect())
+    }
+
     pub(crate) fn graph_snapshot(&self) -> Result<(u64, Vec<Graph>)> {
         self.refresh()?;
         let state = self
