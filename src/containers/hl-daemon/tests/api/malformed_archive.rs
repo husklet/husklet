@@ -16,11 +16,9 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let socket = work.path().join("daemon.sock");
     let (shutdown, stopped) = oneshot::channel();
-    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(
-        async move {
-            let _ = stopped.await;
-        },
-    ));
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
     wait_for_path(&socket).await?;
     let client = Client::unix(&socket)?;
     let error = client
@@ -34,10 +32,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 status.as_u16() == 400,
                 &format!("malformed image archive was HTTP {status}: {message}"),
             )?;
-            require(
-                !message.is_empty(),
-                "malformed image archive error had no message",
-            )?;
+            require(!message.is_empty(), "malformed image archive error had no message")?;
         }
         other => {
             return Err(format!("malformed archive returned non-Docker error: {other}").into());

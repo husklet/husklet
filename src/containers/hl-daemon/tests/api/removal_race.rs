@@ -1,6 +1,6 @@
 //! Race between forced removal and a pending removal waiter.
 
-use crate::api::support::{require, TIMEOUT};
+use crate::api::support::{TIMEOUT, require};
 use hl_container::{Config, ContainerSpec, Containers, Process, WaitCondition};
 use tempfile::TempDir;
 use tokio::time::timeout;
