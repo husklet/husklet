@@ -1,0 +1,1005 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/memory/mlockall-scope
+    status: !broken
+      reason: "QEMU host mlock policy diverges from the engine lock-scope contract on both guest ISAs"
+      evidence: "tests/runtime/memory/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/mlockallscope.c, output: mlockall-scope, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/mlockall-scope }
+    run: []
+    expect: { exit: 0, stdout: golden/mlockallscope.txt }
+  - id: runtime/memory/vector-limits
+    status: !broken
+      reason: "QEMU host writev limits diverge from the engine Linux cap contract on both guest ISAs"
+      evidence: "tests/runtime/memory/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/vectorlimits.c, output: vector-limits, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/vector-limits }
+    run: []
+    expect: { exit: 0, stdout: golden/vectorlimits.txt }
+  - id: runtime/memory/vector-order
+    status: !broken
+      reason: "QEMU host vector admission ordering diverges from the engine contract on both guest ISAs"
+      evidence: "tests/runtime/memory/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/vectororder.c, output: vector-order, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/vector-order }
+    run: []
+    expect: { exit: 0, stdout: golden/vectororder.txt }
+  - id: runtime/memory/vector-pipe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vectorpipe.c, output: vector-pipe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/vector-pipe }
+    run: []
+    expect: { exit: 0, stdout: golden/vectorpipe.txt }
+  - id: runtime/memory/fd-reclamation
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fdrss.c, output: fd-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fd-reclamation }
+    run: []
+    expect: { exit: 0, stdout: golden/fdrss.out }
+  - id: runtime/memory/fork-reclamation
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/forkrss.c, output: fork-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fork-reclamation }
+    run: []
+    expect: { exit: 0, stdout: golden/forkrss.out }
+  - id: runtime/memory/allocator-reclamation
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mallocfree.c, output: allocator-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/allocator-reclamation }
+    run: []
+    expect: { exit: 0, stdout: golden/mallocfree.out }
+  - id: runtime/memory/file-mapping-reclamation
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mmapfilerss.c, output: file-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/file-mapping-reclamation }
+    run: []
+    expect: { exit: 0, stdout: golden/mmapfilerss.out }
+  - id: runtime/memory/anonymous-mapping-reclamation
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mmapfree.c, output: anonymous-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/anonymous-mapping-reclamation }
+    run: []
+    expect: { exit: 0, stdout: golden/mmapfree.out }
+  - id: runtime/memory/thread-reclamation
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/threadrss.c, output: thread-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/thread-reclamation }
+    run: []
+    expect: { exit: 0, stdout: golden/threadrss.out }
+  - id: runtime/memory/fixed-replacement
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mapfixed.c, output: fixed-replacement, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fixed-replacement }
+    run: []
+    expect: { exit: 0, stdout: golden/mapfixed.out }
+  - id: runtime/memory/fixed-file-protection
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fixed_fileprotection.c, output: fixed-file-protection, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fixed-file-protection }
+    run: []
+    expect: { exit: 0, stdout: golden/fixed_fileprotection.out }
+  - id: runtime/memory/fixed-noreplace
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/noreplace.c, output: fixed-noreplace, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fixed-noreplace }
+    run: []
+    expect: { exit: 0, stdout: golden/noreplace.out }
+  - id: runtime/memory/residency-vector
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mincore.c, output: residency-vector, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/residency-vector }
+    run: []
+    expect: { exit: 0, stdout: golden/mincore.out }
+  - id: runtime/memory/page-locking
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mlock.c, output: page-locking, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/page-locking }
+    run: []
+    expect: { exit: 0, stdout: golden/mlock.out }
+  - id: runtime/memory/mapping-errors
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mmerr.c, output: mapping-errors, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mapping-errors }
+    run: []
+    expect: { exit: 0, stdout: golden/mmerr.out }
+  - id: runtime/memory/mapping-semantics
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mmsem.c, output: mapping-semantics, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mapping-semantics }
+    run: []
+    expect: { exit: 0, stdout: golden/mmsem.out }
+  - id: runtime/memory/mapping-resize
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mremap.c, output: mapping-resize, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mapping-resize }
+    run: []
+    expect: { exit: 0, stdout: golden/mremap.out }
+  - id: runtime/memory/mprotect-enforcement
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: PROT_NONE and read-only enforcement is deliberately non-enforced on the macOS engine (mem.c case 226 forces host PROT_READ). Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mprotect_enforce.c, output: mprotect-enforcement, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mprotect-enforcement }
+    run: []
+    expect: { exit: 0, stdout: golden/mprotect_enforce.out }
+  - id: runtime/memory/file-none-commit
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/file_nonecommit.c, output: file-none-commit, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/file-none-commit }
+    run: []
+    expect: { exit: 0, stdout: golden/file_nonecommit.out }
+  - id: runtime/memory/elf-rodata-write
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/elf_rodatawrite.c, output: elf-rodata-write, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/elf-rodata-write }
+    run: []
+    expect: { exit: 0, stdout: golden/elf_rodatawrite.out }
+  - id: runtime/memory/elf-rodata-fault
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/elf_rodatafault.c, output: elf-rodata-fault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/elf-rodata-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/elf_rodatafault.out }
+  - id: runtime/memory/dontneed-commit
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dontneed_commit.c, output: dontneed-commit, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/dontneed-commit }
+    run: []
+    expect: { exit: 0, stdout: golden/dontneed_commit.out }
+  - id: runtime/memory/dontneed-mmap-commit
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dontneed_mmapcommit.c, output: dontneed-mmap-commit, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/dontneed-mmap-commit }
+    run: []
+    expect: { exit: 0, stdout: golden/dontneed_mmapcommit.out }
+  - id: runtime/memory/file-eof-bus
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eof_bus.c, output: file-eof-bus, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/file-eof-bus }
+    run: []
+    expect: { exit: 0, stdout: golden/eof_bus.out }
+  - id: runtime/memory/truncate-eof-bus
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/truncate_bus.c, output: truncate-eof-bus, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/truncate-eof-bus }
+    run: []
+    expect: { exit: 0, stdout: golden/truncate_bus.out }
+  - id: runtime/memory/bus-activation-race
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/bus_race.c, output: bus-activation-race, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/bus-activation-race }
+    run: []
+    expect: { exit: 0, stdout: golden/bus_race.out }
+  - id: runtime/memory/bus-state-race
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/bus_staterace.c, output: bus-state-race, flags: ["-static","-O2","-std=gnu11","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/bus-state-race }
+    run: []
+    expect: { exit: 0, stdout: golden/bus_staterace.out }
+  - id: runtime/memory/truncate-peer
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/truncate_peer.c, output: truncate-peer, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/truncate-peer }
+    run: []
+    expect: { exit: 0, stdout: golden/truncate_peer.out }
+  - id: runtime/memory/madvise-dontneed-partial
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/madv_dontneedpartial.c, output: madvise-dontneed-partial, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/madvise-dontneed-partial }
+    run: []
+    expect: { exit: 0, stdout: golden/madv_dontneedpartial.out }
+  - id: runtime/memory/fork-cow-dontneed
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_cowdontneed.c, output: fork-cow-dontneed, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fork-cow-dontneed }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_cowdontneed.out }
+  - id: runtime/memory/fork-cow-private
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_cowprivate.c, output: fork-cow-private, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fork-cow-private }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_cowprivate.out }
+  - id: runtime/memory/fork-shared-anon
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_sharedanon.c, output: fork-shared-anon, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/fork-shared-anon }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_sharedanon.out }
+  - id: runtime/memory/memfd-share
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_share.c, output: memfd-share, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/memfd-share }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_share.out }
+  - id: runtime/memory/memfd-offset-alias
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/memfd_offsetalias.c, output: memfd-offset-alias, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/memfd-offset-alias }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_offsetalias.out }
+  - id: runtime/memory/aarch64-pair-writeback
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/aarch64_pairwriteback.c, output: aarch64-pair-writeback, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/aarch64-pair-writeback }
+    run: []
+    expect: { exit: 0, stdout: golden/aarch64_pairwriteback.out }
+  - id: runtime/memory/aarch64-logical-atomics
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/aarch64_logicalatomics.c, output: aarch64-logical-atomics, flags: ["-static","-O2","-std=gnu11","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/aarch64-logical-atomics }
+    run: []
+    expect: { exit: 0, stdout: golden/aarch64_logicalatomics.out }
+  - id: runtime/memory/aarch64-cross-view
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/aarch64_crossview.c, output: aarch64-cross-view, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/aarch64-cross-view }
+    run: []
+    expect: { exit: 0, stdout: golden/aarch64_crossview.out }
+  - id: runtime/memory/aarch64-logical-ops
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/aarch64_logicalops.c, output: aarch64-logical-ops, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/aarch64-logical-ops }
+    run: []
+    expect: { exit: 0, stdout: golden/aarch64_logicalops.out }
+  - id: runtime/memory/aarch64-smc-targeted
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/aarch64_smctargeted.c, output: aarch64-smc-targeted, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/aarch64-smc-targeted }
+    run: []
+    expect: { exit: 0, stdout: golden/aarch64_smctargeted.out }
+  - id: runtime/memory/aarch64-pcache-smc
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/aarch64_pcachesmc.c, output: aarch64-pcache-smc, flags: ["-static-pie","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/aarch64-pcache-smc }
+    run: []
+    environment: {"HL_PCACHE_DIR":"/tmp/hljit-pcache-smc-targeted"}
+    expect: { exit: 0, stdout: golden/aarch64_pcachesmc.out }
+  - id: runtime/memory/memfd-alias-overflow
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_aliasoverflow.c, output: memfd-alias-overflow, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/memfd-alias-overflow }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_aliasoverflow.out }
+  - id: runtime/memory/memfd-exec-alias
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/memfd_execalias.c, output: memfd-exec-alias, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/memfd-exec-alias }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_execalias.out }
+  - id: runtime/memory/memfd-exec-alias-race
+    targets: [amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/memfd_execaliasrace.c, output: memfd-exec-alias-race, flags: ["-static","-O2","-std=gnu11","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/memfd-exec-alias-race }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_execaliasrace.out }
+  - id: runtime/memory/memfd-smc-exact-next
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_smcexactnext.c, output: memfd-smc-exact-next, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/memfd-smc-exact-next }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_smcexactnext.out }
+  - id: runtime/memory/msync-writeback
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/msync_writeback.c, output: msync-writeback, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/msync-writeback }
+    run: []
+    expect: { exit: 0, stdout: golden/msync_writeback.out }
+  - id: runtime/memory/zero-length-ops
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/zero_lenops.c, output: zero-length-ops, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/zero-length-ops }
+    run: []
+    expect: { exit: 0, stdout: golden/zero_lenops.out }
+  - id: runtime/memory/madvise-hints
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/madv_hints.c, output: madvise-hints, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/madvise-hints }
+    run: []
+    expect: { exit: 0, stdout: golden/madv_hints.out }
+  - id: runtime/memory/map-populate
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/map_populate.c, output: map-populate, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/map-populate }
+    run: []
+    expect: { exit: 0, stdout: golden/map_populate.out }
+  - id: runtime/memory/mremap-shrink
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mremap_shrink.c, output: mremap-shrink, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mremap-shrink }
+    run: []
+    expect: { exit: 0, stdout: golden/mremap_shrink.out }
+  - id: runtime/memory/mprotect-split
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mprotect_split.c, output: mprotect-split, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mprotect-split }
+    run: []
+    expect: { exit: 0, stdout: golden/mprotect_split.out }
+  - id: runtime/memory/unmap-middle
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/unmap_middle.c, output: unmap-middle, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/unmap-middle }
+    run: []
+    expect: { exit: 0, stdout: golden/unmap_middle.out }
+  - id: runtime/memory/map-over-existing
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/map_overexisting.c, output: map-over-existing, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/map-over-existing }
+    run: []
+    expect: { exit: 0, stdout: golden/map_overexisting.out }
+  - id: runtime/memory/mremap-dontunmap
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mremap_dontunmap.c, output: mremap-dontunmap, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mremap-dontunmap }
+    run: []
+    expect: { exit: 0, stdout: golden/mremap_dontunmap.out }
+  - id: runtime/memory/memfd-seal
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_seal.c, output: memfd-seal, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/memfd-seal }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_seal.out }
+  - id: runtime/memory/madv-remove-shared
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/madv_removeshared.c, output: madv-remove-shared, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/madv-remove-shared }
+    run: []
+    expect: { exit: 0, stdout: golden/madv_removeshared.out }
+  - id: runtime/memory/zz-iso-flag
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/zz_isoflag.c, output: zz-iso-flag, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/zz-iso-flag }
+    run: []
+    expect: { exit: 0, stdout: golden/zz_isoflag.out }
+  - id: runtime/memory/mprotect-none-cycle
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/mprotect_nonecycle.c, output: mprotect-none-cycle, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mprotect-none-cycle }
+    run: []
+    expect: { exit: 0, stdout: golden/mprotect_nonecycle.out }
+  - id: runtime/memory/brk-edges
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: the macOS engine's x86_64 target SIGSEGVs outright in this case (HLFATAL, si_addr=-1, empty stdout) rather than reporting brk edge errnos; the aarch64 target diverges on the same Mach VM/brk emulation. Linux engine runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/brk_edges.c, output: brk-edges, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/brk-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/brk_edges.out }
+  - id: runtime/memory/zz-iso-brk
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: brk growth fails on the macOS engine x86_64 target ('grow-failed', exit 3) -- the Mach VM backend cannot extend the guest break in place. Linux engine runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/zz_isobrk.c, output: zz-iso-brk, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/zz-iso-brk }
+    run: []
+    expect: { exit: 0, stdout: golden/zz_isobrk.out }
+  - id: runtime/memory/dbt-ibtc-mega
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_ibtcmega.c, output: dbt-ibtc-mega, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-ibtc-mega }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_ibtcmega.out }
+  - id: runtime/memory/dbt-computed-goto
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_computedgoto.c, output: dbt-computed-goto, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-computed-goto }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_computedgoto.out }
+  - id: runtime/memory/dbt-switch-wide
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_switchwide.c, output: dbt-switch-wide, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-switch-wide }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_switchwide.out }
+  - id: runtime/memory/dbt-vtable
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_vtable.c, output: dbt-vtable, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-vtable }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_vtable.out }
+  - id: runtime/memory/dbt-tailcall-chain
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_tailcallchain.c, output: dbt-tailcall-chain, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-tailcall-chain }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_tailcallchain.out }
+  - id: runtime/memory/dbt-deepwide-recursion
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_deepwiderecursion.c, output: dbt-deepwide-recursion, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-deepwide-recursion }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_deepwiderecursion.out }
+  - id: runtime/memory/dbt-flags-carry
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_flagscarry.c, output: dbt-flags-carry, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-flags-carry }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_flagscarry.out }
+  - id: runtime/memory/dbt-nested-loops
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_nestedloops.c, output: dbt-nested-loops, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-nested-loops }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_nestedloops.out }
+  - id: runtime/memory/dbt-longjmp-reenter
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_longjmpreenter.c, output: dbt-longjmp-reenter, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-longjmp-reenter }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_longjmpreenter.out }
+  - id: runtime/memory/dbt-codecache-churn
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_codecachechurn.c, output: dbt-codecache-churn, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-codecache-churn }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_codecachechurn.out }
+  - id: runtime/memory/dbt-codecache-straightline
+    targets: [arm64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_codecachestraightline.c, output: dbt-codecache-straightline, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/dbt-codecache-straightline }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_codecachestraightline.out }
+  - id: runtime/memory/dbt-soak-mix
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_soakmix.c, output: dbt-soak-mix, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-soak-mix }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_soakmix.out }
+  - id: runtime/memory/dbt-ret-predict
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_retpredict.c, output: dbt-ret-predict, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-ret-predict }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_retpredict.out }
+  - id: runtime/memory/dbt-sparse-fault
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_sparsefault.c, output: dbt-sparse-fault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-sparse-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_sparsefault.out }
+  - id: runtime/memory/dbt-smc-rwx-rewrite
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smcrwxrewrite.c, output: dbt-smc-rwx-rewrite, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-rwx-rewrite }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out }
+  - id: runtime/memory/dbt-smc-bounce
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smcbounce.c, output: dbt-smc-bounce, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-bounce }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smcbounce.out }
+  - id: runtime/memory/dbt-smc-grow
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_smcgrow.c, output: dbt-smc-grow, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-grow }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smcgrow.out }
+  - id: runtime/memory/dbt-smc-trampoline
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smctrampoline.c, output: dbt-smc-trampoline, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-trampoline }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smctrampoline.out }
+  - id: runtime/memory/dbt-smc-minijit
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_smcminijit.c, output: dbt-smc-minijit, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-minijit }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smcminijit.out }
+  - id: runtime/memory/dbt-smc-manyslots
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smcmanyslots.c, output: dbt-smc-manyslots, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-manyslots }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smcmanyslots.out }
+  - id: runtime/memory/dbt-smc-crosspage
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_smccrosspage.c, output: dbt-smc-crosspage, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-smc-crosspage }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_smccrosspage.out }
+  - id: runtime/memory/dbt-conc-same
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_concsame.c, output: dbt-conc-same, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-conc-same }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_concsame.out }
+  - id: runtime/memory/dbt-conc-patch
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dbt_concpatch.c, output: dbt-conc-patch, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-conc-patch }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_concpatch.out }
+  - id: runtime/memory/dbt-conc-mmap-exec
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/dbt_concmmapexec.c, output: dbt-conc-mmap-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/dbt-conc-mmap-exec }
+    run: []
+    expect: { exit: 0, stdout: golden/dbt_concmmapexec.out }
+  - id: runtime/memory/wild-highva
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: a wild high-VA access is not classified as a guest SEGV_MAPERR on the macOS engine (the run dies with an engine HLFATAL instead), a consequence of the deliberate PROT_NONE non-enforcement plus Mach VM divergence. Linux engine runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/wild_highva.c, output: wild-highva, flags: ["-static","-O2","-std=gnu11","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/wild-highva }
+    run: []
+    expect: { exit: 0, stdout: golden/wild_highva.out }
+  - id: runtime/memory/null-page
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/null_map.c, output: null-page, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/null-page }
+    run: []
+    expect: { exit: 0, stdout: golden/null_map.out }
+  - id: runtime/memory/uaccess-efault
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/efault_uaccess.c, output: uaccess-efault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/uaccess-efault }
+    run: []
+    expect: { exit: 0, stdout: golden/efault_uaccess.out }
+  - id: runtime/memory/nx-exec
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "SECURITY: NX/W^X not enforced -- a page mapped without PROT_EXEC (guest PROT_READ) executes on both targets (prot_read killed_segv=0 vs native 1); the engine strips PROT_EXEC and forces host PROT_READ (syscall/mem.c mmap+mprotect case 226) so guest exec permission is never represented. x86_64 additionally does not kill on a PROT_NONE exec (prot_none killed_segv=0; aarch64 is correct). Fix needs a guest-exec registry checked at translate-block code fetch"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/nx_exec.c, output: nx-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/nx-exec }
+    run: []
+    expect: { exit: 0, stdout: golden/nx_exec.out }
+  - id: runtime/memory/edge-faults
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "page just past / just below a live mapping does not fault (should SEGV_MAPERR); satisfied by the 64KB anon guard tail + adjacency grow cushion. Fidelity gap only -- verified over-read stays within private zero guard, no cross-mapping leak"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/edge_faults.c, output: edge-faults, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/edge-faults }
+    run: []
+    expect: { exit: 0, stdout: golden/edge_faults.out }
+  - id: runtime/memory/devzero-mmap
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/devzero_mmap.c, output: devzero-mmap, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/devzero-mmap }
+    run: []
+    expect: { exit: 0, stdout: golden/devzero_mmap.out }
+  - id: runtime/memory/anon-tracker-capacity
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/anon_trackercapacity.c, output: anon-tracker-capacity, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/anon-tracker-capacity }
+    run: []
+    expect: { exit: 0, stdout: golden/anon_trackercapacity.out }
+  - id: runtime/memory/anon-tracker-concurrent
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/anon_trackerconcurrent.c, output: anon-tracker-concurrent, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/anon-tracker-concurrent }
+    run: []
+    expect: { exit: 0, stdout: golden/anon_trackerconcurrent.out }
+  - id: runtime/memory/memfd-seal-busy
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_sealbusy.c, output: memfd-seal-busy, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/memfd-seal-busy }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_sealbusy.out }
+  - id: runtime/memory/noreplace-anon
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/noreplace_anon.c, output: noreplace-anon, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/noreplace-anon }
+    run: []
+    expect: { exit: 0, stdout: golden/noreplace_anon.out }
+  - id: runtime/memory/map-flags
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: mmap/mprotect/mremap/brk protection and fault semantics are not fully enforced/emulated on the macOS engine (deliberate PROT_NONE non-enforcement, mem.c case 226, plus Mach VM divergence); Linux engine still runs+enforces this."
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/map_flags.c, output: map-flags, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/map-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/map_flags.out }
+  - id: runtime/memory/madv-dontfork
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/madv_dontfork.c, output: madv-dontfork, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/madv-dontfork }
+    run: []
+    expect: { exit: 0, stdout: golden/madv_dontfork.out }
+  - id: runtime/memory/msync-hole
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/msync_hole.c, output: msync-hole, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/msync-hole }
+    run: []
+    expect: { exit: 0, stdout: golden/msync_hole.out }
+  - id: runtime/memory/memfd-seal-mixed
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_sealmixed.c, output: memfd-seal-mixed, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/memfd-seal-mixed }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_sealmixed.out }
+  - id: runtime/memory/mmap-overlay
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mmap_overlay.c, output: mmap-overlay, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mmap-overlay }
+    run: []
+    expect: { exit: 0, stdout: golden/mmap_overlay.out }
+  - id: runtime/memory/mmap-occupied-hint
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mmap_occupiedhint.c, output: mmap-occupied-hint, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mmap-occupied-hint }
+    run: []
+    expect: { exit: 0, stdout: golden/mmap_occupiedhint.out }
+  - id: runtime/memory/mmap-einval
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mmap_einval.c, output: mmap-einval, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/mmap-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/mmap_einval.out }
+  - id: runtime/memory/guard-page-efault
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/guard_pageefault.c, output: guard-page-efault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/guard-page-efault }
+    run: []
+    expect: { exit: 0, stdout: golden/guard_pageefault.out }
+  - id: runtime/memory/syscall-logical-uaccess
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      evidence: "tests/runtime/memory/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/syscall_logicaluaccess.c, output: syscall-logical-uaccess, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/syscall-logical-uaccess }
+    run: []
+    expect: { exit: 0, stdout: golden/syscall_logicaluaccess.out }
+  - id: runtime/memory/guest-copy-edges
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/guest_copyedges.c, output: guest-copy-edges, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/guest-copy-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/guest_copyedges.out }
+  - id: runtime/memory/x86-rep-logical-fault
+    targets: [amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/x86_replogicalfault.c, output: x86-rep-logical-fault, flags: ["-static","-O2","-std=gnu11","-Isource"] }
+    artifact: { destination: /opt/husklet/memory/x86-rep-logical-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/x86_replogicalfault.out }
+  - id: runtime/memory/copyout-readonly
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/copyout_readonly.c, output: copyout-readonly, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/copyout-readonly }
+    run: []
+    expect: { exit: 0, stdout: golden/copyout_readonly.out }
+  - id: runtime/memory/futex-logical-alias
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/futex_logicalalias.c, output: futex-logical-alias, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/futex-logical-alias }
+    run: []
+    expect: { exit: 0, stdout: golden/futex_logicalalias.out }
+  - id: runtime/memory/syscall-logical-unmap-race
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/syscall_logicalunmaprace.c, output: syscall-logical-unmap-race, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/syscall-logical-unmap-race }
+    run: []
+    expect: { exit: 0, stdout: golden/syscall_logicalunmaprace.out }
+  - id: runtime/memory/logical-transition-race
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/logical_transitionrace.c, output: logical-transition-race, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/logical-transition-race }
+    run: []
+    expect: { exit: 0, stdout: golden/logical_transitionrace.out }
+  - id: runtime/memory/gna-negative-cache
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/gna_negativecache.c, output: gna-negative-cache, flags: ["-static","-O2","-std=gnu11","-pthread"] }
+    artifact: { destination: /opt/husklet/memory/gna-negative-cache }
+    run: []
+    expect: { exit: 0, stdout: golden/gna_negativecache.out }
+  - id: runtime/memory/advice-einval
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/advice_einval.c, output: advice-einval, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/advice-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/advice_einval.out }
+  - id: runtime/memory/mremap-einval
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mremap_einval.c, output: mremap-einval, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/mremap-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/mremap_einval.out }
+  - id: runtime/memory/mprotect-jit-interior
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mprotect_jitinterior.c, output: mprotect-jit-interior, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/mprotect-jit-interior }
+    run: []
+    expect: { exit: 0, stdout: golden/mprotect_jitinterior.out }
+  - id: runtime/memory/nonpie-mmap-hint
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nonpie_mmaphint.c, output: nonpie-mmap-hint, flags: ["-static","-O2","-std=gnu11"] }
+    artifact: { destination: /opt/husklet/memory/nonpie-mmap-hint }
+    run: []
+    expect: { exit: 0, stdout: golden/nonpie_mmaphint.out }

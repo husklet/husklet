@@ -221,12 +221,6 @@ regress/repcmps-nonpie	1	pending	live hl-jit registry case requires current proo
 regress/ldrsw-literal	1	pending	live hl-jit registry case requires current proof
 regress/ldrsw-literal-pcache	1	pending	live hl-jit registry case requires current proof
 regress/nonpie-v8blob	1	pending	live hl-jit registry case requires current proof
-memory/mmapfree	2	pending	live hl-jit registry case requires current proof
-memory/mallocfree	2	pending	live hl-jit registry case requires current proof
-memory/threadrss	2	pending	live hl-jit registry case requires current proof
-memory/forkrss	2	pending	live hl-jit registry case requires current proof
-memory/fdrss	2	pending	live hl-jit registry case requires current proof
-memory/mmapfilerss	2	pending	live hl-jit registry case requires current proof
 abi-int/intwrap	2	pending	live hl-jit registry case requires current proof
 abi-int/mul64	2	pending	live hl-jit registry case requires current proof
 abi-int/divmod	2	pending	live hl-jit registry case requires current proof
