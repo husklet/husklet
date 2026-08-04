@@ -275,14 +275,10 @@ fn network_checkpoint_role() {
     assert!(roles.contains(&hl_runtime::CheckpointRole::Provider));
     assert!(roles.contains(&hl_runtime::CheckpointRole::Event));
     assert!(roles.contains(&hl_runtime::CheckpointRole::Network));
-    assert!(!roles.contains(&hl_runtime::CheckpointRole::Ipc));
+    assert!(roles.contains(&hl_runtime::CheckpointRole::Ipc));
     let mut sink = hl_checkpoint::MemorySink::new();
-    assert!(matches!(
-        machine.assembly.capture_checkpoint(&mut sink),
-        Err(hl_runtime::AssemblyCheckpointError::Unsupported(
-            hl_runtime::RuntimeDomain::Ipc,
-        )),
-    ));
+    machine.assembly.capture_checkpoint(&mut sink).unwrap();
+    assert!(sink.committed().is_some());
     machine.wait().unwrap();
     drop(machine);
     drop(staged);

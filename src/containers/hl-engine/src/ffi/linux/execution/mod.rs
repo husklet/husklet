@@ -359,7 +359,7 @@ impl GuestExecutor {
         assembly
             .prepare_checkpoint(Arc::new(
                 hl_runtime::MemoryCheckpointParticipant::new(
-                    checkpoint_memory,
+                    checkpoint_memory.clone(),
                     Arc::new(checkpoint::Host::new(routed.process.space())),
                     Arc::new(hl_runtime::PortableMemoryCodec),
                 )
@@ -374,6 +374,9 @@ impl GuestExecutor {
             .map_err(|_| EngineError::LaunchFailed)?;
         assembly
             .prepare_network_checkpoint(routed.process.network_bindings())
+            .map_err(|_| EngineError::LaunchFailed)?;
+        assembly
+            .prepare_ipc_checkpoint(checkpoint_memory)
             .map_err(|_| EngineError::LaunchFailed)?;
         let machine = threads.find(routed.thread).ok_or(EngineError::LaunchFailed)?.machine;
         assembly

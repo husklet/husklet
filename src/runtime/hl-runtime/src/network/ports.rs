@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use hl_linux::GuestSocketOption;
 use hl_network::{
-    AddressFamily, NetworkResourceKey, NetworkSocketResource, SocketAddress, SocketHostIo, SocketProtocol, SocketType,
+    AddressFamily, EgressRoute, NetworkResourceKey, NetworkSocketResource, SocketAddress, SocketHostIo, SocketProtocol,
+    SocketType,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,7 +122,13 @@ pub trait RuntimeNetworkHost: SocketHostIo {
         protocol: SocketProtocol,
     ) -> Result<CreatedSocket<Self::Token>, RuntimeNetworkError>;
     fn bind(&self, token: Self::Token, address: SocketAddress) -> Result<SocketAddress, RuntimeNetworkError>;
+    fn bind_route(&self, token: Self::Token, route: EgressRoute) -> Result<SocketAddress, RuntimeNetworkError> {
+        self.bind(token, route.address)
+    }
     fn prepare_connect(&self, token: Self::Token, address: SocketAddress) -> Result<(), RuntimeNetworkError>;
+    fn prepare_connect_route(&self, token: Self::Token, route: EgressRoute) -> Result<(), RuntimeNetworkError> {
+        self.prepare_connect(token, route.address)
+    }
     fn listen(&self, token: Self::Token, backlog: u32) -> Result<(), RuntimeNetworkError>;
     fn accept(&self, token: Self::Token) -> Result<AcceptedSocket<Self::Token>, RuntimeNetworkError>;
     fn local_address(&self, token: Self::Token) -> Result<SocketAddress, RuntimeNetworkError>;
@@ -133,6 +140,15 @@ pub trait RuntimeNetworkHost: SocketHostIo {
         address: SocketAddress,
         nonblocking: bool,
     ) -> Result<usize, RuntimeNetworkError>;
+    fn send_to_route(
+        &self,
+        token: Self::Token,
+        input: &[u8],
+        route: EgressRoute,
+        nonblocking: bool,
+    ) -> Result<usize, RuntimeNetworkError> {
+        self.send_to(token, input, route.address, nonblocking)
+    }
     fn receive_from(
         &self,
         token: Self::Token,

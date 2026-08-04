@@ -131,6 +131,54 @@ impl NetworkPolicy {
         }
     }
 
+    /// Selects the virtual interface that owns an IPv4 connection destination.
+    ///
+    /// Loopback is handled by the namespace-local loopback transport. For
+    /// overlapping subnets, launch order is authoritative, matching the retained
+    /// switch implementation.
+    #[must_use]
+    pub fn connect_interface(&self, address: [u8; 4]) -> Option<&InterfaceConfiguration> {
+        if address[0] == 127 {
+            return None;
+        }
+        self.switch_interfaces()
+            .find(|interface| Self::subnet_contains(interface, address))
+    }
+
+    /// Selects the virtual interface that owns an IPv4 bind address.
+    ///
+    /// An unspecified address binds the first configured switch interface.
+    /// Otherwise an interface owns its configured address and every address in
+    /// its subnet. Loopback remains namespace-local rather than switch-backed.
+    #[must_use]
+    pub fn bind_interface(&self, address: [u8; 4]) -> Option<&InterfaceConfiguration> {
+        if address[0] == 127 {
+            return None;
+        }
+        if address == [0; 4] {
+            return self.switch_interfaces().next();
+        }
+        self.switch_interfaces()
+            .find(|interface| interface.ipv4 == address)
+            .or_else(|| {
+                self.switch_interfaces()
+                    .find(|interface| Self::subnet_contains(interface, address))
+            })
+    }
+
+    fn switch_interfaces(&self) -> impl Iterator<Item = &InterfaceConfiguration> {
+        self.interfaces.iter().filter(|interface| !interface.bridge.is_empty())
+    }
+
+    fn subnet_contains(interface: &InterfaceConfiguration, address: [u8; 4]) -> bool {
+        let mask = if interface.prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - interface.prefix)
+        };
+        u32::from_be_bytes(address) & mask == u32::from_be_bytes(interface.ipv4) & mask
+    }
+
     fn interface(slot: usize, bridge: &[u8], ipv4: [u8; 4], prefix: u8) -> InterfaceConfiguration {
         let mut name = b"eth".to_vec();
         name.extend_from_slice(slot.to_string().as_bytes());
@@ -175,7 +223,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn launch_records_preserve_interfaces() {
+    fn launch_records() {
         let policy =
             NetworkPolicy::from_launch(false, b"ignored", b"192.0.2.9", b"blue=10.4.5.6/24\ngreen=10.8.0.9/12")
                 .unwrap();
@@ -188,13 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn isolation_suppresses_non_loopback_interfaces() {
+    fn isolation() {
         let policy = NetworkPolicy::from_launch(true, b"bridge", b"10.0.0.2", b"blue=10.1.0.2/16").unwrap();
         assert!(policy.interfaces.is_empty());
     }
 
     #[test]
-    fn legacy_bridge_and_synthetic_fallback_match_c() {
+    fn legacy_fallback() {
         let bridge = NetworkPolicy::from_launch(false, b"default", b"192.0.2.7", b"").unwrap();
         assert_eq!(
             (bridge.interfaces[0].ipv4, bridge.interfaces[0].prefix),
@@ -205,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_records_are_rejected() {
+    fn malformed_records() {
         assert_eq!(
             NetworkPolicy::from_launch(false, b"", b"", b"bridge=10.0.0.2/33"),
             Err(NetworkPolicyError::InvalidInterface)
@@ -213,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn ipv4_only_namespace_has_no_global_ipv6_route() {
+    fn ipv6_routes() {
         let policy = NetworkPolicy::from_launch(false, b"", b"", b"").unwrap();
         let address = |address| crate::SocketAddress::Inet6 {
             address,
@@ -230,5 +278,50 @@ mod tests {
         link_local[..2].copy_from_slice(&[0xfe, 0x80]);
         assert_eq!(policy.route(&address(link_local)), RouteDisposition::Host);
         assert_eq!(policy.route(&address([0; 16])), RouteDisposition::Host);
+    }
+
+    #[test]
+    fn connect_priority() {
+        let policy = NetworkPolicy::from_launch(
+            false,
+            b"",
+            b"",
+            b"wide=10.0.0.2/8\nnarrow=10.4.0.2/16\npoint=192.0.2.9/32",
+        )
+        .unwrap();
+
+        assert_eq!(policy.connect_interface([10, 4, 9, 8]).unwrap().bridge, b"wide");
+        assert_eq!(policy.connect_interface([192, 0, 2, 9]).unwrap().bridge, b"point");
+        assert!(policy.connect_interface([192, 0, 2, 8]).is_none());
+        assert!(policy.connect_interface([127, 0, 0, 1]).is_none());
+    }
+
+    #[test]
+    fn wildcard_bind() {
+        let policy = NetworkPolicy::from_launch(false, b"", b"", b"first=172.20.0.2/24\nsecond=172.21.0.2/24").unwrap();
+
+        assert_eq!(policy.bind_interface([0, 0, 0, 0]).unwrap().bridge, b"first");
+        assert_eq!(policy.bind_interface([172, 21, 0, 2]).unwrap().bridge, b"second");
+        assert_eq!(policy.bind_interface([172, 20, 0, 255]).unwrap().bridge, b"first");
+        assert!(policy.bind_interface([172, 22, 0, 2]).is_none());
+        assert!(policy.bind_interface([127, 0, 0, 1]).is_none());
+    }
+
+    #[test]
+    fn exact_bind() {
+        let policy = NetworkPolicy::from_launch(false, b"", b"", b"wide=10.0.0.2/8\nnarrow=10.4.0.2/16").unwrap();
+
+        assert_eq!(policy.bind_interface([10, 4, 0, 2]).unwrap().bridge, b"narrow");
+        assert_eq!(policy.bind_interface([10, 4, 9, 8]).unwrap().bridge, b"wide");
+    }
+
+    #[test]
+    fn prefix_edges() {
+        let all = NetworkPolicy::from_launch(false, b"", b"", b"all=10.0.0.2/0").unwrap();
+        assert_eq!(all.connect_interface([203, 0, 113, 7]).unwrap().bridge, b"all");
+
+        let synthetic = NetworkPolicy::from_launch(false, b"", b"", b"").unwrap();
+        assert!(synthetic.connect_interface([172, 17, 0, 3]).is_none());
+        assert!(synthetic.bind_interface([0, 0, 0, 0]).is_none());
     }
 }

@@ -96,10 +96,24 @@ impl Running for Process {
             .map_err(|error| Error::Runtime(format!("engine resume: {error:?}")))
     }
 
-    async fn checkpoint(&self, _timeout: std::time::Duration) -> Result<()> {
-        Err(Error::Runtime(
-            "Rust engine checkpoint capture is not connected to container storage".into(),
-        ))
+    async fn checkpoint(&self, timeout: std::time::Duration) -> Result<()> {
+        let engine = self.engine()?;
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match engine.checkpoint_supported() {
+                Ok(()) => {
+                    return engine
+                        .capture_checkpoint()
+                        .map_err(|error| Error::Runtime(format!("engine checkpoint: {error:?}")));
+                }
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                Err(error) => {
+                    return Err(Error::Runtime(format!("engine checkpoint preflight: {error:?}")));
+                }
+            }
+        }
     }
 
     async fn resize(&self, _size: crate::Size) -> Result<()> {

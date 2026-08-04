@@ -159,6 +159,10 @@ impl<L, W> Clone for Engine<L, W> {
 }
 
 impl<L: Launcher, W: Workspace> Engine<L, W> {
+    pub(crate) fn launcher(&self) -> &L {
+        &self.shared.launcher
+    }
+
     #[must_use]
     pub fn new(isa: GuestIsa, plan: RuntimeLaunchPlan, launcher: L, workspaces: W) -> Self {
         Self {

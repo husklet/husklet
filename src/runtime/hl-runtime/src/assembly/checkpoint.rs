@@ -159,6 +159,19 @@ impl RuntimeAssembly {
         Ok(())
     }
 
+    /// Verifies that the live assembly can be represented by the currently installed
+    /// checkpoint participants without beginning a freeze transaction.
+    pub fn preflight_checkpoint(&self) -> Result<(), AssemblyCheckpointError> {
+        let coordinator = self.checkpoint().ok_or(AssemblyCheckpointError::Missing)?;
+        self.checkpoint_ready(&coordinator)?;
+        let tasks = self.tasks();
+        let snapshot = tasks.snapshot();
+        if snapshot.processes.len() != 1 || snapshot.threads.len() != 1 {
+            return Err(AssemblyCheckpointError::Unsupported(RuntimeDomain::Task));
+        }
+        Ok(())
+    }
+
     pub fn capture_checkpoint<S: CheckpointSink>(&self, sink: &mut S) -> Result<(), AssemblyCheckpointError> {
         let coordinator = self.checkpoint().ok_or(AssemblyCheckpointError::Missing)?;
         self.checkpoint_ready(&coordinator)?;

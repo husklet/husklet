@@ -265,7 +265,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         };
         let host = self.host.as_ref().ok_or(Errno::ENOSYS)?;
         loop {
-            match host.send_to(*token, payload, address.clone(), true) {
+            match host.send_to_route(*token, payload, self.connect_route(address.clone()), true) {
                 Ok(count) => return Ok(count),
                 Err(crate::RuntimeNetworkError::WouldBlock) if !nonblocking => {}
                 Err(error) => return Err(SocketErrno::runtime(error)),

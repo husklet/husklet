@@ -5,8 +5,8 @@ use hl_linux::{
     Errno, GuestAccess, GuestArchitecture, GuestMarshaller, GuestMemory, GuestNetworkAddress, LinuxResult, NetworkAbi,
 };
 use hl_network::{
-    AddressFamily, NetworkCatalog, SocketAddress, SocketConnectError, SocketConnectStatus, SocketDescription,
-    SocketProtocol, SocketState, SocketType, UnixAddress, UnixSocketPair,
+    AddressFamily, EgressRoute, NetworkCatalog, SocketAddress, SocketConnectError, SocketConnectStatus,
+    SocketDescription, SocketProtocol, SocketState, SocketType, UnixAddress, UnixSocketPair,
 };
 
 use crate::{DescriptorTransfer, RuntimeNetworkHost, RuntimeSocket, RuntimeSocketKind, RuntimeSocketRegistry};
@@ -34,8 +34,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         match address {
             SocketAddress::Inet4 { address, .. } => *address == [0; 4] || *address == [127, 0, 0, 1],
             SocketAddress::Inet6 { address, .. } => {
-                address.iter().all(|byte| *byte == 0)
-                    || address[..15].iter().all(|byte| *byte == 0) && address[15] == 1
+                address.iter().all(|byte| *byte == 0) || address[..15].iter().all(|byte| *byte == 0) && address[15] == 1
             }
             SocketAddress::Unix(_) => false,
         }
@@ -138,6 +137,26 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         }
     }
 
+    pub(crate) fn bind_route(&self, address: SocketAddress) -> EgressRoute {
+        match &self.policy {
+            Some(policy) => policy.bind_route(address),
+            None => EgressRoute {
+                address,
+                interface: None,
+            },
+        }
+    }
+
+    pub(crate) fn connect_route(&self, address: SocketAddress) -> EgressRoute {
+        match &self.policy {
+            Some(policy) => policy.connect_route(address),
+            None => EgressRoute {
+                address,
+                interface: None,
+            },
+        }
+    }
+
     fn socket(&self, domain: i32, raw_type: u32, protocol: i32) -> LinuxResult {
         if domain == 17 || (matches!(domain, 2 | 10) && raw_type & 0xf == 3) {
             return LinuxResult::Error(Errno::EPERM);
@@ -153,7 +172,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let policy = self.policy.clone().unwrap_or_else(|| {
                 hl_network::NetworkPolicy::from_launch(false, b"", b"", b"").expect("default network policy")
             });
-            let port = self.credentials.as_ref().and_then(|credentials| credentials.current()).map_or(1, |value| value.process);
+            let port = self
+                .credentials
+                .as_ref()
+                .and_then(|credentials| credentials.current())
+                .map_or(1, |value| value.process);
             let route = crate::network::netlink::RouteSocket::new(policy.namespace_interfaces(), port);
             let snapshot = Self::snapshot(
                 AddressFamily::Unix,
@@ -163,7 +186,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 None,
                 None,
             );
-            return self.install_one(RuntimeSocket::netlink(route, snapshot, self.current_catalog()), raw_type);
+            return self.install_one(
+                RuntimeSocket::netlink(route, snapshot, self.current_catalog()),
+                raw_type,
+            );
         }
         let (family, socket_type, protocol, status, local) = match Self::socket_parameters(domain, raw_type, protocol) {
             Ok(value) => value,
@@ -265,7 +291,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     fn bind(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
         if let Ok(socket) = self.lookup(descriptor) {
             if socket.netlink_socket().is_some() {
-                return if length >= 12 { LinuxResult::Value(0) } else { LinuxResult::Error(Errno::EINVAL) };
+                return if length >= 12 {
+                    LinuxResult::Value(0)
+                } else {
+                    LinuxResult::Error(Errno::EINVAL)
+                };
             }
         }
         let mut address = match NetworkAbi::new(&self.memory, self.architecture)
@@ -309,22 +339,30 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let bound = match socket.bind_unix(self.sockets.unix_namespace(), requested) {
                 Ok(value) => value,
                 Err(hl_network::UnixNamespaceError::AddressInUse) => {
-                    if let Some(prepared) = prepared_path.take() { prepared.rollback(); }
+                    if let Some(prepared) = prepared_path.take() {
+                        prepared.rollback();
+                    }
                     return LinuxResult::Error(Errno::EADDRINUSE);
                 }
                 Err(hl_network::UnixNamespaceError::Invalid) => {
-                    if let Some(prepared) = prepared_path.take() { prepared.rollback(); }
+                    if let Some(prepared) = prepared_path.take() {
+                        prepared.rollback();
+                    }
                     return LinuxResult::Error(Errno::EINVAL);
                 }
                 Err(hl_network::UnixNamespaceError::Exhausted) => {
-                    if let Some(prepared) = prepared_path.take() { prepared.rollback(); }
+                    if let Some(prepared) = prepared_path.take() {
+                        prepared.rollback();
+                    }
                     return LinuxResult::Error(Errno::ENOSPC);
                 }
             };
             if let Some(named) = socket.named_unix() {
                 if named.bind(bound.clone()).is_err() {
                     socket.rollback_unix_bind();
-                    if let Some(prepared) = prepared_path.take() { prepared.rollback(); }
+                    if let Some(prepared) = prepared_path.take() {
+                        prepared.rollback();
+                    }
                     return LinuxResult::Error(Errno::EINVAL);
                 }
             }
@@ -338,12 +376,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             snapshot.state = SocketState::Bound;
             return match self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
                 Ok(()) => {
-                    if let Some(prepared) = prepared_path.take() { prepared.commit(); }
+                    if let Some(prepared) = prepared_path.take() {
+                        prepared.commit();
+                    }
                     LinuxResult::Value(0)
                 }
                 Err(_) => {
                     socket.rollback_unix_bind();
-                    if let Some(prepared) = prepared_path.take() { prepared.rollback(); }
+                    if let Some(prepared) = prepared_path.take() {
+                        prepared.rollback();
+                    }
                     LinuxResult::Error(Errno::EIO)
                 }
             };
@@ -375,14 +417,20 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             snapshot.state = SocketState::Bound;
             let catalog = self.current_catalog();
             if catalog.replace_host_snapshot(socket.id, snapshot.clone()).is_err()
-                || catalog.claim_port(hl_network::PortCheckpoint { family, port, owner: socket.id }).is_err()
+                || catalog
+                    .claim_port(hl_network::PortCheckpoint {
+                        family,
+                        port,
+                        owner: socket.id,
+                    })
+                    .is_err()
             {
                 let _ = catalog.replace_host_snapshot(socket.id, previous);
                 return LinuxResult::Error(Errno::EADDRINUSE);
             }
             return LinuxResult::Value(0);
         }
-        let local = match host.bind(*token, address) {
+        let local = match host.bind_route(*token, self.bind_route(address)) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::runtime(error)),
         };
@@ -405,16 +453,25 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Err(error) => return LinuxResult::Error(error),
         };
         if let RuntimeSocketKind::UnixStandalone { .. } = &socket.kind {
-            let Some(named) = socket.named_unix() else { return LinuxResult::Error(Errno::EOPNOTSUPP); };
+            let Some(named) = socket.named_unix() else {
+                return LinuxResult::Error(Errno::EOPNOTSUPP);
+            };
             let backlog = backlog.max(0) as u32;
-            if named.listen(backlog as usize).is_err() { return LinuxResult::Error(Errno::EINVAL); }
+            if named.listen(backlog as usize).is_err() {
+                return LinuxResult::Error(Errno::EINVAL);
+            }
             let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
-            snapshot.state = SocketState::Listening { backlog: backlog.max(1) };
+            snapshot.state = SocketState::Listening {
+                backlog: backlog.max(1),
+            };
             return match self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
-                Ok(()) => LinuxResult::Value(0), Err(_) => LinuxResult::Error(Errno::EIO),
+                Ok(()) => LinuxResult::Value(0),
+                Err(_) => LinuxResult::Error(Errno::EIO),
             };
         }
-        let RuntimeSocketKind::Host { description, token } = &socket.kind else { return LinuxResult::Error(Errno::ENOSYS); };
+        let RuntimeSocketKind::Host { description, token } = &socket.kind else {
+            return LinuxResult::Error(Errno::ENOSYS);
+        };
         let Some(host) = &self.host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
@@ -432,7 +489,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 return LinuxResult::Error(Errno::EINVAL);
             }
             snapshot.state = SocketState::Listening { backlog };
-            return match self.current_catalog().replace_host_snapshot(socket.id, snapshot.clone()) {
+            return match self
+                .current_catalog()
+                .replace_host_snapshot(socket.id, snapshot.clone())
+            {
                 Ok(()) => LinuxResult::Value(0),
                 Err(_) => LinuxResult::Error(Errno::EIO),
             };
@@ -467,12 +527,18 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             if matches!(snapshot.state, SocketState::Listening { .. }) {
                 return LinuxResult::Error(Errno::EISCONN);
             }
-            if matches!(guest_address, GuestNetworkAddress::Unspecified)
-                && snapshot.socket_type == SocketType::Datagram
+            if matches!(guest_address, GuestNetworkAddress::Unspecified) && snapshot.socket_type == SocketType::Datagram
             {
                 snapshot.peer = None;
-                snapshot.state = if snapshot.local.is_some() { SocketState::Bound } else { SocketState::Created };
-                return match self.current_catalog().replace_host_snapshot(socket.id, snapshot.clone()) {
+                snapshot.state = if snapshot.local.is_some() {
+                    SocketState::Bound
+                } else {
+                    SocketState::Created
+                };
+                return match self
+                    .current_catalog()
+                    .replace_host_snapshot(socket.id, snapshot.clone())
+                {
                     Ok(()) => LinuxResult::Value(0),
                     Err(_) => LinuxResult::Error(Errno::EIO),
                 };
@@ -483,25 +549,52 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
         };
         if let RuntimeSocketKind::UnixStandalone { .. } = &socket.kind {
-            let SocketAddress::Unix(raw) = address else { return LinuxResult::Error(Errno::EINVAL); };
-            let target = if raw.is_empty() { UnixAddress::Unnamed } else if raw[0] == 0 { UnixAddress::Abstract(raw[1..].to_vec()) } else { UnixAddress::Pathname(raw) };
-            let Some(listener_id) = self.sockets.unix_namespace().resolve(&target) else { return LinuxResult::Error(Errno::ECONNREFUSED); };
-            let Some(listener) = self.sockets.get_id(listener_id) else { return LinuxResult::Error(Errno::ECONNREFUSED); };
+            let SocketAddress::Unix(raw) = address else {
+                return LinuxResult::Error(Errno::EINVAL);
+            };
+            let target = if raw.is_empty() {
+                UnixAddress::Unnamed
+            } else if raw[0] == 0 {
+                UnixAddress::Abstract(raw[1..].to_vec())
+            } else {
+                UnixAddress::Pathname(raw)
+            };
+            let Some(listener_id) = self.sockets.unix_namespace().resolve(&target) else {
+                return LinuxResult::Error(Errno::ECONNREFUSED);
+            };
+            let Some(listener) = self.sockets.get_id(listener_id) else {
+                return LinuxResult::Error(Errno::ECONNREFUSED);
+            };
             if let Some(datagram) = socket.unix_datagram() {
                 if listener.unix_datagram().is_none() || datagram.connect(target).is_err() {
                     return LinuxResult::Error(Errno::ECONNREFUSED);
                 }
                 let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
-                snapshot.peer = listener.snapshot.lock().unwrap_or_else(|error| error.into_inner()).local.clone();
+                snapshot.peer = listener
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .local
+                    .clone();
                 snapshot.state = SocketState::Connected;
                 return match self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
                     Ok(()) => LinuxResult::Value(0),
                     Err(_) => LinuxResult::Error(Errno::EIO),
                 };
             }
-            let (Some(client_named), Some(listener_named)) = (socket.named_unix(), listener.named_unix()) else { return LinuxResult::Error(Errno::ECONNREFUSED); };
-            let current = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()).clone();
-            let listener_snapshot = listener.snapshot.lock().unwrap_or_else(|error| error.into_inner()).clone();
+            let (Some(client_named), Some(listener_named)) = (socket.named_unix(), listener.named_unix()) else {
+                return LinuxResult::Error(Errno::ECONNREFUSED);
+            };
+            let current = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
+            let listener_snapshot = listener
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone();
             let nonblocking = current.nonblocking;
             let queue = listener_named.wait_queue();
             let reservation = loop {
@@ -512,7 +605,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     Err(hl_network::UnixNamedSocketError::WouldBlock) => return LinuxResult::Error(Errno::EAGAIN),
                     Err(_) => return LinuxResult::Error(Errno::ECONNREFUSED),
                 }
-                let Some(wait) = &self.wait else { return LinuxResult::Error(Errno::EAGAIN); };
+                let Some(wait) = &self.wait else {
+                    return LinuxResult::Error(Errno::EAGAIN);
+                };
                 match wait.wait(&queue, observed, None) {
                     Ok(hl_sync::WaitOutcome::Notified) => {}
                     Ok(hl_sync::WaitOutcome::Interrupted) => return LinuxResult::Error(Errno::EINTR),
@@ -520,23 +615,49 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 }
             };
             let flags = StatusFlags::from_bits(if nonblocking { StatusFlags::NONBLOCKING } else { 0 });
-            let pair = match UnixSocketPair::new(current.socket_type, flags) { Ok(value) => Arc::new(value), Err(_) => return LinuxResult::Error(Errno::EPROTONOSUPPORT) };
+            let pair = match UnixSocketPair::new(current.socket_type, flags) {
+                Ok(value) => Arc::new(value),
+                Err(_) => return LinuxResult::Error(Errno::EPROTONOSUPPORT),
+            };
             if let Some(credentials) = self.credentials.as_ref().and_then(|source| source.current()) {
                 pair.set_peer_credentials(credentials);
             }
             let client_local = current.local.clone().or(Some(SocketAddress::Unix(Vec::new())));
             let mut client_snapshot = current.clone();
-            client_snapshot.local = client_local.clone(); client_snapshot.peer = listener_snapshot.local.clone(); client_snapshot.state = SocketState::Connected;
-            let mut accepted_snapshot = Self::snapshot(current.family, current.socket_type, current.protocol, flags, listener_snapshot.local.clone(), client_local);
+            client_snapshot.local = client_local.clone();
+            client_snapshot.peer = listener_snapshot.local.clone();
+            client_snapshot.state = SocketState::Connected;
+            let mut accepted_snapshot = Self::snapshot(
+                current.family,
+                current.socket_type,
+                current.protocol,
+                flags,
+                listener_snapshot.local.clone(),
+                client_local,
+            );
             accepted_snapshot.state = SocketState::Connected;
             let catalog = self.current_catalog();
-            let accepted_id = match catalog.connect_unix_pair(listener.id, socket.id, client_snapshot.clone(), accepted_snapshot.clone(), pair.clone()) { Ok(id) => id, Err(_) => return LinuxResult::Error(Errno::EIO) };
+            let accepted_id = match catalog.connect_unix_pair(
+                listener.id,
+                socket.id,
+                client_snapshot.clone(),
+                accepted_snapshot.clone(),
+                pair.clone(),
+            ) {
+                Ok(id) => id,
+                Err(_) => return LinuxResult::Error(Errno::EIO),
+            };
             accepted_snapshot.id = accepted_id;
             let lifetime = RuntimeSocket::<H>::pair_lifetime(catalog, socket.id);
             socket.attach_unix_connection(pair.clone(), 0, lifetime.clone());
             *socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()) = client_snapshot;
-            listener.queue_pending(accepted_id, RuntimeSocket::connected_unix(pair.clone(), 1, accepted_id, accepted_snapshot, lifetime));
-            if reservation.commit(pair).is_err() { return LinuxResult::Error(Errno::EIO); }
+            listener.queue_pending(
+                accepted_id,
+                RuntimeSocket::connected_unix(pair.clone(), 1, accepted_id, accepted_snapshot, lifetime),
+            );
+            if reservation.commit(pair).is_err() {
+                return LinuxResult::Error(Errno::EIO);
+            }
             return LinuxResult::Value(0);
         }
         let RuntimeSocketKind::Host { description, token } = &socket.kind else {
@@ -545,8 +666,14 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let Some(host) = &self.host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        if socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()).socket_type == SocketType::Datagram {
-            if let Err(error) = host.prepare_connect(*token, address.clone()) {
+        if socket
+            .snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .socket_type
+            == SocketType::Datagram
+        {
+            if let Err(error) = host.prepare_connect_route(*token, self.connect_route(address.clone())) {
                 return LinuxResult::Error(SocketErrno::runtime(error));
             }
             match hl_network::SocketHostIo::start_connect(host.as_ref(), *token, false) {
@@ -554,7 +681,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
                     snapshot.peer = Some(address);
                     snapshot.state = SocketState::Connected;
-                    return match self.current_catalog().replace_host_snapshot(socket.id, snapshot.clone()) {
+                    return match self
+                        .current_catalog()
+                        .replace_host_snapshot(socket.id, snapshot.clone())
+                    {
                         Ok(()) => LinuxResult::Value(0),
                         Err(_) => LinuxResult::Error(Errno::EIO),
                     };
@@ -566,7 +696,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if let Err(error) = self.route(&address) {
             return LinuxResult::Error(error);
         }
-        if let Err(error) = host.prepare_connect(*token, address.clone()) {
+        if let Err(error) = host.prepare_connect_route(*token, self.connect_route(address.clone())) {
             return LinuxResult::Error(SocketErrno::runtime(error));
         }
         {
@@ -611,16 +741,24 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Err(error) => return LinuxResult::Error(error),
         };
         if let Some(netlink) = socket.netlink_socket() {
-            if peer { return LinuxResult::Error(Errno::ENOTCONN); }
+            if peer {
+                return LinuxResult::Error(Errno::ENOTCONN);
+            }
             let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
             let mut capacity = [0_u8; 4];
-            if marshaller.copy_from(length, &mut capacity).fault.is_some() { return LinuxResult::Error(Errno::EFAULT); }
+            if marshaller.copy_from(length, &mut capacity).fault.is_some() {
+                return LinuxResult::Error(Errno::EFAULT);
+            }
             let capacity = u32::from_le_bytes(capacity) as usize;
             let mut address = [0_u8; 12];
             address[..2].copy_from_slice(&16_u16.to_le_bytes());
             address[4..8].copy_from_slice(&netlink.port().to_le_bytes());
-            if marshaller.copy_to(pointer, &address[..capacity.min(12)]).fault.is_some()
-                || marshaller.copy_to(length, &12_u32.to_le_bytes()).fault.is_some() {
+            if marshaller
+                .copy_to(pointer, &address[..capacity.min(12)])
+                .fault
+                .is_some()
+                || marshaller.copy_to(length, &12_u32.to_le_bytes()).fault.is_some()
+            {
                 return LinuxResult::Error(Errno::EFAULT);
             }
             return LinuxResult::Value(0);
@@ -639,8 +777,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     let Some(host) = &self.host else {
                         return LinuxResult::Error(Errno::ENOSYS);
                     };
-                    if peer { host.peer_address(*token) } else { host.local_address(*token) }
-                        .map(GuestNetworkAddress::Inet)
+                    if peer {
+                        host.peer_address(*token)
+                    } else {
+                        host.local_address(*token)
+                    }
+                    .map(GuestNetworkAddress::Inet)
                 }
             }
             RuntimeSocketKind::Unix { pair, endpoint } => {

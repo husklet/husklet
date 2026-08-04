@@ -275,6 +275,31 @@ impl Engine {
         Ok(Self { backend, workspace })
     }
 
+    /// Constructs a runtime with application-owned durable checkpoint transport.
+    pub fn from_plan_with_checkpoint(
+        isa: GuestIsa,
+        plan: RuntimePlan,
+        streams: crate::composition::StandardStreams,
+        sink: Arc<dyn crate::composition::CheckpointSink>,
+        source: Arc<dyn crate::composition::CheckpointSource>,
+    ) -> Result<Self, EngineError> {
+        let workspace = OwnedWorkspace::create()?;
+        let factory = RustRuntimeFactory::new(
+            Arc::new(crate::native::GuestExecutor::default()),
+            Arc::new(Services),
+            RuntimeAssemblyConfig::default(),
+        );
+        let services = RuntimeServices {
+            activation: Arc::new(Activation),
+            checkpoint_sink: Some(sink),
+            checkpoint_source: Some(source),
+            streams,
+        };
+        let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
+            .map_err(|_| EngineError::LaunchFailed)?;
+        Ok(Self { backend, workspace })
+    }
+
     pub fn start(&self) -> Result<(), EngineError> {
         self.backend.start()
     }
@@ -283,6 +308,12 @@ impl Engine {
     }
     pub fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         self.backend.stop(request)
+    }
+    pub fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        self.backend.checkpoint_supported()
+    }
+    pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        self.backend.capture_checkpoint()
     }
     pub fn destroy(&self) -> Result<Option<EngineExit>, EngineError> {
         self.backend.destroy()

@@ -56,7 +56,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let crate::RuntimeSocketKind::Host { token, .. } = &socket.kind else {
                 return LinuxResult::Error(Errno::EOPNOTSUPP);
             };
-            let Some(host) = &self.host else { return LinuxResult::Error(Errno::ENOSYS) };
+            let Some(host) = &self.host else {
+                return LinuxResult::Error(Errno::ENOSYS);
+            };
             return match host.send_urgent(*token, &input) {
                 Ok(count) => LinuxResult::Value(count as u64),
                 Err(error) => LinuxResult::Error(SocketErrno::runtime(error)),
@@ -170,7 +172,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .nonblocking;
-        match host.send_to(*token, &input, address, nonblocking) {
+        match host.send_to_route(*token, &input, self.connect_route(address), nonblocking) {
             Ok(count) => LinuxResult::Value(count as u64),
             Err(error) => LinuxResult::Error(SocketErrno::runtime(error)),
         }
@@ -215,12 +217,18 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let crate::RuntimeSocketKind::Host { token, .. } = &socket.kind else {
                 return LinuxResult::Error(Errno::EOPNOTSUPP);
             };
-            let Some(host) = &self.host else { return LinuxResult::Error(Errno::ENOSYS) };
+            let Some(host) = &self.host else {
+                return LinuxResult::Error(Errno::ENOSYS);
+            };
             let mut output = vec![0; length];
             return match host.receive_urgent(*token, &mut output, flags & MSG_PEEK != 0) {
                 Ok(count) if count <= output.len() => {
                     let copied = marshaller.copy_to(pointer, &output[..count]);
-                    if copied.fault.is_some() { LinuxResult::Error(Errno::EFAULT) } else { LinuxResult::Value(count as u64) }
+                    if copied.fault.is_some() {
+                        LinuxResult::Error(Errno::EFAULT)
+                    } else {
+                        LinuxResult::Value(count as u64)
+                    }
                 }
                 Ok(_) => LinuxResult::Error(Errno::EIO),
                 Err(error) => LinuxResult::Error(SocketErrno::runtime(error)),
@@ -299,7 +307,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         waitall: bool,
     ) -> Result<(usize, usize, Option<hl_network::SocketAddress>), Errno> {
         if let Some(netlink) = socket.netlink_socket() {
-            return netlink.receive(output, peek).map(|(count, full)| (count, full, None)).map_err(FileErrno::object);
+            return netlink
+                .receive(output, peek)
+                .map(|(count, full)| (count, full, None))
+                .map_err(FileErrno::object);
         }
         let socket_type = socket
             .snapshot

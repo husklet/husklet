@@ -9,6 +9,9 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
+const CHECKPOINT_OBJECT: &str = "rust/image";
+const CHECKPOINT_MANIFEST_MAGIC: &[u8; 8] = b"HLRUST01";
+
 mod process;
 mod spec;
 use process::Process;
@@ -16,6 +19,59 @@ use spec::Spec;
 
 #[derive(Default)]
 pub(crate) struct Engine;
+
+struct CheckpointTransport {
+    image: Arc<dyn crate::CheckpointImage>,
+}
+
+impl CheckpointTransport {
+    fn new(image: Arc<dyn crate::CheckpointImage>) -> Self {
+        Self { image }
+    }
+}
+
+impl hl_engine::composition::CheckpointSink for CheckpointTransport {
+    fn replace(&self, bytes: &[u8]) -> std::result::Result<(), hl_engine::composition::CompositionError> {
+        self.image
+            .put(CHECKPOINT_OBJECT, bytes)
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)?;
+        let mut manifest = Vec::with_capacity(16);
+        manifest.extend_from_slice(CHECKPOINT_MANIFEST_MAGIC);
+        manifest.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        self.image
+            .commit(&manifest)
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+}
+
+impl hl_engine::composition::CheckpointSource for CheckpointTransport {
+    fn read(&self, maximum: usize) -> std::result::Result<Vec<u8>, hl_engine::composition::CompositionError> {
+        let manifest = self
+            .image
+            .get("MANIFEST")
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)?;
+        if manifest.len() != 16 || &manifest[..8] != CHECKPOINT_MANIFEST_MAGIC {
+            return Err(hl_engine::composition::CompositionError::RuntimeConstruction);
+        }
+        let length = u64::from_le_bytes(
+            manifest[8..]
+                .try_into()
+                .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)?,
+        );
+        let length =
+            usize::try_from(length).map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)?;
+        if length > maximum {
+            return Err(hl_engine::composition::CompositionError::RuntimeConstruction);
+        }
+        let bytes = self
+            .image
+            .get(CHECKPOINT_OBJECT)
+            .map_err(|_| hl_engine::composition::CompositionError::RuntimeConstruction)?;
+        (bytes.len() == length)
+            .then_some(bytes)
+            .ok_or(hl_engine::composition::CompositionError::RuntimeConstruction)
+    }
+}
 
 struct ChannelInput {
     receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
@@ -96,12 +152,6 @@ impl Runtime for Engine {
                 config.rootfs.display()
             )));
         }
-        if config.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore) {
-            return Err(Error::Runtime(
-                "Rust engine checkpoint restore is not connected to container storage".into(),
-            ));
-        }
-        let checkpointable = false;
         let spec = Spec::try_from(&config)?;
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
         let streams = hl_engine::composition::StandardStreams::new(
@@ -109,9 +159,22 @@ impl Runtime for Engine {
             LogOutput::new(crate::Stream::Stdout, sender.clone()),
             LogOutput::new(crate::Stream::Stderr, sender),
         );
+        let checkpoint = config
+            .checkpoint
+            .map(|checkpoint| Arc::new(CheckpointTransport::new(checkpoint.image)));
+        let checkpointable = checkpoint.is_some();
         let engine = Arc::new(
-            hl_engine::runtime::Engine::from_plan_with_streams(spec.isa, spec.plan, streams)
-                .map_err(|error| Error::Runtime(format!("engine construction: {error:?}")))?,
+            match checkpoint {
+                Some(transport) => hl_engine::runtime::Engine::from_plan_with_checkpoint(
+                    spec.isa,
+                    spec.plan,
+                    streams,
+                    transport.clone(),
+                    transport,
+                ),
+                None => hl_engine::runtime::Engine::from_plan_with_streams(spec.isa, spec.plan, streams),
+            }
+            .map_err(|error| Error::Runtime(format!("engine construction: {error:?}")))?,
         );
         engine
             .start()
@@ -129,9 +192,56 @@ impl Runtime for Engine {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelInput, LogOutput, Spec};
-    use crate::service::ProcessConfig;
+    use super::{ChannelInput, CheckpointTransport, LogOutput, Spec};
+    use crate::CheckpointImage as _;
+    use crate::service::{NetworkConfig, ProcessConfig};
+    use hl_engine::composition::{CheckpointSink as _, CheckpointSource as _};
+    use std::collections::BTreeMap;
     use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Image(Mutex<BTreeMap<String, Vec<u8>>>);
+
+    impl crate::CheckpointImage for Image {
+        fn put(&self, name: &str, bytes: &[u8]) -> Result<(), crate::CheckpointError> {
+            self.0.lock().unwrap().insert(name.to_owned(), bytes.to_vec());
+            Ok(())
+        }
+
+        fn get(&self, name: &str) -> Result<Vec<u8>, crate::CheckpointError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(name)
+                .cloned()
+                .ok_or_else(|| crate::CheckpointError::new("missing object"))
+        }
+
+        fn list(&self) -> Result<Vec<String>, crate::CheckpointError> {
+            Ok(self.0.lock().unwrap().keys().cloned().collect())
+        }
+    }
+
+    #[test]
+    fn checkpoint_transport_publishes_then_reads_exact_image() {
+        let image = Arc::new(Image::default());
+        let transport = CheckpointTransport::new(image.clone());
+        transport.replace(b"rust-checkpoint").unwrap();
+        assert_eq!(transport.read(64).unwrap(), b"rust-checkpoint");
+        assert_eq!(image.list().unwrap(), ["MANIFEST", "rust/image"]);
+        assert!(transport.read(4).is_err());
+    }
+
+    #[test]
+    fn checkpoint_transport_rejects_uncommitted_or_torn_images() {
+        let image = Arc::new(Image::default());
+        image.put("rust/image", b"partial").unwrap();
+        let transport = CheckpointTransport::new(image.clone());
+        assert!(transport.read(64).is_err());
+        image.put("MANIFEST", b"not-a-rust-manifest").unwrap();
+        assert!(transport.read(64).is_err());
+    }
 
     fn launch() -> ProcessConfig {
         ProcessConfig {
@@ -156,6 +266,18 @@ mod tests {
             terminal: None,
             domain: None,
             domain_owner: true,
+        }
+    }
+
+    fn bridge(name: &str, address: &str, prefix: u8) -> NetworkConfig {
+        NetworkConfig {
+            namespace: "container-test".to_owned(),
+            bridge: Some(name.to_owned()),
+            address: Some(address.parse().unwrap()),
+            prefix: Some(prefix),
+            name: name.to_owned(),
+            driver: crate::NetworkDriver::Bridge,
+            endpoints: Vec::new(),
         }
     }
 
@@ -184,6 +306,53 @@ mod tests {
         let spec = Spec::try_from(&launch).unwrap();
         assert_eq!(spec.plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(spec.plan.options.get("HL_NATIVE_DIAGNOSTICS"), None);
+    }
+
+    #[test]
+    fn network_interfaces_preserve_attachment_order_and_prefixes() {
+        let mut launch = launch();
+        launch.networks = vec![bridge("front", "172.29.0.2", 24), bridge("back", "10.7.0.9", 19)];
+
+        let spec = Spec::try_from(&launch).unwrap();
+
+        assert_eq!(
+            spec.plan.options.get("HL_NETIFS"),
+            Some("front=172.29.0.2/24\nback=10.7.0.9/19")
+        );
+        assert_eq!(spec.plan.options.get("HL_NETBR"), None);
+        assert_eq!(spec.plan.options.get("HL_IP"), None);
+    }
+
+    #[test]
+    fn network_interfaces_are_bounded() {
+        let mut launch = launch();
+        launch.networks = (0..9)
+            .map(|index| bridge(&format!("net{index}"), &format!("10.0.0.{}", index + 1), 24))
+            .collect();
+
+        let error = Spec::try_from(&launch).err().unwrap();
+        assert!(error.to_string().contains("at most 8 virtual network interfaces"));
+    }
+
+    #[test]
+    fn network_interface_fields_are_validated() {
+        let mut launch = launch();
+        launch.networks = vec![bridge("bad=bridge", "10.0.0.2", 24)];
+        assert!(Spec::try_from(&launch).is_err());
+
+        launch.networks = vec![bridge(&"x".repeat(41), "10.0.0.2", 24)];
+        assert!(Spec::try_from(&launch).is_err());
+
+        launch.networks = vec![bridge("valid", "10.0.0.2", 33)];
+        assert!(Spec::try_from(&launch).is_err());
+
+        launch.networks = vec![bridge("valid", "0.0.0.0", 24)];
+        assert!(Spec::try_from(&launch).is_err());
+
+        let mut incomplete = bridge("valid", "10.0.0.2", 24);
+        incomplete.prefix = None;
+        launch.networks = vec![incomplete];
+        assert!(Spec::try_from(&launch).is_err());
     }
 
     #[test]

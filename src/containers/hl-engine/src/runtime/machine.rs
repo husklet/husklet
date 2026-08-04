@@ -96,7 +96,11 @@ impl TaskExternalCheckpoint for TaskBindings {
     }
 
     fn stage(&self, image: &TaskRegistryImage) -> Result<Box<dyn TaskExternalRestore>, TaskError> {
-        if !image.processes.is_empty() || !image.threads.is_empty() {
+        if image.processes.len() != 1
+            || image.threads.len() != 1
+            || image.registry.processes.len() != 1
+            || image.registry.threads.len() != 1
+        {
             return Err(TaskError::InvalidSnapshot);
         }
         Ok(Box::new(TaskRestore))
@@ -205,6 +209,27 @@ impl<E: GuestExecutionPort> GuestMachine for RustRuntimeMachine<E> {
 
     fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         self.execution.stop(&self.assembly, request)
+    }
+
+    fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        self.assembly.preflight_checkpoint().map_err(|error| match error {
+            hl_runtime::AssemblyCheckpointError::Missing | hl_runtime::AssemblyCheckpointError::Unsupported(_) => {
+                EngineError::Unsupported
+            }
+            hl_runtime::AssemblyCheckpointError::Transaction(_) => EngineError::LaunchFailed,
+        })
+    }
+
+    fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        self.checkpoint_supported()?;
+        let transport = self.services.checkpoint_sink.as_ref().ok_or(EngineError::Unsupported)?;
+        let mut sink = hl_checkpoint::MemorySink::new();
+        self.assembly
+            .capture_checkpoint(&mut sink)
+            .map_err(|_| EngineError::LaunchFailed)?;
+        transport
+            .replace(sink.committed().ok_or(EngineError::LaunchFailed)?)
+            .map_err(|_| EngineError::LaunchFailed)
     }
 }
 

@@ -80,6 +80,7 @@ struct HostState {
     next: u64,
     local: Option<SocketAddress>,
     peer: Option<SocketAddress>,
+    routes: Vec<(&'static str, hl_network::EgressRoute)>,
     closed: Vec<u64>,
     sent_to: Vec<(u64, Vec<u8>, SocketAddress, bool)>,
     send_to_result: Option<Result<usize, crate::RuntimeNetworkError>>,
@@ -163,9 +164,27 @@ impl RuntimeNetworkHost for Host {
         Ok(address)
     }
 
+    fn bind_route(
+        &self,
+        token: u64,
+        route: hl_network::EgressRoute,
+    ) -> Result<SocketAddress, crate::RuntimeNetworkError> {
+        self.state.lock().unwrap().routes.push(("bind", route.clone()));
+        self.bind(token, route.address)
+    }
+
     fn prepare_connect(&self, _: u64, address: SocketAddress) -> Result<(), crate::RuntimeNetworkError> {
         self.state.lock().unwrap().peer = Some(address);
         Ok(())
+    }
+
+    fn prepare_connect_route(
+        &self,
+        token: u64,
+        route: hl_network::EgressRoute,
+    ) -> Result<(), crate::RuntimeNetworkError> {
+        self.state.lock().unwrap().routes.push(("connect", route.clone()));
+        self.prepare_connect(token, route.address)
     }
 
     fn listen(&self, _: u64, _: u32) -> Result<(), crate::RuntimeNetworkError> {
@@ -214,6 +233,16 @@ impl RuntimeNetworkHost for Host {
         let mut state = self.state.lock().unwrap();
         state.sent_to.push((token, input.to_vec(), address, nonblocking));
         state.send_to_result.take().unwrap_or(Ok(input.len()))
+    }
+    fn send_to_route(
+        &self,
+        token: u64,
+        input: &[u8],
+        route: hl_network::EgressRoute,
+        nonblocking: bool,
+    ) -> Result<usize, crate::RuntimeNetworkError> {
+        self.state.lock().unwrap().routes.push(("send", route.clone()));
+        self.send_to(token, input, route.address, nonblocking)
     }
     fn receive_from(
         &self,
@@ -371,6 +400,60 @@ fn host_work_isas() {
 }
 
 #[test]
+fn interface_routes_reach_host_bind_connect_and_datagram_send() {
+    let fixture = Fixture::new();
+    let policy =
+        hl_network::NetworkPolicy::from_launch(false, b"", b"", b"wide=10.0.0.2/8\nnarrow=10.4.0.2/16").unwrap();
+    let mut runtime = fixture
+        .runtime(GuestArchitecture::X86_64)
+        .with_network_policy(policy)
+        .with_host_projection(true);
+    let sockaddr = |address: [u8; 4], port: u16| {
+        let mut value = [0_u8; 16];
+        value[..2].copy_from_slice(&2_u16.to_le_bytes());
+        value[2..4].copy_from_slice(&port.to_be_bytes());
+        value[4..8].copy_from_slice(&address);
+        value
+    };
+
+    let LinuxResult::Value(listener) = runtime.handle(Fixture::operation("socket"), [2, 1, 6, 0, 0, 0]) else {
+        panic!("stream socket creation failed")
+    };
+    fixture.memory.put(16, &sockaddr([10, 4, 0, 2], 8080));
+    assert_eq!(
+        runtime.handle(Fixture::operation("bind"), [listener, 16, 16, 0, 0, 0]),
+        LinuxResult::Value(0)
+    );
+
+    let LinuxResult::Value(client) = runtime.handle(Fixture::operation("socket"), [2, 1, 6, 0, 0, 0]) else {
+        panic!("stream socket creation failed")
+    };
+    fixture.memory.put(64, &sockaddr([10, 4, 9, 8], 8080));
+    assert_eq!(
+        runtime.handle(Fixture::operation("connect"), [client, 64, 16, 0, 0, 0]),
+        LinuxResult::Value(0)
+    );
+
+    let LinuxResult::Value(datagram) = runtime.handle(Fixture::operation("socket"), [2, 2, 17, 0, 0, 0]) else {
+        panic!("datagram socket creation failed")
+    };
+    fixture.memory.put(96, b"ping");
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendto"), [datagram, 96, 4, 0, 64, 16]),
+        LinuxResult::Value(4)
+    );
+
+    let state = fixture.host.state.lock().unwrap();
+    assert_eq!(state.routes.len(), 3);
+    assert_eq!(state.routes[0].0, "bind");
+    assert_eq!(state.routes[0].1.interface.as_ref().unwrap().bridge, b"narrow");
+    assert_eq!(state.routes[1].0, "connect");
+    assert_eq!(state.routes[1].1.interface.as_ref().unwrap().bridge, b"wide");
+    assert_eq!(state.routes[2].0, "send");
+    assert_eq!(state.routes[2].1.interface.as_ref().unwrap().bridge, b"wide");
+}
+
+#[test]
 fn ipv4_policy_rejects_global_ipv6_before_host_io() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
         let fixture = Fixture::new();
@@ -379,23 +462,17 @@ fn ipv4_policy_rejects_global_ipv6_before_host_io() {
         let mut address = [0_u8; 28];
         address[..2].copy_from_slice(&10_u16.to_le_bytes());
         address[2..4].copy_from_slice(&80_u16.to_be_bytes());
-        address[8..24].copy_from_slice(&[
-            0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88,
-        ]);
+        address[8..24].copy_from_slice(&[0x20, 0x01, 0x48, 0x60, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88]);
         fixture.memory.put(64, &address);
         fixture.memory.put(128, b"ping");
-        let LinuxResult::Value(stream) =
-            runtime.handle(Fixture::operation("socket"), [10, 1, 6, 0, 0, 0])
-        else {
+        let LinuxResult::Value(stream) = runtime.handle(Fixture::operation("socket"), [10, 1, 6, 0, 0, 0]) else {
             panic!("IPv6 stream socket creation failed")
         };
         assert_eq!(
             runtime.handle(Fixture::operation("connect"), [stream, 64, 28, 0, 0, 0]),
             LinuxResult::Error(Errno::ENETUNREACH),
         );
-        let LinuxResult::Value(datagram) =
-            runtime.handle(Fixture::operation("socket"), [10, 2, 17, 0, 0, 0])
-        else {
+        let LinuxResult::Value(datagram) = runtime.handle(Fixture::operation("socket"), [10, 2, 17, 0, 0, 0]) else {
             panic!("IPv6 datagram socket creation failed")
         };
         assert_eq!(
@@ -562,7 +639,9 @@ fn isolated_nonblocking_listener_accepts_as_would_block() {
             LinuxResult::Value(value) => value,
             other => panic!("socket failed: {other:?}"),
         };
-        fixture.memory.put(64, &[2, 0, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        fixture
+            .memory
+            .put(64, &[2, 0, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
             runtime.handle(Fixture::operation("bind"), [listener, 64, 16, 0, 0, 0]),
             LinuxResult::Value(0),

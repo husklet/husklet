@@ -98,6 +98,12 @@ pub trait GuestMachine: Send + Sync {
     fn start(&self) -> Result<(), EngineError>;
     fn wait(&self) -> Result<EngineExit, EngineError>;
     fn stop(&self, request: StopRequest) -> Result<(), EngineError>;
+    fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported)
+    }
+    fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        Err(EngineError::Unsupported)
+    }
 }
 
 /// Constructs all runtime domains for one engine.
@@ -157,6 +163,16 @@ impl<M: GuestMachine + 'static> Launcher for MachineLauncher<M> {
     }
 }
 
+impl<M: GuestMachine> MachineLauncher<M> {
+    fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        self.machine.checkpoint_supported()
+    }
+
+    fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        self.machine.capture_checkpoint()
+    }
+}
+
 /// Public app composition around one independently owned runtime machine.
 pub struct EngineBackend<M: GuestMachine, W> {
     engine: Engine<MachineLauncher<M>, W>,
@@ -202,6 +218,14 @@ impl<M: GuestMachine + 'static, W: Workspace> EngineBackend<M, W> {
 
     pub fn stop(&self, request: StopRequest) -> Result<(), EngineError> {
         self.engine.terminate(request)
+    }
+
+    pub fn checkpoint_supported(&self) -> Result<(), EngineError> {
+        self.engine.launcher().checkpoint_supported()
+    }
+
+    pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
+        self.engine.launcher().capture_checkpoint()
     }
 
     pub fn destroy(&self) -> Result<Option<EngineExit>, EngineError> {

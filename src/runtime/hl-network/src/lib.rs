@@ -6,10 +6,13 @@ use std::collections::BTreeMap;
 use std::sync::RwLock;
 
 mod ancillary;
+mod blocking;
 mod catalog;
 mod checkpoint;
 mod checkpoint_activity;
+mod egress;
 mod listener;
+mod platform;
 mod policy;
 mod socket_ofd;
 mod unix;
@@ -23,6 +26,7 @@ pub use checkpoint::{
     NETWORK_CHECKPOINT_VERSION, NetworkCatalogRestore, NetworkCheckpointError, NetworkCheckpointImage,
     NetworkCheckpointRebind, NetworkResourceKey, NetworkSocketResource, NetworkSocketState, PortCheckpoint,
 };
+pub use egress::{EgressInterface, EgressRoute};
 pub use listener::{AcceptError, AcceptedToken};
 pub use policy::{InterfaceConfiguration, NamespaceInterface, NetworkPolicy, NetworkPolicyError, RouteDisposition};
 pub use socket_ofd::{

@@ -23,6 +23,11 @@ impl TryFrom<&ProcessConfig> for Spec {
         Self::network(&mut options, launch)?;
         Self::flag(&mut options, "HL_NATIVE_EXECUTION", launch.execution.is_native())?;
         Self::flag(&mut options, "HL_NATIVE_DIAGNOSTICS", launch.execution.diagnostics())?;
+        Self::flag(
+            &mut options,
+            "HL_RESTORE",
+            launch.checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.restore),
+        )?;
 
         let executable = launch.rootfs.join(launch.process.program.trim_start_matches('/'));
         let arguments = std::iter::once(launch.process.program.as_bytes().to_vec())
@@ -51,6 +56,8 @@ impl TryFrom<&ProcessConfig> for Spec {
 }
 
 impl Spec {
+    const MAX_NETWORK_INTERFACES: usize = 8;
+
     fn set(options: &mut Options, name: &str, value: impl AsRef<[u8]>) -> Result<()> {
         options
             .set_bytes(name, value.as_ref(), true)
@@ -158,13 +165,50 @@ impl Spec {
                 Self::flag(options, "HL_NET_ISOLATE", launch.isolation.network_isolated)?;
             }
         }
-        if let Some(network) = launch.networks.iter().find(|network| network.bridge.is_some()) {
-            if let Some(bridge) = &network.bridge {
-                Self::set(options, "HL_NETBR", bridge)?;
+        let interfaces = launch
+            .networks
+            .iter()
+            .filter(|network| network.bridge.is_some())
+            .collect::<Vec<_>>();
+        if interfaces.len() > Self::MAX_NETWORK_INTERFACES {
+            return Err(Error::InvalidSpec(format!(
+                "at most {} virtual network interfaces are supported",
+                Self::MAX_NETWORK_INTERFACES
+            )));
+        }
+        let mut records = Vec::with_capacity(interfaces.len());
+        for interface in interfaces {
+            let bridge = interface.bridge.as_deref().expect("filtered for bridge");
+            if bridge.is_empty()
+                || bridge.len() > 40
+                || !bridge
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            {
+                return Err(Error::InvalidSpec(format!(
+                    "virtual network bridge {bridge:?} must be 1..=40 ASCII letters, digits, '-' or '_'"
+                )));
             }
-            if let Some(address) = network.address {
-                Self::set(options, "HL_IP", address.to_string())?;
+            let address = interface
+                .address
+                .ok_or_else(|| Error::InvalidSpec(format!("virtual network bridge {bridge:?} has no IPv4 address")))?;
+            if address.is_unspecified() {
+                return Err(Error::InvalidSpec(format!(
+                    "virtual network bridge {bridge:?} has an unspecified IPv4 address"
+                )));
             }
+            let prefix = interface
+                .prefix
+                .ok_or_else(|| Error::InvalidSpec(format!("virtual network bridge {bridge:?} has no IPv4 prefix")))?;
+            if prefix > 32 {
+                return Err(Error::InvalidSpec(format!(
+                    "virtual network bridge {bridge:?} has IPv4 prefix {prefix} greater than 32"
+                )));
+            }
+            records.push(format!("{bridge}={address}/{prefix}"));
+        }
+        if !records.is_empty() {
+            Self::set(options, "HL_NETIFS", records.join("\n"))?;
         }
         let publish = launch
             .publish
