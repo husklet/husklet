@@ -1264,3 +1264,76 @@ The same warning-strict `x86_chain` compile is presently blocked before
 execution by three test-only positional `hl_native_projection` initializers
 that omit the newer `active` field (lines 180, 289, and 361). This audit did
 not weaken warnings or edit that shared test. No production source changed.
+
+## Rejected run-scoped AArch64 view certificate
+
+The exact baseline was `a0ff93cd4b003022afc47fb6f21e52eef4256679`; the
+corrected candidate was `e34a8a4b7ed43b5384a479b521fd9137df86b9b4`. The
+retained-C reference remained
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. The candidate appended a complete
+run-scoped first/last/delta/permissions/incarnation/authority certificate,
+published it only under a live projection lease and native execution admission,
+and made every ordinary AArch64 guard try it before the complete selector.
+Write-cache owner transitions invalidated the certificate before changing the
+exact dirty owner.
+
+Warning-strict `hl-engine --lib --no-run`, the direct native `aarch64_trace`,
+and the focused cached-write-view test passed. A broader engine run found only
+three previously classified invalid/racy tests after the cached-write owner bug
+was corrected. Focused native tests covered exact issuance, a valid hit, stale
+authority and incarnation, permission and bounds rejection, checked-end
+overflow, exact successful dirty ranges, and no publication for a faulting
+store.
+
+Both release binaries were built alone with 18 Cargo jobs. Their SHA-256 values
+were respectively
+`f4f39b9def5627dad59cc2c91e784a75b35b7e42e68abb47c7b32500ec6fad54`
+and
+`f77ddd89460e6eb7ad7288f40a474f2a943dfc684cd5b7fd7af46ae7238bf7b9`.
+The combined guest source hash was
+`ec97f6f5c598f6fc229231dbf4751fb298ebaf1ae04c530d8aecbc7a1ec926af`.
+The temporary manifest selected `--divisor 20 --phase memory`, one warmup and
+one measured repetition; its hash was
+`2962e46663e7e9557fc73058904d764e012ecc9bb8c40e9f2599ecff7b73def6`.
+The checked-in manifest was restored after measurement.
+
+Root confirmed a quiet window before five alternating baseline/candidate pairs.
+Every invocation was pinned to CPU 17 with its `performance` governor and used:
+
+```text
+taskset -c 17 env \
+  HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1' \
+  <exact-release-testing> bench combined --isa arm64 --jobs 1 \
+  --results target/testing/a64-cert-<tree>-<pair>.tsv
+```
+
+At the earlier artifact-binding checkpoint the host had 15 GiB available RAM,
+23 GiB free swap, 149 GiB free on `/Users`, and 12 GiB free in `/tmp`. The
+first attempted run was discarded while unrelated compilation was active. No
+timing below came from that contaminated run.
+
+All ten scored rows passed with typed native execution and diagnostics. The
+memory checksum remained `36526`, matching the pinned workload's recorded
+control. Execution counts were identical: 900 runs, 229 builds, 4,898 hits, 16
+fallbacks, 7 sites, 22 services, 58,122,035 completed instructions, 2,780
+operand callbacks, and 833 operand-cache hits. Baseline guards were
+0 fast / 29,021,179 full / 3,626 fallback; candidate guards were
+13,421,658 fast / 15,599,521 full / 3,626 fallback. Dirty counters were
+identical: 14,536,779 reserved and committed, 3 overflow, and 14,534,044
+merged.
+
+| Pair | Baseline guest/wall | Candidate guest/wall |
+| ---: | ---: | ---: |
+| 1 | 183999 us / 216 ms | 189129 us / 222 ms |
+| 2 | 181698 us / 212 ms | 189678 us / 222 ms |
+| 3 | 180507 us / 210 ms | 220445 us / 252 ms |
+| 4 | 180057 us / 209 ms | 188896 us / 219 ms |
+| 5 | 183706 us / 216 ms | 202699 us / 236 ms |
+
+Baseline guest min/median/max was 180057/181698/183999 us; candidate was
+188896/189678/220445 us. Baseline wall min/median/max was 209/212/216 ms;
+candidate was 219/222/252 ms. Candidate medians regressed by 4.39% guest and
+4.72% wall, and every paired sample was slower. The mechanism reduced full
+selector executions but its added per-access identity/range checks and static
+code outweighed that saving. The production candidate was therefore reverted;
+no performance claim is accepted.
