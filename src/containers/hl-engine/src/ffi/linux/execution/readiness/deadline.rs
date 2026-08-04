@@ -188,13 +188,14 @@ impl Queue {
             state.tokens.remove(&token);
             let callback = state.callbacks.remove(&token);
             drop(state);
-            let value = 1_u64;
-            // SAFETY: value is readable for eight bytes, the worker shares the
-            // live owned descriptor, and write retains no pointer.
-            let _ = unsafe { write(inner.descriptor, (&value as *const u64).cast(), 8) };
             if let Some(callback) = callback {
                 callback();
             }
+            let value = 1_u64;
+            // SAFETY: value is readable for eight bytes, the worker shares the
+            // live owned descriptor, and write retains no pointer. Callback
+            // effects are published before readiness becomes observable.
+            let _ = unsafe { write(inner.descriptor, (&value as *const u64).cast(), 8) };
             state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
             inner.changed.notify_all();
         }
@@ -228,6 +229,51 @@ unsafe extern "C" {
 mod test {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn callback_completes_before_readiness_is_published() {
+        #[derive(Default)]
+        struct Gate {
+            entered: bool,
+            released: bool,
+        }
+
+        let queue = Queue::new().unwrap();
+        let gate = Arc::new((Mutex::new(Gate::default()), Condvar::new()));
+        let callback_gate = Arc::clone(&gate);
+        queue
+            .schedule_callback(
+                0,
+                Arc::new(move || {
+                    let (state, changed) = &*callback_gate;
+                    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                    state.entered = true;
+                    changed.notify_all();
+                    while !state.released {
+                        state = changed.wait(state).unwrap_or_else(|error| error.into_inner());
+                    }
+                }),
+            )
+            .unwrap();
+
+        let (state, changed) = &*gate;
+        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        while !state.entered {
+            state = changed.wait(state).unwrap_or_else(|error| error.into_inner());
+        }
+        let mut descriptor = libc::pollfd {
+            fd: queue.descriptor(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: descriptor points to one initialized pollfd for the call duration.
+        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 0) }, 0);
+        state.released = true;
+        changed.notify_all();
+        drop(state);
+        // SAFETY: descriptor points to one initialized pollfd for the call duration.
+        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 1_000) }, 1);
+    }
 
     #[test]
     fn capacity_releases() {
