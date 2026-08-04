@@ -1,0 +1,1 @@
+prctl-capbset in_range_ok=1 oor_einval=1 nnp_before=0 nnp_set=1 nnp_after=1

@@ -1,4 +1,4 @@
-use syn::{visit::Visit, Expr, Lit, Pat, Type};
+use syn::{Expr, Lit, Pat, Type, visit::Visit};
 
 pub(super) fn excluded_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
@@ -38,7 +38,7 @@ pub(super) fn excluded_name(name: &str) -> bool {
     .any(|word| name == *word || name.ends_with(&format!("_{word}")))
 }
 
-pub(super) fn state_name(name: &str) -> bool {
+pub(super) fn candidate_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     [
         "state",
@@ -60,10 +60,7 @@ pub(super) fn peel(expression: &Expr) -> &Expr {
         Expr::Paren(inner) => peel(&inner.expr),
         Expr::Reference(inner) => peel(&inner.expr),
         Expr::MethodCall(call)
-            if matches!(
-                call.method.to_string().as_str(),
-                "as_str" | "as_ref" | "borrow"
-            ) && call.args.is_empty() =>
+            if matches!(call.method.to_string().as_str(), "as_str" | "as_ref" | "borrow") && call.args.is_empty() =>
         {
             peel(&call.receiver)
         }
@@ -78,10 +75,8 @@ pub(super) fn string_literal(expression: &Expr) -> Option<(String, proc_macro2::
             _ => None,
         },
         Expr::MethodCall(call)
-            if matches!(
-                call.method.to_string().as_str(),
-                "into" | "to_owned" | "to_string"
-            ) && call.args.is_empty() =>
+            if matches!(call.method.to_string().as_str(), "into" | "to_owned" | "to_string")
+                && call.args.is_empty() =>
         {
             string_literal(&call.receiver)
         }

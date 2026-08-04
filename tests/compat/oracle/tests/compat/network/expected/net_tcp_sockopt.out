@@ -1,0 +1,11 @@
+nodelay set=0 get=1
+nodelay_off get=0
+cork get=1
+keepidle get=55
+keepcnt get=7
+maxseg ok=1 nonzero=1
+sotype=1
+sodomain=2
+soproto=6
+tcp_info ok=1 established=1
+outq_ok=1

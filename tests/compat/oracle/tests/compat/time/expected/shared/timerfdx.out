@@ -1,0 +1,1 @@
+timerfd oneshot=1 rem=1 disarmed=1 periodic=1 abstime=1 badclock=1 badflags=1 efault=1

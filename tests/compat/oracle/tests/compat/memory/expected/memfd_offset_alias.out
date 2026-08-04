@@ -1,0 +1,1 @@
+memfd-offset-alias alias=1 fixed=1 writable-publish=1 third=1 thread=1 reuse=1 unmapped=1

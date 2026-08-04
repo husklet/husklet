@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use syn::{
-    spanned::Spanned, visit::Visit, Block, Expr, ExprCall, ExprMacro, ExprMethodCall, ImplItemFn,
-    ItemFn, ItemMod, ItemUse, Local, Pat, UseTree,
+    Block, Expr, ExprCall, ExprMacro, ExprMethodCall, ImplItemFn, ItemFn, ItemMod, ItemUse, Local, Pat, UseTree,
+    spanned::Spanned, visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 /// Prevents host process execution from leaking outside platform boundaries.
@@ -59,30 +59,20 @@ impl<'a> Commands<'a> {
     fn boundary(&self) -> bool {
         self.source.test
             || self.test_depth > 0
+            || self.source.path.file_name().is_some_and(|name| name == "build.rs")
             || self
-                .source
-                .path
-                .file_name()
-                .is_some_and(|name| name == "build.rs")
-            || self.modules.iter().any(|module| {
-                matches!(
-                    module.as_str(),
-                    "adapter" | "adapters" | "platform" | "host"
-                )
-            })
-            || (self.source.package == "husklet"
+                .modules
+                .iter()
+                .any(|module| matches!(module.as_str(), "adapter" | "adapters" | "platform" | "host"))
+            || (self.source.package == "hl-engine"
                 && (self
                     .modules
                     .first()
-                    .is_some_and(|module| module == "runtime")
-                    || self
-                        .source
-                        .path
-                        .file_name()
-                        .is_some_and(|name| name == "main.rs")))
+                    .is_some_and(|module| matches!(module.as_str(), "native" | "platform"))
+                    || self.source.path.file_name().is_some_and(|name| name == "main.rs")))
     }
 
-    fn command_path(&self, call: &ExprCall) -> Option<String> {
+    fn program_path(&self, call: &ExprCall) -> Option<String> {
         let Expr::Path(function) = call.func.as_ref() else {
             return None;
         };
@@ -99,8 +89,7 @@ impl<'a> Commands<'a> {
         if let Some(prefix) = path.first().and_then(|first| self.aliases.get(first)) {
             path.splice(0..1, prefix.clone());
         }
-        (path == ["std", "process", "Command"] || path == ["tokio", "process", "Command"])
-            .then(|| path.join("::"))
+        (path == ["std", "process", "Command"] || path == ["tokio", "process", "Command"]).then(|| path.join("::"))
     }
 
     fn report_boundary(&mut self, call: &ExprCall, command: String) {
@@ -160,9 +149,8 @@ impl<'a> Commands<'a> {
         let unsafe_script = if expression.method == "arg" && expression.args.len() == 1 {
             let argument = &expression.args[0];
             let unsafe_script = command.armed && dynamic(argument);
-            command.armed = !command.armed
-                && string_literal(argument)
-                    .is_some_and(|flag| matches!(flag.as_str(), "-c" | "-e"));
+            command.armed =
+                !command.armed && string_literal(argument).is_some_and(|flag| matches!(flag.as_str(), "-c" | "-e"));
             unsafe_script
         } else if expression.method == "args" && expression.args.len() == 1 {
             let Expr::Array(arguments) = &expression.args[0] else {
@@ -225,11 +213,8 @@ impl<'ast> Visit<'ast> for Commands<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
         let aliases = self.aliases.clone();
         let staged = std::mem::take(&mut self.staged);
-        let test = requires_test(&function.attrs)
-            || function
-                .attrs
-                .iter()
-                .any(|attribute| attribute.path().is_ident("test"));
+        let test =
+            requires_test(&function.attrs) || function.attrs.iter().any(|attribute| attribute.path().is_ident("test"));
         self.test_depth += usize::from(test);
         syn::visit::visit_item_fn(self, function);
         self.test_depth -= usize::from(test);
@@ -240,11 +225,8 @@ impl<'ast> Visit<'ast> for Commands<'_> {
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
         let aliases = self.aliases.clone();
         let staged = std::mem::take(&mut self.staged);
-        let test = requires_test(&function.attrs)
-            || function
-                .attrs
-                .iter()
-                .any(|attribute| attribute.path().is_ident("test"));
+        let test =
+            requires_test(&function.attrs) || function.attrs.iter().any(|attribute| attribute.path().is_ident("test"));
         self.test_depth += usize::from(test);
         syn::visit::visit_impl_item_fn(self, function);
         self.test_depth -= usize::from(test);
@@ -262,20 +244,15 @@ impl<'ast> Visit<'ast> for Commands<'_> {
         if let (Pat::Ident(binding), Some(initializer)) = (&local.pat, &local.init) {
             self.staged.remove(&binding.ident.to_string());
             if let Expr::Call(call) = initializer.expr.as_ref() {
-                if self.command_path(call).is_some() {
+                if self.program_path(call).is_some() {
                     if let Some(shell) = call
                         .args
                         .first()
                         .and_then(string_literal)
                         .filter(|program| shell_program(program))
                     {
-                        self.staged.insert(
-                            binding.ident.to_string(),
-                            Staged {
-                                shell,
-                                armed: false,
-                            },
-                        );
+                        self.staged
+                            .insert(binding.ident.to_string(), Staged { shell, armed: false });
                     }
                 }
             } else if let Expr::Path(alias) = initializer.expr.as_ref() {
@@ -290,7 +267,7 @@ impl<'ast> Visit<'ast> for Commands<'_> {
     }
 
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
-        if let Some(command) = self.command_path(call) {
+        if let Some(command) = self.program_path(call) {
             self.report_boundary(call, command);
         }
         syn::visit::visit_expr_call(self, call);
@@ -351,12 +328,8 @@ fn shell_chain(expression: &ExprMethodCall, commands: &Commands<'_>) -> Option<S
         };
         let shell_flag = flag.method == "arg"
             && flag.args.len() == 1
-            && string_literal(&flag.args[0])
-                .is_some_and(|flag| matches!(flag.as_str(), "-c" | "-e"));
-        (
-            flag.receiver.as_ref(),
-            shell_flag && dynamic(&expression.args[0]),
-        )
+            && string_literal(&flag.args[0]).is_some_and(|flag| matches!(flag.as_str(), "-c" | "-e"));
+        (flag.receiver.as_ref(), shell_flag && dynamic(&expression.args[0]))
     } else if expression.method == "args" && expression.args.len() == 1 {
         let Expr::Array(arguments) = &expression.args[0] else {
             return None;
@@ -376,13 +349,13 @@ fn shell_chain(expression: &ExprMethodCall, commands: &Commands<'_>) -> Option<S
     if !dynamic_script {
         return None;
     }
-    let (call, program) = command_root(receiver)?;
-    commands.command_path(call)?;
+    let (call, program) = root(receiver)?;
+    commands.program_path(call)?;
     let program = string_literal(program)?;
     shell_program(&program).then_some(program)
 }
 
-fn command_root(expression: &Expr) -> Option<(&ExprCall, &Expr)> {
+fn root(expression: &Expr) -> Option<(&ExprCall, &Expr)> {
     let Expr::Call(call) = expression else {
         return None;
     };
@@ -402,11 +375,7 @@ fn string_literal(expression: &Expr) -> Option<String> {
 fn dynamic(expression: &Expr) -> bool {
     match expression {
         Expr::Lit(literal) => !matches!(literal.lit, syn::Lit::Str(_)),
-        Expr::Macro(ExprMacro { mac, .. }) => mac
-            .path
-            .segments
-            .last()
-            .is_none_or(|segment| segment.ident != "concat"),
+        Expr::Macro(ExprMacro { mac, .. }) => mac.path.segments.last().is_none_or(|segment| segment.ident != "concat"),
         _ => true,
     }
 }

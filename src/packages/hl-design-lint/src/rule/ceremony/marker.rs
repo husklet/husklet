@@ -1,13 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use syn::{
-    spanned::Spanned, visit::Visit, GenericParam, ItemImpl, ItemTrait, Type, TypeParamBound,
-    Visibility,
-};
+use syn::{GenericParam, ItemImpl, ItemTrait, Type, TypeParamBound, Visibility, spanned::Spanned, visit::Visit};
 
 use crate::{
     model::{Finding, Related, Review},
-    source::{requires_test, Source, Workspace},
+    source::{Source, Workspace, requires_test},
 };
 
 use super::ID;
@@ -81,8 +78,7 @@ impl Trait {
             ("Bound or trait-object uses".into(), "none".into()),
         ];
         review.questions = vec![
-            "Does this marker provide a sealing, safety, auto-trait, or selective tag contract?"
-                .into(),
+            "Does this marker provide a sealing, safety, auto-trait, or selective tag contract?".into(),
             "Which consumer changes behavior based on this trait?".into(),
         ];
         finding.review = Some(review);
@@ -141,11 +137,7 @@ impl Visit<'_> for Collector<'_, '_> {
             syn::visit::visit_item_impl(self, item);
             return;
         };
-        let Some(name) = path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string())
-        else {
+        let Some(name) = path.segments.last().map(|segment| segment.ident.to_string()) else {
             return;
         };
         let generic_names = item
@@ -153,14 +145,11 @@ impl Visit<'_> for Collector<'_, '_> {
             .params
             .iter()
             .filter_map(|parameter| match parameter {
-                GenericParam::Type(parameter) if parameter.bounds.is_empty() => {
-                    Some(parameter.ident.to_string())
-                }
+                GenericParam::Type(parameter) if parameter.bounds.is_empty() => Some(parameter.ident.to_string()),
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
-        let blanket =
-            simple_type(&item.self_ty).is_some_and(|owner| generic_names.contains(&owner));
+        let blanket = simple_type(&item.self_ty).is_some_and(|owner| generic_names.contains(&owner));
         self.database
             .impls
             .entry((self.source.package.clone(), name))
@@ -173,15 +162,8 @@ impl Visit<'_> for Collector<'_, '_> {
     }
 
     fn visit_trait_bound(&mut self, bound: &syn::TraitBound) {
-        if let Some(name) = bound
-            .path
-            .segments
-            .last()
-            .map(|part| part.ident.to_string())
-        {
-            self.database
-                .uses
-                .insert((self.source.package.clone(), name));
+        if let Some(name) = bound.path.segments.last().map(|part| part.ident.to_string()) {
+            self.database.uses.insert((self.source.package.clone(), name));
         }
         syn::visit::visit_trait_bound(self, bound);
     }
@@ -189,15 +171,8 @@ impl Visit<'_> for Collector<'_, '_> {
     fn visit_type_trait_object(&mut self, object: &syn::TypeTraitObject) {
         for bound in &object.bounds {
             if let TypeParamBound::Trait(bound) = bound {
-                if let Some(name) = bound
-                    .path
-                    .segments
-                    .last()
-                    .map(|part| part.ident.to_string())
-                {
-                    self.database
-                        .uses
-                        .insert((self.source.package.clone(), name));
+                if let Some(name) = bound.path.segments.last().map(|part| part.ident.to_string()) {
+                    self.database.uses.insert((self.source.package.clone(), name));
                 }
             }
         }
@@ -209,6 +184,5 @@ fn simple_type(ty: &Type) -> Option<String> {
     let Type::Path(path) = ty else {
         return None;
     };
-    (path.qself.is_none() && path.path.segments.len() == 1)
-        .then(|| path.path.segments[0].ident.to_string())
+    (path.qself.is_none() && path.path.segments.len() == 1).then(|| path.path.segments[0].ident.to_string())
 }

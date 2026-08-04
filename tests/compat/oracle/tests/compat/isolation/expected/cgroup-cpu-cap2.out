@@ -1,0 +1,1 @@
+cgv2=1 controllers=OK type=domain v1absent=1 cpu.max=[200000 100000] mem.max=[max] mem.swap.max=[max] mem.high=[max] cpu.weight=[100] pids.max=[max]

@@ -1,0 +1,13 @@
+get_missing=ENODATA
+rm_missing=ENODATA
+replace_missing=ENODATA
+set=ok
+create_existing=EEXIST
+get_probe=5
+get_small=ERANGE
+list_has_name=1
+list_small=ERANGE
+create_and_replace=EINVAL
+overwrite=1
+rm=ok
+get_after_rm=ENODATA

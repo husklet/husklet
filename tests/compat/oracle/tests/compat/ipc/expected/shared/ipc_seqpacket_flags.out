@@ -1,0 +1,1 @@
+seqpacket_flags cloexec=1 nonblock=1 msg=1 recvclo=1 passcred=1

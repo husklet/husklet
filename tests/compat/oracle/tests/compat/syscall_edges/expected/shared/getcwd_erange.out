@@ -1,0 +1,3 @@
+getcwd_small_errno=34
+getgroups_count_ok=1
+getgroups_neg_errno=22

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use proc_macro2::Span;
-use syn::{spanned::Spanned, visit::Visit, Path as RustPath, UseTree};
+use syn::{Path as RustPath, UseTree, spanned::Spanned, visit::Visit};
 
 use crate::{
     model::{Finding, Review},
@@ -49,15 +49,9 @@ impl Role {
             Self::Model => target == Self::Model,
             Self::Library => matches!(target, Self::Library),
             Self::Ports => matches!(target, Self::Model | Self::Library | Self::Ports),
-            Self::Service => matches!(
-                target,
-                Self::Model | Self::Library | Self::Ports | Self::Service
-            ),
+            Self::Service => matches!(target, Self::Model | Self::Library | Self::Ports | Self::Service),
             Self::Api => matches!(target, Self::Model | Self::Service | Self::Api),
-            Self::Adapters => matches!(
-                target,
-                Self::Model | Self::Library | Self::Ports | Self::Adapters
-            ),
+            Self::Adapters => matches!(target, Self::Model | Self::Library | Self::Ports | Self::Adapters),
         }
     }
 }
@@ -128,8 +122,7 @@ impl RoleVisitor<'_> {
             ("Proof".into(), "explicit `crate::` path".into()),
         ]);
         review.questions.push(
-            "Does this behavior belong in the target role, or should a lower model/port own the contract?"
-                .into(),
+            "Does this behavior belong in the target role, or should a lower model/port own the contract?".into(),
         );
         finding.review = Some(review);
         self.findings.push(finding);
@@ -139,10 +132,7 @@ impl RoleVisitor<'_> {
 impl<'ast> Visit<'ast> for RoleVisitor<'_> {
     fn visit_path(&mut self, path: &'ast RustPath) {
         let mut segments = path.segments.iter();
-        if segments
-            .next()
-            .is_some_and(|segment| segment.ident == "crate")
-        {
+        if segments.next().is_some_and(|segment| segment.ident == "crate") {
             if let Some(target) = segments
                 .next()
                 .and_then(|segment| Role::parse(&segment.ident.to_string()))
@@ -191,24 +181,14 @@ fn collect_use_roles(tree: &UseTree, record: &mut impl FnMut(Role)) {
 
 fn role_help(source: Role, target: Role) -> &'static str {
     match (source, target) {
-        (Role::Model, _) => {
-            "keep models independent of transport, orchestration, ports, and concrete adapters"
-        }
-        (Role::Library, _) => {
-            "keep transferable domain-kind machinery independent of domain policy and I/O roles"
-        }
+        (Role::Model, _) => "keep models independent of transport, orchestration, ports, and concrete adapters",
+        (Role::Library, _) => "keep transferable domain-kind machinery independent of domain policy and I/O roles",
         (Role::Service, Role::Adapters) => {
             "depend on a narrow domain-owned port and select the concrete adapter at composition"
         }
-        (Role::Api, _) => {
-            "delegate through models or services instead of reaching across API boundaries"
-        }
-        (Role::Ports, _) => {
-            "express the capability with model/library values, not higher-level behavior"
-        }
-        (Role::Adapters, _) => {
-            "implement a domain-owned port without depending on API or service policy"
-        }
+        (Role::Api, _) => "delegate through models or services instead of reaching across API boundaries",
+        (Role::Ports, _) => "express the capability with model/library values, not higher-level behavior",
+        (Role::Adapters, _) => "implement a domain-owned port without depending on API or service policy",
         _ => "move the dependency toward the lower role that owns the contract",
     }
 }

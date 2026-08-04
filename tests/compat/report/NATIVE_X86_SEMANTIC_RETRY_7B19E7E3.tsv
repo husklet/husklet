@@ -1,0 +1,17 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+abi	ucontext_swap	x86_64	pass	0	linux-libc,abi,ucontext	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+core/syscall	utimes-family	x86_64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+core/workload	smctableoverflow	x86_64	fail	0	x86-smc,capacity	stdout:e=2d3d6f048e9d3658,a=f5de1575db02810a,d=21,eb=34,ab=36,el=26,al=24	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	devfull	x86_64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	dbt-smc-crosspage	x86_64	fail	1	smc,page-boundary	exit:e=0,a=1;stdout:e=a226e49cc1394513,a=bbe8318ca674cc1c,d=14,eb=61,ab=4d,el=39,al=53	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-grow	x86_64	fail	1	smc,variable-length,re-translation	exit:e=0,a=1;stdout:e=788f5551dda9ce58,a=1c8489e508b178f9,d=9,eb=61,ab=4d,el=34,al=48	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-manyslots	x86_64	fail	125	smc,code-cache,capacity	exit:e=0,a=125;stdout:e=ffd950fda0193454,a=cbf29ce484222325,d=0,eb=73,ab=--,el=38,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 0, fault: Some(FaultDiagnostic { isa: X86_64, pc: 0, opcode: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], opcode_len: 0, reason: Frozen, address: None, access: None }) }
+memory	dbt-smc-minijit	x86_64	fail	1	smc,mini-jit,codegen	exit:e=0,a=1;stdout:e=47ecab7bf7c90b0a,a=17608103eefac468,d=12,eb=61,ab=4d,el=37,al=50	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-rwx-rewrite	x86_64	fail	1	smc,mmap-rwx,re-translation	exit:e=0,a=1;stdout:e=c700b3535de38313,a=e3e1cbc05df75829,d=8,eb=61,ab=4d,el=32,al=48	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-trampoline	x86_64	fail	1	smc,trampoline,direct-branch-chain	exit:e=0,a=1;stdout:e=9fadfc704cf9dc46,a=24154ac7c594e90d,d=15,eb=61,ab=4d,el=40,al=48	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	memfd-exec-alias	x86_64	fail	1	linux-libc,mmap,mprotect,memfd,filesystem,smc	exit:e=0,a=1;stdout:e=f7ad69d577c08ada,a=cbd9c27d0cbcc617,d=83,eb=31,ab=30,el=168,al=168	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+network	netlink-edges	x86_64	fail	0	linux-libc	stdout:e=8e13ad6190b1df3e,a=e3c2c81a42b49f4d,d=65,eb=31,ab=30,el=254,al=254	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	ifindex	x86_64	fail	0	linux-libc	stdout:e=d1f0344361480a06,a=40e23192bda92f53,d=22,eb=31,ab=30,el=30,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	credential-mutation	x86_64	fail	1	linux-libc,credentials,fork,self-contained-process	exit:e=0,a=1;stdout:e=936d084278d78b06,a=93706a4278da6763,d=23,eb=31,ab=30,el=25,al=25	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+process	proc-self-exe-comm	x86_64	fail	0	linux-libc,procfs,fork,exec,comm,stateful-cleanup	stdout:e=5c1a291d454816ff,a=1ec358bced2bf96e,d=47,eb=72,ab=73,el=126,al=143	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	seccomp-filter	x86_64	fail	1	linux-libc,seccomp,prctl,fork,exec,self-contained-process	exit:e=0,a=1;stdout:e=42b66f55770281d2,a=c4febc63fe71b9b5,d=16,eb=31,ab=30,el=73,al=73	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }

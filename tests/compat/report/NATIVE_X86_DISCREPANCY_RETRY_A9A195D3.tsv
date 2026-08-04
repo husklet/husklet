@@ -1,0 +1,4 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+isa/x86_64	go-static-goro	x86_64	pass	0	go,scheduler,channels	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mprotect-enforcement	x86_64	fail	-	linux-libc,mmap,mprotect,signals	engine:output-limit	capture limit
+process	forkstorm	x86_64	fail	-	linux-libc	engine:output-limit	capture limit

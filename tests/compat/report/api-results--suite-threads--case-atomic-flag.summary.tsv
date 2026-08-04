@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	threads	2
+stdout	threads	2

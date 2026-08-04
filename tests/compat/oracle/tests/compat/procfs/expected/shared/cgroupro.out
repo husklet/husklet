@@ -1,0 +1,17 @@
+self_cgroup_fmt=1
+memory_max_ok=1
+memory_current_le_max=1
+memory_stat_ok=1
+memory_events_ok=1
+cpu_max_ok=1
+cpu_stat_ok=1
+cpu_weight_ok=1
+pids_max_ok=1
+pids_current_ok=1
+controllers_ok=1
+cgroup_type_ok=1
+procs_has_self=1
+cgroup_events_ok=1
+bogus_enoent=1
+cpu_max_wopen_fails=1
+memory_max_wopen_fails=1

@@ -1,0 +1,5 @@
+kill_badsig_errno=22
+kill_nopid_errno=3
+self_probe_ok=1
+tgkill_badsig_errno=22
+tgkill_nopid_errno=3

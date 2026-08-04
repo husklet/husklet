@@ -1,0 +1,25 @@
+selreg ret1                ok
+selreg readset             ok
+selpipe ret2               ok
+selpipe readset            ok
+selpipe writeset           ok
+selfifo ret2               ok
+selfifo readset            ok
+selfifo writeset           ok
+seltimeout ret0            ok
+selpoll0 ret0              ok
+selnfds0 ret0              ok
+selneg einval              ok
+selbadf ebadf              ok
+selbadfdset efault         ok
+pselbadtmo efault          ok
+psel6 tmo0 ret0            ok
+poll empty tmo0            ok
+poll writable              ok
+poll badfd nval            ok
+poll negfd ignored         ok
+poll badptr efault         ok
+epc1 nocloexec             ok
+epc1 cloexec               ok
+epc1 badflag einval        ok
+POLLSEL_DONE

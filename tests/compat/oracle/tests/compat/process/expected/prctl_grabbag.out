@@ -1,0 +1,12 @@
+mce_get_default    r=2 e=0
+mce_get_arg_nz     r=-1 e=22
+mce_clear          r=0 e=0
+mce_set_early      r=0 e=0
+mce_get_after      r=1 e=0
+mce_set_badsub     r=-1 e=22
+mce_set_badval     r=-1 e=22
+perf_disable       r=0 e=0
+perf_disable_argnz r=0 e=0
+perf_enable        r=0 e=0
+set_mm_brk         r=-1 e=1
+set_mm_badsub      r=-1 e=1

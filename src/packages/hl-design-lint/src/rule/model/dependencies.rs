@@ -28,11 +28,7 @@ pub(super) fn local_dependencies(path: &Path) -> HashSet<(String, String)> {
     dependencies
         .into_iter()
         .filter_map(|(alias, specification)| {
-            let specification = if specification
-                .get("workspace")
-                .and_then(toml::Value::as_bool)
-                == Some(true)
-            {
+            let specification = if specification.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
                 workspace_dependencies.as_ref()?.get(alias)?
             } else {
                 specification
@@ -75,11 +71,7 @@ fn dependency_package(alias: &str, specification: &toml::Value) -> Option<String
 fn package_name(manifest: &Path) -> Option<String> {
     let text = fs::read_to_string(manifest).ok()?;
     let value = text.parse::<toml::Value>().ok()?;
-    value
-        .get("package")?
-        .get("name")?
-        .as_str()
-        .map(ToOwned::to_owned)
+    value.get("package")?.get("name")?.as_str().map(ToOwned::to_owned)
 }
 
 fn manifest(path: &Path) -> Option<PathBuf> {

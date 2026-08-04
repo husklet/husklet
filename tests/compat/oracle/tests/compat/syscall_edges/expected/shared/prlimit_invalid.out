@@ -1,0 +1,4 @@
+badres_errno=22
+badpid_errno=3
+badold_errno=14
+badnew_errno=14

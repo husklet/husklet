@@ -1,0 +1,1 @@
+readlinkat n=12 tgt=target-12345

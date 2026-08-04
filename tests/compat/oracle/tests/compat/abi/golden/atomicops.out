@@ -1,0 +1,4 @@
+a=777 prev=383
+cas strong ok=1 val=42 fail=0 seen=42 final=42
+cas weak final=1
+flag t0=0 t1=1 t2=0

@@ -1,0 +1,1 @@
+flock-ofd locked=1 dup-shares=1 downgrade=1 shared-compat=1 upgrade-blocked=1 upgrade-ok=1 fork-shares=1 fork-contends=1

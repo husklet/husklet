@@ -1,0 +1,2 @@
+neon-recip tables=1 est=1 uint=1 step=1 cvtxn=1
+neon-recip checks=17652 fails=0 digest=2eb6af06d5049d82

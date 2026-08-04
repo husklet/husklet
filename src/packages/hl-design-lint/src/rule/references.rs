@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use syn::{spanned::Spanned, visit::Visit, ImplItemFn, ItemFn};
+use syn::{ImplItemFn, ItemFn, spanned::Spanned, visit::Visit};
 
-use crate::{source::Source, Location};
+use crate::{Location, source::Source};
 
 #[derive(Clone)]
 pub struct Context {

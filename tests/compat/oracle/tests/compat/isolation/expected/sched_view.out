@@ -1,0 +1,2 @@
+online_positive=1 conf_ge_online=1 affinity_matches_online=1
+getcpu_valid=1 getcpu_in_mask=1 getcpu_below_conf=1

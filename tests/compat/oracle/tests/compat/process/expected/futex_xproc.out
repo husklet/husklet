@@ -1,0 +1,1 @@
+xproc-futex a_wake=1 b_wake=1 timeout=1 nwake=1

@@ -1,0 +1,1 @@
+sentry_fd_emfile create=1 duplicate=1 recovered_dup=1 recovered_new=1 cleanup=1

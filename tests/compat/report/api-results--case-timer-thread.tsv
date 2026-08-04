@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+time	timer-thread	aarch64	pass	0	linux-libc,time,signals,pthreads	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	timer-thread	x86_64	pass	0	linux-libc,time,signals,pthreads	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,0 +1,6 @@
+badpolicy_errno=22
+nullparam_errno=22
+fifo_hiprio_errno=22
+other_nonzero_errno=22
+getsched_nopid_errno=3
+getparam_nopid_errno=3

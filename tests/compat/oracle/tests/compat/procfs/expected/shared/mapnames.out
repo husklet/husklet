@@ -1,0 +1,5 @@
+setup=1 ordered=1
+plain_named=1 inner_named=1 inner_split=1 head_anon=1
+map_files_agrees=1
+prot_rw=1 prot_ro=1 prot_none=1 prot_back=1
+wx_rx_not_writable=1 wx_rw_writable=1 wx_back_not_writable=1

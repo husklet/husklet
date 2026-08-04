@@ -1,0 +1,11 @@
+x87 fsw exception flags:
+  1.0/0.0   ZE=1
+  0.0/0.0   IE=1
+  sqrt(-1)  IE=1
+  1.0/3.0   PE=1
+  1.0/2.0   PE=0
+fnclex clears:
+  after 1/0 then fnclex, exc=00
+error-summary (masked vs unmasked ZE):
+  masked   ZE=1 ES=0
+  unmasked ZE=1 ES=1

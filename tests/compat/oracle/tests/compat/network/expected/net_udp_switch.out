@@ -1,0 +1,8 @@
+bound fam=2 ip=7f000001 hasport=1
+dg0=3/AAA fromfam=2 fromip=7f000001
+peek=2/BB next=2/BB
+zerolen=0
+empty=-1/EAGAIN
+trunc=10
+oversize=-1/EMSGSIZE
+noreceiver=1/OK

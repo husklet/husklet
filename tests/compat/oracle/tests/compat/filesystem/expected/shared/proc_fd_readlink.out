@@ -1,0 +1,1 @@
+proc-fd-readlink file=1 pipe=1 stat-same=1

@@ -1,0 +1,11 @@
+raise_valid        r=-1 e=1
+lower_valid        r=0 e=0
+is_set_valid       r=0 e=0
+raise_badcap       r=-1 e=22
+lower_badcap       r=-1 e=22
+is_set_badcap      r=-1 e=22
+raise_arg4_nz      r=-1 e=22
+is_set_arg5_nz     r=-1 e=22
+clear_all          r=0 e=0
+clear_all_arg_nz   r=-1 e=22
+unknown_sub        r=-1 e=22

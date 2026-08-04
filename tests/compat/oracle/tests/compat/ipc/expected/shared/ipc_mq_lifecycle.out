@@ -1,0 +1,1 @@
+mq_lifecycle capacity=1 duplicate=1 cycles=1 stale=1

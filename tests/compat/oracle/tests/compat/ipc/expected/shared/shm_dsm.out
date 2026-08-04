@@ -1,0 +1,1 @@
+shm_dsm roundtrip=1 forkshared=1 sem=1

@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+filesystem	dentry-storm	x86_64	fail	125	alpine-rootfs,linux-libc,filesystem,fork,stateful-soak	exit:e=0,a=125;stdout:e=eba0d3f2e8ee3c46,a=cbf29ce484222325,d=0,eb=64,ab=--,el=49,al=0;stderr:e=cbf29ce484222325,a=78eb953ed7f39f55,d=0,eb=--,ab=46,el=0,al=254;engine:worker=0,cleaned=true	EngineExit { kind: Fault, guest_status: 0, detail: 0, fault: Some(FaultDiagnostic { isa: X86_64, pc: 0, opcode: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], opcode_len: 0, reason: Frozen, address: None, access: None }) }

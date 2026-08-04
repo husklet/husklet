@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use quote::ToTokens;
-use syn::{
-    spanned::Spanned, Expr, FnArg, ImplItem, Item, ItemImpl, ItemStruct, Member, Pat, Stmt, Type,
-    Visibility,
-};
+use syn::{Expr, FnArg, ImplItem, Item, ItemImpl, ItemStruct, Member, Pat, Stmt, Type, Visibility, spanned::Spanned};
 
 use crate::{
     model::{Finding, Related, Review},
@@ -155,11 +152,9 @@ impl Wrapper {
 
         let mut inner_methods = Vec::new();
         for forwarder in &self.methods {
-            let matches = database.methods.get(&(
-                self.package.clone(),
-                self.inner.clone(),
-                forwarder.name.clone(),
-            ))?;
+            let matches = database
+                .methods
+                .get(&(self.package.clone(), self.inner.clone(), forwarder.name.clone()))?;
             if matches.len() != 1 || matches[0].signature != forwarder.signature {
                 return None;
             }
@@ -203,8 +198,7 @@ impl Wrapper {
         ];
         review.questions = vec![
             "Does this wrapper own a non-syntactic boundary or compatibility promise?".into(),
-            "Can callers use the inner entity without losing validation, state, or observability?"
-                .into(),
+            "Can callers use the inner entity without losing validation, state, or observability?".into(),
         ];
         finding.review = Some(review);
         Some(finding)
@@ -311,9 +305,7 @@ fn parameter_names(signature: &syn::Signature) -> Option<Vec<String>> {
         .filter_map(|argument| match argument {
             FnArg::Receiver(_) => None,
             FnArg::Typed(argument) => Some(match argument.pat.as_ref() {
-                Pat::Ident(ident) if ident.by_ref.is_none() && ident.subpat.is_none() => {
-                    Some(ident.ident.to_string())
-                }
+                Pat::Ident(ident) if ident.by_ref.is_none() && ident.subpat.is_none() => Some(ident.ident.to_string()),
                 _ => None,
             }),
         })
@@ -334,9 +326,7 @@ fn path_name(expression: &Expr) -> Option<String> {
     let Expr::Path(path) = strip(expression) else {
         return None;
     };
-    path.path
-        .get_ident()
-        .map(|identifier| identifier.to_string())
+    path.path.get_ident().map(|identifier| identifier.to_string())
 }
 
 fn strip(expression: &Expr) -> &Expr {
@@ -362,24 +352,16 @@ fn boundary_attrs(attributes: &[syn::Attribute]) -> bool {
         if !attribute.path().is_ident("derive") {
             return true;
         }
-        let Ok(derives) = attribute.parse_args_with(
-            syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
-        ) else {
+        let Ok(derives) =
+            attribute.parse_args_with(syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated)
+        else {
             return true;
         };
         derives.iter().any(|derive| {
             !derive.segments.last().is_some_and(|segment| {
                 matches!(
                     segment.ident.to_string().as_str(),
-                    "Debug"
-                        | "Clone"
-                        | "Copy"
-                        | "Eq"
-                        | "PartialEq"
-                        | "Ord"
-                        | "PartialOrd"
-                        | "Hash"
-                        | "Default"
+                    "Debug" | "Clone" | "Copy" | "Eq" | "PartialEq" | "Ord" | "PartialOrd" | "Hash" | "Default"
                 )
             })
         })

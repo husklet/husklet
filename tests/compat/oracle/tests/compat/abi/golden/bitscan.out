@@ -1,0 +1,9 @@
+i=0 clz32=31 ctz32=0 clz64=63 ctz64=0 pop=1 par=1 ffs=1
+i=1 clz32=0 ctz32=31 clz64=32 ctz64=31 pop=1 par=1 ffs=32
+i=2 clz32=32 ctz32=32 clz64=0 ctz64=63 pop=1 par=1 ffs=64
+i=3 clz32=0 ctz32=0 clz64=0 ctz64=0 pop=64 par=0 ffs=1
+i=4 clz32=32 ctz32=32 clz64=31 ctz64=32 pop=1 par=1 ffs=33
+i=5 clz32=0 ctz32=4 clz64=0 ctz64=4 pop=32 par=0 ffs=5
+i=6 clz32=0 ctz32=4 clz64=3 ctz64=4 pop=32 par=0 ffs=5
+i=7 clz32=12 ctz32=12 clz64=44 ctz64=12 pop=8 par=0 ffs=13
+acc=ce39759e

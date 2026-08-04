@@ -1,0 +1,1 @@
+procfd_bundle open=1 send=1 recv=3 status=1 statm=1 maps=1 child=1

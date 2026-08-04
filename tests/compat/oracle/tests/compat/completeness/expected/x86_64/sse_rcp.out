@@ -1,0 +1,3 @@
+bound rcpps=ok rsqrtps=ok lanes_agree=ok rcpss=ok rsqrtss=ok rcpss_merge=ok rsqrtss_merge=ok
+specials rsqrt_pzero=ok rcp_pzero=ok rsqrt_nzero=ok rcp_nzero=ok rsqrt_pinf=ok rsqrt_ninf=ok rcp_ninf=ok rsqrt_neg=ok rsqrt_snan=ok rcp_snan=ok rsqrt_qnan=ok rcp_qnan=ok rsqrt_nsnan=ok rcp_nsnan=ok rsqrt_nqnan=ok rcp_nqnan=ok
+flags none_raised=ok

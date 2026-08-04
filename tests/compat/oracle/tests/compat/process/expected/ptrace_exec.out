@@ -1,0 +1,1 @@
+ptrace-exec ok execstop=1 exit=0

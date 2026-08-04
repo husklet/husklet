@@ -1,0 +1,5 @@
+nearest 1/3=3fd5555555555555 10/7=3ff6db6db6db6db7 sqrt2=3ff6a09e667f3bcd fma=3fd47ae147ae147b
+down 1/3=3fd5555555555555 10/7=3ff6db6db6db6db6 sqrt2=3ff6a09e667f3bcd fma=3fd47ae147ae147b
+up 1/3=3fd5555555555556 10/7=3ff6db6db6db6db7 sqrt2=3ff6a09e667f3bcd fma=3fd47ae147ae147b
+zero 1/3=3fd5555555555555 10/7=3ff6db6db6db6db6 sqrt2=3ff6a09e667f3bcd fma=3fd47ae147ae147b
+divbyzero_flag=1

@@ -1,0 +1,78 @@
+-- overflow
+8 pushes                   top=0 cc=000 ie=0 sf=0 exc=00
+8 pushes tw=0000
+9th push                   top=7 cc=000 ie=1 sf=1 exc=01
+9th push st0 bits=fff8000000000000
+depth probe: ie after 9 pushes
+-- underflow
+fstp m64 empty             c1=0 ie=1 sf=1
+fstp m64 empty  = fff8000000000000 top=1
+fistp m32 empty            c1=0 ie=1 sf=1
+fistp m32 empty = 80000000
+fistp m16 empty = 8000
+fstp m80 empty  = ffffc000000000000000
+fsqrt empty                c1=0 ie=1 sf=1
+fsqrt empty tw=fffe
+fchs empty                 c1=0 ie=1 sf=1
+fadd m64 to empty          c1=0 ie=1 sf=1
+fld st(1) empty            top=6 cc=000 ie=1 sf=1 exc=01
+fld st(1) empty tw=2fff
+fprem st1 empty            c1=0 ie=1 sf=1
+fxtract from 1 deep        c1=0 ie=0 sf=0
+fxch st(1) empty           top=7 cc=000 ie=1 sf=1 exc=01
+  st0=ffffc000000000000000 st1=3fff8000000000000000
+fcom st(1) empty           top=7 cc=111 ie=1 sf=1 exc=01
+fucom st(1) empty          top=7 cc=111 ie=1 sf=1 exc=01
+fcomi st(1) empty fl=045 ie=1 sf=1
+fucomi st(1) empty fl=045 ie=1
+fst st(3) empty dest       top=7 cc=000 ie=0 sf=0 exc=00
+fst st(3) tw=3fcf
+fdecstp onto full          top=7 cc=000 ie=0 sf=0 exc=00
+fld1 into the gap          top=5 cc=000 ie=0 sf=0 exc=00
+fld1 into the gap tw=33ff
+-- fxam / ffree
+fxam on empty              top=0 cc=101 ie=0 sf=0 exc=00
+fxam +0                    top=7 cc=100 ie=0 sf=0 exc=00
+fxam -0                    top=7 cc=100 ie=0 sf=0 exc=00
+fxam 1.0                   top=7 cc=010 ie=0 sf=0 exc=00
+fxam +inf                  top=7 cc=011 ie=0 sf=0 exc=00
+fxam nan                   top=7 cc=001 ie=0 sf=0 exc=00
+fxam after ffree st0       top=7 cc=101 ie=0 sf=0 exc=00
+ffree st0 tw=ffff
+ffree st1 of 3 tw=33ff fx_top=5
+ffree st0 then fst st0     c1=0 ie=1 sf=1
+fld1;fincstp;fxam          top=0 cc=101 ie=0 sf=0 exc=00
+-- fnstenv / fldenv
+empty tw=ffff
+2 live: cw=ffff037f sw=ffff3000 tw=ffff0fff
+upper halves: ffff ffff ffff ffff
+nan,inf,1,0 pushed: tw=a1ff top=4
+fcw before fnstenv=0340
+fcw after  fnstenv=037f
+after fninit tw=ffff
+after fldenv tw=0fff top=6
+fldenv st0=2.5 ie=0
+fldenv all-empty tw        top=7 cc=101 ie=0 sf=0 exc=00
+fldcw 0000 -> fnstcw 0040
+fldcw 0b00 -> fnstcw 0b40
+fldcw ffff -> fnstcw 1f7f
+fldcw 1234 -> fnstcw 1274
+-- fnsave / frstor
+saved cw=0a7f sw=3000 tw=0fff
+saved st(0)=c0009000000000000000
+saved st(1)=3fffc000000000000000
+after fnsave: cw=037f tw=ffff top=0 ie=0
+after frstor: cw=0a7f tw=0fff top=6
+frstor st0=-2.25 st1=1.5 ie=0 sf=0
+hole saved tw=33ff
+hole restored tw=33ff
+push after restore: ie=0 c1=0
+-- fxsave
+top=5 ftw_byte=e0
+fxsave slot 0=4000c000000000000000
+fxsave slot 1=40008000000000000000
+fxsave slot 2=3fff8000000000000000
+empty ftw_byte=00
+hole ftw_byte=a0
+fxrstor tw=33ff top=5
+fxrstor st0=3 ie=0

@@ -1,0 +1,2 @@
+prot_read killed_segv=1 handler_accerr=1
+prot_none killed_segv=1 handler_accerr=1

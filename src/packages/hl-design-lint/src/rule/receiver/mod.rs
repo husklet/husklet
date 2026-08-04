@@ -1,17 +1,17 @@
-use syn::{visit::Visit, FnArg, ImplItemFn, ItemImpl, ItemTrait, TraitItem, TraitItemFn};
+use syn::{FnArg, ImplItemFn, ItemImpl, ItemTrait, TraitItem, TraitItemFn, visit::Visit};
 
 use crate::{
+    Result,
     model::{Finding, Review, Severity},
     source::{Source, Workspace},
-    Result,
 };
 
-use super::{syntax::type_name, Rule};
+use super::{Rule, syntax::type_name};
 
 /// Detects method names that unnecessarily repeat their receiver namespace.
-pub struct ReceiverRepetition;
+pub struct Repetition;
 
-impl Rule for ReceiverRepetition {
+impl Rule for Repetition {
     fn id(&self) -> &'static str {
         "receiver-name-repetition"
     }
@@ -76,9 +76,7 @@ impl Visitor<'_> {
             format!("{namespace}::{method_name}"),
             self.source.location(method.span()),
         );
-        finding.message = format!(
-            "method `{method_name}` repeats receiver namespace `{namespace}` as a {position}"
-        );
+        finding.message = format!("method `{method_name}` repeats receiver namespace `{namespace}` as a {position}");
         finding.help = format!(
             "prefer `{namespace}::{suggested}` when the repeated words mean the receiver itself; retain them only when they name a distinct domain concept"
         );
@@ -91,8 +89,7 @@ impl Visitor<'_> {
             ("Candidate name".into(), suggested),
         ];
         review.questions = vec![
-            "Does the repeated token denote the receiver itself or a genuinely different domain concept?"
-                .into(),
+            "Does the repeated token denote the receiver itself or a genuinely different domain concept?".into(),
             "Will the shorter method remain unambiguous at every call site and re-export boundary?".into(),
             "Have all callers and documentation been updated together?".into(),
         ];
@@ -137,14 +134,12 @@ fn is_receiver(argument: &FnArg) -> bool {
 }
 
 fn conversion(tokens: &[String]) -> bool {
-    matches!(
-        tokens.first().map(String::as_str),
-        Some("as" | "from" | "into" | "to")
-    ) || matches!(
-        tokens,
-        [first, second, ..]
-            if first == "try" && matches!(second.as_str(), "from" | "into")
-    )
+    matches!(tokens.first().map(String::as_str), Some("as" | "from" | "into" | "to"))
+        || matches!(
+            tokens,
+            [first, second, ..]
+                if first == "try" && matches!(second.as_str(), "from" | "into")
+        )
 }
 
 fn ambiguous(tokens: &[String]) -> bool {

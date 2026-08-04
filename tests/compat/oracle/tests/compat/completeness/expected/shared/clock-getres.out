@@ -1,0 +1,1 @@
+clock_getres mono=1 real=1 res_le_ms=1

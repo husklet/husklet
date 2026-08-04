@@ -1,0 +1,15 @@
+div64-ovf sig=8 code=1
+div64-zero sig=8 code=1
+idiv64-minus1 sig=8 code=1
+idiv64-ovf sig=8 code=1
+idiv64-zero sig=8 code=1
+div32-ovf sig=8 code=1
+idiv32-minus1 sig=8 code=1
+idiv16-minus1 sig=8 code=1
+div8-ovf sig=8 code=1
+idiv64-int128min sig=8 code=1
+idiv64-int128min1 sig=8 code=1
+idiv64-ok sig=0 code=0 q=8000000000000000 r=0000000000000000
+div64-ok sig=0 code=0 q=8000000000000000 r=0000000000000000
+idiv64-min-by-1 sig=0 code=0 q=8000000000000000 r=0000000000000000
+idiv64-small sig=0 code=0 q=fffffffffffffffd r=0000000000000001

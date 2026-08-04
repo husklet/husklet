@@ -3,9 +3,9 @@ mod diagnostic;
 mod markdown;
 
 use crate::{
+    Result,
     model::{Finding, Summary},
     source::Workspace,
-    Result,
 };
 
 pub use cases::Cases;

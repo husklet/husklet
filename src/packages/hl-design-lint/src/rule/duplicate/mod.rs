@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 
 use proc_macro2::Span;
-use syn::{spanned::Spanned, visit::Visit, Fields, ItemMod, ItemStruct};
+use syn::{Fields, ItemMod, ItemStruct, spanned::Spanned, visit::Visit};
 
 use crate::{
+    Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 /// Reports related structs that repeat at least three identically typed fields.
-pub struct DuplicateEntity;
+pub struct Entity;
 
-impl Rule for DuplicateEntity {
+impl Rule for Entity {
     fn id(&self) -> &'static str {
         "duplicate-entity-base"
     }
@@ -103,11 +103,7 @@ impl Visit<'_> for Structs<'_> {
 }
 
 fn normalized(source: &Source, span: Span) -> String {
-    source
-        .excerpt(span)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    source.excerpt(span).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn related(first: &Definition, second: &Definition) -> bool {
@@ -121,8 +117,7 @@ fn related(first: &Definition, second: &Definition) -> bool {
     }
     let namespace = first.module.rsplit("::").next().unwrap_or_default();
     first.module == second.module
-        && (namespace.eq_ignore_ascii_case(&first.name)
-            || namespace.eq_ignore_ascii_case(&second.name))
+        && (namespace.eq_ignore_ascii_case(&first.name) || namespace.eq_ignore_ascii_case(&second.name))
 }
 
 struct Pair {
@@ -148,7 +143,9 @@ impl Pair {
             "`{}` and `{}` repeat a possible entity basis",
             self.first.name, self.second.name
         );
-        finding.help = "extract a shared base entity and compose specialization, or prove the fields have different semantics".into();
+        finding.help =
+            "extract a shared base entity and compose specialization, or prove the fields have different semantics"
+                .into();
         finding.related.push(Related {
             label: format!("second struct; common fields: {fields}"),
             location: self.second.location,
@@ -167,10 +164,7 @@ fn compare(definitions: Vec<Definition>) -> Vec<Pair> {
     let mut pairs = Vec::new();
     let mut packages = HashMap::<String, Vec<Definition>>::new();
     for definition in definitions {
-        packages
-            .entry(definition.package.clone())
-            .or_default()
-            .push(definition);
+        packages.entry(definition.package.clone()).or_default().push(definition);
     }
     for definitions in packages.values() {
         for (index, first) in definitions.iter().enumerate() {

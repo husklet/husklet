@@ -1,0 +1,1 @@
+waitsig sigpoll=1 sigsys=1 sigstkflt=1 sigpwr=1 exit157=1 sigkill=1 sigsegv=1

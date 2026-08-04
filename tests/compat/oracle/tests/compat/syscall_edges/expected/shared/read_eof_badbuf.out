@@ -1,0 +1,34 @@
+regular_midfile_nullbuf rc=-1 errno=14
+regular_midfile_pos_after pos=3
+regular_midfile_next_read rc=1 errno=0
+regular_midfile_next_byte byte=d
+regular_midfile_badvec rc=-1 errno=14
+regular_eof_nullbuf rc=0 errno=0
+regular_eof_badvec rc=0 errno=0
+regular_eof_nullbuf_pread rc=0 errno=0
+pipe_data_nullbuf rc=-1 errno=14
+pipe_data_next_read rc=1 errno=0
+pipe_data_next_byte byte=Z
+pipe_eof_nullbuf rc=0 errno=0
+pipe_eof_badvec rc=0 errno=0
+pipe_eof_nullvec rc=-1 errno=14
+pipe_eof_nullbuf_pread rc=-1 errno=29
+pipe_eof_badvec_preadv2 rc=0 errno=0
+pipe_closed_data_nullbuf rc=-1 errno=14
+pipe_live_empty_nullbuf rc=-1 errno=11
+pipe_live_empty_badvec rc=-1 errno=11
+pipe_eof_nonblock_nullbuf rc=0 errno=0
+sock_data_nullbuf rc=-1 errno=14
+sock_data_next_read rc=1 errno=0
+sock_data_next_byte byte=Z
+sock_eof_nullbuf rc=0 errno=0
+sock_eof_badvec rc=0 errno=0
+sock_eof_badvec_preadv rc=-1 errno=29
+sock_shutwr_nullbuf rc=0 errno=0
+sock_live_empty_nullbuf rc=-1 errno=11
+tty_slave_live_empty_nullbuf rc=-1 errno=11
+tty_slave_live_empty_badvec rc=-1 errno=11
+tty_slave_data_nullbuf rc=-1 errno=14
+tty_master_slave_gone_nullbuf rc=-1 errno=14
+tty_slave_master_gone_nullbuf rc=0 errno=0
+tty_slave_master_gone_badvec rc=0 errno=0

@@ -1,0 +1,9 @@
+surface	legacy_registrations	legacy_unique_subjects	current_registration_or_gate	status	note
+engine-matrix	899	899	tests/compat/live_hl_jit_registry.tsv	pending-proof	live legacy registry is frozen one-to-one; every identity now has an explicit disposition and evidence slot
+legacy-rust-harness	36	36	make unit; pkgs/rust/tests	mapped	behavior moved to production-boundary C tests and typed Rust API tests; legacy platform wrapper itself is superseded
+ltp-curated	430	405	make ltp-compliance	active	pinned upstream commit ae4a01208fa2ce31f4f0a7a92b6e71a32299eb94; duplicate list registrations are deliberately executed; 430 cases on each of two ISAs
+legacy-guest-root	-	874	tests/compat/guest_inventory.tsv	mapped-or-excluded	current source tree has 874 artifacts; ledger also retains six historical graphics subjects and one external procfd bundle
+current-local-manifests	-	-	814 cases / 1510 ISA lanes	active	806 rows carry explicit legacy source provenance and eight are new generic regression fixtures
+current-rust-api	-	-	67 tests	active	typed engine API, container, policy, network, terminal, and e2e behavior
+current-c-unit	-	-	98 test executables	active	portable engine, translator, Linux ABI, provider, namespace, lifecycle, and host boundary tests
+current-ltp	-	-	860 ISA lanes	active	all 430 registrations execute on aarch64 and x86_64; results.tsv is machine-readable

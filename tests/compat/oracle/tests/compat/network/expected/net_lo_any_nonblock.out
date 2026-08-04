@@ -1,0 +1,2 @@
+lo_any_nonblock started=1 ready=1 writable=1 error=OK
+lo_any_closed started=1 ready=1 error=ECONNREFUSED

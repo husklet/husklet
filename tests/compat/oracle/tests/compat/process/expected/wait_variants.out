@@ -1,0 +1,1 @@
+wait=1 waitpid=1 wait4=1 wnowait=1 reap=1 echild=1

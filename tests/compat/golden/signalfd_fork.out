@@ -1,0 +1,1 @@
+signalfd_fork child=1 isolated=1 closed=1

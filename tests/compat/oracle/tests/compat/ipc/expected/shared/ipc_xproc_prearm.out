@@ -1,0 +1,2 @@
+child prearm n=2 sock=1 msg=Invitation efd=1 val=5
+parent child_exit=0

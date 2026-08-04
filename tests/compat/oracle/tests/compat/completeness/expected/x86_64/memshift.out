@@ -1,0 +1,24 @@
+shrq.64 in=f0f0f0f0f0f0f0f0 cnt= 1 -> 7878787878787878 fl=004
+shrq.64 in=f0f0f0f0f0f0f0f0 cnt= 5 -> 0787878787878787 fl=005
+shrq.64 in=f0f0f0f0f0f0f0f0 cnt=62 -> 0000000000000003 fl=005
+shrq.64 in=f0f0f0f0f0f0f0f0 cnt=63 -> 0000000000000001 fl=001
+shrq.64 in=f0f0f0f0f0f0f0f0 cnt=64 -> f0f0f0f0f0f0f0f0 fl=044
+shrl.32 in=f0f0f0f0 cnt= 1 -> 78787878 fl=004
+shrl.32 in=f0f0f0f0 cnt= 5 -> 07878787 fl=005
+shrl.32 in=f0f0f0f0 cnt=31 -> 00000001 fl=001
+shrl.32 in=f0f0f0f0 cnt=32 -> f0f0f0f0 fl=044
+shlq.64 in=f0f0f0f0f0f0f0f0 cnt= 1 -> e1e1e1e1e1e1e1e0 fl=081
+shlq.64 in=f0f0f0f0f0f0f0f0 cnt= 4 -> 0f0f0f0f0f0f0f00 fl=005
+shlq.64 in=f0f0f0f0f0f0f0f0 cnt=63 -> 0000000000000000 fl=044
+shll.32 in=f0f0f0f0 cnt= 1 -> e1e1e1e0 fl=081
+shll.32 in=f0f0f0f0 cnt= 7 -> 78787800 fl=004
+shll.32 in=f0f0f0f0 cnt=31 -> 00000000 fl=044
+sarq.64 in=8000000000000000 cnt= 1 -> c000000000000000 fl=084
+sarq.64 in=8000000000000000 cnt=40 -> ffffffffff800000 fl=084
+sarq.64 in=f0f0f0f0f0f0f0f0 cnt= 8 -> fff0f0f0f0f0f0f0 fl=085
+sarl.32 in=80000000 cnt= 1 -> c0000000 fl=084
+sarl.32 in=80000000 cnt=20 -> fffff800 fl=084
+sarl.32 in=f0f0f0f0 cnt= 8 -> fff0f0f0 fl=085
+shrq.sib cnt=62 -> a2=0000000000000003
+shlq.sib cnt= 5 -> a2=ffffffffffffffe0
+sarq.sib cnt= 3 -> a2=ffffffffffffffff

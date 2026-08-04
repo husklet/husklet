@@ -1,0 +1,6 @@
+read 11223344
+scalar sig=1 code=2 off=4096
+memset sig=1 code=2 in=1
+memcpy sig=1 code=2 in=1
+dirty 0
+reopen ok=1 sig=0 value=aa

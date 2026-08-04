@@ -1,11 +1,12 @@
 use crate::{
+    Result,
     model::{Finding, Location, Review, Severity},
     rule::Rule,
-    source::{domain, package, Workspace},
-    Result,
+    source::{Workspace, domain, package},
 };
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 /// Reviews directories that add a namespace for one file.
@@ -24,9 +25,17 @@ impl Rule for SingleFileDirectory {
         Ok(workspace
             .single_file_directories()
             .iter()
+            .filter(|(directory, _)| !is_fixture_boundary(directory))
             .map(|(directory, file)| finding(self.id(), directory, file))
             .collect())
     }
+}
+
+fn is_fixture_boundary(directory: &std::path::Path) -> bool {
+    matches!(
+        directory.file_name().and_then(|name| name.to_str()),
+        Some("expected" | "golden")
+    ) && directory.components().any(|part| part.as_os_str() == "tests")
 }
 
 fn finding(rule: &'static str, directory: &std::path::Path, file: &std::path::Path) -> Finding {
@@ -48,13 +57,9 @@ fn finding(rule: &'static str, directory: &std::path::Path, file: &std::path::Pa
     finding.message = format!(
         "directory `{}` contains only `{}`",
         directory.display(),
-        file.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("one file")
+        file.file_name().and_then(|name| name.to_str()).unwrap_or("one file")
     );
-    finding.help =
-        "collapse the namespace into a file, or add cohesive children that justify the directory"
-            .to_owned();
+    finding.help = "collapse the namespace into a file, or add cohesive children that justify the directory".to_owned();
     let mut review = Review::error();
     review.metadata = vec![
         ("domain".to_owned(), domain(directory)),
@@ -65,8 +70,7 @@ fn finding(rule: &'static str, directory: &std::path::Path, file: &std::path::Pa
         ("only file".to_owned(), file.display().to_string()),
     ];
     review.questions = vec![
-        "Does this directory define a stable boundary that cannot be represented by a file?"
-            .to_owned(),
+        "Does this directory define a stable boundary that cannot be represented by a file?".to_owned(),
         "Should the file move to the parent as `<directory>.rs`?".to_owned(),
         "Which cohesive second child justifies retaining the namespace?".to_owned(),
     ];

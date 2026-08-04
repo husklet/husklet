@@ -1,0 +1,1 @@
+s3db regfile_fsync=0 regfile_fdatasync=0 readback_ok=1 badfd_fsync_ret=-1

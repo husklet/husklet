@@ -1,0 +1,1 @@
+copyout-readonly read=1 image=1 clock=1 time=1 signal=1 misc=1 seccomp=1 process-memory=1 eof=1 guard=1

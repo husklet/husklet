@@ -1,0 +1,2 @@
+arch_prctl get_fs_static=ok get_gs_static=ok set_get_gs=ok get_fs_minus1=ok get_fs_null=ok get_gs_minus1=ok get_fs_unmapped=ok bogus_code=ok
+legacy time_static=ok time_bad=ok select_static=ok select_bad=ok utimes_bad=ok utime_bad=ok futimesat_bad=ok

@@ -1,0 +1,1 @@
+opath stat=1 read_ebadf=1 reopened=1 dir_ebadf=1 fchdir=1 fstatat=1 closed=1

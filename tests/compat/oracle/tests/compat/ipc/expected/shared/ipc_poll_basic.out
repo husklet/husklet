@@ -1,0 +1,1 @@
+poll n=2 in=1 out=1 neg_revents=0

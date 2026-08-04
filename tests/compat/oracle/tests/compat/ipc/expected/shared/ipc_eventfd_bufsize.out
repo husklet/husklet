@@ -1,0 +1,4 @@
+w8 ret=8 r16 ret=8 value=5 tail_untouched=1
+write16 errno=22 write9 errno=22 write4 errno=22
+short_read ret=-1 errno=Invalid argument
+zero_write ret=8 zero_noop_read ret=-1 errno=Resource temporarily unavailable

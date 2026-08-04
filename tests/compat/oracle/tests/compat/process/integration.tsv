@@ -1,0 +1,2 @@
+# case	runner	guest	isas	configuration	golden	disposition	note
+forkserver-equivalence	integration/forkserver_runner.c	forkserver_probe.c	aarch64,x86_64	typed --server/--client protocol; empty explicit guest configuration	expected/forkserver_integration.out	active	cold/server equivalence for argv/cwd/stdio/exit/fatal status plus repeated prewarm workers

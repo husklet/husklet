@@ -1,0 +1,1 @@
+inotify_epoll add=1 idle=0 sel=1 poll=1 epoll=1 data=1 create=1 drained=1 del=1 del2=1

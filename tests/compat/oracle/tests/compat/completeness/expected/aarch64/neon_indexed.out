@@ -1,0 +1,2 @@
+neon-indexed i16=1 i32=1 w16=1 w32=1 asm=1 sat=1 qc_cases=63 fp=1 fused_differs=1
+neon-indexed sums 41836 2147418112 168516905 -1918563378 fused=35000001 split=35000000 mulx=40000000

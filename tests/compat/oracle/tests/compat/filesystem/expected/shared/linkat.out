@@ -1,0 +1,1 @@
+linkat sym=1 readlink=1 link=1 nlink2=1 rename=1 oldgone=1 newhas=1 mkdir=1 isdir=1

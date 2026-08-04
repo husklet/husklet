@@ -1,0 +1,4 @@
+cloexec_ok=1 flagged=1
+closed_ok=1 gone=1
+inverted_errno=22
+badflag_errno=22

@@ -1,0 +1,1 @@
+fifo_nb enxio=1 rd_ok=1 wr_ok=1 data=hello

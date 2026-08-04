@@ -1,11 +1,11 @@
 use proc_macro2::Span;
-use syn::{spanned::Spanned, visit::Visit, Expr, ImplItemFn, ItemFn};
+use syn::{Expr, ImplItemFn, ItemFn, spanned::Spanned, visit::Visit};
 
 use crate::{
+    Result,
     model::{Finding, Severity},
     rule::Rule,
     source::{Source, Workspace},
-    Result,
 };
 
 /// Reports functions whose structural control-flow depth reaches three.
@@ -46,17 +46,12 @@ impl Functions<'_> {
             return;
         }
         let deepest = depth.span.expect("maximum depth has a span");
-        let mut finding = Finding::warning(
-            "deep-control-flow",
-            name.clone(),
-            self.source.location(deepest),
-        );
+        let mut finding = Finding::warning("deep-control-flow", name.clone(), self.source.location(deepest));
         finding.message = format!(
             "`{name}` reaches control-flow depth {} at {}",
             depth.maximum, depth.construct
         );
-        finding.help =
-            "use early returns, extract receiver behavior, or model the nested state".to_owned();
+        finding.help = "use early returns, extract receiver behavior, or model the nested state".to_owned();
         finding.related.push(crate::model::Related {
             label: "function".to_owned(),
             location: self.source.location(span),
@@ -67,20 +62,12 @@ impl Functions<'_> {
 
 impl<'ast> Visit<'ast> for Functions<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
-        self.inspect(
-            function.sig.ident.to_string(),
-            function.span(),
-            &function.block,
-        );
+        self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
         syn::visit::visit_item_fn(self, function);
     }
 
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
-        self.inspect(
-            function.sig.ident.to_string(),
-            function.span(),
-            &function.block,
-        );
+        self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
         syn::visit::visit_impl_item_fn(self, function);
     }
 }

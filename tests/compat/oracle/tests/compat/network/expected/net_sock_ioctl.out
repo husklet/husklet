@@ -1,0 +1,11 @@
+ifconf_sizeprobe=OK len_positive=1 len_aligned=1
+ifconf_fill=OK lo_present=1 lo_addr_127=1
+lo_addr=OK is127=1
+lo_mask=OK is8=1
+lo_flags=OK up=1 loopback=1
+lo_index=OK is1=1
+lo_mtu=OK positive=1
+lo_hwaddr=OK loopfam=1
+name_idx1=OK islo=1
+nodev=ENODEV
+badioctl=ENOTTY

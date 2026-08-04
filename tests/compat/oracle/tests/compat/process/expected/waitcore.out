@@ -1,0 +1,14 @@
+quit-nocore signaled=1 term=3 core=0 expect=0 OK
+quit signaled=1 term=3 core=1 expect=1 OK
+abrt signaled=1 term=6 core=1 expect=1 OK
+segv signaled=1 term=11 core=1 expect=1 OK
+fpe signaled=1 term=8 core=1 expect=1 OK
+ill signaled=1 term=4 core=1 expect=1 OK
+bus signaled=1 term=7 core=1 expect=1 OK
+trap signaled=1 term=5 core=1 expect=1 OK
+sys signaled=1 term=31 core=1 expect=1 OK
+kill signaled=1 term=9 core=0 expect=0 OK
+term signaled=1 term=15 core=0 expect=0 OK
+int signaled=1 term=2 core=0 expect=0 OK
+exit exited=1 code=7 signaled=0
+waitcore done

@@ -1,0 +1,2 @@
+pipe2_badflag_errno=22
+eventfd2_badflag_errno=-1

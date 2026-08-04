@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+time	timerfd-ext	aarch64	fail	0	linux-libc,time,timerfd	stdout:e=e80c1b12673cff47,a=4b41fc335dd2b600,d=22,eb=31,ab=30,el=121,al=121	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

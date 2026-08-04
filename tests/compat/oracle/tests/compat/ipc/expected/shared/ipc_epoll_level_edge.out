@@ -1,0 +1,3 @@
+level first=1 second=1
+edge first=1 second=0
+edge after_write=1

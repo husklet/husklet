@@ -1,0 +1,1 @@
+shm_ring ok cmds=200000 wraps=390 child_exit=0 spurious_eagain=0

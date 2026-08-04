@@ -1,0 +1,13 @@
+[package]
+name = "hl-loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+hl-isa = { path = "../hl-isa" }
+
+[lints]
+workspace = true

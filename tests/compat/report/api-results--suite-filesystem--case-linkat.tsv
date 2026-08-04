@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+filesystem	linkat	aarch64	fail	0	linux-libc,filesystem	stdout:e=06cec853652c3309,a=a785f82ebfe3cca4,d=66,eb=31,ab=30,el=84,al=84	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	linkat	x86_64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

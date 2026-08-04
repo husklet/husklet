@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	libc	4
+stdout	libc	4

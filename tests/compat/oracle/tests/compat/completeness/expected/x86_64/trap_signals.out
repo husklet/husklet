@@ -1,0 +1,3 @@
+int3 trap=1
+ud2 ill=1 resumed=1
+ud1 ill=1 resumed=1

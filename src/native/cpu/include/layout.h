@@ -1,0 +1,216 @@
+/* Generated from ../layout.tsv by ../generate.rs. */
+#ifndef HL_NATIVE_CPU_LAYOUT_H
+#define HL_NATIVE_CPU_LAYOUT_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct hl_native_aarch64_cpu {
+    uint64_t registers[31];
+    uint64_t stack;
+    uint64_t program;
+    uint64_t tls;
+    uint64_t reason;
+    uint64_t host_stack;
+    uint64_t host_registers[12];
+    uint64_t vectors[64];
+    uint64_t host_vectors[16];
+    uint64_t flags;
+    uint64_t indirect_site;
+    volatile uint64_t interrupt;
+    uint64_t memory_first;
+    uint64_t memory_last;
+    uint64_t memory_delta;
+    uint64_t memory_permissions;
+    uint64_t fault_address;
+    uint64_t fault_access;
+    uint64_t fault_size;
+    uint64_t budget;
+    uint64_t executed;
+    uint64_t memory_written;
+    uint64_t dirty_view_first;
+    uint64_t dirty_view_last;
+    uint64_t dirty_first;
+    uint64_t dirty_last;
+    uint64_t dirty_count;
+    uint64_t dirty_overflow;
+    uint64_t dirty_records[16][4];
+    uint64_t read_token;
+    uint64_t read_incarnation;
+    uint64_t read_count;
+    uint64_t read_views[4][4];
+    uint64_t interrupt_token;
+    uint64_t executable_written;
+    uint64_t fpcr;
+    uint64_t fpsr;
+    uint64_t certificate_valid;
+    uint64_t certificate_delta;
+    uint64_t active_authority;
+    uint64_t loop_valid;
+    uint64_t loop_view_count;
+    uint64_t loop_views[2][6];
+    uint64_t loop_mapping_incarnation;
+    uint64_t loop_authority;
+    uint64_t loop_trip;
+    uint64_t loop_decrement;
+    uint64_t loop_instruction_count;
+    uint64_t loop_iterations;
+    uint64_t loop_budget_iterations;
+    uint64_t loop_executable;
+} hl_native_aarch64_cpu;
+
+typedef struct hl_native_x86_64_cpu {
+    uint64_t registers[16];
+    uint64_t program;
+    uint64_t flags;
+    uint64_t fs;
+    uint64_t gs;
+    uint64_t reason;
+    uint64_t host_stack;
+    uint64_t host_registers[12];
+    uint64_t host_vectors[16];
+    uint64_t vectors[32];
+    uint64_t scratch[2];
+    volatile uint64_t interrupt;
+    uint64_t indirect_site;
+    uint64_t memory_first;
+    uint64_t memory_last;
+    uint64_t memory_delta;
+    uint64_t memory_permissions;
+    uint64_t fault_address;
+    uint64_t fault_access;
+    uint64_t fault_size;
+    uint64_t memory_written;
+    uint64_t budget;
+    uint64_t executed;
+    uint64_t loop_remaining;
+    uint64_t loop_completed;
+    uint64_t loop_block_count;
+    uint64_t loop_pc;
+    uint64_t dirty_view_first;
+    uint64_t dirty_view_last;
+    uint64_t dirty_first;
+    uint64_t dirty_last;
+    uint64_t dirty_count;
+    uint64_t dirty_overflow;
+    uint64_t dirty_records[16][4];
+    uint64_t read_token;
+    uint64_t read_incarnation;
+    uint64_t read_count;
+    uint64_t read_views[4][4];
+    uint64_t executable_written;
+    uint64_t mxcsr;
+    uint64_t fpcr;
+    uint64_t fpsr;
+    uint64_t host_fpcr;
+    uint64_t host_fpsr;
+} hl_native_x86_64_cpu;
+
+#define HL_CPU_ASSERT(type, field, expected) \
+    _Static_assert(offsetof(type, field) == (expected), #type "." #field " offset drifted")
+
+HL_CPU_ASSERT(hl_native_aarch64_cpu, registers, 0);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, stack, 248);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, program, 256);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, tls, 264);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, reason, 272);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, host_stack, 280);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, host_registers, 288);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, vectors, 384);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, host_vectors, 896);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, flags, 1024);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, indirect_site, 1032);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, interrupt, 1040);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_first, 1048);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_last, 1056);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_delta, 1064);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_permissions, 1072);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, fault_address, 1080);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, fault_access, 1088);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, fault_size, 1096);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, budget, 1104);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, executed, 1112);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_written, 1120);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_view_first, 1128);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_view_last, 1136);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_first, 1144);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_last, 1152);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_count, 1160);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_overflow, 1168);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, dirty_records, 1176);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, read_token, 1688);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, read_incarnation, 1696);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, read_count, 1704);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, read_views, 1712);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, interrupt_token, 1840);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, executable_written, 1848);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, fpcr, 1856);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, fpsr, 1864);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_valid, 1872);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_delta, 1880);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, active_authority, 1888);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_valid, 1896);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_view_count, 1904);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_views, 1912);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_mapping_incarnation, 2008);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_authority, 2016);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_trip, 2024);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_decrement, 2032);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_instruction_count, 2040);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_iterations, 2048);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_budget_iterations, 2056);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_executable, 2064);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2072, "aarch64 native CPU prefix size drifted");
+
+_Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
+
+HL_CPU_ASSERT(hl_native_x86_64_cpu, registers, 0);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, program, 128);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, flags, 136);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, fs, 144);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, gs, 152);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, reason, 160);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, host_stack, 168);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, host_registers, 176);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, host_vectors, 272);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, vectors, 400);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, scratch, 656);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, interrupt, 672);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, indirect_site, 680);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, memory_first, 688);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, memory_last, 696);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, memory_delta, 704);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, memory_permissions, 712);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, fault_address, 720);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, fault_access, 728);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, fault_size, 736);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, memory_written, 744);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, budget, 752);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, executed, 760);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, loop_remaining, 768);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, loop_completed, 776);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, loop_block_count, 784);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, loop_pc, 792);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_view_first, 800);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_view_last, 808);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_first, 816);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_last, 824);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_count, 832);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_overflow, 840);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, dirty_records, 848);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, read_token, 1360);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, read_incarnation, 1368);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, read_count, 1376);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, read_views, 1384);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, executable_written, 1512);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, mxcsr, 1520);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, fpcr, 1528);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, fpsr, 1536);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, host_fpcr, 1544);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, host_fpsr, 1552);
+_Static_assert(sizeof(hl_native_x86_64_cpu) == 1560, "x86_64 native CPU prefix size drifted");
+
+_Static_assert(_Alignof(hl_native_x86_64_cpu) == 8, "x86_64 native CPU prefix alignment drifted");
+
+#undef HL_CPU_ASSERT
+#endif

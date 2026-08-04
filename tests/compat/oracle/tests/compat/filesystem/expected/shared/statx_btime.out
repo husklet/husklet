@@ -1,0 +1,4 @@
+tmp-statx-ok=1
+tmp-btime-mask=1 btime-nonzero=1 fd-btime-mask=1 btime-consistent=1
+proc-statx-ok=1 proc-btime-mask=0
+mnt-id-mask-unasked=1 mnt-id-mask-asked=1 mnt-id-consistent=1

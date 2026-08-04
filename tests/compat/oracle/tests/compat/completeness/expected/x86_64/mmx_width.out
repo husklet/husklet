@@ -1,0 +1,55 @@
+mmx dst: 02 04 06 08 0a 0c 0e 10 aa aa aa aa aa aa aa aa
+punpckhbw    ff01fe02fd03fc04
+punpckhwd    fffe0102fdfc0304
+punpckhdq    fffefdfc01020304
+punpcklbw    fb05fa06f907f808
+punpcklwd    fbfa0506f9f80708
+punpckldq    fbfaf9f805060708
+packsswb     fe8080807f7f7f7f
+packuswb     00000000ffffffff
+packssdw     800080007fff7fff
+pmulhw       fffffff9ffebffd5
+pmulhuw      010102fd04f106dd
+pmaddwd      fff9e9ecffc1619c
+pmuludq      04f1d5af707d97c0
+psadbw       00000000000007b8
+pmovmskb ones 000000ff
+pmovmskb neg  000000ff
+pmovmskb sub  000000ff
+pextrw 0/4/7  0708 0708 0102
+pinsrw $4    0102030405061234
+pinsrw $7    1234030405060708
+paddb        8979695949392919
+paddw        8979695949392919
+paddd        8979695949392919
+paddq        8979695949392919
+psubb        798b9dafc1d3e5f7
+psubusb      0000000000000000
+paddsw       8979695949392919
+pand         0002020404020200
+pandn        8875645140312011
+por          8977675545372719
+pxor         8975655141352519
+pcmpeqb      0000000000000000
+pcmpgtw      ffff000000000000
+pmaxub       8877665544332211
+pminsw       8877030405060708
+pavgb        453d352d251d150d
+pmullw       87ee985498328788
+pmulhw       ff870134015600ef
+pmulhuw      00890134015600ef
+pmaddwd      00bc204202461fba
+pmuludq      01569abca8ed8788
+psadbw       0000000000000240
+punpcklbw    4405330622071108
+punpckhbw    8801770266035504
+punpckhwd    8877010266550304
+punpckhdq    8877665501020304
+packsswb     807f7f7f7f7f7f7f
+packuswb     00ffffffffffffff
+packssdw     80007fff7fff7fff
+psllw        0000000000000000
+psrld        0000000000000000
+psraw        0000000000000000
+movq         8877665544332211
+page-edge: survived

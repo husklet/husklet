@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use syn::{spanned::Spanned, visit::Visit, Expr, ImplItemFn, ItemFn, Pat, ReturnType, Stmt, Type};
+use syn::{Expr, ImplItemFn, ItemFn, Pat, ReturnType, Stmt, Type, spanned::Spanned, visit::Visit};
 
 use crate::{
-    model::{Finding, Location, Related, Severity},
-    rule::{syntax::type_name, Rule},
-    source::{requires_test, Source, Workspace},
     Result,
+    model::{Finding, Location, Related, Severity},
+    rule::{Rule, syntax::type_name},
+    source::{Source, Workspace, requires_test},
 };
 
 /// Reports discarded fallible results when syntax proves the expression is a `Result`.
@@ -72,12 +72,7 @@ impl Signatures {
         signatures
     }
 
-    fn insert(
-        map: &mut HashMap<String, Declaration>,
-        name: String,
-        result: bool,
-        location: Location,
-    ) {
+    fn insert(map: &mut HashMap<String, Declaration>, name: String, result: bool, location: Location) {
         let declaration = result.then_some(Declaration::Result(location));
         match (map.get(&name), declaration) {
             (None, Some(declaration)) => {
@@ -94,15 +89,15 @@ impl Signatures {
     }
 
     fn function(&self, name: &str) -> Option<Location> {
-        result_span(self.functions.get(name))
+        span(self.functions.get(name))
     }
 
     fn method(&self, owner: &str, name: &str) -> Option<Location> {
-        result_span(self.methods.get(&(owner.to_owned(), name.to_owned())))
+        span(self.methods.get(&(owner.to_owned(), name.to_owned())))
     }
 }
 
-fn result_span(declaration: Option<&Declaration>) -> Option<Location> {
+fn span(declaration: Option<&Declaration>) -> Option<Location> {
     match declaration {
         Some(Declaration::Result(location)) => Some(location.clone()),
         Some(Declaration::Ambiguous) | None => None,
@@ -136,10 +131,7 @@ impl<'ast> Visit<'ast> for SignatureCollector<'_> {
         let previous = self.test_scope;
         self.test_scope |= is_test(&function.attrs);
         if !self.test_scope && self.owner.is_some() {
-            let key = (
-                self.owner.clone().unwrap_or_default(),
-                function.sig.ident.to_string(),
-            );
+            let key = (self.owner.clone().unwrap_or_default(), function.sig.ident.to_string());
             insert_declaration(
                 &mut self.signatures.methods,
                 key,
@@ -169,19 +161,15 @@ impl<'ast> Visit<'ast> for SignatureCollector<'_> {
 fn returns_result(output: &ReturnType) -> bool {
     match output {
         ReturnType::Default => false,
-        ReturnType::Type(_, ty) => result_type(ty),
+        ReturnType::Type(_, ty) => is_result(ty),
     }
 }
 
-fn result_type(ty: &Type) -> bool {
+fn is_result(ty: &Type) -> bool {
     match ty {
-        Type::Path(path) => path
-            .path
-            .segments
-            .last()
-            .is_some_and(|part| part.ident == "Result"),
-        Type::Group(group) => result_type(&group.elem),
-        Type::Paren(paren) => result_type(&paren.elem),
+        Type::Path(path) => path.path.segments.last().is_some_and(|part| part.ident == "Result"),
+        Type::Group(group) => is_result(&group.elem),
+        Type::Paren(paren) => is_result(&paren.elem),
         _ => false,
     }
 }
@@ -203,9 +191,7 @@ impl Discards<'_> {
         let subject = location.source.clone();
         let mut finding = Finding::error("ignored-fallible-result", subject.clone(), location);
         finding.message = format!("{kind} discards proven fallible result `{subject}`");
-        finding.help =
-            "propagate with `?`, handle every outcome, or log the error with actionable context"
-                .into();
+        finding.help = "propagate with `?`, handle every outcome, or log the error with actionable context".into();
         if let Proof::Declaration(location) = proof {
             finding.related.push(Related {
                 label: "workspace declaration proves this returns Result".into(),
@@ -285,8 +271,7 @@ impl<'ast> Visit<'ast> for Discards<'_> {
                     self.inspect(receiver, "`.ok()`/`.err()`");
                     return;
                 }
-                if drop_argument(expression).is_some_and(|value| self.inspect(value, "`drop(...)`"))
-                {
+                if drop_argument(expression).is_some_and(|value| self.inspect(value, "`drop(...)`")) {
                     return;
                 }
                 if self.inspect(expression, "expression statement") {
@@ -361,10 +346,7 @@ fn drop_argument(expression: &Expr) -> Option<&Expr> {
 }
 
 fn is_test(attributes: &[syn::Attribute]) -> bool {
-    requires_test(attributes)
-        || attributes
-            .iter()
-            .any(|attribute| attribute.path().is_ident("test"))
+    requires_test(attributes) || attributes.iter().any(|attribute| attribute.path().is_ident("test"))
 }
 
 fn insert_declaration<K: Eq + std::hash::Hash>(
@@ -389,4 +371,5 @@ fn insert_declaration<K: Eq + std::hash::Hash>(
 }
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;

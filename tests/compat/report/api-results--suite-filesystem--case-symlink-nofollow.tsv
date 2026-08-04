@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+filesystem	symlink-nofollow	aarch64	fail	0	linux-libc,filesystem,symlink	stdout:e=9b912addb6aef885,a=e992449eead9081d,d=23,eb=31,ab=30,el=99,al=99	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	symlink-nofollow	x86_64	fail	0	linux-libc,filesystem,symlink	stdout:e=9b912addb6aef885,a=e992449eead9081d,d=23,eb=31,ab=30,el=99,al=99	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

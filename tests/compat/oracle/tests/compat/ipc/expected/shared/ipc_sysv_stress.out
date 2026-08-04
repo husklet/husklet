@@ -1,0 +1,2 @@
+many_segs over32=1 allmapped=1 dataok=1
+xfork shm_shared=1 sem_blockwait=1 msg_roundtrip=1

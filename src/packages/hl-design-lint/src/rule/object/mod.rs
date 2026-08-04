@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{
-    spanned::Spanned, visit::Visit, Expr, ExprField, ExprMethodCall, ImplItem, ImplItemFn,
-    ItemImpl, ItemStruct, Member, Type,
+    Expr, ExprField, ExprMethodCall, ImplItem, ImplItemFn, ItemImpl, ItemStruct, Member, Type, spanned::Spanned,
+    visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
-    source::{requires_test, Workspace},
-    Result,
+    source::{Workspace, requires_test},
 };
 
 const METHOD_THRESHOLD: usize = 20;
@@ -19,6 +19,7 @@ const CLUSTER_THRESHOLD: usize = 3;
 mod origin;
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 /// Reviews state-owning types whose methods span several unrelated capabilities.
@@ -208,10 +209,7 @@ fn self_type_name(item: &ItemImpl) -> Option<String> {
     let Type::Path(path) = item.self_ty.as_ref() else {
         return None;
     };
-    path.path
-        .segments
-        .last()
-        .map(|segment| segment.ident.to_string())
+    path.path.segments.last().map(|segment| segment.ident.to_string())
 }
 
 fn has_receiver(method: &ImplItemFn) -> bool {
@@ -276,14 +274,12 @@ fn finding(facts: TypeFacts) -> Option<Finding> {
     review
         .metadata
         .push(("Cross-capability method".into(), crossing.1.name.clone()));
-    review.questions.push(
-        "Do these field groups have separate invariants, lifecycles, or domain vocabularies?"
-            .into(),
-    );
-    review.questions.push(
-        "Can each group become a cohesive capability while this type retains only composition?"
-            .into(),
-    );
+    review
+        .questions
+        .push("Do these field groups have separate invariants, lifecycles, or domain vocabularies?".into());
+    review
+        .questions
+        .push("Can each group become a cohesive capability while this type retains only composition?".into());
     finding.review = Some(review);
     Some(finding)
 }
@@ -291,12 +287,7 @@ fn finding(facts: TypeFacts) -> Option<Finding> {
 fn clusters(methods: &[Method], origins: &BTreeMap<String, String>) -> Vec<Cluster> {
     let mut by_fields: BTreeMap<Vec<String>, Vec<usize>> = BTreeMap::new();
     for (index, method) in methods.iter().enumerate() {
-        if method.fields.is_empty()
-            || method
-                .calls
-                .iter()
-                .all(|field| !origins.contains_key(field))
-        {
+        if method.fields.is_empty() || method.calls.iter().all(|field| !origins.contains_key(field)) {
             continue;
         }
         by_fields
@@ -308,10 +299,7 @@ fn clusters(methods: &[Method], origins: &BTreeMap<String, String>) -> Vec<Clust
         .into_iter()
         .filter(|(_, methods)| methods.len() >= CLUSTER_METHOD_THRESHOLD)
         .map(|(fields, methods)| Cluster {
-            origins: fields
-                .iter()
-                .filter_map(|field| origins.get(field).cloned())
-                .collect(),
+            origins: fields.iter().filter_map(|field| origins.get(field).cloned()).collect(),
             fields: fields.into_iter().collect(),
             methods,
         })
@@ -323,9 +311,7 @@ fn clusters(methods: &[Method], origins: &BTreeMap<String, String>) -> Vec<Clust
         .enumerate()
         .filter(|(index, candidate)| {
             candidates.iter().enumerate().all(|(other_index, other)| {
-                *index == other_index
-                    || other.fields == candidate.fields
-                    || !other.fields.is_subset(&candidate.fields)
+                *index == other_index || other.fields == candidate.fields || !other.fields.is_subset(&candidate.fields)
             })
         })
         .map(|(_, cluster)| cluster)
@@ -335,9 +321,10 @@ fn clusters(methods: &[Method], origins: &BTreeMap<String, String>) -> Vec<Clust
         .iter()
         .enumerate()
         .filter(|(index, candidate)| {
-            minimal.iter().enumerate().all(|(other_index, other)| {
-                *index == other_index || candidate.fields.is_disjoint(&other.fields)
-            })
+            minimal
+                .iter()
+                .enumerate()
+                .all(|(other_index, other)| *index == other_index || candidate.fields.is_disjoint(&other.fields))
         })
         .map(|(_, cluster)| Cluster {
             fields: cluster.fields.clone(),
@@ -356,12 +343,7 @@ fn clusters(methods: &[Method], origins: &BTreeMap<String, String>) -> Vec<Clust
 }
 
 fn describe_cluster(cluster: &Cluster, methods: &[Method]) -> String {
-    let fields = cluster
-        .fields
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
+    let fields = cluster.fields.iter().cloned().collect::<Vec<_>>().join(", ");
     let examples = cluster
         .methods
         .iter()
@@ -369,12 +351,7 @@ fn describe_cluster(cluster: &Cluster, methods: &[Method]) -> String {
         .map(|index| methods[*index].name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let origins = cluster
-        .origins
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
+    let origins = cluster.origins.iter().cloned().collect::<Vec<_>>().join(", ");
     format!("fields [{fields}] from [{origins}] via [{examples}]")
 }
 
@@ -429,9 +406,7 @@ impl<'ast> Visit<'ast> for MethodAnalysis<'_> {
     fn visit_expr(&mut self, expression: &'ast Expr) {
         match expression {
             Expr::Assign(_) => self.assignment = true,
-            Expr::ForLoop(_) | Expr::If(_) | Expr::Loop(_) | Expr::Match(_) | Expr::While(_) => {
-                self.control = true
-            }
+            Expr::ForLoop(_) | Expr::If(_) | Expr::Loop(_) | Expr::Match(_) | Expr::While(_) => self.control = true,
             _ => {}
         }
         syn::visit::visit_expr(self, expression);
@@ -440,8 +415,7 @@ impl<'ast> Visit<'ast> for MethodAnalysis<'_> {
 
 fn receiver_field(expression: &Expr) -> Option<String> {
     match expression {
-        Expr::Field(field) if matches!(field.base.as_ref(), Expr::Path(path) if path.path.is_ident("self")) =>
-        {
+        Expr::Field(field) if matches!(field.base.as_ref(), Expr::Path(path) if path.path.is_ident("self")) => {
             let Member::Named(field) = &field.member else {
                 return None;
             };

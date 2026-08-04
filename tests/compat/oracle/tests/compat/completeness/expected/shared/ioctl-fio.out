@@ -1,0 +1,1 @@
+ioctl fionread=5 nb_ok=1 regular=1 cloexec=1 clear=1

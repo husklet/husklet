@@ -1,0 +1,9 @@
+udp_disconnect_unspec=OK
+getpeername_after_disconnect=ENOTCONN
+udp_reconnect=OK repointed=1
+getpeername_unconn=ENOTCONN
+getsockname_unbound=OK port0=1
+double_bind=EINVAL
+bind_nonlocal=EADDRNOTAVAIL
+bind_inuse=EADDRINUSE
+connect_listening=EISCONN

@@ -1,0 +1,2 @@
+child bootstrap chan=1 msg=EstablishPeer shmem=1 futex=1 decoy_swept=1
+parent bootstrap child_exit=0

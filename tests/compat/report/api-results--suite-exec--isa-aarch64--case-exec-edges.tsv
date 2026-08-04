@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+exec	exec-edges	aarch64	fail	1	linux-libc,fork,pthreads,execve,futex,signals,shebang	exit:e=0,a=1;stdout:e=d4793bb1554a1f4b,a=811056dcddcf4adb,d=8,eb=31,ab=30,el=128,al=128	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }

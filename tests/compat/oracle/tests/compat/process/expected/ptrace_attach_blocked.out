@@ -1,0 +1,1 @@
+ptrace-attach-blocked stop=1 sig=19

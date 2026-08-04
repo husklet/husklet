@@ -1,0 +1,1 @@
+ldisc raw_slave=1 raw_noecho=1 raw_out=1 onlcr=1 icrnl=1 echo=1 fionread=1(av=5)

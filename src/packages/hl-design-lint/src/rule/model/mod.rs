@@ -2,28 +2,29 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use quote::ToTokens;
 use syn::{
-    spanned::Spanned, visit::Visit, Attribute, Fields, GenericArgument, ImplItem, ItemImpl,
-    ItemMod, ItemStruct, ItemType, PathArguments, Type, Visibility,
+    Attribute, Fields, GenericArgument, ImplItem, ItemImpl, ItemMod, ItemStruct, ItemType, PathArguments, Type,
+    Visibility, spanned::Spanned, visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 mod dependencies;
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 use dependencies::local_dependencies;
 
 /// Reviews likely copies of the same model across serialization boundaries.
-pub struct ModelDuplication;
+pub struct Duplication;
 
-impl Rule for ModelDuplication {
+impl Rule for Duplication {
     fn id(&self) -> &'static str {
         "wire-domain-model-duplication"
     }
@@ -35,9 +36,7 @@ impl Rule for ModelDuplication {
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut database = Database::default();
         for source in workspace.production() {
-            database
-                .dependencies
-                .extend(local_dependencies(&source.path));
+            database.dependencies.extend(local_dependencies(&source.path));
             let mut aliases = AliasCollector::default();
             aliases.visit_file(&source.syntax);
             let mut collector = Collector::new(source, aliases.aliases);
@@ -45,10 +44,7 @@ impl Rule for ModelDuplication {
             database.definitions.extend(collector.definitions);
             database.conversions.extend(collector.conversions);
             for (name, count) in collector.behaviors {
-                *database
-                    .behaviors
-                    .entry((source.package.clone(), name))
-                    .or_default() += count;
+                *database.behaviors.entry((source.package.clone(), name)).or_default() += count;
             }
         }
         Ok(database.findings(self.id()))
@@ -68,12 +64,8 @@ impl Database {
         let mut findings = Vec::new();
         for (index, first) in self.definitions.iter().enumerate() {
             for second in &self.definitions[index + 1..] {
-                let conversion = self
-                    .conversions
-                    .iter()
-                    .find(|item| item.connects(first, second));
-                let Some((candidate, owner)) = self.roles(first, second, conversion.is_some())
-                else {
+                let conversion = self.conversions.iter().find(|item| item.connects(first, second));
+                let Some((candidate, owner)) = self.roles(first, second, conversion.is_some()) else {
                     continue;
                 };
                 if !same_concept(candidate, owner, conversion.is_some()) {
@@ -167,8 +159,7 @@ struct Conversion {
 impl Conversion {
     fn connects(&self, left: &Definition, right: &Definition) -> bool {
         (self.package == left.package || self.package == right.package)
-            && ((self.from == left.name && self.to == right.name)
-                || (self.from == right.name && self.to == left.name))
+            && ((self.from == left.name && self.to == right.name) || (self.from == right.name && self.to == left.name))
     }
 }
 
@@ -224,11 +215,7 @@ impl Visit<'_> for Collector<'_> {
                 normalized_type(&field.ty, &self.aliases),
             );
         }
-        let serialized = serialization(&item.attrs)
-            || fields
-                .named
-                .iter()
-                .any(|field| serde_attribute(&field.attrs));
+        let serialized = serialization(&item.attrs) || fields.named.iter().any(|field| serde_attribute(&field.attrs));
         self.definitions.push(Definition {
             package: self.source.package.clone(),
             domain: self.source.domain.clone(),
@@ -251,11 +238,7 @@ impl Visit<'_> for Collector<'_> {
             return;
         };
         if let Some((_, path, _)) = &item.trait_ {
-            let Some(kind) = path
-                .segments
-                .last()
-                .map(|segment| segment.ident.to_string())
-            else {
+            let Some(kind) = path.segments.last().map(|segment| segment.ident.to_string()) else {
                 return;
             };
             if !matches!(kind.as_str(), "From" | "TryFrom") {
@@ -298,10 +281,8 @@ impl Visit<'_> for AliasCollector {
 
     fn visit_item_type(&mut self, item: &ItemType) {
         if !self.test_scope && !requires_test(&item.attrs) {
-            self.aliases.insert(
-                item.ident.to_string(),
-                normalized_type(&item.ty, &self.aliases),
-            );
+            self.aliases
+                .insert(item.ident.to_string(), normalized_type(&item.ty, &self.aliases));
         }
     }
 }
@@ -337,26 +318,21 @@ fn finding(
         .map(|(name, ty)| format!("{name}: {ty}"))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut finding = Finding::warning(
-        rule,
-        format!("{}_{}", wire.name, domain.name),
-        wire.location.clone(),
-    );
+    let mut finding = Finding::warning(rule, format!("{}_{}", wire.name, domain.name), wire.location.clone());
     finding.message = format!(
         "`{}` appears to duplicate the owned `{}` model across a wire boundary",
         wire.name, domain.name
     );
-    finding.help = "keep one owner for the model, or document the distinct wire contract and map only boundary-specific fields".into();
+    finding.help =
+        "keep one owner for the model, or document the distinct wire contract and map only boundary-specific fields"
+            .into();
     finding.related.push(Related {
         label: format!("candidate owning model; matching fields: {fields}"),
         location: domain.location.clone(),
     });
     if let Some(conversion) = conversion {
         finding.related.push(Related {
-            label: format!(
-                "existing {} conversion copies between the models",
-                conversion.kind
-            ),
+            label: format!("existing {} conversion copies between the models", conversion.kind),
             location: conversion.location.clone(),
         });
     }
@@ -374,9 +350,9 @@ fn finding(
             "private fields and inherent behavior".into()
         },
     ));
-    review.questions.push(
-        "Is this a copied domain entity, or a deliberately narrower transport projection?".into(),
-    );
+    review
+        .questions
+        .push("Is this a copied domain entity, or a deliberately narrower transport projection?".into());
     review.questions.push(
         "Can the protocol reuse the owned model or compose a stable shared value without leaking transport policy?"
             .into(),
@@ -394,10 +370,7 @@ fn simple_type(ty: &Type) -> Option<String> {
     let Type::Path(path) = ty else {
         return None;
     };
-    path.path
-        .segments
-        .last()
-        .map(|segment| segment.ident.to_string())
+    path.path.segments.last().map(|segment| segment.ident.to_string())
 }
 
 fn generic_type(segment: &syn::PathSegment) -> Option<String> {
@@ -428,17 +401,12 @@ fn serialization(attributes: &[Attribute]) -> bool {
 }
 
 fn serde_attribute(attributes: &[Attribute]) -> bool {
-    attributes
-        .iter()
-        .any(|attribute| attribute.path().is_ident("serde"))
+    attributes.iter().any(|attribute| attribute.path().is_ident("serde"))
 }
 
 fn serialized_name(default: String, attributes: &[Attribute]) -> String {
     let mut renamed = None;
-    for attribute in attributes
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("serde"))
-    {
+    for attribute in attributes.iter().filter(|attribute| attribute.path().is_ident("serde")) {
         let _ = attribute.parse_nested_meta(|meta| {
             if meta.path.is_ident("rename") {
                 renamed = Some(meta.value()?.parse::<syn::LitStr>()?.value());
@@ -450,15 +418,11 @@ fn serialized_name(default: String, attributes: &[Attribute]) -> String {
 }
 
 fn representation(attributes: &[Attribute]) -> bool {
-    attributes
-        .iter()
-        .any(|attribute| attribute.path().is_ident("repr"))
+    attributes.iter().any(|attribute| attribute.path().is_ident("repr"))
 }
 
 fn projection_name(name: &str) -> bool {
-    [
-        "Request", "Response", "View", "Summary", "Snapshot", "Event", "Command",
-    ]
-    .iter()
-    .any(|suffix| name.ends_with(suffix))
+    ["Request", "Response", "View", "Summary", "Snapshot", "Event", "Command"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
 }

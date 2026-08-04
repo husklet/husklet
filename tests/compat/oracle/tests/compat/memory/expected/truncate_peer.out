@@ -1,0 +1,1 @@
+truncate-peer partial=1 shrink-shared=1 shrink-private=1 extend-shared=1 extend-private=1 dirty-private=1 initial-extend=1 metadata=1 peer=1

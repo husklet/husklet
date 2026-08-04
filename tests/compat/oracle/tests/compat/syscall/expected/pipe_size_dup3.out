@@ -1,0 +1,6 @@
+default_pipe_sz_pos=1
+setpipe rc_pos=1 got_ge_8192=1
+shrink rc_pos=1 got=4096
+dup3 same rc=-1 errno=22
+dup3 cloexec rc=20 cloexec=1
+dup3 badflag rc=-1 errno=22

@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	ipc	1
+stdout	ipc	1

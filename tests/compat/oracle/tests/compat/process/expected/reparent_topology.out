@@ -1,0 +1,6 @@
+nearest subreaper: D.getppid==B=1 B harvested D=1
+daemon grandchild: getppid==A=1 /proc ppid matches=1 subreaper harvested=1
+wait grandchild ECHILD=1 wait sibling-thread ECHILD=1
+__WCLONE skips fork child=1 __WALL reaps code==5=1
+zombie state Z=1 reaped code==3=1 gone after reap=1
+waitpid(-pgid) reaps group child=1 code==11=1

@@ -1,12 +1,13 @@
 use crate::{
+    Result,
     model::{Finding, Severity},
     source::Workspace,
-    Result,
 };
 
 mod accessor;
 mod blocking;
 mod boolean;
+mod boundary;
 mod catchall;
 mod ceremony;
 mod command;
@@ -22,36 +23,47 @@ mod model;
 mod naming;
 mod nesting;
 mod object;
+mod placement;
 mod receiver;
 mod references;
 mod result;
+mod role;
+mod safety;
+mod shape;
 mod single;
 mod state;
+mod suite;
 mod syntax;
 mod toolkit;
 
-pub use accessor::AccessorBloat;
+pub use accessor::Bloat as AccessorBloat;
 pub use blocking::AsyncBlocking;
-pub use boolean::BooleanState;
+pub use boolean::State as BooleanState;
+pub use boundary::PathModules;
 pub use catchall::CatchAllModule;
 pub use ceremony::CeremonialStructure;
 pub use command::PlatformCommand;
 pub use contract::BroadTrait;
-pub use dependency::DependencyDirection;
-pub use duplicate::DuplicateEntity;
-pub use empty::EmptyDirectory;
-pub use environment::EnvironmentAccess;
+pub use dependency::Direction as DependencyDirection;
+pub use duplicate::Entity as DuplicateEntity;
+pub use empty::Directory as EmptyDirectory;
+pub use environment::Access as EnvironmentAccess;
 pub use folder::SingleFileDirectory;
 pub use function::FreeFunction;
 pub use length::FileLength;
-pub use model::ModelDuplication;
+pub use model::Duplication as ModelDuplication;
 pub use naming::StructNaming;
 pub use nesting::DeepControlFlow;
 pub use object::GodObject;
-pub use receiver::ReceiverRepetition;
+pub use placement::IntegrationCandidate;
+pub use receiver::Repetition as ReceiverRepetition;
 pub use result::IgnoredResult;
-pub use single::SingleUse;
+pub use role::Suffix as SuffixRole;
+pub use safety::Boundary as UnsafeBoundary;
+pub use shape::{FileName, FolderNoun, ModulePrefix, PrefixDirectory, SymbolName, TestName};
+pub use single::Use as SingleUse;
 pub use state::FiniteStateString;
+pub use suite::{Dependency as TestDependency, Directory as TestDirectory};
 pub use toolkit::GuiToolkitLeakage;
 
 /// One independently executable design check.

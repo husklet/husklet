@@ -1,0 +1,1 @@
+bound-uaccess write=1 read=1 ioctl=1 fault=1

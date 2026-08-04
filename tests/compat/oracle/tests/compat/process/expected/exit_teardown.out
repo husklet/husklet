@@ -1,0 +1,6 @@
+exit_group over blocked siblings: exited=1 code==55=1
+thread self-exit leaves process alive: code==6=1
+pthread_exit main, worker is last thread: exited=1 code==0=1
+thread SIGSEGV terminates group: signaled=1 sig==SEGV=1
+exit() kills running worker: exited=1 code==4=1
+abort SIGABRT=1 exit(261) low-8-bits==5=1

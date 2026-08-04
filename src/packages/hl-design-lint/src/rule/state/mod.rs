@@ -1,21 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{
-    visit::Visit, BinOp, Expr, ExprAssign, ExprBinary, ExprField, ExprMatch, ExprMethodCall,
-    ExprPath, ExprStruct, Fields, ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemStruct, Member,
+    BinOp, Expr, ExprAssign, ExprBinary, ExprField, ExprMatch, ExprMethodCall, ExprPath, ExprStruct, Fields,
+    ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemStruct, Member, visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 mod syntax;
 use syntax::{
-    excluded_name, is_self, pattern_literals, peel, preserves_unknown, state_name, string_literal,
-    string_type, type_name,
+    candidate_name, excluded_name, is_self, pattern_literals, peel, preserves_unknown, string_literal, string_type,
+    type_name,
 };
 
 /// Finds closed state vocabularies represented as string literals.
@@ -110,7 +110,7 @@ impl Strings<'_> {
             return None;
         }
         let name = path.path.segments.first()?.ident.to_string();
-        (!excluded_name(&name) && state_name(&name)).then(|| Concept {
+        (!excluded_name(&name) && candidate_name(&name)).then(|| Concept {
             package: self.source.package.clone(),
             identity: format!("{}::{}", self.source.path.display(), self.scope.join("::")),
             owner: self.scope.join("::"),
@@ -124,7 +124,7 @@ impl Strings<'_> {
             return None;
         };
         let name = member.to_string();
-        if excluded_name(&name) || !state_name(&name) {
+        if excluded_name(&name) || !candidate_name(&name) {
             return None;
         }
         let owner = self.owner.as_ref()?;
@@ -156,10 +156,8 @@ impl Strings<'_> {
 
     fn record_field(&mut self, owner: &str, name: &str, literal: &Expr, kind: EvidenceKind) {
         if excluded_name(name)
-            || !state_name(name)
-            || !self
-                .string_fields
-                .contains(&(owner.to_owned(), name.to_owned()))
+            || !candidate_name(name)
+            || !self.string_fields.contains(&(owner.to_owned(), name.to_owned()))
         {
             return;
         }
@@ -183,7 +181,7 @@ impl Strings<'_> {
         let Some(name) = name.strip_prefix("set_") else {
             return;
         };
-        if excluded_name(name) || !state_name(name) {
+        if excluded_name(name) || !candidate_name(name) {
             return;
         }
         let Some((value, span)) = string_literal(literal) else {
@@ -197,11 +195,10 @@ impl Strings<'_> {
             name: name.to_owned(),
             kind: "target",
         };
-        self.concepts.entry(concept).or_default().record(
-            value,
-            self.source.location(span),
-            EvidenceKind::Assignment,
-        );
+        self.concepts
+            .entry(concept)
+            .or_default()
+            .record(value, self.source.location(span), EvidenceKind::Assignment);
     }
 
     fn visit_scoped(&mut self, name: String, visit: impl FnOnce(&mut Self)) {
@@ -235,8 +232,7 @@ impl<'ast> Visit<'ast> for Strings<'_> {
                 continue;
             };
             if string_type(&field.ty) {
-                self.string_fields
-                    .insert((item.ident.to_string(), name.to_string()));
+                self.string_fields.insert((item.ident.to_string(), name.to_string()));
             }
         }
     }
@@ -275,12 +271,7 @@ impl<'ast> Visit<'ast> for Strings<'_> {
     }
 
     fn visit_expr_struct(&mut self, item: &'ast ExprStruct) {
-        if let Some(mut owner) = item
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string())
-        {
+        if let Some(mut owner) = item.path.segments.last().map(|segment| segment.ident.to_string()) {
             if owner == "Self" {
                 let Some(current) = self.owner.clone() else {
                     syn::visit::visit_expr_struct(self, item);
@@ -290,12 +281,7 @@ impl<'ast> Visit<'ast> for Strings<'_> {
             }
             for field in &item.fields {
                 if let Member::Named(name) = &field.member {
-                    self.record_field(
-                        &owner,
-                        &name.to_string(),
-                        &field.expr,
-                        EvidenceKind::Assignment,
-                    );
+                    self.record_field(&owner, &name.to_string(), &field.expr, EvidenceKind::Assignment);
                 }
             }
         }
@@ -356,26 +342,11 @@ fn finding(rule: &'static str, concept: Concept, evidence: Evidence) -> Option<F
     let mut locations = evidence
         .literals
         .iter()
-        .flat_map(|(literal, locations)| {
-            locations
-                .iter()
-                .cloned()
-                .map(|location| (literal.clone(), location))
-        })
+        .flat_map(|(literal, locations)| locations.iter().cloned().map(|location| (literal.clone(), location)))
         .collect::<Vec<_>>();
-    locations.sort_by(|left, right| {
-        left.1
-            .path
-            .cmp(&right.1.path)
-            .then(left.1.line.cmp(&right.1.line))
-    });
+    locations.sort_by(|left, right| left.1.path.cmp(&right.1.path).then(left.1.line.cmp(&right.1.line)));
     let (_, location) = locations.first()?.clone();
-    let values = evidence
-        .literals
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
+    let values = evidence.literals.keys().cloned().collect::<Vec<_>>().join(", ");
     let subject = format!("{}::{}", concept.owner, concept.name);
     let mut finding = Finding::warning(rule, subject, location);
     finding.message = format!(
@@ -384,8 +355,7 @@ fn finding(rule: &'static str, concept: Concept, evidence: Evidence) -> Option<F
         evidence.literals.len()
     );
     finding.help =
-        "model the closed vocabulary as an enum; serialize or parse strings only at wire/storage boundaries"
-            .into();
+        "model the closed vocabulary as an enum; serialize or parse strings only at wire/storage boundaries".into();
     finding.related = locations
         .into_iter()
         .skip(1)
@@ -407,12 +377,13 @@ fn finding(rule: &'static str, concept: Concept, evidence: Evidence) -> Option<F
     review
         .metadata
         .push(("Match patterns".into(), evidence.matches.to_string()));
-    review.questions.push(
-        "Is this vocabulary closed by domain policy, and where should its enum own parsing?".into(),
-    );
+    review
+        .questions
+        .push("Is this vocabulary closed by domain policy, and where should its enum own parsing?".into());
     finding.review = Some(review);
     Some(finding)
 }
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;

@@ -1,0 +1,14 @@
+rdonly_open=1
+rdonly_send=EBADF
+wronly_open=1
+wronly_send=ok
+wronly_recv=EBADF
+rdwr_drain=ok msg=hello prio=3
+open_nonblock_flag=1
+setattr_ret=0 old_max=4 old_size=16 old_flags=0
+after_max=4 after_size=16 after_nonblock=1
+survive_send=ok survive_recv=ok msg=survive
+reopen_after_unlink=ENOENT
+zero_curmsgs=1
+zero_recv_len=0
+zero_unlink=ok

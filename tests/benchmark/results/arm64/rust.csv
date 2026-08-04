@@ -1,0 +1,6 @@
+env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution
+rust-engine,arm64,compute,314223,7097455804780747230,311878,317180,5,349550,native-verified
+rust-engine,arm64,intdiv,49872,896961339111467556,49619,50302,5,70891,native-verified
+rust-engine,arm64,memory,5010645,36526,4982017,5050044,5,5558537,native-verified
+rust-engine,arm64,pipe,3145238,75000,3066798,4202335,5,3466006,native-verified
+rust-engine,arm64,syscall,794143,1000000,789239,810447,5,916039,native-verified

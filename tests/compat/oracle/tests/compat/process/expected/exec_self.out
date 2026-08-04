@@ -1,0 +1,4 @@
+execve code=7
+execveat code=7
+fexecve code=7
+exec_self done

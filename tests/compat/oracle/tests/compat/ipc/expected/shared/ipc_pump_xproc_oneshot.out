@@ -1,0 +1,2 @@
+child oneshot got=4000/4000 ok=1
+parent done sent=4000 child_exit=0

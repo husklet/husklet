@@ -1,0 +1,12 @@
+read_badfd_nullbuf rc=-1 errno=9
+write_badfd_nullbuf rc=-1 errno=9
+pread_badfd_nullbuf rc=-1 errno=9
+pwrite_badfd_nullbuf rc=-1 errno=9
+readv_badfd_nullvec rc=-1 errno=9
+writev_badfd_nullvec rc=-1 errno=9
+read_hifd_nullbuf rc=-1 errno=9
+read_eof_nullbuf rc=0 errno=0
+read_zero_nullbuf rc=0 errno=0
+read_goodfd_nullbuf rc=-1 errno=14
+write_rdonly_nullbuf rc=-1 errno=9
+read_wronly_nullbuf rc=-1 errno=9

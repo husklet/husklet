@@ -1,0 +1,1 @@
+seqpass_ctrunc n=4 data=tiny trunc=0 ctrunc=0 controllen=32 cmsgs=1 rights=0 fdbyte=- cred=1 credpid=1 child=1

@@ -1,0 +1,5 @@
+kcore=exists
+kcorelen=0
+scsi=dir
+firmware=exists
+sysctl=RO

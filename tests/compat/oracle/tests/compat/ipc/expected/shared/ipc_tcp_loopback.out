@@ -1,0 +1,1 @@
+tcp connect=0 accept_ok=1 recv=4 data=ping

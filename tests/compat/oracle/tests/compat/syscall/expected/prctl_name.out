@@ -1,0 +1,3 @@
+name_match=1 name=hl-probe
+keepcaps=0
+badopt_errno=22

@@ -1,0 +1,74 @@
+[package]
+name = "hl-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hl-checkpoint = { path = "../../runtime/hl-checkpoint" }
+hl-descriptor = { path = "../../runtime/hl-descriptor" }
+hl-network = { path = "../../runtime/hl-network" }
+hl-fake-host = { path = "../../runtime/hl-fake-host" }
+hl-execution = { path = "../../runtime/hl-execution" }
+hl-event = { path = "../../runtime/hl-event" }
+hl-isa = { path = "../../runtime/hl-isa" }
+hl-ipc = { path = "../../runtime/hl-ipc" }
+hl-loader = { path = "../../runtime/hl-loader" }
+hl-linux = { path = "../../runtime/hl-linux" }
+hl-memory = { path = "../../runtime/hl-memory" }
+hl-provider = { path = "../../runtime/hl-provider" }
+hl-runtime = { path = "../../runtime/hl-runtime" }
+hl-sync = { path = "../../runtime/hl-sync" }
+hl-task = { path = "../../runtime/hl-task" }
+hl-time = { path = "../../runtime/hl-time" }
+ring = "0.17.14"
+zeroize = "1.9"
+[dev-dependencies]
+
+[build-dependencies]
+cc = "1.4.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+
+[lib]
+name = "hl_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hl-engine"
+path = "src/main.rs"
+
+[[bin]]
+name = "hl-native-child-fixture"
+path = "src/bin/child-fixture.rs"
+
+[[bin]]
+name = "hl-compat-worker"
+path = "src/bin/compat-worker.rs"
+
+[[bin]]
+name = "hl-authority-child"
+path = "src/bin/authority-child.rs"
+
+[[bin]]
+name = "hl-aarch64"
+path = "src/bin/aarch64.rs"
+
+[[bin]]
+name = "hl-x86_64"
+path = "src/bin/x86.rs"
+
+[[bin]]
+name = "hl-confinement-child"
+path = "src/bin/confinement-child.rs"
+
+[[bin]]
+name = "hl-projection-worker"
+path = "src/bin/projection-worker.rs"

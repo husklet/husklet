@@ -1,0 +1,2 @@
+child primary-pump rounds=12000/12000 ok=1
+parent primary-pump sent=12000 child_exit=0

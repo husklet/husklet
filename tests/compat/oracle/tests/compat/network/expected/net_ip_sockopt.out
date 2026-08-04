@@ -1,0 +1,14 @@
+IP_TOS set_ok=1 got=16
+IP_TTL set_ok=1 got=42
+IP_MTU_DISCOVER set_ok=1 got=2
+IP_PKTINFO set_ok=1 got=1
+IP_RECVTTL set_ok=1 got=1
+IP_RECVTOS set_ok=1 got=1
+IP_RECVERR set_ok=1 got=1
+IP_FREEBIND set_ok=1 got=1
+V6ONLY pre_ok=1 bind_ok=1 post_einval=1 got=1
+IPV6_TCLASS set_ok=1 got=32
+IPV6_UNICAST_HOPS set_ok=1 got=55
+IPV6_RECVPKTINFO set_ok=1 got=1
+IPV6_RECVHOPLIMIT set_ok=1 got=1
+IPV6_RECVTCLASS set_ok=1 got=1

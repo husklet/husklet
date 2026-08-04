@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+process	exec-cloexec-signal	aarch64	pass	0	linux-libc,fork,execve,cloexec,signal-disposition	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-cloexec-signal	x86_64	pass	0	linux-libc,fork,execve,cloexec,signal-disposition	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

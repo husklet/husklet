@@ -1,0 +1,6 @@
+fifo_max=99 fifo_min=1
+rr_max=99 rr_min=1
+other_max=0 other_min=0
+batch_max=0 batch_min=0
+idle_max=0 idle_min=0
+badpol_max_errno=22 badpol_min_errno=22

@@ -1,0 +1,172 @@
+add  a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+add  a=01 b=10 r=11 fl=004 dead=004 blk=004 ah=04 p=1 jp=1
+add  a=03 b=88 r=8b fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+add  a=5a b=0f r=69 fl=014 dead=014 blk=014 ah=14 p=1 jp=1
+add  a=7f b=80 r=ff fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+add  a=80 b=ff r=7f fl=801 dead=801 blk=801 ah=00 p=0 jp=0
+add  a=aa b=03 r=ad fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+add  a=f0 b=7f r=6f fl=005 dead=005 blk=005 ah=04 p=1 jp=1
+add  a=ff b=f0 r=ef fl=081 dead=081 blk=081 ah=00 p=0 jp=0
+or   a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+or   a=01 b=10 r=11 fl=004 dead=004 blk=004 ah=04 p=1 jp=1
+or   a=03 b=88 r=8b fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+or   a=5a b=0f r=5f fl=004 dead=014 blk=004 ah=04 p=1 jp=1
+or   a=7f b=80 r=ff fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+or   a=80 b=ff r=ff fl=084 dead=801 blk=084 ah=04 p=1 jp=1
+or   a=aa b=03 r=ab fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+or   a=f0 b=7f r=ff fl=084 dead=005 blk=084 ah=04 p=1 jp=1
+or   a=ff b=f0 r=ff fl=084 dead=081 blk=084 ah=04 p=1 jp=1
+and  a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+and  a=01 b=10 r=00 fl=044 dead=004 blk=044 ah=04 p=1 jp=1
+and  a=03 b=88 r=00 fl=044 dead=084 blk=044 ah=04 p=1 jp=1
+and  a=5a b=0f r=0a fl=004 dead=014 blk=004 ah=04 p=1 jp=1
+and  a=7f b=80 r=00 fl=044 dead=084 blk=044 ah=04 p=1 jp=1
+and  a=80 b=ff r=80 fl=080 dead=801 blk=080 ah=00 p=0 jp=0
+and  a=aa b=03 r=02 fl=000 dead=080 blk=000 ah=00 p=0 jp=0
+and  a=f0 b=7f r=70 fl=000 dead=005 blk=000 ah=00 p=0 jp=0
+and  a=ff b=f0 r=f0 fl=084 dead=081 blk=084 ah=04 p=1 jp=1
+sub  a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+sub  a=01 b=10 r=f1 fl=081 dead=004 blk=081 ah=00 p=0 jp=0
+sub  a=03 b=88 r=7b fl=015 dead=084 blk=015 ah=14 p=1 jp=1
+sub  a=5a b=0f r=4b fl=014 dead=014 blk=014 ah=14 p=1 jp=1
+sub  a=7f b=80 r=ff fl=885 dead=084 blk=885 ah=04 p=1 jp=1
+sub  a=80 b=ff r=81 fl=095 dead=801 blk=095 ah=14 p=1 jp=1
+sub  a=aa b=03 r=a7 fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+sub  a=f0 b=7f r=71 fl=814 dead=005 blk=814 ah=14 p=1 jp=1
+sub  a=ff b=f0 r=0f fl=004 dead=081 blk=004 ah=04 p=1 jp=1
+xor  a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+xor  a=01 b=10 r=11 fl=004 dead=004 blk=004 ah=04 p=1 jp=1
+xor  a=03 b=88 r=8b fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+xor  a=5a b=0f r=55 fl=004 dead=014 blk=004 ah=04 p=1 jp=1
+xor  a=7f b=80 r=ff fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+xor  a=80 b=ff r=7f fl=000 dead=801 blk=000 ah=00 p=0 jp=0
+xor  a=aa b=03 r=a9 fl=084 dead=080 blk=084 ah=04 p=1 jp=1
+xor  a=f0 b=7f r=8f fl=080 dead=005 blk=080 ah=00 p=0 jp=0
+xor  a=ff b=f0 r=0f fl=004 dead=081 blk=004 ah=04 p=1 jp=1
+cmp  a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+cmp  a=01 b=10 r=01 fl=081 dead=004 blk=081 ah=00 p=0 jp=0
+cmp  a=03 b=88 r=03 fl=015 dead=084 blk=015 ah=14 p=1 jp=1
+cmp  a=5a b=0f r=5a fl=014 dead=014 blk=014 ah=14 p=1 jp=1
+cmp  a=7f b=80 r=7f fl=885 dead=084 blk=885 ah=04 p=1 jp=1
+cmp  a=80 b=ff r=80 fl=095 dead=801 blk=095 ah=14 p=1 jp=1
+cmp  a=aa b=03 r=aa fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+cmp  a=f0 b=7f r=f0 fl=814 dead=005 blk=814 ah=14 p=1 jp=1
+cmp  a=ff b=f0 r=ff fl=004 dead=081 blk=004 ah=04 p=1 jp=1
+test a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+test a=01 b=10 r=01 fl=044 dead=004 blk=044 ah=04 p=1 jp=1
+test a=03 b=88 r=03 fl=044 dead=084 blk=044 ah=04 p=1 jp=1
+test a=5a b=0f r=5a fl=004 dead=014 blk=004 ah=04 p=1 jp=1
+test a=7f b=80 r=7f fl=044 dead=084 blk=044 ah=04 p=1 jp=1
+test a=80 b=ff r=80 fl=080 dead=801 blk=080 ah=00 p=0 jp=0
+test a=aa b=03 r=aa fl=000 dead=080 blk=000 ah=00 p=0 jp=0
+test a=f0 b=7f r=f0 fl=000 dead=005 blk=000 ah=00 p=0 jp=0
+test a=ff b=f0 r=ff fl=084 dead=081 blk=084 ah=04 p=1 jp=1
+adc0 a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+adc0 a=01 b=10 r=11 fl=004 dead=004 blk=004 ah=04 p=1 jp=1
+adc0 a=03 b=88 r=8b fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+adc0 a=5a b=0f r=69 fl=014 dead=014 blk=014 ah=14 p=1 jp=1
+adc0 a=7f b=80 r=ff fl=084 dead=084 blk=084 ah=04 p=1 jp=1
+adc0 a=80 b=ff r=7f fl=801 dead=801 blk=801 ah=00 p=0 jp=0
+adc0 a=aa b=03 r=ad fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+adc0 a=f0 b=7f r=6f fl=005 dead=005 blk=005 ah=04 p=1 jp=1
+adc0 a=ff b=f0 r=ef fl=081 dead=081 blk=081 ah=00 p=0 jp=0
+adc1 a=00 b=00 r=01 fl=000 dead=044 blk=000 ah=00 p=0 jp=0
+adc1 a=01 b=10 r=12 fl=004 dead=004 blk=004 ah=04 p=1 jp=1
+adc1 a=03 b=88 r=8c fl=080 dead=084 blk=080 ah=00 p=0 jp=0
+adc1 a=5a b=0f r=6a fl=014 dead=014 blk=014 ah=14 p=1 jp=1
+adc1 a=7f b=80 r=00 fl=055 dead=084 blk=055 ah=14 p=1 jp=1
+adc1 a=80 b=ff r=80 fl=091 dead=801 blk=091 ah=10 p=0 jp=0
+adc1 a=aa b=03 r=ae fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+adc1 a=f0 b=7f r=70 fl=011 dead=005 blk=011 ah=10 p=0 jp=0
+adc1 a=ff b=f0 r=f0 fl=095 dead=081 blk=095 ah=14 p=1 jp=1
+sbb0 a=00 b=00 r=00 fl=044 dead=044 blk=044 ah=04 p=1 jp=1
+sbb0 a=01 b=10 r=f1 fl=081 dead=004 blk=081 ah=00 p=0 jp=0
+sbb0 a=03 b=88 r=7b fl=015 dead=084 blk=015 ah=14 p=1 jp=1
+sbb0 a=5a b=0f r=4b fl=014 dead=014 blk=014 ah=14 p=1 jp=1
+sbb0 a=7f b=80 r=ff fl=885 dead=084 blk=885 ah=04 p=1 jp=1
+sbb0 a=80 b=ff r=81 fl=095 dead=801 blk=095 ah=14 p=1 jp=1
+sbb0 a=aa b=03 r=a7 fl=080 dead=080 blk=080 ah=00 p=0 jp=0
+sbb0 a=f0 b=7f r=71 fl=814 dead=005 blk=814 ah=14 p=1 jp=1
+sbb0 a=ff b=f0 r=0f fl=004 dead=081 blk=004 ah=04 p=1 jp=1
+sbb1 a=00 b=00 r=ff fl=095 dead=044 blk=095 ah=14 p=1 jp=1
+sbb1 a=01 b=10 r=f0 fl=085 dead=004 blk=085 ah=04 p=1 jp=1
+sbb1 a=03 b=88 r=7a fl=011 dead=084 blk=011 ah=10 p=0 jp=0
+sbb1 a=5a b=0f r=4a fl=010 dead=014 blk=010 ah=10 p=0 jp=0
+sbb1 a=7f b=80 r=fe fl=881 dead=084 blk=881 ah=00 p=0 jp=0
+sbb1 a=80 b=ff r=80 fl=091 dead=801 blk=091 ah=10 p=0 jp=0
+sbb1 a=aa b=03 r=a6 fl=084 dead=080 blk=084 ah=04 p=1 jp=1
+sbb1 a=f0 b=7f r=70 fl=810 dead=005 blk=810 ah=10 p=0 jp=0
+sbb1 a=ff b=f0 r=0e fl=000 dead=081 blk=000 ah=00 p=0 jp=0
+shl  v=00 pf=1 setp=1 dead_pf=1
+shl  v=01 pf=0 setp=0 dead_pf=1
+shl  v=03 pf=1 setp=1 dead_pf=1
+shl  v=0f pf=1 setp=1 dead_pf=0
+shl  v=10 pf=0 setp=0 dead_pf=1
+shl  v=5a pf=1 setp=1 dead_pf=1
+shl  v=7f pf=0 setp=0 dead_pf=0
+shl  v=80 pf=1 setp=1 dead_pf=1
+shl  v=88 pf=0 setp=0 dead_pf=0
+shl  v=aa pf=0 setp=0 dead_pf=1
+shl  v=f0 pf=0 setp=0 dead_pf=0
+shl  v=ff pf=0 setp=0 dead_pf=0
+shr  v=00 pf=1 setp=1 dead_pf=1
+shr  v=01 pf=1 setp=1 dead_pf=1
+shr  v=03 pf=0 setp=0 dead_pf=0
+shr  v=0f pf=0 setp=0 dead_pf=1
+shr  v=10 pf=0 setp=0 dead_pf=0
+shr  v=5a pf=1 setp=1 dead_pf=1
+shr  v=7f pf=1 setp=1 dead_pf=1
+shr  v=80 pf=0 setp=0 dead_pf=0
+shr  v=88 pf=1 setp=1 dead_pf=1
+shr  v=aa pf=1 setp=1 dead_pf=1
+shr  v=f0 pf=1 setp=1 dead_pf=0
+shr  v=ff pf=0 setp=0 dead_pf=1
+sar  v=00 pf=1 setp=1 dead_pf=1
+sar  v=01 pf=1 setp=1 dead_pf=1
+sar  v=03 pf=0 setp=0 dead_pf=0
+sar  v=0f pf=0 setp=0 dead_pf=1
+sar  v=10 pf=0 setp=0 dead_pf=0
+sar  v=5a pf=1 setp=1 dead_pf=1
+sar  v=7f pf=1 setp=1 dead_pf=1
+sar  v=80 pf=1 setp=1 dead_pf=1
+sar  v=88 pf=0 setp=0 dead_pf=0
+sar  v=aa pf=0 setp=0 dead_pf=0
+sar  v=f0 pf=0 setp=0 dead_pf=1
+sar  v=ff pf=1 setp=1 dead_pf=0
+inc  v=00 r=01 fl=000 ah=00
+dec  v=00 r=ff fl=094
+neg  v=00 r=00 fl=044
+inc  v=01 r=02 fl=001 ah=00
+dec  v=01 r=00 fl=044
+neg  v=01 r=ff fl=095
+inc  v=03 r=04 fl=001 ah=00
+dec  v=03 r=02 fl=000
+neg  v=03 r=fd fl=091
+inc  v=0f r=10 fl=011 ah=10
+dec  v=0f r=0e fl=000
+neg  v=0f r=f1 fl=091
+inc  v=10 r=11 fl=005 ah=04
+dec  v=10 r=0f fl=014
+neg  v=10 r=f0 fl=085
+inc  v=5a r=5b fl=001 ah=00
+dec  v=5a r=59 fl=004
+neg  v=5a r=a6 fl=095
+inc  v=7f r=80 fl=891 ah=10
+dec  v=7f r=7e fl=004
+neg  v=7f r=81 fl=095
+inc  v=80 r=81 fl=085 ah=04
+dec  v=80 r=7f fl=810
+neg  v=80 r=80 fl=881
+inc  v=88 r=89 fl=081 ah=00
+dec  v=88 r=87 fl=084
+neg  v=88 r=78 fl=015
+inc  v=aa r=ab fl=081 ah=00
+dec  v=aa r=a9 fl=084
+neg  v=aa r=56 fl=015
+inc  v=f0 r=f1 fl=081 ah=00
+dec  v=f0 r=ef fl=090
+neg  v=f0 r=10 fl=001
+inc  v=ff r=00 fl=055 ah=14
+dec  v=ff r=fe fl=080
+neg  v=ff r=01 fl=011
+PFAF-CHECKSUM 382bdb68ef7f3397

@@ -1,0 +1,1 @@
+pidfd_getfd opened=1 badflags_einval=1 nonpidfd_ebadf=1 got=1 same_file=1

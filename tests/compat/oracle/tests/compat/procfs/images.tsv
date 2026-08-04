@@ -1,0 +1,4 @@
+# case	image	argv	exit	stdout	isas	legacy_registration	disposition
+pf-groups-alpine	alpine	/bin/sh -c <GROUPS_PROBE>	0	expected/images/alpine.out	aarch64,x86_64	in_rootfs(alpine)	external-service
+pf-groups-ubuntu	ubuntu	/bin/sh -c <GROUPS_PROBE>	0	expected/images/ubuntu.out	aarch64,x86_64	in_rootfs(ubuntu)	external-service
+pf-groups-busybox	busybox	/bin/sh -c <GROUPS_PROBE>	0	expected/images/busybox.out	aarch64,x86_64	in_rootfs(busybox)	external-service

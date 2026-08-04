@@ -195,9 +195,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.67"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
+checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -913,6 +913,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hl-aio"
+version = "0.1.0"
+
+[[package]]
+name = "hl-benchmark"
+version = "0.1.0"
+dependencies = [
+ "hl-design",
+]
+
+[[package]]
+name = "hl-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "ring",
+]
+
+[[package]]
 name = "hl-client"
 version = "0.1.0"
 dependencies = [
@@ -993,6 +1011,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hl-descriptor"
+version = "0.1.0"
+
+[[package]]
 name = "hl-design"
 version = "0.1.0"
 dependencies = [
@@ -1015,7 +1037,60 @@ dependencies = [
 
 [[package]]
 name = "hl-engine"
-version = "0.1.34"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "hl-checkpoint",
+ "hl-descriptor",
+ "hl-event",
+ "hl-execution",
+ "hl-fake-host",
+ "hl-ipc",
+ "hl-isa",
+ "hl-linux",
+ "hl-loader",
+ "hl-memory",
+ "hl-network",
+ "hl-provider",
+ "hl-runtime",
+ "hl-sync",
+ "hl-task",
+ "hl-time",
+ "libc",
+ "ring",
+ "zeroize",
+]
+
+[[package]]
+name = "hl-event"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+ "hl-time",
+]
+
+[[package]]
+name = "hl-execution"
+version = "0.1.0"
+dependencies = [
+ "hl-isa",
+ "hl-softfloat",
+]
+
+[[package]]
+name = "hl-fake-host"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+ "hl-execution",
+ "hl-isa",
+ "hl-linux",
+ "hl-memory",
+ "hl-network",
+ "hl-provider",
+ "hl-time",
+ "hl-vfs",
+]
 
 [[package]]
 name = "hl-fs"
@@ -1055,8 +1130,128 @@ dependencies = [
 ]
 
 [[package]]
+name = "hl-ipc"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+ "hl-memory",
+ "hl-sync",
+ "hl-time",
+]
+
+[[package]]
+name = "hl-isa"
+version = "0.1.0"
+
+[[package]]
+name = "hl-linux"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+ "hl-event",
+ "hl-isa",
+ "hl-memory",
+ "hl-network",
+ "hl-sync",
+ "hl-task",
+ "hl-time",
+ "hl-vfs",
+]
+
+[[package]]
+name = "hl-loader"
+version = "0.1.0"
+dependencies = [
+ "hl-isa",
+]
+
+[[package]]
 name = "hl-log"
 version = "0.1.0"
+
+[[package]]
+name = "hl-memory"
+version = "0.1.0"
+dependencies = [
+ "hl-isa",
+]
+
+[[package]]
+name = "hl-network"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+ "hl-sync",
+]
+
+[[package]]
+name = "hl-provider"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+]
+
+[[package]]
+name = "hl-runtime"
+version = "0.1.0"
+dependencies = [
+ "hl-aio",
+ "hl-checkpoint",
+ "hl-descriptor",
+ "hl-event",
+ "hl-execution",
+ "hl-ipc",
+ "hl-isa",
+ "hl-linux",
+ "hl-loader",
+ "hl-memory",
+ "hl-network",
+ "hl-provider",
+ "hl-sync",
+ "hl-task",
+ "hl-terminal",
+ "hl-time",
+ "hl-vfs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hl-softfloat"
+version = "0.1.0"
+
+[[package]]
+name = "hl-sync"
+version = "0.1.0"
+dependencies = [
+ "hl-time",
+]
+
+[[package]]
+name = "hl-syscall-audit"
+version = "0.1.0"
+
+[[package]]
+name = "hl-task"
+version = "0.1.0"
+
+[[package]]
+name = "hl-terminal"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+]
+
+[[package]]
+name = "hl-time"
+version = "0.1.0"
+
+[[package]]
+name = "hl-vfs"
+version = "0.1.0"
+dependencies = [
+ "hl-descriptor",
+]
 
 [[package]]
 name = "hl-ws"

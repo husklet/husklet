@@ -1,0 +1,4 @@
+icmp_create=OK
+icmp_send=OK
+icmp_reply=OK echo_ok=1
+icmp_flood=1 drained=1

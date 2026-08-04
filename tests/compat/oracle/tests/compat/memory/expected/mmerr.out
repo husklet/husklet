@@ -1,0 +1,6 @@
+noreserve ok=1 val=126
+mmap_rdonly shared_eacces=1 private_ok=1
+msync sync=0 async=0 both=-1/EINVAL badbit=-1/EINVAL
+madv_dontfork rc=0 dofork rc=0
+mremap_fixed moved=1 val=66
+mremap_fixed_nomove einval=1 misalign einval=1

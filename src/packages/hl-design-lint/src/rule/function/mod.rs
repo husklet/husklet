@@ -1,15 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
 
-use syn::{
-    spanned::Spanned, visit::Visit, Expr, ExprCall, ExprMacro, FnArg, ItemFn, ItemMod,
-    PathArguments, Type,
-};
+use syn::{Expr, ExprCall, ExprMacro, FnArg, ItemFn, ItemMod, PathArguments, Type, spanned::Spanned, visit::Visit};
 
 use crate::{
-    model::{Finding, Related, Review, ReviewState, Severity},
-    rule::{references::References, Rule},
-    source::{requires_test, Workspace},
     Result,
+    model::{Finding, Related, Review, ReviewState, Severity},
+    rule::{Rule, references::References},
+    source::{Workspace, requires_test},
 };
 
 /// Requires one- and two-argument free functions to be refactored or classified.
@@ -41,10 +38,7 @@ impl Rule for FreeFunction {
             let mut uses = References::new(source);
             uses.visit_file(&source.syntax);
             for reference in uses.values {
-                references
-                    .entry(reference.name.clone())
-                    .or_default()
-                    .push(reference);
+                references.entry(reference.name.clone()).or_default().push(reference);
             }
         }
         Ok(candidates
@@ -85,8 +79,7 @@ impl Candidate {
             self.arguments,
             if self.arguments == 1 { "" } else { "s" }
         );
-        finding.help =
-            "refactor it or add a temporary #[hl_design::classify(...)] classification".into();
+        finding.help = "refactor it or add a temporary #[hl_design::classify(...)] classification".into();
         finding.related = usages
             .map(|usage| Related {
                 label: usage.context.as_ref().map_or_else(
@@ -172,9 +165,7 @@ fn candidate(function: &ItemFn) -> bool {
         && !framework_adapter(function)
         && !function.attrs.iter().any(|attribute| {
             let path = attribute.path();
-            path.is_ident("proc_macro")
-                || path.is_ident("proc_macro_attribute")
-                || path.is_ident("proc_macro_derive")
+            path.is_ident("proc_macro") || path.is_ident("proc_macro_attribute") || path.is_ident("proc_macro_derive")
         })
 }
 
@@ -247,11 +238,9 @@ fn classification(function: &ItemFn) -> Option<Classification> {
     let (scope, kind) = text.split_once('=')?;
     let scope = scope.trim().trim_start_matches("r#");
     let kind = kind.trim().trim_matches('"');
-    (matches!(scope, "root" | "domain" | "pkg" | "struct") && !kind.is_empty()).then(|| {
-        Classification {
-            scope: scope.into(),
-            kind: kind.into(),
-        }
+    (matches!(scope, "root" | "domain" | "pkg" | "struct") && !kind.is_empty()).then(|| Classification {
+        scope: scope.into(),
+        kind: kind.into(),
     })
 }
 
@@ -274,8 +263,7 @@ impl<'ast> Visit<'ast> for Dependencies {
     }
 
     fn visit_expr_macro(&mut self, expression: &'ast ExprMacro) {
-        self.names
-            .insert(format!("{}!", path_name(&expression.mac.path)));
+        self.names.insert(format!("{}!", path_name(&expression.mac.path)));
         syn::visit::visit_expr_macro(self, expression);
     }
 }

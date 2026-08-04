@@ -1,0 +1,8 @@
+flush-to-zero:
+  noflush min*0.5 = 00400000
+  flush   min*0.5 = 00000000 underflow=1
+  flush   tiny+tiny = 00000000
+  roundtrip preserves flush = 1
+nan-signaling:
+  quiet     compare qNaN invalid=0
+  signaling compare qNaN invalid=1

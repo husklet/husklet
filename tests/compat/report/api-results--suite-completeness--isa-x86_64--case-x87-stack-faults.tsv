@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+completeness	x87-stack-faults	x86_64	fail	132	linux-libc	exit:e=0,a=132;stdout:e=7c98aec338cd4911,a=cbf29ce484222325,d=0,eb=2d,ab=--,el=2745,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }

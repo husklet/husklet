@@ -1,0 +1,6 @@
+s1 size=32 align=8 off(b)=4 off(c)=8 off(d)=16 off(e)=24
+nested size=48 align=8 off(tag)=32 off(v)=40
+union size=8 align=8 off(hi)=4
+packed size=16 align=1 off(d)=6 off(e)=14
+flex size=4 off(data)=4
+scalars c=1 s=2 i=4 l=8 ll=8 p=8

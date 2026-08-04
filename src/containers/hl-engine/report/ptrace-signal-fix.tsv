@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+process	ptrace-syscalls	aarch64	fail	-	linux-libc,fork,ptrace,signals,registers,tracee-memory	engine:timeout	timeout

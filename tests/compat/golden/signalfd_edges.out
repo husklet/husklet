@@ -1,0 +1,1 @@
+signalfd_edges handler=1 empty=-1 eagain=1 fault=-1 efault=1 kill=1 directed=128 tkill=1 grouped=128 tgkill=1 cloexec=1

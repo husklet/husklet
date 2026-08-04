@@ -1,0 +1,14 @@
+sigstop stopped=1 stopsig=19 raw=0x137f r=1
+sigcont continued=1 raw=0xffff r=1
+resumed-exit exited=1 code=4 raw=0x400
+tstp peek=1 stop=1
+tstp cont code=1 status=1
+tstp resumed code=9
+wnowait peeked=1 reaped_again=1
+killed code=1 status=1
+pgrp0 ok=1 code=11
+pgrpn ok=1 code=13
+wnohang_notready ret=0
+double echild=1
+nochild echild=1
+waitstop done

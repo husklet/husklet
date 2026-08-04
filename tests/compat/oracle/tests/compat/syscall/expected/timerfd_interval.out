@@ -1,0 +1,1 @@
+timerfd_interval set=1 reads=3 total_ge3=1

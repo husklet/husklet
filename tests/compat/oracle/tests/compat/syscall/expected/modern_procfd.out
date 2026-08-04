@@ -1,0 +1,6 @@
+dup3_same_einval=1 dup3_ok=1 dup3_cloexec=1 dup3_badflag_einval=1
+cr_cloexec=1 cr_all_cloexec=1 cr_close=1 cr_all_closed=1 cr_std_alive=1 cr_lohi_einval=1 cr_badflag_einval=1
+close_reclosed_ebadf=1 close_neg1_ebadf=1
+name_to_handle_ok=1 open_by_handle_eperm=1
+opath_ok=1 fexecve_child_ran=1
+sched_getcpu_valid=1 getcpu_ok=1 getcpu_consistent=1 cpu_in_range=1

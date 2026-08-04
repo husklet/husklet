@@ -1,0 +1,4 @@
+clamped_nice=19
+badwhich_errno=22
+setbadwhich_errno=22
+nopid_errno=3

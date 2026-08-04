@@ -1,0 +1,160 @@
+cvtpi2ps: 00 00 00 00 00 00 80 3f a5 a5 a5 a5 a5 a5 a5 a5 rc=near mx=00
+cvtpi2pd: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 3f rc=near mx=00
+cvtpi2ps: 00 00 80 bf 00 00 00 cf a5 a5 a5 a5 a5 a5 a5 a5 rc=near mx=00
+cvtpi2pd: 00 00 00 00 00 00 f0 bf 00 00 00 00 00 00 e0 c1 rc=near mx=00
+cvtpi2ps: 00 00 00 4f 00 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=near mx=20
+cvtpi2pd: 00 00 c0 ff ff ff df 41 00 00 00 10 00 00 70 c1 rc=near mx=00
+cvtpi2ps: 00 00 80 4b 00 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=near mx=20
+cvtpi2pd: 00 00 00 10 00 00 70 41 00 00 00 10 00 00 70 c1 rc=near mx=00
+cvtps2pi: 02 00 00 00 fe ff ff ff rc=near mx=20
+cvttps2pi: 01 00 00 00 ff ff ff ff rc=near mx=20
+cvtps2pi: 02 00 00 00 fe ff ff ff rc=near mx=20
+cvttps2pi: 02 00 00 00 fe ff ff ff rc=near mx=20
+cvtps2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvtps2pi: 80 ff ff 7f 00 00 00 80 rc=near mx=00
+cvttps2pi: 80 ff ff 7f 00 00 00 80 rc=near mx=00
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvtps2pi: 00 00 00 80 03 00 00 00 rc=near mx=01
+cvttps2pi: 00 00 00 80 03 00 00 00 rc=near mx=01
+cvtps2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvtpd2pi: 02 00 00 00 fe ff ff ff rc=near mx=20
+cvttpd2pi: 01 00 00 00 ff ff ff ff rc=near mx=20
+cvtpd2pi: 02 00 00 00 fe ff ff ff rc=near mx=20
+cvttpd2pi: 02 00 00 00 fe ff ff ff rc=near mx=20
+cvtpd2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvtpd2pi: ff ff ff 7f 00 00 00 80 rc=near mx=00
+cvttpd2pi: ff ff ff 7f 00 00 00 80 rc=near mx=00
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=near mx=01
+cvtpd2pi: 00 00 00 80 03 00 00 00 rc=near mx=01
+cvttpd2pi: 00 00 00 80 03 00 00 00 rc=near mx=01
+cvtpd2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=near mx=20
+cvtpi2ps: 00 00 00 00 00 00 80 3f a5 a5 a5 a5 a5 a5 a5 a5 rc=down mx=00
+cvtpi2pd: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 3f rc=down mx=00
+cvtpi2ps: 00 00 80 bf 00 00 00 cf a5 a5 a5 a5 a5 a5 a5 a5 rc=down mx=00
+cvtpi2pd: 00 00 00 00 00 00 f0 bf 00 00 00 00 00 00 e0 c1 rc=down mx=00
+cvtpi2ps: ff ff ff 4e 01 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=down mx=20
+cvtpi2pd: 00 00 c0 ff ff ff df 41 00 00 00 10 00 00 70 c1 rc=down mx=00
+cvtpi2ps: 00 00 80 4b 01 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=down mx=20
+cvtpi2pd: 00 00 00 10 00 00 70 41 00 00 00 10 00 00 70 c1 rc=down mx=00
+cvtps2pi: 01 00 00 00 fe ff ff ff rc=down mx=20
+cvttps2pi: 01 00 00 00 ff ff ff ff rc=down mx=20
+cvtps2pi: 02 00 00 00 fd ff ff ff rc=down mx=20
+cvttps2pi: 02 00 00 00 fe ff ff ff rc=down mx=20
+cvtps2pi: 00 00 00 00 ff ff ff ff rc=down mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=down mx=20
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvtps2pi: 80 ff ff 7f 00 00 00 80 rc=down mx=00
+cvttps2pi: 80 ff ff 7f 00 00 00 80 rc=down mx=00
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvtps2pi: 00 00 00 80 03 00 00 00 rc=down mx=01
+cvttps2pi: 00 00 00 80 03 00 00 00 rc=down mx=01
+cvtps2pi: 00 00 00 00 ff ff ff ff rc=down mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=down mx=20
+cvtpd2pi: 01 00 00 00 fe ff ff ff rc=down mx=20
+cvttpd2pi: 01 00 00 00 ff ff ff ff rc=down mx=20
+cvtpd2pi: 02 00 00 00 fd ff ff ff rc=down mx=20
+cvttpd2pi: 02 00 00 00 fe ff ff ff rc=down mx=20
+cvtpd2pi: 00 00 00 00 ff ff ff ff rc=down mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=down mx=20
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvtpd2pi: ff ff ff 7f 00 00 00 80 rc=down mx=00
+cvttpd2pi: ff ff ff 7f 00 00 00 80 rc=down mx=00
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=down mx=01
+cvtpd2pi: 00 00 00 80 03 00 00 00 rc=down mx=01
+cvttpd2pi: 00 00 00 80 03 00 00 00 rc=down mx=01
+cvtpd2pi: 00 00 00 00 ff ff ff ff rc=down mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=down mx=20
+cvtpi2ps: 00 00 00 00 00 00 80 3f a5 a5 a5 a5 a5 a5 a5 a5 rc=up mx=00
+cvtpi2pd: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 3f rc=up mx=00
+cvtpi2ps: 00 00 80 bf 00 00 00 cf a5 a5 a5 a5 a5 a5 a5 a5 rc=up mx=00
+cvtpi2pd: 00 00 00 00 00 00 f0 bf 00 00 00 00 00 00 e0 c1 rc=up mx=00
+cvtpi2ps: 00 00 00 4f 00 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=up mx=20
+cvtpi2pd: 00 00 c0 ff ff ff df 41 00 00 00 10 00 00 70 c1 rc=up mx=00
+cvtpi2ps: 01 00 80 4b 00 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=up mx=20
+cvtpi2pd: 00 00 00 10 00 00 70 41 00 00 00 10 00 00 70 c1 rc=up mx=00
+cvtps2pi: 02 00 00 00 ff ff ff ff rc=up mx=20
+cvttps2pi: 01 00 00 00 ff ff ff ff rc=up mx=20
+cvtps2pi: 03 00 00 00 fe ff ff ff rc=up mx=20
+cvttps2pi: 02 00 00 00 fe ff ff ff rc=up mx=20
+cvtps2pi: 01 00 00 00 00 00 00 00 rc=up mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=up mx=20
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvtps2pi: 80 ff ff 7f 00 00 00 80 rc=up mx=00
+cvttps2pi: 80 ff ff 7f 00 00 00 80 rc=up mx=00
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvtps2pi: 00 00 00 80 03 00 00 00 rc=up mx=01
+cvttps2pi: 00 00 00 80 03 00 00 00 rc=up mx=01
+cvtps2pi: 01 00 00 00 00 00 00 00 rc=up mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=up mx=20
+cvtpd2pi: 02 00 00 00 ff ff ff ff rc=up mx=20
+cvttpd2pi: 01 00 00 00 ff ff ff ff rc=up mx=20
+cvtpd2pi: 03 00 00 00 fe ff ff ff rc=up mx=20
+cvttpd2pi: 02 00 00 00 fe ff ff ff rc=up mx=20
+cvtpd2pi: 01 00 00 00 00 00 00 00 rc=up mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=up mx=20
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvtpd2pi: ff ff ff 7f 00 00 00 80 rc=up mx=00
+cvttpd2pi: ff ff ff 7f 00 00 00 80 rc=up mx=00
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=up mx=01
+cvtpd2pi: 00 00 00 80 03 00 00 00 rc=up mx=01
+cvttpd2pi: 00 00 00 80 03 00 00 00 rc=up mx=01
+cvtpd2pi: 01 00 00 00 00 00 00 00 rc=up mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=up mx=20
+cvtpi2ps: 00 00 00 00 00 00 80 3f a5 a5 a5 a5 a5 a5 a5 a5 rc=zero mx=00
+cvtpi2pd: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 3f rc=zero mx=00
+cvtpi2ps: 00 00 80 bf 00 00 00 cf a5 a5 a5 a5 a5 a5 a5 a5 rc=zero mx=00
+cvtpi2pd: 00 00 00 00 00 00 f0 bf 00 00 00 00 00 00 e0 c1 rc=zero mx=00
+cvtpi2ps: ff ff ff 4e 00 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=zero mx=20
+cvtpi2pd: 00 00 c0 ff ff ff df 41 00 00 00 10 00 00 70 c1 rc=zero mx=00
+cvtpi2ps: 00 00 80 4b 00 00 80 cb a5 a5 a5 a5 a5 a5 a5 a5 rc=zero mx=20
+cvtpi2pd: 00 00 00 10 00 00 70 41 00 00 00 10 00 00 70 c1 rc=zero mx=00
+cvtps2pi: 01 00 00 00 ff ff ff ff rc=zero mx=20
+cvttps2pi: 01 00 00 00 ff ff ff ff rc=zero mx=20
+cvtps2pi: 02 00 00 00 fe ff ff ff rc=zero mx=20
+cvttps2pi: 02 00 00 00 fe ff ff ff rc=zero mx=20
+cvtps2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvtps2pi: 80 ff ff 7f 00 00 00 80 rc=zero mx=00
+cvttps2pi: 80 ff ff 7f 00 00 00 80 rc=zero mx=00
+cvtps2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvttps2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvtps2pi: 00 00 00 80 03 00 00 00 rc=zero mx=01
+cvttps2pi: 00 00 00 80 03 00 00 00 rc=zero mx=01
+cvtps2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvttps2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvtpd2pi: 01 00 00 00 ff ff ff ff rc=zero mx=20
+cvttpd2pi: 01 00 00 00 ff ff ff ff rc=zero mx=20
+cvtpd2pi: 02 00 00 00 fe ff ff ff rc=zero mx=20
+cvttpd2pi: 02 00 00 00 fe ff ff ff rc=zero mx=20
+cvtpd2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvtpd2pi: ff ff ff 7f 00 00 00 80 rc=zero mx=00
+cvttpd2pi: ff ff ff 7f 00 00 00 80 rc=zero mx=00
+cvtpd2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvttpd2pi: 00 00 00 80 00 00 00 80 rc=zero mx=01
+cvtpd2pi: 00 00 00 80 03 00 00 00 rc=zero mx=01
+cvttpd2pi: 00 00 00 80 03 00 00 00 rc=zero mx=01
+cvtpd2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20
+cvttpd2pi: 00 00 00 00 00 00 00 00 rc=zero mx=20

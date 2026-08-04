@@ -1,0 +1,11 @@
+getrusage_null_errno=14
+getrusage_thread_null_errno=14
+getrusage_badwho_errno=22
+sched_getaffinity_null_errno=14
+sched_getaffinity_badsize_errno=22
+getrusage_ok=1
+sched_getaffinity_ok=1
+getfl_largefile=1 getfl_accmode=2
+setfl_append=0
+getfl2_largefile=1 getfl2_append=1 getfl2_accmode=2
+getfl_rdonly_largefile=1

@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+threads	atomic-flag	aarch64	fail	125	linux-libc,pthreads	exit:e=0,a=125;stdout:e=b8f3123b4036f594,a=cbf29ce484222325,d=0,eb=61,ab=--,el=26,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 4208356, fault: Some(FaultDiagnostic { isa: Aarch64, pc: 4208356, opcode: [65, 255, 223, 136, 33, 3, 0, 52, 127, 3, 19, 235, 192, 1, 0], opcode_len: 15, reason: Unsupported, address: None, access: None }) }
+threads	atomic-flag	x86_64	fail	139	linux-libc,pthreads	exit:e=0,a=139;stdout:e=b8f3123b4036f594,a=cbf29ce484222325,d=0,eb=61,ab=--,el=26,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }

@@ -1,0 +1,11 @@
+shm_stat ok=1 segok=1 mode600=1 owner=1
+shm_set ok=1 mode640=1
+sem_stat ok=1 nsems=1 mode600=1 owner=1
+sem_set ok=1 mode644=1
+msg_stat ok=1 qbytes_pos=1 qnum0=1 mode600=1 owner=1
+msg_set ok=1 qbytes1024=1 mode620=1
+info shmi=1 shminfo=1 semi=1 seminfo=1 msgi=1 msginfo=1
+einval shm=EINVAL sem=EINVAL msg=EINVAL
+badidx shm=EINVAL sem=EINVAL msg=EINVAL
+efault shm=EFAULT sem=EFAULT msg=EFAULT
+perm acc=1 shmset=1 shmrmid=1 semset=1 msgset=1

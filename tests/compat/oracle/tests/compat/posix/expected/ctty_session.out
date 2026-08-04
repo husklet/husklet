@@ -1,0 +1,1 @@
+ctty A_pre_enxio=1 A_gsid=1 A_tcgetsid=1 A_devtty=1 B_notleader=1 B_devtty_enxio=1 setsid_eperm=1 setpgid_leader_fails=1

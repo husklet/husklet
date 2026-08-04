@@ -1,0 +1,1 @@
+lock_range=1 unlock_range=1 mlockall=0 munlockall=1 badflag=EINVAL limit_set=1 future=1 future_one=1 future_limit=1 clear=1 clear_map=1 fork_empty=1 hole=ENOMEM

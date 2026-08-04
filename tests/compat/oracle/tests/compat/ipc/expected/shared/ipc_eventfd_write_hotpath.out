@@ -1,0 +1,4 @@
+acc w1=8 w2=8 wbad=-1(Invalid argument) wzero=8 wmax=-1(Invalid argument) read=8 sum=42
+overflow wof=-1 errno=Resource temporarily unavailable
+xproc read=8 sum=111
+wakeup read=8 value=9

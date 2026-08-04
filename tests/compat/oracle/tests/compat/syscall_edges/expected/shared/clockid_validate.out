@@ -1,0 +1,6 @@
+realtime_ok=1 mono_ok=1
+res_realtime_ok=1 res_mono_ok=1
+boottime_ok=1 proccpu_ok=1
+gettime_bad_errno=22 getres_bad_errno=22
+nanosleep_bad_errno=22
+nanosleep_negns_errno=22

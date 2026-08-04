@@ -1,15 +1,19 @@
 use proc_macro2::Span;
-use syn::spanned::Spanned;
+use syn::{spanned::Spanned, visit::Visit};
 
 use crate::{
+    Result,
     model::{Finding, Review, Severity},
     rule::Rule,
     source::Workspace,
-    Result,
 };
 
 /// Rejects Rust files whose size obscures cohesive ownership boundaries.
 pub struct FileLength;
+
+#[cfg(test)]
+#[path = "test.rs"]
+mod tests;
 
 impl Rule for FileLength {
     fn id(&self) -> &'static str {
@@ -22,11 +26,18 @@ impl Rule for FileLength {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        for source in workspace.sources() {
+        for source in workspace.production() {
             if source.package == "hl-design-lint" {
                 continue;
             }
-            let lines = source.text.lines().count();
+            let physical = source.text.lines().count();
+            let mut test_lines = vec![false; physical.saturating_add(1)];
+            TestLines {
+                physical,
+                lines: &mut test_lines,
+            }
+            .visit_file(&source.syntax);
+            let lines = (1..=physical).filter(|line| !test_lines[*line]).count();
             if lines <= 500 {
                 continue;
             }
@@ -46,14 +57,11 @@ impl Rule for FileLength {
             finding.message = format!("Rust source contains {lines} lines; the maximum is 500");
             finding.help = "split by cohesive entity, component, screen region, adapter, or service; do not use include! or arbitrary numbered fragments".to_owned();
             let mut review = Review::error();
-            review
-                .metadata
-                .push(("lines".to_owned(), lines.to_string()));
+            review.metadata.push(("lines".to_owned(), lines.to_string()));
             review.metadata.push(("limit".to_owned(), "500".to_owned()));
             review.questions = vec![
                 "Which independent responsibilities are mixed in this file?".to_owned(),
-                "Does each extracted module have a precise domain name and dependency direction?"
-                    .to_owned(),
+                "Does each extracted module have a precise domain name and dependency direction?".to_owned(),
                 "Can the split be tested without relying on source-text assertions?".to_owned(),
             ];
             finding.review = Some(review);
@@ -61,4 +69,63 @@ impl Rule for FileLength {
         }
         Ok(findings)
     }
+}
+
+struct TestLines<'a> {
+    physical: usize,
+    lines: &'a mut [bool],
+}
+
+impl TestLines<'_> {
+    fn mark(&mut self, item: &syn::Item) {
+        let span = item.span();
+        let start = item_attributes(item)
+            .and_then(|attributes| attributes.first())
+            .map_or_else(|| span.start().line, |attribute| attribute.span().start().line)
+            .max(1);
+        let end = span.end().line.min(self.physical);
+        for line in start..=end {
+            self.lines[line] = true;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for TestLines<'_> {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if test_only(item) {
+            self.mark(item);
+            return;
+        }
+        syn::visit::visit_item(self, item);
+    }
+}
+
+fn test_only(item: &syn::Item) -> bool {
+    let Some(attributes) = item_attributes(item) else {
+        return false;
+    };
+    crate::source::requires_test(attributes) || attributes.iter().any(|attribute| attribute.path().is_ident("test"))
+}
+
+fn item_attributes(item: &syn::Item) -> Option<&[syn::Attribute]> {
+    use syn::Item;
+
+    Some(match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::ExternCrate(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::ForeignMod(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::TraitAlias(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => return None,
+    })
 }

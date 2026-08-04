@@ -1,0 +1,2 @@
+lockf blocked=1 acquired=1
+lockf close-any=1 acquired=1

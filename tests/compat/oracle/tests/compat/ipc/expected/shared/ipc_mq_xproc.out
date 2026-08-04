@@ -1,0 +1,7 @@
+open=1
+wake len=4 prio=0 msg=wake
+drain0 prio=7 msg=hi
+drain1 prio=3 msg=mid
+drain2 prio=1 msg=lo
+child_exit=1
+unlink=ok

@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
 use syn::{
-    spanned::Spanned, visit::Visit, Block, Expr, ExprCall, ExprClosure, ExprMethodCall, ImplItemFn,
-    ItemFn, ItemMod, ItemUse, Local, Pat, Stmt,
+    Block, Expr, ExprCall, ExprClosure, ExprMethodCall, ImplItemFn, ItemFn, ItemMod, ItemUse, Local, Pat, Stmt,
+    spanned::Spanned, visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 mod support;
@@ -81,11 +81,7 @@ impl<'a> Blocking<'a> {
 
     fn report(&mut self, span: proc_macro2::Span, kind: &str, subject: String, help: &str) {
         let location = self.source.location(span);
-        let mut finding = Finding::error(
-            "async-blocking-operation",
-            subject.clone(),
-            location.clone(),
-        );
+        let mut finding = Finding::error("async-blocking-operation", subject.clone(), location.clone());
         finding.message = format!("{kind} `{subject}` can block the async executor thread");
         finding.help = help.to_owned();
         finding.related.push(Related {
@@ -112,7 +108,7 @@ impl<'a> Blocking<'a> {
             );
         } else if path.first().is_some_and(|part| part == "std")
             && path.get(1).is_some_and(|part| part == "fs")
-            && (path.get(2).is_some_and(|name| blocking_fs_function(name))
+            && (path.get(2).is_some_and(|name| fs_function(name))
                 || matches!(
                     path.as_slice(),
                     [_, _, kind, operation]
@@ -130,9 +126,7 @@ impl<'a> Blocking<'a> {
 
     fn method_call(&mut self, call: &ExprMethodCall) {
         let method = call.method.to_string();
-        if matches!(method.as_str(), "blocking_recv" | "blocking_lock")
-            && self.proven_tokio_receiver(&call.receiver)
-        {
+        if matches!(method.as_str(), "blocking_recv" | "blocking_lock") && self.proven_tokio_receiver(&call.receiver) {
             self.report(
                 call.span(),
                 "explicit blocking runtime operation",
@@ -163,9 +157,7 @@ impl<'a> Blocking<'a> {
                 method,
                 "use an async-aware lock when contention may span executor work, or acquire the synchronous lock outside async execution",
             );
-        } else if method == "open"
-            && fs_open_options_constructor(&call.receiver, |path| self.resolve(path))
-        {
+        } else if method == "open" && fs_options_constructor(&call.receiver, |path| self.resolve(path)) {
             self.report(
                 call.span(),
                 "synchronous filesystem operation",
@@ -214,10 +206,7 @@ impl<'a> Blocking<'a> {
             return;
         };
         if command_constructor(&initializer.expr, |path| self.resolve(path)) {
-            self.command_bindings
-                .last_mut()
-                .unwrap()
-                .insert(name.clone());
+            self.command_bindings.last_mut().unwrap().insert(name.clone());
         }
         if let Some(kind) = lock_constructor(&initializer.expr, |path| self.resolve(path)) {
             self.lock_bindings.last_mut().unwrap().insert(name, kind);
@@ -316,7 +305,7 @@ impl<'ast> Visit<'ast> for Blocking<'_> {
     }
 
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
-        let exempt = call_is_blocking_boundary(call, |path| self.resolve(path));
+        let exempt = boundary_call(call, |path| self.resolve(path));
         if exempt {
             self.exempt_depth += 1;
             syn::visit::visit_expr_call(self, call);
@@ -354,10 +343,7 @@ impl<'ast> Visit<'ast> for Blocking<'_> {
 }
 
 impl Blocking<'_> {
-    fn bind_arguments(
-        &mut self,
-        arguments: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>,
-    ) {
+    fn bind_arguments(&mut self, arguments: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>) {
         self.command_bindings.push(HashSet::new());
         self.lock_bindings.push(HashMap::new());
         for argument in arguments {
@@ -385,4 +371,5 @@ impl Blocking<'_> {
 }
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;

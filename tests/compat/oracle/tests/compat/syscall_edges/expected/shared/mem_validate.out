@@ -1,0 +1,4 @@
+mprotect_unaligned_errno=22
+madvise_badadvice_errno=22
+madvise_unaligned_errno=22
+mprotect_unmapped_errno=12

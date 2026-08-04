@@ -1,0 +1,2 @@
+pollhup with_data in=1 hup=1
+pollhup drained hup=1

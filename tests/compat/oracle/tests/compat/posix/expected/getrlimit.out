@@ -1,0 +1,1 @@
+getrlimit nofile=1 stack=1 rusage=1

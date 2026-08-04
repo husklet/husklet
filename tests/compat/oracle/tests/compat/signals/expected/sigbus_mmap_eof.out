@@ -1,0 +1,2 @@
+handler: is_sigbus_adrerr=1
+default: is_sigbus=1

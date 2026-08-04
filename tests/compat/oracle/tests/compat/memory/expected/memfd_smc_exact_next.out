@@ -1,0 +1,1 @@
+memfd-smc-exact-next initial=1 scalar-once=1 lock-once=1 rep-remainder=1 rep-state=1 next-rip=1

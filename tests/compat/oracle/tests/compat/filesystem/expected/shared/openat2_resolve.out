@@ -1,0 +1,1 @@
+openat2-resolve plain=1 nosym-eloop=1 beneath-blocked=1 slash-blocked=1

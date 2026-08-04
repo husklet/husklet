@@ -1,0 +1,1 @@
+pagesize auxv=4096 libc=4096 proc=4096

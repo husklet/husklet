@@ -1,0 +1,1 @@
+rw-semantics pwrite-appends=1 concurrent-append=1 readv-order=1 fork-offset=1 neg-einval=1 pipe-espipe=1 read-wo-ebadf=1 write-ro-ebadf=1 read-dir-eisdir=1

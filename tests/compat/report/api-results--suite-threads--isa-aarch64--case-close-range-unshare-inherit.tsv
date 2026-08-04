@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+threads	close-range-unshare-inherit	aarch64	fail	-	linux-libc,pthreads,close-range,sentry	engine:timeout	timeout

@@ -1,0 +1,1 @@
+cpu.max=[200000 100000] mem.max=[536870912] controllers=[cpuset cpu io memory pids]

@@ -4,7 +4,7 @@ use std::{
 };
 
 use proc_macro2::Span;
-use syn::{punctuated::Punctuated, Attribute, Meta, Token};
+use syn::{Attribute, Meta, Token, punctuated::Punctuated};
 
 use crate::{LintError, Result};
 
@@ -27,8 +27,7 @@ pub struct Source {
 
 impl Source {
     fn load(path: PathBuf) -> Result<Self> {
-        let text =
-            fs::read_to_string(&path).map_err(|error| LintError::io("read", &path, error))?;
+        let text = fs::read_to_string(&path).map_err(|error| LintError::io("read", &path, error))?;
         let syntax = syn::parse_file(&text).map_err(|source| LintError::Parse {
             path: path.clone(),
             source,
@@ -79,8 +78,7 @@ impl Workspace {
         let mut single_file_directories = Vec::new();
         for path in &paths {
             let include_linter = explicit_linter(path);
-            rust_files(path, &mut files, include_linter)
-                .map_err(|error| LintError::io("walk", path, error))?;
+            rust_files(path, &mut files, include_linter).map_err(|error| LintError::io("walk", path, error))?;
             directory_shapes(
                 path,
                 &mut empty_directories,
@@ -95,13 +93,11 @@ impl Workspace {
         empty_directories.dedup();
         single_file_directories.sort();
         single_file_directories.dedup();
-        let mut sources = files
-            .into_iter()
-            .map(Source::load)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        mark_test_modules(&mut sources);
         Ok(Self {
-            sources,
+            sources: files
+                .into_iter()
+                .map(Source::load)
+                .collect::<std::result::Result<_, _>>()?,
             empty_directories,
             single_file_directories,
             paths,
@@ -185,10 +181,7 @@ pub fn domain(path: &Path) -> String {
     });
     while let Some(component) = components.next() {
         if component == "src" {
-            return components
-                .next()
-                .map(snake_case)
-                .unwrap_or_else(|| "root".into());
+            return components.next().map(snake_case).unwrap_or_else(|| "root".into());
         }
     }
     "root".to_owned()
@@ -232,8 +225,9 @@ fn meta_requires_test(meta: &Meta) -> bool {
         Meta::List(list) if list.path.is_ident("all") => {
             parse_cfg_items(list).is_some_and(|items| items.iter().any(meta_requires_test))
         }
-        Meta::List(list) if list.path.is_ident("any") => parse_cfg_items(list)
-            .is_some_and(|items| !items.is_empty() && items.iter().all(meta_requires_test)),
+        Meta::List(list) if list.path.is_ident("any") => {
+            parse_cfg_items(list).is_some_and(|items| !items.is_empty() && items.iter().all(meta_requires_test))
+        }
         Meta::List(_) | Meta::NameValue(_) => false,
     }
 }
@@ -244,7 +238,7 @@ fn parse_cfg_items(list: &syn::MetaList) -> Option<Punctuated<Meta, Token![,]>> 
 }
 
 fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io::Result<()> {
-    if (!include_linter && is_linter(path)) || is_paused_domain(path) {
+    if (!include_linter && is_linter(path)) || is_foreign_source(path) || is_external_corpus(path) {
         return Ok(());
     }
     if fs::symlink_metadata(path)?.file_type().is_symlink() {
@@ -259,8 +253,7 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return Ok(());
     };
-    if matches!(name, ".git" | "target" | "vendor") || (!include_linter && name == "hl-design-lint")
-    {
+    if matches!(name, ".git" | "target" | "vendor") || (!include_linter && name == "hl-design-lint") {
         return Ok(());
     }
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -277,10 +270,7 @@ fn directory_shapes(
     single: &mut Vec<(PathBuf, PathBuf)>,
     include_linter: bool,
 ) -> io::Result<()> {
-    if excluded(path, include_linter)
-        || fs::symlink_metadata(path)?.file_type().is_symlink()
-        || path.is_file()
-    {
+    if excluded(path, include_linter) || fs::symlink_metadata(path)?.file_type().is_symlink() || path.is_file() {
         return Ok(());
     }
 
@@ -292,10 +282,7 @@ fn directory_shapes(
         .collect::<Vec<_>>();
     if substantive.is_empty() {
         empty.push(path.to_owned());
-    } else if substantive.len() == 1
-        && substantive[0].file_type()?.is_file()
-        && !conventional_single_file_directory(path)
-    {
+    } else if substantive.len() == 1 && substantive[0].file_type()?.is_file() && !conventional_single_directory(path) {
         single.push((path.to_owned(), substantive[0].path()));
     }
     for entry in entries {
@@ -306,7 +293,7 @@ fn directory_shapes(
     Ok(())
 }
 
-fn conventional_single_file_directory(path: &Path) -> bool {
+fn conventional_single_directory(path: &Path) -> bool {
     let name = path.file_name().and_then(|name| name.to_str());
     let artifact_boundary = path.components().any(|component| {
         matches!(
@@ -333,7 +320,7 @@ fn placeholder(path: &Path) -> bool {
 }
 
 fn excluded(path: &Path, include_linter: bool) -> bool {
-    if (!include_linter && is_linter(path)) || is_paused_domain(path) {
+    if (!include_linter && is_linter(path)) || is_foreign_source(path) || is_external_corpus(path) {
         return true;
     }
     path.file_name()
@@ -341,14 +328,22 @@ fn excluded(path: &Path, include_linter: bool) -> bool {
         .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint"))
 }
 
-fn is_paused_domain(path: &Path) -> bool {
+fn is_external_corpus(path: &Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        ancestor.join(".hl-external-corpus").is_file() || ancestor.join(".hl-generated-artifacts").is_file()
+    })
+}
+
+fn is_foreign_source(path: &Path) -> bool {
     let mut components = path.components().filter_map(|component| match component {
         std::path::Component::Normal(value) => value.to_str(),
         _ => None,
     });
     while let Some(component) = components.next() {
         if component == "src" {
-            return components.next().is_some_and(|domain| domain == "engine");
+            return components
+                .next()
+                .is_some_and(|layer| matches!(layer, "native" | "schema"));
         }
     }
     false
@@ -371,119 +366,50 @@ fn explicit_linter(path: &Path) -> bool {
 }
 
 fn is_test(path: &Path) -> bool {
-    path.file_stem().is_some_and(|stem| stem == "tests")
-        || path.components().any(|component| {
-            matches!(
-                component.as_os_str().to_str(),
-                Some("tests" | "test_support" | "benches")
-            )
-        })
-}
-
-/// Marks sources that only exist behind a `#[cfg(test)]` module declaration.
-///
-/// A file reached solely through `#[cfg(test)] mod name;` compiles only in test configuration, so its
-/// contents are test support regardless of how the file is named. Recognising the declaration keeps the
-/// repository's `name_test.rs` and gated-subdirectory conventions out of the production rules, which
-/// otherwise report test helpers as production design findings.
-fn mark_test_modules(sources: &mut [Source]) {
-    let mut files = std::collections::BTreeSet::new();
-    let mut directories = std::collections::BTreeSet::new();
-    for source in sources.iter() {
-        let Some(root) = module_root(&source.path) else {
-            continue;
-        };
-        let Some(directory) = source.path.parent() else {
-            continue;
-        };
-        collect_test_modules(
-            &source.syntax.items,
-            &root,
-            directory,
-            source.test,
-            &mut files,
-            &mut directories,
-        );
-    }
-    for source in sources.iter_mut() {
-        source.test |= files.contains(&source.path)
-            || directories
-                .iter()
-                .any(|directory| source.path.starts_with(directory));
-    }
-}
-
-/// The directory that `mod name;` declarations inside this file resolve against.
-fn module_root(path: &Path) -> Option<PathBuf> {
-    let parent = path.parent()?;
-    match path.file_stem()?.to_str()? {
-        "mod" | "lib" | "main" => Some(parent.to_owned()),
-        stem => Some(parent.join(stem)),
-    }
-}
-
-/// Collects the sources gated by `#[cfg(test)]` module declarations.
-///
-/// `root` resolves plain `mod name;` declarations, which live in the directory owned by the module.
-/// `overrides` resolves `#[path = "..."]`, which Rust reads relative to the directory of the file
-/// holding the declaration until an inline module moves it deeper.
-fn collect_test_modules(
-    items: &[syn::Item],
-    root: &Path,
-    overrides: &Path,
-    test_scope: bool,
-    files: &mut std::collections::BTreeSet<PathBuf>,
-    directories: &mut std::collections::BTreeSet<PathBuf>,
-) {
-    for item in items {
-        let syn::Item::Mod(module) = item else {
-            continue;
-        };
-        let gated = test_scope || requires_test(&module.attrs);
-        let name = module.ident.to_string();
-        match &module.content {
-            // An inline module nests further declarations one directory deeper.
-            Some((_, nested)) => {
-                let nested_root = root.join(&name);
-                collect_test_modules(
-                    nested,
-                    &nested_root,
-                    &nested_root,
-                    gated,
-                    files,
-                    directories,
-                );
-            }
-            None if gated => match module_path_attribute(&module.attrs) {
-                Some(relative) => {
-                    files.insert(overrides.join(relative));
-                }
-                None => {
-                    files.insert(root.join(format!("{name}.rs")));
-                    // A gated module owning a directory gates every descendant with it.
-                    directories.insert(root.join(name));
-                }
-            },
-            None => {}
-        }
-    }
-}
-
-/// The literal of an explicit `#[path = "..."]` module override.
-fn module_path_attribute(attributes: &[Attribute]) -> Option<String> {
-    attributes.iter().find_map(|attribute| {
-        if !attribute.path().is_ident("path") {
-            return None;
-        }
-        let Meta::NameValue(value) = &attribute.meta else {
-            return None;
-        };
-        let syn::Expr::Lit(literal) = &value.value else {
-            return None;
-        };
-        let syn::Lit::Str(text) = &literal.lit else {
-            return None;
-        };
-        Some(text.value())
+    path.file_stem().is_some_and(|stem| {
+        stem == "test"
+            || stem == "tests"
+            || stem
+                .to_str()
+                .is_some_and(|name| name.ends_with("_test") || name.ends_with("_tests"))
+    }) || path.components().any(|component| {
+        matches!(
+            component.as_os_str().to_str(),
+            Some("tests" | "test_support" | "benches")
+        )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Workspace;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    #[test]
+    fn external_corpus_ignored() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("hl-lint-corpus-{nonce}"));
+        let imported = root.join("oracle/only");
+        fs::create_dir_all(&imported).unwrap();
+        fs::write(root.join("oracle/.hl-external-corpus"), b"external\n").unwrap();
+        fs::write(imported.join("fixture.c"), b"int main(void) { return 0; }\n").unwrap();
+        let workspace = Workspace::load([root.clone()]).unwrap();
+        assert!(workspace.single_file_directories().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generated_artifacts_ignored() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("hl-lint-artifacts-{nonce}"));
+        let generated = root.join("work/empty");
+        fs::create_dir_all(&generated).unwrap();
+        fs::write(root.join("work/.hl-generated-artifacts"), b"generated\n").unwrap();
+        let workspace = Workspace::load([root.clone()]).unwrap();
+        assert!(workspace.empty_directories().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

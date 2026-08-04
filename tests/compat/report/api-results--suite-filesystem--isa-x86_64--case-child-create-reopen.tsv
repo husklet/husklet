@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+filesystem	child-create-reopen	x86_64	skip	-	linux-libc,filesystem,fork	-	unsupported-fixture:multi-process-service

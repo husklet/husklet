@@ -2,9 +2,10 @@
 
 use proc_macro::TokenStream;
 use syn::{
+    Error, Ident, LitStr, Result, Token,
     ext::IdentExt,
     parse::{Parse, ParseStream},
-    parse_macro_input, Error, Ident, LitStr, Result, Token,
+    parse_macro_input,
 };
 
 struct NamingException {
@@ -23,10 +24,7 @@ impl Parse for NamingException {
             return Err(input.error("unexpected naming exception argument"));
         }
         if reason.value().trim().is_empty() {
-            return Err(Error::new(
-                reason.span(),
-                "naming exception reason cannot be empty",
-            ));
+            return Err(Error::new(reason.span(), "naming exception reason cannot be empty"));
         }
         Ok(Self { reason })
     }
@@ -98,12 +96,9 @@ pub fn classify(attribute: TokenStream, item: TokenStream) -> TokenStream {
         Kind::String(kind) => kind.value(),
     };
     if kind.trim().is_empty() {
-        return Error::new(
-            classification.scope.span(),
-            "classification kind cannot be empty",
-        )
-        .into_compile_error()
-        .into();
+        return Error::new(classification.scope.span(), "classification kind cannot be empty")
+            .into_compile_error()
+            .into();
     }
     item
 }
@@ -120,12 +115,9 @@ pub fn naming(attribute: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn adapter(attribute: TokenStream, item: TokenStream) -> TokenStream {
     if !attribute.is_empty() {
-        return Error::new(
-            proc_macro2::Span::call_site(),
-            "adapter does not accept arguments",
-        )
-        .into_compile_error()
-        .into();
+        return Error::new(proc_macro2::Span::call_site(), "adapter does not accept arguments")
+            .into_compile_error()
+            .into();
     }
     item
 }
@@ -140,18 +132,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_reasoned_naming_exception() {
+    fn accepts_reason() {
         assert_eq!(
-            parse("reason = \"external protocol term\"")
-                .unwrap()
-                .reason
-                .value(),
+            parse("reason = \"external protocol term\"").unwrap().reason.value(),
             "external protocol term"
         );
     }
 
     #[test]
-    fn rejects_empty_missing_and_unknown_reasons() {
+    fn rejects_bad_reasons() {
         assert!(parse("reason = \"\"").is_err());
         assert!(parse("").is_err());
         assert!(parse("because = \"unsupported\"").is_err());

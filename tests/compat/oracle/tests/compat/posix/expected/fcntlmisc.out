@@ -1,0 +1,1 @@
+fcntlmisc rw=1 nonblock=1 dupfd=1 cloexec=1

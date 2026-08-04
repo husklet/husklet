@@ -1,24 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use syn::{
-    spanned::Spanned, visit::Visit, BinOp, Expr, ExprAssign, ExprBinary, ExprLit, ExprStruct,
-    Fields, ImplItem, ItemImpl, ItemMod, ItemStruct, Lit, Member, Type,
+    BinOp, Expr, ExprAssign, ExprBinary, ExprLit, ExprStruct, Fields, ImplItem, ItemImpl, ItemMod, ItemStruct, Lit,
+    Member, Type, spanned::Spanned, visit::Visit,
 };
 
 use crate::{
-    model::{Finding, Related, Review, Severity},
-    rule::{syntax::type_name, Rule},
-    source::{requires_test, Source, Workspace},
     Result,
+    model::{Finding, Related, Review, Severity},
+    rule::{Rule, syntax::type_name},
+    source::{Source, Workspace, requires_test},
 };
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 /// Reviews related boolean fields that encode one mutually exclusive state.
-pub struct BooleanState;
+pub struct State;
 
-impl Rule for BooleanState {
+impl Rule for State {
     fn id(&self) -> &'static str {
         "boolean-state-cluster"
     }
@@ -182,13 +183,14 @@ impl<'a> Collector<'a> {
             if states.len() < 2 {
                 continue;
             }
-            self.transitions.entry(key.clone()).or_default().extend(
-                complete.into_iter().take(4).map(|construction| Evidence {
+            self.transitions
+                .entry(key.clone())
+                .or_default()
+                .extend(complete.into_iter().take(4).map(|construction| Evidence {
                     label: "one-hot construction of the same boolean field set".into(),
                     location: construction.location.clone(),
                     fields: definition.fields.clone(),
-                }),
-            );
+                }));
         }
     }
 }
@@ -234,12 +236,7 @@ impl Visit<'_> for Collector<'_> {
 
     fn visit_expr_struct(&mut self, item: &ExprStruct) {
         if !self.test_scope {
-            if let Some(name) = item
-                .path
-                .segments
-                .last()
-                .map(|segment| segment.ident.to_string())
-            {
+            if let Some(name) = item.path.segments.last().map(|segment| segment.ident.to_string()) {
                 let values = item
                     .fields
                     .iter()
@@ -250,13 +247,10 @@ impl Visit<'_> for Collector<'_> {
                         literal_bool(&field.expr).map(|value| (name.to_string(), value))
                     })
                     .collect();
-                self.literals
-                    .entry(self.key(&name))
-                    .or_default()
-                    .push(Construction {
-                        values,
-                        location: self.source.location(item.span()),
-                    });
+                self.literals.entry(self.key(&name)).or_default().push(Construction {
+                    values,
+                    location: self.source.location(item.span()),
+                });
             }
         }
         syn::visit::visit_expr_struct(self, item);
@@ -291,18 +285,15 @@ impl Visit<'_> for Collector<'_> {
                 .filter(|field| assignments.values.get(*field) == Some(&true))
                 .count();
             if coordinated.len() >= 3 && true_count == 1 {
-                self.transitions
-                    .entry(key.clone())
-                    .or_default()
-                    .push(Evidence {
-                        label: format!(
-                            "method `{}` coordinates {} boolean state fields",
-                            method.sig.ident,
-                            coordinated.len()
-                        ),
-                        location: self.source.location(method.span()),
-                        fields: coordinated,
-                    });
+                self.transitions.entry(key.clone()).or_default().push(Evidence {
+                    label: format!(
+                        "method `{}` coordinates {} boolean state fields",
+                        method.sig.ident,
+                        coordinated.len()
+                    ),
+                    location: self.source.location(method.span()),
+                    fields: coordinated,
+                });
             }
             let mut exclusions = Exclusions::default();
             exclusions.visit_block(&method.block);
@@ -313,17 +304,11 @@ impl Visit<'_> for Collector<'_> {
                 .filter(|field| definition.fields.contains(field))
                 .collect::<BTreeSet<_>>();
             if excluded_fields.len() >= 3 && exclusions.pairs.len() >= 2 {
-                self.transitions
-                    .entry(key.clone())
-                    .or_default()
-                    .push(Evidence {
-                        label: format!(
-                            "method `{}` rejects mutually active boolean fields",
-                            method.sig.ident
-                        ),
-                        location: self.source.location(method.span()),
-                        fields: excluded_fields,
-                    });
+                self.transitions.entry(key.clone()).or_default().push(Evidence {
+                    label: format!("method `{}` rejects mutually active boolean fields", method.sig.ident),
+                    location: self.source.location(method.span()),
+                    fields: excluded_fields,
+                });
             }
         }
     }
@@ -358,11 +343,7 @@ impl Visit<'_> for Exclusions {
     fn visit_expr_binary(&mut self, item: &ExprBinary) {
         if matches!(item.op, BinOp::And(_)) {
             if let (Some(left), Some(right)) = (self_field(&item.left), self_field(&item.right)) {
-                let pair = if left < right {
-                    (left, right)
-                } else {
-                    (right, left)
-                };
+                let pair = if left < right { (left, right) } else { (right, left) };
                 self.pairs.insert(pair);
             }
         }
@@ -389,8 +370,7 @@ fn is_bool(ty: &Type) -> bool {
 
 fn literal_bool(expr: &Expr) -> Option<bool> {
     let Expr::Lit(ExprLit {
-        lit: Lit::Bool(value),
-        ..
+        lit: Lit::Bool(value), ..
     }) = expr
     else {
         return None;

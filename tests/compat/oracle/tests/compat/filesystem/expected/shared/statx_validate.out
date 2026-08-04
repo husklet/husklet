@@ -1,0 +1,1 @@
+statx-validate badflag=22 badmask=22 have_type=1 have_core=1

@@ -1,0 +1,2 @@
+env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution
+rust-engine,arm64,memory,2466124,36526,2462074,2647989,5,2516194,native-verified

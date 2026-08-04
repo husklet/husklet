@@ -1,0 +1,1 @@
+ptrace-ctl peek=1 poke=1 reg=1 fpclean=1 badclean=1 exit=1 status=0

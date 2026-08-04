@@ -1,0 +1,21 @@
+[package]
+name = "hl-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hl-isa = { path = "../hl-isa" }
+hl-event = { path = "../hl-event" }
+hl-descriptor = { path = "../hl-descriptor" }
+hl-memory = { path = "../hl-memory" }
+hl-network = { path = "../hl-network" }
+hl-sync = { path = "../hl-sync" }
+hl-task = { path = "../hl-task" }
+hl-time = { path = "../hl-time" }
+hl-vfs = { path = "../hl-vfs" }

@@ -1,0 +1,6 @@
+lseek_pipe_errno=29
+pread_pipe_errno=29
+pwrite_pipe_errno=29
+pwrite_negoff_errno=22
+lseek_badwhence_errno=22
+lseek_pasteof=1

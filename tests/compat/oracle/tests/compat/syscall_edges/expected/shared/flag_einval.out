@@ -1,0 +1,11 @@
+close_range_badflag_errno=22 open=1
+pidfd_open_badflag_errno=22
+unshare_badflag_errno=22
+setns_badfd_errno=9
+inotify_init1_badflag_errno=22
+epoll_pwait_zero_errno=22 neg_errno=22
+signalfd4_badsize_errno=22
+accept4_badflag_errno=22
+accept4_goodflag_errno=11
+socketpair_badtype_errno=22 socket_badtype_errno=22
+pvm_readv_ok=1 pvm_readv_badflag_errno=22 pvm_writev_badflag_errno=22

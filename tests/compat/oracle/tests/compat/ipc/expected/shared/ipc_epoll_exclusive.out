@@ -1,0 +1,3 @@
+exclusive add=0 add_errno=0
+mod=-1 mod_errno=Invalid argument
+delivered=1

@@ -10,12 +10,7 @@ use crate::{rule::syntax::type_name, source::Source};
 pub(super) fn public_files(sources: &[&Source]) -> BTreeSet<PathBuf> {
     let mut public = sources
         .iter()
-        .filter(|source| {
-            matches!(
-                source.path.file_name().and_then(|name| name.to_str()),
-                Some("lib.rs")
-            )
-        })
+        .filter(|source| matches!(source.path.file_name().and_then(|name| name.to_str()), Some("lib.rs")))
         .map(|source| source.path.clone())
         .collect::<BTreeSet<_>>();
     loop {
@@ -127,10 +122,7 @@ fn module_paths_named(source: &Source, name: &str) -> [PathBuf; 2] {
     let parent = source.path.parent().unwrap_or_else(|| Path::new(""));
     let directory = if source.path.file_name().is_some_and(|name| name == "mod.rs")
         || source.path.file_name().is_some_and(|name| name == "lib.rs")
-        || source
-            .path
-            .file_name()
-            .is_some_and(|name| name == "main.rs")
+        || source.path.file_name().is_some_and(|name| name == "main.rs")
     {
         parent.to_owned()
     } else {

@@ -1,0 +1,1 @@
+hardlink-nlink nlink3=1 same-inode=1 content-shared=1 nlink2=1 dir-eperm=1

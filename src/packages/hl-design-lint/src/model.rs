@@ -107,12 +107,7 @@ impl Finding {
         Self::new(rule, Severity::Warning, subject, location)
     }
 
-    fn new(
-        rule: &'static str,
-        severity: Severity,
-        subject: impl Into<String>,
-        location: Location,
-    ) -> Self {
+    fn new(rule: &'static str, severity: Severity, subject: impl Into<String>, location: Location) -> Self {
         Self {
             rule,
             severity,

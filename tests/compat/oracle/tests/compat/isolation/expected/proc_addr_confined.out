@@ -1,0 +1,7 @@
+vmas_ok=1 exe_ok=1
+numa_present=1 numa_addrs_ours=1 numa_names_ours=1
+rollup_present=1 rollup_in_span=1
+map_files_present=1 map_files_bounds_ours=1 map_files_names_ours=1
+syscall_addrs_ours=1
+mem_leaks_foreign=0
+mountstats_present=1 mountstats_subset_of_mountinfo=1

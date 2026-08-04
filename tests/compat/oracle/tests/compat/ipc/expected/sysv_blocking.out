@@ -1,0 +1,1 @@
+sysv_blocking msg_wake=1 msg_remove=1 sem_wake=1 sem_remove=1 timeout=1 eintr=1

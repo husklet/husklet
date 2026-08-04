@@ -1,0 +1,1 @@
+syscall-logical-uaccess cross=1 aliases=1 second-page-fault=1 zero-then-fault=1 time=1 signal=1 event=1 misc-seccomp=1 rare=1

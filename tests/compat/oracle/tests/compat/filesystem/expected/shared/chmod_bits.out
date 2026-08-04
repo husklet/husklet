@@ -1,0 +1,1 @@
+chmod-bits setuid=1 setgid=1 sticky=1 all-special=1

@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+filesystem	mkdir-umask	x86_64	fail	0	linux-libc,filesystem	stdout:e=882c359c6c031be3,a=8828d39c6c003f86,d=42,eb=31,ab=30,el=44,al=44	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

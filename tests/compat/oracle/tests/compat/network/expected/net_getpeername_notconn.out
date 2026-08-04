@@ -1,0 +1,1 @@
+getpeername=-1 errno=ENOTCONN getsockname=0 fam_inet=1 port0=1

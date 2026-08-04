@@ -1,0 +1,1 @@
+selectpipe timeout=1 ready=1 pselect=1

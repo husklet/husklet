@@ -1,9 +1,9 @@
 use std::io::{self, Write};
 
 use crate::{
+    LintError, Result,
     model::{Finding, Summary},
     report::Reporter,
-    LintError, Result,
 };
 
 /// Emits compiler-style diagnostics and summaries.

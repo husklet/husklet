@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+process	ptrace-syscalls	aarch64	fail	0	linux-libc,fork,ptrace,signals,registers,tracee-memory	stdout:e=70a7a85836faac74,a=183f6253960734f1,d=18,eb=31,ab=30,el=70,al=71	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	ptrace-syscalls	x86_64	fail	0	linux-libc,fork,ptrace,signals,registers,tracee-memory	stdout:e=70a7a85836faac74,a=183f6253960734f1,d=18,eb=31,ab=30,el=70,al=71	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

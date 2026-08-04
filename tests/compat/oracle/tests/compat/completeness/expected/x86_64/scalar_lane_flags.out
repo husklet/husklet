@@ -1,0 +1,24 @@
+addss      mx=00 low32=40400000 low64=7fc0000040400000
+addps      mx=28 low32=40400000 low64=7fc0000040400000
+subss      mx=00 low32=40000000 low64=7fc0000040000000
+subps      mx=00 low32=40000000 low64=7fc0000040000000
+mulss      mx=00 low32=40c00000 low64=7fc0000040c00000
+mulps      mx=28 low32=40c00000 low64=7fc0000040c00000
+divss      mx=00 low32=40000000 low64=7fc0000040000000
+divps      mx=00 low32=40000000 low64=7fc0000040000000
+sqrtss     mx=00 low32=40000000 low64=7fc0000040000000
+sqrtps     mx=20 low32=40000000 low64=7fc0000040000000
+cmpltss    mx=00 low32=ffffffff low64=7fc00000ffffffff
+cmpltps    mx=01 low32=ffffffff low64=00000000ffffffff
+addsd      mx=00 low32=00000000 low64=4008000000000000
+addpd      mx=00 low32=00000000 low64=4008000000000000
+mulsd      mx=00 low32=00000000 low64=4018000000000000
+mulpd      mx=00 low32=00000000 low64=4018000000000000
+divsd      mx=00 low32=00000000 low64=4000000000000000
+divpd      mx=00 low32=00000000 low64=4000000000000000
+sqrtsd     mx=00 low32=00000000 low64=4000000000000000
+sqrtpd     mx=00 low32=00000000 low64=4000000000000000
+cmpltsd    mx=00 low32=ffffffff low64=ffffffffffffffff
+cmpltpd    mx=01 low32=ffffffff low64=ffffffffffffffff
+test8      zf=0 marker=5a5a
+test16     zf=0 marker=5a5a

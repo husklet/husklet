@@ -1,0 +1,9 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+process	ptrace-attach-detach	aarch64	fail	1	linux-libc,fork,ptrace,attach,detach,signal-inject	exit:e=0,a=1;stdout:e=ec0a3a7d7e01b2f7,a=1e8ecf11ef5c293e,d=11,eb=61,ab=6d,el=53,al=21	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+process	ptrace-control-writes	aarch64	pass	0	linux-libc,fork,ptrace,poke,registers	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	ptrace-exec-stop	aarch64	fail	-	linux-libc,fork,ptrace,self-exec	engine:timeout	timeout
+process	ptrace-syscalls	aarch64	pass	0	linux-libc,fork,ptrace,signals,registers,tracee-memory	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	ptrace-attach-detach	x86_64	fail	1	linux-libc,fork,ptrace,attach,detach,signal-inject	exit:e=0,a=1;stdout:e=ec0a3a7d7e01b2f7,a=1e8ecf11ef5c293e,d=11,eb=61,ab=6d,el=53,al=21	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+process	ptrace-control-writes	x86_64	pass	0	linux-libc,fork,ptrace,poke,registers	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	ptrace-exec-stop	x86_64	fail	1	linux-libc,fork,ptrace,self-exec	exit:e=0,a=1;stdout:e=af78beba9d206d42,a=93876028573fbfc7,d=12,eb=6f,ab=73,el=33,al=22	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+process	ptrace-syscalls	x86_64	pass	0	linux-libc,fork,ptrace,signals,registers,tracee-memory	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

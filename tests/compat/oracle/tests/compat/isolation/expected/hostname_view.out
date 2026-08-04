@@ -1,0 +1,3 @@
+gethostname_ok=1 uname_ok=1 proc_ok=1
+uts_match=1 proc_match=1 nonempty=1
+sysname_is_linux=1

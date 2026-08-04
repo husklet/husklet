@@ -1,0 +1,1 @@
+proc_fork_registry child=1 self_before=1 self_after=1 exit=1

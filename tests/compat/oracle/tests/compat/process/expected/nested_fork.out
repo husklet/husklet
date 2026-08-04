@@ -1,0 +1,2 @@
+middle survived fork: B.getppid==A=1
+grandchild parented by middle: C.getppid==B=1

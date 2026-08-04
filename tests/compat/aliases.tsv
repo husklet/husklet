@@ -1,0 +1,3 @@
+# suite	case	declared_source	build_source	reason
+process	exec-symlink-entry	tests/compat/process/exec_symlink_entry	tests/compat/process/exec_symlink.c	retained manifest declares launch alias; note states same guest as exec-symlink
+core/workload	ibtc-dispatch	tests/compat/core/workload/ibtc_dispatch.c	tests/compat/core/abi/ibtc_dispatch.c	retained workload manifest declares source ownership by sibling ABI directory

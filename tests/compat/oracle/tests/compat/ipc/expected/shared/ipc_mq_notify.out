@@ -1,0 +1,13 @@
+open=1
+notify_none=ok
+notify_busy=EBUSY
+notify_unreg=ok
+notify_badnotify=EINVAL
+notify_sig_reg=ok
+notify_fired=1
+notify_signo=1
+notify_code=1
+notify_value=1
+notify_pid=1
+notify_reregister=ok
+unlink=ok

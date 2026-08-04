@@ -14,11 +14,12 @@ pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure,
-    DeepControlFlow, DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess,
-    FileLength, FiniteStateString, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult,
-    ModelDuplication, PlatformCommand, ReceiverRepetition, Registry, Rule, SingleFileDirectory,
-    SingleUse, StructNaming,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DeepControlFlow,
+    DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString,
+    FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ModelDuplication,
+    ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, Rule,
+    SingleFileDirectory, SingleUse, StructNaming, SuffixRole, SymbolName, TestDependency, TestDirectory, TestName,
+    UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 
@@ -38,6 +39,7 @@ impl Linter {
         Self::new(
             Registry::new()
                 .register(rule::DependencyDirection)
+                .register(rule::UnsafeBoundary)
                 .register(rule::FreeFunction)
                 .register(rule::DuplicateEntity)
                 .register(rule::BooleanState)
@@ -55,6 +57,17 @@ impl Linter {
                 .register(rule::SingleUse)
                 .register(rule::DeepControlFlow)
                 .register(rule::FileLength)
+                .register(rule::FileName)
+                .register(rule::TestName)
+                .register(rule::PrefixDirectory)
+                .register(rule::SuffixRole)
+                .register(rule::PathModules)
+                .register(rule::TestDirectory)
+                .register(rule::TestDependency)
+                .register(rule::IntegrationCandidate)
+                .register(rule::FolderNoun)
+                .register(rule::SymbolName)
+                .register(rule::ModulePrefix)
                 .register(rule::FiniteStateString)
                 .register(rule::CatchAllModule)
                 .register(rule::EmptyDirectory)
@@ -64,11 +77,7 @@ impl Linter {
     }
 
     /// Runs every registered rule and reports its findings.
-    pub fn run(
-        &self,
-        paths: impl IntoIterator<Item = PathBuf>,
-        reporter: &mut dyn Reporter,
-    ) -> Result<Vec<Summary>> {
+    pub fn run(&self, paths: impl IntoIterator<Item = PathBuf>, reporter: &mut dyn Reporter) -> Result<Vec<Summary>> {
         let workspace = Workspace::load(paths)?;
         reporter.begin(&workspace)?;
         let mut summaries = Vec::new();
@@ -81,10 +90,7 @@ impl Linter {
             summaries.push(Summary {
                 rule: rule.id(),
                 severity,
-                findings: findings
-                    .iter()
-                    .filter(|finding| finding.is_violation())
-                    .count(),
+                findings: findings.iter().filter(|finding| finding.is_violation()).count(),
             });
         }
         reporter.finish(&summaries)?;
@@ -121,10 +127,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "hl-design-lint-{name}-{}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
             NEXT.fetch_add(1, Ordering::Relaxed),
         ));
         fs::create_dir_all(root.join("src")).unwrap();
@@ -148,15 +151,11 @@ mod tests {
         let mut reporter = Memory(Vec::new());
         Linter::standard().run([source], &mut reporter).unwrap();
         fs::remove_dir_all(root).unwrap();
-        reporter
-            .0
-            .into_iter()
-            .filter(|finding| finding.rule == rule)
-            .collect()
+        reporter.0.into_iter().filter(|finding| finding.rule == rule).collect()
     }
 
     #[test]
-    fn registry_runs_rules_through_one_reporter_contract() {
+    fn registry_reporter_contract() {
         let root = temporary("registry");
         let source = write(
             &root,
@@ -164,7 +163,7 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 23);
+        assert_eq!(summaries.len(), 35);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
         assert_eq!(reporter.0[1].rule, "deep-control-flow");
@@ -172,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn standard_registry_preserves_all_rule_semantics() {
+    fn standard_rule_semantics() {
         let root = temporary("rules");
         let source = write(
             &root,
@@ -198,19 +197,23 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 23);
-        assert!(reporter
-            .0
-            .iter()
-            .any(|finding| finding.rule == "unclassified-free-function"
-                && finding.subject == "unclassified"
-                && finding.is_violation()));
-        assert!(reporter
-            .0
-            .iter()
-            .any(|finding| finding.rule == "unclassified-free-function"
-                && finding.subject == "classified"
-                && !finding.is_violation()));
+        assert_eq!(summaries.len(), 35);
+        assert!(
+            reporter
+                .0
+                .iter()
+                .any(|finding| finding.rule == "unclassified-free-function"
+                    && finding.subject == "unclassified"
+                    && finding.is_violation())
+        );
+        assert!(
+            reporter
+                .0
+                .iter()
+                .any(|finding| finding.rule == "unclassified-free-function"
+                    && finding.subject == "classified"
+                    && !finding.is_violation())
+        );
         for rule in [
             "duplicate-entity-base",
             "struct-noun-naming",
@@ -218,16 +221,13 @@ fn caller() {
             "single-use-free-function",
             "deep-control-flow",
         ] {
-            assert!(
-                reporter.0.iter().any(|finding| finding.rule == rule),
-                "missing {rule}"
-            );
+            assert!(reporter.0.iter().any(|finding| finding.rule == rule), "missing {rule}");
         }
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn cases_replace_both_queues_and_separate_classified_functions() {
+    fn cases_classified_functions() {
         let root = temporary("cases");
         let source = write(
             &root,
@@ -265,7 +265,7 @@ fn caller() { let _ = missing("x"); let _ = reviewed("x"); }
     }
 
     #[test]
-    fn free_function_rule_honors_scope_and_classification_contracts() {
+    fn free_classification_contracts() {
         let values = findings(
             r#"
 fn zero() {}
@@ -298,34 +298,37 @@ fn detached(state: AppState) { let _ = state; }
                 "malformed"
             ]
         );
-        assert!(values
-            .iter()
-            .find(|value| value.subject == "one")
-            .unwrap()
-            .is_violation());
-        let package = values
-            .iter()
-            .find(|value| value.subject == "package")
-            .unwrap();
+        assert!(
+            values
+                .iter()
+                .find(|value| value.subject == "one")
+                .unwrap()
+                .is_violation()
+        );
+        let package = values.iter().find(|value| value.subject == "package").unwrap();
         assert!(!package.is_violation());
         assert!(matches!(
             package.review.as_ref().map(|review| &review.state),
             Some(ReviewState::Check(value)) if value == "pkg(lint-fixture)"
         ));
-        assert!(!values
-            .iter()
-            .find(|value| value.subject == "domain")
-            .unwrap()
-            .is_violation());
-        assert!(values
-            .iter()
-            .find(|value| value.subject == "malformed")
-            .unwrap()
-            .is_violation());
+        assert!(
+            !values
+                .iter()
+                .find(|value| value.subject == "domain")
+                .unwrap()
+                .is_violation()
+        );
+        assert!(
+            values
+                .iter()
+                .find(|value| value.subject == "malformed")
+                .unwrap()
+                .is_violation()
+        );
     }
 
     #[test]
-    fn environment_rule_covers_std_calls_and_builtin_macros() {
+    fn environment_builtin_macros() {
         let values = findings(
             r#"
 fn reads() {
@@ -345,7 +348,7 @@ fn reads() {
     }
 
     #[test]
-    fn platform_command_rule_resolves_qualified_grouped_and_renamed_imports() {
+    fn platform_renamed_imports() {
         let values = findings(
             r#"
 use std::process::Command;
@@ -363,13 +366,15 @@ fn commands() {
         );
         assert_eq!(values.len(), 5);
         assert!(values.iter().all(Finding::is_violation));
-        assert!(values
-            .iter()
-            .all(|finding| finding.message.contains("outside an application")));
+        assert!(
+            values
+                .iter()
+                .all(|finding| finding.message.contains("outside an application"))
+        );
     }
 
     #[test]
-    fn platform_command_rule_distinguishes_guest_process_models() {
+    fn platform_process_models() {
         let values = findings(
             r#"
 struct Process;
@@ -385,7 +390,7 @@ fn guest() {
     }
 
     #[test]
-    fn platform_command_rule_allows_explicit_adapter_modules() {
+    fn platform_adapter_modules() {
         let values = findings(
             r#"
 mod adapters {
@@ -403,7 +408,27 @@ mod model {
     }
 
     #[test]
-    fn platform_command_rule_rejects_interpolated_shell_source() {
+    fn engine_native_commands() {
+        let root = temporary("engine-native-command");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"hl-engine\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        fs::create_dir(root.join("src/native")).unwrap();
+        let native = root.join("src/native/fixture.rs");
+        let domain = root.join("src/domain.rs");
+        fs::write(&native, "fn run() { let _ = std::process::Command::new(\"guest\"); }").unwrap();
+        fs::write(&domain, "fn run() { let _ = std::process::Command::new(\"guest\"); }").unwrap();
+        let workspace = Workspace::load([native, domain]).unwrap();
+        let values = PlatformCommand.check(&workspace).unwrap();
+        assert_eq!(values.len(), 1);
+        assert!(values[0].location.path.ends_with("src/domain.rs"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn platform_shell_source() {
         let values = findings(
             r#"
 fn unsafe_shell(value: &str) {
@@ -427,7 +452,7 @@ fn unsafe_shell(value: &str) {
     }
 
     #[test]
-    fn platform_command_rule_allows_build_commands_but_not_dynamic_shells() {
+    fn platform_dynamic_shells() {
         let root = temporary("platform-build");
         let path = root.join("build.rs");
         fs::write(
@@ -453,7 +478,7 @@ fn main() {
     }
 
     #[test]
-    fn platform_command_rule_allows_cfg_test_commands() {
+    fn platform_test_commands() {
         let values = findings(
             r#"
 #[cfg(test)]
@@ -469,7 +494,7 @@ fn test_fixture() { let _ = tokio::process::Command::new("git"); }
     }
 
     #[test]
-    fn platform_command_rule_tracks_staged_shell_builders_with_lexical_scope() {
+    fn platform_lexical_scope() {
         let root = temporary("platform-staged");
         let path = root.join("build.rs");
         fs::write(
@@ -505,14 +530,12 @@ fn unrelated(value: &str) {
         let workspace = Workspace::load([path]).unwrap();
         let values = PlatformCommand.check(&workspace).unwrap();
         assert_eq!(values.len(), 2);
-        assert!(values
-            .iter()
-            .all(|finding| finding.message.contains("staged shell")));
+        assert!(values.iter().all(|finding| finding.message.contains("staged shell")));
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn single_use_rule_excludes_supported_boundaries() {
+    fn single_supported_boundaries() {
         let values = findings(
             r#"
 fn main() { once(); visual(); public(); ffi(); twice(); twice(); }
@@ -533,7 +556,7 @@ fn twice() {}
     }
 
     #[test]
-    fn nesting_rule_counts_structural_depth_but_not_else_if_as_two_levels() {
+    fn nesting_two_levels() {
         let values = findings(
             r#"
 fn shallow(value: bool) {
@@ -550,7 +573,7 @@ fn deep(value: bool) {
     }
 
     #[test]
-    fn duplicate_entity_rule_requires_identity_relation_and_three_typed_fields() {
+    fn duplicate_typed_fields() {
         let values = findings(
             r#"
 struct Image { id: u64, name: String, path: String }
@@ -566,7 +589,7 @@ struct WrongTypes { id: String, name: String, path: String }
     }
 
     #[test]
-    fn naming_rule_checks_structs_but_allows_other_types_and_methods() {
+    fn naming_types_methods() {
         let values = findings(
             r#"
 struct Workspace;
@@ -594,7 +617,7 @@ impl Workspaces {
     }
 
     #[test]
-    fn receiver_repetition_handles_traits_acronyms_versions_and_exclusions() {
+    fn receiver_versions_exclusions() {
         let values = findings(
             r#"
 struct Directory;
@@ -649,14 +672,11 @@ impl Foreign for Directory {
             ]
         );
         assert!(values.iter().all(|finding| finding.review.is_some()));
-        assert_eq!(
-            values[3].review.as_ref().unwrap().metadata[1].1,
-            "http, server, v, 2"
-        );
+        assert_eq!(values[3].review.as_ref().unwrap().metadata[1].1, "http, server, v, 2");
     }
 
     #[test]
-    fn catch_all_module_rule_checks_rust_module_identity_only() {
+    fn catch_module_identity() {
         let values = findings(
             r#"
 mod util {}
@@ -679,15 +699,16 @@ const PROSE: &str = "mod misc {}";
         assert!(values.iter().all(Finding::is_violation));
         assert!(values.iter().all(|finding| {
             finding.review.as_ref().is_some_and(|review| {
-                review.metadata.iter().any(|(key, value)| {
-                    key == "declaration" && value == "inline module declaration"
-                })
+                review
+                    .metadata
+                    .iter()
+                    .any(|(key, value)| key == "declaration" && value == "inline module declaration")
             })
         }));
     }
 
     #[test]
-    fn catch_all_module_rule_maps_files_directories_and_external_modules() {
+    fn catch_external_modules() {
         let root = temporary("catch-all-files");
         fs::create_dir_all(root.join("src/common")).unwrap();
         fs::create_dir_all(root.join("src/fixture")).unwrap();
@@ -725,7 +746,7 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
-    fn catch_all_module_rule_does_not_exempt_test_support() {
+    fn catch_test_support() {
         let root = temporary("catch-all-tests");
         let tests = root.join("tests");
         fs::create_dir_all(tests.join("common")).unwrap();
@@ -736,26 +757,26 @@ const PROSE: &str = "mod misc {}";
         let values = CatchAllModule.check(&workspace).unwrap();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].subject, "common");
-        assert!(values[0]
-            .review
-            .as_ref()
-            .unwrap()
-            .metadata
-            .contains(&("scope".to_owned(), "test".to_owned())));
+        assert!(
+            values[0]
+                .review
+                .as_ref()
+                .unwrap()
+                .metadata
+                .contains(&("scope".to_owned(), "test".to_owned()))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn reporters_render_to_injected_outputs() {
+    fn reporters_injected_outputs() {
         let root = temporary("reporters");
         let source = write(
             &root,
             "#[hl_design::classify(pkg)] fn reviewed(value: usize) { let _ = value; }\nfn missing(value: usize) { reviewed(value); }",
         );
         let mut diagnostic = Diagnostic::new(Vec::new());
-        Linter::standard()
-            .run([source.clone()], &mut diagnostic)
-            .unwrap();
+        Linter::standard().run([source.clone()], &mut diagnostic).unwrap();
         let diagnostic = String::from_utf8(diagnostic.into_inner()).unwrap();
         assert!(diagnostic.contains("unclassified free function `missing`"));
         assert!(!diagnostic.contains("unclassified free function `reviewed`"));
@@ -770,7 +791,7 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
-    fn file_length_rule_includes_integration_tests() {
+    fn file_test_files() {
         let root = temporary("test-file-length");
         let tests = root.join("tests");
         fs::create_dir_all(&tests).unwrap();
@@ -780,13 +801,31 @@ const PROSE: &str = "mod misc {}";
         let workspace = Workspace::load([path]).unwrap();
         let findings = FileLength.check(&workspace).unwrap();
 
-        assert_eq!(findings.len(), 1);
-        assert!(findings[0].message.contains("501 lines"));
+        assert!(findings.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn empty_directory_rule_reports_empty_and_placeholder_only_folders() {
+    fn file_test_modules() {
+        let root = temporary("inline-test-length");
+        let path = root.join("src/lib.rs");
+        let production = "\n".repeat(490);
+        let tests = "\n".repeat(100);
+        fs::write(
+            &path,
+            format!("{production}struct Runtime;\n#[cfg(test)] mod tests {{{tests}}}\n"),
+        )
+        .unwrap();
+
+        let workspace = Workspace::load([path]).unwrap();
+        let findings = FileLength.check(&workspace).unwrap();
+
+        assert!(findings.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn empty_placeholder_folders() {
         let root = temporary("empty-directory");
         fs::create_dir_all(root.join("src/model/unused")).unwrap();
         fs::create_dir_all(root.join("src/adapter/planned")).unwrap();
@@ -802,23 +841,21 @@ const PROSE: &str = "mod misc {}";
 
         assert_eq!(
             paths,
-            [
-                Path::new("src/adapter/planned"),
-                Path::new("src/model/unused"),
-            ]
+            [Path::new("src/adapter/planned"), Path::new("src/model/unused"),]
         );
         assert!(findings.iter().all(Finding::is_violation));
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn empty_directory_rule_ignores_generated_and_excluded_trees() {
+    fn empty_excluded_trees() {
         let root = temporary("empty-directory-exclusions");
         for path in [
             "lint/errors",
             "target/debug/empty",
             "vendor/package/empty",
-            "src/engine/hl-engine/empty",
+            "src/native/execution/empty",
+            "src/schema/cpu/empty",
             "src/packages/hl-design-lint/empty",
         ] {
             fs::create_dir_all(root.join(path)).unwrap();
@@ -832,50 +869,7 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
-    fn workspace_treats_test_gated_modules_as_test_support() {
-        let root = temporary("test-gated-modules");
-        fs::create_dir_all(root.join("src/suite/deep")).unwrap();
-        fs::write(
-            root.join("src/lib.rs"),
-            "mod feature;\n#[cfg(test)]\nmod suite;\n",
-        )
-        .unwrap();
-        // A gated module owning a directory gates every descendant with it.
-        fs::write(root.join("src/suite.rs"), "mod deep;\n").unwrap();
-        fs::write(root.join("src/suite/deep.rs"), "mod inner;\n").unwrap();
-        fs::write(
-            root.join("src/suite/deep/inner.rs"),
-            "fn helper(value: usize) -> usize { value }\n",
-        )
-        .unwrap();
-        // `#[path]` resolves against the directory holding the declaration, not the module directory.
-        fs::write(
-            root.join("src/feature.rs"),
-            "#[cfg(test)]\n#[path = \"feature_test.rs\"]\nmod tests;\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join("src/feature_test.rs"),
-            "fn fixture(value: usize) -> usize { value }\n",
-        )
-        .unwrap();
-
-        let workspace = Workspace::load([root.join("src")]).unwrap();
-        let production = workspace
-            .production()
-            .map(|source| source.path.strip_prefix(&root).unwrap().to_owned())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            production,
-            [PathBuf::from("src/feature.rs"), PathBuf::from("src/lib.rs"),]
-        );
-        assert!(FreeFunction.check(&workspace).unwrap().is_empty());
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn workspace_includes_the_linter_only_when_addressed_directly() {
+    fn workspace_addressed_directly() {
         let root = temporary("self-exclusion");
         let linter = root.join("hl-design-lint");
         fs::create_dir_all(linter.join("src")).unwrap();
@@ -898,14 +892,16 @@ const PROSE: &str = "mod misc {}";
     }
 
     #[test]
-    fn workspace_excludes_only_the_paused_engine_domain() {
-        let root = temporary("paused-domains");
-        for (domain, package, source) in [
-            ("engine", "hl-engine", "fn engine(value: u8) {}\n"),
-            ("containers", "hl-daemon", "fn container(value: u8) {}\n"),
-            ("gpu", "hl-gpu", "fn gpu(value: u8) {}\n"),
+    fn workspace_source_layers() {
+        let root = temporary("source-layers");
+        for (layer, package, source) in [
+            ("packages", "hl-fs", "fn filesystem(value: u8) {}\n"),
+            ("runtime", "hl-task", "fn task(value: u8) {}\n"),
+            ("app", "hl-engine", "fn engine(value: u8) {}\n"),
+            ("native", "execution", "fn native(value: u8) {}\n"),
+            ("schema", "cpu", "fn schema(value: u8) {}\n"),
         ] {
-            let directory = root.join(format!("src/{domain}/{package}/src"));
+            let directory = root.join(format!("src/{layer}/{package}/src"));
             fs::create_dir_all(&directory).unwrap();
             fs::write(directory.join("lib.rs"), source).unwrap();
         }
@@ -920,8 +916,9 @@ const PROSE: &str = "mod misc {}";
         assert_eq!(
             paths,
             [
-                root.join("src/containers/hl-daemon/src/lib.rs").as_path(),
-                root.join("src/gpu/hl-gpu/src/lib.rs").as_path(),
+                root.join("src/app/hl-engine/src/lib.rs").as_path(),
+                root.join("src/packages/hl-fs/src/lib.rs").as_path(),
+                root.join("src/runtime/hl-task/src/lib.rs").as_path(),
             ]
         );
         fs::remove_dir_all(root).unwrap();

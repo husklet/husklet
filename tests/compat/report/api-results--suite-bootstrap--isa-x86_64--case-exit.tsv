@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+bootstrap	exit	x86_64	pass	42	-	-	EngineExit { kind: Code, guest_status: 42, detail: 0, fault: None }

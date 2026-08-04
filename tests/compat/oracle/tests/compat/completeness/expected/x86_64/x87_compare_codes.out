@@ -1,0 +1,256 @@
+fcom 0,0               fsw=7000 cc=8 top=6 exc=00
+fucom 0,0              fsw=7000 cc=8 top=6 exc=00
+fucomi 0,0 fl=040 fsw=3000
+fcomi  0,0 fl=040 fsw=3000
+fcom 0,1               fsw=3100 cc=1 top=6 exc=00
+fucom 0,1              fsw=3100 cc=1 top=6 exc=00
+fucomi 0,1 fl=001 fsw=3000
+fcomi  0,1 fl=001 fsw=3000
+fcom 0,2               fsw=3000 cc=0 top=6 exc=00
+fucom 0,2              fsw=3000 cc=0 top=6 exc=00
+fucomi 0,2 fl=000 fsw=3000
+fcomi  0,2 fl=000 fsw=3000
+fcom 0,3               fsw=3000 cc=0 top=6 exc=00
+fucom 0,3              fsw=3000 cc=0 top=6 exc=00
+fucomi 0,3 fl=000 fsw=3000
+fcomi  0,3 fl=000 fsw=3000
+fcom 0,4               fsw=3000 cc=0 top=6 exc=00
+fucom 0,4              fsw=3000 cc=0 top=6 exc=00
+fucomi 0,4 fl=000 fsw=3000
+fcomi  0,4 fl=000 fsw=3000
+fcom 0,5               fsw=3100 cc=1 top=6 exc=00
+fucom 0,5              fsw=3100 cc=1 top=6 exc=00
+fucomi 0,5 fl=001 fsw=3000
+fcomi  0,5 fl=001 fsw=3000
+fcom 0,6               fsw=3000 cc=0 top=6 exc=00
+fucom 0,6              fsw=3000 cc=0 top=6 exc=00
+fucomi 0,6 fl=000 fsw=3000
+fcomi  0,6 fl=000 fsw=3000
+fcom 0,7               fsw=7501 cc=d top=6 exc=01
+fucom 0,7              fsw=7500 cc=d top=6 exc=00
+fucomi 0,7 fl=045 fsw=3000
+fcomi  0,7 fl=045 fsw=3001
+fcom 1,0               fsw=3000 cc=0 top=6 exc=00
+fucom 1,0              fsw=3000 cc=0 top=6 exc=00
+fucomi 1,0 fl=000 fsw=3000
+fcomi  1,0 fl=000 fsw=3000
+fcom 1,1               fsw=7000 cc=8 top=6 exc=00
+fucom 1,1              fsw=7000 cc=8 top=6 exc=00
+fucomi 1,1 fl=040 fsw=3000
+fcomi  1,1 fl=040 fsw=3000
+fcom 1,2               fsw=3000 cc=0 top=6 exc=00
+fucom 1,2              fsw=3000 cc=0 top=6 exc=00
+fucomi 1,2 fl=000 fsw=3000
+fcomi  1,2 fl=000 fsw=3000
+fcom 1,3               fsw=3000 cc=0 top=6 exc=00
+fucom 1,3              fsw=3000 cc=0 top=6 exc=00
+fucomi 1,3 fl=000 fsw=3000
+fcomi  1,3 fl=000 fsw=3000
+fcom 1,4               fsw=3000 cc=0 top=6 exc=00
+fucom 1,4              fsw=3000 cc=0 top=6 exc=00
+fucomi 1,4 fl=000 fsw=3000
+fcomi  1,4 fl=000 fsw=3000
+fcom 1,5               fsw=3100 cc=1 top=6 exc=00
+fucom 1,5              fsw=3100 cc=1 top=6 exc=00
+fucomi 1,5 fl=001 fsw=3000
+fcomi  1,5 fl=001 fsw=3000
+fcom 1,6               fsw=3000 cc=0 top=6 exc=00
+fucom 1,6              fsw=3000 cc=0 top=6 exc=00
+fucomi 1,6 fl=000 fsw=3000
+fcomi  1,6 fl=000 fsw=3000
+fcom 1,7               fsw=7501 cc=d top=6 exc=01
+fucom 1,7              fsw=7500 cc=d top=6 exc=00
+fucomi 1,7 fl=045 fsw=3000
+fcomi  1,7 fl=045 fsw=3001
+fcom 2,0               fsw=3100 cc=1 top=6 exc=00
+fucom 2,0              fsw=3100 cc=1 top=6 exc=00
+fucomi 2,0 fl=001 fsw=3000
+fcomi  2,0 fl=001 fsw=3000
+fcom 2,1               fsw=3100 cc=1 top=6 exc=00
+fucom 2,1              fsw=3100 cc=1 top=6 exc=00
+fucomi 2,1 fl=001 fsw=3000
+fcomi  2,1 fl=001 fsw=3000
+fcom 2,2               fsw=7000 cc=8 top=6 exc=00
+fucom 2,2              fsw=7000 cc=8 top=6 exc=00
+fucomi 2,2 fl=040 fsw=3000
+fcomi  2,2 fl=040 fsw=3000
+fcom 2,3               fsw=3100 cc=1 top=6 exc=00
+fucom 2,3              fsw=3100 cc=1 top=6 exc=00
+fucomi 2,3 fl=001 fsw=3000
+fcomi  2,3 fl=001 fsw=3000
+fcom 2,4               fsw=3100 cc=1 top=6 exc=00
+fucom 2,4              fsw=3100 cc=1 top=6 exc=00
+fucomi 2,4 fl=001 fsw=3000
+fcomi  2,4 fl=001 fsw=3000
+fcom 2,5               fsw=3100 cc=1 top=6 exc=00
+fucom 2,5              fsw=3100 cc=1 top=6 exc=00
+fucomi 2,5 fl=001 fsw=3000
+fcomi  2,5 fl=001 fsw=3000
+fcom 2,6               fsw=3000 cc=0 top=6 exc=00
+fucom 2,6              fsw=3000 cc=0 top=6 exc=00
+fucomi 2,6 fl=000 fsw=3000
+fcomi  2,6 fl=000 fsw=3000
+fcom 2,7               fsw=7501 cc=d top=6 exc=01
+fucom 2,7              fsw=7500 cc=d top=6 exc=00
+fucomi 2,7 fl=045 fsw=3000
+fcomi  2,7 fl=045 fsw=3001
+fcom 3,0               fsw=3100 cc=1 top=6 exc=00
+fucom 3,0              fsw=3100 cc=1 top=6 exc=00
+fucomi 3,0 fl=001 fsw=3000
+fcomi  3,0 fl=001 fsw=3000
+fcom 3,1               fsw=3100 cc=1 top=6 exc=00
+fucom 3,1              fsw=3100 cc=1 top=6 exc=00
+fucomi 3,1 fl=001 fsw=3000
+fcomi  3,1 fl=001 fsw=3000
+fcom 3,2               fsw=3000 cc=0 top=6 exc=00
+fucom 3,2              fsw=3000 cc=0 top=6 exc=00
+fucomi 3,2 fl=000 fsw=3000
+fcomi  3,2 fl=000 fsw=3000
+fcom 3,3               fsw=7000 cc=8 top=6 exc=00
+fucom 3,3              fsw=7000 cc=8 top=6 exc=00
+fucomi 3,3 fl=040 fsw=3000
+fcomi  3,3 fl=040 fsw=3000
+fcom 3,4               fsw=7000 cc=8 top=6 exc=00
+fucom 3,4              fsw=7000 cc=8 top=6 exc=00
+fucomi 3,4 fl=040 fsw=3000
+fcomi  3,4 fl=040 fsw=3000
+fcom 3,5               fsw=3100 cc=1 top=6 exc=00
+fucom 3,5              fsw=3100 cc=1 top=6 exc=00
+fucomi 3,5 fl=001 fsw=3000
+fcomi  3,5 fl=001 fsw=3000
+fcom 3,6               fsw=3000 cc=0 top=6 exc=00
+fucom 3,6              fsw=3000 cc=0 top=6 exc=00
+fucomi 3,6 fl=000 fsw=3000
+fcomi  3,6 fl=000 fsw=3000
+fcom 3,7               fsw=7501 cc=d top=6 exc=01
+fucom 3,7              fsw=7500 cc=d top=6 exc=00
+fucomi 3,7 fl=045 fsw=3000
+fcomi  3,7 fl=045 fsw=3001
+fcom 4,0               fsw=3100 cc=1 top=6 exc=00
+fucom 4,0              fsw=3100 cc=1 top=6 exc=00
+fucomi 4,0 fl=001 fsw=3000
+fcomi  4,0 fl=001 fsw=3000
+fcom 4,1               fsw=3100 cc=1 top=6 exc=00
+fucom 4,1              fsw=3100 cc=1 top=6 exc=00
+fucomi 4,1 fl=001 fsw=3000
+fcomi  4,1 fl=001 fsw=3000
+fcom 4,2               fsw=3000 cc=0 top=6 exc=00
+fucom 4,2              fsw=3000 cc=0 top=6 exc=00
+fucomi 4,2 fl=000 fsw=3000
+fcomi  4,2 fl=000 fsw=3000
+fcom 4,3               fsw=7000 cc=8 top=6 exc=00
+fucom 4,3              fsw=7000 cc=8 top=6 exc=00
+fucomi 4,3 fl=040 fsw=3000
+fcomi  4,3 fl=040 fsw=3000
+fcom 4,4               fsw=7000 cc=8 top=6 exc=00
+fucom 4,4              fsw=7000 cc=8 top=6 exc=00
+fucomi 4,4 fl=040 fsw=3000
+fcomi  4,4 fl=040 fsw=3000
+fcom 4,5               fsw=3100 cc=1 top=6 exc=00
+fucom 4,5              fsw=3100 cc=1 top=6 exc=00
+fucomi 4,5 fl=001 fsw=3000
+fcomi  4,5 fl=001 fsw=3000
+fcom 4,6               fsw=3000 cc=0 top=6 exc=00
+fucom 4,6              fsw=3000 cc=0 top=6 exc=00
+fucomi 4,6 fl=000 fsw=3000
+fcomi  4,6 fl=000 fsw=3000
+fcom 4,7               fsw=7501 cc=d top=6 exc=01
+fucom 4,7              fsw=7500 cc=d top=6 exc=00
+fucomi 4,7 fl=045 fsw=3000
+fcomi  4,7 fl=045 fsw=3001
+fcom 5,0               fsw=3000 cc=0 top=6 exc=00
+fucom 5,0              fsw=3000 cc=0 top=6 exc=00
+fucomi 5,0 fl=000 fsw=3000
+fcomi  5,0 fl=000 fsw=3000
+fcom 5,1               fsw=3000 cc=0 top=6 exc=00
+fucom 5,1              fsw=3000 cc=0 top=6 exc=00
+fucomi 5,1 fl=000 fsw=3000
+fcomi  5,1 fl=000 fsw=3000
+fcom 5,2               fsw=3000 cc=0 top=6 exc=00
+fucom 5,2              fsw=3000 cc=0 top=6 exc=00
+fucomi 5,2 fl=000 fsw=3000
+fcomi  5,2 fl=000 fsw=3000
+fcom 5,3               fsw=3000 cc=0 top=6 exc=00
+fucom 5,3              fsw=3000 cc=0 top=6 exc=00
+fucomi 5,3 fl=000 fsw=3000
+fcomi  5,3 fl=000 fsw=3000
+fcom 5,4               fsw=3000 cc=0 top=6 exc=00
+fucom 5,4              fsw=3000 cc=0 top=6 exc=00
+fucomi 5,4 fl=000 fsw=3000
+fcomi  5,4 fl=000 fsw=3000
+fcom 5,5               fsw=7000 cc=8 top=6 exc=00
+fucom 5,5              fsw=7000 cc=8 top=6 exc=00
+fucomi 5,5 fl=040 fsw=3000
+fcomi  5,5 fl=040 fsw=3000
+fcom 5,6               fsw=3000 cc=0 top=6 exc=00
+fucom 5,6              fsw=3000 cc=0 top=6 exc=00
+fucomi 5,6 fl=000 fsw=3000
+fcomi  5,6 fl=000 fsw=3000
+fcom 5,7               fsw=7501 cc=d top=6 exc=01
+fucom 5,7              fsw=7500 cc=d top=6 exc=00
+fucomi 5,7 fl=045 fsw=3000
+fcomi  5,7 fl=045 fsw=3001
+fcom 6,0               fsw=3100 cc=1 top=6 exc=00
+fucom 6,0              fsw=3100 cc=1 top=6 exc=00
+fucomi 6,0 fl=001 fsw=3000
+fcomi  6,0 fl=001 fsw=3000
+fcom 6,1               fsw=3100 cc=1 top=6 exc=00
+fucom 6,1              fsw=3100 cc=1 top=6 exc=00
+fucomi 6,1 fl=001 fsw=3000
+fcomi  6,1 fl=001 fsw=3000
+fcom 6,2               fsw=3100 cc=1 top=6 exc=00
+fucom 6,2              fsw=3100 cc=1 top=6 exc=00
+fucomi 6,2 fl=001 fsw=3000
+fcomi  6,2 fl=001 fsw=3000
+fcom 6,3               fsw=3100 cc=1 top=6 exc=00
+fucom 6,3              fsw=3100 cc=1 top=6 exc=00
+fucomi 6,3 fl=001 fsw=3000
+fcomi  6,3 fl=001 fsw=3000
+fcom 6,4               fsw=3100 cc=1 top=6 exc=00
+fucom 6,4              fsw=3100 cc=1 top=6 exc=00
+fucomi 6,4 fl=001 fsw=3000
+fcomi  6,4 fl=001 fsw=3000
+fcom 6,5               fsw=3100 cc=1 top=6 exc=00
+fucom 6,5              fsw=3100 cc=1 top=6 exc=00
+fucomi 6,5 fl=001 fsw=3000
+fcomi  6,5 fl=001 fsw=3000
+fcom 6,6               fsw=7000 cc=8 top=6 exc=00
+fucom 6,6              fsw=7000 cc=8 top=6 exc=00
+fucomi 6,6 fl=040 fsw=3000
+fcomi  6,6 fl=040 fsw=3000
+fcom 6,7               fsw=7501 cc=d top=6 exc=01
+fucom 6,7              fsw=7500 cc=d top=6 exc=00
+fucomi 6,7 fl=045 fsw=3000
+fcomi  6,7 fl=045 fsw=3001
+fcom 7,0               fsw=7501 cc=d top=6 exc=01
+fucom 7,0              fsw=7500 cc=d top=6 exc=00
+fucomi 7,0 fl=045 fsw=3000
+fcomi  7,0 fl=045 fsw=3001
+fcom 7,1               fsw=7501 cc=d top=6 exc=01
+fucom 7,1              fsw=7500 cc=d top=6 exc=00
+fucomi 7,1 fl=045 fsw=3000
+fcomi  7,1 fl=045 fsw=3001
+fcom 7,2               fsw=7501 cc=d top=6 exc=01
+fucom 7,2              fsw=7500 cc=d top=6 exc=00
+fucomi 7,2 fl=045 fsw=3000
+fcomi  7,2 fl=045 fsw=3001
+fcom 7,3               fsw=7501 cc=d top=6 exc=01
+fucom 7,3              fsw=7500 cc=d top=6 exc=00
+fucomi 7,3 fl=045 fsw=3000
+fcomi  7,3 fl=045 fsw=3001
+fcom 7,4               fsw=7501 cc=d top=6 exc=01
+fucom 7,4              fsw=7500 cc=d top=6 exc=00
+fucomi 7,4 fl=045 fsw=3000
+fcomi  7,4 fl=045 fsw=3001
+fcom 7,5               fsw=7501 cc=d top=6 exc=01
+fucom 7,5              fsw=7500 cc=d top=6 exc=00
+fucomi 7,5 fl=045 fsw=3000
+fcomi  7,5 fl=045 fsw=3001
+fcom 7,6               fsw=7501 cc=d top=6 exc=01
+fucom 7,6              fsw=7500 cc=d top=6 exc=00
+fucomi 7,6 fl=045 fsw=3000
+fcomi  7,6 fl=045 fsw=3001
+fcom 7,7               fsw=7501 cc=d top=6 exc=01
+fucom 7,7              fsw=7500 cc=d top=6 exc=00
+fucomi 7,7 fl=045 fsw=3000
+fcomi  7,7 fl=045 fsw=3001

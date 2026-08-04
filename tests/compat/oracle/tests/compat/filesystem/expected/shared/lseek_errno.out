@@ -1,0 +1,1 @@
+lseek-errno set=1 cur=1 end=1 einval=1 grew=1 espipe=1

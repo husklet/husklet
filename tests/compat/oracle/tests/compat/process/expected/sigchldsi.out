@@ -1,0 +1,6 @@
+exit signo=17 code=1(want1) status=7 pid=1
+kill code=2(want2) status=9(want9)
+stop code=5(want5) status=19(want19)
+cont code=6(want6) status=18(want18)
+stop-child-exit code=3
+done

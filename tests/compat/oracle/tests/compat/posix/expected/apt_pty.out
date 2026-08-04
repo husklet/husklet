@@ -1,0 +1,1 @@
+aptpty ptsname=1 mget=1 mset=1 mswin=1 mgwin=1 mdrain=1 mflush=1 sgwin=1

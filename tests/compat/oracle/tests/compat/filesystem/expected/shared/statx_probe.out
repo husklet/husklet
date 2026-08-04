@@ -1,0 +1,1 @@
+statx-probe ok=1 size=1 type=1 mode=1 nlink=1 blksize=1 empty-path=1

@@ -1,0 +1,133 @@
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Nzcv(u32);
+
+impl Nzcv {
+    pub const NEGATIVE: u32 = 1 << 31;
+    pub const ZERO: u32 = 1 << 30;
+    pub const CARRY: u32 = 1 << 29;
+    pub const OVERFLOW: u32 = 1 << 28;
+    pub const MASK: u32 = Self::NEGATIVE | Self::ZERO | Self::CARRY | Self::OVERFLOW;
+
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits & Self::MASK)
+    }
+
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    pub const fn negative(self) -> bool {
+        self.0 & Self::NEGATIVE != 0
+    }
+
+    pub const fn zero(self) -> bool {
+        self.0 & Self::ZERO != 0
+    }
+
+    pub const fn carry(self) -> bool {
+        self.0 & Self::CARRY != 0
+    }
+
+    pub const fn overflow(self) -> bool {
+        self.0 & Self::OVERFLOW != 0
+    }
+
+    pub(crate) fn set(&mut self, negative: bool, zero: bool, carry: bool, overflow: bool) {
+        self.0 = u32::from(negative) << 31 | u32::from(zero) << 30 | u32::from(carry) << 29 | u32::from(overflow) << 28;
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CpuState {
+    pub registers: [u64; 31],
+    /// Architectural V0..V31 state. Lane zero occupies the least-significant bits.
+    pub vectors: [u128; 32],
+    pub sp: u64,
+    pub pc: u64,
+    pub nzcv: Nzcv,
+    pub tls: u64,
+    pub fpcr: u64,
+    pub fpsr: u64,
+    pub exclusive: Option<crate::ExclusiveReservation>,
+}
+pub type Aarch64CpuState = CpuState;
+
+impl Aarch64CpuState {
+    pub fn vector(&self, register: u8) -> u128 {
+        self.vectors.get(usize::from(register)).copied().unwrap_or(0)
+    }
+
+    pub fn set_vector(&mut self, register: u8, value: u128) {
+        if let Some(destination) = self.vectors.get_mut(usize::from(register)) {
+            *destination = value;
+        }
+    }
+
+    pub(crate) fn vector_lane(&self, register: u8, lane_bits: u8, lane: u8) -> u64 {
+        let shift = u32::from(lane_bits) * u32::from(lane);
+        let mask = if lane_bits == 64 {
+            u64::MAX
+        } else {
+            (1_u64 << lane_bits) - 1
+        };
+        ((self.vector(register) >> shift) as u64) & mask
+    }
+
+    pub(crate) fn set_vector_lane(&mut self, register: u8, lane_bits: u8, lane: u8, value: u64) {
+        let shift = u32::from(lane_bits) * u32::from(lane);
+        let mask = if lane_bits == 64 {
+            u128::from(u64::MAX)
+        } else {
+            (1_u128 << lane_bits) - 1
+        };
+        let old = self.vector(register);
+        self.set_vector(register, (old & !(mask << shift)) | (u128::from(value) & mask) << shift);
+    }
+
+    pub(crate) fn write_vector_width(&mut self, register: u8, value: u128, wide: bool) {
+        self.set_vector(register, if wide { value } else { value & u128::from(u64::MAX) });
+    }
+
+    /// Drops the local monitor during fork, exec, migration, or explicit reset.
+    pub fn clear_exclusive_reservation(&mut self) {
+        self.exclusive = None;
+    }
+
+    pub fn register(&self, register: u8) -> u64 {
+        self.registers.get(usize::from(register)).copied().unwrap_or(0)
+    }
+
+    pub fn set_register(&mut self, register: u8, value: u64) {
+        if let Some(destination) = self.registers.get_mut(usize::from(register)) {
+            *destination = value;
+        }
+    }
+
+    pub(crate) fn register_or_sp(&self, register: u8) -> u64 {
+        if register == 31 {
+            self.sp
+        } else {
+            self.register(register)
+        }
+    }
+
+    pub(crate) fn set_destination(&mut self, register: u8, value: u64) {
+        if register == 31 {
+            self.sp = value;
+        } else {
+            self.set_register(register, value);
+        }
+    }
+
+    pub(crate) fn set_narrow_register(&mut self, register: u8, value: u32) {
+        self.set_register(register, u64::from(value));
+    }
+
+    pub(crate) fn set_narrow_destination(&mut self, register: u8, value: u32) {
+        if register == 31 {
+            self.sp = u64::from(value);
+        } else {
+            self.set_narrow_register(register, value);
+        }
+    }
+}

@@ -1,0 +1,5 @@
+nametoolong_errno=36
+enoent_errno=2
+readlink_nonlink_errno=22
+mkdir_exist_errno=17
+rmdir_notempty_errno=39

@@ -36,11 +36,6 @@ pub(super) fn package(package: &Package) -> Location {
         path: package.manifest.clone(),
         line: line + 1,
         column: 1,
-        source: package
-            .text
-            .lines()
-            .nth(line)
-            .unwrap_or_default()
-            .to_owned(),
+        source: package.text.lines().nth(line).unwrap_or_default().to_owned(),
     }
 }

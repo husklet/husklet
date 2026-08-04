@@ -1,0 +1,1 @@
+seqpass_full n=5 data=mojo! trunc=0 ctrunc=0 rights=1 fdbyte=R cred=1 credpid=1 child=1

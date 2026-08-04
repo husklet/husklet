@@ -1,0 +1,468 @@
+use super::*;
+
+pub(in crate::ffi::linux::execution) fn launch_identity(
+    plan: &RuntimeLaunchPlan,
+    name: &str,
+    inherited: u32,
+) -> Result<u32, EngineError> {
+    let value = plan.options.integer(name).map_err(|_| EngineError::LaunchFailed)?;
+    match value {
+        Some(value) => u32::try_from(value).map_err(|_| EngineError::LaunchFailed),
+        None if plan.rootfs.is_some() => Ok(0),
+        None => Ok(inherited),
+    }
+}
+
+pub(in crate::ffi::linux::execution) fn host_user() -> u32 {
+    // SAFETY: geteuid reads process credentials, retains no pointer, and cannot fail.
+    unsafe { libc::geteuid() }
+}
+
+pub(in crate::ffi::linux::execution) fn host_group() -> u32 {
+    // SAFETY: getegid reads process credentials, retains no pointer, and cannot fail.
+    unsafe { libc::getegid() }
+}
+
+pub(in crate::ffi::linux::execution) fn seccomp_baseline(
+    plan: &RuntimeLaunchPlan,
+) -> Result<hl_linux::SeccompBaseline, EngineError> {
+    match plan.options.get("HL_SECCOMP_BASELINE") {
+        None | Some("container") => Ok(hl_linux::SeccompBaseline::Container),
+        Some("disabled") => Ok(hl_linux::SeccompBaseline::Disabled),
+        Some(_) => Err(EngineError::LaunchFailed),
+    }
+}
+
+fn limit_resource(name: &str) -> Option<Resource> {
+    match name {
+        "cpu" => Some(Resource::CpuTime),
+        "fsize" => Some(Resource::FileSize),
+        "data" => Some(Resource::Data),
+        "stack" => Some(Resource::Stack),
+        "core" => Some(Resource::Core),
+        "rss" => Some(Resource::ResidentSet),
+        "nproc" => Some(Resource::Processes),
+        "nofile" => Some(Resource::OpenFiles),
+        "memlock" => Some(Resource::LockedMemory),
+        "as" => Some(Resource::AddressSpace),
+        "locks" => Some(Resource::Locks),
+        "sigpending" => Some(Resource::PendingSignals),
+        "msgqueue" => Some(Resource::MessageQueue),
+        "nice" => Some(Resource::Nice),
+        "rtprio" => Some(Resource::RealtimePriority),
+        "rttime" => Some(Resource::RealtimeTime),
+        _ => None,
+    }
+}
+
+fn limit_value(value: &str) -> Result<u64, EngineError> {
+    match value {
+        "unlimited" | "-1" => Ok(u64::MAX),
+        _ => value.parse().map_err(|_| EngineError::LaunchFailed),
+    }
+}
+
+fn launch_limits(plan: &RuntimeLaunchPlan) -> Result<(ProcessLimits, Vec<(Resource, Limit)>), EngineError> {
+    let mut limits = ProcessLimits::default();
+    let mut overrides = Vec::new();
+    let Some(specification) = plan.options.get("HL_ULIMITS").filter(|value| !value.is_empty()) else {
+        return Ok((limits, overrides));
+    };
+    for record in specification.split(',') {
+        let (name, values) = record.split_once('=').ok_or(EngineError::LaunchFailed)?;
+        let Some(resource) = limit_resource(name) else { continue };
+        let (soft, hard) = values.split_once(':').map_or((values, values), |pair| pair);
+        let limit = Limit::new(limit_value(soft)?, limit_value(hard)?).map_err(|_| EngineError::LaunchFailed)?;
+        limits.set(resource, limit);
+        overrides.push((resource, limit));
+    }
+    Ok((limits, overrides))
+}
+
+pub(in crate::ffi::linux::execution) fn create(
+    arena: Arc<VirtualMemory>,
+    mappings: Arc<MappingCoordinator<MappingHostAdapter>>,
+    plan: &RuntimeLaunchPlan,
+    assembly: &RuntimeAssembly,
+    architecture: hl_linux::GuestArchitecture,
+    cancellation: Arc<readiness::Cancellation>,
+    authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>,
+    entropy: Arc<dyn ports::random::EntropySource>,
+) -> Result<Route, EngineError> {
+    let projected = authority.is_some();
+    // A rooted container starts as root. A direct, rootless launch inherits
+    // the host identity, matching Linux execution and the retained engine.
+    let uid = launch_identity(plan, "HL_UID", host_user())?;
+    let gid = launch_identity(plan, "HL_GID", host_group())?;
+    let seccomp_baseline = seccomp_baseline(plan)?;
+    let table = assembly.descriptors().descriptor_table();
+    let descriptors = Arc::new(
+        descriptor_table::Set::with_table(Arc::clone(&table), Box::new(std::io::stdin()))
+            .expect("valid standard descriptor table"),
+    );
+    let handles = Arc::new(hl_runtime::ProcessHandleRegistry::new());
+    let namespace_handles = Arc::new(hl_runtime::NamespaceHandleRegistry::new());
+    let events = assembly.events();
+    let epoll = assembly.epoll();
+    let epoll_table = assembly.descriptors();
+    let descriptor_image = epoll_table.image_slot();
+    let network_enabled = (plan.options.get("HL_NET_HOST") == Some("1")
+        || plan.options.get("HL_UNTRUSTED") == Some("1"))
+        && plan.options.get("HL_NET_ISOLATE") != Some("1");
+    let network_policy = hl_network::NetworkPolicy::from_launch(
+        plan.options.get("HL_NET_ISOLATE") == Some("1"),
+        plan.options.get_bytes("HL_NETBR").unwrap_or_default(),
+        plan.options.get_bytes("HL_IP").unwrap_or_default(),
+        plan.options.get_bytes("HL_NETIFS").unwrap_or_default(),
+    )
+    .map_err(|_| EngineError::LaunchFailed)?;
+    let network = network::CheckpointRuntime::new(
+        assembly.checkpoint_network(),
+        assembly.checkpoint_descriptors(),
+        authority.clone(),
+        network_policy,
+    );
+    let event_operations = Arc::new(OperationRegistry::new());
+    let event_checkpoint = event_checkpoint::Resources::new(assembly);
+    let tasks = assembly.tasks();
+    let seccomp = assembly.seccomp();
+    let mut launch_credentials = ProcessCredentials::new(uid, gid, &[], 32).expect("valid launch credentials");
+    launch_credentials.capabilities = hl_task::CapabilitySets {
+        effective: hl_task::CapabilitySets::CONTAINER,
+        permitted: hl_task::CapabilitySets::CONTAINER,
+        inheritable: 0,
+        ambient: 0,
+    };
+    launch_credentials.capability_bounding = hl_task::CapabilitySets::CONTAINER;
+    let (launch_limits, limit_overrides) = launch_limits(plan)?;
+    let source = match tasks.snapshot().init {
+        Some(init) => {
+            tasks
+                .replace_credentials(init, launch_credentials)
+                .map_err(|_| EngineError::LaunchFailed)?;
+            for (resource, limit) in limit_overrides {
+                tasks.set_limit(init, resource, limit).map_err(|_| EngineError::LaunchFailed)?;
+            }
+            tasks
+                .snapshot()
+                .processes
+                .into_iter()
+                .find(|process| process.id == init)
+                .expect("init process exists")
+                .leader
+        }
+        None => {
+            tasks
+                .create_init(launch_credentials, launch_limits)
+                .expect("task registry has init capacity")
+                .1
+        }
+    };
+    if let Some(hostname) = plan.options.get_bytes("HL_HOSTNAME") {
+        let init = tasks.snapshot().init.ok_or(EngineError::LaunchFailed)?;
+        let current = tasks.uts_identity(init).map_err(|_| EngineError::LaunchFailed)?;
+        let owner = current.owner();
+        let identity = hl_task::UtsIdentity::owned(hostname.to_vec(), current.domainname, owner)
+            .map_err(|_| EngineError::LaunchFailed)?;
+        tasks
+            .replace_uts_identity(init, identity)
+            .map_err(|_| EngineError::LaunchFailed)?;
+    }
+    let memory_limit = plan
+        .options
+        .get("HL_MEM_MAX")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value != 0);
+    let cpu_limit = plan
+        .options
+        .get("HL_CPUS")
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value != 0)
+        .map(|_| tasks.topology().online());
+    let uptime_seconds = crate::native::HostSyscalls::clock_ns(
+        &crate::ffi::LinuxHost,
+        crate::native::ClockKind::Monotonic,
+    )
+    .unwrap_or(1_000_000_000)
+    .saturating_div(1_000_000_000)
+    .max(1);
+    let system = assembly.system();
+    let boot_key = plan
+        .options
+        .get_bytes("HL_NETNS")
+        .or_else(|| plan.options.get_bytes("HL_HOSTNAME"))
+        .or(plan.rootfs.as_deref())
+        .or(plan.executable_host.as_deref())
+        .unwrap_or(b"hl-engine");
+    system.set_boot_key(boot_key);
+    system.replace(hl_runtime::ResourceSnapshot {
+        uptime_seconds,
+        total_memory: memory_limit.unwrap_or(0),
+        free_memory: memory_limit.unwrap_or(0),
+        cpu_limit,
+        ..hl_runtime::ResourceSnapshot::default()
+    });
+    let child = tasks
+        .begin_fork_process(source)
+        .and_then(|plan| tasks.commit_fork_process(plan))
+        .expect("task registry has process capacity");
+    let executable = super::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
+    tasks
+        .set_name(child.1, hl_runtime::linux_comm(&executable))
+        .map_err(|_| EngineError::LaunchFailed)?;
+    seccomp
+        .register_inheriting(source, &[])
+        .map_err(|_| EngineError::LaunchFailed)?;
+    seccomp.fork(source, child.1).map_err(|_| EngineError::LaunchFailed)?;
+    let deadlines = readiness::deadline::Queue::new().map_err(|_| EngineError::LaunchFailed)?;
+    let clock = Arc::new(task::ClockIdentity::new(
+        u64::from(uid),
+        u64::from(gid),
+        child.0,
+        Arc::clone(&deadlines),
+        Arc::clone(&tasks),
+    ));
+    let interruption = Arc::new(task::FutexInterrupt::new());
+    let futex = Arc::new(
+        hl_runtime::SafeRuntimeFutex::new(
+            Arc::clone(&mappings),
+            clock.clone(),
+            interruption.clone(),
+            hl_sync::FutexLimits::default(),
+        )
+        .map_err(|_| EngineError::LaunchFailed)?,
+    );
+    let ipc_catalog = assembly.ipc().ok_or(EngineError::LaunchFailed)?;
+    let ipc_pipes = assembly.ipc_pipes().ok_or(EngineError::LaunchFailed)?;
+    let ipc = Arc::new(hl_runtime::MemoryMappings::new(Arc::clone(&mappings)));
+    let vfork = Arc::new(OnceLock::new());
+    let space = super::super::space::AddressSpace::new(Arc::clone(&arena), Arc::clone(&mappings));
+    let procfs_spaces = super::super::process_memory::ProcfsSpaces::new(child.0, &space);
+    let process_memory = ProcessMemory::new(Arc::clone(&space));
+    let ptrace = Arc::new(hl_runtime::PtraceCatalog::default());
+    let trace_exchange = hl_runtime::TraceExchange::new(Arc::new(process_memory.clone()));
+    ptrace.register(child.0, Arc::clone(&trace_exchange));
+    let sigreturn_pc = image::SignalGateway::install(&mappings, &process_memory, architecture)?;
+    let brk = BrkRegion::new(
+        Arc::clone(&mappings),
+        BrkSnapshot {
+            lower: GuestAddress::new(0x80_0000),
+            current: GuestAddress::new(0x80_0000),
+            upper: GuestAddress::new(0xf0_0000),
+            backing_identity: hl_runtime::BRK_BACKING_IDENTITY,
+        },
+    )
+    .map_err(|_| EngineError::LaunchFailed)?;
+    let (path_host, watches) = image::WorkspaceRoot::host(
+        plan,
+        authority,
+        Arc::clone(&tasks),
+        child.0,
+        Arc::clone(&namespace_handles),
+        Arc::clone(&table),
+        network.files(),
+        Arc::clone(&entropy),
+        assembly.system(),
+        architecture,
+    )?;
+    if path_host
+        .as_ref()
+        .is_some_and(|host| image::WorkspaceRoot::configure(host, plan, projected).is_err())
+        && plan.rootfs.is_none()
+    {
+        return Err(EngineError::LaunchFailed);
+    }
+    let exit = exit_runtime(
+        Arc::clone(&tasks),
+        Arc::clone(&mappings),
+        Arc::clone(&descriptor_image),
+        Arc::clone(&epoll),
+        futex.clone(),
+        Arc::clone(&ipc_catalog),
+        Arc::clone(&ipc),
+        assembly.locks(),
+        Arc::clone(&clock),
+        Arc::clone(&vfork),
+        Arc::clone(&handles),
+        Arc::clone(&ptrace),
+        Arc::clone(&procfs_spaces),
+        path_host.as_ref().map(|host| host.terminal_catalog()),
+    );
+    let mut memory = RuntimeMemorySyscalls::new(
+        Arc::clone(&mappings),
+        Arc::clone(&table),
+        process_memory.clone(),
+        architecture,
+    )
+    .with_process(child.0.number())
+    .with_brk(brk)
+    .with_address_limit(arena.length() as u64)
+    .with_host(Arc::new(super::super::super::memory_control::Control::new(
+        Arc::clone(&arena),
+        Arc::clone(&mappings),
+        Arc::new(super::super::memory_limit::MemoryLimit::new(
+            Arc::clone(&tasks),
+            child.0,
+        )),
+    )));
+    if let Some(shared) = mappings.shared_objects() {
+        memory = memory.with_memfd_objects(
+            Arc::clone(&shared),
+            u64::from(child.0.number()),
+            Arc::new(hl_runtime::MemfdRegistry::new()),
+        );
+        if let Some(host) = &path_host {
+            memory = memory.with_descriptor_source(Arc::new(host.mapping_source(Arc::clone(&arena))));
+        }
+    }
+    let alarms =
+        hl_runtime::AlarmRegistry::new(Arc::clone(&tasks), Arc::new(itimer::Scheduler(Arc::clone(&deadlines))));
+    let working_path = plan.options.get("HL_CWD").unwrap_or("/");
+    let working_path = hl_runtime::GuestPath::new(working_path).map_err(|_| EngineError::LaunchFailed)?;
+    if !working_path.is_absolute() {
+        return Err(EngineError::LaunchFailed);
+    }
+    if let Some(host) = &path_host {
+        host.working_base(working_path.clone())
+            .map_err(|_| EngineError::LaunchFailed)?;
+    }
+    let working = Arc::new(hl_runtime::WorkingDirectory::root());
+    working.replace(working_path);
+    let procfs_resources = super::super::process_resources::Catalog::new(child.0, &table, &working);
+    let process = Arc::new(ProcessContext {
+        projected,
+        aio: Arc::new(hl_runtime::AioCatalog::default()),
+        descriptors,
+        entropy,
+        handles,
+        namespace_handles,
+        events,
+        epoll,
+        epoll_table,
+        table_admission: TableAdmission::with_root(),
+        _table_permit: None,
+        thread_files: Mutex::new(BTreeMap::new()),
+        network,
+        network_enabled,
+        event_operations,
+        event_checkpoint,
+        tasks,
+        seccomp,
+        seccomp_baseline,
+        process: child.0,
+        memory: Arc::new(Mutex::new(memory)),
+        clock,
+        deadlines,
+        alarms: Arc::clone(&alarms),
+        timers: hl_runtime::TimerRegistry::new(child.0, Arc::clone(&alarms)),
+        exec: assembly.exec_slot(),
+        exec_queue: Arc::new(hl_runtime::ExecQueue::default()),
+        futex,
+        interruptions: interruption,
+        architecture,
+        trace: plan.result_path.is_some(),
+        path_host,
+        watches,
+        space,
+        procfs_spaces,
+        procfs_resources,
+        fork: OnceLock::new(),
+        threads: OnceLock::new(),
+        clone_context: OnceLock::new(),
+        exec_coordinator: OnceLock::new(),
+        sigreturn_pc,
+        exec_registration: OnceLock::new(),
+        working,
+        fs_context: Arc::new(hl_runtime::FsContext::default()),
+        ipc_catalog,
+        posix_queues: Arc::new(hl_runtime::MqNamespace::new(hl_runtime::MqLimits::default())),
+        ipc_pipes,
+        ipc,
+        locks: assembly.locks(),
+        exit,
+        ptrace,
+        system: assembly.system(),
+        vfork,
+    });
+    let router = process.router(child.1, cancellation, None);
+    Ok(Route {
+        router,
+        thread: child.1,
+        process,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::Options;
+
+    fn plan(options: Options) -> RuntimeLaunchPlan {
+        RuntimeLaunchPlan {
+            rootfs: None,
+            executable_host: None,
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            result_path: None,
+            options,
+        }
+    }
+
+    #[test]
+    fn absent_identity_inherits_host() {
+        let plan = plan(Options::default());
+        assert_eq!(launch_identity(&plan, "HL_UID", 501), Ok(501));
+        assert_eq!(launch_identity(&plan, "HL_GID", 20), Ok(20));
+    }
+
+    #[test]
+    fn explicit_root_does_not_inherit() {
+        let mut options = Options::default();
+        options.set("HL_UID", "0", true).unwrap();
+        options.set("HL_GID", "0", true).unwrap();
+        let plan = plan(options);
+        assert_eq!(launch_identity(&plan, "HL_UID", 501), Ok(0));
+        assert_eq!(launch_identity(&plan, "HL_GID", 20), Ok(0));
+    }
+
+    #[test]
+    fn seccomp_baseline_is_typed_and_defaults_to_container() {
+        assert_eq!(
+            seccomp_baseline(&plan(Options::default())),
+            Ok(hl_linux::SeccompBaseline::Container),
+        );
+        for (value, expected) in [
+            ("container", Ok(hl_linux::SeccompBaseline::Container)),
+            ("disabled", Ok(hl_linux::SeccompBaseline::Disabled)),
+        ] {
+            let mut options = Options::default();
+            options.set("HL_SECCOMP_BASELINE", value, true).unwrap();
+            assert_eq!(seccomp_baseline(&plan(options)), expected);
+        }
+        let mut options = Options::default();
+        options.set("HL_SECCOMP_BASELINE", "unknown", true).unwrap();
+        assert_eq!(seccomp_baseline(&plan(options)), Err(EngineError::LaunchFailed));
+    }
+
+    #[test]
+    fn launch_limits_parse_linux_resources() {
+        let mut options = Options::default();
+        options
+            .set("HL_ULIMITS", "nofile=1024:2048,core=unlimited,unknown=bad", true)
+            .unwrap();
+        let (limits, overrides) = launch_limits(&plan(options)).unwrap();
+
+        assert_eq!(limits.get(Resource::OpenFiles), Some(Limit { soft: 1024, hard: 2048 }));
+        assert_eq!(limits.get(Resource::Core), Some(Limit { soft: u64::MAX, hard: u64::MAX }));
+        assert_eq!(overrides.len(), 2);
+    }
+
+    #[test]
+    fn launch_limits_reject_invalid_known_values() {
+        for specification in ["nofile=2048:1024", "nofile=bad", "nofile"] {
+            let mut options = Options::default();
+            options.set("HL_ULIMITS", specification, true).unwrap();
+            assert!(matches!(launch_limits(&plan(options)), Err(EngineError::LaunchFailed)));
+        }
+    }
+}

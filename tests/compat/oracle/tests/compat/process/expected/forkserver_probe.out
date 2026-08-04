@@ -1,0 +1,6 @@
+argc=1
+argv[0]=/tmp/finalcore/probe
+env=(unset)
+cwd=/Users/x/dd/engine
+tty=000
+exe=/tmp/finalcore/probe

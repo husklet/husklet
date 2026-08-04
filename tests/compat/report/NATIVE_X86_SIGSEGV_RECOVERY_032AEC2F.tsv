@@ -1,0 +1,17 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+abi/corpus	x_strsearch	x86_64	pass	0	linux-libc,abi	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	aesni	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	bycl	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	cvt-flags	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	cvt-mmx	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	denorm-flags	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fma-nan	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sha	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	shflag	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	shuffle	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sse4x	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	x87-compare-codes	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	x87-precision-rounding	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+core/syscall	tmpfile	x86_64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isa/x86_64	isa-regress	x86_64	pass	0	sse-nan,partial-register,lazy-flags,cmpxchg,split-lock-atomics,sse3-horizontal,x87-indefinite	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-cloexec	x86_64	pass	0	linux-libc,exec,fork/wait	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,0 +1,3 @@
+overlap rc=-1 errno=22
+nonoverlap rc=3 in=3 out=10
+clamp rc=2 wrote=2 data=[BC]

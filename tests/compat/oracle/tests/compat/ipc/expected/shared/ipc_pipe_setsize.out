@@ -1,0 +1,1 @@
+pipesz default_pos=1 set_ok=1 capacity_ge_4096=1 pipe_buf=4096

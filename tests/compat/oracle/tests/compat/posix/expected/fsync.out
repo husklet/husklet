@@ -1,0 +1,1 @@
+fsync fsync=1 fdatasync=1 survived=1

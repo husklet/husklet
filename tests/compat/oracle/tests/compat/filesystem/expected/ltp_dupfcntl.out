@@ -1,0 +1,21 @@
+dup2 same fd: ret==newfd=1 still_open=1
+dup2 same bad fd: ret=-1 errno=Bad file descriptor
+dup2 over open: ret==b=1 reads_zero=1
+dup clears cloexec: 1
+F_DUPFD floor: ge100=1 cloexec=0
+F_DUPFD_CLOEXEC: ge100=1 cloexec=1
+F_SETFD roundtrip: set=1 clr=1
+F_GETFL accmode rdwr: 1
+F_SETFL flags: append=1 nonblock=1
+F_SETFL keeps accmode: 1
+F_GETLK unlocked: ok=1 unlck=1 whence_kept=1 start0=1 len0=1
+F_SETLK bad whence: einval=1
+fcntl bad cmd: einval=1
+fcntl badfd: ret=-1 ebadf=1
+read badfd: ebadf=1
+read dir: eisdir=1
+read PROT_NONE: efault=1
+dup2 newfd>=cap: ebadf=1
+dup2 newfd<0: ebadf=1
+F_DUPFD floor>=cap: einval=1
+dup exhaust: emfile=1

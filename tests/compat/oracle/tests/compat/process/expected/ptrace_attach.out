@@ -1,0 +1,1 @@
+ptrace-att attach=1 regs=1 detach=1 esrch=1 inject=1

@@ -1,0 +1,4 @@
+statx_ok=1
+has_size=1 has_type=1 has_mode=1
+size=7 isreg=1 nlink=1
+missing_errno=2

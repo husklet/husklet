@@ -1,0 +1,13 @@
+crc32-hi 08d09c48 08d09c48 08d09c48 08d09c48
+crc32-lo a5adcf19 a5adcf19
+crc32-w cd1b818a bc88c634 0000000050a6aee9
+movzx/sx 00000090 ffffff90 0090 ff90
+add-hi 0000000000006834
+cmp-hi zf=0 cf=1
+xchg-hi 00000000000000ff
+mov-hi ffffffffffff5a00
+setcc-hi aaaaaaaaaaaa01aa
+shr-hi 0000000000001f00
+sar-hi 00000000000006ff
+movbe16 ffffffffffff3412
+mem-hi zf=0 buf=de 77 be ef

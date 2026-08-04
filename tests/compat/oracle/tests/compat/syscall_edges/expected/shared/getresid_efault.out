@@ -1,0 +1,2 @@
+getresuid_null_errno=14
+getresgid_null_errno=14

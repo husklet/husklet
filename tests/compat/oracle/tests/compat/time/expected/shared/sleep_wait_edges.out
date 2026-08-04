@@ -1,0 +1,1 @@
+sw full=1 eintr=1 absnrem=1 past=1 einval=1 ppollto=1 ppollzero=1 pselto=1 selmod=1

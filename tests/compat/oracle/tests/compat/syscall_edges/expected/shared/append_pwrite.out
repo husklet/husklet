@@ -1,0 +1,10 @@
+append_pwrite_ret=1 len=5 data=AAAAB
+append_pwrite2_ret=1 len=6 data=AAAABC
+noappend_pwrite_ret=1 len=4 data=BAAA
+mremap_zero_oldsize_errno=22
+mremap_shrink_inplace=1
+fallocate_badmode_errno=95
+fallocate_stale_mode_errno=95
+fallocate_zerolen_errno=22
+procfd_open_live=1
+procfd_open_closed_errno=2

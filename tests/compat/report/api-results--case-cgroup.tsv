@@ -1,0 +1,15 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+completeness	pf-cgroup-files	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-cpu-cap2	aarch64	pass	0	linux-libc,procfs,sysfs,cgroup-v2,cpu-config	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-mem-cap512m	aarch64	pass	0	linux-libc,procfs,sysfs,cgroup-v2,memory-config	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-self	aarch64	pass	0	linux-libc,procfs,cgroup-v2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-v2-default	aarch64	pass	0	linux-libc,procfs,sysfs,cgroup-v2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cgroup-ro	aarch64	pass	0	linux-libc,procfs,cgroup2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcgroup	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-cgroup-files	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-cpu-cap2	x86_64	pass	0	linux-libc,procfs,sysfs,cgroup-v2,cpu-config	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-mem-cap512m	x86_64	pass	0	linux-libc,procfs,sysfs,cgroup-v2,memory-config	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-self	x86_64	pass	0	linux-libc,procfs,cgroup-v2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-v2-default	x86_64	pass	0	linux-libc,procfs,sysfs,cgroup-v2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cgroup-ro	x86_64	pass	0	linux-libc,procfs,cgroup2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcgroup	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

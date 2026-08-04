@@ -1,0 +1,6 @@
+signature	count
+engine-fault-before-output Error x86_64 - Engine(Load(Source { role: Interpreter, error: NotFound }))	1
+engine-fault-before-output Fault Aarch64 40cc348b Unsupported	1122
+engine-fault-before-output Fault Aarch64 604c208b Unsupported	1
+engine-fault-before-output Fault X86_64 0fb795f0feffff Decode	1153
+matched	8

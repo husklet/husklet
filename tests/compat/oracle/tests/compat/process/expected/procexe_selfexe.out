@@ -1,0 +1,12 @@
+exe abs=1 canon=1 alias=1 tself=1 dirfd=1 cwdrel=1 selfpid=1 open=1 lstat=1 stat=1 access=1
+fdlink file=1 pipe=1 sock=1 closed=1
+magic cwd=1 root=1 mounts=1 ns=1 einval=1 eproc=1 zerobuf=1
+sym rel=1 dirfd=1 cwd=1 abs=1 long=1 trunc=1 zero=1 dangle=1 efile=1 edir=1 enoent=1 ebadf=1
+stage proc exe=1
+stage rel exe=1
+stage lnk exe=1
+stage shb exe=1
+stage at exe=1
+stage atrel exe=1
+stage empty exe=1
+procexe done

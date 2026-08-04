@@ -1,0 +1,4 @@
+fionread=5
+nonblock_drained_errno=11
+winsz_nontty_errno=25
+fionread_badfd_errno=9

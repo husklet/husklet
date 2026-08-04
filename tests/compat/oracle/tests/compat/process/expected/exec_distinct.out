@@ -1,0 +1,3 @@
+exec-distinct program ok
+exec-distinct script ok
+exec-distinct missing ENOENT

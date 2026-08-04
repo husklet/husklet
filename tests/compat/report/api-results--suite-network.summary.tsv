@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	network	5
+stdout	network	17

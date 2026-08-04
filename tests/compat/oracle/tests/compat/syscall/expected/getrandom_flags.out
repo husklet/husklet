@@ -1,0 +1,1 @@
+getrandom_flags nonblock=1 blocking=1 differ=1

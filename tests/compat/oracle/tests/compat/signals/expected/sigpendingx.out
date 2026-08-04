@@ -1,0 +1,1 @@
+sigpending empty0=1 no_handler=1 only_usr1=1 both=1 raw_both=1 efault=1 delivered=1

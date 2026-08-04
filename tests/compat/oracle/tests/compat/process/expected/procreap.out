@@ -1,0 +1,8 @@
+exit0 code=0
+exit42 code=42
+sigkill code=1009
+multi sum=60
+wnohang code=7 polled=1
+nested code=5
+pgkill code=1009 survived=1
+procreap done

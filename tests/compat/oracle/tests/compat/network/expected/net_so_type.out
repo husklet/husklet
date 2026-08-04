@@ -1,0 +1,2 @@
+tcp type=1 domain=1 proto_stream=1 accept_before=0 accept_after=1
+udp type=1 proto_udp=1 accept=0

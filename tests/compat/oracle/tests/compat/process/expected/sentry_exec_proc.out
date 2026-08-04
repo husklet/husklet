@@ -1,0 +1,5 @@
+execfn-ok
+exe-ok
+memfd-sum 32640
+splice-sum 32640
+child-exit 0

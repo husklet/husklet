@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+ipc	signalfd-nonblock	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	signalfd-nonblock	x86_64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service

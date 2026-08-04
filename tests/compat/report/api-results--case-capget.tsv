@@ -1,0 +1,5 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+completeness	capget	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	capget-version	aarch64	pass	0	linux-libc,capabilities	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	capget	x86_64	fail	125	linux-libc	exit:e=0,a=125;stdout:e=1e31c289f371ea5f,a=cbf29ce484222325,d=0,eb=63,ab=--,el=12,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 4316568, fault: Some(FaultDiagnostic { isa: X86_64, pc: 4316568, opcode: [243, 72, 15, 30, 200, 72, 137, 71, 88, 233, 10, 0, 0, 0, 102], opcode_len: 15, reason: Decode, address: None, access: None }) }
+process	capget-version	x86_64	fail	125	linux-libc,capabilities	exit:e=0,a=125;stdout:e=116e78f4ee6e854e,a=cbf29ce484222325,d=0,eb=63,ab=--,el=63,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 4316888, fault: Some(FaultDiagnostic { isa: X86_64, pc: 4316888, opcode: [243, 72, 15, 30, 200, 72, 137, 71, 88, 233, 10, 0, 0, 0, 102], opcode_len: 15, reason: Decode, address: None, access: None }) }

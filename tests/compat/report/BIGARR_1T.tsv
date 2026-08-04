@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+core/workload	bigarr	aarch64	fail	-	memory,indexing,heavy	engine:timeout	timeout
+core/workload	bigarr	x86_64	fail	-	memory,indexing,heavy	engine:timeout	timeout

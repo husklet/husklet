@@ -1,0 +1,1 @@
+socketpair_efault=1 getsockname_efault=1 readlinkat_efault=1 valid=1

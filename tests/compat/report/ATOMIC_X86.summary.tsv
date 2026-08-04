@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	abi	1
+stdout	abi	1

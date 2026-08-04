@@ -1,0 +1,14 @@
+[package]
+name = "hl-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hl-descriptor = { path = "../hl-descriptor" }
+hl-sync = { path = "../hl-sync" }

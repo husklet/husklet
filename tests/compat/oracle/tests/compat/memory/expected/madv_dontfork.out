@@ -1,0 +1,1 @@
+madv_dontfork adv_ok=1 child_faults=1 parent_keeps=1 dofork_inherits=1

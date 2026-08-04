@@ -1,0 +1,9 @@
+tmpfile.getseals.ret=1 errno=0
+tmpfile.addseal.ret=-1 errno=1
+memfd.created=1
+memfd.seals0=0
+memfd.seal_write_mapped.ret=-1 errno=16
+memfd.seal_write_unmapped.ret=0 errno=0
+memfd.seals1=8
+memfd.write_after_seal.ret=-1 errno=1
+memfd.shrink_after_seal.ret=-1 errno=1

@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+memory	advice-einval	aarch64	fail	0	linux-libc,madvise,mlock,msync	stdout:e=d104482033d9fb94,a=30f86f345e9f56cb,d=27,eb=32,ab=33,el=61,al=61	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	advice-einval	x86_64	fail	0	linux-libc,madvise,mlock,msync	stdout:e=d104482033d9fb94,a=30f86f345e9f56cb,d=27,eb=32,ab=33,el=61,al=61	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,0 +1,14 @@
+badfd failed=1 ebadf=1
+mmap_badoff failed=1 einval=1 fd_live=1
+mmap_len0 failed=1 einval=1
+munmap_len0 einval=1
+munmap_misalign einval=1
+munmap_oor einval=1
+munmap_ok r=0
+populate ok=1 allzero=1
+mincore rc=0 all_resident=1 misalign_einval=1
+madv_dontneed rc=0 zeroed=1
+madv_willneed rc=0
+madv_free rc=0
+madv_wipeonfork rc=0 child_zero=1 parent_keeps=1
+madv_keeponfork rc=0 child_keeps=1

@@ -1,0 +1,2 @@
+child woke sock=1 msg=BeginFrame efd=1 val=7
+parent done child_exit=0

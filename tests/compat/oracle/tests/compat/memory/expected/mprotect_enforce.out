@@ -1,0 +1,1 @@
+mprotect enforce none=1 ro=1 recover=1 peer=1 unaligned=1 smc=1

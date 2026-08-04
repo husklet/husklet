@@ -1,0 +1,4 @@
+mismatch	suite	cases
+cleanup-engine-exit	memory	4
+expected-exit	memory	6
+stdout	memory	6

@@ -1,0 +1,5 @@
+exec-symlink single ok
+exec-symlink multi ok
+exec-symlink absolute ok
+exec-symlink chained ok
+exec-symlink dangling ENOENT

@@ -1,0 +1,5 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+network	msg-peek	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+network	msg-peek-stream	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+network	msg-peek	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+network	msg-peek-stream	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,0 +1,1142 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+bootstrap	exit	aarch64	pass	42	-	-	EngineExit { kind: Code, guest_status: 42, detail: 0, fault: None }
+bootstrap	signal	aarch64	pass	0	-	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+bootstrap	status	aarch64	pass	17	-	-	EngineExit { kind: Code, guest_status: 17, detail: 0, fault: None }
+bootstrap	syscall	aarch64	pass	0	-	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+bootstrap	write	aarch64	pass	0	-	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	abs	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	adjtimex	aarch64	fail	0	linux-libc	stdout:e=f84a8a886a02d901,a=d7d6a3d42b4a1792,d=17,eb=31,ab=30,el=34,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	auxval	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	bf16	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	bitfield	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	cachestat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	capget	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	clock-getres	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	clock-variants	aarch64	fail	0	linux-libc	stdout:e=1e82bf9428d10fb2,a=abdbe5b73e3fc2dd,d=14,eb=31,ab=30,el=38,al=38	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	clone3	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	close-range	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	close-range-flags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	cmp	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	copy_file_range	aarch64	fail	0	linux-libc	stdout:e=8a06fb2f3bcae84d,a=726fbf289b859db3,d=18,eb=31,ab=2d,el=38,al=27	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	cpu_discovery	aarch64	fail	-	linux-libc	engine:timeout	timeout
+completeness	crc32	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	crypto-aes	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	crypto-sha1	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	crypto-sha256	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	cvt	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	dc-zva-model	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	dotprod	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	exec-newline-env	aarch64	pass	0	linux-libc,self-exec	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	exec-null-env	aarch64	fail	1	linux-libc,self-exec	exit:e=0,a=1;stdout:e=ee01353f7825b3eb,a=077604df28c10ed7,d=28,eb=6e,ab=--,el=40,al=28;stderr:e=cbf29ce484222325,a=3f715478e8c42d93,d=0,eb=--,ab=65,el=0,al=25	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+completeness	faccessat2	aarch64	fail	0	linux-libc	stdout:e=27dd606cd9c2b3d3,a=d0d88f1dd54a34a4,d=14,eb=31,ab=30,el=25,al=25	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fadvise	aarch64	fail	0	linux-libc	stdout:e=da504f43b5d8a9d5,a=85f379da00d89ff0,d=17,eb=31,ab=30,el=36,al=36	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fallocate	aarch64	fail	0	linux-libc	stdout:e=c0b6336df1b0a200,a=f66e4a3e463588ef,d=13,eb=31,ab=30,el=25,al=22	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fchmodat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	flock	aarch64	fail	0	linux-libc	stdout:e=87a25dcd0d0ed3ef,a=23079fcf1ba7367c,d=9,eb=31,ab=30,el=21,al=21	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fp	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fp16	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fsops	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	fstatfs	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	futex-waitv	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getcpu	aarch64	fail	0	linux-libc	stdout:e=954744cb96163f32,a=8c0aa7764692783e,d=10,eb=31,ab=30,el=24,al=24	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getentropy	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getgroups	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getrandom-flags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getresuid	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getresuid-null	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	getrusage	aarch64	fail	0	linux-libc	stdout:e=2772e9057f8dc8bf,a=d531b0f2d524e0d5,d=13,eb=31,ab=30,el=28,al=28	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	i8mm	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	indexed	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	inotify	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	int	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	io-uring-enter	aarch64	fail	0	linux-libc	stdout:e=1589469aeb35474d,a=446f414891f92fda,d=15,eb=31,ab=30,el=47,al=47	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	io-uring-setup	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	ioctl-fio	aarch64	fail	0	linux-libc	stdout:e=da0137cbd33b6a5f,a=83b9ed7c1b0c836b,d=15,eb=35,ab=2d,el=53,al=54	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	itimer	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	kcmp	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	landlock	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	ldpstp	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	lse	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	madvise	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	membarrier	aarch64	fail	0	linux-libc	stdout:e=00f4e00801e877b7,a=4079a024b346ae99,d=20,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	memfd-secret	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	mempolicy	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	mincore	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	minmax	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	mlock	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	mremap	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	name_to_handle_at	aarch64	fail	0	linux-libc	stdout:e=fa69f1fa03116b4f,a=b05be04f1a4cc14c,d=21,eb=31,ab=30,el=36,al=36	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	neon-misc	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	neon-recip	aarch64	fail	-	linux-libc	engine:timeout	timeout
+completeness	openat2	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pagesize	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	passcred-badfd	aarch64	fail	0	linux-libc	stdout:e=e1bc044b6a8be35f,a=d60fa67899a6267b,d=21,eb=31,ab=30,el=33,al=33	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	perm	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-argv	aarch64	fail	0	linux-libc,procfs	stdout:e=935de92361f18433,a=935a872361eea7d6,d=28,eb=31,ab=30,el=30,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-cgroup-files	aarch64	fail	0	linux-libc,procfs	stdout:e=4e9be274964364b5,a=ce375811e5dc3dd4,d=26,eb=31,ab=30,el=32,al=32	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-devseed	aarch64	fail	0	linux-libc,procfs	stdout:e=75f4d5c87c96a166,a=348b9c371bf964f8,d=16,eb=31,ab=30,el=27,al=27	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-dirs	aarch64	fail	0	linux-libc,procfs	stdout:e=917654f5113246e0,a=1a594aaa5aa1cad8,d=13,eb=31,ab=30,el=55,al=55	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-environ	aarch64	fail	0	linux-libc,procfs	stdout:e=6cc3e8d84d869426,a=6cc74ad84d897083,d=19,eb=31,ab=30,el=21,al=21	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-fdclose	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-fdinfo	aarch64	fail	0	linux-libc,procfs	stdout:e=f1b44158fd7f17b5,a=a86de4534a363a8a,d=14,eb=31,ab=30,el=36,al=36	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-maps-relro	aarch64	fail	0	linux-libc,procfs	stdout:e=7040df36839ee38f,a=92683c04f3a280a1,d=11,eb=68,ab=6f,el=20,al=23	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-net-unix	aarch64	fail	0	linux-libc,procfs	stdout:e=538fb1c35eb00121,a=14fef81032cc6237,d=17,eb=31,ab=30,el=30,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-proc-files	aarch64	fail	0	linux-libc,procfs	stdout:e=153bf320313cf2cb,a=34b28c58f494be3a,d=14,eb=31,ab=30,el=72,al=72	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-procstat-forks	aarch64	fail	0	linux-libc,procfs	stdout:e=de398b232acf73a3,a=de3629232acc9746,d=26,eb=31,ab=30,el=28,al=28	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-selfdir	aarch64	fail	0	linux-libc,procfs	stdout:e=dfaaefb83fdb5d9d,a=dfa785b83fd873a8,d=19,eb=31,ab=30,el=21,al=21	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-smaps	aarch64	fail	0	linux-libc,procfs	stdout:e=11f74f7736f417de,a=d53ddb9ea0f3ba91,d=6,eb=72,ab=6f,el=16,al=18	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-statfs	aarch64	fail	0	linux-libc,procfs	stdout:e=28c04aa59de11290,a=a87307de246e9d2d,d=18,eb=31,ab=30,el=48,al=48	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-status-meta	aarch64	fail	0	linux-libc,procfs	stdout:e=6f486fe303b369a8,a=e2977d7268d9cfca,d=24,eb=31,ab=30,el=63,al=63	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-taskdir	aarch64	fail	0	linux-libc,procfs	stdout:e=fff904e64dc195e0,a=bc8aa6a345068607,d=20,eb=31,ab=30,el=33,al=33	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pf-tty	aarch64	fail	0	linux-libc,procfs	stdout:e=5bc3663be72a8c66,a=53a6ada4320fd93c,d=15,eb=31,ab=30,el=30,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pidfd-cap	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pidfd-flags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pidfd-getfd	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	pidfd-signal	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	priority	aarch64	fail	0	linux-libc	stdout:e=6bde9b0e7822d9a8,a=190c575cdb6718bd,d=13,eb=31,ab=30,el=22,al=23	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	prlimit64	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	process-vm	aarch64	fail	0	linux-libc	stdout:e=e29844fde6250f0d,a=7c9a1990d28084dc,d=19,eb=31,ab=2d,el=44,al=29	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	readlinkat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	reduce	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	robust-list	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	rseq	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	rt-sigpending	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	rt-sigtimedwait	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=e87b36944d1bb31d,a=5cc71ee7e9c1006d,d=41,eb=31,ab=30,el=53,al=53	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+completeness	s3db-durability-default	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sched-affinity	aarch64	fail	0	linux-libc	stdout:e=fce96eef285ee968,a=e675e9745c1d3986,d=18,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sched-attr	aarch64	fail	0	linux-libc	stdout:e=8627a1fe81fa5cc6,a=3725bc69e6df4f11,d=13,eb=30,ab=2d,el=47,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sched-getattr	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	seccomp-filter	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	set-tid-address	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	setfsuid	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	shift	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sigaltstack	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	statx	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	statx-attr	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sync-family	aarch64	fail	0	linux-libc	stdout:e=4eb5a118aa0d37c9,a=86d7c4bfeccec693,d=32,eb=31,ab=30,el=43,al=43	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	sysconf-nproc	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	tbl	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	timer-create	aarch64	fail	0	linux-libc	stdout:e=e55d3d522d9d54d9,a=697777b4ede61e5f,d=13,eb=31,ab=30,el=50,al=50	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	timerfd	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	truncate	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	unshare-setns	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	utimensat	aarch64	fail	0	linux-libc	stdout:e=1de66790f840086f,a=21213450cb9351cb,d=13,eb=31,ab=30,el=32,al=32	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	widen	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+exec	exec-edges	aarch64	pass	0	linux-libc,fork,pthreads,execve,futex,signals,shebang	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+exec	execveat-edges	aarch64	pass	0	linux-libc,fork,execveat,dirfd,AT_EMPTY_PATH,AT_SYMLINK_NOFOLLOW	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	absolute-symlink	aarch64	fail	1	linux-libc,filesystem,symlink	exit:e=0,a=1;stdout:e=fdedc51a9d70e7e2,a=97ebbe4ad0d235a0,d=44,eb=31,ab=30,el=73,al=73	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+filesystem	append-mode	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	atflags	aarch64	fail	0	linux-libc,filesystem	stdout:e=a8d791b07cf203fa,a=b2779324cdfc089e,d=29,eb=31,ab=30,el=63,al=63	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	bound-uaccess	aarch64	fail	2	linux-libc,filesystem,provider,mmap,readv/writev,pread/pwrite,ioctl	exit:e=0,a=2;stdout:e=dcb53140a5e20d51,a=cbf29ce484222325,d=0,eb=62,ab=--,el=45,al=0	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
+filesystem	child-create-reopen	aarch64	skip	-	linux-libc,filesystem,fork	-	unsupported-fixture:multi-process-service
+filesystem	chmod-bits	aarch64	fail	0	linux-libc,filesystem,metadata	stdout:e=09cef833bc1d59c3,a=d994949fd764e8d6,d=18,eb=31,ab=30,el=52,al=52	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	chown-selfown	aarch64	fail	0	linux-libc,filesystem,metadata	stdout:e=7dac1d8fa3bb8acb,a=6528d83c8cf0624e,d=19,eb=31,ab=30,el=60,al=60	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	close-range	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	copy-range	aarch64	fail	0	linux-libc,filesystem	stdout:e=ff8e52b12550a1ab,a=713f32b12692ac1d,d=17,eb=31,ab=30,el=69,al=53	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	dentry-storm	aarch64	pass	0	alpine-rootfs,linux-libc,filesystem,fork,stateful-soak	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	dev-random	aarch64	fail	0	linux-libc,filesystem	stdout:e=b2470472c1856b08,a=6fc9c9f392d18f62,d=5,eb=31,ab=30,el=92,al=92	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	devfull	aarch64	fail	0	linux-libc,filesystem	stdout:e=b0155233042f6d89,a=8ef5e6a30b6a18bc,d=15,eb=31,ab=30,el=34,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	dup-offset	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	dup2redir	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	errno-matrix	aarch64	fail	0	linux-libc,filesystem	stdout:e=ecf98cd98f088ae0,a=075318ba3cbbd6eb,d=19,eb=31,ab=30,el=77,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	faccessat-flags	aarch64	fail	0	linux-libc,filesystem	stdout:e=ca707efee1168dd1,a=dc4abfd1c5121cff,d=23,eb=31,ab=30,el=107,al=107	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fadvise	aarch64	fail	0	linux-libc,filesystem	stdout:e=a8ba151843690dae,a=1714df79bf4c2518,d=12,eb=30,ab=33,el=45,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fallocate-modes	aarch64	fail	0	linux-libc,filesystem	stdout:e=467e2060779ec52f,a=ef5f808dffdd3525,d=21,eb=31,ab=30,el=56,al=56	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fchmodat2-empty	aarch64	fail	3	linux-libc,filesystem,metadata	exit:e=0,a=3;stdout:e=1b57f8157a9c0331,a=cbf29ce484222325,d=0,eb=66,ab=--,el=47,al=0	EngineExit { kind: Code, guest_status: 3, detail: 0, fault: None }
+filesystem	fcntlflags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	flock-probe	aarch64	fail	0	linux-libc,filesystem	stdout:e=6ddd161a7ea04af2,a=a74474a51acf2a86,d=19,eb=31,ab=30,el=77,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fork-reopen	aarch64	skip	-	linux-libc,filesystem,fork,exec	-	unsupported-fixture:multi-process-service
+filesystem	fs-mountpseudo	aarch64	fail	0	alpine-rootfs,overlay,linux-libc	stdout:e=b36e241ee3538ef2,a=ad734a48c96cf4cb,d=15,eb=31,ab=30,el=17,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fs-mounttab	aarch64	fail	0	alpine-rootfs,overlay,linux-libc	stdout:e=99a1674362e0d223,a=5b2333a281895f56,d=12,eb=31,ab=30,el=14,al=28	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fs-shm-visible	aarch64	fail	0	alpine-rootfs,overlay,linux-libc,ipc	stdout:e=016ee8195794187e,a=daff2f8ed0fa59e2,d=15,eb=31,ab=30,el=17,al=35	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fs-statfs-type	aarch64	pass	0	alpine-rootfs,overlay,linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fstatat-flags	aarch64	pass	0	linux-libc,filesystem,symlink	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	fsync-probe	aarch64	fail	0	linux-libc,filesystem	stdout:e=dbb1d502a8159067,a=7eb752881785dd4e,d=39,eb=31,ab=30,el=65,al=65	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	futimens-null-path	aarch64	fail	1	linux-libc,filesystem,metadata	exit:e=0,a=1;stdout:e=266ac8d138fd5e5a,a=cbf29ce484222325,d=0,eb=66,ab=--,el=114,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+filesystem	getdents-dtype	aarch64	fail	0	linux-libc,filesystem	stdout:e=6a903f0b420de280,a=0f6dd09e64c3e7b9,d=21,eb=34,ab=33,el=59,al=52	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	getdents-einval	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	hardlink-nlink	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	linkat	aarch64	fail	0	linux-libc,filesystem	stdout:e=06cec853652c3309,a=a785f82ebfe3cca4,d=66,eb=31,ab=30,el=84,al=84	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	lseek-errno	aarch64	fail	0	linux-libc,filesystem	stdout:e=74dec3a959fdcdcb,a=74db61a959faf16e,d=53,eb=31,ab=30,el=55,al=55	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	ltp_aterr	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=25a001b8b7b5b075,a=d0d1de3983c5bdaf,d=6,eb=66,ab=63,el=250,al=19	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+filesystem	ltp_dupfcntl	aarch64	fail	0	linux-libc	stdout:e=0b9c4913e6b014a3,a=c63715d3121c00a2,d=25,eb=31,ab=30,el=638,al=638	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	ltp_linkstat	aarch64	fail	0	linux-libc	stdout:e=db31136364e6703a,a=cef719cc1d76cd27,d=205,eb=31,ab=30,el=448,al=450	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	memf-adopt-manyfd	aarch64	pass	0	linux-libc,open,unlink,stat	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	memf-adopt-scan	aarch64	pass	0	linux-libc,open,unlink,stat	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	memfd-seals	aarch64	fail	0	linux-libc,filesystem,memfd	stdout:e=628e84e7c69599a2,a=44a257dfa6d36af3,d=3,eb=31,ab=2d,el=121,al=127	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	missing-root-stat	aarch64	pass	0	linux-libc,scratch-rootfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	mkdir-umask	aarch64	fail	0	linux-libc,filesystem	stdout:e=882c359c6c031be3,a=2e7721880d2f1a19,d=31,eb=31,ab=30,el=44,al=44	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	mkfifo	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=5fa26eb05895f970,a=cbf29ce484222325,d=0,eb=66,ab=--,el=16,al=0;stderr:e=cbf29ce484222325,a=912887c2c712ed9e,d=0,eb=--,ab=6d,el=0,al=33	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+filesystem	mkfifoat	aarch64	skip	-	linux-libc,filesystem,process,poll	-	unsupported-fixture:multi-process-service
+filesystem	opath	aarch64	fail	0	linux-libc,filesystem	stdout:e=24ec405f3b653069,a=d0b9185fb6b3b389,d=24,eb=31,ab=30,el=77,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	open-errno	aarch64	fail	0	linux-libc,filesystem,symlink	stdout:e=623cb845df015c3d,a=5a952a76fab974e2,d=18,eb=31,ab=30,el=56,al=56	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	openat-edges	aarch64	fail	0	linux-libc,filesystem	stdout:e=4c30860628086461,a=11670fc692dc5cc6,d=18,eb=20,ab=32,el=125,al=125	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	openat2-einval	aarch64	fail	0	linux-libc,filesystem,openat2	stdout:e=0fc313ee33c02c76,a=317603b0f8cf10e2,d=67,eb=37,ab=32,el=82,al=83	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	openat2-resolve	aarch64	fail	0	linux-libc,filesystem,openat2	stdout:e=a6678e4375edd7d7,a=0c2fc7573660338e,d=36,eb=31,ab=30,el=72,al=72	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	otmpfile-link	aarch64	fail	0	linux-libc,filesystem,openat	stdout:e=2ccad20b14279ade,a=67b326f6cf978af2,d=24,eb=31,ab=30,el=77,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	pc-execchain	aarch64	skip	-	linux-libc,persistent-cache,exec,self-exec,stateful-soak	-	unsupported-fixture:multi-process-service
+filesystem	pc-forkoutlive	aarch64	skip	-	linux-libc,persistent-cache,fork,stateful-soak	-	unsupported-fixture:multi-process-service
+filesystem	pc-forkpipe	aarch64	skip	-	linux-libc,persistent-cache,fork,pipe,stateful-soak	-	unsupported-fixture:multi-process-service
+filesystem	pc-libmap	aarch64	fail	2	linux-libc,persistent-cache,mmap,executable-map,stateful-soak	exit:e=0,a=2;stdout:e=ce2abe7ed899c85c,a=4768a567e883ac5f,d=14,eb=61,ab=6f,el=25,al=26	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
+filesystem	pc-selfexec	aarch64	skip	-	linux-libc,persistent-cache,fork,exec,self-exec,stateful-soak	-	unsupported-fixture:multi-process-service
+filesystem	permissions	aarch64	fail	1	linux-libc,filesystem	exit:e=0,a=1;stdout:e=2a474470478c174f,a=cbf29ce484222325,d=0,eb=70,ab=--,el=46,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+filesystem	pread-pwrite	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	proc-fd-readlink	aarch64	fail	0	linux-libc,filesystem,procfs	stdout:e=0f2ca464a948e0e8,a=96699d3557a63b53,d=22,eb=31,ab=30,el=43,al=43	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	procself	aarch64	fail	0	linux-libc,procfs,filesystem	stdout:e=3a889dc2649f8ebf,a=20f99c1ec4ef1f23,d=14,eb=31,ab=30,el=22,al=22	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	readlink-edges	aarch64	pass	0	linux-libc,filesystem,symlink	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	realpath-probe	aarch64	pass	0	linux-libc,filesystem,symlink	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	renameat2-einval	aarch64	fail	0	linux-libc,filesystem,renameat2	stdout:e=147223cd7d425688,a=14758dcd7d45407d,d=51,eb=31,ab=30,el=53,al=53	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	renameat2-flags	aarch64	fail	0	linux-libc,filesystem,renameat2	stdout:e=77fe1b9ee750acc7,a=30f743ef8c99a687,d=44,eb=31,ab=30,el=84,al=84	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	rm-tree-coherence	aarch64	fail	0	linux-libc,filesystem	stdout:e=3cd0498e58b2913d,a=01386c0a094f52b9,d=57,eb=31,ab=30,el=91,al=91	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	rw-semantics	aarch64	fail	0	linux-libc,filesystem	stdout:e=499c7c74db16998e,a=027eab0cfc6a9728,d=48,eb=31,ab=30,el=156,al=156	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	scratch-exec	aarch64	pass	0	linux-libc,scratch-rootfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	seek-hole	aarch64	fail	0	linux-libc,filesystem	stdout:e=3e4c733349c43ac2,a=22eef881d0eacd8c,d=20,eb=31,ab=30,el=66,al=66	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	sendfile-probe	aarch64	fail	0	linux-libc,filesystem	stdout:e=28f4278a5822c07f,a=fe7fa5946d43601d,d=21,eb=31,ab=30,el=63,al=63	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	sentry-fs-sandbox	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	sentry-fs-untrusted	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	sentry_fs	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	sibling-generation-stress	aarch64	skip	-	linux-libc,filesystem,fork,stateful-soak	-	unsupported-fixture:multi-process-service
+filesystem	statx-probe	aarch64	pass	0	linux-libc,filesystem,metadata	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	statx-validate	aarch64	pass	0	linux-libc,filesystem,metadata	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	symlink-chain-eloop	aarch64	fail	0	linux-libc,filesystem,symlink	stdout:e=0a6bc28ea082d96a,a=9eab6893c914c371,d=26,eb=31,ab=30,el=71,al=71	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	symlink-nofollow	aarch64	fail	0	linux-libc,filesystem,symlink	stdout:e=9b912addb6aef885,a=30587cd15ba491e0,d=56,eb=31,ab=30,el=99,al=99	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	truncate-grow	aarch64	pass	0	linux-libc,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	typed-create-cache	aarch64	pass	0	linux-libc,open,stat,unlink	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	utimensat-times	aarch64	fail	0	linux-libc,filesystem,metadata	stdout:e=b00ed352d8539c8d,a=a4922ffaf5dce05f,d=25,eb=31,ab=30,el=87,al=87	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	xattr	aarch64	fail	0	linux-libc,filesystem,xattr	stdout:e=0983976e9e718ee5,a=3fbfb30c10ecbd9d,d=10,eb=31,ab=30,el=50,al=50	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	xattr-edge	aarch64	fail	0	linux-libc,filesystem,xattr	stdout:e=15648b01cb8b671e,a=3aa6ac3c3debe4df,d=12,eb=45,ab=4f,el=221,al=217	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	xattr-ranges	aarch64	fail	0	linux-libc,filesystem,xattr	stdout:e=42c321bb8ff7925d,a=cb40a4a8d5abb06c,d=31,eb=31,ab=30,el=79,al=79	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+filesystem	xattr-roundtrip	aarch64	fail	0	linux-libc,filesystem,xattr	stdout:e=7a42414c64666bc6,a=4018424831a49195,d=32,eb=31,ab=30,el=94,al=94	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	bootstrap-handle	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	credpid	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	dup-offset	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	efd-scm	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	efd-scm-hifd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	efd-xproc	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-closefd-reuse	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-ctl-errno	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-exclusive	aarch64	skip	-	linux-libc,ipc,epoll	-	unsupported-fixture:multi-process-service
+ipc	epoll-level-edge	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-mod-interest	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-nested	aarch64	skip	-	linux-libc,ipc,epoll	-	unsupported-fixture:multi-process-service
+ipc	epoll-oneshot	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-rdhup-hup	aarch64	skip	-	linux-libc,ipc,epoll	-	unsupported-fixture:multi-process-service
+ipc	epoll-shared-xthread	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-timeout	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	epoll-wake-socket-collision	aarch64	skip	-	linux-libc,threads,ipc,network	-	unsupported-fixture:special-device-network
+ipc	eventfd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	eventfd-bufsize	aarch64	skip	-	linux-libc,ipc,eventfd	-	unsupported-fixture:multi-process-service
+ipc	eventfd-counter	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	eventfd-lifecycle	aarch64	skip	-	linux-libc,ipc,eventfd	-	unsupported-fixture:multi-process-service
+ipc	eventfd-overflow	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	eventfd-poll	aarch64	skip	-	linux-libc,ipc,eventfd	-	unsupported-fixture:multi-process-service
+ipc	eventfd-semaphore	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	eventfd-write-hotpath	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	evtmix-epoll	aarch64	skip	-	linux-libc,ipc,eventfd,signalfd	-	unsupported-fixture:multi-process-service
+ipc	exec-fd-epoll	aarch64	fail	0	linux-libc,threads,ipc	stdout:e=67f66ff592d61f54,a=1f8aa2572b6c153a,d=21,eb=30,ab=31,el=60,al=62	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	fifo-multi-writer	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	fifo-nonblock	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	fifo-twoway	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	flock-fork	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	fork-epoll-timerfd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	lockf-fork	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	mq	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	mq-access	aarch64	skip	-	linux-libc,ipc	-	unsupported-fixture:multi-process-service
+ipc	mq-edge	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	mq-lifecycle	aarch64	skip	-	linux-libc,ipc	-	unsupported-fixture:multi-process-service
+ipc	msg	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	msgget-ftok	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	neonshm	aarch64	fail	125	linux-libc	exit:e=0,a=125;stdout:e=4240069a06392883,a=cbf29ce484222325,d=0,eb=6e,ab=--,el=29,al=0	EngineExit { kind: Fault, guest_status: 0, detail: 16813692, fault: Some(FaultDiagnostic { isa: Aarch64, pc: 16813692, opcode: [32, 32, 159, 76, 227, 3, 4, 170, 132, 0, 1, 145, 223, 2, 4], opcode_len: 15, reason: Unsupported, address: None, access: None }) }
+ipc	pipe	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pipe-eof	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pipe-nonblock	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pipe-poll	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pipe-poll-hup	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pipe-setsize	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pipe-sigpipe	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	poll-basic	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	poll-nval	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	posix-sem-named	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	posix-shm	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	poslk-xproc	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	ppoll-mask	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	procfd-bundle	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pump-epollout-rearm	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pump-primary-channel	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pump-worker-dispatch	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pump-xproc-et	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	pump-xproc-oneshot	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-epoll	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-eventfd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-eventfd-dense	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-eventfd-dense-untrusted	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-eventfd-untrusted	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-futex	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-inotify	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-memfd-seal	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-recv-epoll	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-rights	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-rights-trunc	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-signalfd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	scm-timerfd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	select-basic	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sem	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	seqbystander	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqcred	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqpacket	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqpacket-epoll-drain	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqpacket-flags	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqpacket-lastclose	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqpacket-passcred-ctrunc	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	seqpacket-passcred-full	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	shared-ring	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	shm	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	shm-dsm	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	shmposix	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=228aadf229e24076,a=cbf29ce484222325,d=0,eb=73,ab=--,el=21,al=0;stderr:e=cbf29ce484222325,a=6a8d2fc3a076c248,d=0,eb=--,ab=73,el=0,al=36	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+ipc	signalfd-maskupdate	aarch64	skip	-	linux-libc,ipc,signalfd	-	unsupported-fixture:multi-process-service
+ipc	signalfd-multi	aarch64	skip	-	linux-libc,ipc,signalfd	-	unsupported-fixture:multi-process-service
+ipc	signalfd-nonblock	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	signalfd-read	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	signalfd-rt	aarch64	skip	-	linux-libc,ipc,signalfd	-	unsupported-fixture:multi-process-service
+ipc	sockpair-dgram	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	splice-tee	aarch64	skip	-	linux-libc,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-blocking	aarch64	pass	0	linux-libc,fork,ipc,signals,time,self-contained-process	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	sysv-ctl	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-edge	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-fork	aarch64	pass	0	linux-libc,fork,ipc,self-contained-process	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	sysv-msg	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-owner	aarch64	skip	-	linux-libc,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-sem	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-shm	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysv-stress	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	sysvshm	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+ipc	tcp-loopback	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	tcp-rcvtimeo	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	timerfd-abstime	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	timerfd-gettime	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	timerfd-periodic	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	timerfd-relative	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	udp-loopback	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	unix-abstract	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	unix-dgram-boundary	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	unix-peek	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	unix-peercred	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	unix-scm-fd	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	unix-shutdown	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	xproc-inbound	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	xproc-prearm	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+ipc	zygote-inbound	aarch64	skip	-	linux-libc,threads,ipc	-	unsupported-fixture:multi-process-service
+isolation	cgroup-cpu-cap2	aarch64	fail	0	linux-libc,procfs,sysfs,cgroup-v2,cpu-config	stdout:e=b13e1eb1e1248286,a=5db5cc215e81f44f,d=5,eb=31,ab=30,el=149,al=161	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-mem-cap512m	aarch64	fail	0	linux-libc,procfs,sysfs,cgroup-v2,memory-config	stdout:e=ae0013f5dbf948b8,a=5db5cc215e81f44f,d=5,eb=31,ab=30,el=158,al=161	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-self	aarch64	fail	0	linux-libc,procfs,cgroup-v2	stdout:e=9b7b4510f35008fc,a=8e432b9845dddd51,d=8,eb=31,ab=30,el=47,al=10	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cgroup-v2-default	aarch64	fail	0	linux-libc,procfs,sysfs,cgroup-v2	stdout:e=dd5c423f954a86ca,a=5db5cc215e81f44f,d=5,eb=31,ab=30,el=146,al=161	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cpu-default	aarch64	fail	0	linux-libc,procfs,sysfs,cpu-config	stdout:e=7fd7efe505f0a675,a=76af313e7c9b345c,d=23,eb=31,ab=30,el=37,al=37	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cpu-default-cap2	aarch64	fail	1	linux-libc,procfs,sysfs,cpu-config	exit:e=0,a=1;stdout:e=294cb25e3088c8d1,a=6a544302e6dd7f2a,d=3,eb=73,ab=63,el=7,al=61	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+isolation	cpu-sysfs-dirs	aarch64	fail	0	linux-libc,sysfs,cpu-config	stdout:e=5d220956760346dd,a=a0a8b4fa47bddd89,d=26,eb=31,ab=30,el=40,al=40	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cpu-sysfs-dirs-cap2	aarch64	fail	0	linux-libc,sysfs,cpu-config	stdout:e=eee15b0474d8f3bc,a=e4b4e2c0b2ef66bd,d=10,eb=32,ab=31,el=43,al=43	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cpu-topology	aarch64	fail	0	linux-libc,sysfs,cpu-topology	stdout:e=6b4b3cc8dd67dedf,a=35582a3c9583a781,d=11,eb=31,ab=30,el=13,al=64	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cpucap-1	aarch64	fail	0	linux-libc,cpu-config,sched-affinity	stdout:e=3d21dfabeaf63568,a=3d1e69abeaf3370f,d=9,eb=31,ab=32,el=11,al=11	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cpucap-2	aarch64	pass	0	linux-libc,cpu-config,sched-affinity	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	cred-identity	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	hostname-view	aarch64	fail	0	linux-libc,procfs	stdout:e=7eb4c0a32cb66daf,a=aa256d00ee2df15d,d=36,eb=31,ab=30,el=93,al=93	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	mount-view	aarch64	fail	0	linux-libc,procfs	stdout:e=a6eaf282c0881a68,a=8e432b9845dddd51,d=8,eb=31,ab=30,el=72,al=10	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	pid-identity	aarch64	fail	0	linux-libc,procfs	stdout:e=20410e912227ac7b,a=461705f425af6095,d=11,eb=31,ab=30,el=69,al=69	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	proc-addr-confined	aarch64	fail	0	linux-libc,procfs	stdout:e=cfd0c63d8cc93f98,a=0fe143faa0f3e161,d=8,eb=31,ab=30,el=266,al=266	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	proc-confined	aarch64	fail	0	linux-libc,procfs	stdout:e=5427179923a00cf6,a=3670af2ad06b2d0b,d=14,eb=31,ab=30,el=69,al=69	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	procstat-percpu	aarch64	fail	0	linux-libc,procfs,cpu-accounting	stdout:e=b95cbc3a9325ae75,a=3b4bdae173133bed,d=19,eb=31,ab=30,el=37,al=37	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	rlimit-view	aarch64	fail	0	linux-libc,procfs,rlimit	stdout:e=c557c5942f654327,a=df245584771f01c6,d=65,eb=31,ab=30,el=107,al=107	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	sched-view	aarch64	fail	0	linux-libc,sched-affinity	stdout:e=d408eb9a7268e374,a=841667a80c89201e,d=59,eb=31,ab=30,el=113,al=113	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+isolation	ulimit-nofile	aarch64	fail	0	linux-libc,rlimit,ulimit-config	stdout:e=e777b6ccc1232240,a=a0548db07af2c5ea,d=12,eb=31,ab=32,el=27,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	absdiv	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	align-alloc	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	assert-off	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	atexit-order	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	atox	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	bsearch	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	calloc-zero	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	ctype-class	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	ctype-conv	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	div-family	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	env	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	errno-sym	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	explicit-bzero	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	fenv-round	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	fgets-fputs	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=72bdd0b0aee3af4a,a=cbf29ce484222325,d=0,eb=66,ab=--,el=37,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	fmemopen-rw	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	fnmatch	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	fpos	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=e78de1402aead1e4,a=cbf29ce484222325,d=0,eb=66,ab=--,el=30,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	fread-fwrite	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=71f1b26ddcbbb687,a=cbf29ce484222325,d=0,eb=66,ab=--,el=33,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	freopen	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=0f0a33e19044be43,a=cbf29ce484222325,d=0,eb=66,ab=--,el=18,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	fscanf	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=748608c10a00b20a,a=cbf29ce484222325,d=0,eb=66,ab=--,el=22,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	fseek-ftell	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=15d6213b760d3882,a=cbf29ce484222325,d=0,eb=66,ab=--,el=37,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	getline	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=2fb8b2c424078f1f,a=cbf29ce484222325,d=0,eb=6c,ab=--,el=52,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	getopt	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	locale-c	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	localtime-utc	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	malloc-big	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-class	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-exact	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-explog	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-frexp	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-gamma	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-hyper	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-misc	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-mod	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-round	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	math-trig	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	mbs-wcs	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	mem-extra	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	mem-move	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	mktime-utc	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	nl-langinfo	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	open-memstream	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-flags	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-float	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-hexfloat	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-int	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-len	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-limits	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-pos	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-prec	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	printf-str	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	qsort-int	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	qsort-large	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	qsort-str	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	qsort-struct	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	rand-seq	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	realloc-chain	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	regex	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	scanf-set	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	setjmp-val	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	setvbuf	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=30313de26dfae7d0,a=cbf29ce484222325,d=0,eb=73,ab=--,el=23,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	sigsetjmp	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	snprintf-ret	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	sscanf-mix	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	sscanf-num	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	sscanf-str	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-cmp	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-copy	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-dup	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-extra	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-search	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-tok	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	str-xfrm	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strerror	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strftime-utc	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strptime	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strto-float	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strtod-round	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strtol	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strtoll	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	strtoul	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	sysconf	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	time-asctime	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	time-diff	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	time-gmtime	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	time-mktime	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	time-strftime	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	time-strftime-num	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	ungetc	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=c7f2b1818621f356,a=cbf29ce484222325,d=0,eb=75,ab=--,el=37,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	ungetc-multi	aarch64	fail	139	linux-libc,libm	exit:e=0,a=139;stdout:e=c5d4697acbb227b8,a=cbf29ce484222325,d=0,eb=75,ab=--,el=38,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+libc	vla-alloca	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	wchar-str	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	wctype-class	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+libc	wmem	aarch64	pass	0	linux-libc,libm	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	aarch64-cross-view	aarch64	fail	139	linux-libc,mmap,memfd,aarch64-unaligned	exit:e=0,a=139;stdout:e=e6a849528bfd245c,a=cbf29ce484222325,d=0,eb=61,ab=--,el=171,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+memory	aarch64-logical-atomics	aarch64	skip	-	linux-libc,mmap,memfd,pthreads,aarch64-exclusives	-	unsupported-fixture:multi-process-service
+memory	aarch64-logical-ops	aarch64	fail	1	linux-libc,mmap,memfd,aarch64-atomics	exit:e=0,a=1;stdout:e=edd3fbc9bd5b4b67,a=08776b48aa3657bc,d=24,eb=31,ab=30,el=62,al=62	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	aarch64-pair-writeback	aarch64	pass	0	linux-libc,mmap,memfd,aarch64-pairs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	aarch64-pcache-smc	aarch64	skip	-	linux-libc,execve,mprotect,persistent-cache,aarch64-smc	-	unsupported-fixture:multi-process-service
+memory	aarch64-smc-targeted	aarch64	fail	1	linux-libc,mmap,aarch64-smc,ibtc,tier2	exit:e=0,a=1;stdout:e=c913c600933791a0,a=cbf29ce484222325,d=0,eb=73,ab=--,el=42,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	advice-einval	aarch64	fail	0	linux-libc,madvise,mlock,msync	stdout:e=d104482033d9fb94,a=30f86f345e9f56cb,d=27,eb=32,ab=33,el=61,al=61	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	allocator-reclamation	aarch64	fail	0	linux-libc,procfs,allocator/mmap	stderr:e=cbf29ce484222325,a=180a5df8743f9336,d=0,eb=--,ab=6d,el=0,al=53	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	anon-tracker-capacity	aarch64	skip	-	linux-libc,mmap,madvise,fork/wait,munmap	-	unsupported-fixture:multi-process-service
+memory	anon-tracker-concurrent	aarch64	skip	-	linux-libc,mmap,mprotect,madvise,munmap,fork/wait,pthreads	-	unsupported-fixture:multi-process-service
+memory	anonymous-mapping-reclamation	aarch64	fail	-	linux-libc,procfs,mmap/munmap	engine:timeout	timeout
+memory	bus-activation-race	aarch64	skip	-	linux-libc,mmap,signals,threads,fork/wait	-	unsupported-fixture:multi-process-service
+memory	bus-state-race	aarch64	skip	-	linux-libc,mmap,signals,threads	-	unsupported-fixture:multi-process-service
+memory	copyout-readonly	aarch64	fail	1	linux-libc,mmap,mprotect,read,clock_gettime	exit:e=0,a=1;stdout:e=ddd82e4d78142df1,a=f866dfcd99f0ea24,d=45,eb=31,ab=30,el=104,al=104	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-codecache-churn	aarch64	fail	-	code-cache,eviction,re-translation	engine:timeout	timeout
+memory	dbt-codecache-straightline	aarch64	fail	1	code-cache,straight-line,mmap-rwx	exit:e=0,a=1;stdout:e=6d38e0e38aba612d,a=cbf29ce484222325,d=0,eb=63,ab=--,el=26,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-computed-goto	aarch64	fail	-	ibtc,computed-goto,interpreter	engine:timeout	timeout
+memory	dbt-conc-mmap-exec	aarch64	skip	-	concurrency,mmap,exec	-	unsupported-fixture:multi-process-service
+memory	dbt-conc-patch	aarch64	fail	1	concurrency,smc,cross-thread	exit:e=0,a=1;stdout:e=e6e170a940a15852,a=cbf29ce484222325,d=0,eb=63,ab=--,el=46,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-conc-same	aarch64	fail	-	concurrency,translation-cache	engine:timeout	timeout
+memory	dbt-deepwide-recursion	aarch64	fail	-	recursion,return-predict,cache-pressure	engine:timeout	timeout
+memory	dbt-flags-carry	aarch64	pass	0	flags,block-chaining,carry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	dbt-ibtc-mega	aarch64	fail	-	ibtc,fnptr-table,megamorphic	engine:timeout	timeout
+memory	dbt-longjmp-reenter	aarch64	fail	-	longjmp,setjmp,reenter	engine:timeout	timeout
+memory	dbt-nested-loops	aarch64	pass	0	block-chaining,loops,flags	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	dbt-ret-predict	aarch64	fail	-	return-predict,recursion	engine:timeout	timeout
+memory	dbt-smc-bounce	aarch64	pass	0	smc,mprotect,replacement	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	dbt-smc-crosspage	aarch64	fail	1	smc,page-boundary	exit:e=0,a=1;stdout:e=a226e49cc1394513,a=cbf29ce484222325,d=0,eb=73,ab=--,el=39,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-grow	aarch64	fail	1	smc,variable-length,re-translation	exit:e=0,a=1;stdout:e=788f5551dda9ce58,a=cbf29ce484222325,d=0,eb=73,ab=--,el=34,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-manyslots	aarch64	fail	1	smc,code-cache,capacity	exit:e=0,a=1;stdout:e=ffd950fda0193454,a=cbf29ce484222325,d=0,eb=73,ab=--,el=38,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-minijit	aarch64	fail	1	smc,mini-jit,codegen	exit:e=0,a=1;stdout:e=47ecab7bf7c90b0a,a=cbf29ce484222325,d=0,eb=73,ab=--,el=37,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-rwx-rewrite	aarch64	fail	1	smc,mmap-rwx,re-translation	exit:e=0,a=1;stdout:e=c700b3535de38313,a=cbf29ce484222325,d=0,eb=73,ab=--,el=32,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-smc-trampoline	aarch64	fail	1	smc,trampoline,direct-branch-chain	exit:e=0,a=1;stdout:e=9fadfc704cf9dc46,a=cbf29ce484222325,d=0,eb=73,ab=--,el=40,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-soak-mix	aarch64	fail	-	soak,ibtc,block-chaining	engine:timeout	timeout
+memory	dbt-sparse-fault	aarch64	fail	1	mmap,sparse,fault	exit:e=0,a=1;stdout:e=da251498ff2e01b1,a=cbf29ce484222325,d=0,eb=73,ab=--,el=38,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	dbt-switch-wide	aarch64	fail	-	indirect-branch,jump-table	engine:timeout	timeout
+memory	dbt-tailcall-chain	aarch64	fail	-	tail-call,ibtc,block-chaining	engine:timeout	timeout
+memory	dbt-vtable	aarch64	fail	-	ibtc,vtable,virtual-call	engine:timeout	timeout
+memory	dontneed-commit	aarch64	pass	0	linux-libc,mmap,mprotect,madvise	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	dontneed-mmap-commit	aarch64	pass	0	linux-libc,mmap,madvise	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	elf-rodata-fault	aarch64	fail	0	linux-libc,elf,signals	stdout:e=bd74c0ec795c07aa,a=3c338c27a3ec108b,d=32,eb=32,ab=31,el=128,al=128	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	elf-rodata-write	aarch64	pass	0	linux-libc,elf,mprotect	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	fd-reclamation	aarch64	fail	0	linux-libc,procfs,fd/open/close	stderr:e=cbf29ce484222325,a=b58e295f71ea1485,d=0,eb=--,ab=66,el=0,al=48	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	file-eof-bus	aarch64	fail	5	linux-libc,mmap,signals,atomics	exit:e=0,a=5;stdout:e=0c0af5bbae109f8f,a=b9f19600a63bc736,d=68,eb=31,ab=30,el=148,al=148	EngineExit { kind: Code, guest_status: 5, detail: 0, fault: None }
+memory	file-mapping-reclamation	aarch64	fail	0	linux-libc,procfs,filesystem,mmap	stderr:e=cbf29ce484222325,a=07007ee612b219f8,d=0,eb=--,ab=6d,el=0,al=54	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	file-none-commit	aarch64	pass	0	linux-libc,mmap,mprotect	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	fixed-file-protection	aarch64	pass	0	linux-libc,mmap,newfstatat,mapping-data-rootfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	fixed-noreplace	aarch64	pass	0	linux-libc,mmap,filesystem,mapping-data-rootfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	fixed-replacement	aarch64	pass	0	linux-libc,mmap	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	fork-cow-dontneed	aarch64	skip	-	linux-libc,mmap,madvise,fork/wait	-	unsupported-fixture:multi-process-service
+memory	fork-cow-private	aarch64	skip	-	linux-libc,mmap,fork/wait	-	unsupported-fixture:multi-process-service
+memory	fork-reclamation	aarch64	skip	-	linux-libc,procfs,fork/wait	-	unsupported-fixture:multi-process-service
+memory	fork-shared-anon	aarch64	skip	-	linux-libc,mmap,fork/wait	-	unsupported-fixture:multi-process-service
+memory	futex-logical-alias	aarch64	skip	-	linux-libc,mmap,memfd,futex,pthreads	-	unsupported-fixture:multi-process-service
+memory	gna-negative-cache	aarch64	skip	-	linux-libc,mmap,mprotect,pthreads,write	-	unsupported-fixture:multi-process-service
+memory	guard-page-efault	aarch64	fail	0	linux-libc,mmap	stdout:e=12f338e311464285,a=a5e94eae13596139,d=3,eb=38,ab=2d,el=76,al=75	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	guest-copy-edges	aarch64	fail	1	linux-libc,mmap,memfd,read/write,readv/writev,smc	exit:e=0,a=1;stdout:e=ad0042959638c32f,a=eb759a51d5667979,d=28,eb=31,ab=30,el=88,al=88	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	logical-transition-race	aarch64	skip	-	linux-libc,mmap,memfd,pthreads	-	unsupported-fixture:multi-process-service
+memory	madv-dontfork	aarch64	skip	-	linux-libc,mmap,madvise,fork/wait	-	unsupported-fixture:multi-process-service
+memory	madvise-dontneed-partial	aarch64	pass	0	linux-libc,mmap,madvise	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	madvise-hints	aarch64	pass	0	linux-libc,mmap,madvise	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	map-populate	aarch64	pass	0	linux-libc,mmap,madvise,mincore	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mapping-errors	aarch64	fail	0	linux-libc,mmap,filesystem,msync,madvise,mremap	stdout:e=4b73e7c3af035bc0,a=756bfe1bb4e56e2e,d=49,eb=31,ab=30,el=223,al=217	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mapping-resize	aarch64	pass	0	linux-libc,mmap,mremap	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mapping-semantics	aarch64	skip	-	linux-libc,mmap,filesystem,mincore,mlock,madvise,fork/wait	-	unsupported-fixture:multi-process-service
+memory	memfd-alias-overflow	aarch64	pass	0	linux-libc,mmap,memfd,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	memfd-exec-alias	aarch64	pass	0	linux-libc,mmap,mprotect,memfd,filesystem,smc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	memfd-offset-alias	aarch64	pass	0	linux-libc,mmap,memfd,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	memfd-seal	aarch64	fail	0	linux-libc,mmap,memfd,filesystem	stdout:e=44830b7ae609c00a,a=66392e6b057e433e,d=7,eb=31,ab=30,el=58,al=58	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	memfd-seal-busy	aarch64	fail	0	linux-libc,mmap,memfd,filesystem	stdout:e=1644cca3bb14335f,a=bf5579e02c035ad8,d=16,eb=31,ab=30,el=64,al=64	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	memfd-seal-mixed	aarch64	fail	0	linux-libc,mmap,memfd,filesystem	stdout:e=8672f3698d558598,a=4402898329949947,d=11,eb=31,ab=30,el=78,al=78	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	memfd-share	aarch64	pass	0	linux-libc,mmap,memfd,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mlockall-scope	aarch64	pass	0	linux-libc,mmap,mlock,fork/wait	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mmap-einval	aarch64	fail	0	linux-libc,mmap	stdout:e=5a98e3af697fe587,a=d594bc7c45adc753,d=21,eb=39,ab=32,el=102,al=105	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mmap-occupied-hint	aarch64	fail	1	linux-libc,mmap	exit:e=0,a=1;stdout:e=d2f3c7d655b9fee0,a=cbf29ce484222325,d=0,eb=6d,ab=--,el=42,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	mmap-overlay	aarch64	pass	0	linux-libc,mmap	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mprotect-jit-interior	aarch64	pass	0	linux-libc,mprotect,jit	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mremap-dontunmap	aarch64	pass	0	linux-libc,mmap,mremap	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	mremap-einval	aarch64	fail	0	linux-libc,mremap,mlock,mincore	stdout:e=402fb5842974daae,a=0b6a3540bfa1b099,d=51,eb=32,ab=33,el=93,al=93	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	msync-hole	aarch64	pass	0	linux-libc,mmap,msync	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	msync-writeback	aarch64	pass	0	linux-libc,mmap,msync,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	nonpie-mmap-hint	aarch64	pass	0	linux-libc,mmap	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	page-locking	aarch64	pass	0	linux-libc,mmap,mlock	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	residency-vector	aarch64	pass	0	linux-libc,mmap,mincore	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	syscall-logical-uaccess	aarch64	fail	1	linux-libc,mmap,memfd,read/write,readv/writev	exit:e=0,a=1;stdout:e=ac480de3ef63b460,a=3701ad7a2986a821,d=30,eb=31,ab=30,el=126,al=126	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+memory	syscall-logical-unmap-race	aarch64	skip	-	linux-libc,mmap,memfd,read,pthreads	-	unsupported-fixture:multi-process-service
+memory	thread-reclamation	aarch64	skip	-	linux-libc,procfs,pthreads	-	unsupported-fixture:multi-process-service
+memory	truncate-eof-bus	aarch64	skip	-	linux-libc,mmap,ftruncate,dup,fork,signals	-	unsupported-fixture:multi-process-service
+memory	truncate-peer	aarch64	fail	9	linux-libc,mmap,ftruncate,signals,fork/wait,mapping-data-rootfs	exit:e=0,a=9;stdout:e=7ff91e29103f71c1,a=cbf29ce484222325,d=0,eb=74,ab=--,el=141,al=0	EngineExit { kind: Code, guest_status: 9, detail: 0, fault: None }
+memory	uaccess-efault	aarch64	pass	0	linux-libc,mmap,pipe,read/write	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	zero-length-ops	aarch64	pass	0	linux-libc,mmap,mprotect,madvise,msync,mlock	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+memory	zz-iso-flag	aarch64	fail	0	linux-libc,mmap	stderr:e=cbf29ce484222325,a=eded57e7ad68a3ef,d=0,eb=--,ab=41,el=0,al=58	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+network	accept-backlog	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	accept4	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	async-refused	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	bufsize	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	connect-edges	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	connect-refused	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	dns-hostresolver	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	dual-wildcard-v6only	aarch64	skip	-	linux-libc,sockets,ipv6,loopback	-	unsupported-fixture:special-device-network
+network	dual-wildcard-v6only-bridge	aarch64	skip	-	linux-libc,sockets,ipv6,bridge	-	unsupported-fixture:special-device-network
+network	dup-socket	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	epoll-readiness	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	errpaths	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	fionread	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	getaddrinfo	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	gethostname	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	getpeername	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	getpeername-notconn	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	icmp-bridge	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	icmp-loopback	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	ifaces	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	inet-pton	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	ip-sockopt	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	ipv6-loopback	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	ipv6-v6only	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	keepalive	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	listen-tcp	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	lo-any-nonblock	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	ltp_neterr	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	mmsg	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	msg-dontwait	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	msg-peek	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	msg-peek-stream	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	msg-waitall	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	net_nonblock	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	net_sendmsg	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	net_sockopt	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	net_tcp	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	net_udp	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	net_unix	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	netlink-edges	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	nonblock-connect	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	peercred	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	poll-accept	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	poll-events	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	rcvtimeo	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	recvmsg-trunc	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	scm-rights	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	select-multi	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	sendmsg-addr	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	sendmsg-iov	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	sentry-net-untrusted	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=aff697d6ee00a4d7,a=cbf29ce484222325,d=0,eb=73,ab=--,el=40,al=0;stderr:e=cbf29ce484222325,a=c3b9c4245147419b,d=0,eb=--,ab=73,el=0,al=33	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+network	sentry_net	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	shutdown-rd	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	shutdown-wr	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	so-linger	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	so-reuseport	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	sock-flags	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	sock-ioctl	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	socketpair	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	sockopt-buf	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	tcp-bulk	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	tcp-multi	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	tcp-row	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	tcp-shutdown	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	tcp-sockopt	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	udp-connected	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	udp-pair	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	udp-private	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	unix-abstract-name	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	unix-abstract-stream	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	unix-autobind	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	unix-dgram	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	unix-dgram-abstract	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	unix-stream	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	v6-unreach	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	waitall-partial	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+network	writev	aarch64	skip	-	linux-libc	-	unsupported-fixture:special-device-network
+posix	access	aarch64	fail	0	linux-libc	stdout:e=e69dc52a0fe4f721,a=e69a4b2a0fe1f1fc,d=32,eb=31,ab=30,el=34,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	addrinfo	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	apt-pty	aarch64	fail	0	linux-libc	stdout:e=f32a788094257e65,a=b9268c23afc40756,d=7,eb=70,ab=6f,el=73,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	apt-pty-devpts	aarch64	fail	0	linux-libc	stdout:e=0e22d40b13b55244,a=f05973c37f7205fd,d=10,eb=6d,ab=6f,el=70,al=19	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	chmodchown	aarch64	fail	0	linux-libc	stdout:e=9915d1f686652cca,a=ffb6131330e5cd5d,d=33,eb=31,ab=30,el=98,al=98	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	clockid	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	clocknano	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	confstrt	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	dup	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	dup3	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	execself	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	fcntl-setfl-mask	aarch64	fail	0	linux-libc	stdout:e=564b8dddbb340d24,a=91a4c0c9e05b3d5e,d=13,eb=31,ab=30,el=129,al=129	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	fcntlmisc	aarch64	fail	0	linux-libc	stdout:e=248486bf4ca67f17,a=231305b251122cc4,d=13,eb=31,ab=30,el=44,al=44	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	flock	aarch64	fail	0	linux-libc	stdout:e=d3b17d3a54dc6c39,a=6dbd37efad374784,d=13,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	flockfilet	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	fnmatchglob	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	freopent	aarch64	fail	139	linux-libc	exit:e=0,a=139;stdout:e=59dcdb3326ec2376,a=cbf29ce484222325,d=0,eb=66,ab=--,el=35,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
+posix	fstatat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	fsync	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	getcwdchdir	aarch64	fail	0	linux-libc	stdout:e=97e841e1b1b06b9a,a=ae9a191fd0340570,d=27,eb=31,ab=30,el=36,al=36	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	getdents64	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	getids	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	getrlimit	aarch64	fail	0	linux-libc	stdout:e=1774543761bc7f4c,a=1777ce3761bf8471,d=34,eb=31,ab=30,el=36,al=36	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	getrusage-who	aarch64	fail	0	linux-libc	stdout:e=96f055d50cdef789,a=5686f3f5e4044703,d=8,eb=31,ab=30,el=97,al=97	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	ifindex	aarch64	fail	0	linux-libc	stdout:e=d1f0344361480a06,a=49624dd95c927fa4,d=15,eb=31,ab=30,el=30,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	inetpton	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	iovec	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	killraise	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	linksym	aarch64	fail	0	linux-libc	stdout:e=ea6f8bebaa168de7,a=2bf32eb16296bb10,d=47,eb=31,ab=30,el=58,al=58	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	lseek	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	madvise	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	mkdirrmdir	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	mkstempt	aarch64	fail	0	linux-libc	stdout:e=f46255b7a9a0e665,a=f45eebb7a99dfc70,d=54,eb=31,ab=30,el=56,al=56	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	mmapanon2	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	mmapfile	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	mqueue	aarch64	fail	0	linux-libc	stdout:e=b2e8314a9b22a6d8,a=4987c485910a5d1a,d=7,eb=61,ab=6f,el=59,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	nanosleep	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	nftwt	aarch64	fail	0	linux-libc	stdout:e=5d801da3ac15cab0,a=07a9bb5a486375cf,d=13,eb=31,ab=30,el=38,al=38	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	openat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	openflags	aarch64	fail	0	linux-libc	stdout:e=5812a616020e8091,a=807ab189309670b6,d=25,eb=31,ab=30,el=50,al=50	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	openptyt	aarch64	fail	0	linux-libc	stdout:e=efa8690ec8318280,a=2dda29b235d524b2,d=9,eb=6d,ab=6f,el=31,al=18	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pathconft	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pipe2	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pipe2way	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pollbig	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pollpipe	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	ppoll	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	preadwrite	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pthatfork	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pthattr	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pthbarrier	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pthcancel	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	pthkey	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pthrwlock	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	pthspin	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	pty	aarch64	fail	0	linux-libc	stdout:e=9762a10846fa4d6b,a=81be36080c1c53f9,d=4,eb=6d,ab=6f,el=75,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pty-canon	aarch64	skip	-	linux-libc,pty,termios	-	unsupported-fixture:special-device-network
+posix	pty-devpts	aarch64	fail	0	linux-libc	stdout:e=4e79179bf5a2bfb0,a=e5d20fd7076fb67c,d=2,eb=6f,ab=70,el=138,al=21	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pty-devpts-ls	aarch64	fail	0	alpine-rootfs,linux-libc	stdout:e=adce0d092beafd63,a=7edaa6b2bebf312a,d=3,eb=6c,ab=70,el=17,al=10	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pty-fork-devpts	aarch64	fail	0	linux-libc	stdout:e=6bc7ce55836d2d97,a=754ca3165bc2fae7,d=8,eb=63,ab=6f,el=32,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	pty-jobsig	aarch64	skip	-	linux-libc,pty,termios,fork,setsid,TIOCSCTTY	-	unsupported-fixture:special-device-network
+posix	pty-ldisc	aarch64	skip	-	linux-libc,pty,termios	-	unsupported-fixture:special-device-network
+posix	pwgr	aarch64	fail	0	linux-libc	stdout:e=b1285d8fe6bc935f,a=86df4cac711d7fb1,d=8,eb=31,ab=30,el=24,al=24	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	readdir-dtype	aarch64	fail	0	linux-libc	stdout:e=3a07a2899429fa80,a=3a044c8994273287,d=36,eb=33,ab=30,el=38,al=38	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	regexbr	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	rename	aarch64	fail	0	linux-libc	stdout:e=99855171e833fa77,a=05e5d107db369668,d=23,eb=31,ab=30,el=46,al=46	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	rusaget	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	rw	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	scandirt	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	selectfd	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	selectpipe	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	semnamed	aarch64	fail	0	linux-libc	stdout:e=32d7ff1f02bd17cb,a=48a92f3d86e01244,d=9,eb=65,ab=6f,el=62,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	sendfile2	aarch64	fail	0	linux-libc	stdout:e=b880c7589c6c302d,a=e83e07bb7a2c91fb,d=14,eb=31,ab=2d,el=45,al=33	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	setpgid	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	shmshare	aarch64	fail	0	linux-libc	stdout:e=f17d420aa7660f6a,a=863c212138d0eea1,d=9,eb=74,ab=6f,el=46,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	sigmask	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	sigqueuewait	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	statfam	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	statx	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	strftimet	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	sysconf	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	termios-raw	aarch64	skip	-	linux-libc,termios	-	unsupported-fixture:special-device-network
+posix	timerthread	aarch64	fail	-	linux-libc	engine:timeout	timeout
+posix	truncate	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	tty-bg-access	aarch64	skip	-	linux-libc,pty,job-control,SIGTTIN,SIGTTOU	-	unsupported-fixture:special-device-network
+posix	tty-leaderhup	aarch64	skip	-	linux-libc,pty,setsid,TIOCSCTTY,SIGHUP	-	unsupported-fixture:special-device-network
+posix	umask	aarch64	fail	0	linux-libc	stdout:e=91a975f2554b1c87,a=9d194916160ebfe4,d=15,eb=31,ab=30,el=26,al=26	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	uname	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	utimensat	aarch64	fail	0	linux-libc	stdout:e=cad4e319d7aa9e4a,a=a1514e409a8eda55,d=14,eb=31,ab=30,el=52,al=52	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	waitstatus	aarch64	fail	0	linux-libc	stdout:e=bf59fd819f86548a,a=0f91470685e06fe7,d=27,eb=31,ab=30,el=39,al=39	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+posix	wordexpt	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	capget-version	aarch64	pass	0	linux-libc,capabilities	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	chrome-cache-storm	aarch64	skip	-	linux-libc,pthreads,fork,clone3,exec,self-exec,translation-reuse	-	unsupported-fixture:multi-process-service
+process	clone-stack	aarch64	skip	-	linux-libc,clone	-	unsupported-fixture:multi-process-service
+process	clone3-lifecycle	aarch64	skip	-	linux-libc,clone3,wait	-	unsupported-fixture:multi-process-service
+process	clone3-pidfd	aarch64	skip	-	linux-libc,clone3,CLONE_PIDFD,poll,waitid,P_PIDFD	-	unsupported-fixture:multi-process-service
+process	close-range-child-progress	aarch64	skip	-	linux-libc,fork,close-range,poll	-	unsupported-fixture:multi-process-service
+process	credential-mutation	aarch64	pass	0	linux-libc,credentials,fork	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	credentials	aarch64	pass	0	linux-libc,prctl,capabilities,setuid	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	credentials-shape	aarch64	skip	-	linux-libc,process	-	unsupported-fixture:multi-process-service
+process	cross-process-futex	aarch64	skip	-	linux-libc,fork,shared-mmap,futex	-	unsupported-fixture:multi-process-service
+process	exec-cloexec	aarch64	fail	0	linux-libc,exec,fork/wait	stdout:e=1188553fb8ec8c0c,a=e96b763210a9ae96,d=64,eb=30,ab=31,el=103,al=103	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-cloexec-signal	aarch64	fail	0	linux-libc,fork,execve,cloexec,signal-disposition	stdout:e=aed372ea61adb8d3,a=89e732573a35c360,d=27,eb=31,ab=30,el=78,al=78	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-distinct	aarch64	pass	0	linux-libc,fork,execve,shebang	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-errno	aarch64	pass	0	linux-libc,exec	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-self	aarch64	pass	0	linux-libc,fork,execve,execveat,fexecve,self-exec	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-symlink	aarch64	pass	0	linux-libc,fork,execve,symlink	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-symlink-entry	aarch64	pass	0	linux-libc,fork,execve,symlink,launch	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exec-symlink-rootfs	aarch64	pass	0	linux-libc,fork,execve,symlink,scratch-rootfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	execfault	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	exit-teardown	aarch64	skip	-	linux-libc,pthreads,exit_group,pthread_exit,thread-teardown,exit-status,abort	-	unsupported-fixture:multi-process-service
+process	fatal-signal-wait	aarch64	skip	-	linux-libc,fork/wait,signals	-	unsupported-fixture:multi-process-service
+process	fatal-thread-group	aarch64	skip	-	linux-libc,pthreads,fork/wait,signals	-	unsupported-fixture:multi-process-service
+process	fork-blocked-io	aarch64	skip	-	linux-libc,pthreads,pipe,fork/wait	-	unsupported-fixture:multi-process-service
+process	fork-child-futex	aarch64	skip	-	linux-libc,fork,pthreads,futex,eventfd	-	unsupported-fixture:multi-process-service
+process	fork-reap-storm	aarch64	skip	-	linux-libc,fork,wait,WNOHANG,double-fork,ECHILD	-	unsupported-fixture:multi-process-service
+process	forkstorm	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	forkwait	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	futex-operations	aarch64	skip	-	linux-libc,pthreads,futex-wait/wake/wake-op	-	unsupported-fixture:multi-process-service
+process	getcpu-sysinfo-shape	aarch64	fail	0	linux-libc,getcpu,sysinfo	stdout:e=d5e1e70c1b827386,a=5259806548b61fd1,d=25,eb=31,ab=30,el=73,al=73	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	identity	aarch64	skip	-	linux-libc,fork,pthreads,getpid,getppid,gettid	-	unsupported-fixture:multi-process-service
+process	inet-isolated	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	inet-loopback	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	ltp_checkpoint	aarch64	fail	2	linux-libc	exit:e=0,a=2;stdout:e=9d7e9054ff295aa7,a=a9e638b70f0481ee,d=0,eb=77,ab=6f,el=64,al=18	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
+process	ltp_procmisc	aarch64	fail	0	linux-libc	stdout:e=f7e14e8f63db9865,a=2a5b5bf72444f2ed,d=12,eb=68,ab=0a,el=374,al=368	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	namespace-boundary	aarch64	pass	0	linux-syscall,procfs,namespaces	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	nested-fork	aarch64	skip	-	linux-libc,fork,double-fork,daemonize	-	unsupported-fixture:multi-process-service
+process	nonpie-dladdr	aarch64	pass	0	linux-libc,dynamic-rootfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	nonpie-pointer-arguments	aarch64	skip	-	linux-libc,nonpie-loader,signals,sysv-ipc,poll,rlimit,scheduler	-	unsupported-fixture:special-device-network
+process	orphan-stop-hup	aarch64	skip	-	linux-libc,fork,setsid,setpgid,SIGHUP,SIGCONT	-	unsupported-fixture:multi-process-service
+process	pgroup-session	aarch64	skip	-	linux-libc,fork,setpgid,getpgid,setsid,getsid	-	unsupported-fixture:multi-process-service
+process	pi-and-robust-futex	aarch64	skip	-	linux-libc,pthreads,pi-futex,robust-list	-	unsupported-fixture:multi-process-service
+process	pipeproc	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	posix-spawn	aarch64	skip	-	linux-libc,posix-spawn,file-actions,self-exec	-	unsupported-fixture:multi-process-service
+process	posix-spawn-attr	aarch64	skip	-	linux-libc,posix-spawn,spawnattr,SETPGROUP,SETSIGDEF,self-exec	-	unsupported-fixture:multi-process-service
+process	prctl-cap-ambient	aarch64	pass	0	linux-libc,prctl,capabilities	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	prctl-capbset	aarch64	pass	0	linux-libc,prctl,capabilities	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	prctl-grabbag	aarch64	fail	0	linux-libc,prctl	stdout:e=7ce852916116959f,a=74e5990c3271dca8,d=21,eb=32,ab=2d,el=332,al=348	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	prctl-lifecycle	aarch64	fail	-	linux-libc,prctl,fork,signals	engine:timeout	timeout
+process	proc-self-exe-comm	aarch64	skip	-	linux-libc,procfs,fork,exec,comm,stateful-cleanup	-	unsupported-fixture:multi-process-service
+process	process-limits	aarch64	pass	0	linux-libc,prlimit,rlimit	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	procreap	aarch64	fail	0	linux-libc	stdout:e=e878f71d13b67819,a=93c2020c94eeebfb,d=41,eb=31,ab=30,el=139,al=133	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	ptrace-attach-detach	aarch64	skip	-	linux-libc,fork,ptrace,attach,detach,signal-inject	-	unsupported-fixture:multi-process-service
+process	ptrace-control-writes	aarch64	skip	-	linux-libc,fork,ptrace,poke,registers	-	unsupported-fixture:multi-process-service
+process	ptrace-exec-stop	aarch64	skip	-	linux-libc,fork,ptrace,self-exec	-	unsupported-fixture:multi-process-service
+process	ptrace-syscalls	aarch64	skip	-	linux-libc,fork,ptrace,signals,registers,tracee-memory	-	unsupported-fixture:multi-process-service
+process	pty-fd-handoff	aarch64	skip	-	linux-libc,pty,pipe,fork,dup3,fcntl,exec	-	unsupported-fixture:special-device-network
+process	resource-usage	aarch64	skip	-	linux-libc,fork/wait,getrusage	-	unsupported-fixture:multi-process-service
+process	sched-attr	aarch64	fail	0	linux-libc,sched	stdout:e=3aed406ec26c1668,a=3af0aa6ec26f005d,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	sched-setscheduler-errno	aarch64	skip	-	linux-libc,scheduler,process	-	unsupported-fixture:multi-process-service
+process	seccomp-filter	aarch64	pass	0	linux-libc,seccomp,prctl,fork	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	seccomp-matrix	aarch64	pass	0	linux-libc,seccomp,prctl,fork,pthreads,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	sentry-exec-proc-untrusted	aarch64	fail	3	linux-libc	exit:e=0,a=3;stdout:e=aee95f2e8f41805c,a=32aee41f1e47650b,d=7,eb=6f,ab=62,el=63,al=32	EngineExit { kind: Code, guest_status: 3, detail: 0, fault: None }
+process	sentry-fork-sandbox	aarch64	fail	0	linux-libc	stdout:e=5e8977c953b708a9,a=f98ec0a89d3cab00,d=23,eb=37,ab=31,el=47,al=45	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	sentry-fork-untrusted	aarch64	fail	0	linux-libc	stdout:e=5e8977c953b708a9,a=f98ec0a89d3cab00,d=23,eb=37,ab=31,el=47,al=45	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	sentry_exec_proc	aarch64	fail	3	linux-libc	exit:e=0,a=3;stdout:e=aee95f2e8f41805c,a=32aee41f1e47650b,d=7,eb=6f,ab=62,el=63,al=32	EngineExit { kind: Code, guest_status: 3, detail: 0, fault: None }
+process	sentry_fork	aarch64	fail	0	linux-libc	stdout:e=5e8977c953b708a9,a=f98ec0a89d3cab00,d=23,eb=37,ab=31,el=47,al=45	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	setpgid-errno	aarch64	skip	-	linux-libc,process	-	unsupported-fixture:multi-process-service
+process	shared-key-futex	aarch64	skip	-	linux-libc,pthreads,fork,shared-mmap,futex	-	unsupported-fixture:multi-process-service
+process	sysinfo	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	thrfork	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	times-contract	aarch64	pass	0	linux-libc,times,sysconf	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	uname-boundary	aarch64	pass	0	linux-syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	vfork-exec	aarch64	skip	-	linux-libc,vfork,execve,wait	-	unsupported-fixture:multi-process-service
+process	vfork-lifecycle	aarch64	skip	-	linux-libc,vfork,wait	-	unsupported-fixture:multi-process-service
+process	vfork-parent-wait	aarch64	skip	-	linux-libc,vfork,wait,time	-	unsupported-fixture:multi-process-service
+process	wait-stop-cont	aarch64	skip	-	linux-libc,fork,job-control,WUNTRACED,WCONTINUED,SIGSTOP,SIGCONT	-	unsupported-fixture:multi-process-service
+process	wait-variants	aarch64	skip	-	linux-libc,fork,wait,waitpid,wait4,waitid,rusage,WNOWAIT,ECHILD	-	unsupported-fixture:multi-process-service
+process	waitcore	aarch64	fail	0	linux-libc	stdout:e=f13a1fc2e2a321d8,a=10213df8a9b91d79,d=21,eb=31,ab=30,el=555,al=612	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+process	waitid-status	aarch64	skip	-	linux-libc,fork,waitid,signals	-	unsupported-fixture:multi-process-service
+process	waitstop	aarch64	skip	-	linux-libc,fork,waitpid,waitid,job-control	-	unsupported-fixture:multi-process-service
+procfs	pf-auxv-execfn	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cgroup-ro	aarch64	fail	0	linux-libc,procfs,cgroup2	stdout:e=105cf723ec118dfc,a=1d47f5e401ec780f,d=16,eb=31,ab=30,el=301,al=301	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-comm-status	aarch64	fail	0	linux-libc,procfs	stdout:e=c50116a8b3eb1496,a=811da67a170d8f67,d=41,eb=61,ab=20,el=109,al=82	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cpucount	aarch64	fail	0	linux-libc,procfs	stdout:e=2211aca68ec3c14a,a=22150ea68ec69da7,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cpuinfo	aarch64	fail	0	linux-libc,procfs	stdout:e=496ae08b52ab7f6b,a=49677e8b52a8a30e,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cpumodel	aarch64	fail	0	linux-libc,procfs,auxv	stdout:e=66a2b41213c4842f,a=1370bdadcb24449d,d=38,eb=31,ab=30,el=45,al=45;stderr:e=cbf29ce484222325,a=a117d02821b2fa11,d=0,eb=--,ab=63,el=0,al=174	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-cpusysfs	aarch64	fail	0	linux-libc,procfs	stdout:e=756c9aa59e5a9227,a=756938a59e57b5ca,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-devnodes	aarch64	skip	-	linux-libc,procfs	-	unsupported-fixture:special-device-network
+procfs	pf-fdvis-capacity	aarch64	skip	-	linux-libc,procfs,process	-	unsupported-fixture:multi-process-service
+procfs	pf-futexstate	aarch64	skip	-	linux-libc,procfs,threads	-	unsupported-fixture:multi-process-service
+procfs	pf-limits-view	aarch64	fail	0	linux-libc,procfs	stdout:e=319311f9ab785216,a=c7695b26fcec36fa,d=7,eb=31,ab=30,el=71,al=68	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-mapnames	aarch64	fail	0	linux-libc,procfs	stdout:e=f9f0ce1dc764da93,a=5dac14b39ad6f04a,d=6,eb=31,ab=30,el=196,al=196	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-maps	aarch64	fail	0	linux-libc,procfs	stdout:e=3075732d301a5e1c,a=3078ed2d301d6341,d=8,eb=31,ab=30,el=10,al=10	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-meminfo	aarch64	fail	0	linux-libc,procfs	stdout:e=bbb9f0c111a127d4,a=bbbd4ac111a3f699,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-misc	aarch64	fail	0	linux-libc,procfs	stdout:e=a06fc50671e3f84e,a=a073270671e6d4ab,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-mountinfo-bind	aarch64	fail	0	linux-libc,procfs	stdout:e=23fa8d544231d2c5,a=23f72354422ee8d0,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-net	aarch64	skip	-	linux-libc,procfs,network	-	unsupported-fixture:special-device-network
+procfs	pf-net-iso	aarch64	skip	-	linux-libc,procfs,network	-	unsupported-fixture:special-device-network
+procfs	pf-net2	aarch64	skip	-	linux-libc,procfs,network	-	unsupported-fixture:special-device-network
+procfs	pf-netnone-direct	aarch64	skip	-	linux-libc,procfs,network	-	unsupported-fixture:special-device-network
+procfs	pf-peer-ns	aarch64	fail	0	linux-libc,procfs	stdout:e=7081a82f5361085f,a=707e462f535e2c02,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-permbits	aarch64	fail	0	linux-libc	stdout:e=5183625fc4fd5d35,a=517ff85fc4fa7340,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-procstate	aarch64	fail	-	linux-libc,procfs	engine:timeout	timeout
+procfs	pf-rng	aarch64	fail	0	linux-libc,procfs	stdout:e=6006cd021f9fb002,a=42369dddb13cf304,d=9,eb=31,ab=30,el=71,al=71	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-self-fd-links	aarch64	fail	0	linux-libc,procfs	stdout:e=ffaf5aa8065243e3,a=c3eb4b2ff9b90548,d=3,eb=30,ab=2d,el=83,al=87	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfauxv	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcaps	aarch64	fail	0	linux-libc,procfs	stdout:e=53755fda582015e8,a=d3180ed24ffc6801,d=12,eb=31,ab=30,el=14,al=299	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcgroup	aarch64	fail	0	linux-libc,procfs	stdout:e=eca218a9568ce0a5,a=ec9eaea95689f6b0,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcmdline	aarch64	fail	0	linux-libc,procfs	stdout:e=25929e97352a2ddd,a=258f3497352743e8,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcomm	aarch64	fail	0	linux-libc,procfs,prctl	stdout:e=c89a4336e50ee2e9,a=c896e936e50c1424,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfcwd	aarch64	fail	0	linux-libc,procfs	stdout:e=6d13481874568685,a=6d0fde1874539c90,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfenviron	aarch64	fail	0	linux-libc,procfs	stdout:e=0689f14da8a5d4a6,a=068d534da8a8b103,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfexe	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selffd	aarch64	fail	0	linux-libc,procfs	stdout:e=bd8228b4915acd6f,a=bd7ec6b49157f112,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selffd-link	aarch64	fail	0	linux-libc,procfs	stdout:e=41c6d29aec7a2283,a=41c3709aec774626,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selflimits	aarch64	fail	0	linux-libc,procfs	stdout:e=4f88f799cb1baa49,a=4f859d99cb18db84,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selflink	aarch64	fail	0	linux-libc,procfs	stdout:e=2c9bfdb88dbf4401,a=2c9883b88dbc3edc,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfmounts	aarch64	fail	0	linux-libc,procfs	stdout:e=dc818e6aeb0b8c83,a=dc7e2c6aeb08b026,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfoom	aarch64	fail	0	linux-libc,procfs	stdout:e=5b3f0cc2ebfc7292,a=5b426ec2ebff4eef,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfrss	aarch64	fail	0	linux-libc,procfs	stdout:e=9792245f748e6b9f,a=f4643a7af615c266,d=11,eb=31,ab=30,el=13,al=22	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfsmaps	aarch64	fail	0	linux-libc,procfs	stdout:e=752bce466f36de29,a=752874466f340f64,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfstat	aarch64	fail	0	linux-libc,procfs	stdout:e=6d918d09320e2477,a=6d8e2b09320b481a,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfstatm	aarch64	fail	0	linux-libc,procfs	stdout:e=4f8c47e768c93c1a,a=4f8fa9e768cc1877,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selfstatus	aarch64	fail	0	linux-libc,procfs	stdout:e=93900995e459573b,a=938ca795e4567ade,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-selftask	aarch64	skip	-	linux-libc,procfs,threads	-	unsupported-fixture:multi-process-service
+procfs	pf-stat	aarch64	fail	0	linux-libc,procfs	stdout:e=6c571e8685e5b12f,a=6c53bc8685e2d4d2,d=9,eb=31,ab=30,el=11,al=11	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-sysctl	aarch64	fail	0	linux-libc,procfs	stdout:e=10c9a6a1f0658b4d,a=10c63ca1f062a158,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-sysfs	aarch64	fail	0	linux-libc,procfs	stdout:e=098951cd23a8efb3,a=0985efcd23a61356,d=9,eb=31,ab=30,el=11,al=11	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-threadself	aarch64	fail	0	linux-libc,procfs	stdout:e=e8f5c688442dbc41,a=e8f24c88442ab71c,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-ttynonblock	aarch64	skip	-	linux-libc,procfs	-	unsupported-fixture:special-device-network
+procfs	pf-umask	aarch64	fail	0	linux-libc,procfs	stdout:e=47a3945d8e5b7bcc,a=08ae53df31d5e8b1,d=13,eb=31,ab=30,el=15,al=139	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+procfs	pf-unamehost	aarch64	fail	0	linux-libc,procfs	stdout:e=090b1c444dfb5707,a=0907ba444df87aaa,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	abort-sigabrt	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	alternate-stack	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	blocked-delivery-order	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	compute-preemption	aarch64	pass	0	linux-libc,signals,timers	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	default-exit-codes	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	eintr-nanosleep	aarch64	fail	0	linux-libc,signals,timers	stdout:e=b4f22ee77be52477,a=50427d88571753cb,d=32,eb=31,ab=30,el=60,al=60	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	eintr-no-restart	aarch64	pass	0	linux-libc,signals,timers,pipes	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	eintr-poll	aarch64	fail	0	linux-libc,signals,timers,pipes	stdout:e=aa53d958999d401d,a=aa506f58999a5628,d=27,eb=31,ab=30,el=29,al=29	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	eintr-restart	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	eintr-restart-read	aarch64	skip	-	linux-libc,signals,pipes,fork/wait	-	unsupported-fixture:multi-process-service
+signals	eintr-sigsuspend	aarch64	fail	0	linux-libc,signals,timers	stdout:e=27939a67ac039fa9,a=00f4bd8182cc30bc,d=35,eb=31,ab=30,el=53,al=53	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	eintr-wait-restart	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	fatal-raise-quiet	aarch64	skip	-	linux-libc,signals,fork/wait,pipes	-	unsupported-fixture:multi-process-service
+signals	folded-fault-registers	aarch64	pass	0	linux-libc,signals,jit	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	ignore-discards-pending	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	implicit-null-pc	aarch64	pass	0	linux-libc,signals,jit	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	interval-timer	aarch64	pass	0	linux-libc,signals,timers	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	kill-errors	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	mask-in-handler	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	multi-handler-counts	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	nested-handlers	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	pause-eintr	aarch64	fail	0	linux-libc,signals,timers	stdout:e=e04e6b68cf6dc554,a=e051c568cf709419,d=28,eb=31,ab=30,el=30,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	pause-signal	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	pause-wake-set	aarch64	skip	-	linux-libc,signals,fork/wait,timers	-	unsupported-fixture:multi-process-service
+signals	pending-set	aarch64	pass	0	linux-libc,signals,mmap	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	pidfd-send-signal	aarch64	fail	-	linux-libc,signals,raw-syscalls	engine:timeout	timeout
+signals	pthread-kill-self	aarch64	skip	-	linux-libc,signals,threads	-	unsupported-fixture:multi-process-service
+signals	pthread-sigmask-route	aarch64	skip	-	linux-libc,signals,threads	-	unsupported-fixture:multi-process-service
+signals	restart-interrupted-io	aarch64	skip	-	linux-libc,signals,timers,pipes,fork/wait	-	unsupported-fixture:multi-process-service
+signals	restart-wait-preempt	aarch64	skip	-	linux-libc,signals,timers,fork/wait	-	unsupported-fixture:multi-process-service
+signals	rt-vs-standard-pending	aarch64	fail	0	linux-libc,signals	stdout:e=0a6c73c5f23e3e9b,a=62a5c7f5c0615179,d=33,eb=31,ab=30,el=50,al=50	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sa-nocldstop	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sa-nocldwait	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sa-nodefer	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sa-resethand	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sender-information	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sigaction-edges	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sigaction-query	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigaltstack-nonpie-bss	aarch64	fail	0	linux-libc,signals	stdout:e=65fb24c3d9b0f3e4,a=397e4b4f8c5008ec,d=149,eb=31,ab=30,el=224,al=224	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigaltstack-onstack	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigaltstack-state	aarch64	fail	0	linux-libc,signals	stdout:e=ae1b1b380aa22ba0,a=898afcf55f792cef,d=52,eb=31,ab=32,el=96,al=96	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigbus-mmap-eof	aarch64	fail	0	linux-libc	stdout:e=a9b54ad68873c3c3,a=20913c53a063bafd,d=26,eb=31,ab=30,el=49,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigchld-multi	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sigchld-siginfo	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sigill-probe	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	sigmask-inherit-fork	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	signal-returns-prev	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	signalfd-basic	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	signalfd-kill-uid	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	signalfd-rt-queue	aarch64	fail	1	linux-libc,signals	exit:e=0,a=1;stdout:e=d7d2eb2f6adf1c3f,a=5951349ff99bb65a,d=18,eb=6f,ab=73,el=29,al=24	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+signals	signalfd-state	aarch64	pass	0	linux-libc,signals,signalfd	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	signals-core	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigpipe-nosignal	aarch64	skip	-	linux-libc,signals,sockets	-	unsupported-fixture:special-device-network
+signals	sigpipe-pipe	aarch64	pass	0	linux-libc,signals,pipes	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigprocmask-return	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigqueue-value	aarch64	fail	0	linux-libc,signals	stdout:e=9954b41eaafc8cbf,a=10a889fdbb819619,d=18,eb=31,ab=30,el=48,al=48	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigsegv-recover	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigsetjmp-savemask	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigtimedwait-edges	aarch64	fail	0	linux-libc,signals	stdout:e=a780053f83ed798e,a=a3b92c1aeb5c8d6e,d=13,eb=31,ab=2d,el=81,al=77	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigtimedwait-timeout	aarch64	pass	0	linux-libc,signals,timers	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	sigurg-go-preempt	aarch64	fail	-	linux-libc,signals	engine:timeout	timeout
+signals	sigurg-preempt	aarch64	fail	-	linux-libc	engine:timeout	timeout
+signals	sigwaitinfo-rt	aarch64	fail	-	linux-libc,signals	engine:timeout	timeout
+signals	suspend-mask-restore	aarch64	fail	0	linux-libc,signals,timers	stdout:e=79c6c7605670f58f,a=0acaf4dc1ad5a670,d=23,eb=31,ab=30,el=36,al=36	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	synchronous-wait	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+signals	thread-directed-kill	aarch64	pass	0	linux-libc,signals,raw-syscalls	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	unblock-single-delivery	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+signals	waitpid-wnohang-empty	aarch64	skip	-	linux-libc,signals,fork/wait	-	unsupported-fixture:multi-process-service
+syscall	aio-bad-opcode	aarch64	fail	1	linux-libc,aio,syscall-edges	exit:e=0,a=1;stdout:e=8e6a999f2dbb5ad7,a=bab5a03a1a59e918,d=0,eb=62,ab=73,el=93,al=11	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall	aio-persist	aarch64	skip	-	linux-libc,aio,eventfd,filesystem,exec	-	unsupported-fixture:multi-process-service
+syscall	aio-pread	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=458896eeb06c8f54,a=a0631172b4222c85,d=0,eb=61,ab=69,el=40,al=14	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall	cfr-overlap	aarch64	fail	0	linux-libc	stdout:e=f2cc3ef5d163d0bc,a=f56f0697734b4212,d=20,eb=32,ab=33,el=80,al=79	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	clock-gettime-efault	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	clock-linux	aarch64	fail	0	linux-libc	stdout:e=55f9d6e713b9600b,a=d3c269dec09365d1,d=38,eb=31,ab=30,el=60,al=60	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	close-range-flags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	copy-file-range	aarch64	fail	0	linux-libc	stdout:e=309edbf98c63eddf,a=c800996ce8b3ae1c,d=23,eb=35,ab=2d,el=66,al=55	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	eloop-stat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-et	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-mod	aarch64	fail	0	linux-libc	stdout:e=e6bfc7f0131b0323,a=f278274edfd67b1a,d=19,eb=31,ab=30,el=45,al=45	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-oneshot	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-pwait	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-pwait2	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-reblock-fin	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	epoll-reblock-inf	aarch64	fail	-	linux-libc	engine:timeout	timeout
+syscall	eventfd-nonblock	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	faccessat-badmode	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	faccessat-flags	aarch64	fail	0	linux-libc	stdout:e=2be3b121872a5e4a,a=2be71321872d3aa7,d=62,eb=31,ab=30,el=64,al=64	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	fanotify	aarch64	fail	0	linux-libc	stdout:e=6703d4db2edfcdc7,a=670072db2edcf16a,d=20,eb=31,ab=30,el=22,al=22	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	fdreuse-guard	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	fstatfs	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	getcpu	aarch64	fail	0	linux-libc	stdout:e=02910cd91c0ab38d,a=9213b3acde174c44,d=10,eb=30,ab=2d,el=27,al=28	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	getentropy-probe	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	getpid-fork-pid-cache	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	getrandom-badflag	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	getrandom-flags	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	getrandom-len	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	gettid	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	gettid-fork-ident	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	gettid-worker-fork	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=fe16091f8df45ffb,a=fe12a71f8df1839e,d=41,eb=31,ab=30,el=43,al=43	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall	high-fd-emul	aarch64	fail	0	linux-libc	stdout:e=c9e34e2df9f036ea,a=aa805e1cf3f0278d,d=12,eb=31,ab=30,el=41,al=41	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	inotify-epoll	aarch64	fail	0	linux-libc,inotify,filesystem	stdout:e=be9be70f5b0698ac,a=d4621c5200e87262,d=31,eb=31,ab=30,el=87,al=87	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	inotify-fdreserve	aarch64	fail	0	linux-libc,inotify,filesystem	stdout:e=1fe5250c222ec1df,a=a941f4737a1fff29,d=38,eb=31,ab=30,el=49,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	inotify-modify	aarch64	fail	11	linux-libc	exit:e=0,a=11;stdout:e=485fe264302371ef,a=cbf29ce484222325,d=0,eb=69,ab=--,el=42,al=0	EngineExit { kind: Code, guest_status: 11, detail: 0, fault: None }
+syscall	inotify-moves	aarch64	fail	-	linux-libc	engine:timeout	timeout
+syscall	io-uring	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	ioprio	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	iov-bounds	aarch64	fail	0	linux-libc,filesystem	stdout:e=3e702e8fca598b17,a=985e182831eb30db,d=502,eb=32,ab=31,el=945,al=945	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	iov-max	aarch64	fail	0	linux-libc	stdout:e=0613a63fe3f7674c,a=87ad6702f602ef18,d=24,eb=32,ab=31,el=78,al=78	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	membarrier	aarch64	fail	0	linux-libc	stdout:e=758ce30fa8011da5,a=f7ea2f3dfcf09843,d=19,eb=31,ab=30,el=43,al=43	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	memfd-seal	aarch64	fail	0	linux-libc	stdout:e=024cb8c57bd0620e,a=aeaaef16ce2bb350,d=26,eb=31,ab=30,el=48,al=48	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	meminfo-consistency	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=e6c9cdf720348361,a=cbf29ce484222325,d=0,eb=6d,ab=--,el=25,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall	modern-procfd	aarch64	fail	0	linux-libc,dup3,close_range,execveat,fexecve,name_to_handle_at,rseq,getcpu	stdout:e=b16b6aef1b7b7446,a=6fe2f276b4a8e8f6,d=235,eb=31,ab=30,el=359,al=359	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	personality	aarch64	fail	0	linux-libc	stdout:e=344d5ade2ae18b91,a=f9a541b1c4c65b5a,d=20,eb=31,ab=30,el=40,al=40	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	pidfd-open	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	pidfd-signal	aarch64	fail	-	linux-libc	engine:timeout	timeout
+syscall	pipe2-badflag	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	poll-select-epoll	aarch64	fail	2	linux-libc	exit:e=0,a=2;stdout:e=5d6deb3c2f9b3d66,a=038008c9aa561a61,d=27,eb=6f,ab=46,el=733,al=154	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
+syscall	prctl-dumpable	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	prctl-ltp	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	prctl-name	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	prctl-nnp	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	prctl-pdeathsig	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	prctl-timerslack	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	proc-bootid	aarch64	fail	0	linux-libc	stdout:e=41f59765f8d5c775,a=410eb88916120c90,d=7,eb=4f,ab=46,el=29,al=1000	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	proc-fork-registry	aarch64	fail	1	linux-libc	exit:e=0,a=1;stdout:e=22705babae0fc4ff,a=6d9b5a322bc666e8,d=25,eb=31,ab=30,el=61,al=61	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall	process-vm	aarch64	fail	0	linux-libc	stdout:e=c739aae3c4a5b72e,a=3ec487c3f9725e68,d=16,eb=33,ab=2d,el=24,al=24	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	pwritev2-rwf	aarch64	fail	0	linux-libc	stdout:e=7251157497c1adef,a=0058f06a84bccd8e,d=32,eb=33,ab=2d,el=94,al=92	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	resource-accounting	aarch64	fail	-	linux-libc	engine:timeout	timeout
+syscall	rlimit-fsize	aarch64	fail	0	linux-libc	stdout:e=1df1d9795b5bdbee,a=b5502ae6f277fb39,d=9,eb=31,ab=30,el=31,al=30	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	rlimit-fsize-ops	aarch64	fail	0	linux-libc	stdout:e=78a786343066c55a,a=f130e12566985502,d=24,eb=31,ab=30,el=153,al=153	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	rlimit-nofile-emfile	aarch64	fail	0	linux-libc	stdout:e=5b32590908042dbb,a=276cb0d50f4be41f,d=13,eb=32,ab=30,el=16,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	rng-quality	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sched-affinity	aarch64	fail	0	linux-libc	stdout:e=a6dfe5b9bf4f4629,a=a269eb65a7c5d953,d=19,eb=31,ab=30,el=49,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sched-setaffinity-errors	aarch64	fail	0	linux-libc	stdout:e=36929442ffb72232,a=8937a95d7bf58564,d=7,eb=31,ab=30,el=33,al=33	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sched-yield	aarch64	fail	0	linux-libc	stdout:e=a7399e4762214b7d,a=636d2e2ee2e39922,d=18,eb=31,ab=30,el=45,al=45	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sendfile-offset	aarch64	fail	0	linux-libc	stdout:e=b38977d768a3499f,a=2f3f71254f3e9787,d=11,eb=34,ab=2d,el=112,al=105	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sendfile-splice	aarch64	fail	0	linux-libc	stdout:e=bef8642d7fe7cc3a,a=9b1a6bbc30eed959,d=11,eb=38,ab=2d,el=72,al=75	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sigaction-sigsetsize	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	signalfd-rt	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	splice-offset	aarch64	fail	0	linux-libc	stdout:e=ec3678a979fa5dbb,a=589eaa5b938b98a9,d=9,eb=33,ab=2d,el=35,al=33	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	statx-fields	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	syncfs	aarch64	fail	0	linux-libc	stdout:e=07f66f9a80d723a3,a=92f083645a5a5995,d=23,eb=31,ab=30,el=34,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	sysinfo-uname	aarch64	fail	0	linux-libc	stdout:e=ffe01c38fcbc6bcb,a=47834e189933b3c8,d=13,eb=31,ab=30,el=118,al=118	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	tee	aarch64	fail	0	linux-libc	stdout:e=be1ae3eac9e2182a,a=02c77de5bffc18d1,d=9,eb=37,ab=2d,el=33,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	timerfd-gettime	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	timerfd-interval	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	umask-open	aarch64	fail	0	linux-libc	stdout:e=f53095827eb88189,a=0c19579a4abcb396,d=11,eb=30,ab=34,el=42,al=42	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	unshare-files	aarch64	fail	0	linux-libc	stdout:e=30954e3fe50f341c,a=3f5176c1af67c529,d=22,eb=31,ab=30,el=38,al=38	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall	vmsplice	aarch64	fail	0	linux-libc	stdout:e=b8bf5fb7d0c8934d,a=00d0ddc608db9d68,d=15,eb=31,ab=2d,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-append-pwrite	aarch64	fail	1	linux-libc,filesystem,memory,procfs	exit:e=0,a=1;stdout:e=172b25d1dd1562f3,a=cbf29ce484222325,d=0,eb=61,ab=--,el=297,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall_edges	sc-badtimeout	aarch64	pass	0	linux-libc,time,poll	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-bound-io-order	aarch64	fail	1	linux-libc,syscall,EBADF,EFAULT,volumes	exit:e=0,a=1;stdout:e=f6f918442140cd41,a=f289ad30161aec4d,d=232,eb=30,ab=2d,el=1792,al=951	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall_edges	sc-copyout-efault	aarch64	skip	-	linux-libc,process,scheduler,fcntl	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-dup-edges	aarch64	fail	0	linux-libc,fcntl,syscall	stdout:e=3ec556eb3a31ddb5,a=7522ca602930ad56,d=10,eb=31,ab=30,el=125,al=125	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-dup3-edges	aarch64	fail	0	linux-libc,syscall	stdout:e=88500903e22d20e1,a=d7d9590deede649e,d=2,eb=31,ab=30,el=63,al=63	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-epoll-semantics	aarch64	fail	0	linux-libc,syscall,epoll	stdout:e=3c1175b2674b71a7,a=a53b412344f4a73d,d=15,eb=31,ab=32,el=70,al=72	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-eventfd-nullread	aarch64	skip	-	linux-libc,eventfd,ipc	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-eventfd-overflow	aarch64	skip	-	linux-libc,eventfd,ipc	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-eventfd-semaphore	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-fcntl-flags	aarch64	fail	0	linux-libc,fcntl,syscall	stdout:e=15d772ac98b45f94,a=84d6ded0bcc826f4,d=15,eb=31,ab=30,el=144,al=144	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-fcntl-lock	aarch64	fail	0	linux-libc,fcntl,filesystem	stdout:e=e2876cef624a0b5b,a=3789e39221e35f07,d=9,eb=31,ab=30,el=63,al=63	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-flag-einval	aarch64	fail	0	linux-libc,syscall	stdout:e=712132a5cc526251,a=6f482e48731350f3,d=254,eb=31,ab=39,el=379,al=378	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-getcwd-erange	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-getresid-efault	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-inotify-rm	aarch64	pass	0	linux-libc,inotify,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-inotify-state	aarch64	fail	0	linux-libc,syscall,inotify	stdout:e=0b0ecd69e57f7c4e,a=ab0edc66a3a5082a,d=17,eb=31,ab=30,el=120,al=121	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-ioctl-edges	aarch64	fail	-	linux-libc,ioctl,syscall	engine:timeout	timeout
+syscall_edges	sc-iov-edges	aarch64	fail	0	linux-libc,filesystem,syscall	stdout:e=4c31816d8790a022,a=e900031b41220082,d=35,eb=32,ab=31,el=145,al=145	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-iov-limits	aarch64	fail	0	linux-libc,syscall	stdout:e=5cdc997eadc09f53,a=a4b23aa52b7bb14e,d=21,eb=32,ab=31,el=70,al=70	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-kill-errno	aarch64	skip	-	linux-libc,signals,process	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-kill-zero-group	aarch64	pass	0	alpine-rootfs,linux-libc,signals,process	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-mem-validate	aarch64	fail	0	linux-libc,memory,syscall	stdout:e=7b5beb70e23d95f9,a=6085f670d2ccc8ec,d=106,eb=31,ab=32,el=109,al=109	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-mlock-rlimit	aarch64	pass	0	linux-libc,memory,rlimit	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-open-flags	aarch64	fail	0	linux-libc,open,filesystem	stdout:e=2bb3df122190f68e,a=2c3c294ba557f1c6,d=11,eb=31,ab=30,el=147,al=144	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-path-errors	aarch64	fail	0	linux-libc,filesystem	stdout:e=d4f154116e07843e,a=11347ec6cd7cec81,d=18,eb=33,ab=35,el=107,al=105	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-pipe-eventfd	aarch64	skip	-	linux-libc,eventfd,ipc	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-prlimit-invalid	aarch64	skip	-	linux-libc,rlimit,process	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-procfd-exec	aarch64	skip	-	linux-libc,process,exec,procfs	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-read-badfd-order	aarch64	fail	1	linux-libc,syscall,EBADF,EFAULT	exit:e=0,a=1;stdout:e=c3d9de244e10f9da,a=a6b07ec774ecff4c,d=257,eb=30,ab=2d,el=402,al=300	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall_edges	sc-read-eof-badbuf	aarch64	fail	1	linux-libc,syscall,EFAULT,EAGAIN	exit:e=0,a=1;stdout:e=d577d561ed63f309,a=c2f4ac8e52ce05f0,d=204,eb=30,ab=2d,el=1217,al=943	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+syscall_edges	sc-rlimit-nofile	aarch64	skip	-	linux-libc,rlimit,process	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-sched-rt	aarch64	fail	0	linux-libc,scheduler,syscall	stdout:e=874564461669e9b4,a=33bd47180c5c0e36,d=17,eb=31,ab=33,el=19,al=20	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-seek-espipe	aarch64	fail	0	linux-libc,filesystem,syscall	stdout:e=1189b7cc6aae359e,a=1fede66abe86b3e5,d=17,eb=32,ab=33,el=125,al=124	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-sentry-cloexec-exec	aarch64	skip	-	linux-libc,process,exec,sentry	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-shortread-inotify	aarch64	pass	0	alpine-rootfs,linux-libc,inotify,filesystem	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-shortread-signalfd	aarch64	pass	0	linux-libc,signalfd,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-shortread-timerfd	aarch64	pass	0	linux-libc,timerfd,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-sigaction-einval	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-sigaltstack-validate	aarch64	fail	0	linux-libc,signals	stdout:e=0f7637578bc4033b,a=6fac1939e8f18e96,d=17,eb=31,ab=32,el=28,al=28	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-sigkill-unmaskable	aarch64	skip	-	linux-libc,signals,process	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-sigprocmask-validate	aarch64	pass	0	linux-libc,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-sigsetsize-validate	aarch64	pass	0	linux-libc,signals,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-splice-edges	aarch64	skip	-	linux-libc,filesystem,ipc,syscall	-	unsupported-fixture:multi-process-service
+syscall_edges	sc-timerfd-einval	aarch64	pass	0	linux-libc,syscall,timers	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	sc-timerfd-first-interval	aarch64	pass	0	linux-libc,timerfd,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	se-clockid-validate	aarch64	fail	0	linux-libc,time	stdout:e=5b4b908e9dff44d7,a=7100783679507109,d=68,eb=31,ab=30,el=172,al=172	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	se-memfd-validate	aarch64	pass	0	linux-libc,memory	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	se-priority-contract	aarch64	fail	0	linux-libc,scheduler	stdout:e=499908bdac9745e1,a=fddf40545d614f19,d=13,eb=31,ab=2d,el=69,al=70	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	se-sched-priority	aarch64	fail	0	linux-libc,scheduler	stdout:e=42d91123a9d879fb,a=c3c89f8a47d76c21,d=9,eb=39,ab=2d,el=152,al=160	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+syscall_edges	se-waitid-validate	aarch64	skip	-	linux-libc,process,wait	-	unsupported-fixture:multi-process-service
+threads	atomic-cas-ptr	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	atomic-flag	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	atomics-ops	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	atomics-orders	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	atomics-outline-pie	aarch64	skip	-	linux-libc,pthreads,atomics	-	unsupported-fixture:multi-process-service
+threads	attr-stack	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	barrier	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	cancel	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	cas-contention	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	close-range-unshare	aarch64	pass	0	linux-libc,pthreads,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	close-range-unshare-exec	aarch64	pass	0	linux-libc,pthreads,exec,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	close-range-unshare-fork	aarch64	pass	0	linux-libc,pthreads,fork,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	close-range-unshare-inherit	aarch64	pass	0	linux-libc,pthreads,close-range,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	cond-signal-wins	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	condvar-broadcast	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	condvar-prodcons	aarch64	skip	-	linux-libc,pthreads,condvar,mutex	-	unsupported-fixture:multi-process-service
+threads	condvar-timedwait	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	detach	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	errno-threadlocal	aarch64	skip	-	linux-libc,pthreads,errno,barrier	-	unsupported-fixture:multi-process-service
+threads	exec-thread-binding	aarch64	fail	1	linux-libc,pthreads,exec,sentry	exit:e=0,a=1;stdout:e=19505a200fa6c715,a=c53d61ae82cde69a,d=30,eb=31,ab=30,el=57,al=57	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
+threads	futex-fork-stale-waiter	aarch64	skip	-	linux-libc,pthreads,fork,futex	-	unsupported-fixture:multi-process-service
+threads	futex-pi-owner-word	aarch64	skip	-	linux-libc,pthreads,futex,LOCK_PI,UNLOCK_PI	-	unsupported-fixture:multi-process-service
+threads	futex-requeue	aarch64	skip	-	linux-libc,pthreads,futex,CMP_REQUEUE	-	unsupported-fixture:multi-process-service
+threads	futex-wait-errors	aarch64	fail	0	linux-libc,futex,EAGAIN,ETIMEDOUT,WAIT_BITSET	stdout:e=65906d8ed4723388,a=750a937416e84001,d=49,eb=31,ab=30,el=63,al=63	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	futex-wake-bitset	aarch64	skip	-	linux-libc,pthreads,futex,WAKE_BITSET	-	unsupported-fixture:multi-process-service
+threads	futex-wake-fairness	aarch64	skip	-	linux-libc,pthreads,futex	-	unsupported-fixture:multi-process-service
+threads	futex-wake-n	aarch64	skip	-	linux-libc,pthreads,futex	-	unsupported-fixture:multi-process-service
+threads	gettid-distinct	aarch64	skip	-	linux-libc,pthreads,gettid	-	unsupported-fixture:multi-process-service
+threads	join-retval	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	key	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	key-dtor	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	mutex-errorcheck	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	mutex-pi	aarch64	skip	-	linux-libc,pthreads,pi-mutex,PRIO_INHERIT	-	unsupported-fixture:multi-process-service
+threads	mutex-recursive	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	mutex-stress	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	mutex-timedlock	aarch64	skip	-	linux-libc,pthreads,mutex-timedlock,sem-timedwait,ETIMEDOUT	-	unsupported-fixture:multi-process-service
+threads	mutex-trylock	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	once	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	once-value	aarch64	skip	-	linux-libc,pthreads,pthread_once	-	unsupported-fixture:multi-process-service
+threads	robust-mutex	aarch64	skip	-	linux-libc,pthreads,robust-mutex,EOWNERDEAD	-	unsupported-fixture:multi-process-service
+threads	robust-pi-handoff	aarch64	skip	-	linux-libc,pthreads,futex,LOCK_PI,robust	-	unsupported-fixture:multi-process-service
+threads	robust-pi-mutex	aarch64	skip	-	linux-libc,pthreads,futex,robust-mutex,pi-mutex	-	unsupported-fixture:multi-process-service
+threads	rwlock	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	rwlock-invariant	aarch64	skip	-	linux-libc,pthreads,rwlock	-	unsupported-fixture:multi-process-service
+threads	rwlock-try	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	sched	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	self	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	sem-named	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	sem-peak	aarch64	skip	-	linux-libc,pthreads,semaphore	-	unsupported-fixture:multi-process-service
+threads	sem-unnamed	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	sentry-binding-overflow	aarch64	skip	-	linux-libc,pthreads,sentry	-	unsupported-fixture:multi-process-service
+threads	sentry-dup3-cleanup	aarch64	pass	0	linux-libc,eventfd,dup3,sentry	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	sentry-fd-emfile	aarch64	pass	0	linux-libc,sentry,fd	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+threads	sentry-fork-exhaustion	aarch64	skip	-	linux-libc,fork,sentry	-	unsupported-fixture:multi-process-service
+threads	sentry-table-exhaustion	aarch64	skip	-	linux-libc,pthreads,fork,close-range,sentry	-	unsupported-fixture:multi-process-service
+threads	spin-release-store	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	spinlock	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	thread-setname	aarch64	skip	-	linux-libc,pthreads,prctl	-	unsupported-fixture:multi-process-service
+threads	thread-signal-direct	aarch64	skip	-	linux-libc,pthreads,signals	-	unsupported-fixture:multi-process-service
+threads	threads-basic	aarch64	fail	-	linux-libc	engine:timeout	timeout
+threads	threads-many	aarch64	fail	134	linux-libc	exit:e=0,a=134;stdout:e=8c7081968a9e997e,a=cbf29ce484222325,d=0,eb=74,ab=--,el=35,al=0;stderr:e=cbf29ce484222325,a=d6be30652ae4299f,d=0,eb=--,ab=54,el=0,al=54	EngineExit { kind: Signal, guest_status: 6, detail: 0, fault: None }
+threads	threads-mutex-queue	aarch64	fail	-	linux-libc	engine:timeout	timeout
+threads	threads-nopie-tls	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	threads-nopie-variant	aarch64	skip	-	linux-libc,pthreads	-	unsupported-fixture:multi-process-service
+threads	tls-across-threads	aarch64	skip	-	linux-libc,pthreads,tls	-	unsupported-fixture:multi-process-service
+threads	tss-iterations	aarch64	skip	-	linux-libc,pthreads,tss,destructor-iterations	-	unsupported-fixture:multi-process-service
+threads	uaccess-write-probe	aarch64	skip	-	linux-libc,pthreads,uaccess,atomics	-	unsupported-fixture:multi-process-service
+time	adjtimex-read	aarch64	fail	0	linux-libc,time	stdout:e=1b349bb7e42e6f6b,a=aaab256bdee72534,d=15,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	alarm-prev	aarch64	pass	0	linux-libc,time,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	calendar-roundtrip	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clock-getres-all	aarch64	fail	0	linux-libc,time	stdout:e=bc99ab6410971313,a=09e5fc9813c72bf6,d=32,eb=31,ab=30,el=73,al=73	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clock-monotonic-order	aarch64	fail	-	linux-libc,time	engine:timeout	timeout
+time	clock-settime-errno	aarch64	fail	0	linux-libc,time	stdout:e=3801613e2fcc5a6a,a=0a5541e460bb5c60,d=21,eb=31,ab=30,el=34,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clock-syscall-static	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clock-tai	aarch64	fail	0	linux-libc,time	stdout:e=ec35734cdca419cf,a=fac2474d14009339,d=15,eb=31,ab=30,el=34,al=34	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clock-tai-offset	aarch64	fail	0	linux-libc,time	stdout:e=436e8522c760de6d,a=436b1b22c75df478,d=18,eb=31,ab=30,el=20,al=20	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clockid-validation	aarch64	fail	0	linux-libc,time	stdout:e=e4042bc8bf6fdf84,a=e40785c8bf72ae49,d=29,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clockids	aarch64	fail	0	linux-libc,time	stdout:e=d85099f66adf7d51,a=0337ebe9630b3ae6,d=14,eb=31,ab=30,el=53,al=53	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clocknanosleep	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clocknanosleep-abs	aarch64	fail	0	linux-libc,time	stdout:e=14cb9d05cf045d16,a=35cef5849e163373,d=18,eb=31,ab=30,el=50,al=50	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clocknanosleep-edges	aarch64	skip	-	linux-libc,time,signals,pthreads	-	unsupported-fixture:multi-process-service
+time	clocknanosleep-errsurf	aarch64	fail	0	linux-libc,time	stdout:e=867b20f29cd5e149,a=d97d940238329313,d=2,eb=30,ab=32,el=40,al=41	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	clockres	aarch64	fail	0	linux-libc,time	stdout:e=3f5886717f2b4228,a=3639de4724314523,d=28,eb=31,ab=30,el=49,al=49	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	cputime-advance	aarch64	fail	-	linux-libc,time	engine:timeout	timeout
+time	dynamic-cpu-clock	aarch64	fail	0	linux-libc,time	stdout:e=02b9b1a58540e6c6,a=e428a5432eba2764,d=20,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	gettimeofday	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	itimer-real	aarch64	pass	0	linux-libc,time,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	itimer-unarmed	aarch64	pass	0	linux-libc,time,signals	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	itimer-virt-prof	aarch64	fail	-	linux-libc,time,signals	engine:timeout	timeout
+time	monotonic-sleep-delta	aarch64	fail	0	linux-libc,time	stdout:e=39e310897806d908,a=1681dd1b9baac2e3,d=28,eb=31,ab=30,el=37,al=37	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	nanosleep-eintr	aarch64	fail	0	linux-libc,time,signals	stdout:e=11e576e72f1b63d5,a=650b38a380be296f,d=23,eb=31,ab=30,el=42,al=42	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	posixtimer	aarch64	fail	0	linux-libc,time,signals	stdout:e=49f08826e1265d66,a=ca76e3b55508f139,d=16,eb=31,ab=30,el=97,al=97	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	posixtimer-abstime	aarch64	fail	0	linux-libc,time,signals	stdout:e=c77fc79dc568ecc2,a=83c4d63cccbcd325,d=16,eb=31,ab=30,el=31,al=31	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	posixtimer-ext	aarch64	fail	0	linux-libc,time,signals	stdout:e=952c0c9c20d3aa4a,a=01a5b8ec6a3d8921,d=13,eb=31,ab=30,el=121,al=121	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	pselect-ppoll-timeout	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	sleep-returns	aarch64	fail	-	linux-libc,time,signals	engine:timeout	timeout
+time	sleep-wait-edges	aarch64	fail	-	linux-libc,time,signals	engine:timeout	timeout
+time	time-func	aarch64	fail	0	linux-libc,time	stdout:e=06f823d8879e5f24,a=789d3dd5f2056037,d=30,eb=31,ab=30,el=56,al=56	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	timer-errsurf	aarch64	fail	0	linux-libc,time,timerfd,signals	stdout:e=a0c7918b9b44bd9c,a=0b7e649a0489228a,d=110,eb=31,ab=30,el=130,al=130	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	timer-interact	aarch64	fail	0	linux-libc,time,signals	stdout:e=8b91140dee455cd4,a=b9897787a3fe665f,d=81,eb=31,ab=30,el=120,al=120	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	timer-thread	aarch64	skip	-	linux-libc,time,signals,pthreads	-	unsupported-fixture:multi-process-service
+time	timerfd-ext	aarch64	pass	0	linux-libc,time,timerfd	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	timerfdx	aarch64	pass	0	linux-libc,time,timerfd	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	times-clock	aarch64	fail	-	linux-libc,time	engine:timeout	timeout
+time	timespec-get	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+time	wallclock-agree	aarch64	fail	0	linux-libc,time	stdout:e=8c6e60a4c9bfc45d,a=8796f8fdae9d7446,d=22,eb=31,ab=30,el=46,al=46	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

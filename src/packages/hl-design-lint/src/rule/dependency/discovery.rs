@@ -8,8 +8,7 @@ use crate::{LintError, Result};
 pub(super) fn manifests(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut manifests = Vec::new();
     for path in paths {
-        let metadata =
-            fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
+        let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
         if metadata.file_type().is_symlink() {
             continue;
         }
@@ -26,8 +25,7 @@ pub(super) fn manifests(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
                 .map(|directory| directory.join("Cargo.toml"))
                 .find(|manifest| {
                     fs::read_to_string(manifest).is_ok_and(|text| {
-                        toml::from_str::<toml::Value>(&text)
-                            .is_ok_and(|value| value.get("workspace").is_some())
+                        toml::from_str::<toml::Value>(&text).is_ok_and(|value| value.get("workspace").is_some())
                     })
                 })
             {
@@ -44,12 +42,7 @@ fn collect(path: &Path, output: &mut Vec<PathBuf>) -> std::io::Result<()> {
     if path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| {
-            matches!(
-                name,
-                ".git" | "target" | "vendor" | "lint" | "hl-design-lint"
-            )
-        })
+        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor" | "lint" | "hl-design-lint"))
     {
         return Ok(());
     }

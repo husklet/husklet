@@ -1,0 +1,4 @@
+accmode_rdwr=1
+append_on=1 nonblock_on=1
+accmode_unchanged=1 creat_ignored=1 trunc_ignored=1
+append_cleared=1 nonblock_cleared=1

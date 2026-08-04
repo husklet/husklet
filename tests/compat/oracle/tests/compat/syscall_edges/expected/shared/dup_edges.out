@@ -1,0 +1,7 @@
+dup2_same=1 open=1
+dup3_same_errno=22
+dup3_badflag_errno=22
+dup3_cloexec=1
+dup_noclo=1
+dup_badfd_errno=9
+dup2_badnew_errno=9

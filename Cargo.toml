@@ -2,6 +2,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "src/runtime/*",
+    "src/containers/hl-engine",
     "src/containers/hl-client",
     "src/containers/hl-container",
     "src/containers/hl-daemon",
@@ -11,6 +13,8 @@ members = [
     "src/workspaces/hl-ws",
     "src/packages/hl-log",
     "src/packages/hl-fs",
+    "src/packages/hl-benchmark",
+    "src/packages/hl-softfloat",
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
     "src/apps/husklet",
@@ -22,11 +26,11 @@ default-members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 repository = "https://github.com/husklet/husklet"
 homepage = "https://github.com/husklet/husklet"
-rust-version = "1.85"
+rust-version = "1.93"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -38,7 +42,8 @@ futures-util = "0.3"
 fs2 = "0.4"
 http = "1"
 http-body-util = "0.1"
-hl-engine = "0.1.31"
+hl-engine = { path = "src/containers/hl-engine" }
+hl-design = { path = "src/packages/hl-design" }
 hyper = "1"
 hyper-util = "0.1"
 oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
@@ -60,7 +65,7 @@ tower = "0.5"
 uuid = "1"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "warn"
@@ -68,8 +73,16 @@ pedantic = "warn"
 # hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
 # explicitly with `cargo build -p hl-gui` (or `make app`) on the macOS host.
-[patch.crates-io]
-hl-engine = { path = "../engine/pkgs/rust" }
-
 [profile.release]
 opt-level = 2
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+incremental = false
+
+[profile.dev.package.hl-execution]
+opt-level = 2
+
+[profile.test]
+incremental = false

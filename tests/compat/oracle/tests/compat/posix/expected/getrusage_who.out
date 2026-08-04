@@ -1,0 +1,4 @@
+self_ok=1 children_ok=1 thread_ok=1
+badwho_errno=22
+null_errno=14
+maxrss_nonneg=1 ctxsw_nonneg=1

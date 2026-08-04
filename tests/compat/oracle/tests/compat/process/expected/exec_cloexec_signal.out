@@ -1,0 +1,2 @@
+keep_open=1 cloexec_closed=1 term_reset=1 usr1_ign=1
+exec_cloexec_signal done

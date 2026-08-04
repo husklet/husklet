@@ -1,17 +1,15 @@
 use std::collections::BTreeSet;
 
-use syn::{visit::Visit, ItemMod};
+use syn::{ItemMod, visit::Visit};
 
 use crate::{
+    Result,
     model::{Finding, Location, Review, Severity},
     rule::Rule,
-    source::{snake_case, Source, Workspace},
-    Result,
+    source::{Source, Workspace, snake_case},
 };
 
-const FORBIDDEN: &[&str] = &[
-    "util", "utils", "core", "common", "shared", "helper", "helpers", "misc",
-];
+const FORBIDDEN: &[&str] = &["util", "utils", "core", "common", "shared", "helper", "helpers", "misc"];
 
 /// Rejects Rust modules whose names describe reuse rather than ownership.
 pub struct CatchAllModule;
@@ -76,8 +74,7 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         let name = snake_case(&item.ident.to_string());
         let external_source_loaded = item.content.is_none()
-            && module_source_paths(self.source, item, &name)
-                .any(|path| self.source_paths.contains(&path));
+            && module_source_paths(self.source, item, &name).any(|path| self.source_paths.contains(&path));
         if forbidden(&name) && !external_source_loaded {
             self.findings.push(finding(
                 self.rule,
@@ -95,15 +92,8 @@ impl<'ast> Visit<'ast> for ModuleVisitor<'_> {
     }
 }
 
-fn module_source_paths(
-    source: &Source,
-    item: &ItemMod,
-    name: &str,
-) -> impl Iterator<Item = std::path::PathBuf> {
-    let directory = source
-        .path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new(""));
+fn module_source_paths(source: &Source, item: &ItemMod, name: &str) -> impl Iterator<Item = std::path::PathBuf> {
+    let directory = source.path.parent().unwrap_or_else(|| std::path::Path::new(""));
     let explicit = item.attrs.iter().find_map(|attribute| {
         if !attribute.path().is_ident("path") {
             return None;
@@ -140,17 +130,10 @@ fn forbidden(name: &str) -> bool {
     FORBIDDEN.contains(&name)
 }
 
-fn finding(
-    rule: &'static str,
-    source: &Source,
-    name: String,
-    location: Location,
-    declaration: &str,
-) -> Finding {
+fn finding(rule: &'static str, source: &Source, name: String, location: Location, declaration: &str) -> Finding {
     let mut finding = Finding::error(rule, name.clone(), location);
-    finding.message = format!(
-        "{declaration} `{name}` is a catch-all name that describes convenience or reuse, not ownership"
-    );
+    finding.message =
+        format!("{declaration} `{name}` is a catch-all name that describes convenience or reuse, not ownership");
     finding.help = "rename the module for the entity, capability, algorithm, fixture domain, or external mechanism it owns; split unrelated contents before renaming".to_owned();
     let mut review = Review::error();
     review.metadata = vec![

@@ -1,0 +1,12 @@
+prctl name: hlprobe
+prctl dumpable in {0,1}: 1
+prctl bad option EINVAL: ret=-1 ok=1
+nanosleep ok: ret=0
+nanosleep EINVAL nsec: ret=-1 ok=1
+nanosleep EINVAL negsec: ret=-1 ok=1
+sched_getaffinity ok: ret=0 cpus_ge1=1
+sched_getaffinity small EINVAL: ret=-1 ok=1
+read wronly EBADF: ret=-1 ok=1
+read dir EISDIR: ret=-1 ok=1
+read EFAULT: ret=-1 ok=1
+read badfd EBADF: ret=-1 ok=1

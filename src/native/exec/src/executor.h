@@ -1,0 +1,64 @@
+#ifndef HL_NATIVE_EXECUTOR_PRIVATE_H
+#define HL_NATIVE_EXECUTOR_PRIVATE_H
+
+#include "../include/executor.h"
+#include "arena.h"
+#include "../cache/cache.h"
+
+#include <stdatomic.h>
+
+typedef struct hl_native_ibtc_entry {
+    uint64_t target;
+    void *body;
+} hl_native_ibtc_entry;
+
+#define HL_NATIVE_IBTC_COUNT (1u << 16)
+
+struct hl_native_executor {
+    hl_native_arena arena;
+    hl_native_cache *cache;
+    hl_native_ibtc_entry *ibtc;
+    /* High 32 bits are mutation state; low 32 bits are execution leases.  One
+     * atomic word makes close versus admission a race-free transition. */
+    _Atomic uint64_t admission;
+    struct hl_native_direct_token *direct_authority;
+    uint64_t direct_generation;
+    uint64_t next_authority_identity;
+    uint64_t retained_authority_identity;
+    hl_native_direct_authority retained_authority;
+    uint32_t retained_authority_valid;
+    uint64_t memory_mode;
+    uint64_t authority_generation;
+    uint32_t diagnostics;
+    uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
+    uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;
+    uint64_t operand_callbacks, operand_cache_hits;
+};
+
+typedef struct hl_native_execution {
+    hl_native_executor *owner;
+} hl_native_execution;
+
+/* Internal admission groundwork. An execution lease pins the current arena,
+ * cache identities, and provenance against mutation. It must stay private to
+ * one dispatcher activation and be released after fully spilled return. */
+hl_native_status hl_native_executor_gate_enter(hl_native_executor *);
+void hl_native_executor_gate_leave(hl_native_executor *);
+hl_native_status hl_native_execution_enter(hl_native_executor *, hl_native_execution *);
+hl_native_status hl_native_execution_leave(hl_native_execution *);
+hl_native_status hl_native_execution_exit(hl_native_execution *, hl_native_exit *, uint32_t, uint32_t,
+                                          uint64_t, uint64_t, uint64_t, uint64_t);
+hl_native_status hl_native_synchronize_epoch(hl_native_executor *, uint64_t, uint64_t,
+                                             uint64_t, uint64_t);
+hl_native_status hl_native_synchronize_direct(hl_native_executor *, uint64_t, uint64_t,
+                                              const hl_native_direct_token *, uint64_t, uint64_t,
+                                              const hl_native_projection *);
+hl_native_status hl_native_executor_rollover(hl_native_executor *, uint64_t, uint64_t);
+void hl_native_ibtc_fill_shared(hl_native_executor *, uint64_t, void *);
+int hl_native_direct_request_valid(const hl_native_executor *, const hl_native_direct_token *,
+                                   uint64_t, uint64_t, const hl_native_projection *);
+int hl_native_direct_request_snapshot(const hl_native_executor *, const hl_native_direct_token *,
+                                      uint64_t, uint64_t, const hl_native_projection *,
+                                      hl_native_direct_authority *);
+
+#endif

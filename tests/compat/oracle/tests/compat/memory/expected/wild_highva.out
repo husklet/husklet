@@ -1,0 +1,4 @@
+addr=0x7ffffffff000 killed_segv=1 handler_maperr=1
+addr=0x600000000000 killed_segv=1 handler_maperr=1
+addr=0x123456789000 killed_segv=1 handler_maperr=1
+addr=0x40000000000 killed_segv=1 handler_maperr=1

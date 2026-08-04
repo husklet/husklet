@@ -1,0 +1,8 @@
+sigsuspend_size4_errno=22
+sigsuspend_size16_errno=22
+sigsuspend_size0_errno=22
+sigtimedwait_size4_errno=22
+sigtimedwait_size16_errno=22
+sigsuspend_badsize_badptr_errno=22
+sigtimedwait_badsize_badptr_errno=22
+sigtimedwait_size8_errno=11

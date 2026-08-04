@@ -1,0 +1,10 @@
+movq2dq: ef cd ab 89 67 45 23 01 00 00 00 00 00 00 00 00
+movdq2q: 10 11 12 13 14 15 16 17
+movq-reg: 10 11 12 13 14 15 16 17 00 00 00 00 00 00 00 00
+movq-mem: 10 11 12 13 14 15 16 17 00 00 00 00 00 00 00 00
+np-reg: sig=4 code=2
+np-mem: sig=4 code=2
+f3-mem: sig=4 code=2
+f2-mem: sig=4 code=2
+f3-reg: ran
+f2-reg: ran

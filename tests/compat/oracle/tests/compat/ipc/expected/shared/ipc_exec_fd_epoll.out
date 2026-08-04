@@ -1,0 +1,2 @@
+execfd mode=lt child=0 pong=1
+execfd mode=et child=0 pong=1

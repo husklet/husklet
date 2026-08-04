@@ -1,0 +1,2 @@
+child recv-epoll rounds=64/64 ok=1
+parent done sent=64 child_exit=0

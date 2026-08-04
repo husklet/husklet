@@ -1,0 +1,1 @@
+nonpie419 getgroups=ok getresuid=ok getresgid=ok capget=ok sigprocmask=ok sigpending=ok sigaction=ok sigaltstack=ok sigtimedwait=ok rt_sigqueueinfo=ok rt_tgsigqueueinfo=ok getrlimit=ok setrlimit=ok sched_getaffinity=ok sched_getattr=ok futex=ok pselect=ok ppoll=ok wait4=ok msgsnd=ok msgrcv=ok semctl_setall=ok semop=ok semtimedop=ok shmctl=ok

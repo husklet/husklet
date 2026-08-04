@@ -1,0 +1,7 @@
+writev_bytes=4
+writev_toobig_errno=22
+writev_neg_errno=22
+writev_badbase_errno=14
+readv_badfd_errno=9
+preadv_negoff_errno=22
+preadv_ok=1 first=a

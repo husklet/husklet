@@ -1,0 +1,474 @@
+use crate::{CpuState, ExclusiveMemory, ExecutionExit, GuestOperandMemory, ScalarInstruction, ScalarWidth};
+
+pub(crate) struct Eager;
+
+impl Eager {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute<M: GuestOperandMemory + ExclusiveMemory>(
+        cpu: &mut CpuState,
+        memory: &mut M,
+        instruction: ScalarInstruction,
+        width: ScalarWidth,
+        pc: u64,
+        next: u64,
+    ) -> Option<ExecutionExit> {
+        match instruction {
+            ScalarInstruction::VectorLaneInsert {
+                destination,
+                source,
+                bytes,
+                lane,
+            } => Some(crate::x86::lane_transfer::LaneTransfer::insert(
+                cpu,
+                memory,
+                destination,
+                source,
+                bytes,
+                lane,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorLaneExtract {
+                source,
+                destination,
+                bytes,
+                lane,
+            } => Some(crate::x86::lane_transfer::LaneTransfer::extract(
+                cpu,
+                memory,
+                source,
+                destination,
+                bytes,
+                lane,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorInsertSingle {
+                destination,
+                source,
+                control,
+            } => Some(crate::x86::lane_transfer::LaneTransfer::insert_single(
+                cpu,
+                memory,
+                destination,
+                source,
+                control,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VexInsertSingle {
+                destination,
+                first,
+                second,
+                control,
+            } => Some(crate::x86::lane_transfer::LaneTransfer::vex_insert_single(
+                cpu,
+                memory,
+                destination,
+                first,
+                second,
+                control,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorRound {
+                destination,
+                source,
+                format,
+                packed,
+                control,
+            } => Some(crate::x86::scalar::arithmetic::Arithmetic::round(
+                cpu,
+                memory,
+                destination,
+                source,
+                format,
+                packed,
+                control,
+                pc,
+                next,
+            )),
+            ScalarInstruction::PackedString {
+                left,
+                right,
+                control,
+                explicit,
+                mask,
+                wide_lengths,
+            } => Some(crate::x86::scalar::string::PackedString::execute(
+                cpu,
+                memory,
+                left,
+                right,
+                control,
+                explicit,
+                mask,
+                wide_lengths,
+                pc,
+                next,
+            )),
+            ScalarInstruction::BitOperation {
+                action,
+                destination,
+                index,
+                locked,
+            } => Some(crate::x86::bit_operation::BitExecutor::execute(
+                cpu,
+                memory,
+                action,
+                destination,
+                index,
+                locked,
+                width,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorPack {
+                destination,
+                source,
+                kind,
+            } => Some(crate::x86::vector::Pack::execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                kind,
+                next,
+                pc,
+            )),
+            ScalarInstruction::Increment {
+                operand,
+                decrement,
+                locked,
+            } => Some(crate::x86::increment::Increment::execute(
+                cpu, memory, operand, decrement, locked, width, pc, next,
+            )),
+            ScalarInstruction::DoubleShift {
+                destination,
+                source,
+                right,
+                count,
+            } => Some(crate::x86::double_shift::DoubleShift::execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                right,
+                count,
+                width,
+                pc,
+                next,
+            )),
+            ScalarInstruction::X87Control { address, load } => {
+                Some(crate::x86::x87::Control::execute(cpu, memory, address, load, pc, next))
+            }
+            ScalarInstruction::X87Extended { address, load } => Some(crate::x86::x87::ExtendedMemory::execute(
+                cpu, memory, address, load, pc, next,
+            )),
+            ScalarInstruction::X87Float {
+                address,
+                format,
+                store,
+                pop,
+            } => Some(crate::x86::x87::ExtendedMemory::float(
+                cpu, memory, address, format, store, pop, pc, next,
+            )),
+            ScalarInstruction::X87Compare { source, ordered, pop } => Some(crate::x86::x87::ExtendedMemory::compare(
+                cpu, source, ordered, pop, pc, next,
+            )),
+            ScalarInstruction::X87ConditionalMove {
+                source,
+                condition,
+                negate,
+            } => Some(crate::x86::x87::ExtendedMemory::conditional_move(
+                cpu, source, condition, negate, pc, next,
+            )),
+            ScalarInstruction::X87Stack { source, operation } => {
+                Some(crate::x86::x87::ExtendedMemory::stack(cpu, source, operation, pc, next))
+            }
+            ScalarInstruction::X87Initialize => Some(crate::x86::x87::ExtendedMemory::initialize(cpu, next)),
+            ScalarInstruction::X87Status => Some(crate::x86::x87::ExtendedMemory::status(cpu, next)),
+            ScalarInstruction::X87StatusStore { address } => Some(crate::x86::x87::ExtendedMemory::store_status(
+                cpu, memory, address, pc, next,
+            )),
+            ScalarInstruction::X87Constant { constant } => {
+                Some(crate::x86::x87::ExtendedMemory::constant(cpu, constant, pc, next))
+            }
+            ScalarInstruction::X87Environment { address, load } => Some(crate::x86::x87::ExtendedMemory::environment(
+                cpu, memory, address, load, pc, next,
+            )),
+            ScalarInstruction::X87Arithmetic {
+                address,
+                source,
+                operation,
+                destination_source,
+                pop,
+                format,
+                integer_bytes,
+            } => Some(crate::x86::x87::ExtendedMemory::arithmetic(
+                cpu,
+                memory,
+                address,
+                source,
+                operation,
+                destination_source,
+                pop,
+                format,
+                integer_bytes,
+                pc,
+                next,
+            )),
+            ScalarInstruction::X87StatusCompare {
+                address,
+                source,
+                pop,
+                format,
+                ordered,
+            } => Some(crate::x86::x87::ExtendedMemory::status_compare(
+                cpu, memory, address, source, pop, format, ordered, pc, next,
+            )),
+            ScalarInstruction::X87Integer {
+                address,
+                bytes,
+                load,
+                pop,
+                truncate,
+            } => Some(crate::x86::x87::ExtendedMemory::integer(
+                cpu, memory, address, bytes, load, pop, truncate, pc, next,
+            )),
+            ScalarInstruction::X87Unary { operation, source } => {
+                Some(crate::x86::x87::ExtendedMemory::unary(cpu, operation, source, pc, next))
+            }
+            ScalarInstruction::X87Save { address, load } => Some(crate::x86::x87::ExtendedMemory::save(
+                cpu, memory, address, load, pc, next,
+            )),
+            ScalarInstruction::VectorScalarMove {
+                destination,
+                operand,
+                store,
+                format,
+            } => Some(crate::x86::scalar::transport::Transport::execute(
+                cpu,
+                memory,
+                destination,
+                operand,
+                store,
+                format,
+                pc,
+                next,
+            )),
+            ScalarInstruction::MxcsrControl { address, load } => Some(
+                crate::x86::mxcsr_control::MxcsrControl::execute(cpu, memory, address, load, pc, next),
+            ),
+            ScalarInstruction::Fxsave { address } => {
+                Some(crate::x86::fxsave::Fxsave::execute(cpu, memory, address, pc, next))
+            }
+            ScalarInstruction::Fxrstor { address } => {
+                Some(crate::x86::fxsave::Fxsave::restore(cpu, memory, address, pc, next))
+            }
+            ScalarInstruction::ConvertFloatInteger {
+                destination,
+                source,
+                wide,
+                format,
+                truncate,
+            } => Some(crate::x86::scalar::conversion::Conversion::to_integer_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                wide,
+                format,
+                truncate,
+                pc,
+                next,
+            )),
+            ScalarInstruction::ConvertIntegerFloat {
+                destination,
+                source,
+                wide,
+                format,
+                merge,
+            } => Some(crate::x86::scalar::conversion::Conversion::from_integer_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                wide,
+                format,
+                merge,
+                pc,
+                next,
+            )),
+            ScalarInstruction::MmxConvertToFloat {
+                destination,
+                source,
+                double,
+            } => Some(crate::x86::scalar::conversion::Conversion::mmx_to_float(
+                cpu, memory, destination, source, double, pc, next,
+            )),
+            ScalarInstruction::MmxConvertFromFloat {
+                destination,
+                source,
+                double,
+                truncate,
+            } => Some(crate::x86::scalar::conversion::Conversion::mmx_from_float(
+                cpu, memory, destination, source, double, truncate, pc, next,
+            )),
+            ScalarInstruction::ConvertFloatWidth {
+                destination,
+                source,
+                destination_format,
+                packed,
+            } => Some(crate::x86::scalar::conversion::Conversion::width_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                destination_format,
+                packed,
+                pc,
+                next,
+            )),
+            ScalarInstruction::ConvertPackedSingle {
+                destination,
+                source,
+                to_integer,
+                truncate,
+            } => Some(crate::x86::scalar::conversion::Conversion::packed_single_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                to_integer,
+                truncate,
+                pc,
+                next,
+            )),
+            ScalarInstruction::ConvertPackedDouble {
+                destination,
+                source,
+                from_integer,
+                truncate,
+            } => Some(crate::x86::scalar::conversion::Conversion::packed_double_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                from_integer,
+                truncate,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorFloatArithmetic {
+                operation,
+                destination,
+                source,
+                format,
+                packed,
+            } => Some(crate::x86::scalar::arithmetic::Arithmetic::execute(
+                cpu,
+                memory,
+                operation,
+                destination,
+                source,
+                format,
+                packed,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorPairArithmetic {
+                destination,
+                source,
+                format,
+                subtract,
+                alternating,
+            } => Some(crate::x86::scalar::arithmetic::Arithmetic::pair_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                format,
+                subtract,
+                alternating,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VexPairArithmetic {
+                destination,
+                first,
+                second,
+                format,
+                subtract,
+                alternating,
+                wide,
+            } => Some(crate::x86::scalar::arithmetic::Arithmetic::vex_pair_execute(
+                cpu,
+                memory,
+                destination,
+                first,
+                second,
+                format,
+                subtract,
+                alternating,
+                wide,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VexFloatArithmetic {
+                operation,
+                destination,
+                first,
+                second,
+                format,
+                scalar,
+                wide,
+            } => Some(crate::x86::scalar::arithmetic::Arithmetic::vex_execute(
+                cpu,
+                memory,
+                operation,
+                destination,
+                first,
+                second,
+                format,
+                scalar,
+                wide,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorFloatCompare {
+                destination,
+                source,
+                format,
+                packed,
+                predicate,
+            } => Some(crate::x86::scalar::compare::Comparison::mask_execute(
+                cpu,
+                memory,
+                destination,
+                source,
+                format,
+                packed,
+                predicate,
+                pc,
+                next,
+            )),
+            ScalarInstruction::VectorScalarCompare {
+                left,
+                right,
+                format,
+                signaling_only,
+            } => Some(crate::x86::scalar::compare::Comparison::execute(
+                cpu,
+                memory,
+                left,
+                right,
+                format,
+                signaling_only,
+                pc,
+                next,
+            )),
+            _ => None,
+        }
+    }
+}

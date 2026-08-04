@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use syn::{spanned::Spanned, visit::Visit, Attribute, Item, ItemMod, UseTree, Visibility};
+use syn::{Attribute, Item, ItemMod, UseTree, Visibility, spanned::Spanned, visit::Visit};
 
 use crate::{
     model::{Finding, Related, Review},
@@ -53,9 +53,7 @@ fn candidate(source: &Source, workspace: &Workspace) -> Option<Finding> {
         .collect::<Vec<_>>();
     if uses.is_empty()
         || uses.iter().any(|item| {
-            !item.attrs.is_empty()
-                || !crate_visible(&item.vis)
-                || !transparent_use(&item.tree, &child_name)
+            !item.attrs.is_empty() || !crate_visible(&item.vis) || !transparent_use(&item.tree, &child_name)
         })
     {
         return None;
@@ -73,19 +71,14 @@ fn candidate(source: &Source, workspace: &Workspace) -> Option<Finding> {
     }
 
     let child_path = child_path(source, child)?;
-    let child_source = workspace
-        .production()
-        .find(|candidate| candidate.path == child_path)?;
-    if child_source.syntax.attrs.iter().any(boundary_attribute)
-        || child_source.syntax.items.iter().any(boundary_item)
-    {
+    let child_source = workspace.production().find(|candidate| candidate.path == child_path)?;
+    if child_source.syntax.attrs.iter().any(boundary_attribute) || child_source.syntax.items.iter().any(boundary_item) {
         return None;
     }
 
     let mut finding = Finding::warning(ID, module_name.clone(), source.location(child.span()));
-    finding.message = format!(
-        "private module `{module_name}` contains only child `{child_name}` and transparent re-exports"
-    );
+    finding.message =
+        format!("private module `{module_name}` contains only child `{child_name}` and transparent re-exports");
     finding.help = "flatten the child into the parent module unless this namespace owns a documented public, platform, generation, FFI, cfg, or privacy contract".into();
     finding.related = vec![
         Related {
@@ -99,10 +92,7 @@ fn candidate(source: &Source, workspace: &Workspace) -> Option<Finding> {
     ];
     let mut review = Review::error();
     review.metadata = vec![
-        (
-            "Category".into(),
-            "single-child transparent namespace".into(),
-        ),
+        ("Category".into(), "single-child transparent namespace".into()),
         ("Child".into(), child_name),
         (
             "Re-exports".into(),
@@ -117,8 +107,7 @@ fn candidate(source: &Source, workspace: &Workspace) -> Option<Finding> {
         ),
     ];
     review.questions = vec![
-        "Does this namespace enforce any visibility or compatibility contract not visible in the source?"
-            .into(),
+        "Does this namespace enforce any visibility or compatibility contract not visible in the source?".into(),
         "Can the child file replace mod.rs without changing supported paths?".into(),
     ];
     finding.review = Some(review);
@@ -130,23 +119,17 @@ struct Declaration<'a> {
     item: &'a ItemMod,
 }
 
-fn parent_declaration<'a>(
-    source: &Source,
-    workspace: &'a Workspace,
-    module_name: &str,
-) -> Option<Declaration<'a>> {
+fn parent_declaration<'a>(source: &Source, workspace: &'a Workspace, module_name: &str) -> Option<Declaration<'a>> {
     let directory = source.path.parent()?.parent()?;
     workspace.production().find_map(|candidate| {
         if candidate.path.parent()? != directory {
             return None;
         }
         candidate.syntax.items.iter().find_map(|item| match item {
-            Item::Mod(module) if module.content.is_none() && module.ident == module_name => {
-                Some(Declaration {
-                    source: candidate,
-                    item: module,
-                })
-            }
+            Item::Mod(module) if module.content.is_none() && module.ident == module_name => Some(Declaration {
+                source: candidate,
+                item: module,
+            }),
             _ => None,
         })
     })
@@ -177,11 +160,7 @@ fn child_path(source: &Source, child: &ItemMod) -> Option<PathBuf> {
 }
 
 fn boundary_attribute(attribute: &Attribute) -> bool {
-    let name = attribute
-        .path()
-        .segments
-        .last()
-        .map(|part| part.ident.to_string());
+    let name = attribute.path().segments.last().map(|part| part.ident.to_string());
     matches!(
         name.as_deref(),
         Some("cfg" | "cfg_attr" | "path" | "link" | "repr" | "doc")
@@ -234,10 +213,7 @@ fn has_qualified_use(source: &Source, module: &str) -> bool {
             syn::visit::visit_path(self, path);
         }
     }
-    let mut paths = Paths {
-        module,
-        found: false,
-    };
+    let mut paths = Paths { module, found: false };
     paths.visit_file(&source.syntax);
     paths.found
 }

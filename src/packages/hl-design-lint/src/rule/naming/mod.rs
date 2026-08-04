@@ -1,13 +1,13 @@
 use english_pos_tagger::Tagger;
 use proc_macro2::Span;
-use syn::{spanned::Spanned, visit::Visit, Attribute, ItemMod, ItemStruct, Meta};
+use syn::{Attribute, ItemMod, ItemStruct, Meta, spanned::Spanned, visit::Visit};
 use wordnet_lemmatizer::{Lemmatizer, Pos};
 
 use crate::{
+    Result,
     model::{Finding, Review, Severity},
     rule::Rule,
-    source::{requires_test, snake_case, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test, snake_case},
 };
 
 /// Validates noun struct names using English POS tagging.
@@ -51,7 +51,9 @@ impl Names<'_> {
     fn push(&mut self, name: &syn::Ident, span: Span, kind: &str, reason: &str) {
         let mut finding = Finding::error(self.rule, name.to_string(), self.source.location(span));
         finding.message = format!("`{name}` violates the noun/struct rule: {reason}");
-        finding.help = "choose a precise noun for the struct, or use #[hl_design::naming(reason = \"...\")] after human review".into();
+        finding.help =
+            "choose a precise noun for the struct, or use #[hl_design::naming(reason = \"...\")] after human review"
+                .into();
         let mut review = Review::error();
         review.metadata.push(("Kind".into(), kind.into()));
         review
@@ -62,8 +64,7 @@ impl Names<'_> {
     }
 
     fn type_name(&mut self, name: &syn::Ident, attributes: &[Attribute], span: Span) {
-        if !self.test_scope && !exception(attributes) && !has_noun(self.language, &name.to_string())
-        {
+        if !self.test_scope && !exception(attributes) && !has_noun(self.language, &name.to_string()) {
             self.push(
                 name,
                 span,
@@ -148,9 +149,7 @@ impl Language for English {
 }
 
 fn has_noun(language: &dyn Language, name: &str) -> bool {
-    identifier_words(name)
-        .iter()
-        .any(|word| language.noun(word))
+    identifier_words(name).iter().any(|word| language.noun(word))
 }
 
 fn identifier_words(name: &str) -> Vec<String> {
@@ -167,10 +166,10 @@ fn identifier_words(name: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_noun, identifier_words, English, Language};
+    use super::{English, Language, has_noun, identifier_words};
 
     #[test]
-    fn english_classifies_domain_nouns() {
+    fn classifies_domain_nouns() {
         let english = English::new();
         assert!(english.noun("workspace"));
         assert!(english.noun("settings"));
@@ -183,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn versioned_compound_identifier_accepts_any_noun_token() {
+    fn accepts_versioned_nouns() {
         let english = English::new();
         assert_eq!(identifier_words("VkImageCopy2"), ["vk", "image", "copy"]);
         assert!(has_noun(&english, "VkImageCopy2"));

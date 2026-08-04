@@ -1,0 +1,12 @@
+splice_badflag_errno=22
+tee_badflag_errno=22
+vmsplice_badflag_errno=22
+cfr_badflag_errno=22
+splice_bothregular_errno=22
+tee_notpipe_errno=22
+splice_pipe_offset_errno=29
+sendfile_negcount_errno=22
+splice_ok=5 read=5 data=01234
+tee_ok=3 read=3 data=xyz
+tee_source_intact=3 data=xyz
+vmsplice_ok=5 read=5 data=HELLO

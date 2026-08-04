@@ -7,10 +7,10 @@ use std::{
 };
 
 use crate::{
+    LintError, Result,
     model::{Finding, ReviewState, Summary},
     report::Reporter,
-    source::{domain, package, snake_case, Workspace},
-    LintError, Result,
+    source::{Workspace, domain, package, snake_case},
 };
 
 /// Replaces the flat `errors` and `check` Markdown review queues.
@@ -45,9 +45,7 @@ impl<Output> Cases<Output> {
     fn queue(&self, finding: &Finding) -> Option<(PathBuf, String)> {
         match &finding.review.as_ref()?.state {
             ReviewState::Error => Some((self.root.join("errors"), "unclassified".to_owned())),
-            ReviewState::Check(classification) => {
-                Some((self.root.join("check"), classification.clone()))
-            }
+            ReviewState::Check(classification) => Some((self.root.join("check"), classification.clone())),
         }
     }
 
@@ -82,8 +80,7 @@ impl<Output: Write> Reporter for Cases<Output> {
         for name in ["errors", "check"] {
             let queue = self.root.join(name);
             if queue.exists() {
-                fs::remove_dir_all(&queue)
-                    .map_err(|error| LintError::io("clear", &queue, error))?;
+                fs::remove_dir_all(&queue).map_err(|error| LintError::io("clear", &queue, error))?;
             }
             fs::create_dir_all(&queue).map_err(|error| LintError::io("create", &queue, error))?;
         }
@@ -99,23 +96,12 @@ impl<Output: Write> Reporter for Cases<Output> {
     }
 
     fn finish(&mut self, _summaries: &[Summary]) -> Result<()> {
-        writeln!(
-            self.output,
-            "wrote {} case(s) to {}",
-            self.written,
-            self.root.display()
-        )
-        .map_err(|error| LintError::report("case summary", error))
+        writeln!(self.output, "wrote {} case(s) to {}", self.written, self.root.display())
+            .map_err(|error| LintError::report("case summary", error))
     }
 }
 
-fn document(
-    finding: &Finding,
-    timestamp: u64,
-    domain: &str,
-    package: &str,
-    classification: &str,
-) -> String {
+fn document(finding: &Finding, timestamp: u64, domain: &str, package: &str, classification: &str) -> String {
     let review = finding.review.as_ref().expect("case finding has review");
     let metadata = review
         .metadata

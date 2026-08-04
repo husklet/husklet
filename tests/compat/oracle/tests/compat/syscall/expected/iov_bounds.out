@@ -1,0 +1,31 @@
+writev empty 0 rc=0 errno=0
+readv empty 0 rc=0 errno=0
+pwritev empty 0 rc=0 errno=0
+preadv empty 0 rc=0 errno=0
+writev empty 1 rc=0 errno=0
+readv empty 1 rc=0 errno=0
+pwritev empty 1 rc=0 errno=0
+preadv empty 1 rc=0 errno=0
+writev empty 1023 rc=0 errno=0
+readv empty 1023 rc=0 errno=0
+pwritev empty 1023 rc=0 errno=0
+preadv empty 1023 rc=0 errno=0
+writev empty 1024 rc=0 errno=0
+readv empty 1024 rc=0 errno=0
+pwritev empty 1024 rc=0 errno=0
+preadv empty 1024 rc=0 errno=0
+writev empty 1025 rc=-1 errno=22
+readv empty 1025 rc=-1 errno=22
+pwritev empty 1025 rc=-1 errno=22
+preadv empty 1025 rc=-1 errno=22
+writev empty -1 rc=-1 errno=22
+readv empty -1 rc=-1 errno=22
+pwritev empty -1 rc=-1 errno=22
+preadv empty -1 rc=-1 errno=22
+pwritev full 1024 rc=1024 errno=0
+pwritev over 1025 rc=-1 errno=22
+preadv full 1024 rc=1024 errno=0
+payload intact=1
+writev mixed 1024 rc=3 errno=0
+writev badfd 1024 rc=-1 errno=9
+writev badfd over 1025 rc=-1 errno=9

@@ -1,0 +1,3 @@
+# case	group	source	legacy_source	isas	cflags	defines	env	exit	stdout	dependencies	disposition	note
+sysv-fork	sysv	sysv_fork.c	-	aarch64,x86_64	-static -O2 -std=gnu11	-	-	0	expected/sysv_fork.out	linux-libc,fork,ipc,self-contained-process	active	fork attachment identity, peer-visible shared memory, SEM_UNDO exit cleanup, and deferred IPC_RMID
+sysv-blocking	sysv	sysv_blocking.c	-	aarch64,x86_64	-static -O2 -std=gnu11	-	-	0	expected/sysv_blocking.out	linux-libc,fork,ipc,signals,time,self-contained-process	active	blocking message and semaphore wake, removal, timeout, and signal interruption

@@ -1,0 +1,1 @@
+fdclose lstat_enoent=1 access_enoent=1 readlink_enoent=1

@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+process	ptrace-attach-detach	aarch64	fail	-	linux-libc,fork,ptrace,attach,detach,signal-inject	engine:timeout	timeout

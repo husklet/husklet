@@ -1,0 +1,3 @@
+kill_errno=22
+stop_errno=22
+badsig_errno=22

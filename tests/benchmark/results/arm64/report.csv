@@ -1,0 +1,11 @@
+provider,arch,phase,execution,us,wall_us,x_c-engine,wall_x_c-engine,checksum
+c-engine,arm64,compute,c-engine,2442,22866,1.000,1.000,7097455804780747230
+c-engine,arm64,intdiv,c-engine,15349,42188,1.000,1.000,896961339111467556
+c-engine,arm64,memory,c-engine,6564,28005,1.000,1.000,36526
+c-engine,arm64,pipe,c-engine,69421,98519,1.000,1.000,75000
+c-engine,arm64,syscall,c-engine,20991,40617,1.000,1.000,754218500000
+rust-engine,arm64,compute,native-verified,314223,349550,128.674,15.287,7097455804780747230
+rust-engine,arm64,intdiv,native-verified,49872,70891,3.249,1.680,896961339111467556
+rust-engine,arm64,memory,native-verified,5010645,5558537,763.352,198.484,36526
+rust-engine,arm64,pipe,native-verified,3145238,3466006,45.307,35.181,75000
+rust-engine,arm64,syscall,native-verified,794143,916039,37.833,22.553,1000000

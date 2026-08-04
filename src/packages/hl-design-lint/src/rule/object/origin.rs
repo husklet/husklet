@@ -63,9 +63,7 @@ fn qualified(path: &syn::Path) -> Option<String> {
 }
 
 fn wrappers() -> &'static [&'static str] {
-    &[
-        "Arc", "Box", "Mutex", "Option", "Rc", "RefCell", "RwLock", "Weak",
-    ]
+    &["Arc", "Box", "Mutex", "Option", "Rc", "RefCell", "RwLock", "Weak"]
 }
 
 fn collections() -> &'static [&'static str] {

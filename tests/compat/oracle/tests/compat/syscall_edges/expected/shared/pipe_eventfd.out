@@ -1,0 +1,5 @@
+eventfd2_badflag_errno=22
+sem_read1=1 read2=1
+drain=5
+write_max_errno=22
+short_write_errno=22

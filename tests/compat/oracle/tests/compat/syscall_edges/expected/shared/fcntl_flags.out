@@ -1,0 +1,9 @@
+accmode_rdonly=1 append0=1
+append_set=1
+cloexec0=1
+cloexec_set=1
+dupfd_floor=1
+dupfd_noclo=1
+dupfd_clo=1
+dupfd_neg_errno=22
+getfl_badfd_errno=9

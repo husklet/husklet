@@ -1,0 +1,1 @@
+mkdir-umask dir=1 file=1 tight=1 explicit=1

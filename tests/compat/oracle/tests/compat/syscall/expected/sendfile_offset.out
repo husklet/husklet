@@ -1,0 +1,3 @@
+sendfile n=4 off=6 inpos=3 data=[2345]
+sendfile clamp n=2 off=10 data=[89]
+sendfile null n=3 inpos=4 data=[123]

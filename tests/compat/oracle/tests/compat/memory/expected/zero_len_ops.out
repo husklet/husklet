@@ -1,0 +1,1 @@
+mprotect0=0 madvise0=0 msync0=0 mlock0=0 munlock0=0 munmap0=EINVAL

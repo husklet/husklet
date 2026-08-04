@@ -1,0 +1,1106 @@
+#include "../include/executor.h"
+#include "executor.h"
+
+#include "arena.h"
+#include "../cache/cache.h"
+#include "fault/provenance.h"
+#include "dispatch/exit.h"
+#include "arch/aarch64/entry.h"
+#include "arch/aarch64/fault.h"
+#include "arch/aarch64/projection.h"
+#include "arch/aarch64/source.h"
+#include "arch/aarch64/trace.h"
+#include "arch/x86_64/run.h"
+
+#include <stdlib.h>
+#include <stdatomic.h>
+#include <string.h>
+
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "executor admission requires lock-free uint64 atomics");
+
+enum mutation_state {
+    MUTATION_OPEN,
+    MUTATION_ACTIVE,
+    MUTATION_FORK,
+};
+
+#define ADMISSION_STATE_SHIFT 32u
+#define ADMISSION(state, count) (((uint64_t)(state) << ADMISSION_STATE_SHIFT) | (uint32_t)(count))
+#define ADMISSION_STATE(value) ((uint32_t)((value) >> ADMISSION_STATE_SHIFT))
+#define ADMISSION_COUNT(value) ((uint32_t)(value))
+
+struct hl_native_interrupt_token {
+    _Atomic uint64_t value;
+};
+
+struct hl_native_direct_token {
+    hl_native_executor *owner;
+    uint64_t generation;
+    uint64_t identity;
+    hl_native_direct_authority authority;
+};
+
+static void ibtc_clear(hl_native_executor *executor);
+
+static uint64_t direct_generation(hl_native_executor *executor) {
+    executor->direct_generation++;
+    if (executor->direct_generation == 0) executor->direct_generation = 1;
+    return executor->direct_generation;
+}
+
+static uint64_t authority_identity(hl_native_executor *executor) {
+    executor->next_authority_identity++;
+    if (executor->next_authority_identity == 0) executor->next_authority_identity = 1;
+    return executor->next_authority_identity;
+}
+
+hl_native_status hl_native_direct_register(hl_native_executor *executor,
+                                           const hl_native_direct_authority *authority,
+                                           hl_native_direct_token **output) {
+    hl_native_direct_token *token;
+    hl_native_status status;
+    if (output == NULL) return HL_NATIVE_ARGUMENT;
+    *output = NULL;
+    if (executor == NULL || authority == NULL || authority->abi != HL_NATIVE_ABI ||
+        authority->size != sizeof(*authority) || authority->reserved != 0 ||
+        authority->permissions == 0 || (authority->permissions & ~7u) != 0 ||
+        authority->guest_last <= authority->guest_first ||
+        authority->host_first > UINT64_MAX - (authority->guest_last - authority->guest_first))
+        return HL_NATIVE_ARGUMENT;
+    token = calloc(1, sizeof(*token));
+    if (token == NULL) return HL_NATIVE_MEMORY;
+    status = hl_native_executor_gate_enter(executor);
+    if (status != HL_NATIVE_OK) {
+        free(token);
+        return status;
+    }
+    if (executor->direct_authority != NULL) {
+        status = HL_NATIVE_STATE;
+    } else {
+        token->owner = executor;
+        token->generation = direct_generation(executor);
+        token->authority = *authority;
+        if (!executor->retained_authority_valid ||
+            memcmp(&executor->retained_authority, authority, sizeof(*authority)) != 0) {
+            executor->retained_authority = *authority;
+            executor->retained_authority_identity = authority_identity(executor);
+            executor->retained_authority_valid = 1;
+        }
+        token->identity = executor->retained_authority_identity;
+        executor->direct_authority = token;
+        *output = token;
+    }
+    hl_native_executor_gate_leave(executor);
+    if (status != HL_NATIVE_OK) free(token);
+    return status;
+}
+
+int hl_native_direct_validate(const hl_native_executor *executor,
+                              const hl_native_direct_token *token,
+                              hl_native_direct_authority *output) {
+    if (executor == NULL || token == NULL || output == NULL ||
+        executor->direct_authority != token || token->owner != executor ||
+        token->generation == 0 || token->generation != executor->direct_generation)
+        return 0;
+    *output = token->authority;
+    return 1;
+}
+
+uint64_t hl_native_direct_generation(const hl_native_executor *executor,
+                                     const hl_native_direct_token *token) {
+    return executor != NULL && token != NULL && executor->direct_authority == token &&
+                   token->owner == executor && token->generation == executor->direct_generation
+        ? token->generation : 0;
+}
+
+uint64_t hl_native_direct_identity(const hl_native_executor *executor,
+                                   const hl_native_direct_token *token) {
+    return hl_native_direct_generation(executor, token) != 0 ? token->identity : 0;
+}
+
+int hl_native_direct_request_valid(const hl_native_executor *executor,
+                                   const hl_native_direct_token *token, uint64_t generation,
+                                   uint64_t identity,
+                                   const hl_native_projection *projection) {
+    if (hl_native_direct_generation(executor, token) != generation || identity == 0 ||
+        token->identity != identity || projection == NULL ||
+        projection->active >= projection->count)
+        return 0;
+    const hl_native_direct_authority *authority = &token->authority;
+    const hl_native_projection_view *view = &projection->views[projection->active];
+    return authority->mapping_incarnation == projection->mapping_incarnation &&
+        authority->mapping_incarnation == view->mapping_incarnation &&
+        authority->guest_first == view->guest_first && authority->guest_last == view->guest_last &&
+        authority->host_first == view->host_first &&
+        (view->permissions & authority->permissions) == authority->permissions;
+}
+
+int hl_native_direct_request_snapshot(const hl_native_executor *executor,
+                                      const hl_native_direct_token *token, uint64_t generation,
+                                      uint64_t identity,
+                                      const hl_native_projection *projection,
+                                      hl_native_direct_authority *output) {
+    if (output == NULL || !hl_native_direct_request_valid(executor, token, generation, identity, projection)) return 0;
+    *output = token->authority;
+    return 1;
+}
+
+hl_native_status hl_native_direct_unregister(hl_native_executor *executor,
+                                             hl_native_direct_token *token) {
+    hl_native_status status;
+    if (executor == NULL || token == NULL || token->owner != executor) return HL_NATIVE_ARGUMENT;
+    status = hl_native_executor_gate_enter(executor);
+    if (status != HL_NATIVE_OK) return status;
+    if (executor->direct_authority == token && token->generation == executor->direct_generation) {
+        executor->direct_authority = NULL;
+        (void)direct_generation(executor);
+    }
+    token->owner = NULL;
+    hl_native_executor_gate_leave(executor);
+    free(token);
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_interrupt_create(hl_native_interrupt_token **output) {
+    if (output == NULL) return HL_NATIVE_ARGUMENT;
+    *output = calloc(1, sizeof(**output));
+    if (*output == NULL) return HL_NATIVE_MEMORY;
+    atomic_init(&(*output)->value, 0);
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_interrupt_set(hl_native_interrupt_token *token, uint64_t value) {
+    if (token == NULL) return HL_NATIVE_ARGUMENT;
+    atomic_store_explicit(&token->value, value, memory_order_release);
+    return HL_NATIVE_OK;
+}
+
+void hl_native_interrupt_destroy(hl_native_interrupt_token *token) {
+    if (token == NULL) return;
+    atomic_store_explicit(&token->value, 0, memory_order_relaxed);
+    free(token);
+}
+
+static void ibtc_clear(hl_native_executor *executor) {
+    if (executor != NULL && executor->ibtc != NULL)
+        memset(executor->ibtc, 0, HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc));
+}
+
+static void ibtc_publish(hl_native_ibtc_entry *, uint64_t, void *);
+
+static void ibtc_invalidate(hl_native_executor *executor, uint64_t first, uint64_t last) {
+    if (executor == NULL || executor->ibtc == NULL || last <= first) return;
+    for (size_t index = 0; index < HL_NATIVE_IBTC_COUNT; ++index) {
+        hl_native_ibtc_entry *entry = &executor->ibtc[index];
+        uint64_t target = __atomic_load_n(&entry->target, __ATOMIC_ACQUIRE);
+        if (target >= first && target < last) ibtc_publish(entry, 0, NULL);
+    }
+}
+
+static void ibtc_publish(hl_native_ibtc_entry *entry, uint64_t target, void *body) {
+#if defined(__aarch64__)
+    __asm__ volatile("dmb ish\n\tstp %1, %2, [%0]" : : "r"(entry), "r"(target), "r"(body) : "memory");
+#else
+    entry->body = body;
+    atomic_thread_fence(memory_order_release);
+    entry->target = target;
+#endif
+}
+
+void hl_native_ibtc_fill_shared(hl_native_executor *executor, uint64_t target, void *body) {
+    ibtc_publish(&executor->ibtc[(target >> 2) & (HL_NATIVE_IBTC_COUNT - 1)], target, body);
+}
+
+static hl_native_status ibtc_fill(hl_native_executor *executor, hl_native_aarch64_cpu *cpu,
+                                  uint64_t target, const hl_native_code *code) {
+    uintptr_t site = (uintptr_t)cpu->indirect_site;
+    uintptr_t rx = (uintptr_t)executor->arena.executable;
+    if (site == 0) return HL_NATIVE_OK;
+    if ((site & 15u) != 0 || site < rx || site > rx + executor->arena.mapping.content - 16)
+        return HL_NATIVE_STATE;
+    if (executor->diagnostics) {
+        uint64_t previous;
+        hl_native_ibtc_entry *shared;
+        memcpy(&previous, executor->arena.writable + (site - rx), sizeof(previous));
+        shared = &executor->ibtc[(target >> 2) & (HL_NATIVE_IBTC_COUNT - 1)];
+        executor->ibtc_fills++;
+        if (previous != 0 && previous != target) executor->ibtc_site_collisions++;
+        if (shared->target != 0 && shared->target != target) executor->ibtc_shared_collisions++;
+    }
+    int64_t branch_delta;
+    memcpy(&branch_delta, executor->arena.writable + (site - rx) + 8, sizeof(branch_delta));
+    hl_native_status status = hl_native_executor_gate_enter(executor);
+    if (status != HL_NATIVE_OK) {
+        /* A peer is executing.  Keep the unfilled local site and retry through
+         * ordinary dispatch; never turn harmless patch contention fatal. */
+        cpu->indirect_site = 0;
+        return HL_NATIVE_OK;
+    }
+    int writing = 0;
+    status = hl_native_cache_write_begin(executor->cache);
+    if (status == HL_NATIVE_OK) writing = 1;
+    uint32_t patched = 0;
+    if (status == HL_NATIVE_OK)
+        status = hl_native_cache_relocate_site(executor->cache, (const void *)site, branch_delta,
+                                               target, code->instruction_epoch,
+                                               code->identity_token, &patched);
+    if (status == HL_NATIVE_OK) {
+        uint64_t offset = site - rx;
+        memcpy(executor->arena.writable + offset, &target, sizeof(target));
+        status = executor->arena.memory.publish(executor->arena.memory.context,
+                                                executor->arena.mapping.handle, offset, 8);
+    }
+    if (status == HL_NATIVE_OK) hl_native_ibtc_fill_shared(executor, target, code->body);
+    if (writing) {
+        hl_native_status end = hl_native_cache_write_end(executor->cache);
+        if (status == HL_NATIVE_OK) status = end;
+    }
+    hl_native_executor_gate_leave(executor);
+    if (status != HL_NATIVE_OK) return status;
+    (void)patched;
+    cpu->indirect_site = 0;
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_executor_gate_enter(hl_native_executor *executor) {
+    if (executor == NULL) return HL_NATIVE_ARGUMENT;
+    uint64_t expected = ADMISSION(MUTATION_OPEN, 0);
+    if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
+                                                 ADMISSION(MUTATION_ACTIVE, 0),
+                                                 memory_order_seq_cst, memory_order_relaxed))
+        return HL_NATIVE_STATE;
+    return HL_NATIVE_OK;
+}
+
+void hl_native_executor_gate_leave(hl_native_executor *executor) {
+    if (executor == NULL) return;
+    atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
+}
+
+hl_native_status hl_native_execution_enter(hl_native_executor *executor, hl_native_execution *execution) {
+    if (executor == NULL || execution == NULL || execution->owner != NULL) return HL_NATIVE_ARGUMENT;
+    uint64_t current = atomic_load_explicit(&executor->admission, memory_order_acquire);
+    for (;;) {
+        if (ADMISSION_STATE(current) != MUTATION_OPEN) return HL_NATIVE_STATE;
+        if (ADMISSION_COUNT(current) == UINT32_MAX) return HL_NATIVE_CAPACITY;
+        uint64_t desired = ADMISSION(MUTATION_OPEN, ADMISSION_COUNT(current) + 1);
+        if (atomic_compare_exchange_weak_explicit(&executor->admission, &current, desired,
+                                                  memory_order_acquire, memory_order_relaxed))
+            break;
+    }
+    execution->owner = executor;
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_execution_leave(hl_native_execution *execution) {
+    hl_native_executor *executor;
+    if (execution == NULL || execution->owner == NULL) return HL_NATIVE_ARGUMENT;
+    executor = execution->owner;
+    execution->owner = NULL;
+    uint64_t current = atomic_load_explicit(&executor->admission, memory_order_relaxed);
+    for (;;) {
+        if (ADMISSION_STATE(current) != MUTATION_OPEN || ADMISSION_COUNT(current) == 0)
+            return HL_NATIVE_STATE;
+        uint64_t desired = ADMISSION(MUTATION_OPEN, ADMISSION_COUNT(current) - 1);
+        if (atomic_compare_exchange_weak_explicit(&executor->admission, &current, desired,
+                                                  memory_order_release, memory_order_relaxed))
+            break;
+    }
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_fault_scope_enter(hl_native_executor *executor, hl_native_cpu *cpu,
+                                             hl_native_fault_scope *scope) {
+    hl_native_execution execution = {0};
+    if (executor == NULL || cpu == NULL || scope == NULL || scope->executor != NULL || scope->reserved != 0 ||
+        cpu->abi != HL_NATIVE_ABI || cpu->size != sizeof(*cpu) || cpu->state.opaque == NULL ||
+        (cpu->architecture != HL_NATIVE_AARCH64 && cpu->architecture != HL_NATIVE_X86_64))
+        return HL_NATIVE_ARGUMENT;
+    hl_native_status status = hl_native_execution_enter(executor, &execution);
+    if (status != HL_NATIVE_OK) return status;
+    scope->abi = HL_NATIVE_ABI;
+    scope->size = sizeof(*scope);
+    scope->architecture = cpu->architecture;
+    scope->reserved = 0;
+    scope->cpu = cpu;
+    /* Publish the owner last.  The consumer is responsible for publishing the
+     * completed scope to its signal owner before native entry. */
+    scope->executor = execution.owner;
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_fault_scope_leave(hl_native_fault_scope *scope) {
+    if (scope == NULL || scope->abi != HL_NATIVE_ABI || scope->size != sizeof(*scope) ||
+        scope->reserved != 0 || scope->executor == NULL || scope->cpu == NULL)
+        return HL_NATIVE_ARGUMENT;
+    hl_native_execution execution = {.owner = scope->executor};
+    scope->executor = NULL;
+    scope->cpu = NULL;
+    scope->architecture = 0;
+    return hl_native_execution_leave(&execution);
+}
+
+int hl_native_fault_scope_provenance(const hl_native_fault_scope *scope, uint64_t host_pc,
+                                     hl_native_provenance *output) {
+    if (scope == NULL || output == NULL || scope->abi != HL_NATIVE_ABI ||
+        scope->size != sizeof(*scope) || scope->reserved > 1 ||
+        scope->executor == NULL || scope->cpu == NULL ||
+        host_pc == 0)
+        return 0;
+    return hl_native_cache_provenance_record(scope->executor->cache,
+                                             (const void *)(uintptr_t)host_pc, output);
+}
+
+int hl_native_fault_scope_contains(const hl_native_fault_scope *scope, uint64_t host_pc) {
+    hl_native_provenance record;
+    return hl_native_fault_scope_provenance(scope, host_pc, &record);
+}
+
+int hl_native_fault_scope_prepare_return(const hl_native_fault_scope *scope, uint64_t host_pc,
+                                         uint64_t host_fault, void *host_context) {
+    hl_native_provenance record;
+    if (host_context == NULL || !hl_native_fault_scope_provenance(scope, host_pc, &record)) return 0;
+#if defined(__linux__) && defined(__aarch64__)
+    if (scope->architecture == HL_NATIVE_AARCH64) {
+        hl_a64_host_context context;
+        if (!hl_a64_linux_context(host_context, &context) || context.program != host_pc) return 0;
+        return hl_a64_linux_fault_return(scope->cpu->state.aarch64, host_context, &record,
+                                         host_fault);
+    }
+#elif defined(__APPLE__) && defined(__aarch64__)
+    if (scope->architecture == HL_NATIVE_AARCH64) {
+        hl_a64_host_context context;
+        if (!hl_a64_darwin_context(host_context, &context) || context.program != host_pc) return 0;
+        return hl_a64_darwin_fault_return(scope->cpu->state.aarch64, host_context, &record,
+                                          host_fault);
+    }
+#else
+    (void)host_fault;
+#endif
+    return 0;
+}
+
+hl_native_status hl_native_execution_exit(hl_native_execution *execution, hl_native_exit *output,
+                                          uint32_t kind, uint32_t access, uint64_t instruction,
+                                          uint64_t next, uint64_t address, uint64_t code) {
+    hl_native_status status;
+    hl_native_status release;
+    if (execution == NULL || execution->owner == NULL) return HL_NATIVE_ARGUMENT;
+    status = hl_native_exit_build(output, kind, access, instruction, next, address, code);
+    release = hl_native_execution_leave(execution);
+    return status == HL_NATIVE_OK ? release : status;
+}
+
+hl_native_status hl_native_create(const hl_native_config *config, hl_native_executor **output) {
+    hl_native_executor *executor;
+    hl_native_status status;
+    if (output == NULL) return HL_NATIVE_ARGUMENT;
+    *output = NULL;
+    executor = calloc(1, sizeof(*executor));
+    if (executor == NULL) return HL_NATIVE_MEMORY;
+    /* Dynamically allocated atomic state is initialized with atomic_init before
+     * its first operation; zeroed storage alone is not a C11 initializer. */
+    atomic_init(&executor->admission, ADMISSION(MUTATION_OPEN, 0));
+    executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
+    status = hl_native_arena_create(&executor->arena, config);
+    if (status != HL_NATIVE_OK) {
+        free(executor);
+        return status;
+    }
+    status = hl_native_cache_create(&executor->cache, &executor->arena, 1u << 19, 1u << 18, 0, 0);
+    if (status != HL_NATIVE_OK) {
+        hl_native_arena_destroy(&executor->arena);
+        free(executor);
+        return status;
+    }
+    executor->ibtc = aligned_alloc(65536, HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc));
+    if (executor->ibtc == NULL) {
+        hl_native_cache_destroy(executor->cache);
+        hl_native_arena_destroy(&executor->arena);
+        free(executor);
+        return HL_NATIVE_MEMORY;
+    }
+    ibtc_clear(executor);
+    *output = executor;
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_before_fork(hl_native_executor *executor) {
+    uint64_t expected = ADMISSION(MUTATION_OPEN, 0);
+    if (executor == NULL) return HL_NATIVE_ARGUMENT;
+    if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
+                                                 ADMISSION(MUTATION_FORK, 0),
+                                                 memory_order_seq_cst, memory_order_relaxed))
+        return HL_NATIVE_STATE;
+    if (!hl_native_cache_available(executor->cache)) {
+        atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
+        return HL_NATIVE_STATE;
+    }
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_after_fork(hl_native_executor *executor, uint32_t preserve) {
+    hl_native_status status;
+    uint64_t expected = ADMISSION(MUTATION_FORK, 0);
+    if (executor == NULL || preserve > 1) return HL_NATIVE_ARGUMENT;
+    if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
+                                                 ADMISSION(MUTATION_ACTIVE, 0),
+                                                 memory_order_acquire, memory_order_relaxed))
+        return HL_NATIVE_STATE;
+    status = hl_native_arena_repair(&executor->arena, preserve);
+    if (status == HL_NATIVE_OK && preserve == 0) status = hl_native_cache_reset(executor->cache, 0);
+    if (status == HL_NATIVE_OK && preserve != 0) hl_native_cache_relocations_clear(executor->cache);
+    if (status == HL_NATIVE_OK) ibtc_clear(executor);
+    if (status == HL_NATIVE_OK && executor->memory_mode != 0) {
+        hl_native_cache_stats identity;
+        hl_native_cache_diagnose(executor->cache, &identity);
+        status = hl_native_cache_reset(executor->cache, identity.mapping_epoch);
+        executor->memory_mode = 0;
+        executor->authority_generation = 0;
+    }
+    /* Neither parent nor child may reuse an authority across the host-fork
+     * boundary. Each process retires its COW copy through unregister. */
+    executor->direct_authority = NULL;
+    executor->retained_authority_valid = 0;
+    executor->retained_authority_identity = 0;
+    (void)direct_generation(executor);
+    atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
+    return status;
+}
+
+hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_native_diagnostics *output) {
+    const hl_native_arena *arena;
+    hl_native_cache_stats stats;
+    if (executor == NULL || output == NULL || output->abi != HL_NATIVE_ABI || output->size < sizeof(*output))
+        return HL_NATIVE_ARGUMENT;
+    arena = &executor->arena;
+    output->capacity = arena->mapping.capacity;
+    output->used = arena->mapping.content;
+    output->publications = arena->publications;
+    output->write_transitions = arena->write_transitions;
+    output->dual_alias = arena->mapping.writable != arena->mapping.executable;
+    output->writing = arena->writing;
+    hl_native_cache_diagnose(executor->cache, &stats);
+    output->cache_lookups = stats.lookups;
+    output->cache_hits = stats.hits;
+    output->cache_misses = stats.misses;
+    output->epoch_rejections = stats.epoch_rejections;
+    output->invalidations = stats.invalidations;
+    output->live_blocks = stats.live_blocks;
+    output->cache_generation = stats.generation;
+    output->mapping_epoch = stats.mapping_epoch;
+    output->ibtc_fills = executor->ibtc_fills;
+    output->ibtc_site_collisions = executor->ibtc_site_collisions;
+    output->ibtc_shared_collisions = executor->ibtc_shared_collisions;
+    output->boundary_branch = executor->boundary_branch;
+    output->boundary_syscall = executor->boundary_syscall;
+    output->boundary_fallback = executor->boundary_fallback;
+    output->boundary_yield = executor->boundary_yield;
+    output->completed = executor->completed;
+    output->operand_callbacks = executor->operand_callbacks;
+    output->operand_cache_hits = executor->operand_cache_hits;
+    return HL_NATIVE_OK;
+}
+
+hl_native_status hl_native_changed(hl_native_executor *executor, const hl_native_change *changes, size_t count) {
+    if (executor == NULL || changes == NULL || count == 0 || count > 1024) return HL_NATIVE_ARGUMENT;
+    int replaced = 0;
+    for (size_t index = 0; index < count; index++) {
+        const hl_native_change *change = &changes[index];
+        if (change->abi != HL_NATIVE_ABI || change->size < sizeof(*change) || change->reserved != 0 ||
+            (change->kind != HL_NATIVE_REPLACE && change->kind != HL_NATIVE_INVALIDATE) ||
+            (change->kind == HL_NATIVE_INVALIDATE && change->last <= change->first) ||
+            (change->kind == HL_NATIVE_REPLACE && (change->first != 0 || change->last != 0)))
+            return HL_NATIVE_ARGUMENT;
+    }
+    hl_native_status status = hl_native_executor_gate_enter(executor);
+    if (status != HL_NATIVE_OK) return status;
+    int writing = 0;
+    status = hl_native_cache_write_begin(executor->cache);
+    if (status == HL_NATIVE_OK) writing = 1;
+    for (size_t index = 0; index < count; index++) {
+        if (status != HL_NATIVE_OK) break;
+        const hl_native_change *change = &changes[index];
+        if (change->kind == HL_NATIVE_REPLACE) {
+            status = hl_native_cache_reset(executor->cache, change->mapping_epoch);
+            replaced = 1;
+        } else {
+            status = (change->mapping_epoch == 0 ||
+                      hl_native_cache_address_identity_matches(executor->cache,
+                                                               change->mapping_epoch,
+                                                               executor->memory_mode,
+                                                               executor->authority_generation))
+                ? hl_native_cache_relocations_invalidate(executor->cache, change->first, change->last)
+                : HL_NATIVE_STATE;
+            if (status == HL_NATIVE_OK)
+                status = hl_native_cache_invalidate(executor->cache, change->first, change->last, NULL);
+        }
+    }
+    if (writing) {
+        hl_native_status end = hl_native_cache_write_end(executor->cache);
+        if (status == HL_NATIVE_OK) status = end;
+    }
+    if (status == HL_NATIVE_OK) {
+        if (replaced)
+            ibtc_clear(executor);
+        else
+            for (size_t index = 0; index < count; ++index)
+                ibtc_invalidate(executor, changes[index].first, changes[index].last);
+        if (replaced) {
+            executor->memory_mode = 0;
+            executor->authority_generation = 0;
+            executor->retained_authority_valid = 0;
+            executor->retained_authority_identity = 0;
+        }
+    }
+    hl_native_executor_gate_leave(executor);
+    return status;
+}
+
+hl_native_status hl_native_resolve_fault(const hl_native_executor *executor, hl_native_fault *fault) {
+    uint64_t guest_pc;
+    if (executor == NULL || fault == NULL || fault->abi != HL_NATIVE_ABI || fault->size < sizeof(*fault) ||
+        fault->access > HL_NATIVE_ACCESS_EXECUTE)
+        return HL_NATIVE_ARGUMENT;
+    fault->precise = hl_native_fault_guest(executor->cache, fault->host_pc, &guest_pc);
+    fault->guest_pc = fault->precise ? guest_pc : 0;
+    return HL_NATIVE_OK;
+}
+
+static hl_native_status run_exit(hl_native_execution *execution, hl_native_exit *output,
+                                 uint32_t kind, uint64_t instruction) {
+    return hl_native_execution_exit(execution, output, kind, HL_NATIVE_ACCESS_UNKNOWN,
+                                    instruction, instruction, 0, 0);
+}
+
+static hl_native_status run_fatal(hl_native_execution *execution, hl_native_exit *output, uint64_t code) {
+    return hl_native_execution_exit(execution, output, HL_NATIVE_EXIT_FATAL, HL_NATIVE_ACCESS_UNKNOWN,
+                                    0, 0, 0, code == 0 ? 1 : code);
+}
+
+hl_native_status hl_native_synchronize_epoch(hl_native_executor *executor, uint64_t mapping_epoch,
+                                             uint64_t instruction_epoch, uint64_t memory_mode,
+                                             uint64_t authority_generation) {
+    hl_native_status status;
+    if (hl_native_cache_epoch_matches(executor->cache, mapping_epoch, instruction_epoch,
+                                      memory_mode, authority_generation))
+        return HL_NATIVE_OK;
+    status = hl_native_executor_gate_enter(executor);
+    if (status != HL_NATIVE_OK) return status;
+    if (!hl_native_cache_epoch_matches(executor->cache, mapping_epoch, instruction_epoch,
+                                       memory_mode, authority_generation))
+        status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch,
+                                                memory_mode, authority_generation);
+    if (status == HL_NATIVE_OK) ibtc_clear(executor);
+    if (status == HL_NATIVE_OK) {
+        executor->memory_mode = memory_mode;
+        executor->authority_generation = authority_generation;
+    }
+    hl_native_executor_gate_leave(executor);
+    return status;
+}
+
+hl_native_status hl_native_synchronize_direct(hl_native_executor *executor, uint64_t mapping_epoch,
+                                              uint64_t instruction_epoch,
+                                              const hl_native_direct_token *token, uint64_t generation,
+                                              uint64_t identity,
+                                              const hl_native_projection *projection) {
+    hl_native_status status = hl_native_executor_gate_enter(executor);
+    if (status != HL_NATIVE_OK) return status;
+    if (!hl_native_direct_request_valid(executor, token, generation, identity, projection)) {
+        status = HL_NATIVE_STATE;
+    } else if (!hl_native_cache_epoch_matches(executor->cache, mapping_epoch, instruction_epoch, 1, identity)) {
+        status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch, 1, identity);
+        if (status == HL_NATIVE_OK) ibtc_clear(executor);
+    }
+    if (status == HL_NATIVE_OK) {
+        executor->memory_mode = 1;
+        executor->authority_generation = identity;
+    }
+    hl_native_executor_gate_leave(executor);
+    return status;
+}
+
+hl_native_status hl_native_executor_rollover(hl_native_executor *executor, uint64_t mapping_epoch,
+                                              uint64_t instruction_epoch) {
+    hl_native_status status;
+    if (executor == NULL || atomic_load_explicit(&executor->admission, memory_order_acquire) !=
+                                ADMISSION(MUTATION_ACTIVE, 0))
+        return HL_NATIVE_STATE;
+    status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch,
+                                            executor->memory_mode,
+                                            executor->authority_generation);
+    if (status != HL_NATIVE_OK) return status;
+    ibtc_clear(executor);
+    status = hl_native_arena_rotate(&executor->arena);
+    return status;
+}
+
+#if defined(__aarch64__)
+#ifndef HL_A64_RUN_VIEW_CACHE
+#define HL_A64_RUN_VIEW_CACHE 1
+#endif
+#define HL_A64_RUN_VIEW_COUNT 4u
+
+typedef struct hl_a64_run_views {
+    hl_a64_view entries[HL_A64_RUN_VIEW_COUNT];
+    size_t count;
+} hl_a64_run_views;
+
+static int run_view_contains(const hl_a64_view *view, uint64_t address,
+                             uint64_t size, uint32_t required) {
+    return view != NULL && size != 0 && address <= UINT64_MAX - size &&
+           address >= view->guest_first && address + size <= view->guest_last &&
+           (view->permissions & required) == required;
+}
+
+static void run_view_promote(hl_a64_run_views *cache, size_t index) {
+    hl_a64_view selected;
+    if (cache == NULL || index >= cache->count || index == 0) return;
+    selected = cache->entries[index];
+    memmove(&cache->entries[1], &cache->entries[0], index * sizeof(cache->entries[0]));
+    cache->entries[0] = selected;
+}
+
+static int run_view_resolve(hl_a64_run_views *cache, hl_native_aarch64_cpu *cpu,
+                            uint64_t address, uint64_t size, uint32_t required) {
+    size_t index;
+    if (cache == NULL) return 0;
+    for (index = 0; index < cache->count; index++) {
+        hl_a64_projection projection;
+        if (!run_view_contains(&cache->entries[index], address, size, required)) continue;
+        run_view_promote(cache, index);
+        projection = (hl_a64_projection){&cache->entries[0], 1,
+                                         cache->entries[0].mapping_incarnation, 0};
+        return hl_a64_projection_resolve(&projection, cpu, address, size, required);
+    }
+    return 0;
+}
+
+static void run_view_install(hl_a64_run_views *cache, const hl_a64_view *view) {
+    size_t index;
+    if (cache == NULL || view == NULL) return;
+    for (index = 0; index < cache->count; index++) {
+        if (memcmp(&cache->entries[index], view, sizeof(*view)) == 0) {
+            run_view_promote(cache, index);
+            return;
+        }
+    }
+    if (cache->count < HL_A64_RUN_VIEW_COUNT) cache->count++;
+    if (cache->count > 1)
+        memmove(&cache->entries[1], &cache->entries[0],
+                (cache->count - 1) * sizeof(cache->entries[0]));
+    cache->entries[0] = *view;
+}
+
+static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cpu *cpu,
+                             uint64_t mapping_incarnation) {
+    size_t count = cache != NULL ? cache->count : 0;
+    __atomic_store_n(&cpu->read_token, 0, __ATOMIC_RELEASE);
+    cpu->read_count = 0;
+    if (mapping_incarnation == 0 || count > HL_A64_RUN_VIEW_COUNT) return;
+    for (size_t index = 0; index < count; ++index) {
+        const hl_a64_view *view = &cache->entries[index];
+        if (view->guest_last <= view->guest_first || view->reserved != 0 ||
+            view->mapping_incarnation != mapping_incarnation || view->permissions == 0 ||
+            (view->permissions & ~7u) != 0 ||
+            view->host_first > UINT64_MAX - (view->guest_last - view->guest_first))
+            return;
+        cpu->read_views[index][0] = view->guest_first;
+        cpu->read_views[index][1] = view->guest_last;
+        cpu->read_views[index][2] = view->host_first - view->guest_first;
+        cpu->read_views[index][3] = view->permissions;
+    }
+    cpu->read_count = count;
+    cpu->read_incarnation = mapping_incarnation;
+    __atomic_store_n(&cpu->read_token, mapping_incarnation, __ATOMIC_RELEASE);
+}
+
+static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu *cpu_handle,
+                                    hl_native_aarch64_cpu *cpu,
+                                    const hl_native_run_request *request, hl_native_exit *output) {
+    const hl_a64_source *source = request->source;
+    const hl_a64_source *active_source = source;
+    hl_a64_source_span resolved_span;
+    hl_a64_source resolved_source;
+    const hl_a64_projection *projection = request->projection;
+    uint8_t scratch[HL_A64_TRACE_MAX_BYTES];
+    uint64_t budget = request->budget;
+    int translated = 0;
+    hl_native_execution execution = {0};
+    hl_native_source_resolve resolver = NULL;
+    void *resolver_context = NULL;
+    hl_native_operand_resolve operand_resolver = NULL;
+    void *operand_context = NULL;
+    hl_a64_run_views operand_views = {0};
+    hl_native_fault_publish fault_publish = NULL;
+    hl_native_fault_unpublish fault_unpublish = NULL;
+    void *fault_context = NULL;
+    uint64_t memory_mode = 0;
+    uint64_t authority_generation = 0;
+    uint64_t authority_identity = 0;
+    uint64_t expected_authority = 0;
+    const hl_native_direct_token *direct_token = NULL;
+    hl_native_direct_authority direct_authority = {0};
+    cpu->read_token = 0;
+    cpu->read_count = 0;
+    cpu->certificate_valid = 0;
+    cpu->certificate_delta = 0;
+    cpu->active_authority = 0;
+    cpu->loop_valid = 0;
+    cpu->loop_view_count = 0;
+    memset(cpu->loop_views, 0, sizeof(cpu->loop_views));
+    cpu->loop_mapping_incarnation = 0;
+    cpu->loop_authority = 0;
+    cpu->loop_trip = 0;
+    cpu->loop_decrement = 0;
+    cpu->loop_instruction_count = 0;
+    cpu->loop_iterations = 0;
+    cpu->loop_budget_iterations = 0;
+    cpu->loop_executable = 0;
+    if (request->size >= offsetof(hl_native_run_request, operand_context)) {
+        resolver = request->source_resolve;
+        resolver_context = request->source_context;
+    }
+    if (request->size >= offsetof(hl_native_run_request, memory_mode)) {
+        operand_resolver = request->operand_resolve;
+        operand_context = request->operand_context;
+        fault_publish = request->fault_publish;
+        fault_unpublish = request->fault_unpublish;
+        fault_context = request->fault_context;
+    }
+    if (request->size >= offsetof(hl_native_run_request, direct_token)) {
+        memory_mode = request->memory_mode;
+        authority_generation = request->authority_generation;
+    }
+    if (request->size >= offsetof(hl_native_run_request, authority_identity))
+        direct_token = request->direct_token;
+    if (request->size >= sizeof(*request)) authority_identity = request->authority_identity;
+    if ((fault_publish == NULL) != (fault_unpublish == NULL)) return HL_NATIVE_ARGUMENT;
+    if (source == NULL || !hl_a64_source_validate(source) ||
+        source->mapping_incarnation != request->mapping_epoch ||
+        (projection != NULL && (!hl_a64_projection_validate(projection) ||
+                                projection->mapping_incarnation != request->mapping_epoch)))
+        return HL_NATIVE_ARGUMENT;
+    if ((memory_mode == 0) != (authority_generation == 0) ||
+        (memory_mode == 0) != (authority_identity == 0)) return HL_NATIVE_ARGUMENT;
+    expected_authority = memory_mode != 0 ? authority_identity : request->mapping_epoch;
+    if (expected_authority == 0) return HL_NATIVE_ARGUMENT;
+    hl_native_status epoch_status = memory_mode == 0
+        ? hl_native_synchronize_epoch(executor, source->mapping_incarnation, 0, 0, expected_authority)
+        : hl_native_synchronize_direct(executor, source->mapping_incarnation, 0,
+                                       direct_token, authority_generation, authority_identity, projection);
+    if (epoch_status != HL_NATIVE_OK) return epoch_status;
+    if (projection != NULL) {
+        const hl_a64_view *view = &projection->views[projection->active];
+        if (!hl_a64_projection_resolve(projection, cpu, view->guest_first,
+                                       view->guest_last - view->guest_first, view->permissions))
+            return HL_NATIVE_ARGUMENT;
+        if (HL_A64_RUN_VIEW_CACHE)
+            for (size_t index = projection->count;
+                 index > 0 && operand_views.count < HL_A64_RUN_VIEW_COUNT; index--)
+                run_view_install(&operand_views, &projection->views[index - 1]);
+    }
+    run_view_publish(&operand_views, cpu, request->mapping_epoch);
+    cpu->budget = budget;
+    cpu->executed = 0;
+    for (;;) {
+        hl_native_code code;
+        hl_native_code executed_code;
+        hl_native_translation_key key;
+        size_t count;
+        uint32_t hit;
+        hl_native_status status;
+        uint64_t instruction = cpu->program;
+        if (execution.owner == NULL) {
+            status = hl_native_execution_enter(executor, &execution);
+            if (status != HL_NATIVE_OK) return status;
+            if (memory_mode != 0 && !hl_native_direct_request_snapshot(
+                    executor, direct_token, authority_generation, authority_identity, projection,
+                    &direct_authority)) {
+                (void)hl_native_execution_leave(&execution);
+                return HL_NATIVE_STATE;
+            }
+        }
+        if (cpu->interrupt != 0 || budget == 0) {
+            return run_exit(&execution, output, cpu->interrupt != 0 ? HL_NATIVE_EXIT_INTERRUPT : HL_NATIVE_EXIT_YIELD,
+                            instruction);
+        }
+        size_t limit = budget < HL_A64_SOURCE_MAX_WORDS ? (size_t)budget : HL_A64_SOURCE_MAX_WORDS;
+        if (limit > HL_A64_TRACE_MAX_WORDS) limit = HL_A64_TRACE_MAX_WORDS;
+        count = hl_a64_source_available(active_source, instruction, limit);
+        if (count == 0 && translated && resolver != NULL) {
+            memset(&resolved_span, 0, sizeof(resolved_span));
+            if (resolver(resolver_context, instruction, source->mapping_incarnation,
+                         source->instruction_epoch, &resolved_span)) {
+                resolved_source = (hl_a64_source){&resolved_span, 1,
+                                                  source->mapping_incarnation,
+                                                  resolved_span.instruction_epoch};
+                if (!hl_a64_source_validate(&resolved_source)) return HL_NATIVE_ARGUMENT;
+                active_source = &resolved_source;
+                count = hl_a64_source_available(active_source, instruction, limit);
+            }
+        }
+        if (count == 0) {
+            return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
+        }
+        key = (hl_native_translation_key){
+            .guest = instruction,
+            .mapping_incarnation = active_source->mapping_incarnation,
+            .instruction_epoch = active_source->instruction_epoch,
+            .source_first = instruction,
+            .source_last = instruction + count * 4,
+            .memory_mode = memory_mode,
+            .authority_generation = expected_authority,
+        };
+        if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
+            code.source_last > key.source_last) {
+            status = hl_native_execution_leave(&execution);
+            if (status != HL_NATIVE_OK) return status;
+            status = hl_a64_trace_cache_direct(executor, active_source, instruction, count, scratch,
+                                               sizeof(scratch), memory_mode != 0 ? &direct_authority : NULL,
+                                               expected_authority,
+                                               &code, &hit);
+            if (status != HL_NATIVE_OK) {
+                status = hl_native_execution_enter(executor, &execution);
+                if (status != HL_NATIVE_OK) return status;
+                return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
+            }
+            status = hl_native_execution_enter(executor, &execution);
+            if (status != HL_NATIVE_OK) return status;
+            /* Publication and reset both require exclusive mutation admission.
+             * Resolve only after re-admission, so no pointer selected before
+             * that boundary can survive an epoch change or fork repair. */
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
+                code.source_last > key.source_last)
+                return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
+        }
+        if (cpu->indirect_site != 0) {
+            status = hl_native_execution_leave(&execution);
+            if (status != HL_NATIVE_OK) return status;
+            status = ibtc_fill(executor, cpu, instruction, &code);
+            if (status != HL_NATIVE_OK) return status;
+            status = hl_native_execution_enter(executor, &execution);
+            if (status != HL_NATIVE_OK) return status;
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
+                code.source_last > key.source_last)
+                return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
+        }
+        uint64_t executed_before = cpu->executed;
+        hl_native_fault_scope fault_scope = {
+            .abi = HL_NATIVE_ABI,
+            .size = sizeof(fault_scope),
+            .architecture = HL_NATIVE_AARCH64,
+            .reserved = 1,
+            .executor = executor,
+            .cpu = cpu_handle,
+        };
+        /* This value comes from the independently authenticated run request,
+         * never from the translation key baked into generated code.  The
+         * execution gate keeps it current until the fully spilled return. */
+        cpu->active_authority = memory_mode != 0 ? authority_identity : request->mapping_epoch;
+        if (fault_publish != NULL && fault_publish(fault_context, &fault_scope) != HL_NATIVE_OK) {
+            cpu->active_authority = 0;
+            status = hl_native_execution_leave(&execution);
+            return status == HL_NATIVE_OK ? HL_NATIVE_STATE : status;
+        }
+        hl_native_aarch64_enter(cpu, code.entry);
+        if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
+        cpu->active_authority = 0;
+        int executed_identity = 0;
+        if ((cpu->indirect_site & 3u) == 1u) {
+            if (!hl_native_cache_execution(executor->cache, cpu->indirect_site, &executed_code))
+                return run_fatal(&execution, output, 1);
+            cpu->indirect_site = 0;
+            executed_identity = 1;
+        }
+        if (executor->diagnostics) {
+            executor->completed += cpu->executed - executed_before;
+            switch (cpu->reason) {
+                case HL_NATIVE_EXIT_BRANCH: executor->boundary_branch++; break;
+                case HL_NATIVE_EXIT_SYSCALL: executor->boundary_syscall++; break;
+                case HL_NATIVE_EXIT_FALLBACK: executor->boundary_fallback++; break;
+                case HL_NATIVE_EXIT_YIELD: executor->boundary_yield++; break;
+                default: break;
+            }
+        }
+        translated = 1;
+        if ((cpu->executable_written & 4u) != 0)
+            return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
+        if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&
+            cpu->fault_size != 0 && operand_resolver != NULL) {
+            uint64_t completed, current_first, current_last;
+            hl_a64_view view = {0};
+            hl_a64_projection resolved_projection;
+            uint32_t result;
+            if (!executed_identity) {
+                return run_fatal(&execution, output, 1);
+            }
+            current_first = executed_code.source_first;
+            current_last = executed_code.source_last;
+            completed = (cpu->program - current_first) / 4;
+            if (completed > budget) return run_fatal(&execution, output, 1);
+            uint64_t charged = (current_last - current_first) / 4;
+            if (charged < completed || cpu->executed < charged || cpu->budget > request->budget - (charged - completed))
+                return run_fatal(&execution, output, 1);
+            cpu->executed -= charged - completed;
+            cpu->budget += charged - completed;
+            budget = cpu->budget;
+            if (HL_A64_RUN_VIEW_CACHE && run_view_resolve(&operand_views, cpu, cpu->fault_address,
+                                                         cpu->fault_size, (uint32_t)cpu->fault_access)) {
+                if (executor->diagnostics) executor->operand_cache_hits++;
+                /* run_view_resolve promoted the selected generation-qualified
+                 * view and installed it as the active owner. Publish that same
+                 * bounded ordering before retry so generated guards can select
+                 * subsequent cached owners without another dispatcher exit. */
+                run_view_publish(&operand_views, cpu, source->mapping_incarnation);
+                continue;
+            }
+            status = hl_native_execution_leave(&execution);
+            if (status != HL_NATIVE_OK) return status;
+            if (cpu->interrupt != 0 || budget == 0) continue;
+            if (executor->diagnostics) executor->operand_callbacks++;
+            result = operand_resolver(operand_context, cpu->fault_address, cpu->fault_size,
+                                      (uint32_t)cpu->fault_access, executed_code.mapping_epoch,
+                                      executed_code.instruction_epoch, &view);
+            if (result == HL_NATIVE_OPERAND_RESOLVED) {
+                resolved_projection = (hl_a64_projection){&view, 1, source->mapping_incarnation, 0};
+                if (!hl_a64_projection_validate(&resolved_projection) ||
+                    !hl_a64_projection_resolve(&resolved_projection, cpu, cpu->fault_address,
+                                               cpu->fault_size, (uint32_t)cpu->fault_access))
+                    return HL_NATIVE_ARGUMENT;
+                if (HL_A64_RUN_VIEW_CACHE) run_view_install(&operand_views, &view);
+                run_view_publish(&operand_views, cpu, source->mapping_incarnation);
+                continue;
+            }
+            status = hl_native_execution_enter(executor, &execution);
+            if (status != HL_NATIVE_OK) return status;
+            if (result == HL_NATIVE_OPERAND_FAULT)
+                return hl_native_execution_exit(&execution, output, HL_NATIVE_EXIT_FAULT,
+                                                (uint32_t)cpu->fault_access, cpu->program, cpu->program,
+                                                cpu->fault_address, 1);
+            if (result == HL_NATIVE_OPERAND_EPOCH)
+                return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
+            if (result != HL_NATIVE_OPERAND_DECLINED) {
+                status = hl_native_execution_leave(&execution);
+                return status == HL_NATIVE_OK ? HL_NATIVE_ARGUMENT : status;
+            }
+            return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
+        }
+        if (cpu->budget > budget || cpu->executed > request->budget) return run_fatal(&execution, output, 1);
+        budget = cpu->budget;
+        if (cpu->reason == HL_NATIVE_EXIT_BRANCH) {
+            continue;
+        }
+        if (cpu->reason == HL_NATIVE_EXIT_FAULT)
+            return hl_native_execution_exit(&execution, output, HL_NATIVE_EXIT_FAULT,
+                                            (uint32_t)cpu->fault_access, cpu->program, cpu->program,
+                                            cpu->fault_address, 1);
+        if (cpu->reason != HL_NATIVE_EXIT_SYSCALL && cpu->reason != HL_NATIVE_EXIT_FALLBACK &&
+            cpu->reason != HL_NATIVE_EXIT_INTERRUPT && cpu->reason != HL_NATIVE_EXIT_YIELD)
+            return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
+        return run_exit(&execution, output, (uint32_t)cpu->reason, cpu->program);
+    }
+}
+#endif
+
+hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
+                               const hl_native_run_request *request, hl_native_exit *output) {
+    hl_native_execution execution = {0};
+    uint64_t instruction;
+    volatile uint64_t *interrupt;
+    hl_native_status status;
+
+    if (executor == NULL || cpu == NULL || request == NULL || output == NULL ||
+        cpu->abi != HL_NATIVE_ABI || cpu->size < sizeof(*cpu) || cpu->reserved != 0 ||
+        request->abi != HL_NATIVE_ABI || request->size < offsetof(hl_native_run_request, source) ||
+        request->reserved != 0 ||
+        output->abi != HL_NATIVE_ABI || output->size < sizeof(*output) ||
+        cpu->architecture != request->architecture)
+        return HL_NATIVE_ARGUMENT;
+
+    switch (cpu->architecture) {
+        case HL_NATIVE_AARCH64:
+            if (cpu->state.aarch64 == NULL) return HL_NATIVE_ARGUMENT;
+            cpu->state.aarch64->executable_written = 0;
+            instruction = cpu->state.aarch64->program;
+            interrupt = &cpu->state.aarch64->interrupt;
+            break;
+        case HL_NATIVE_X86_64:
+            if (cpu->state.x86_64 == NULL) return HL_NATIVE_ARGUMENT;
+            cpu->state.x86_64->executable_written = 0;
+            instruction = cpu->state.x86_64->program;
+            interrupt = &cpu->state.x86_64->interrupt;
+            break;
+        default:
+            return HL_NATIVE_ARGUMENT;
+    }
+
+#if defined(__aarch64__)
+    if (cpu->architecture == HL_NATIVE_X86_64 &&
+        request->size >= offsetof(hl_native_run_request, source_context) &&
+        request->source != NULL) {
+        return hl_native_x86_64_run(executor, cpu->state.x86_64, request, output);
+    }
+    if (cpu->architecture == HL_NATIVE_AARCH64 &&
+        request->size >= offsetof(hl_native_run_request, source_context) &&
+        request->source != NULL)
+        return run_aarch64(executor, cpu, cpu->state.aarch64, request, output);
+#endif
+
+    status = hl_native_execution_enter(executor, &execution);
+    if (status != HL_NATIVE_OK) return status;
+    if (request->size >= offsetof(hl_native_run_request, direct_token) &&
+        ((request->memory_mode == 0) != (request->authority_generation == 0))) {
+        (void)hl_native_execution_leave(&execution);
+        return HL_NATIVE_ARGUMENT;
+    }
+    if (request->size >= offsetof(hl_native_run_request, direct_token) && request->memory_mode != 0) {
+        const hl_native_direct_token *token = request->size >= offsetof(hl_native_run_request, authority_identity)
+            ? request->direct_token : NULL;
+        uint64_t identity = request->size >= sizeof(*request) ? request->authority_identity : 0;
+        if (!hl_native_direct_request_valid(executor, token, request->authority_generation,
+                                            identity, request->projection)) {
+            (void)hl_native_execution_leave(&execution);
+            return HL_NATIVE_STATE;
+        }
+    }
+    if (*interrupt != 0)
+        return run_exit(&execution, output, HL_NATIVE_EXIT_INTERRUPT, instruction);
+    if (request->budget == 0)
+        return run_exit(&execution, output, HL_NATIVE_EXIT_YIELD, instruction);
+
+    /* M1 has no production translation service.  Returning fallback before
+     * cache lookup is exact: no architectural state or guest PC was changed. */
+#if defined(__aarch64__)
+    if (cpu->architecture == HL_NATIVE_AARCH64)
+        hl_native_aarch64_enter(cpu->state.aarch64, hl_native_aarch64_fallback);
+#endif
+    return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
+}
+
+hl_native_status hl_native_destroy(hl_native_executor *executor) {
+    if (executor == NULL) return HL_NATIVE_ARGUMENT;
+    /* One nonblocking CAS closes admission only when no execution/fault scope,
+     * mutation, or fork lease exists. STATE leaves the live handle untouched
+     * and may be retried after the conflicting owner releases its lease. */
+    uint64_t expected = ADMISSION(MUTATION_OPEN, 0);
+    if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
+                                                 ADMISSION(MUTATION_ACTIVE, 0),
+                                                 memory_order_acq_rel, memory_order_relaxed))
+        return HL_NATIVE_STATE;
+    if (executor->direct_authority != NULL) {
+        atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
+        return HL_NATIVE_STATE;
+    }
+    hl_native_cache_destroy(executor->cache);
+    free(executor->ibtc);
+    hl_native_arena_destroy(&executor->arena);
+    free(executor);
+    return HL_NATIVE_OK;
+}
+
+void hl_native_flush(void *address, size_t size) {
+    if (address == NULL || size == 0) return;
+    __builtin___clear_cache((char *)address, (char *)address + size);
+}

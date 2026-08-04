@@ -1,0 +1,2 @@
+update same_fd=1
+read_signo=10 only_one=1 usr2_still_pending=1

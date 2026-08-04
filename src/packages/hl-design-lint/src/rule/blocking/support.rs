@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use syn::{visit::Visit, Expr, ExprCall, Stmt, Type, UseTree};
+use syn::{Expr, ExprCall, Stmt, Type, UseTree, visit::Visit};
 
 use crate::source::requires_test;
 
@@ -11,13 +11,10 @@ pub(super) enum LockKind {
 }
 
 pub(super) fn test_attributes(attributes: &[syn::Attribute]) -> bool {
-    requires_test(attributes)
-        || attributes
-            .iter()
-            .any(|attribute| attribute.path().is_ident("test"))
+    requires_test(attributes) || attributes.iter().any(|attribute| attribute.path().is_ident("test"))
 }
 
-pub(super) fn blocking_fs_function(name: &str) -> bool {
+pub(super) fn fs_function(name: &str) -> bool {
     matches!(
         name,
         "canonicalize"
@@ -41,11 +38,7 @@ pub(super) fn blocking_fs_function(name: &str) -> bool {
     )
 }
 
-pub(super) fn collect_use(
-    tree: &UseTree,
-    prefix: Vec<String>,
-    aliases: &mut HashMap<String, Vec<String>>,
-) {
+pub(super) fn collect_use(tree: &UseTree, prefix: Vec<String>, aliases: &mut HashMap<String, Vec<String>>) {
     match tree {
         UseTree::Path(path) => {
             let mut prefix = prefix;
@@ -91,10 +84,7 @@ pub(super) fn lock_acquisition(expression: &Expr) -> Option<&syn::ExprMethodCall
     }
 }
 
-pub(super) fn command_constructor(
-    expression: &Expr,
-    resolve: impl Fn(&syn::Path) -> Vec<String> + Copy,
-) -> bool {
+pub(super) fn command_constructor(expression: &Expr, resolve: impl Fn(&syn::Path) -> Vec<String> + Copy) -> bool {
     let Expr::Call(call) = expression else {
         return false;
     };
@@ -104,10 +94,7 @@ pub(super) fn command_constructor(
     resolve(&function.path) == ["std", "process", "Command", "new"]
 }
 
-pub(super) fn fs_open_options_constructor(
-    expression: &Expr,
-    resolve: impl Fn(&syn::Path) -> Vec<String> + Copy,
-) -> bool {
+pub(super) fn fs_options_constructor(expression: &Expr, resolve: impl Fn(&syn::Path) -> Vec<String> + Copy) -> bool {
     match expression {
         Expr::Call(call) => {
             let Expr::Path(function) = call.func.as_ref() else {
@@ -115,7 +102,7 @@ pub(super) fn fs_open_options_constructor(
             };
             resolve(&function.path) == ["std", "fs", "OpenOptions", "new"]
         }
-        Expr::MethodCall(call) => fs_open_options_constructor(&call.receiver, resolve),
+        Expr::MethodCall(call) => fs_options_constructor(&call.receiver, resolve),
         _ => false,
     }
 }
@@ -133,10 +120,7 @@ pub(super) fn lock_constructor(
     lock_path(&resolve(&function.path))
 }
 
-pub(super) fn lock_type(
-    ty: &Type,
-    resolve: impl Fn(&syn::Path) -> Vec<String> + Copy,
-) -> Option<LockKind> {
+pub(super) fn lock_type(ty: &Type, resolve: impl Fn(&syn::Path) -> Vec<String> + Copy) -> Option<LockKind> {
     match ty {
         Type::Path(path) => lock_path(&resolve(&path.path)),
         Type::Reference(reference) => lock_type(&reference.elem, resolve),
@@ -161,10 +145,7 @@ fn lock_path(path: &[String]) -> Option<LockKind> {
     }
 }
 
-pub(super) fn call_is_blocking_boundary(
-    call: &ExprCall,
-    resolve: impl Fn(&syn::Path) -> Vec<String>,
-) -> bool {
+pub(super) fn boundary_call(call: &ExprCall, resolve: impl Fn(&syn::Path) -> Vec<String>) -> bool {
     let Expr::Path(function) = call.func.as_ref() else {
         return false;
     };

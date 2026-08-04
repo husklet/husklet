@@ -1,26 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use quote::ToTokens;
-use syn::{
-    spanned::Spanned, Expr, FnArg, ImplItem, Item, ItemImpl, ItemStruct, Member, Pat, Stmt,
-    Visibility,
-};
+use syn::{Expr, FnArg, ImplItem, Item, ItemImpl, ItemStruct, Member, Pat, Stmt, Visibility, spanned::Spanned};
 
 use crate::{
+    Result,
     model::{Finding, Related, Review, Severity},
     source::{Source, Workspace},
-    Result,
 };
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
-use super::{syntax::type_name, Rule};
+use super::{Rule, syntax::type_name};
 
 /// Detects accessors that duplicate access callers already have.
-pub struct AccessorBloat;
+pub struct Bloat;
 
-impl Rule for AccessorBloat {
+impl Rule for Bloat {
     fn id(&self) -> &'static str {
         "redundant-accessor"
     }
@@ -138,12 +136,7 @@ fn inspect_source(source: &Source, definitions: &Definitions, findings: &mut Vec
     }
 }
 
-fn inspect_impl(
-    source: &Source,
-    definitions: &Definitions,
-    item: &ItemImpl,
-    findings: &mut Vec<Finding>,
-) {
+fn inspect_impl(source: &Source, definitions: &Definitions, item: &ItemImpl, findings: &mut Vec<Finding>) {
     if item.trait_.is_some() || boundary_attributes(&item.attrs) {
         return;
     }
@@ -243,9 +236,7 @@ fn getter(expression: &Expr) -> Option<(String, Shape)> {
             })
         }
         Expr::MethodCall(call)
-            if call.method == "clone"
-                && call.args.is_empty()
-                && matches!(strip(&call.receiver), Expr::Field(_)) =>
+            if call.method == "clone" && call.args.is_empty() && matches!(strip(&call.receiver), Expr::Field(_)) =>
         {
             let Expr::Field(field) = strip(&call.receiver) else {
                 unreachable!()
@@ -267,21 +258,13 @@ fn setter(method: &syn::ImplItemFn, expression: &Expr) -> Option<(String, String
     let Expr::Path(value) = strip(&assign.right) else {
         return None;
     };
-    let (argument, argument_type) =
-        method
-            .sig
-            .inputs
-            .iter()
-            .find_map(|argument| match argument {
-                FnArg::Typed(argument) => match argument.pat.as_ref() {
-                    Pat::Ident(name) => Some((
-                        name.ident.to_string(),
-                        argument.ty.to_token_stream().to_string(),
-                    )),
-                    _ => None,
-                },
-                FnArg::Receiver(_) => None,
-            })?;
+    let (argument, argument_type) = method.sig.inputs.iter().find_map(|argument| match argument {
+        FnArg::Typed(argument) => match argument.pat.as_ref() {
+            Pat::Ident(name) => Some((name.ident.to_string(), argument.ty.to_token_stream().to_string())),
+            _ => None,
+        },
+        FnArg::Receiver(_) => None,
+    })?;
     (method.sig.inputs.len() == 2
         && value.path.is_ident(&argument)
         && matches!(method.sig.output, syn::ReturnType::Default))
@@ -301,12 +284,7 @@ fn self_field(field: &syn::ExprField) -> Option<String> {
     }
 }
 
-fn exposed_finding(
-    source: &Source,
-    owner: &str,
-    candidate: &Candidate<'_>,
-    field: &Field,
-) -> Finding {
+fn exposed_finding(source: &Source, owner: &str, candidate: &Candidate<'_>, field: &Field) -> Finding {
     let method = candidate.method.sig.ident.to_string();
     let field_name = match &candidate.access {
         Access::Get { field, .. } | Access::Set { field } => field,
@@ -332,10 +310,7 @@ fn exposed_finding(
         ("Method".into(), method),
         ("Field".into(), field_name.clone()),
         ("Field visibility".into(), field.visibility.clone()),
-        (
-            "Method visibility".into(),
-            visibility(&candidate.method.vis),
-        ),
+        ("Method visibility".into(), visibility(&candidate.method.vis)),
         ("Forwarding shape".into(), format!("{:?}", candidate.access)),
     ];
     review.questions = vec![
@@ -347,12 +322,7 @@ fn exposed_finding(
     finding
 }
 
-fn duplicate_finding(
-    source: &Source,
-    owner: &str,
-    left: &Candidate<'_>,
-    right: &Candidate<'_>,
-) -> Finding {
+fn duplicate_finding(source: &Source, owner: &str, left: &Candidate<'_>, right: &Candidate<'_>) -> Finding {
     let left_name = left.method.sig.ident.to_string();
     let right_name = right.method.sig.ident.to_string();
     let mut finding = Finding::warning(
@@ -360,12 +330,9 @@ fn duplicate_finding(
         format!("{owner}::{right_name}"),
         source.location(right.method.span()),
     );
-    finding.message = format!(
-        "`{owner}::{left_name}` and `{owner}::{right_name}` expose the identical field operation"
-    );
-    finding.help =
-        "keep one canonical accessor unless a documented compatibility contract requires both"
-            .into();
+    finding.message =
+        format!("`{owner}::{left_name}` and `{owner}::{right_name}` expose the identical field operation");
+    finding.help = "keep one canonical accessor unless a documented compatibility contract requires both".into();
     finding.related.push(Related {
         label: "identical accessor".into(),
         location: source.location(left.method.span()),
@@ -405,16 +372,7 @@ fn boundary_attributes(attributes: &[syn::Attribute]) -> bool {
             .map(|segment| segment.ident.to_string());
         matches!(
             name.as_deref(),
-            Some(
-                "deprecated"
-                    | "serde"
-                    | "repr"
-                    | "no_mangle"
-                    | "export_name"
-                    | "link_name"
-                    | "cfg"
-                    | "cfg_attr"
-            )
+            Some("deprecated" | "serde" | "repr" | "no_mangle" | "export_name" | "link_name" | "cfg" | "cfg_attr")
         ) || (attribute.path().is_ident("derive") && {
             let tokens = attribute.meta.to_token_stream().to_string();
             tokens.contains("Serialize") || tokens.contains("Deserialize")

@@ -1,0 +1,47 @@
+origin_registration	current_c_manifest	scope	status	notes
+abi.rs	tests/compat/abi/corpus/manifest.tsv	engine	covered	C ABI corpus and exact goldens replace Rust registration
+clitools.rs	tests/compat/core/abi/manifest.tsv; tests/compat/core/syscall/manifest.tsv	engine	covered	CLI-shaped guest behavior is registered as C guests; runner option parsing is covered by C unit tests
+completeness/mod.rs	tests/compat/completeness/manifest.tsv	engine	covered	registry module only; all runnable cases are in the C completeness manifest
+completeness/op_arm_ext.rs	tests/compat/completeness/manifest.tsv	engine	covered	AArch64 extension guests and goldens are registered
+completeness/op_arm_neon.rs	tests/compat/completeness/manifest.tsv	engine	covered	AArch64 NEON guests and goldens are registered
+completeness/op_x86_avx.rs	tests/compat/completeness/manifest.tsv	engine	covered	x86 AVX guests and goldens are registered
+completeness/op_x86_bit.rs	tests/compat/completeness/manifest.tsv	engine	covered	x86 bit-manipulation guests and goldens are registered
+completeness/op_x86_crypto.rs	tests/compat/completeness/manifest.tsv	engine	covered	x86 crypto guests and goldens are registered
+completeness/op_x86_misc.rs	tests/compat/completeness/manifest.tsv	engine	covered	x86 miscellaneous ISA guests and goldens are registered
+completeness/op_x86_sse.rs	tests/compat/completeness/manifest.tsv	engine	covered	x86 SSE guests and goldens are registered
+completeness/sys_cred.rs	tests/compat/completeness/manifest.tsv	engine	covered	credential syscall guests and goldens are registered
+completeness/sys_file.rs	tests/compat/completeness/manifest.tsv	engine	covered	file syscall guests and goldens are registered
+completeness/sys_fs.rs	tests/compat/completeness/manifest.tsv	engine	covered	filesystem syscall guests and goldens are registered
+completeness/sys_mem.rs	tests/compat/completeness/manifest.tsv	engine	covered	memory syscall guests and goldens are registered
+completeness/sys_misc.rs	tests/compat/completeness/manifest.tsv	engine	covered	miscellaneous syscall guests and goldens are registered
+completeness/sys_proc.rs	tests/compat/completeness/manifest.tsv	engine	covered	process syscall guests and goldens are registered
+completeness/sys_signal.rs	tests/compat/completeness/manifest.tsv	engine	covered	signal syscall guests and goldens are registered
+completeness/sys_time.rs	tests/compat/completeness/manifest.tsv	engine	covered	time syscall guests and goldens are registered
+dentry.rs	tests/compat/filesystem/manifest.tsv	engine	covered	dentry mutation and lookup stress is a C golden case
+elf210.rs	tests/unit/test_placement.c	engine	covered	maintenance environment hook removed; production x86 loader uses an injected placement seam tested for fixed-address collision fallback
+execfaultx.rs	tests/compat/process/manifest.tsv; tests/compat/signals/manifest.tsv	engine	covered	exec and fault cases are C guests with goldens
+forkx.rs	tests/compat/process/manifest.tsv; tests/compat/threads/manifest.tsv	engine	covered	fork and thread-fork cases are C guests with goldens
+fs.rs	tests/compat/filesystem/manifest.tsv	engine	covered	filesystem cases are C guests with goldens
+fsx.rs	tests/compat/filesystem/manifest.tsv	engine	covered	extended filesystem cases are C guests with goldens
+gpu_render_ir.rs	-	graphics-ui-out-of-scope	excluded	GPU and compositor rendering are outside the generic container engine
+gui.rs	-	graphics-ui-out-of-scope	excluded	Chrome Wayland EGL GLES Vulkan dmabuf and compositor behavior belongs outside the engine
+ipc.rs	tests/compat/ipc/manifest.tsv	engine	covered	IPC cases are C guests with goldens
+isolation.rs	tests/compat/isolation/manifest.tsv	engine	covered	container isolation cases are C guests with goldens
+libc.rs	tests/compat/libc/manifest.tsv	engine	covered	libc behavior cases are C guests with goldens
+linuxsys.rs	tests/compat/syscall/manifest.tsv	engine	covered	Linux syscall behavior is registered as C guests with goldens
+ltpgaps.rs	tests/compat/syscall_edges/manifest.tsv	engine	covered	LTP-derived edge cases are C guests with checked expectations
+memory.rs	tests/compat/memory/manifest.tsv	engine	covered	memory behavior cases are C guests with goldens
+memx.rs	tests/compat/memory/manifest.tsv	engine	covered	extended mapping cases are C guests with goldens
+mod.rs	tests/compat/guest_inventory.tsv	engine	covered	registry-only module; every origin artifact is accounted for by the guest inventory
+net.rs	tests/compat/network/manifest.tsv	engine	covered	network cases are C guests with goldens
+pcachex.rs	tests/compat/filesystem/manifest.tsv	engine	covered	persistent-cache fork exec and executable-map cases retain cold/warm C registrations
+posix.rs	tests/compat/posix/manifest.tsv	engine	covered	POSIX cases are C guests with goldens
+processx.rs	tests/compat/process/manifest.tsv	engine	covered	extended process cases are C guests with goldens
+procexe.rs	tests/compat/process/manifest.tsv; tests/compat/procfs/manifest.tsv	engine	covered	self-exec and proc executable identity cases are C guests with goldens
+procfs.rs	tests/compat/procfs/manifest.tsv	engine	covered	procfs cases are C guests with goldens
+scratchx.rs	tests/compat/process/manifest.tsv	engine	covered	scratch and static-exec cases are registered as C guests
+signalx.rs	tests/compat/signals/manifest.tsv	engine	covered	extended signal cases are C guests with goldens
+soak.rs	tests/compat/core/workload/manifest.tsv	engine	covered	long-running translator and runtime cases are C guests with deterministic goldens
+syscallcompat.rs	tests/compat/syscall_edges/manifest.tsv	engine	covered	syscall validation and errno cases are C guests with goldens
+threads.rs	tests/compat/threads/manifest.tsv	engine	covered	thread lifecycle and synchronization cases are C guests with goldens
+timex.rs	tests/compat/time/manifest.tsv	engine	covered	time and clock cases are C guests with goldens

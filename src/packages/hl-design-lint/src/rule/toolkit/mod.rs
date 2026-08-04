@@ -2,14 +2,14 @@ use std::collections::BTreeSet;
 
 use quote::ToTokens;
 use syn::{
-    spanned::Spanned, visit::Visit, Fields, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct,
-    ItemTrait, Path, ReturnType, TraitItem, Type, UseTree, Visibility,
+    Fields, ImplItem, Item, ItemEnum, ItemImpl, ItemStruct, ItemTrait, Path, ReturnType, TraitItem, Type, UseTree,
+    Visibility, spanned::Spanned, visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Review, Severity},
     source::{Source, Workspace},
-    Result,
 };
 
 use super::Rule;
@@ -80,9 +80,7 @@ impl Rule for GuiToolkitLeakage {
             for item in &source.syntax.items {
                 let selected = item_name(item).is_some_and(|name| names.contains(&name));
                 let selected_impl = match item {
-                    Item::Impl(item) => {
-                        impl_type_name(item).is_some_and(|name| names.contains(&name))
-                    }
+                    Item::Impl(item) => impl_type_name(item).is_some_and(|name| names.contains(&name)),
                     _ => false,
                 };
                 if selected || selected_impl {
@@ -104,12 +102,7 @@ struct Visitor<'a> {
 }
 
 impl Visitor<'_> {
-    fn inspect(
-        &mut self,
-        subject: String,
-        span: proc_macro2::Span,
-        types: impl IntoIterator<Item = Type>,
-    ) {
+    fn inspect(&mut self, subject: String, span: proc_macro2::Span, types: impl IntoIterator<Item = Type>) {
         let mut leaks = BTreeSet::new();
         for ty in types {
             TypeLeaks {
@@ -123,9 +116,7 @@ impl Visitor<'_> {
         }
         let leaked = leaks.into_iter().collect::<Vec<_>>().join(", ");
         let mut finding = Finding::error(self.rule, subject.clone(), self.source.location(span));
-        finding.message = format!(
-            "externally reachable `{subject}` exposes native GUI toolkit type(s): {leaked}"
-        );
+        finding.message = format!("externally reachable `{subject}` exposes native GUI toolkit type(s): {leaked}");
         finding.help = "replace native types with hl-gui-owned state, events, component handles, or errors; keep toolkit conversion and widget access inside the adapter".into();
         let mut review = Review::error();
         review.metadata = vec![
@@ -160,11 +151,7 @@ impl<'ast> Visit<'ast> for Visitor<'_> {
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         if self.public(&item.vis) {
-            self.inspect(
-                item.sig.ident.to_string(),
-                item.sig.span(),
-                signature_types(&item.sig),
-            );
+            self.inspect(item.sig.ident.to_string(), item.sig.span(), signature_types(&item.sig));
         }
     }
 
@@ -185,14 +172,10 @@ impl<'ast> Visit<'ast> for Visitor<'_> {
         if !leaks.is_empty() {
             let leaked = leaks.into_iter().collect::<Vec<_>>().join(", ");
             let subject = item.tree.to_token_stream().to_string();
-            let mut finding = Finding::error(
-                self.rule,
-                subject.clone(),
-                self.source.location(item.span()),
-            );
-            finding.message =
-                format!("externally reachable re-export `{subject}` exposes {leaked}");
-            finding.help = "export an hl-gui-owned type and keep the native toolkit import private to the adapter".into();
+            let mut finding = Finding::error(self.rule, subject.clone(), self.source.location(item.span()));
+            finding.message = format!("externally reachable re-export `{subject}` exposes {leaked}");
+            finding.help =
+                "export an hl-gui-owned type and keep the native toolkit import private to the adapter".into();
             let mut review = Review::error();
             review.metadata = vec![
                 ("package".into(), self.source.package.clone()),
@@ -273,10 +256,7 @@ impl<'ast> Visit<'ast> for Visitor<'_> {
     }
 
     fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-        if !self.public_context
-            || item.trait_.is_some()
-            || !public_self_type(item, &self.public_types)
-        {
+        if !self.public_context || item.trait_.is_some() || !public_self_type(item, &self.public_types) {
             return;
         }
         let owner = item.self_ty.to_token_stream().to_string();
@@ -302,8 +282,7 @@ struct TypeLeaks<'a> {
 impl<'ast> Visit<'ast> for TypeLeaks<'_> {
     fn visit_path(&mut self, path: &'ast Path) {
         if let Some(toolkit) = self.aliases.toolkit(path) {
-            self.leaks
-                .insert(format!("{toolkit} ({})", path.to_token_stream()));
+            self.leaks.insert(format!("{toolkit} ({})", path.to_token_stream()));
         }
         syn::visit::visit_path(self, path);
     }
@@ -335,11 +314,7 @@ fn generic_types(generics: &syn::Generics) -> Vec<Type> {
             }
         }
     }
-    for predicate in generics
-        .where_clause
-        .iter()
-        .flat_map(|clause| &clause.predicates)
-    {
+    for predicate in generics.where_clause.iter().flat_map(|clause| &clause.predicates) {
         if let syn::WherePredicate::Type(predicate) = predicate {
             types.push(predicate.bounded_ty.clone());
             types.extend(predicate.bounds.iter().filter_map(bound_type));
@@ -348,18 +323,10 @@ fn generic_types(generics: &syn::Generics) -> Vec<Type> {
     types
 }
 
-fn collect_toolkit_uses(
-    tree: &UseTree,
-    prefix: Option<String>,
-    aliases: &Aliases,
-    leaks: &mut BTreeSet<String>,
-) {
+fn collect_toolkit_uses(tree: &UseTree, prefix: Option<String>, aliases: &Aliases, leaks: &mut BTreeSet<String>) {
     match tree {
         UseTree::Path(path) => {
-            let next = prefix.map_or_else(
-                || path.ident.to_string(),
-                |prefix| format!("{prefix}::{}", path.ident),
-            );
+            let next = prefix.map_or_else(|| path.ident.to_string(), |prefix| format!("{prefix}::{}", path.ident));
             collect_toolkit_uses(&path.tree, Some(next), aliases, leaks);
         }
         UseTree::Name(name) => {
@@ -377,12 +344,7 @@ fn collect_toolkit_uses(
     }
 }
 
-fn record_toolkit_use(
-    prefix: Option<String>,
-    leaf: String,
-    aliases: &Aliases,
-    leaks: &mut BTreeSet<String>,
-) {
+fn record_toolkit_use(prefix: Option<String>, leaf: String, aliases: &Aliases, leaks: &mut BTreeSet<String>) {
     let path = prefix.map_or_else(|| leaf.clone(), |prefix| format!("{prefix}::{leaf}"));
     let root = path.split("::").next().unwrap_or_default();
     if let Some(toolkit) = aliases.crate_toolkit(root) {
@@ -414,15 +376,9 @@ fn public_type_names(source: &Source) -> BTreeSet<String> {
         .items
         .iter()
         .filter_map(|item| match item {
-            Item::Struct(item) if matches!(item.vis, Visibility::Public(_)) => {
-                Some(item.ident.to_string())
-            }
-            Item::Enum(item) if matches!(item.vis, Visibility::Public(_)) => {
-                Some(item.ident.to_string())
-            }
-            Item::Union(item) if matches!(item.vis, Visibility::Public(_)) => {
-                Some(item.ident.to_string())
-            }
+            Item::Struct(item) if matches!(item.vis, Visibility::Public(_)) => Some(item.ident.to_string()),
+            Item::Enum(item) if matches!(item.vis, Visibility::Public(_)) => Some(item.ident.to_string()),
+            Item::Union(item) if matches!(item.vis, Visibility::Public(_)) => Some(item.ident.to_string()),
             _ => None,
         })
         .collect()
@@ -435,24 +391,25 @@ fn public_self_type(item: &ItemImpl, public_types: &BTreeSet<String>) -> bool {
             .segments
             .last()
             .is_some_and(|segment| public_types.contains(&segment.ident.to_string())),
-        Type::Group(group) => public_self_type_for(&group.elem, public_types),
-        Type::Paren(paren) => public_self_type_for(&paren.elem, public_types),
+        Type::Group(group) => type_is_public(&group.elem, public_types),
+        Type::Paren(paren) => type_is_public(&paren.elem, public_types),
         _ => false,
     }
 }
 
-fn public_self_type_for(ty: &Type, public_types: &BTreeSet<String>) -> bool {
+fn type_is_public(ty: &Type, public_types: &BTreeSet<String>) -> bool {
     match ty {
         Type::Path(path) => path
             .path
             .segments
             .last()
             .is_some_and(|segment| public_types.contains(&segment.ident.to_string())),
-        Type::Group(group) => public_self_type_for(&group.elem, public_types),
-        Type::Paren(paren) => public_self_type_for(&paren.elem, public_types),
+        Type::Group(group) => type_is_public(&group.elem, public_types),
+        Type::Paren(paren) => type_is_public(&paren.elem, public_types),
         _ => false,
     }
 }
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;

@@ -1,0 +1,1 @@
+futex_waitv zero_rejected=1 huge_rejected=1 badflags_rejected=1

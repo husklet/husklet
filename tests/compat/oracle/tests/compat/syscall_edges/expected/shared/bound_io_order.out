@@ -1,0 +1,48 @@
+volume.read_mid_nullbuf rc=-1 errno=14
+volume.read_mid_pos pos=3
+volume.read_mid_next rc=1 errno=0
+volume.read_mid_byte byte=d
+volume.read_mid_badvec rc=-1 errno=14
+volume.pread_mid_nullbuf rc=-1 errno=14
+volume.read_eof_nullbuf rc=0 errno=0
+volume.read_eof_badvec rc=0 errno=0
+volume.preadv2_eof_badvec rc=0 errno=0
+volume.pread_eof_nullbuf rc=0 errno=0
+volume.preadv_eof_badvec rc=0 errno=0
+volume.read_eof_nullvec rc=-1 errno=14
+volume.rdonly_write_nullbuf rc=-1 errno=9
+volume.rdonly_writev_badvec rc=-1 errno=9
+volume.rdonly_writev_nullvec rc=-1 errno=9
+volume.rdonly_pwrite_nullbuf rc=-1 errno=9
+volume.rdonly_pwritev2_badvec rc=-1 errno=9
+volume.wronly_read_nullbuf rc=-1 errno=9
+volume.wronly_readv_badvec rc=-1 errno=9
+volume.wronly_readv_nullvec rc=-1 errno=9
+volume.wronly_pread_nullbuf rc=-1 errno=9
+volume.wronly_write_nullbuf rc=-1 errno=14
+volume.dir_read_nullbuf rc=-1 errno=21
+volume.dir_read_badvec rc=-1 errno=21
+shm.read_mid_nullbuf rc=-1 errno=14
+shm.read_mid_pos pos=3
+shm.read_mid_next rc=1 errno=0
+shm.read_mid_byte byte=d
+shm.read_mid_badvec rc=-1 errno=14
+shm.pread_mid_nullbuf rc=-1 errno=14
+shm.read_eof_nullbuf rc=0 errno=0
+shm.read_eof_badvec rc=0 errno=0
+shm.preadv2_eof_badvec rc=0 errno=0
+shm.pread_eof_nullbuf rc=0 errno=0
+shm.preadv_eof_badvec rc=0 errno=0
+shm.read_eof_nullvec rc=-1 errno=14
+shm.rdonly_write_nullbuf rc=-1 errno=9
+shm.rdonly_writev_badvec rc=-1 errno=9
+shm.rdonly_writev_nullvec rc=-1 errno=9
+shm.rdonly_pwrite_nullbuf rc=-1 errno=9
+shm.rdonly_pwritev2_badvec rc=-1 errno=9
+shm.wronly_read_nullbuf rc=-1 errno=9
+shm.wronly_readv_badvec rc=-1 errno=9
+shm.wronly_readv_nullvec rc=-1 errno=9
+shm.wronly_pread_nullbuf rc=-1 errno=9
+shm.wronly_write_nullbuf rc=-1 errno=14
+shm.dir_read_nullbuf rc=-1 errno=21
+shm.dir_read_badvec rc=-1 errno=21

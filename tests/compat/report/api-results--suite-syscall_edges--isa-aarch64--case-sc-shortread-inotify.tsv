@@ -1,0 +1,2 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+syscall_edges	sc-shortread-inotify	aarch64	fail	0	linux-libc,inotify,filesystem	stdout:e=7eb88902f5137fae,a=c98f94202bbf5b26,d=22,eb=32,ab=39,el=33,al=32	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

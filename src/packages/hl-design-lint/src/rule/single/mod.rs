@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 
-use syn::{spanned::Spanned, visit::Visit, ItemFn, ItemMod};
+use syn::{ItemFn, ItemMod, spanned::Spanned, visit::Visit};
 
 use crate::{
-    model::{Finding, Related, Severity},
-    rule::{references::References, Rule},
-    source::{requires_test, Source, Workspace},
     Result,
+    model::{Finding, Related, Severity},
+    rule::{Rule, references::References},
+    source::{Source, Workspace, requires_test},
 };
 
 /// Reports private free functions referenced from exactly one production site.
-pub struct SingleUse;
+pub struct Use;
 
-impl Rule for SingleUse {
+impl Rule for Use {
     fn id(&self) -> &'static str {
         "single-use-free-function"
     }
@@ -54,10 +54,7 @@ impl Rule for SingleUse {
                     .into_iter()
                     .flatten()
                     .filter(|reference| {
-                        reference
-                            .context
-                            .as_ref()
-                            .map(|context| context.name.as_str())
+                        reference.context.as_ref().map(|context| context.name.as_str())
                             != Some(definition.name.as_str())
                     })
                     .collect::<Vec<_>>();
@@ -75,7 +72,8 @@ impl Definition {
     fn finding(self, rule: &'static str, usage: &crate::rule::references::Reference) -> Finding {
         let mut finding = Finding::warning(rule, &self.name, self.location);
         finding.message = format!("private free function `{}` has one use", self.name);
-        finding.help="inline it at the use site or mark a deliberate section boundary with `// hl-lint: visual-section`".into();
+        finding.help =
+            "inline it at the use site or mark a deliberate section boundary with `// hl-lint: visual-section`".into();
         finding.related.push(Related {
             label: usage.context.as_ref().map_or_else(
                 || "sole use".into(),
@@ -94,10 +92,7 @@ struct Definitions<'a> {
 }
 impl<'ast> Visit<'ast> for Definitions<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
-        if !self.test_scope
-            && !requires_test(&function.attrs)
-            && candidate(function, &self.source.text)
-        {
+        if !self.test_scope && !requires_test(&function.attrs) && candidate(function, &self.source.text) {
             let span = function
                 .attrs
                 .first()

@@ -1,0 +1,2 @@
+poll empty in=0 out=1
+poll nonzero in=1 out=1

@@ -1,0 +1,2 @@
+sigpipe delivered=1 write=-1 errno=Broken pipe
+sigpipe ignored_write=-1 errno=Broken pipe

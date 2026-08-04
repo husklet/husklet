@@ -1,0 +1,5 @@
+waitid_noflags_errno=22
+waitid_badopt_errno=22
+waitid_badidtype_errno=22
+waitid_nochild_errno=10
+wait4_badopt_errno=22

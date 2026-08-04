@@ -1,0 +1,5 @@
+# case	image	argv	config	exit	stdout	isas	legacy_registration	disposition
+cgroup-rootfs-caps	alpine	/bin/sh -c <CGROUP_PROBE>	cpus=2;memory=536870912	0	expected/images/cgroup-rootfs-caps.out	aarch64,x86_64	in_rootfs(alpine)	external-service
+cpu-sysfs-rootfs	alpine	/bin/sh -c <CPUDIR_PROBE>	-	0	expected/images/cpu-sysfs-rootfs.out	aarch64,x86_64	in_rootfs(alpine)	external-service
+readonly-rootfs	alpine	/bin/sh -c <RO_PROBE>	read_only=1	0	expected/images/readonly-rootfs.out	aarch64,x86_64	in_rootfs(alpine)	external-service
+masked-paths	alpine	/bin/sh -c <MASK_PROBE>	-	0	expected/images/masked-paths.out	aarch64,x86_64	in_rootfs(alpine)	external-service

@@ -1,0 +1,4 @@
+mismatch	suite	cases
+expected-exit	signals	1
+stdout	signals	1
+stdout	syscall	2

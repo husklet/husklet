@@ -2,21 +2,21 @@ use std::collections::HashMap;
 
 use proc_macro2::Span;
 use syn::{
-    spanned::Spanned, visit::Visit, Expr, ExprCall, ExprMacro, ImplItemFn, ItemFn, ItemMod,
-    ItemStatic, ItemUse, Type, UseTree,
+    Expr, ExprCall, ExprMacro, ImplItemFn, ItemFn, ItemMod, ItemStatic, ItemUse, Type, UseTree, spanned::Spanned,
+    visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 /// Prevents reusable code from obtaining configuration from ambient process state.
-pub struct EnvironmentAccess;
+pub struct Access;
 
-impl Rule for EnvironmentAccess {
+impl Rule for Access {
     fn id(&self) -> &'static str {
         "environment-variable-access"
     }
@@ -61,7 +61,7 @@ impl<'a> Accesses<'a> {
         self.source.test
             || self.test_depth > 0
             || source_boundary(self.source, &self.modules)
-            || self.source.package == "husklet"
+            || self.source.package == "hl-engine"
     }
 
     fn resolved_path(&self, expression: &syn::ExprPath) -> Vec<String> {
@@ -116,9 +116,7 @@ impl<'a> Accesses<'a> {
             name.clone(),
             self.source.location(item.span()),
         );
-        finding.message = format!(
-            "ambient configuration/state global `{name}` hides process-wide input and lifecycle"
-        );
+        finding.message = format!("ambient configuration/state global `{name}` hides process-wide input and lifecycle");
         finding.help = "construct this state explicitly at composition and pass an owned configuration or capability to consumers; retain globals only for immutable constants or registries whose process-wide identity is the contract".to_owned();
         finding.related.push(Related {
             label: format!("configuration/state evidence: `{}`", type_text(&item.ty)),
@@ -146,15 +144,10 @@ impl<'ast> Visit<'ast> for Accesses<'_> {
 
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
         let aliases = self.aliases.clone();
-        let test = requires_test(&function.attrs)
-            || function
-                .attrs
-                .iter()
-                .any(|attribute| attribute.path().is_ident("test"));
+        let test =
+            requires_test(&function.attrs) || function.attrs.iter().any(|attribute| attribute.path().is_ident("test"));
         self.test_depth += usize::from(test);
-        let previous = self
-            .context
-            .replace((function.sig.ident.to_string(), function.span()));
+        let previous = self.context.replace((function.sig.ident.to_string(), function.span()));
         syn::visit::visit_item_fn(self, function);
         self.context = previous;
         self.test_depth -= usize::from(test);
@@ -163,15 +156,10 @@ impl<'ast> Visit<'ast> for Accesses<'_> {
 
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
         let aliases = self.aliases.clone();
-        let test = requires_test(&function.attrs)
-            || function
-                .attrs
-                .iter()
-                .any(|attribute| attribute.path().is_ident("test"));
+        let test =
+            requires_test(&function.attrs) || function.attrs.iter().any(|attribute| attribute.path().is_ident("test"));
         self.test_depth += usize::from(test);
-        let previous = self
-            .context
-            .replace((function.sig.ident.to_string(), function.span()));
+        let previous = self.context.replace((function.sig.ident.to_string(), function.span()));
         syn::visit::visit_impl_item_fn(self, function);
         self.context = previous;
         self.test_depth -= usize::from(test);
@@ -240,10 +228,10 @@ fn ambient_global(item: &ItemStatic, accesses: &Accesses<'_>) -> bool {
     let lazy = ["oncelock", "lazylock", "oncecell", "lazy"]
         .iter()
         .any(|kind| ty.contains(kind));
-    lazy || expression_has_ambient_input(&item.expr, accesses)
+    lazy || has_ambient_input(&item.expr, accesses)
 }
 
-fn expression_has_ambient_input(expression: &Expr, accesses: &Accesses<'_>) -> bool {
+fn has_ambient_input(expression: &Expr, accesses: &Accesses<'_>) -> bool {
     struct Calls<'a, 'b> {
         accesses: &'a Accesses<'b>,
         found: bool,
@@ -265,10 +253,7 @@ fn expression_has_ambient_input(expression: &Expr, accesses: &Accesses<'_>) -> b
             syn::visit::visit_expr_macro(self, expression);
         }
     }
-    let mut calls = Calls {
-        accesses,
-        found: false,
-    };
+    let mut calls = Calls { accesses, found: false };
     calls.visit_expr(expression);
     calls.found
 }
@@ -347,37 +332,29 @@ fn source_boundary(source: &Source, modules: &[String]) -> bool {
     let executable = matches!(parts.as_slice(), ["build.rs"])
         || matches!(parts.as_slice(), ["examples", ..])
         || matches!(parts.as_slice(), ["src", "bin", ..]);
-    let explicit_module = modules.first().is_some_and(|module| {
-        matches!(
-            module.as_str(),
-            "adapter" | "adapters" | "platform" | "host"
-        )
-    }) || matches!(
-        modules,
-        [surface, platform, ..]
-            if surface == "surface"
-                && matches!(platform.as_str(), "macos" | "windows" | "linux")
-    );
+    let explicit_module = modules
+        .first()
+        .is_some_and(|module| matches!(module.as_str(), "adapter" | "adapters" | "platform" | "host"))
+        || matches!(
+            modules,
+            [surface, platform, ..]
+                if surface == "surface"
+                    && matches!(platform.as_str(), "macos" | "windows" | "linux")
+        );
     let shim = source.package.contains("-shim-")
-        && source.path.components().any(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .is_some_and(|part| part == "shim")
-        });
+        && source
+            .path
+            .components()
+            .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "shim"));
     let concrete_wgpu = source.package == "hl-gpu-wgpu"
-        && source.path.components().any(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .is_some_and(|part| part == "gpu")
-        })
-        && source.path.components().any(|component| {
-            component
-                .as_os_str()
-                .to_str()
-                .is_some_and(|part| part == "hl-gpu-wgpu")
-        });
+        && source
+            .path
+            .components()
+            .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "gpu"))
+        && source
+            .path
+            .components()
+            .any(|component| component.as_os_str().to_str().is_some_and(|part| part == "hl-gpu-wgpu"));
     executable || explicit_module || shim || concrete_wgpu
 }
 
@@ -391,4 +368,5 @@ fn package_relative(source: &Source) -> Option<std::path::PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;

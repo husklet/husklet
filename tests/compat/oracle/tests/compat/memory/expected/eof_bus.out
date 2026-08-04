@@ -1,0 +1,1 @@
+eof-bus partial=1 load=1 far=1 store=1 crossing=1 atomic=1 metadata=1 default=1 replacement=1 edges=1 suffix=1 canary-miss=1 canary-hit=1 signals=7

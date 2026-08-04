@@ -1,14 +1,14 @@
 use crate::{
+    Result,
     model::{Finding, Location, Review, Severity},
     rule::Rule,
-    source::{domain, package, Workspace},
-    Result,
+    source::{Workspace, domain, package},
 };
 
 /// Rejects repository structure that names a directory without giving it content.
-pub struct EmptyDirectory;
+pub struct Directory;
 
-impl Rule for EmptyDirectory {
+impl Rule for Directory {
     fn id(&self) -> &'static str {
         "empty-directory"
     }
@@ -38,11 +38,10 @@ impl Rule for EmptyDirectory {
                     },
                 );
                 finding.message = format!("directory `{}` has no content", path.display());
-                finding.help = "remove the directory; create it with its first cohesive file when the concept exists".to_owned();
+                finding.help =
+                    "remove the directory; create it with its first cohesive file when the concept exists".to_owned();
                 let mut review = Review::error();
-                review
-                    .metadata
-                    .push(("domain".to_owned(), domain(path)));
+                review.metadata.push(("domain".to_owned(), domain(path)));
                 review.metadata.push((
                     "package".to_owned(),
                     package(path).unwrap_or_else(|| "repository".to_owned()),

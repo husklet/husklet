@@ -1,0 +1,6 @@
+commchk self=selfexe
+stage proc comm=exe
+stage rel comm=selfexe
+stage lnk comm=lnk-selfexe
+stage shb comm=shb.sh
+commchk done

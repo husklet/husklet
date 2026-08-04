@@ -1,0 +1,494 @@
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::{Arc, Mutex};
+
+use hl_descriptor::{DescriptionIdentity, OpenFileDescription};
+use hl_linux::{OpenAbiPlan, PathOperand};
+use hl_runtime::{
+    GuestPathBytes, NamespaceHandle, NamespaceHandleRegistry, OpenIntent, PreparedPathOpen, RuntimePathError,
+};
+use hl_task::NamespaceId;
+
+use super::{NativePath, lease, projected};
+
+pub(super) struct ProcfsTargets {
+    paths: Arc<Mutex<BTreeMap<(u64, u64), lease::LeaseEntry>>>,
+    projected: projected::Registry,
+}
+
+impl ProcfsTargets {
+    pub(super) fn new(
+        paths: Arc<Mutex<BTreeMap<(u64, u64), lease::LeaseEntry>>>,
+        projected: projected::Registry,
+    ) -> Arc<Self> {
+        Arc::new(Self { paths, projected })
+    }
+}
+
+impl hl_runtime::ProcfsDescriptorTarget for ProcfsTargets {
+    fn path(&self, metadata: &hl_descriptor::OfdMetadata) -> Result<Vec<u8>, hl_runtime::ProcfsError> {
+        if metadata.kind == 2
+            && let Some(device) = hl_runtime::BUILTIN_DEVICES
+                .iter()
+                .find(|device| device.device.linux_encoded() == metadata.special_device)
+        {
+            return Ok(device.path.as_bytes().to_vec());
+        }
+        if metadata.kind == 2 {
+            if let Some(path) = devpts_path(metadata.special_device) {
+                return Ok(path);
+            }
+        }
+        let identity = (metadata.device, metadata.inode);
+        if let Some(file) = self.projected.get(&identity) {
+            return file
+                .guest()
+                .map(|path| path.as_str().as_bytes().to_vec())
+                .map_err(|_| hl_runtime::ProcfsError::Invalid);
+        }
+        self.paths
+            .lock()
+            .map_err(|_| hl_runtime::ProcfsError::Invalid)?
+            .get(&identity)
+            .map(|entry| entry.guest.as_str().as_bytes().to_vec())
+            .ok_or(hl_runtime::ProcfsError::NotFound)
+    }
+}
+
+fn devpts_path(encoded: u64) -> Option<Vec<u8>> {
+    let device = hl_runtime::DeviceId::from_linux_encoded(encoded);
+    (device.major == 136).then(|| format!("/dev/pts/{}", device.minor).into_bytes())
+}
+
+pub(super) struct ProcfsLink {
+    target: Option<Vec<u8>>,
+    raw: hl_descriptor::OfdMetadata,
+    metadata: hl_runtime::FileMetadata,
+}
+
+impl ProcfsLink {
+    pub(super) fn target(&self) -> Option<&[u8]> {
+        self.target.as_deref()
+    }
+
+    pub(super) fn follow_namespace(mut self) -> Self {
+        self.target = None;
+        self.raw.kind = 8;
+        self.raw.permissions = 0o444;
+        self.metadata.kind = hl_runtime::FileKind::Regular;
+        self.metadata.permissions = hl_runtime::Permissions::from_bits(0o444);
+        self
+    }
+}
+
+impl std::fmt::Debug for ProcfsLink {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProcfsDescriptorLink")
+    }
+}
+
+impl hl_runtime::ResolvedPathLease for ProcfsLink {
+    fn metadata(&self) -> Result<hl_runtime::FileMetadata, RuntimePathError> {
+        Ok(self.metadata.clone())
+    }
+
+    fn read_link(&self) -> Result<Vec<u8>, RuntimePathError> {
+        self.target.clone().ok_or(RuntimePathError::Invalid)
+    }
+
+    fn access(&self, _plan: &hl_linux::AccessPlan) -> Result<(), RuntimePathError> {
+        Ok(())
+    }
+}
+
+impl OpenFileDescription for ProcfsLink {
+    fn metadata(&self) -> Result<hl_descriptor::OfdMetadata, hl_descriptor::ObjectError> {
+        Ok(self.raw.clone())
+    }
+}
+
+impl NativePath {
+    pub(super) fn procfs_node(&self, path: &[u8]) -> Result<Option<ProcfsLink>, RuntimePathError> {
+        let (Some(procfs), Some(process)) = (&self.procfs, self.process) else {
+            return Ok(None);
+        };
+        let Some(metadata) = procfs.metadata(path, process.number()).map_err(Self::procfs_error)? else {
+            return Ok(None);
+        };
+        let target = procfs
+            .read_link_for(
+                path,
+                process.number(),
+                self.thread.map_or(process.number(), hl_task::ThreadId::number),
+            )
+            .map_err(Self::procfs_error)?;
+        let kind = match metadata.kind {
+            4 => hl_runtime::FileKind::Directory,
+            8 => hl_runtime::FileKind::Regular,
+            10 => hl_runtime::FileKind::Symlink,
+            _ => return Err(RuntimePathError::Invalid),
+        };
+        Ok(Some(ProcfsLink {
+            target,
+            raw: metadata.clone(),
+            metadata: hl_runtime::FileMetadata {
+                identity: hl_runtime::FileIdentity {
+                    device: metadata.device,
+                    inode: metadata.inode,
+                },
+                kind,
+                permissions: hl_runtime::Permissions::from_bits(metadata.permissions),
+                links: metadata.links,
+                user: metadata.user,
+                group: metadata.group,
+                special_device: metadata.special_device,
+                size: metadata.size,
+                blocks_512: metadata.blocks_512,
+                accessed: hl_runtime::FileTimestamp {
+                    seconds: metadata.accessed.seconds,
+                    nanoseconds: metadata.accessed.nanoseconds,
+                },
+                modified: hl_runtime::FileTimestamp {
+                    seconds: metadata.modified.seconds,
+                    nanoseconds: metadata.modified.nanoseconds,
+                },
+                changed: hl_runtime::FileTimestamp {
+                    seconds: metadata.changed.seconds,
+                    nanoseconds: metadata.changed.nanoseconds,
+                },
+            },
+        }))
+    }
+
+    pub(super) fn procfs_link(&self, path: &[u8]) -> Result<Option<Vec<u8>>, RuntimePathError> {
+        if path == b"/proc/self/exe" {
+            let target = self.executable.lock().map_err(|_| RuntimePathError::Io)?.clone();
+            return Ok((!target.is_empty()).then_some(target));
+        }
+        let (Some(procfs), Some(process)) = (&self.procfs, self.process) else {
+            return Ok(None);
+        };
+        procfs
+            .read_link_for(
+                path,
+                process.number(),
+                self.thread.map_or(process.number(), hl_task::ThreadId::number),
+            )
+            .map_err(Self::procfs_error)
+    }
+
+    pub(super) fn procfs_namespace(&self, path: &[u8]) -> Result<bool, RuntimePathError> {
+        let (Some(procfs), Some(process)) = (&self.procfs, self.process) else {
+            return Ok(false);
+        };
+        procfs
+            .namespace_inode(path, process.number())
+            .map(|inode| inode.is_some())
+            .map_err(Self::procfs_error)
+    }
+
+    pub(super) fn procfs_plan(&self, plan: &OpenAbiPlan) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
+        if let (Some(procfs), Some(process)) = (&self.procfs, self.process) {
+            if procfs
+                .uts_namespace(plan.operand.path.as_bytes(), process.number())
+                .map_err(Self::procfs_error)?
+                .is_some()
+            {
+                return Ok(None);
+            }
+        }
+        let Some(mut target) = self.procfs_link(plan.operand.path.as_bytes())? else {
+            return Ok(None);
+        };
+        if matches!(plan.operand.path.as_bytes(), b"/proc/self" | b"/proc/thread-self") {
+            target.splice(..0, b"/proc/".iter().copied());
+        }
+        if plan.operand.nofollow && plan.intent.bits() & OpenIntent::PATH_ONLY == 0 {
+            return Err(RuntimePathError::Loop);
+        }
+        if plan.operand.nofollow {
+            return Ok(None);
+        }
+        if plan.resolve.no_magic_links {
+            return Err(RuntimePathError::Loop);
+        }
+        Ok(Some(OpenAbiPlan {
+            operand: PathOperand {
+                directory: plan.operand.directory,
+                path: GuestPathBytes::new(&target).map_err(|_| RuntimePathError::Invalid)?,
+                allow_empty: false,
+                nofollow: plan.operand.nofollow,
+            },
+            intent: plan.intent,
+            mode: plan.mode,
+            close_on_exec: plan.close_on_exec,
+            nonblocking: plan.nonblocking,
+            no_controlling_terminal: plan.no_controlling_terminal,
+            resolve: plan.resolve,
+        }))
+    }
+
+    fn procfs_error(error: hl_runtime::ProcfsError) -> RuntimePathError {
+        match error {
+            hl_runtime::ProcfsError::NotFound => RuntimePathError::NotFound,
+            hl_runtime::ProcfsError::Access => RuntimePathError::Access,
+            hl_runtime::ProcfsError::ReadOnly => RuntimePathError::ReadOnly,
+            hl_runtime::ProcfsError::Invalid => RuntimePathError::Invalid,
+        }
+    }
+
+    pub(super) fn synthetic_open(
+        &self,
+        plan: &OpenAbiPlan,
+    ) -> Result<Option<Box<dyn PreparedPathOpen>>, RuntimePathError> {
+        if plan.operand.nofollow && plan.intent.bits() & OpenIntent::PATH_ONLY != 0 {
+            if let Some(node) = self.procfs_node(plan.operand.path.as_bytes())? {
+                if node.target().is_some() {
+                    if plan.intent.bits() & OpenIntent::DIRECTORY != 0 {
+                        return Err(RuntimePathError::NotDirectory);
+                    }
+                    return Ok(Some(Box::new(ProcfsOpen(Arc::new(node)))));
+                }
+            }
+        }
+        if let (Some(procfs), Some(process)) = (&self.procfs, self.process) {
+            match procfs.open(plan.operand.path.as_bytes(), process.number(), plan.intent) {
+                Ok(Some(object)) => return Ok(Some(Box::new(ProcfsOpen(object)))),
+                Ok(None) => {}
+                Err(hl_runtime::ProcfsError::NotFound) => return Err(RuntimePathError::NotFound),
+                Err(hl_runtime::ProcfsError::Access) => return Err(RuntimePathError::Access),
+                Err(hl_runtime::ProcfsError::ReadOnly) => return Err(RuntimePathError::ReadOnly),
+                Err(hl_runtime::ProcfsError::Invalid) => return Err(RuntimePathError::Invalid),
+            }
+            let namespace = procfs
+                .uts_namespace(plan.operand.path.as_bytes(), process.number())
+                .map_err(|error| match error {
+                    hl_runtime::ProcfsError::NotFound => RuntimePathError::NotFound,
+                    hl_runtime::ProcfsError::Access => RuntimePathError::Access,
+                    hl_runtime::ProcfsError::ReadOnly => RuntimePathError::ReadOnly,
+                    hl_runtime::ProcfsError::Invalid => RuntimePathError::Invalid,
+                })?;
+            if let Some(serial) = namespace {
+                let handles = self.namespace_handles.as_ref().ok_or(RuntimePathError::NotFound)?;
+                return NamespaceOpen::prepare(
+                    handles,
+                    NamespaceId {
+                        kind: hl_task::NamespaceKind::Uts,
+                        serial,
+                    },
+                    plan.intent,
+                )
+                .map(Some);
+            }
+        }
+        match plan.operand.path.as_bytes() {
+            b"/proc/self/auxv" | b"proc/self/auxv" => {
+                let bytes = self.auxiliary.lock().unwrap_or_else(|error| error.into_inner()).clone();
+                super::auxiliary::AuxiliaryFile::prepare(bytes, plan.intent).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+struct ProcfsOpen(Arc<dyn OpenFileDescription>);
+
+impl fmt::Debug for ProcfsOpen {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ProcfsOpen")
+    }
+}
+
+impl PreparedPathOpen for ProcfsOpen {
+    fn object(&self) -> Arc<dyn OpenFileDescription> {
+        Arc::clone(&self.0)
+    }
+    fn commit(&mut self) -> Result<(), RuntimePathError> {
+        Ok(())
+    }
+    fn rollback(self: Box<Self>) {}
+}
+
+pub(super) struct NamespaceOpen {
+    object: Arc<NamespaceHandle>,
+    handles: Arc<NamespaceHandleRegistry>,
+}
+
+impl NamespaceOpen {
+    pub(super) fn prepare(
+        handles: &Arc<NamespaceHandleRegistry>,
+        identifier: NamespaceId,
+        intent: OpenIntent,
+    ) -> Result<Box<dyn PreparedPathOpen>, RuntimePathError> {
+        if intent.bits() & (OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE) != 0 {
+            return Err(RuntimePathError::Access);
+        }
+        Ok(Box::new(Self {
+            object: handles.object(identifier),
+            handles: Arc::clone(handles),
+        }))
+    }
+}
+
+impl fmt::Debug for NamespaceOpen {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NamespaceOpen")
+    }
+}
+
+impl PreparedPathOpen for NamespaceOpen {
+    fn object(&self) -> Arc<dyn OpenFileDescription> {
+        self.object.clone()
+    }
+
+    fn bind(&mut self, identity: DescriptionIdentity) -> Result<(), RuntimePathError> {
+        self.handles
+            .bind(identity, &self.object)
+            .map_err(|_| RuntimePathError::Io)
+    }
+
+    fn commit(&mut self) -> Result<(), RuntimePathError> {
+        Ok(())
+    }
+
+    fn rollback(self: Box<Self>) {}
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use hl_descriptor::OpenFileDescription;
+    use hl_linux::{OpenAbiPlan, PathOperand, ResolveFlags};
+    use hl_runtime::{GuestPathBytes, OpenDirectory, OpenIntent, RuntimePathHost};
+
+    use super::super::{NativePath, projected, watch};
+    use super::{ProcfsTargets, devpts_path};
+
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn canonicalizes_devpts_device() {
+        let encoded = hl_runtime::DeviceId::new(136, 513).linux_encoded();
+        assert_eq!(devpts_path(encoded), Some(b"/dev/pts/513".to_vec()));
+        assert_eq!(devpts_path(hl_runtime::DeviceId::new(1, 3).linux_encoded()), None);
+    }
+
+    #[test]
+    fn builtin_descriptor_target_is_canonical_device_path() {
+        let targets = ProcfsTargets::new(
+            Arc::new(std::sync::Mutex::new(BTreeMap::new())),
+            projected::Registry::default(),
+        );
+        let device =
+            hl_runtime::BuiltinDescription::open(hl_runtime::DeviceKind::Null, hl_runtime::DeviceOpenCapability::Read)
+                .unwrap();
+        let metadata = device.metadata().unwrap();
+        assert_eq!(
+            hl_runtime::ProcfsDescriptorTarget::path(targets.as_ref(), &metadata).unwrap(),
+            b"/dev/null"
+        );
+    }
+
+    #[test]
+    fn procfs_integration() {
+        let root = std::env::temp_dir().join(format!(
+            "hl-procfs-{}-{}",
+            std::process::id(),
+            NEXT_ROOT.fetch_add(1, Ordering::Relaxed),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let bytes = root.as_os_str().as_encoded_bytes();
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        let (process, _) = tasks
+            .create_init(
+                hl_task::ProcessCredentials::new(7, 8, &[], 8).unwrap(),
+                hl_task::ProcessLimits::default(),
+            )
+            .unwrap();
+        let host = NativePath::new(bytes, watch::Hub::new(bytes).unwrap())
+            .unwrap()
+            .with_process(
+                Arc::clone(&tasks),
+                process,
+                Arc::new(hl_runtime::NamespaceHandleRegistry::new()),
+                Arc::new(hl_descriptor::DescriptorTable::new(8).unwrap()),
+            );
+        let plan = OpenAbiPlan {
+            operand: PathOperand {
+                directory: OpenDirectory::default(),
+                path: GuestPathBytes::new(b"/proc/self/limits").unwrap(),
+                allow_empty: false,
+                nofollow: false,
+            },
+            intent: OpenIntent::from_bits(OpenIntent::READ),
+            mode: 0,
+            close_on_exec: false,
+            nonblocking: false,
+            no_controlling_terminal: false,
+            resolve: ResolveFlags::default(),
+        };
+        let self_plan = OpenAbiPlan {
+            operand: PathOperand {
+                directory: OpenDirectory::default(),
+                path: GuestPathBytes::new(b"/proc/self").unwrap(),
+                allow_empty: false,
+                nofollow: false,
+            },
+            ..plan.clone()
+        };
+        let redirected = host.procfs_plan(&self_plan).unwrap().unwrap();
+        assert_eq!(
+            redirected.operand.path.as_bytes(),
+            format!("/proc/{}", process.number()).as_bytes()
+        );
+        let mut prepared = host.prepare_open(&host.root_base().unwrap(), &plan).unwrap();
+        let object = prepared.object();
+        prepared.commit().unwrap();
+        let mut output = [0_u8; 4096];
+        let count = object.read(&mut output).unwrap();
+        let text = std::str::from_utf8(&output[..count]).unwrap();
+        assert!(text.contains("Max core file size"));
+        assert!(text.contains("Max open files"));
+        let namespace = tasks.namespaces(process).unwrap().uts;
+        let namespace_path = format!("/proc/{}/ns/uts", process.number());
+        let namespace_plan = OpenAbiPlan {
+            operand: PathOperand {
+                directory: OpenDirectory::default(),
+                path: GuestPathBytes::new(namespace_path.as_bytes()).unwrap(),
+                allow_empty: false,
+                nofollow: false,
+            },
+            intent: OpenIntent::from_bits(OpenIntent::READ),
+            mode: 0,
+            close_on_exec: false,
+            nonblocking: false,
+            no_controlling_terminal: false,
+            resolve: ResolveFlags::default(),
+        };
+        let mut namespace_open = host.prepare_open(&host.root_base().unwrap(), &namespace_plan).unwrap();
+        let namespace_object = namespace_open.object();
+        assert_eq!(namespace_object.metadata().unwrap().inode, namespace.serial);
+        namespace_open.commit().unwrap();
+
+        let mount_path = format!("/proc/{}/ns/mnt", process.number());
+        let mount_operand = PathOperand {
+            directory: OpenDirectory::default(),
+            path: GuestPathBytes::new(mount_path.as_bytes()).unwrap(),
+            allow_empty: false,
+            nofollow: false,
+        };
+        let mount = host.resolve(&host.root_base().unwrap(), &mount_operand).unwrap();
+        let metadata = mount.metadata().unwrap();
+        assert_eq!(metadata.identity.inode, 4_026_531_841);
+        assert_eq!(metadata.kind, hl_runtime::FileKind::Regular);
+
+        drop(object);
+        drop(prepared);
+        drop(host);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

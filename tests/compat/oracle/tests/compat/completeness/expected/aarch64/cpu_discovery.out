@@ -1,0 +1,1 @@
+cpu-discovery hwcap=1001fb cpuid=0 sha3=0 sm3=0 sm4=0 ctr=9444c004 dczid=4 proc_clean=1 id_sigill=1

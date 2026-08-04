@@ -1,0 +1,1 @@
+setpgid child_own=1 parent_sees=1

@@ -1,0 +1,1 @@
+errno-matrix rmdir=1 rename=1 renameat2=1 mkdir=1 linksym=1 trunc=1 access=1

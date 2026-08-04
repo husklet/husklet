@@ -1,0 +1,1 @@
+syncfam fsync=1 fdatasync=1 sfr=1 syncfs=1

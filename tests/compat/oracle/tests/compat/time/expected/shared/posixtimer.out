@@ -1,0 +1,1 @@
+posixtimer real=1 mono=1 rem=1 capacity=1 overrun=1 badclock=1 gt_efault=1 st_einval=1 ov_zero=1

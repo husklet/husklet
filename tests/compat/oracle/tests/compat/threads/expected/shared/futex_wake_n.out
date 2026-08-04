@@ -1,0 +1,1 @@
+futex_wake_n first=1 isolated=1 rest=5 total=6

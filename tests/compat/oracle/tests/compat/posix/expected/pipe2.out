@@ -1,0 +1,1 @@
+pipe2 rc=0 nonblock=1 cloexec=1 eagain=1

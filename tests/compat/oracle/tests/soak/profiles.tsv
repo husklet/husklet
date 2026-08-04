@@ -1,0 +1,3 @@
+# profile	case-set	per-case-timeout	repetitions	cleanup
+bounded	active	240s	1	terminate process group on timeout
+extended	active	240s	10	terminate process group on timeout or interruption

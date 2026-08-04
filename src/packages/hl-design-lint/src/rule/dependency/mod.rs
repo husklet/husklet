@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
+    LintError, Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
     source::Workspace,
-    LintError, Result,
 };
 
 mod cycle;
@@ -16,10 +16,11 @@ mod discovery;
 mod location;
 mod module;
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 /// Enforces crate and proven module dependency direction.
-pub struct DependencyDirection;
-impl Rule for DependencyDirection {
+pub struct Direction;
+impl Rule for Direction {
     fn id(&self) -> &'static str {
         "dependency-direction"
     }
@@ -59,7 +60,7 @@ impl Kind {
         }
     }
 
-    fn participates_in_build_cycle(self) -> bool {
+    fn joins_build_cycle(self) -> bool {
         self != Self::Development
     }
 }
@@ -85,7 +86,7 @@ struct Package {
 enum Layer {
     Application,
     Package,
-    Domain(String),
+    Runtime,
     Other,
 }
 
@@ -99,10 +100,11 @@ impl Layer {
             return Self::Other;
         };
         match components.get(index + 1).copied() {
-            Some("apps") => Self::Application,
+            Some("app") => Self::Application,
             Some("packages") => Self::Package,
-            Some(domain) => Self::Domain(domain.to_owned()),
+            Some("runtime") => Self::Runtime,
             None => Self::Other,
+            Some(_) => Self::Other,
         }
     }
 
@@ -110,7 +112,7 @@ impl Layer {
         match self {
             Self::Application => "application",
             Self::Package => "packages",
-            Self::Domain(domain) => domain,
+            Self::Runtime => "runtime",
             Self::Other => "other",
         }
     }
@@ -127,8 +129,7 @@ impl Graph {
         let workspace_dependencies = workspace_dependencies(&manifests)?;
         let mut packages = BTreeMap::new();
         for manifest in manifests {
-            let text = fs::read_to_string(&manifest)
-                .map_err(|error| LintError::io("read", &manifest, error))?;
+            let text = fs::read_to_string(&manifest).map_err(|error| LintError::io("read", &manifest, error))?;
             let document = toml::from_str::<toml::Value>(&text).map_err(|error| {
                 LintError::io(
                     "parse Cargo manifest",
@@ -161,14 +162,9 @@ impl Graph {
         }
         let manifests = packages
             .values()
-            .filter_map(|package| {
-                normalized(&package.manifest).map(|manifest| (manifest, package.name.clone()))
-            })
+            .filter_map(|package| normalized(&package.manifest).map(|manifest| (manifest, package.name.clone())))
             .collect();
-        Ok(Self {
-            packages,
-            manifests,
-        })
+        Ok(Self { packages, manifests })
     }
 
     fn direction_findings(&self, rule: &'static str) -> Vec<Finding> {
@@ -178,16 +174,19 @@ impl Graph {
                 let Some(target) = self.target(dependency) else {
                     continue;
                 };
-                let violation = match (&package.layer, &target.layer) {
-                    (Layer::Package, Layer::Domain(_) | Layer::Application) => Some(
-                        "general-purpose packages must not depend on product domains or applications",
-                    ),
-                    (_, Layer::Application) => {
-                        Some("the application composition root must never be a dependency")
+                let layer_violation = match (&package.layer, &target.layer) {
+                    (Layer::Package, Layer::Runtime | Layer::Application) => {
+                        Some("transferable packages must not depend on engine runtime or application code")
                     }
+                    (Layer::Runtime, Layer::Application) => {
+                        Some("runtime packages must not depend on the application composition root")
+                    }
+                    (_, Layer::Application) => Some("the application composition root must never be a dependency"),
                     _ => None,
                 };
-                let Some(message) = violation else {
+                let policy_violation = (!allowed_edge(&package.name, &target.name))
+                    .then_some("the local dependency is not present in the checked engine package graph");
+                let Some(message) = layer_violation.or(policy_violation) else {
                     continue;
                 };
                 let mut finding = Finding::error(
@@ -206,9 +205,10 @@ impl Graph {
                         .map(|target| format!(" under target `{target}`"))
                         .unwrap_or_default(),
                 );
-                finding.help = match package.layer {
-                    Layer::Package => "move domain policy out of the package or invert the edge through a domain-owned port".into(),
-                    _ => "keep product composition in `apps/husklet`; expose the required capability from its owning domain".into(),
+                finding.help = match (layer_violation, &package.layer) {
+                    (Some(_), Layer::Package) => "move engine policy into `src/runtime`, retain only the transferable mechanism, or invert the edge through a runtime-owned port".into(),
+                    (Some(_), _) => "keep concrete composition in `src/app/hl-engine`; expose the required capability from its owning runtime package".into(),
+                    (None, _) => "remove the edge, invert it through a consumer-owned port, or update the reviewed package graph before adding the dependency".into(),
                 };
                 finding.related.push(Related {
                     label: format!("dependency target in {} layer", target.layer.label()),
@@ -241,14 +241,11 @@ impl Graph {
         let mut edges: HashMap<&str, Vec<(&str, &Dependency)>> = HashMap::new();
         for package in self.packages.values() {
             for dependency in &package.dependencies {
-                if dependency.kind.participates_in_build_cycle() {
+                if dependency.kind.joins_build_cycle() {
                     let Some(target) = self.target(dependency) else {
                         continue;
                     };
-                    edges
-                        .entry(&package.name)
-                        .or_default()
-                        .push((&target.name, dependency));
+                    edges.entry(&package.name).or_default().push((&target.name, dependency));
                 }
             }
         }
@@ -264,25 +261,17 @@ impl Graph {
                 continue;
             }
             let members = component.iter().copied().collect::<BTreeSet<_>>();
-            let path =
-                cycle::path(component[0], &members, &edges).unwrap_or_else(|| component.clone());
+            let path = cycle::path(component[0], &members, &edges).unwrap_or_else(|| component.clone());
             let cycle = path.join(" -> ");
             let package = &self.packages[component[0]];
-            let mut finding = Finding::error(
-                rule,
-                format!("crate cycle: {cycle}"),
-                location::package(package),
-            );
+            let mut finding = Finding::error(rule, format!("crate cycle: {cycle}"), location::package(package));
             finding.message = format!(
                 "workspace crates form a normal/build dependency cycle: {cycle}; development-only edges are excluded because Cargo permits dev-dependency cycles"
             );
             finding.help =
-                "move the shared contract to its owning lower layer or invert one edge through a narrow trait"
-                    .into();
+                "move the shared contract to its owning lower layer or invert one edge through a narrow trait".into();
             let mut review = Review::error();
-            review
-                .metadata
-                .push(("Cycle members".into(), component.join(", ")));
+            review.metadata.push(("Cycle members".into(), component.join(", ")));
             for member in component.iter().skip(1) {
                 let related = &self.packages[*member];
                 finding.related.push(Related {
@@ -291,9 +280,9 @@ impl Graph {
                 });
                 review.dependencies.push((*member).into());
             }
-            review.questions.push(
-                "Which member owns the contract that currently points both directions?".into(),
-            );
+            review
+                .questions
+                .push("Which member owns the contract that currently points both directions?".into());
             finding.review = Some(review);
             findings.push(finding);
         }
@@ -301,42 +290,141 @@ impl Graph {
     }
 
     fn target(&self, dependency: &Dependency) -> Option<&Package> {
-        let manifest = dependency
-            .manifest
-            .as_ref()
-            .and_then(|path| normalized(path))?;
+        let manifest = dependency.manifest.as_ref().and_then(|path| normalized(path))?;
         let name = self.manifests.get(&manifest)?;
         self.packages.get(name)
     }
 }
 
-fn dependencies(
-    document: &toml::Value,
-    manifest: &Path,
-    workspace: &WorkspaceDependencies,
-) -> Vec<Dependency> {
+/// The reviewed production graph from `ARCHITECTURE.md`.
+///
+/// This is deliberately an edge list rather than a layer ordering. Runtime
+/// packages are peers by placement, but their domain contracts still have one
+/// exact dependency direction. Normal, build, development, target-specific,
+/// renamed, and workspace-inherited local dependencies all resolve to this
+/// same source/target pair before reaching this check.
+fn allowed_edge(source: &str, target: &str) -> bool {
+    matches!(
+        (source, target),
+        // Transferable mechanisms.
+        ("hl-fs", "hl-io")
+            | ("hl-codec", "hl-io")
+            // Runtime foundations and domains.
+            | ("hl-descriptor", "hl-io")
+            | ("hl-vfs", "hl-descriptor")
+            | ("hl-vfs", "hl-fs")
+            | ("hl-terminal", "hl-descriptor")
+            | ("hl-event", "hl-descriptor")
+            | ("hl-event", "hl-time")
+            | ("hl-memory", "hl-io")
+            | ("hl-memory", "hl-isa")
+            | ("hl-sync", "hl-memory")
+            | ("hl-sync", "hl-time")
+            | ("hl-network", "hl-descriptor")
+            | ("hl-network", "hl-sync")
+            | ("hl-ipc", "hl-descriptor")
+            | ("hl-ipc", "hl-memory")
+            | ("hl-ipc", "hl-sync")
+            | ("hl-ipc", "hl-time")
+            | ("hl-task", "hl-descriptor")
+            | ("hl-task", "hl-memory")
+            | ("hl-task", "hl-sync")
+            | ("hl-task", "hl-time")
+            | ("hl-loader", "hl-isa")
+            | ("hl-loader", "hl-vfs")
+            | ("hl-loader", "hl-memory")
+            | ("hl-execution", "hl-isa")
+            | ("hl-execution", "hl-memory")
+            | ("hl-execution", "hl-softfloat")
+            | ("hl-provider", "hl-io")
+            | ("hl-provider", "hl-descriptor")
+            // Linux personality.
+            | ("hl-linux", "hl-isa")
+            | ("hl-linux", "hl-time")
+            | ("hl-linux", "hl-descriptor")
+            | ("hl-linux", "hl-vfs")
+            | ("hl-linux", "hl-event")
+            | ("hl-linux", "hl-memory")
+            | ("hl-linux", "hl-sync")
+            | ("hl-linux", "hl-network")
+            | ("hl-linux", "hl-ipc")
+            | ("hl-linux", "hl-task")
+            // Aggregate checkpoint coordination.
+            | ("hl-checkpoint", "hl-codec")
+            | ("hl-checkpoint", "hl-descriptor")
+            | ("hl-checkpoint", "hl-vfs")
+            | ("hl-checkpoint", "hl-event")
+            | ("hl-checkpoint", "hl-memory")
+            | ("hl-checkpoint", "hl-sync")
+            | ("hl-checkpoint", "hl-network")
+            | ("hl-checkpoint", "hl-ipc")
+            | ("hl-checkpoint", "hl-task")
+            | ("hl-checkpoint", "hl-provider")
+            | ("hl-checkpoint", "hl-execution")
+            // Runtime and product composition.
+            | ("hl-runtime", "hl-aio")
+            | ("hl-runtime", "hl-linux")
+            | ("hl-runtime", "hl-loader")
+            | ("hl-runtime", "hl-checkpoint")
+            | ("hl-runtime", "hl-provider")
+            | ("hl-runtime", "hl-execution")
+            | ("hl-runtime", "hl-descriptor")
+            | ("hl-runtime", "hl-event")
+            | ("hl-runtime", "hl-isa")
+            | ("hl-runtime", "hl-time")
+            | ("hl-runtime", "hl-sync")
+            | ("hl-runtime", "hl-task")
+            | ("hl-runtime", "hl-memory")
+            | ("hl-runtime", "hl-network")
+            | ("hl-runtime", "hl-ipc")
+            | ("hl-runtime", "hl-vfs")
+            | ("hl-runtime", "hl-terminal")
+            | ("hl-fake-host", "hl-descriptor")
+            | ("hl-fake-host", "hl-execution")
+            | ("hl-fake-host", "hl-isa")
+            | ("hl-fake-host", "hl-linux")
+            | ("hl-fake-host", "hl-memory")
+            | ("hl-fake-host", "hl-network")
+            | ("hl-fake-host", "hl-provider")
+            | ("hl-fake-host", "hl-time")
+            | ("hl-fake-host", "hl-vfs")
+            | ("hl-engine", "hl-runtime")
+            | ("hl-engine", "hl-checkpoint")
+            | ("hl-engine", "hl-descriptor")
+            | ("hl-engine", "hl-event")
+            | ("hl-engine", "hl-network")
+            | ("hl-engine", "hl-linux")
+            | ("hl-engine", "hl-fake-host")
+            | ("hl-engine", "hl-execution")
+            | ("hl-engine", "hl-isa")
+            | ("hl-engine", "hl-loader")
+            | ("hl-engine", "hl-memory")
+            | ("hl-engine", "hl-sync")
+            | ("hl-engine", "hl-task")
+            | ("hl-engine", "hl-time")
+            | ("hl-engine", "hl-log")
+            | ("hl-engine", "hl-session")
+            | ("hl-engine", "hl-provider")
+    )
+}
+
+fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDependencies) -> Vec<Dependency> {
     let mut output = Vec::new();
     let Some(root) = document.as_table() else {
         return output;
     };
-    dependency_tables(root, None, manifest, workspace, &mut output);
+    tables(root, None, manifest, workspace, &mut output);
     if let Some(targets) = root.get("target").and_then(toml::Value::as_table) {
         for (target, value) in targets {
             if let Some(table) = value.as_table() {
-                dependency_tables(
-                    table,
-                    Some(target.clone()),
-                    manifest,
-                    workspace,
-                    &mut output,
-                );
+                tables(table, Some(target.clone()), manifest, workspace, &mut output);
             }
         }
     }
     output
 }
 
-fn dependency_tables(
+fn tables(
     table: &toml::map::Map<String, toml::Value>,
     target: Option<String>,
     manifest: &Path,
@@ -362,13 +450,7 @@ fn dependency_tables(
                 .as_table()
                 .and_then(|value| value.get("path"))
                 .and_then(toml::Value::as_str)
-                .map(|path| {
-                    manifest
-                        .parent()
-                        .unwrap_or(Path::new(""))
-                        .join(path)
-                        .join("Cargo.toml")
-                })
+                .map(|path| manifest.parent().unwrap_or(Path::new("")).join(path).join("Cargo.toml"))
                 .or_else(|| inherited.and_then(|dependency| dependency.manifest.clone()));
             output.push(Dependency {
                 alias: alias.clone(),
@@ -402,8 +484,7 @@ impl WorkspaceDependencies {
 fn workspace_dependencies(manifests: &[PathBuf]) -> Result<WorkspaceDependencies> {
     let mut roots = Vec::new();
     for manifest in manifests {
-        let text =
-            fs::read_to_string(manifest).map_err(|error| LintError::io("read", manifest, error))?;
+        let text = fs::read_to_string(manifest).map_err(|error| LintError::io("read", manifest, error))?;
         let document = toml::from_str::<toml::Value>(&text).map_err(|error| {
             LintError::io(
                 "parse Cargo manifest",
@@ -424,13 +505,7 @@ fn workspace_dependencies(manifests: &[PathBuf]) -> Result<WorkspaceDependencies
                 .as_table()
                 .and_then(|value| value.get("path"))
                 .and_then(toml::Value::as_str)
-                .map(|path| {
-                    manifest
-                        .parent()
-                        .unwrap_or(Path::new(""))
-                        .join(path)
-                        .join("Cargo.toml")
-                });
+                .map(|path| manifest.parent().unwrap_or(Path::new("")).join(path).join("Cargo.toml"));
             dependencies.insert(
                 alias.clone(),
                 WorkspaceDependency {
@@ -438,10 +513,7 @@ fn workspace_dependencies(manifests: &[PathBuf]) -> Result<WorkspaceDependencies
                 },
             );
         }
-        roots.push((
-            manifest.parent().unwrap_or(Path::new("")).to_owned(),
-            dependencies,
-        ));
+        roots.push((manifest.parent().unwrap_or(Path::new("")).to_owned(), dependencies));
     }
     Ok(WorkspaceDependencies { roots })
 }

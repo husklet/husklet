@@ -1,0 +1,80 @@
+# C ABI matrix contract:
+# compile each source for both Linux guest ISAs and run each binary through its corresponding engine;
+# require the listed exit status, byte-compare both engine outputs to the checked-in golden,
+# and require the two engine outputs to be byte-identical to each other.
+# format: destination<TAB>origin<TAB>architectures<TAB>exit<TAB>golden<TAB>golden_fingerprint<TAB>notes
+alloca.c	hl-jit-darwin/testdata/guests/ext_abi/alloca.c	aarch64,x86_64	0	golden/alloca.out	sha256:764ad526fd0e367909bb8d6215affb879161e011a4a8e93d317c575d87ed206e;bytes:13	portable-c
+atomics.c	hl-jit-darwin/testdata/guests/ext_abi/atomics_st.c	aarch64,x86_64	0	golden/atomics.out	sha256:b582bdc4d38102feb16bd4956eab13c04ee2140ed7d021e191793f522469c47f;bytes:49	portable-c
+switch.c	hl-jit-darwin/testdata/guests/ext_abi/bigswitch.c	aarch64,x86_64	0	golden/switch.out	sha256:84589cca6b00453644270b17ae49592b6a37aca14a62d7de91b30cc210c43fff;bytes:12	portable-c
+bool.c	hl-jit-darwin/testdata/guests/ext_abi/boolconv.c	aarch64,x86_64	0	golden/bool.out	sha256:23b892ece026f22ea5c2e97d36e8f23637adc55fd9a640e45f1015cef08546c9;bytes:19	portable-c
+bswap.c	hl-jit-darwin/testdata/guests/ext_abi/bswap.c	aarch64,x86_64	0	golden/bswap.out	sha256:37607d19328b521b4fb8c3403905d76d3b5a1c7ed58d3d281a029bc5cd3dd225;bytes:58	portable-c
+charmath.c	hl-jit-darwin/testdata/guests/ext_abi/charmath.c	aarch64,x86_64	0	golden/charmath.out	sha256:c8fdfe4417f7e21ea1f8b118a21f6671849eec2e081ab7c97e7db7ab0896ffee;bytes:30	portable-c
+clmul.c	hl-jit-darwin/testdata/guests/ext_abi/clmul.c	aarch64,x86_64	0	golden/clmul.out	sha256:30d614b63ac04f1544a8cefa5804416371b558c6f12d174bfec751bc581597f3;bytes:54	portable-c
+compare.c	hl-jit-darwin/testdata/guests/ext_abi/cmpchain.c	aarch64,x86_64	0	golden/compare.out	sha256:7f76b06d4174ba0ca47f4838f0fb82276147cb37da19f0385aff54768ce8131b;bytes:15	portable-c
+goto.c	hl-jit-darwin/testdata/guests/ext_abi/computed_goto.c	aarch64,x86_64	0	golden/goto.out	sha256:1cf2c91cdf2ef000e986fece8e91cb111a83fd7ad9a9ac9fe86a420f84678760;bytes:7	gnu-labels-as-values
+recursion.c	hl-jit-darwin/testdata/guests/ext_abi/deep_recursion.c	aarch64,x86_64	0	golden/recursion.out	sha256:aa561e7cb1919c639e12887861710fdad0f68502b03199d8420011bf501687ca;bytes:33	portable-c
+divmod.c	hl-jit-darwin/testdata/guests/ext_abi/divmod.c	aarch64,x86_64	0	golden/divmod.out	sha256:fcdd821aa5e35a6233df87a75c455dd2f0114f8d83b0e3a57afcf78f5c0e0cfa;bytes:50	portable-c
+endian.c	hl-jit-darwin/testdata/guests/ext_abi/endian.c	aarch64,x86_64	0	golden/endian.out	sha256:4de1dde4d4ac1495909252860414627b71cf0f9aac15865799fa0442e572a54f;bytes:72	portable-c
+float32.c	hl-jit-darwin/testdata/guests/ext_abi/float32.c	aarch64,x86_64	0	golden/float32.out	sha256:97109ad90e285fdb17373d1b70fab7d196eeba3340ba265b739fb40f6f25f659;bytes:46	portable-c
+fnptr.c	hl-jit-darwin/testdata/guests/ext_abi/fnptr_many.c	aarch64,x86_64	0	golden/fnptr.out	sha256:85b6db1ad316e8d37238b8904bc2f967e05a718fe0c0b2f04545571a54d08378;bytes:17	portable-c
+classify.c	hl-jit-darwin/testdata/guests/ext_abi/fp_classify.c	aarch64,x86_64	0	golden/classify.out	sha256:accd0fd640715db76ac54aab04efd5fd49737344ef685c0daf067538b550d808;bytes:65	portable-c
+fpcmp.c	hl-jit-darwin/testdata/guests/ext_abi/fp_cmp.c	aarch64,x86_64	0	golden/fpcmp.out	sha256:a2cdc0d2a69a873ff4b3b89597077244836ae3e1d4671f19dfb911dfc2d84f02;bytes:35	portable-c
+fpconv.c	hl-jit-darwin/testdata/guests/ext_abi/fp_conv.c	aarch64,x86_64	0	golden/fpconv.out	sha256:02fc8cd3d854d3cc274d4a8e7a7ab9ee09703da1cac727b91becf82525aac6c2;bytes:79	portable-c
+fma.c	hl-jit-darwin/testdata/guests/ext_abi/fp_fma.c	aarch64,x86_64	0	golden/fma.out	sha256:be37ed28f0675d3b5b12a7874e001e494164302886451f41a1fe53fdb3595784;bytes:37	portable-c
+minmax.c	hl-jit-darwin/testdata/guests/ext_abi/fp_minmax.c	aarch64,x86_64	0	golden/minmax.out	sha256:a23ea853d3bddedc52e71176f82dfc3d7d7417a6788503f1fecf99f1ba9b4626;bytes:37	portable-c
+round.c	hl-jit-darwin/testdata/guests/ext_abi/fp_round.c	aarch64,x86_64	0	golden/round.out	sha256:21ed5484f6fffe69a3ee9b1c6a59722c2fda00657856e51aaee380ef39018527;bytes:45	portable-c
+special.c	hl-jit-darwin/testdata/guests/ext_abi/fp_special.c	aarch64,x86_64	0	golden/special.out	sha256:a308d45d4a2754a52745b9f1a026140cde9a20defecf2fe2ec4c8c8651252c16;bytes:80	portable-c
+globals.c	hl-jit-darwin/testdata/guests/ext_abi/globalinit.c	aarch64,x86_64	0	golden/globals.out	sha256:8c331d77b9f77cdf0628243b659ce0342e131a25e797d959635cede25cf78c48;bytes:27	portable-c
+hash.c	hl-jit-darwin/testdata/guests/ext_abi/hash.c	aarch64,x86_64	0	golden/hash.out	sha256:c7d1e75791e6cb6507013d0c48078a666eee415cc6d98808caba6ea18f10af7d;bytes:40	portable-c
+int128.c	hl-jit-darwin/testdata/guests/ext_abi/int128.c	aarch64,x86_64	0	golden/int128.out	sha256:2aaf597fbb84fba56e27ab5143f25f66963d9d27b8ed682215fb72febf4af5b3;bytes:186	gnu-int128
+intwrap.c	hl-jit-darwin/testdata/guests/ext_abi/intwrap.c	aarch64,x86_64	0	golden/intwrap.out	sha256:95ed89ec8abdcc7c39652669efe7b6754999f27c558d0247d1ebfe593c2ab3fc;bytes:63	portable-c
+longdouble.c	hl-jit-darwin/testdata/guests/ext_abi/longdouble.c	aarch64,x86_64	0	golden/longdouble.out	sha256:687030ff66e3dcfff0860f3584a9cc1a53a5fd0ba35c0bce604799fee7826ded;bytes:63	arch-long-double-abi
+manyargs.c	hl-jit-darwin/testdata/guests/ext_abi/manyargs.c	aarch64,x86_64	0	golden/manyargs.out	sha256:11f904c9c26f99453d621191721cb8e8822155cb332c65c059dc797f9b80aa25;bytes:24	portable-c
+memops.c	hl-jit-darwin/testdata/guests/ext_abi/memops.c	aarch64,x86_64	0	golden/memops.out	sha256:fe4d76928506f12eb69c5874639904d8ee279ba5e75a9199aadd2cff02c00679;bytes:20	portable-c
+mixedargs.c	hl-jit-darwin/testdata/guests/ext_abi/mixedargs.c	aarch64,x86_64	0	golden/mixedargs.out	sha256:c0178a17831b9a04fb35e6c4ea656da80c302a5c9e000ed081b5e505113428d1;bytes:17	portable-c
+mul64.c	hl-jit-darwin/testdata/guests/ext_abi/mul64.c	aarch64,x86_64	0	golden/mul64.out	sha256:b9f9002153aa2855bff071d16f639f3f56e030201d24f6b20636c0ff18888031;bytes:65	portable-c
+loops.c	hl-jit-darwin/testdata/guests/ext_abi/nested_loops.c	aarch64,x86_64	0	golden/loops.out	sha256:104b6cab4ef038b2d5df52bb2c8638b0138e508593d6d7cda26fecf4c333cd2a;bytes:9	portable-c
+overflow.c	hl-jit-darwin/testdata/guests/ext_abi/overflow_builtin.c	aarch64,x86_64	0	golden/overflow.out	sha256:5054e664301e3b13d20b4dc5670efea5e5f38dad109407bf6dc75873e4744f8f;bytes:50	portable-c
+popcnt.c	hl-jit-darwin/testdata/guests/ext_abi/popcnt.c	aarch64,x86_64	0	golden/popcnt.out	sha256:b4c8c9d94a8f015bced0d8f20e2f0cde1c520255e682d21fed83c5a4d0b5c5e3;bytes:37	portable-c
+printf.c	hl-jit-darwin/testdata/guests/ext_abi/printf_formats.c	aarch64,x86_64	0	golden/printf.out	sha256:6abde258eb0fb2b6fa729b78daa82946497851dfe8279849290710406e53a1b8;bytes:185	linux-libc-formatting
+pointer.c	hl-jit-darwin/testdata/guests/ext_abi/ptr_arith.c	aarch64,x86_64	0	golden/pointer.out	sha256:5e739892c33651d172b9ac3d2cfa91f0df9ed59bbfa1c85e045d7586154e7d72;bytes:27	portable-c
+qsort.c	hl-jit-darwin/testdata/guests/ext_abi/qsort_cb.c	aarch64,x86_64	0	golden/qsort.out	sha256:c70b7fb56537c5e165be5e041cf7dd3112e29d69fb2c665120b4944f60f700da;bytes:45	libc-callback-into-guest
+returns.c	hl-jit-darwin/testdata/guests/ext_abi/rettypes.c	aarch64,x86_64	0	golden/returns.out	sha256:daac05bbbcd66d804d835d1ba407929cd7a804930c416151f59183468f07affa;bytes:52	portable-c
+rotate.c	hl-jit-darwin/testdata/guests/ext_abi/rotate.c	aarch64,x86_64	0	golden/rotate.out	sha256:572ced474d7699ec2037ae0d5cad5567ff65281a63be5a479bf7dc77da0fb06c;bytes:35	portable-c
+setjmp.c	hl-jit-darwin/testdata/guests/ext_abi/setjmp_longjmp.c	aarch64,x86_64	0	golden/setjmp.out	sha256:a94059ffcdc0aac654e6a354d91c0c4affdd4450d9989c1319482060b889f267;bytes:26	portable-c
+shifts.c	hl-jit-darwin/testdata/guests/ext_abi/shifts.c	aarch64,x86_64	0	golden/shifts.out	sha256:88f84655c2f1c23059be4bc991321541daeffd5fb2257b69cdf44aa16f68278a;bytes:69	portable-c
+signext.c	hl-jit-darwin/testdata/guests/ext_abi/signext.c	aarch64,x86_64	0	golden/signext.out	sha256:fe26ae3f5fd2955dd02310b6bc408dbf3a0a544983623e8cd524e290dbfd525e;bytes:62	portable-c
+simd.c	hl-jit-darwin/testdata/guests/ext_abi/simd_syscall.c	aarch64,x86_64	0	golden/simd.out	sha256:aa6ce2f7328bf74b68b3a22d2e23cd943faf4a58a4e9079dc562cc4c7c550bbe;bytes:40	per-ISA-inline-assembly
+shuffle.c	hl-jit-darwin/testdata/guests/ext_abi/simd_syscall_crypto.c	aarch64,x86_64	0	golden/shuffle.out	sha256:3ffc9e36f7291d277f015bb0f7df0992cbc5322933bcede2a77adfcc5d135cc3;bytes:33	per-ISA-inline-assembly
+hfa.c	hl-jit-darwin/testdata/guests/ext_abi/struct_hfa.c	aarch64,x86_64	0	golden/hfa.out	sha256:16390b8df1cdbc7e8597e197276a3b7f5126a1ec9e496d26e9b0a672f5f08179;bytes:41	arch-aggregate-abi
+large.c	hl-jit-darwin/testdata/guests/ext_abi/struct_large.c	aarch64,x86_64	0	golden/large.out	sha256:1f67480d4080f5c3f1e51a5d3362248449fc5aef7739199c7aee4715fa23e9f1;bytes:44	arch-aggregate-abi
+mixed.c	hl-jit-darwin/testdata/guests/ext_abi/struct_mixed.c	aarch64,x86_64	0	golden/mixed.out	sha256:d61951680212fb10b5b25e8e44ee229f51d2af0f6d828f006cb780aa511633ed;bytes:39	arch-aggregate-abi
+structret.c	hl-jit-darwin/testdata/guests/ext_abi/struct_ret.c	aarch64,x86_64	0	golden/structret.out	sha256:53a69dc5d63a959dc85862d6bba2a02c13b723ef0b707c74ffb4a62a67b46638;bytes:12	arch-aggregate-abi
+small.c	hl-jit-darwin/testdata/guests/ext_abi/struct_small.c	aarch64,x86_64	0	golden/small.out	sha256:4acb32555f85885a44f672411f1b90a56456f13ef31a3083457380820e1ca987;bytes:43	arch-aggregate-abi
+tailcall.c	hl-jit-darwin/testdata/guests/ext_abi/tailcall.c	aarch64,x86_64	0	golden/tailcall.out	sha256:655e47a75d458f0962a0c9eadae6826146593f20cbbdddd43a660f321465bbb6;bytes:28	portable-c
+union.c	hl-jit-darwin/testdata/guests/ext_abi/union_pun.c	aarch64,x86_64	0	golden/union.out	sha256:49dca862b8a1dbb25282b139d7d31a319a4b4512a26146507b1f234462416861;bytes:70	portable-c
+varfloat.c	hl-jit-darwin/testdata/guests/ext_abi/varargs_float.c	aarch64,x86_64	0	golden/varfloat.out	sha256:79194255f9de9fb965603eb6c7781343ff21f9880fdeabc7c13dd43cd419c32d;bytes:40	portable-c
+varmix.c	hl-jit-darwin/testdata/guests/ext_abi/varargs_mixed.c	aarch64,x86_64	0	golden/varmix.out	sha256:0047cd5d4b30ce85a64d091078ea29b0f740f8ef6f42b10dac107b5748462469;bytes:43	portable-c
+vla.c	hl-jit-darwin/testdata/guests/ext_abi/vla.c	aarch64,x86_64	0	golden/vla.out	sha256:ad9c9665686c63329e6a9a9fb2811d2ffd40b92cf30226697563256e0ff0a979;bytes:11	portable-c
+vtable.c	hl-jit-darwin/testdata/guests/ext_abi/vtable.c	aarch64,x86_64	0	golden/vtable.out	sha256:95b183d291856cc574c55a563ccf4bb04724418fc6943d7a1c1bc008704575bb;bytes:12	portable-c
+atomic-builtins	atomics	atomics_builtins.c	atomics_builtins.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/atomics_builtins.out	linux-libc	active	exact source; deterministic checked registration
+cpuid-features	cpu	cpuid_features.c	cpuid_features.c	x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/cpuid_features.out	linux-libc	active	exact source; deterministic checked registration
+lse-atomics	atomics	lse_atomics.c	lse_atomics.c	aarch64	-static-pie -O2 -pthread -lm -march=armv8.2-a+lse -mno-outline-atomics	-	-	0	expected/lse_atomics.out	linux-libc	active	exact source; LSE ISA build retained
+rflags-identity	cpu	rflags_id.c	rflags_id.c	x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/rflags_id.out	linux-libc	active	exact source; deterministic checked registration
+iretq-context	cpu	iretq_context.c	focused-production-regression	x86_64	-static-pie -O2 -std=gnu11	-	-	0	expected/iretq_context.out	linux-libc,iretq,rflags,stack	active	long-mode IRETQ restores the complete five-qword frame, arithmetic flags, ID, and DF before resuming at the restored RIP/RSP
+tls-basic	tls	tls.c	tls.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/tls.out	linux-libc	active	exact source; deterministic checked registration
+tls-models	tls	tlsmodels.c	tlsmodels.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/tlsmodels.out	linux-libc	active	exact source; deterministic checked registration
+tls-models-main	tls	tlsmodels_main.c	tlsmodels_main.c	aarch64,x86_64	-static -no-pie -O2 -pthread -lm	-	-	0	expected/tlsmodels_main.out	linux-libc	active	exact source; static non-PIE variant retained
+bitscan.c	differential-hunt/abi/bitscan.c	aarch64,x86_64	0	golden/bitscan.out	sha256:769c2fb99cfd678b550aa57be53cdcb72a8a6b9a76d5c08b075672a3db72f0ed;bytes:468	portable-c
+bitfield.c	differential-hunt/abi/bitfield.c	aarch64,x86_64	0	golden/bitfield.out	sha256:f3b0a393184e01b5d9b4a5d6a5ef24b775b45fc125b26a2731d49e7905b9a7ef;bytes:103	portable-c
+layout.c	differential-hunt/abi/layout.c	aarch64,x86_64	0	golden/layout.out	sha256:6245c1c084ee782f77ce50cb99fcb1be6ac1b1ce67632770f43bc70bfcd5b90a;bytes:232	portable-c
+atomicops.c	differential-hunt/abi/atomicops.c	aarch64,x86_64	0	golden/atomicops.out	sha256:f6c6bc60674ef48be9758b987d75cc187ff8f660b1334e6e75fb62dcc04b37d3;bytes:99	portable-c
+unaligned.c	differential-hunt/abi/unaligned.c	aarch64,x86_64	0	golden/unaligned.out	sha256:6fabf3cb34a72cccd0539ab182754fbeb1235304f92d4419dd6d88a21f873b9f;bytes:419	portable-c
+memmove_overlap.c	differential-hunt/abi/memmove_overlap.c	aarch64,x86_64	0	golden/memmove_overlap.out	sha256:4b09f8d20bb5d4bf2a3aee7555c2f3298b10f9f6c8d6f1069ba0240b4537d0cd;bytes:984	portable-c
+ackermann.c	differential-hunt/abi/ackermann.c	aarch64,x86_64	0	golden/ackermann.out	sha256:1fe3bf274ab889e46e3bd7a63a94e930096ee4fe1742f7ad79bad945d59affd5;bytes:98	portable-c
+vacopy.c	differential-hunt/abi/vacopy.c	aarch64,x86_64	0	golden/vacopy.out	sha256:86f3cc6f4836c3ff2e0bfe478eb0fd63e2a3ea7eca0c88a217d0ad4e7c5b9897;bytes:33	portable-c
+int128div.c	differential-hunt/abi/int128div.c	aarch64,x86_64	0	golden/int128div.out	sha256:fbcb00c7ebbf5056e4beb4788d3f669a13cdd69f18f7a57a25fb7496e23b4c04;bytes:258	portable-c
+fenv_round.c	differential-hunt/abi/fenv_round.c	aarch64,x86_64	0	golden/fenv_round.out	sha256:855fe76f30a31f22ede16e3c44631e835cd118c211d8f4270e1ad7b25a4402a0;bytes:386	portable-c
+longjmp_deep.c	differential-hunt/abi/longjmp_deep.c	aarch64,x86_64	0	golden/longjmp_deep.out	sha256:8b569b941cbdde918e4886bcae779aea3c88e2dbf53dc6e025c0738a22508939;bytes:132	portable-c
+complexf.c	differential-hunt/abi/complexf.c	aarch64,x86_64	0	golden/complexf.out	sha256:cfdc828dfd126105949a029ff6814daf085d0ffb1e0251ac4dc1e5ba741fef1b;bytes:265	portable-c
+ucontext_swap	abi	ucontext_swap.c	differential-hunt/abi/ucontext_swap.c	aarch64,x86_64	-static -O2 -std=gnu11 -pthread	-	-	0	expected/ucontext_swap.out	linux-libc,abi,ucontext	excluded-macos	excluded-macos: macOS Mach-O engine SIGILL on the first activation of a makecontext() context via swapcontext (initial jump onto the synthesized coroutine stack+PC in the Mach exception + MAP_JIT path); getcontext/setcontext/makecontext-build all pass there. Linux engine and native pass, so the Linux lane now runs and enforces this.

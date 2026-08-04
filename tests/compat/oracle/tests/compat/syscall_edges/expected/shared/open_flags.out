@@ -1,0 +1,7 @@
+excl_errno=17
+odir_on_file_errno=20
+wronly_on_dir_errno=21
+nofollow_symlink_errno=40
+missing_errno=2
+notdir_component_errno=20
+opath_nofollow_ok=1

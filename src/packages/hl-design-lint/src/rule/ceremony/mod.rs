@@ -1,8 +1,8 @@
 use crate::{
+    Result,
     model::{Finding, Severity},
     rule::Rule,
     source::Workspace,
-    Result,
 };
 
 mod marker;
@@ -10,6 +10,7 @@ mod namespace;
 mod wrapper;
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 pub(super) const ID: &str = "ceremonial-structure";

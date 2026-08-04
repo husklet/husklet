@@ -1,0 +1,3 @@
+uid_match=1 gid_match=1
+uid_effective_real_match=1 gid_effective_real_match=1
+legacy_uid_match=1 legacy_gid_match=1

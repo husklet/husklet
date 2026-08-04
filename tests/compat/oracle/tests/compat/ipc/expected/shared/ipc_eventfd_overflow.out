@@ -1,0 +1,3 @@
+overflow maxwrite=8
+overflow blocked=-1 errno=Resource temporarily unavailable
+overflow invalid=-1 errno=Invalid argument

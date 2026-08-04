@@ -1,0 +1,5 @@
+lo found=1 type=772 mtu=65536 flags=0x49 xconsistent=1 roundtrip=1
+lo stable type_ok=1 mtu_ok=1 flags_ok=1
+eth0 found=1 type=1 mtu=1500 flags=0x1043 xconsistent=1 roundtrip=1
+eth0 stable type_ok=1 mtu_ok=1 flags_ok=1
+bogus-index error=1 enodev=1 multi=0

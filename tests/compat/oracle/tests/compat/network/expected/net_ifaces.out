@@ -1,0 +1,5 @@
+getifaddrs eth0 ip=172.17.0.2
+getifaddrs lo=1 eth0=1 lo_v4=1 lo_v6=1 eth_v4=1
+netlink RTM_NEWADDR count=3
+procnetdev lo=1 eth0=1
+sysclassnet lo=1 eth0=1 eth0_addr=02:42:ac:11:00:02

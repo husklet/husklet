@@ -1,18 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{
-    spanned::Spanned, visit::Visit, Attribute, FnArg, ItemImpl, ItemMod, ItemTrait, ReturnType,
-    TraitItem, TraitItemFn,
+    Attribute, FnArg, ItemImpl, ItemMod, ItemTrait, ReturnType, TraitItem, TraitItemFn, spanned::Spanned, visit::Visit,
 };
 
 use crate::{
+    Result,
     model::{Finding, Related, Review, Severity},
     rule::Rule,
-    source::{requires_test, Source, Workspace},
-    Result,
+    source::{Source, Workspace, requires_test},
 };
 
 #[cfg(test)]
+#[path = "test.rs"]
 mod tests;
 
 const MINIMUM_METHODS: usize = 8;
@@ -134,10 +134,7 @@ impl Definition {
             .map(|(cluster, methods)| {
                 format!(
                     "{cluster}: {}",
-                    signature_profile(methods)
-                        .into_iter()
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    signature_profile(methods).into_iter().collect::<Vec<_>>().join(", ")
                 )
             })
             .collect::<Vec<_>>()
@@ -168,12 +165,8 @@ impl Definition {
         review
             .metadata
             .push(("Method count".into(), self.methods.len().to_string()));
-        review
-            .metadata
-            .push(("Capability clusters".into(), summary));
-        review
-            .metadata
-            .push(("Signature type evidence".into(), signatures));
+        review.metadata.push(("Capability clusters".into(), summary));
+        review.metadata.push(("Signature type evidence".into(), signatures));
         review.metadata.push((
             "Implementors".into(),
             implementations
@@ -190,13 +183,11 @@ impl Definition {
                 "trait name uses Repository, Manager, or Service".into(),
             ));
         }
+        review
+            .questions
+            .push("Do consumers need every cluster, or can they depend on smaller capability traits?".into());
         review.questions.push(
-            "Do consumers need every cluster, or can they depend on smaller capability traits?"
-                .into(),
-        );
-        review.questions.push(
-            "Are these operations one cohesive protocol/state machine despite their different verbs and types?"
-                .into(),
+            "Are these operations one cohesive protocol/state machine despite their different verbs and types?".into(),
         );
         finding.review = Some(review);
         Some(finding)
@@ -254,11 +245,7 @@ impl Visit<'_> for Collector<'_> {
         let Some((_, path, _)) = &item.trait_ else {
             return;
         };
-        let Some(trait_name) = path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string())
-        else {
+        let Some(trait_name) = path.segments.last().map(|segment| segment.ident.to_string()) else {
             return;
         };
         self.implementations.push(Implementation {
@@ -294,11 +281,7 @@ fn method(method: &TraitItemFn, source: &Source) -> Method {
 }
 
 fn normalized(source: &Source, span: proc_macro2::Span) -> String {
-    source
-        .excerpt(span)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    source.excerpt(span).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn excluded_trait(item: &ItemTrait, source: &Source) -> bool {
@@ -312,8 +295,7 @@ fn excluded_trait(item: &ItemTrait, source: &Source) -> bool {
 
 fn generated(attributes: &[Attribute], source: &str) -> bool {
     attributes.iter().any(|attribute| {
-        attribute.path().is_ident("automatically_derived")
-            || attribute.path().is_ident("proc_macro_derive")
+        attribute.path().is_ident("automatically_derived") || attribute.path().is_ident("proc_macro_derive")
     }) || source
         .lines()
         .take(8)
@@ -344,25 +326,15 @@ fn capability(name: &str) -> Option<&'static str> {
     }
     let verb = words.first()?;
     match verb.as_str() {
-        "create" | "open" | "read" | "write" | "save" | "load" | "delete" | "remove" | "list"
-        | "find" | "get" | "put" => Some("persistence"),
-        "start" | "stop" | "pause" | "resume" | "restart" | "kill" | "launch" | "terminate" => {
-            Some("lifecycle")
-        }
-        "inspect" | "status" | "stats" | "health" | "metrics" | "describe" | "query" => {
-            Some("observation")
-        }
-        "configure" | "set" | "update" | "apply" | "reset" | "enable" | "disable" => {
-            Some("configuration")
-        }
+        "create" | "open" | "read" | "write" | "save" | "load" | "delete" | "remove" | "list" | "find" | "get"
+        | "put" => Some("persistence"),
+        "start" | "stop" | "pause" | "resume" | "restart" | "kill" | "launch" | "terminate" => Some("lifecycle"),
+        "inspect" | "status" | "stats" | "health" | "metrics" | "describe" | "query" => Some("observation"),
+        "configure" | "set" | "update" | "apply" | "reset" | "enable" | "disable" => Some("configuration"),
         "subscribe" | "unsubscribe" | "watch" | "emit" | "notify" | "poll" => Some("events"),
         "upload" | "download" | "push" | "pull" | "import" | "export" | "copy" => Some("transfer"),
-        "login" | "logout" | "authenticate" | "authorize" | "grant" | "revoke" => {
-            Some("authorization")
-        }
-        "connect" | "disconnect" | "bind" | "listen" | "accept" | "send" | "receive" => {
-            Some("connection")
-        }
+        "login" | "logout" | "authenticate" | "authorize" | "grant" | "revoke" => Some("authorization"),
+        "connect" | "disconnect" | "bind" | "listen" | "accept" | "send" | "receive" => Some("connection"),
         "render" | "draw" | "present" | "commit" | "frame" | "paint" => Some("rendering"),
         "visit" | "walk" | "fold" | "traverse" => Some("traversal"),
         "encode" | "decode" | "serialize" | "deserialize" | "parse" | "format" => Some("codec"),
@@ -400,10 +372,7 @@ fn separation_evidence(clusters: &BTreeMap<&'static str, Vec<&Method>>) -> usize
 }
 
 fn signature_profile(methods: &[&Method]) -> BTreeSet<String> {
-    methods
-        .iter()
-        .flat_map(|method| signature_types(method))
-        .collect()
+    methods.iter().flat_map(|method| signature_types(method)).collect()
 }
 
 fn signature_types(method: &Method) -> BTreeSet<String> {
@@ -446,8 +415,8 @@ fn signature_types(method: &Method) -> BTreeSet<String> {
         .collect()
 }
 
-fn type_words(source: &Source, span: proc_macro2::Span) -> impl Iterator<Item = String> {
-    words(&source.excerpt(span))
+fn type_words(source: &Source, span: proc_macro2::Span) -> Vec<String> {
+    words(&source.excerpt(span)).collect()
 }
 
 fn cohesive_contract(name: &str, methods: &[Method]) -> bool {

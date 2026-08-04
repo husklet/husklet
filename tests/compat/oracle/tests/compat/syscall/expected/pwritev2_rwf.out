@@ -1,0 +1,4 @@
+pwritev2 w=10
+pwritev2 append w=3
+content=[helloworldXYZ] r=13
+preadv2 at5=[world] pr=5 pos=0

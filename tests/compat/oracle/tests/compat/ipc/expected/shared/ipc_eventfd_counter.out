@@ -1,0 +1,2 @@
+counter read=8 sum=42
+counter empty=-1 errno=Resource temporarily unavailable

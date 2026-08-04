@@ -1,0 +1,2 @@
+root_is_slash=1 cwd_abs=1
+getcwd_ok=1 getcwd_abs=1 cwd_link_agrees=1

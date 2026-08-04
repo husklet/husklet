@@ -1,9 +1,9 @@
 use std::io::{self, Write};
 
 use crate::{
+    LintError, Result,
     model::{Finding, Summary},
     report::Reporter,
-    LintError, Result,
 };
 
 /// Emits a single Markdown review document.
@@ -15,10 +15,7 @@ pub struct Markdown<Output = io::Stdout> {
 impl<Output> Markdown<Output> {
     /// Creates a Markdown reporter with an injected output.
     pub fn new(output: Output) -> Self {
-        Self {
-            output,
-            started: false,
-        }
+        Self { output, started: false }
     }
 
     /// Returns the injected output.
@@ -71,8 +68,7 @@ impl<Output: Write> Reporter for Markdown<Output> {
     }
 
     fn finish(&mut self, summaries: &[Summary]) -> Result<()> {
-        writeln!(self.output, "## Summary\n")
-            .map_err(|error| LintError::report("Markdown summary", error))?;
+        writeln!(self.output, "## Summary\n").map_err(|error| LintError::report("Markdown summary", error))?;
         for summary in summaries {
             writeln!(
                 self.output,

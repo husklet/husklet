@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	process	1
+stdout	process	1

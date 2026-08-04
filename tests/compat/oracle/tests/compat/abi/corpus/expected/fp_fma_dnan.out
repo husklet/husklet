@@ -1,0 +1,4 @@
+mul-gen  isnan=1 sign-ok=1 payload=8000000000000
+add-gen  isnan=1 sign-ok=1 payload=8000000000000
+prop-q   keeps-input=1
+prop-sq  keeps-input=1

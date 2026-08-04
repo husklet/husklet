@@ -1,0 +1,1 @@
+forkserver identity=1 stdio=1 exit=1 fatal=1 warm=1

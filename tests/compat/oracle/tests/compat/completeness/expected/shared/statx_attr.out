@@ -1,0 +1,1 @@
+statx_attr ok=1 core_mask=1 isreg=1 size=1 attr_confined=1 blksize=1

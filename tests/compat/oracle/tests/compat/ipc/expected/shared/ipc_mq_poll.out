@@ -1,0 +1,9 @@
+open=1
+empty_pollin=0
+empty_pollout=1
+nonempty_pollin=1
+full_pollin=1
+full_pollout=0
+drained_pollin=0
+drained_pollout=1
+unlink=ok

@@ -1,0 +1,4 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+completeness	avx	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	avx-sigreturn	x86_64	fail	0	linux-libc	stdout:e=fcaadd985d84aba6,a=94cdbb619920da26,d=11,eb=66,ab=30,el=47,al=47	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
+completeness	avx2	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }

@@ -1,0 +1,4 @@
+setlk_ok=1
+getlk_unlck=1
+unlck_ok=1
+pipesz_ge=1 pipesz_match=1

@@ -1,0 +1,3 @@
+suite	case	isa	status	exit	dependencies	mismatch	diagnostic
+process	inet-loopback	aarch64	fail	-	linux-libc	engine:timeout	timeout
+process	inet-loopback	x86_64	fail	-	linux-libc	engine:timeout	timeout

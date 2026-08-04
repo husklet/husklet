@@ -1,0 +1,3 @@
+mismatch	suite	cases
+expected-exit	memory	2
+stdout	memory	2

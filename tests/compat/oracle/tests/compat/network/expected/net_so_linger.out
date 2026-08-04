@@ -1,0 +1,1 @@
+so_linger on=1 t=5 keepalive=1 type_stream=1

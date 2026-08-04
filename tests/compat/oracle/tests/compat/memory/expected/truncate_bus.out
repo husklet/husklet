@@ -1,0 +1,1 @@
+truncate-bus partial=1 shared-load=1 shared-store=1 private-load=1 private-store=1 fork=1 extend-shared=1 extend-private=1 shared-write=1 metadata=1

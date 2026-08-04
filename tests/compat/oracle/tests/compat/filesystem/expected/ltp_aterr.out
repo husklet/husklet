@@ -1,0 +1,1 @@
+aterr fstatat_enotdir=1 fstatat_ebadf=1 fstatat_einval=1 statx_efault=1 statx_einval_flag=1 statx_einval_mask=1 statx_enotdir=1 symlinkat_enotdir=1 linkat_enotdir=1 linkat_einval=1 linkat_exdev=1 renameat2_einval=1 unlink_efault=1 unlinkat_enotdir=1

@@ -1,0 +1,2 @@
+neon-misc dup=1 movi=1 uqshl=1 rshrn=1 cmpinv=1 cvt=1 misc=1 fp16=1
+neon-misc bits dup=887766 rshrn=7 cmp=1ff cls=29 fp16=40004500

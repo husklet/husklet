@@ -1,0 +1,3 @@
+packed sizeof=4 a=5 b=900 c=-7 d=5000
+mixed sizeof=8 flag=1 kind=6 code=3000 big=999999
+wrap a=3 c=-24

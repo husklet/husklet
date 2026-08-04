@@ -1,0 +1,37 @@
+legacy_test	current_evidence	status	reason
+nonpie_dladdr::nonpie_dladdr_rtld_next_aarch64	tests/compat/core/regress/manifest.tsv	mapped	non-PIE dynamic loader behavior is an executable guest gate
+forkserver::forkserver_equivalence_aarch64	tests/compat/process/manifest.tsv; tools/forkserver_runner.c	mapped	production forkserver protocol and output equivalence
+forkserver::forkserver_equivalence_x86_64	tests/compat/process/manifest.tsv; tools/forkserver_runner.c	mapped	production forkserver protocol and output equivalence
+pcache::pcache_lifecycle_aarch64	tests/unit/test_persist.c; tests/unit/test_profile.c	mapped	cache lifecycle is tested at the owning engine boundary
+pcache::pcache_policy_aarch64	tests/unit/test_persist.c; tests/unit/test_profile.c	mapped	cache policy is tested without ambient environment configuration
+pcache::pcache_policy_x86_64	tests/unit/test_persist.c; tests/unit/test_profile.c	mapped	cache policy is architecture-independent typed policy
+gate_invariants::coverage_static_scans_existing_runtime_sources	tests/compat/guest_inventory.tsv	superseded	source-text scanning is not an observable behavior test
+gate_invariants::coverage_static_is_fatal_when_runtime_tree_is_missing	tests/compat/guest_inventory.tsv	superseded	source-tree location is not a runtime contract
+gate_invariants::coverage_report_does_not_greenlight_a_broken_scan	tests/compat/guest_inventory.tsv	superseded	manifest validation replaces implementation-text scanning
+gate_invariants::coverage_dynamic_fails_when_required_engines_are_missing	Makefile e2e-compat prerequisites	mapped	missing production engines fail the executable gate
+gate_invariants::test_ci_matrix_passes_on_a_healthy_full_run	Makefile test-linux-production-full	mapped	authoritative aggregate exits successfully only when every lane passes
+gate_invariants::test_ci_matrix_fails_xpass	tools/matrix_runner.c	mapped	result disposition validation is owned by the runner
+gate_invariants::test_ci_matrix_fails_dark_engine_lanes	tools/matrix_runner.c	mapped	both configured ISA lanes are mandatory
+gate_invariants::test_ci_matrix_fails_empty_or_all_skipped	tools/matrix_runner.c	mapped	empty matrices fail rather than report green
+gate_invariants::test_ci_matrix_xfail_and_skip_stay_green	tools/matrix_runner.c	mapped	explicit dispositions retain their semantics
+gate_invariants::test_every_gui_matrix_probe_is_gated_or_documented	tests/compat/guest_inventory.tsv	superseded	graphics domain ownership is explicitly recorded; engine does not scan product sources
+gate_invariants::perf_matrix_rechecks_timed_invocation_success	tools/perf_runner.c	mapped	measured child status is checked by the production perf runner
+gate_invariants::perf_matrix_hang_guard_wraps_timed_jit_runs	tools/perf_runner.c	mapped	bounded execution is a production perf-runner contract
+suite::matrix	tests/compat/*/manifest.tsv; Makefile e2e-compat	mapped	595 legacy registrations were decomposed into named executable manifests
+overlay::overlay_correctness_aarch64	tests/compat/overlay; pkgs/rust/tests/container.rs	mapped	overlay behavior is tested through generic namespace/filesystem APIs
+overlay::overlay_correctness_x86_64	tests/compat/overlay; pkgs/rust/tests/container.rs	mapped	overlay behavior is tested through generic namespace/filesystem APIs
+perf::median_ms_runs_closure_n_times	tools/perf_runner.c	superseded	legacy Rust harness helper is absent; production C runner owns sampling
+perf::median_ms_single_runs_once	tools/perf_runner.c	superseded	legacy Rust harness helper is absent; production C runner owns sampling
+perf::median_ms_zero_clamps_to_one_no_panic	tools/perf_runner.c	superseded	production runner validates a nonzero sample count
+perf::median_ms_single_element_reports_that_elements_time	tools/perf_runner.c	superseded	legacy helper implementation detail
+perf::median_ms_odd_returns_middle_sample	tools/perf_runner.c	superseded	legacy helper implementation detail
+perf::median_ms_even_returns_upper_of_two_middles_not_average	tools/perf_runner.c	superseded	legacy helper implementation detail
+util::shq_wraps_plain_string_in_single_quotes	-	superseded	legacy shell-command construction was removed from the typed launch API
+util::shq_escapes_embedded_single_quote	-	superseded	legacy shell-command construction was removed from the typed launch API
+util::shq_empty_string_is_empty_quotes	-	superseded	legacy shell-command construction was removed from the typed launch API
+util::shq_preserves_path_like_content	-	superseded	legacy shell-command construction was removed from the typed launch API
+util::strip_noise_removes_unhandled_syscall_lines	-	superseded	current tests assert engine output exactly and never hide unhandled syscalls
+util::strip_noise_preserves_trailing_newline_on_nonempty	-	superseded	current exact-golden runner performs no output filtering
+util::strip_noise_keeps_no_trailing_newline_when_absent	-	superseded	current exact-golden runner performs no output filtering
+util::strip_noise_empty_input_stays_empty	-	superseded	current exact-golden runner performs no output filtering
+util::strip_noise_multiline_no_trailing_newline	-	superseded	current exact-golden runner performs no output filtering

@@ -1,0 +1,5 @@
+m64 ok1=1 ok2=0 exp2=100 fa=100 fs=107 fo=102 fx=119 fn=136 sw=8 v=57005
+m32 wok1=1 wok2=0 we2=100 wfa=100 wfo=107 wsw=123 w=48879
+aba ok=1 v=12
+contended counter=3200000 expect=3200000
+ordering violations=0

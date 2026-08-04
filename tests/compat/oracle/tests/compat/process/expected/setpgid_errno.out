@@ -1,0 +1,7 @@
+setpgid_negpgid_errno=22
+setpgid_nopid_errno=3
+getpgid_nopid_errno=3
+getsid_nopid_errno=3
+getpgid0_ok=1
+getsid0_ok=1
+setsid_leader_errno=1

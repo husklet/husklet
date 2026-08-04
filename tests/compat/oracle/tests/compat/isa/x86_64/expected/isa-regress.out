@@ -1,0 +1,1048 @@
+addsd              11223344556677884008000000000000
+subss              11223344556677883ff0000000000000
+mulss              11223344556677883ff0000000000000
+divsd              11223344556677883fe0000000000000
+sqrtsd             11223344556677883ff6a09e667f3bcd
+minsd              11223344556677883ff0000000000000
+maxss              11223344556677883ff0000000000000
+cmpsd-neq          1122334455667788ffffffffffffffff
+cmpss-eq           11223344556677883ff00000ffffffff
+cvtss2sd           11223344556677880000000000000000
+cvtsd2ss           11223344556677883ff0000040000000
+cvtsi2sdq          112233445566778841f2345678900000
+cvtpd2ps           0000000000000000c3f0000042a80000
+cvtps2pd           40590000000000004024000000000000
+subps-nan0         bf800000bf800000bf800000ffffffff
+mulps-nan0         400000004000000040000000ffffffff
+subps-nan1         bf800000bf800000bf800000ffffffff
+mulps-nan1         400000004000000040000000ffffffff
+subps-nan2         bf800000bf800000bf800000ffc00001
+mulps-nan2         400000004000000040000000ffc00001
+subps-nan3         bf800000bf800000bf800000ffc00001
+mulps-nan3         400000004000000040000000ffc00001
+subps-nan4         bf800000bf800000bf800000ffc00001
+mulps-nan4         400000004000000040000000ffc00001
+subps-nan5         bf800000bf800000bf8000007fc00002
+mulps-nan5         4000000040000000400000007fc00002
+haddps-geninf      41d00000419000007f800000ffc00000
+hsubps-geninf      c0000000c0000000ffc000007f800000
+addsubps-geninf    7f8000007f800000ff8000007f800000
+addsubps-nan       7fc000047fc000037fc000027fc00001
+addsubpd-nan       7ff80000000000027ff8000000000001
+haddpd-nanpair     4008000000000000fff8000000000000
+ucomisd0           of=0 flags=0045
+ucomisd1           of=0 flags=0045
+ucomisd2           of=0 flags=0001
+ucomisd3           of=0 flags=0040
+movw-mem           aaaabbbbcccc1234
+movw-imm           aaaabbbbcccc0077
+movw-regreg        aaaabbbbcccc8888
+cmovew-mem         aaaabbbbcccc1234
+cmovew-reg         aaaabbbbcccc8888
+popcntw            aaaabbbbcccc0005
+bsfw               aaaabbbbcccc0003
+bsrw               aaaabbbbcccc000f
+xchgw-reg          aaaabbbbcccc8888
+xchgw-mem          aaaabbbbcccc1234
+leaw               aaaabbbbcccc888c
+pushpopw           aaaabbbbcccc8888
+pushw-rsp-delta    0000000000000000
+cmpxchgb-ne        aaaabbbbccccdd44 5555666677778888 1111222233334444 0084
+cmpxchgb-eq        aaaabbbbccccdd44 5555666677778888 1111222233334488 0044
+cmpxchgb-hi8       aaaabbbbccccdd88 5555666677778888 1111222233334444 0004
+cmpxchgw-ne        aaaabbbbcccc4444 5555666677778888 1111222233334444 0084
+cmpxchgw-eq        aaaabbbbcccc4444 5555666677778888 1111222233338888 0044
+cmpxchgq           1111222233334444 5555666677778888 1111222233334444 0084
+xaddb              aaaabbbbccccdddd 5555666677778844 11112222333344cc 0084
+xaddb-hi8          aaaabbbbcccc88dd 5555666677776588 1111222233334444 0815
+xaddw              aaaabbbbccccdddd 5555666677774444 111122223333cccc 0084
+xaddw-same         aaaabbbbccccbbba 5555666677778888 1111222233334444 0091
+xaddq              aaaabbbbccccdddd 1111222233334444 66668888aaaacccc 0004
+popcnt0             0 np=1 flags=0040
+popcnt1             1 np=1 flags=0000
+popcnt2             1 np=1 flags=0000
+popcnt3            64 np=1 flags=0000
+popcnt4             8 np=1 flags=0000
+adc-psraw-rcl      0000000000000088
+cmp-addsd-js       0000000000000000
+cmp-cvttsd2si-js   0000000000000000
+xchg64              1 fbf4ede6dfd8d1ca 1122334455667788
+xadd32              1 00000000dfd8d1ca 00000000be8690b9
+lock-and64          1 0b040d060f08010a
+lock-or64           1 fbf4ede6dfd8d1cb
+lock-bts64          1 fbf4ede6dfd8d1ca
+cmpxchg-hit         1 z=1 fbf4ede6dfd8d1ca aaaabbbbccccdddd
+cmpxchg-miss        1 z=0 aaaabbbbccccdddd aaaabbbbccccdddd
+xchg32              1 00000000dfd8d1ca 0000000012345678
+xchg64              8 2c251e17100902fb 1122334455667788
+xadd32              8 00000000100902fb 00000000eeb6c1ea
+lock-and64          8 0c050e070009020b
+lock-or64           8 3c251e17100902fb
+lock-bts64          8 2c251e37100902fb
+cmpxchg-hit         8 z=1 2c251e17100902fb aaaabbbbccccdddd
+cmpxchg-miss        8 z=0 aaaabbbbccccdddd aaaabbbbccccdddd
+xchg32              8 00000000100902fb 0000000012345678
+xchg64             15 5d564f48413a332c 1122334455667788
+xadd32             15 00000000413a332c 000000001fe7f21b
+lock-and64         15 0d060f08010a030c
+lock-or64          15 5d564f48413a332d
+lock-bts64         15 5d564f68413a332c
+cmpxchg-hit        15 z=1 5d564f48413a332c aaaabbbbccccdddd
+cmpxchg-miss       15 z=0 aaaabbbbccccdddd aaaabbbbccccdddd
+xchg32             15 00000000413a332c 0000000012345678
+addpd 00                    7ff80000000000017ff8000000000001
+mulpd 00                    7ff80000000000017ff8000000000001
+haddpd 00                    7ff80000000000017ff8000000000001
+hsubpd 00                    7ff80000000000017ff8000000000001
+addsubpd 00                    7ff80000000000017ff8000000000001
+haddps 00                    7ff000007ff000007ff000007ff00000
+hsubps 00                    7ff000007ff000007ff000007ff00000
+addsubps 00                    7ff000007ff000007ff000007ff00000
+addpd 01                    7ff80000000000017ff8000000000001
+mulpd 01                    7ff80000000000017ff8000000000001
+haddpd 01                    7ff80000000000097ff8000000000001
+hsubpd 01                    7ff80000000000097ff8000000000001
+addsubpd 01                    7ff80000000000097ff8000000000001
+haddps 01                    7ff000007ff800007ff800007ff00000
+hsubps 01                    7ff000007ff800007ff800007ff00000
+addsubps 01                    7ff000007ff800007ff800007ff00000
+addpd 02                    7ff80000000000017ff8000000000001
+mulpd 02                    7ff80000000000017ff8000000000001
+haddpd 02                    fff80000000000027ff8000000000001
+hsubpd 02                    fff80000000000027ff8000000000001
+addsubpd 02                    fff80000000000027ff8000000000001
+haddps 02                    7ff00000fff00000fff000007ff00000
+hsubps 02                    7ff00000fff00000fff000007ff00000
+addsubps 02                    7ff00000fff00000fff000007ff00000
+addpd 03                    7ff80000000000017ff8000000000001
+mulpd 03                    7ff80000000000017ff8000000000001
+haddpd 03                    fff80000000000047ff8000000000001
+hsubpd 03                    fff80000000000047ff8000000000001
+addsubpd 03                    fff80000000000047ff8000000000001
+haddps 03                    7ff00000fff80000fff800007ff00000
+hsubps 03                    7ff00000fff80000fff800007ff00000
+addsubps 03                    7ff00000fff80000fff800007ff00000
+addpd 04                    7ff80000000000017ff8000000000001
+mulpd 04                    7ff80000000000017ff8000000000001
+haddpd 04                    7ff80000000000017ff8000000000001
+hsubpd 04                    7ff80000000000017ff8000000000001
+addsubpd 04                    7ff80000000000017ff8000000000001
+haddps 04                    7ff000007ff000007ff000007ff00000
+hsubps 04                    7ff000007ff000007ff000007ff00000
+addsubps 04                    7ff000007ff000007ff000007ff00000
+addpd 05                    7ff80000000000017ff8000000000001
+mulpd 05                    7ff80000000000017ff8000000000001
+haddpd 05                    7ff80000000000017ff8000000000001
+hsubpd 05                    7ff80000000000017ff8000000000001
+addsubpd 05                    7ff80000000000017ff8000000000001
+haddps 05                    7ff000007ff000007ff000007ff00000
+hsubps 05                    7ff000007ff000007ff000007ff00000
+addsubps 05                    7ff000007ff000007ff000007ff00000
+addpd 10                    7ff80000000000097ff8000000000009
+mulpd 10                    7ff80000000000097ff8000000000009
+haddpd 10                    7ff80000000000017ff8000000000009
+hsubpd 10                    7ff80000000000017ff8000000000009
+addsubpd 10                    7ff80000000000017ff8000000000009
+haddps 10                    7ff800007ff000007ff000007ff80000
+hsubps 10                    7ff800007ff000007ff000007ff80000
+addsubps 10                    7ff800007ff000007ff000007ff80000
+addpd 11                    7ff80000000000097ff8000000000009
+mulpd 11                    7ff80000000000097ff8000000000009
+haddpd 11                    7ff80000000000097ff8000000000009
+hsubpd 11                    7ff80000000000097ff8000000000009
+addsubpd 11                    7ff80000000000097ff8000000000009
+haddps 11                    7ff800007ff800007ff800007ff80000
+hsubps 11                    7ff800007ff800007ff800007ff80000
+addsubps 11                    7ff800007ff800007ff800007ff80000
+addpd 12                    7ff80000000000097ff8000000000009
+mulpd 12                    7ff80000000000097ff8000000000009
+haddpd 12                    fff80000000000027ff8000000000009
+hsubpd 12                    fff80000000000027ff8000000000009
+addsubpd 12                    fff80000000000027ff8000000000009
+haddps 12                    7ff80000fff00000fff000007ff80000
+hsubps 12                    7ff80000fff00000fff000007ff80000
+addsubps 12                    7ff80000fff00000fff000007ff80000
+addpd 13                    7ff80000000000097ff8000000000009
+mulpd 13                    7ff80000000000097ff8000000000009
+haddpd 13                    fff80000000000047ff8000000000009
+hsubpd 13                    fff80000000000047ff8000000000009
+addsubpd 13                    fff80000000000047ff8000000000009
+haddps 13                    7ff80000fff80000fff800007ff80000
+hsubps 13                    7ff80000fff80000fff800007ff80000
+addsubps 13                    7ff80000fff80000fff800007ff80000
+addpd 14                    7ff80000000000097ff8000000000009
+mulpd 14                    7ff80000000000097ff8000000000009
+haddpd 14                    7ff80000000000097ff8000000000009
+hsubpd 14                    7ff80000000000097ff8000000000009
+addsubpd 14                    7ff80000000000097ff8000000000009
+haddps 14                    7ff800007ff000007ff000007ff80000
+hsubps 14                    7ff800007ff000007ff000007ff80000
+addsubps 14                    7ff800007ff000007ff000007ff80000
+addpd 15                    7ff80000000000097ff8000000000009
+mulpd 15                    7ff80000000000097ff8000000000009
+haddpd 15                    7ff80000000000097ff8000000000009
+hsubpd 15                    7ff80000000000097ff8000000000009
+addsubpd 15                    7ff80000000000097ff8000000000009
+haddps 15                    7ff800007ff800007ff800007ff80000
+hsubps 15                    7ff800007ff800007ff800007ff80000
+addsubps 15                    7ff800007ff800007ff800007ff80000
+addpd 20                    fff8000000000002fff8000000000002
+mulpd 20                    fff8000000000002fff8000000000002
+haddpd 20                    7ff8000000000001fff8000000000002
+hsubpd 20                    7ff8000000000001fff8000000000002
+addsubpd 20                    7ff8000000000001fff8000000000002
+haddps 20                    fff000007ff000007ff00000fff00000
+hsubps 20                    fff000007ff000007ff00000fff00000
+addsubps 20                    fff000007ff000007ff00000fff00000
+addpd 21                    fff8000000000002fff8000000000002
+mulpd 21                    fff8000000000002fff8000000000002
+haddpd 21                    7ff8000000000009fff8000000000002
+hsubpd 21                    7ff8000000000009fff8000000000002
+addsubpd 21                    7ff8000000000009fff8000000000002
+haddps 21                    fff000007ff800007ff80000fff00000
+hsubps 21                    fff000007ff800007ff80000fff00000
+addsubps 21                    fff000007ff800007ff80000fff00000
+addpd 22                    fff8000000000002fff8000000000002
+mulpd 22                    fff8000000000002fff8000000000002
+haddpd 22                    fff8000000000002fff8000000000002
+hsubpd 22                    fff8000000000002fff8000000000002
+addsubpd 22                    fff8000000000002fff8000000000002
+haddps 22                    fff00000fff00000fff00000fff00000
+hsubps 22                    fff00000fff00000fff00000fff00000
+addsubps 22                    fff00000fff00000fff00000fff00000
+addpd 23                    fff8000000000002fff8000000000002
+mulpd 23                    fff8000000000002fff8000000000002
+haddpd 23                    fff8000000000004fff8000000000002
+hsubpd 23                    fff8000000000004fff8000000000002
+addsubpd 23                    fff8000000000004fff8000000000002
+haddps 23                    fff00000fff80000fff80000fff00000
+hsubps 23                    fff00000fff80000fff80000fff00000
+addsubps 23                    fff00000fff80000fff80000fff00000
+addpd 24                    fff8000000000002fff8000000000002
+mulpd 24                    fff8000000000002fff8000000000002
+haddpd 24                    fff8000000000002fff8000000000002
+hsubpd 24                    fff8000000000002fff8000000000002
+addsubpd 24                    fff8000000000002fff8000000000002
+haddps 24                    fff000007ff000007ff00000fff00000
+hsubps 24                    fff000007ff000007ff00000fff00000
+addsubps 24                    fff000007ff000007ff00000fff00000
+addpd 25                    fff8000000000002fff8000000000002
+mulpd 25                    fff8000000000002fff8000000000002
+haddpd 25                    fff8000000000002fff8000000000002
+hsubpd 25                    fff8000000000002fff8000000000002
+addsubpd 25                    fff8000000000002fff8000000000002
+haddps 25                    fff00000fff00000fff00000fff00000
+hsubps 25                    fff00000fff00000fff00000fff00000
+addsubps 25                    fff00000fff00000fff00000fff00000
+addpd 30                    fff8000000000004fff8000000000004
+mulpd 30                    fff8000000000004fff8000000000004
+haddpd 30                    7ff8000000000001fff8000000000004
+hsubpd 30                    7ff8000000000001fff8000000000004
+addsubpd 30                    7ff8000000000001fff8000000000004
+haddps 30                    fff800007ff000007ff00000fff80000
+hsubps 30                    fff800007ff000007ff00000fff80000
+addsubps 30                    fff800007ff000007ff00000fff80000
+addpd 31                    fff8000000000004fff8000000000004
+mulpd 31                    fff8000000000004fff8000000000004
+haddpd 31                    7ff8000000000009fff8000000000004
+hsubpd 31                    7ff8000000000009fff8000000000004
+addsubpd 31                    7ff8000000000009fff8000000000004
+haddps 31                    fff800007ff800007ff80000fff80000
+hsubps 31                    fff800007ff800007ff80000fff80000
+addsubps 31                    fff800007ff800007ff80000fff80000
+addpd 32                    fff8000000000004fff8000000000004
+mulpd 32                    fff8000000000004fff8000000000004
+haddpd 32                    fff8000000000002fff8000000000004
+hsubpd 32                    fff8000000000002fff8000000000004
+addsubpd 32                    fff8000000000002fff8000000000004
+haddps 32                    fff80000fff00000fff00000fff80000
+hsubps 32                    fff80000fff00000fff00000fff80000
+addsubps 32                    fff80000fff00000fff00000fff80000
+addpd 33                    fff8000000000004fff8000000000004
+mulpd 33                    fff8000000000004fff8000000000004
+haddpd 33                    fff8000000000004fff8000000000004
+hsubpd 33                    fff8000000000004fff8000000000004
+addsubpd 33                    fff8000000000004fff8000000000004
+haddps 33                    fff80000fff80000fff80000fff80000
+hsubps 33                    fff80000fff80000fff80000fff80000
+addsubps 33                    fff80000fff80000fff80000fff80000
+addpd 34                    fff8000000000004fff8000000000004
+mulpd 34                    fff8000000000004fff8000000000004
+haddpd 34                    fff8000000000004fff8000000000004
+hsubpd 34                    fff8000000000004fff8000000000004
+addsubpd 34                    fff8000000000004fff8000000000004
+haddps 34                    fff800007ff000007ff00000fff80000
+hsubps 34                    fff800007ff000007ff00000fff80000
+addsubps 34                    fff800007ff000007ff00000fff80000
+addpd 35                    fff8000000000004fff8000000000004
+mulpd 35                    fff8000000000004fff8000000000004
+haddpd 35                    fff8000000000004fff8000000000004
+hsubpd 35                    fff8000000000004fff8000000000004
+addsubpd 35                    fff8000000000004fff8000000000004
+haddps 35                    fff80000fff80000fff80000fff80000
+hsubps 35                    fff80000fff80000fff80000fff80000
+addsubps 35                    fff80000fff80000fff80000fff80000
+addpd 40                    7ff80000000000017ff8000000000001
+mulpd 40                    7ff80000000000017ff8000000000001
+haddpd 40                    7ff80000000000017ff8000000000001
+hsubpd 40                    7ff80000000000017ff8000000000001
+addsubpd 40                    7ff80000000000017ff8000000000001
+haddps 40                    7ff000007ff000007ff000007ff00000
+hsubps 40                    7ff000007ff000007ff000007ff00000
+addsubps 40                    7ff000007ff000007ff000007ff00000
+addpd 41                    7ff80000000000097ff8000000000009
+mulpd 41                    7ff80000000000097ff8000000000009
+haddpd 41                    7ff80000000000097ff8000000000009
+hsubpd 41                    7ff80000000000097ff8000000000009
+addsubpd 41                    7ff80000000000097ff8000000000009
+haddps 41                    7ff000007ff800007ff800007ff00000
+hsubps 41                    7ff000007ff800007ff800007ff00000
+addsubps 41                    7ff000007ff800007ff800007ff00000
+addpd 42                    fff8000000000002fff8000000000002
+mulpd 42                    fff8000000000002fff8000000000002
+haddpd 42                    fff8000000000002fff8000000000002
+hsubpd 42                    fff8000000000002fff8000000000002
+addsubpd 42                    fff8000000000002fff8000000000002
+haddps 42                    7ff00000fff00000fff000007ff00000
+hsubps 42                    7ff00000fff00000fff000007ff00000
+addsubps 42                    7ff00000fff00000fff000007ff00000
+addpd 43                    fff8000000000004fff8000000000004
+mulpd 43                    fff8000000000004fff8000000000004
+haddpd 43                    fff8000000000004fff8000000000004
+hsubpd 43                    fff8000000000004fff8000000000004
+addsubpd 43                    fff8000000000004fff8000000000004
+haddps 43                    7ff00000fff80000fff800007ff00000
+hsubps 43                    7ff00000fff80000fff800007ff00000
+addsubps 43                    7ff00000fff80000fff800007ff00000
+addpd 44                    7ff00000000000007ff0000000000000
+mulpd 44                    7ff00000000000007ff0000000000000
+haddpd 44                    7ff00000000000007ff0000000000000
+hsubpd 44                    fff8000000000000fff8000000000000
+addsubpd 44                    7ff0000000000000fff8000000000000
+haddps 44                    7ff000007ff000007ff000007ff00000
+hsubps 44                    7ff000007ff000007ff000007ff00000
+addsubps 44                    7ff000007ff000007ff000007ff00000
+addpd 45                    7ff00000000000007ff0000000000000
+mulpd 45                    7ff00000000000007ff0000000000000
+haddpd 45                    7ff00000000000007ff0000000000000
+hsubpd 45                    fff00000000000007ff0000000000000
+addsubpd 45                    7ff00000000000007ff0000000000000
+haddps 45                    7ff000007ff000007ff000007ff00000
+hsubps 45                    7ff000007ff000007ff000007ff00000
+addsubps 45                    7ff000007ff000007ff000007ff00000
+addpd 50                    7ff80000000000017ff8000000000001
+mulpd 50                    7ff80000000000017ff8000000000001
+haddpd 50                    7ff80000000000017ff8000000000001
+hsubpd 50                    7ff80000000000017ff8000000000001
+addsubpd 50                    7ff80000000000017ff8000000000001
+haddps 50                    7ff000007ff000007ff000007ff00000
+hsubps 50                    7ff000007ff000007ff000007ff00000
+addsubps 50                    7ff000007ff000007ff000007ff00000
+addpd 51                    7ff80000000000097ff8000000000009
+mulpd 51                    7ff80000000000097ff8000000000009
+haddpd 51                    7ff80000000000097ff8000000000009
+hsubpd 51                    7ff80000000000097ff8000000000009
+addsubpd 51                    7ff80000000000097ff8000000000009
+haddps 51                    7ff800007ff800007ff800007ff80000
+hsubps 51                    7ff800007ff800007ff800007ff80000
+addsubps 51                    7ff800007ff800007ff800007ff80000
+addpd 52                    fff8000000000002fff8000000000002
+mulpd 52                    fff8000000000002fff8000000000002
+haddpd 52                    fff8000000000002fff8000000000002
+hsubpd 52                    fff8000000000002fff8000000000002
+addsubpd 52                    fff8000000000002fff8000000000002
+haddps 52                    fff00000fff00000fff00000fff00000
+hsubps 52                    fff00000fff00000fff00000fff00000
+addsubps 52                    fff00000fff00000fff00000fff00000
+addpd 53                    fff8000000000004fff8000000000004
+mulpd 53                    fff8000000000004fff8000000000004
+haddpd 53                    fff8000000000004fff8000000000004
+hsubpd 53                    fff8000000000004fff8000000000004
+addsubpd 53                    fff8000000000004fff8000000000004
+haddps 53                    fff80000fff80000fff80000fff80000
+hsubps 53                    fff80000fff80000fff80000fff80000
+addsubps 53                    fff80000fff80000fff80000fff80000
+addpd 54                    7ff00000000000007ff0000000000000
+mulpd 54                    7ff00000000000007ff0000000000000
+haddpd 54                    7ff00000000000007ff0000000000000
+hsubpd 54                    7ff0000000000000fff0000000000000
+addsubpd 54                    7ff0000000000000fff0000000000000
+haddps 54                    7ff000007ff000007ff000007ff00000
+hsubps 54                    7ff000007ff000007ff000007ff00000
+addsubps 54                    7ff000007ff000007ff000007ff00000
+addpd 55                    40000000000000004000000000000000
+mulpd 55                    3ff00000000000003ff0000000000000
+haddpd 55                    40000000000000004000000000000000
+hsubpd 55                    00000000000000000000000000000000
+addsubpd 55                    40000000000000000000000000000000
+haddps 55                    40700000407000004070000040700000
+hsubps 55                    00000000000000000000000000000000
+addsubps 55                    40700000000000004070000000000000
+cvttps2dq-ip0                    000000648000000080000000ffffffff
+cvtps2dq-ip0                     000000648000000080000000fffffffe
+cvttps2dq-ip1                    ffffffff000000648000000080000000
+cvtps2dq-ip1                     fffffffe000000648000000080000000
+cvttps2dq-ip2                    80000000ffffffff0000006480000000
+cvtps2dq-ip2                     80000000fffffffe0000006480000000
+cvttps2dq-ip3                    8000000080000000ffffffff00000064
+cvtps2dq-ip3                     8000000080000000fffffffe00000064
+fsqrt-neg          fff8000000000000
+fsqrt-negzero      8000000000000000
+fdiv-0/0           fff8000000000000
+fdiv-inf/inf       fff8000000000000
+fsub-inf-inf       fff8000000000000
+fmul-0*inf         fff8000000000000
+fadd-inf-inf       fff8000000000000
+fdivr-0/0          fff8000000000000
+fprem-0            fff8000000000000
+fscale-inf-down    7ff0000000000000
+fscale-ninf-down   fff0000000000000
+fscale-zero-up     0000000000000000
+fscale-nzero-up    8000000000000000
+fscale-one-down    0000000000000000
+fscale-one-up      7ff0000000000000
+fscale-normal      4028000000000000
+fscale-nan         fff8000000000000
+fadd-propagate     fff8000000000000
+fmul-propagate     7ff8000000000000
+fsqrt-propagate    7ff8000000000000
+pcmpistri 00 00  0 08c1
+pcmpistri 04 00  0 08c1
+pcmpistri 08 00  0 08c1
+pcmpistri 0c 00  0 08c1
+pcmpistri 1c 00  1 00c1
+pcmpistri 3c 00  1 00c1
+pcmpistri 5c 00 15 00c1
+pcmpistri 7c 00  5 00c1
+pcmpistri 0d 00  0 08c1
+pcmpistri 1d 00  1 00c1
+pcmpistri 00 01  0 08c1
+pcmpistri 04 01  0 08c1
+pcmpistri 08 01  0 08c1
+pcmpistri 0c 01 16 00c0
+pcmpistri 1c 01  0 08c1
+pcmpistri 3c 01  0 08c1
+pcmpistri 5c 01 15 08c1
+pcmpistri 7c 01  2 08c1
+pcmpistri 0d 01  8 0080
+pcmpistri 1d 01  0 0881
+pcmpistri 00 02 16 00c0
+pcmpistri 04 02 16 00c0
+pcmpistri 08 02  6 00c1
+pcmpistri 0c 02 16 00c0
+pcmpistri 1c 02  0 08c1
+pcmpistri 3c 02 16 00c0
+pcmpistri 5c 02 15 08c1
+pcmpistri 7c 02 16 00c0
+pcmpistri 0d 02  8 00c0
+pcmpistri 1d 02  0 08c1
+pcmpistri 00 03  3 00c1
+pcmpistri 04 03  3 00c1
+pcmpistri 08 03 15 00c1
+pcmpistri 0c 03  3 00c1
+pcmpistri 1c 03  0 08c1
+pcmpistri 3c 03  0 08c1
+pcmpistri 5c 03 15 08c1
+pcmpistri 7c 03 14 08c1
+pcmpistri 0d 03  8 0080
+pcmpistri 1d 03  0 0881
+pcmpistri 00 04  0 0881
+pcmpistri 04 04  0 0881
+pcmpistri 08 04  0 0881
+pcmpistri 0c 04 16 0080
+pcmpistri 1c 04  0 0881
+pcmpistri 3c 04  0 0881
+pcmpistri 5c 04 15 0881
+pcmpistri 7c 04 15 0881
+pcmpistri 0d 04  8 0080
+pcmpistri 1d 04  0 0881
+pcmpistri 00 05  2 00c1
+pcmpistri 04 05  2 00c1
+pcmpistri 08 05  8 00c1
+pcmpistri 0c 05  2 00c1
+pcmpistri 1c 05  0 08c1
+pcmpistri 3c 05  0 08c1
+pcmpistri 5c 05 15 08c1
+pcmpistri 7c 05  7 08c1
+pcmpistri 0d 05  1 0081
+pcmpistri 1d 05  0 0881
+pcmpistri 00 06  0 0881
+pcmpistri 04 06  0 0881
+pcmpistri 08 06  0 0881
+pcmpistri 0c 06 16 0080
+pcmpistri 1c 06  0 0881
+pcmpistri 3c 06  0 0881
+pcmpistri 5c 06 15 0881
+pcmpistri 7c 06 15 0881
+pcmpistri 0d 06  8 0080
+pcmpistri 1d 06  0 0881
+pcmpistri 00 07 16 00c0
+pcmpistri 04 07 16 00c0
+pcmpistri 08 07  6 00c1
+pcmpistri 0c 07 16 00c0
+pcmpistri 1c 07  0 08c1
+pcmpistri 3c 07  0 08c1
+pcmpistri 5c 07 15 08c1
+pcmpistri 7c 07  3 08c1
+pcmpistri 0d 07  8 00c0
+pcmpistri 1d 07  0 08c1
+pcmpistri 00 10  0 08c1
+pcmpistri 04 10  0 08c1
+pcmpistri 08 10  0 08c1
+pcmpistri 0c 10  0 08c1
+pcmpistri 1c 10  1 00c1
+pcmpistri 3c 10  1 00c1
+pcmpistri 5c 10 15 00c1
+pcmpistri 7c 10  5 00c1
+pcmpistri 0d 10  8 0040
+pcmpistri 1d 10  0 0841
+pcmpistri 00 11  0 08c1
+pcmpistri 04 11  0 08c1
+pcmpistri 08 11  0 08c1
+pcmpistri 0c 11  0 08c1
+pcmpistri 1c 11  1 00c1
+pcmpistri 3c 11  1 00c1
+pcmpistri 5c 11 15 00c1
+pcmpistri 7c 11  2 00c1
+pcmpistri 0d 11  0 0801
+pcmpistri 1d 11  1 0001
+pcmpistri 00 12 16 00c0
+pcmpistri 04 12 16 00c0
+pcmpistri 08 12  3 00c1
+pcmpistri 0c 12 16 00c0
+pcmpistri 1c 12  0 08c1
+pcmpistri 3c 12 16 00c0
+pcmpistri 5c 12 15 08c1
+pcmpistri 7c 12 16 00c0
+pcmpistri 0d 12  8 0040
+pcmpistri 1d 12  0 0841
+pcmpistri 00 13  3 00c1
+pcmpistri 04 13  3 00c1
+pcmpistri 08 13 15 00c1
+pcmpistri 0c 13  3 00c1
+pcmpistri 1c 13  0 08c1
+pcmpistri 3c 13  0 08c1
+pcmpistri 5c 13 15 08c1
+pcmpistri 7c 13 14 08c1
+pcmpistri 0d 13  8 0000
+pcmpistri 1d 13  0 0801
+pcmpistri 00 14  0 0881
+pcmpistri 04 14  0 0881
+pcmpistri 08 14  0 0881
+pcmpistri 0c 14 16 0080
+pcmpistri 1c 14  0 0881
+pcmpistri 3c 14  0 0881
+pcmpistri 5c 14 15 0881
+pcmpistri 7c 14 15 0881
+pcmpistri 0d 14  8 0000
+pcmpistri 1d 14  0 0801
+pcmpistri 00 15  2 00c1
+pcmpistri 04 15  2 00c1
+pcmpistri 08 15  8 00c1
+pcmpistri 0c 15  2 00c1
+pcmpistri 1c 15  0 08c1
+pcmpistri 3c 15  0 08c1
+pcmpistri 5c 15 15 08c1
+pcmpistri 7c 15  7 08c1
+pcmpistri 0d 15  8 0000
+pcmpistri 1d 15  0 0801
+pcmpistri 00 16  0 0881
+pcmpistri 04 16  0 0881
+pcmpistri 08 16  0 0881
+pcmpistri 0c 16  0 0881
+pcmpistri 1c 16  1 0081
+pcmpistri 3c 16  1 0081
+pcmpistri 5c 16 15 0081
+pcmpistri 7c 16 15 0081
+pcmpistri 0d 16  8 0000
+pcmpistri 1d 16  0 0801
+pcmpistri 00 17 16 00c0
+pcmpistri 04 17 16 00c0
+pcmpistri 08 17  4 00c1
+pcmpistri 0c 17 16 00c0
+pcmpistri 1c 17  0 08c1
+pcmpistri 3c 17  0 08c1
+pcmpistri 5c 17 15 08c1
+pcmpistri 7c 17  3 08c1
+pcmpistri 0d 17  8 0040
+pcmpistri 1d 17  0 0841
+pcmpistri 00 20 16 00c0
+pcmpistri 04 20 16 00c0
+pcmpistri 08 20  6 00c1
+pcmpistri 0c 20  0 08c1
+pcmpistri 1c 20 16 00c0
+pcmpistri 3c 20  6 00c1
+pcmpistri 5c 20 16 00c0
+pcmpistri 7c 20 15 00c1
+pcmpistri 0d 20  0 08c1
+pcmpistri 1d 20  8 00c0
+pcmpistri 00 21 16 00c0
+pcmpistri 04 21 16 00c0
+pcmpistri 08 21  3 00c1
+pcmpistri 0c 21  0 08c1
+pcmpistri 1c 21 16 00c0
+pcmpistri 3c 21  3 00c1
+pcmpistri 5c 21 16 00c0
+pcmpistri 7c 21 15 00c1
+pcmpistri 0d 21  0 0881
+pcmpistri 1d 21  8 0080
+pcmpistri 00 22 16 00c0
+pcmpistri 04 22 16 00c0
+pcmpistri 08 22  0 08c1
+pcmpistri 0c 22  0 08c1
+pcmpistri 1c 22 16 00c0
+pcmpistri 3c 22  0 08c1
+pcmpistri 5c 22 16 00c0
+pcmpistri 7c 22 15 08c1
+pcmpistri 0d 22  0 08c1
+pcmpistri 1d 22  8 00c0
+pcmpistri 00 23 16 00c0
+pcmpistri 04 23 16 00c0
+pcmpistri 08 23 15 00c1
+pcmpistri 0c 23  0 08c1
+pcmpistri 1c 23 16 00c0
+pcmpistri 3c 23 15 00c1
+pcmpistri 5c 23 16 00c0
+pcmpistri 7c 23 15 00c1
+pcmpistri 0d 23  0 0881
+pcmpistri 1d 23  8 0080
+pcmpistri 00 24 16 0080
+pcmpistri 04 24 16 0080
+pcmpistri 08 24 16 0080
+pcmpistri 0c 24  0 0881
+pcmpistri 1c 24 16 0080
+pcmpistri 3c 24 16 0080
+pcmpistri 5c 24 16 0080
+pcmpistri 7c 24 16 0080
+pcmpistri 0d 24  0 0881
+pcmpistri 1d 24  8 0080
+pcmpistri 00 25 16 00c0
+pcmpistri 04 25 16 00c0
+pcmpistri 08 25  8 00c1
+pcmpistri 0c 25  0 08c1
+pcmpistri 1c 25 16 00c0
+pcmpistri 3c 25  8 00c1
+pcmpistri 5c 25 16 00c0
+pcmpistri 7c 25 15 00c1
+pcmpistri 0d 25  0 0881
+pcmpistri 1d 25  8 0080
+pcmpistri 00 26 16 0080
+pcmpistri 04 26 16 0080
+pcmpistri 08 26 16 0080
+pcmpistri 0c 26  0 0881
+pcmpistri 1c 26 16 0080
+pcmpistri 3c 26 16 0080
+pcmpistri 5c 26 16 0080
+pcmpistri 7c 26 16 0080
+pcmpistri 0d 26  0 0881
+pcmpistri 1d 26  8 0080
+pcmpistri 00 27 16 00c0
+pcmpistri 04 27 16 00c0
+pcmpistri 08 27  4 00c1
+pcmpistri 0c 27  0 08c1
+pcmpistri 1c 27 16 00c0
+pcmpistri 3c 27  4 00c1
+pcmpistri 5c 27 16 00c0
+pcmpistri 7c 27 15 00c1
+pcmpistri 0d 27  0 08c1
+pcmpistri 1d 27  8 00c0
+pcmpistri 00 30  0 08c1
+pcmpistri 04 30  1 00c1
+pcmpistri 08 30 15 00c1
+pcmpistri 0c 30 16 00c0
+pcmpistri 1c 30  0 08c1
+pcmpistri 3c 30  0 08c1
+pcmpistri 5c 30 15 08c1
+pcmpistri 7c 30  5 08c1
+pcmpistri 0d 30  8 0040
+pcmpistri 1d 30  0 0841
+pcmpistri 00 31  0 08c1
+pcmpistri 04 31  1 00c1
+pcmpistri 08 31 15 00c1
+pcmpistri 0c 31 16 00c0
+pcmpistri 1c 31  0 08c1
+pcmpistri 3c 31  0 08c1
+pcmpistri 5c 31 15 08c1
+pcmpistri 7c 31  2 08c1
+pcmpistri 0d 31  8 0000
+pcmpistri 1d 31  0 0801
+pcmpistri 00 32 16 00c0
+pcmpistri 04 32 16 00c0
+pcmpistri 08 32 15 00c1
+pcmpistri 0c 32 16 00c0
+pcmpistri 1c 32  0 08c1
+pcmpistri 3c 32 16 00c0
+pcmpistri 5c 32 15 08c1
+pcmpistri 7c 32 16 00c0
+pcmpistri 0d 32  8 0040
+pcmpistri 1d 32  0 0841
+pcmpistri 00 33  0 08c1
+pcmpistri 04 33  0 08c1
+pcmpistri 08 33  0 08c1
+pcmpistri 0c 33  0 08c1
+pcmpistri 1c 33  1 00c1
+pcmpistri 3c 33  1 00c1
+pcmpistri 5c 33 15 00c1
+pcmpistri 7c 33 14 00c1
+pcmpistri 0d 33  0 0801
+pcmpistri 1d 33  1 0001
+pcmpistri 00 34  0 0881
+pcmpistri 04 34 16 0080
+pcmpistri 08 34  3 0081
+pcmpistri 0c 34 16 0080
+pcmpistri 1c 34  0 0881
+pcmpistri 3c 34  0 0881
+pcmpistri 5c 34 15 0881
+pcmpistri 7c 34 15 0881
+pcmpistri 0d 34  8 0000
+pcmpistri 1d 34  0 0801
+pcmpistri 00 35  0 08c1
+pcmpistri 04 35  3 00c1
+pcmpistri 08 35 15 00c1
+pcmpistri 0c 35 16 00c0
+pcmpistri 1c 35  0 08c1
+pcmpistri 3c 35  0 08c1
+pcmpistri 5c 35 15 08c1
+pcmpistri 7c 35  7 08c1
+pcmpistri 0d 35  8 0000
+pcmpistri 1d 35  0 0801
+pcmpistri 00 36  0 0881
+pcmpistri 04 36  1 0081
+pcmpistri 08 36  3 0081
+pcmpistri 0c 36 16 0080
+pcmpistri 1c 36  0 0881
+pcmpistri 3c 36  0 0881
+pcmpistri 5c 36 15 0881
+pcmpistri 7c 36 15 0881
+pcmpistri 0d 36  8 0000
+pcmpistri 1d 36  0 0801
+pcmpistri 00 37 16 00c0
+pcmpistri 04 37 16 00c0
+pcmpistri 08 37 15 00c1
+pcmpistri 0c 37 16 00c0
+pcmpistri 1c 37  0 08c1
+pcmpistri 3c 37  0 08c1
+pcmpistri 5c 37 15 08c1
+pcmpistri 7c 37  3 08c1
+pcmpistri 0d 37  8 0040
+pcmpistri 1d 37  0 0841
+pcmpistri 00 40  0 0841
+pcmpistri 04 40  0 0841
+pcmpistri 08 40  0 0841
+pcmpistri 0c 40 16 0040
+pcmpistri 1c 40  0 0841
+pcmpistri 3c 40  0 0841
+pcmpistri 5c 40 15 0841
+pcmpistri 7c 40  5 0841
+pcmpistri 0d 40  8 0040
+pcmpistri 1d 40  0 0841
+pcmpistri 00 41  0 0841
+pcmpistri 04 41  0 0841
+pcmpistri 08 41  0 0841
+pcmpistri 0c 41 16 0040
+pcmpistri 1c 41  0 0841
+pcmpistri 3c 41  0 0841
+pcmpistri 5c 41 15 0841
+pcmpistri 7c 41  2 0841
+pcmpistri 0d 41  8 0000
+pcmpistri 1d 41  0 0801
+pcmpistri 00 42 16 0040
+pcmpistri 04 42 16 0040
+pcmpistri 08 42 16 0040
+pcmpistri 0c 42 16 0040
+pcmpistri 1c 42  0 0841
+pcmpistri 3c 42 16 0040
+pcmpistri 5c 42 15 0841
+pcmpistri 7c 42 16 0040
+pcmpistri 0d 42  8 0040
+pcmpistri 1d 42  0 0841
+pcmpistri 00 43  3 0041
+pcmpistri 04 43  3 0041
+pcmpistri 08 43  3 0041
+pcmpistri 0c 43 16 0040
+pcmpistri 1c 43  0 0841
+pcmpistri 3c 43  0 0841
+pcmpistri 5c 43 15 0841
+pcmpistri 7c 43 14 0841
+pcmpistri 0d 43  8 0000
+pcmpistri 1d 43  0 0801
+pcmpistri 00 44  0 0801
+pcmpistri 04 44  0 0801
+pcmpistri 08 44  0 0801
+pcmpistri 0c 44  0 0801
+pcmpistri 1c 44  1 0001
+pcmpistri 3c 44  1 0001
+pcmpistri 5c 44 15 0001
+pcmpistri 7c 44 15 0001
+pcmpistri 0d 44  0 0801
+pcmpistri 1d 44  1 0001
+pcmpistri 00 45  2 0041
+pcmpistri 04 45  2 0041
+pcmpistri 08 45  2 0041
+pcmpistri 0c 45 16 0040
+pcmpistri 1c 45  0 0841
+pcmpistri 3c 45  0 0841
+pcmpistri 5c 45 15 0841
+pcmpistri 7c 45  7 0841
+pcmpistri 0d 45  8 0000
+pcmpistri 1d 45  0 0801
+pcmpistri 00 46  0 0801
+pcmpistri 04 46  0 0801
+pcmpistri 08 46  0 0801
+pcmpistri 0c 46 16 0000
+pcmpistri 1c 46  0 0801
+pcmpistri 3c 46  0 0801
+pcmpistri 5c 46 15 0801
+pcmpistri 7c 46 15 0801
+pcmpistri 0d 46  8 0000
+pcmpistri 1d 46  0 0801
+pcmpistri 00 47  3 0041
+pcmpistri 04 47  0 0841
+pcmpistri 08 47 16 0040
+pcmpistri 0c 47 16 0040
+pcmpistri 1c 47  0 0841
+pcmpistri 3c 47  0 0841
+pcmpistri 5c 47 15 0841
+pcmpistri 7c 47  3 0841
+pcmpistri 0d 47  8 0040
+pcmpistri 1d 47  0 0841
+pcmpistri 00 50  0 08c1
+pcmpistri 04 50  0 08c1
+pcmpistri 08 50  8 00c1
+pcmpistri 0c 50 16 00c0
+pcmpistri 1c 50  0 08c1
+pcmpistri 3c 50  0 08c1
+pcmpistri 5c 50 15 08c1
+pcmpistri 7c 50  5 08c1
+pcmpistri 0d 50  8 0040
+pcmpistri 1d 50  0 0841
+pcmpistri 00 51  0 08c1
+pcmpistri 04 51  0 08c1
+pcmpistri 08 51  8 00c1
+pcmpistri 0c 51 16 00c0
+pcmpistri 1c 51  0 08c1
+pcmpistri 3c 51  0 08c1
+pcmpistri 5c 51 15 08c1
+pcmpistri 7c 51  2 08c1
+pcmpistri 0d 51  8 0000
+pcmpistri 1d 51  0 0801
+pcmpistri 00 52 16 00c0
+pcmpistri 04 52 16 00c0
+pcmpistri 08 52  8 00c1
+pcmpistri 0c 52 16 00c0
+pcmpistri 1c 52  0 08c1
+pcmpistri 3c 52 16 00c0
+pcmpistri 5c 52 15 08c1
+pcmpistri 7c 52 16 00c0
+pcmpistri 0d 52  8 0040
+pcmpistri 1d 52  0 0841
+pcmpistri 00 53  2 00c1
+pcmpistri 04 53  2 00c1
+pcmpistri 08 53 15 00c1
+pcmpistri 0c 53 16 00c0
+pcmpistri 1c 53  0 08c1
+pcmpistri 3c 53  0 08c1
+pcmpistri 5c 53 15 08c1
+pcmpistri 7c 53 14 08c1
+pcmpistri 0d 53  8 0000
+pcmpistri 1d 53  0 0801
+pcmpistri 00 54  0 0881
+pcmpistri 04 54  0 0881
+pcmpistri 08 54  2 0081
+pcmpistri 0c 54 16 0080
+pcmpistri 1c 54  0 0881
+pcmpistri 3c 54  0 0881
+pcmpistri 5c 54 15 0881
+pcmpistri 7c 54 15 0881
+pcmpistri 0d 54  8 0000
+pcmpistri 1d 54  0 0801
+pcmpistri 00 55  0 08c1
+pcmpistri 04 55  0 08c1
+pcmpistri 08 55  0 08c1
+pcmpistri 0c 55  0 08c1
+pcmpistri 1c 55  1 00c1
+pcmpistri 3c 55  1 00c1
+pcmpistri 5c 55 15 00c1
+pcmpistri 7c 55  7 00c1
+pcmpistri 0d 55  0 0801
+pcmpistri 1d 55  1 0001
+pcmpistri 00 56  0 0881
+pcmpistri 04 56  0 0881
+pcmpistri 08 56 16 0080
+pcmpistri 0c 56 16 0080
+pcmpistri 1c 56  0 0881
+pcmpistri 3c 56  0 0881
+pcmpistri 5c 56 15 0881
+pcmpistri 7c 56 15 0881
+pcmpistri 0d 56  8 0000
+pcmpistri 1d 56  0 0801
+pcmpistri 00 57 16 00c0
+pcmpistri 04 57 16 00c0
+pcmpistri 08 57  8 00c1
+pcmpistri 0c 57 16 00c0
+pcmpistri 1c 57  0 08c1
+pcmpistri 3c 57  0 08c1
+pcmpistri 5c 57 15 08c1
+pcmpistri 7c 57  3 08c1
+pcmpistri 0d 57  8 0040
+pcmpistri 1d 57  0 0841
+pcmpistri 00 60  0 0841
+pcmpistri 04 60  0 0841
+pcmpistri 08 60  0 0841
+pcmpistri 0c 60 16 0040
+pcmpistri 1c 60  0 0841
+pcmpistri 3c 60  0 0841
+pcmpistri 5c 60 15 0841
+pcmpistri 7c 60  5 0841
+pcmpistri 0d 60  8 0040
+pcmpistri 1d 60  0 0841
+pcmpistri 00 61  0 0841
+pcmpistri 04 61  0 0841
+pcmpistri 08 61  0 0841
+pcmpistri 0c 61 16 0040
+pcmpistri 1c 61  0 0841
+pcmpistri 3c 61  0 0841
+pcmpistri 5c 61 15 0841
+pcmpistri 7c 61  2 0841
+pcmpistri 0d 61  8 0000
+pcmpistri 1d 61  0 0801
+pcmpistri 00 62 16 0040
+pcmpistri 04 62 16 0040
+pcmpistri 08 62 16 0040
+pcmpistri 0c 62 16 0040
+pcmpistri 1c 62  0 0841
+pcmpistri 3c 62 16 0040
+pcmpistri 5c 62 15 0841
+pcmpistri 7c 62 16 0040
+pcmpistri 0d 62  8 0040
+pcmpistri 1d 62  0 0841
+pcmpistri 00 63  3 0041
+pcmpistri 04 63  3 0041
+pcmpistri 08 63  3 0041
+pcmpistri 0c 63 16 0040
+pcmpistri 1c 63  0 0841
+pcmpistri 3c 63  0 0841
+pcmpistri 5c 63 15 0841
+pcmpistri 7c 63 14 0841
+pcmpistri 0d 63  8 0000
+pcmpistri 1d 63  0 0801
+pcmpistri 00 64  0 0801
+pcmpistri 04 64  0 0801
+pcmpistri 08 64  0 0801
+pcmpistri 0c 64 16 0000
+pcmpistri 1c 64  0 0801
+pcmpistri 3c 64  0 0801
+pcmpistri 5c 64 15 0801
+pcmpistri 7c 64 15 0801
+pcmpistri 0d 64  8 0000
+pcmpistri 1d 64  0 0801
+pcmpistri 00 65  2 0041
+pcmpistri 04 65  2 0041
+pcmpistri 08 65 16 0040
+pcmpistri 0c 65 16 0040
+pcmpistri 1c 65  0 0841
+pcmpistri 3c 65  0 0841
+pcmpistri 5c 65 15 0841
+pcmpistri 7c 65  7 0841
+pcmpistri 0d 65  8 0000
+pcmpistri 1d 65  0 0801
+pcmpistri 00 66  0 0801
+pcmpistri 04 66  0 0801
+pcmpistri 08 66  0 0801
+pcmpistri 0c 66  0 0801
+pcmpistri 1c 66  1 0001
+pcmpistri 3c 66  1 0001
+pcmpistri 5c 66 15 0001
+pcmpistri 7c 66 15 0001
+pcmpistri 0d 66  0 0801
+pcmpistri 1d 66  1 0001
+pcmpistri 00 67  3 0041
+pcmpistri 04 67  0 0841
+pcmpistri 08 67 16 0040
+pcmpistri 0c 67 16 0040
+pcmpistri 1c 67  0 0841
+pcmpistri 3c 67  0 0841
+pcmpistri 5c 67 15 0841
+pcmpistri 7c 67  3 0841
+pcmpistri 0d 67  8 0040
+pcmpistri 1d 67  0 0841
+pcmpistri 00 70 16 00c0
+pcmpistri 04 70 16 00c0
+pcmpistri 08 70  6 00c1
+pcmpistri 0c 70 16 00c0
+pcmpistri 1c 70  0 08c1
+pcmpistri 3c 70  0 08c1
+pcmpistri 5c 70 15 08c1
+pcmpistri 7c 70  5 08c1
+pcmpistri 0d 70  8 00c0
+pcmpistri 1d 70  0 08c1
+pcmpistri 00 71 16 00c0
+pcmpistri 04 71 16 00c0
+pcmpistri 08 71  4 00c1
+pcmpistri 0c 71 16 00c0
+pcmpistri 1c 71  0 08c1
+pcmpistri 3c 71  0 08c1
+pcmpistri 5c 71 15 08c1
+pcmpistri 7c 71  2 08c1
+pcmpistri 0d 71  8 0080
+pcmpistri 1d 71  0 0881
+pcmpistri 00 72 16 00c0
+pcmpistri 04 72 16 00c0
+pcmpistri 08 72  4 00c1
+pcmpistri 0c 72 16 00c0
+pcmpistri 1c 72  0 08c1
+pcmpistri 3c 72 16 00c0
+pcmpistri 5c 72 15 08c1
+pcmpistri 7c 72 16 00c0
+pcmpistri 0d 72  8 00c0
+pcmpistri 1d 72  0 08c1
+pcmpistri 00 73 16 00c0
+pcmpistri 04 73 16 00c0
+pcmpistri 08 73 15 00c1
+pcmpistri 0c 73 16 00c0
+pcmpistri 1c 73  0 08c1
+pcmpistri 3c 73  0 08c1
+pcmpistri 5c 73 15 08c1
+pcmpistri 7c 73 14 08c1
+pcmpistri 0d 73  8 0080
+pcmpistri 1d 73  0 0881
+pcmpistri 00 74 15 0081
+pcmpistri 04 74 15 0081
+pcmpistri 08 74 16 0080
+pcmpistri 0c 74 16 0080
+pcmpistri 1c 74  0 0881
+pcmpistri 3c 74  0 0881
+pcmpistri 5c 74 15 0881
+pcmpistri 7c 74 15 0881
+pcmpistri 0d 74  8 0080
+pcmpistri 1d 74  0 0881
+pcmpistri 00 75 16 00c0
+pcmpistri 04 75 16 00c0
+pcmpistri 08 75  8 00c1
+pcmpistri 0c 75 16 00c0
+pcmpistri 1c 75  0 08c1
+pcmpistri 3c 75  0 08c1
+pcmpistri 5c 75 15 08c1
+pcmpistri 7c 75  7 08c1
+pcmpistri 0d 75  8 0080
+pcmpistri 1d 75  0 0881
+pcmpistri 00 76 15 0081
+pcmpistri 04 76 15 0081
+pcmpistri 08 76 16 0080
+pcmpistri 0c 76 16 0080
+pcmpistri 1c 76  0 0881
+pcmpistri 3c 76  0 0881
+pcmpistri 5c 76 15 0881
+pcmpistri 7c 76 15 0881
+pcmpistri 0d 76  8 0080
+pcmpistri 1d 76  0 0881
+pcmpistri 00 77  0 08c1
+pcmpistri 04 77  0 08c1
+pcmpistri 08 77  0 08c1
+pcmpistri 0c 77  0 08c1
+pcmpistri 1c 77  1 00c1
+pcmpistri 3c 77  1 00c1
+pcmpistri 5c 77 15 00c1
+pcmpistri 7c 77  3 00c1
+pcmpistri 0d 77  0 08c1
+pcmpistri 1d 77  1 00c1

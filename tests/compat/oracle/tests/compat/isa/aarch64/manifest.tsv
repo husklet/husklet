@@ -1,0 +1,2 @@
+# case	group	source	legacy_source	isas	cflags	defines	env	exit	stdout	dependencies	disposition	note
+isa-regress	regression	isa_regress.c	-	aarch64	-O2 -static -no-pie	-	-	0	expected/isa-regress.out	lse-atomic-upgrade,exclusive-monitor,casp,nonpie-fold	active	differential-fuzz regressions: every row is a lowering divergence the aarch64 ISA fuzzer found against the NATIVE host and that is now fixed

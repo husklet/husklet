@@ -1,0 +1,16 @@
+avail_kill_process  r=0 e=0
+avail_kill_thread   r=0 e=0
+avail_trap          r=0 e=0
+avail_errno         r=0 e=0
+avail_user_notif    r=0 e=0
+avail_trace         r=0 e=0
+avail_log           r=0 e=0
+avail_allow         r=0 e=0
+avail_errno_data    r=-1 e=95
+avail_bogus         r=-1 e=95
+avail_flag_einval r=-1 e=22
+notif_sizes r=0 e=0 nonzero=1
+filter_badflag r=-1 e=22
+filter_len0 r=-1 e=22
+so_attach_filter r=0 e=0
+so_detach_filter r=-1 e=22

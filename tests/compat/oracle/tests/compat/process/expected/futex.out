@@ -1,0 +1,2 @@
+futex woke=1 wake_rc_ok=1
+wakeop woke2=1 wv=8 wakeop_rc_ok=1

@@ -1,0 +1,1 @@
+symlink-chain-eloop short=1 deep-eloop=1 self-eloop=1 nofollow-eloop=1

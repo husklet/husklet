@@ -1,0 +1,1 @@
+map_flags hugetlb_einval=1 noreserve=1 stack=1 populate=1 locked=1
