@@ -1,9 +1,9 @@
 use super::{
     Error,
-    definition::{Scenario, ScenarioAction, ScenarioCase},
+    definition::{Scenario, ScenarioCase},
 };
 use crate::{runtime::image::TestImage, suite::Target};
-use hl_container::{Config, ContainerSpec, ExitStatus, Isolation, Process, Sandbox};
+use hl_container::{Config, ContainerSpec, ExitStatus};
 use std::{fs, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
@@ -139,43 +139,12 @@ fn specification(
     image: &std::path::Path,
     name: &str,
 ) -> Result<ContainerSpec, Error> {
-    let mut process = match &case.actions[0] {
-        ScenarioAction::Argv(argv) => {
-            let (program, arguments) = argv.split_first().ok_or("argv action is empty")?;
-            Process::new(program).args(arguments.iter().map(String::as_str))
-        }
-        ScenarioAction::Shell(script) => Process::new("/bin/sh").args(["-c", script]),
-        ScenarioAction::Entrypoint => {
-            return Err(format!("{} entrypoint execution requires image runtime metadata", case.id).into());
-        }
-        ScenarioAction::Host(script) => {
-            return Err(format!(
-                "{} host action requires a typed host adapter (script_bytes={})",
-                case.id,
-                script.len()
-            )
-            .into());
-        }
-        ScenarioAction::Api(operation) => {
-            return Err(format!(
-                "{} API action requires a typed daemon adapter (operation={operation:?})",
-                case.id
-            )
-            .into());
-        }
-    }
-    .working_dir(&case.working_directory);
-    for (name, value) in &case.environment {
-        process = process.env(name, value);
-    }
+    let process = super::process::for_case(case)?;
     Ok(ContainerSpec::from_directory(image, process)
         .name(name)
         .guest(target.guest())
         .execution(case.execution.container()?)
-        .isolation(Isolation {
-            sandbox: Sandbox::Disabled,
-            ..Isolation::default()
-        }))
+        .isolation(super::isolation::for_case(case)))
 }
 
 async fn execute(
