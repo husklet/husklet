@@ -464,13 +464,27 @@ impl Native {
     }
 
     fn reset_switch_socket(&self, token: u64, expected: i32) -> Result<(), RuntimeNetworkError> {
+        self.replace_socket(token, expected, libc::AF_UNIX, true)
+    }
+
+    fn restore_inet_socket(&self, token: u64, expected: i32) -> Result<(), RuntimeNetworkError> {
+        self.replace_socket(token, expected, libc::AF_INET, false)
+    }
+
+    fn replace_socket(
+        &self,
+        token: u64,
+        expected: i32,
+        family: i32,
+        switched: bool,
+    ) -> Result<(), RuntimeNetworkError> {
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if !entry.switched {
             return Err(RuntimeNetworkError::Invalid);
         }
         // SAFETY: socket returns a newly owned descriptor or a negative errno result.
-        let replacement = unsafe { libc::socket(libc::AF_UNIX, expected, 0) };
+        let replacement = unsafe { libc::socket(family, expected, 0) };
         if replacement < 0 {
             return Err(Self::runtime_error());
         }
@@ -492,6 +506,14 @@ impl Native {
                 libc::fcntl(entry.descriptor, libc::F_SETFD, descriptor_flags);
             }
         }
+        if !switched {
+            entry.guest_local = None;
+            entry.guest_peer = None;
+            entry.switch_path = None;
+            entry.switch_interface = None;
+            entry.datagram_peer = None;
+        }
+        entry.switched = switched;
         drop(sockets);
         self.wake();
         Ok(())

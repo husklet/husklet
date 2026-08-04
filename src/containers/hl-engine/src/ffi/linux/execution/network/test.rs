@@ -518,6 +518,13 @@ fn wildcard_alias_failure_removes_partial_paths_and_resets_the_socket() {
     );
     assert!(!primary_path.exists());
     assert!(!alias_path.exists());
+    assert_eq!(
+        host.local_address(socket.token),
+        Ok(SocketAddress::Inet4 {
+            address: [0; 4],
+            port: 0,
+        })
+    );
     assert!(
         host.bind(
             socket.token,
@@ -529,6 +536,63 @@ fn wildcard_alias_failure_removes_partial_paths_and_resets_the_socket() {
         .is_ok()
     );
     host.close(socket.token);
+}
+
+#[test]
+fn switch_bind_failure_restores_the_original_inet_socket() {
+    use std::os::unix::net::UnixListener;
+
+    let bridge = format!("bind-rollback-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 96, 0, 2],
+    };
+    let port = 38_000 + (std::process::id() % 20_000) as u16;
+    let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.96.0.2:{port}"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let collision = UnixListener::bind(&path).unwrap();
+    let host = Native::new();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+
+    assert_eq!(
+        host.bind_route(
+            socket.token,
+            BindRoute {
+                address: SocketAddress::Inet4 {
+                    address: interface.ipv4,
+                    port,
+                },
+                interface: Some(interface),
+                aliases: Vec::new(),
+            },
+        ),
+        Err(hl_runtime::RuntimeNetworkError::AddressInUse)
+    );
+    assert_eq!(
+        host.local_address(socket.token),
+        Ok(SocketAddress::Inet4 {
+            address: [0; 4],
+            port: 0,
+        })
+    );
+    assert!(
+        host.bind(
+            socket.token,
+            SocketAddress::Inet4 {
+                address: Ipv4Addr::LOCALHOST.octets(),
+                port: 0,
+            },
+        )
+        .is_ok()
+    );
+
+    host.close(socket.token);
+    drop(collision);
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(path.parent().unwrap()).unwrap();
 }
 
 #[test]

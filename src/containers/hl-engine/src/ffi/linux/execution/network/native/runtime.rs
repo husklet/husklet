@@ -212,7 +212,7 @@ impl RuntimeNetworkHost for Native {
                 })();
                 if let Err(error) = aliases {
                     drop(SwitchPath(paths));
-                    let _ = self.reset_switch_socket(token, kind);
+                    self.restore_inet_socket(token, kind)?;
                     return Err(error);
                 }
                 let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
@@ -232,9 +232,14 @@ impl RuntimeNetworkHost for Native {
                 entry.switch_path = Some(ownership);
                 return Ok(local);
             }
-            if port != 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EADDRINUSE) {
-                return Err(Self::runtime_error());
+            let error = Self::runtime_error();
+            if port != 0 || error != RuntimeNetworkError::AddressInUse {
+                self.restore_inet_socket(token, kind)?;
+                return Err(error);
             }
+        }
+        if descriptor.is_some() {
+            self.restore_inet_socket(token, kind)?;
         }
         Err(RuntimeNetworkError::AddressInUse)
     }
