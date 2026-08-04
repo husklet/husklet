@@ -1,0 +1,12 @@
+image: alpine:3.20
+build:
+  source: main.c
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -std=gnu11]
+cases:
+  - { id: mmap, build_flags: [-DHL_PERF_OP=1], expect: { stdout_contains: golden/empty.txt } }
+  - { id: file, build_flags: [-DHL_PERF_OP=2], expect: { stdout_contains: golden/empty.txt } }
+  - { id: pipe, build_flags: [-DHL_PERF_OP=3], expect: { stdout_contains: golden/empty.txt } }
+  - { id: event, build_flags: [-DHL_PERF_OP=4], expect: { stdout_contains: golden/empty.txt } }
+  - { id: ipc-latency, build_flags: [-DHL_PERF_OP=5], expect: { stdout_contains: golden/empty.txt } }
+  - { id: ipc-throughput, build_flags: [-DHL_PERF_OP=6], expect: { stdout_contains: golden/empty.txt } }

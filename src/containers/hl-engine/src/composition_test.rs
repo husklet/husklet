@@ -204,6 +204,7 @@ impl Fixture {
                 activation: activation.clone(),
                 checkpoint_sink: Some(checkpoints.clone()),
                 checkpoint_source: Some(checkpoints.clone()),
+                streams: StandardStreams::default(),
             },
             activation,
             checkpoints,
@@ -221,6 +222,7 @@ fn validates_required_checkpoint() {
         activation: Arc::new(Channel::default()),
         checkpoint_sink: None,
         checkpoint_source: None,
+        streams: StandardStreams::default(),
     };
     let result = EngineBackend::construct(GuestIsa::Aarch64, plan, services, &factory, WorkspacePort);
     assert!(matches!(result, Err(CompositionError::MissingCheckpointSink)));

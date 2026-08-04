@@ -419,9 +419,10 @@ impl ProcessContext {
                         .memfd_registry(),
                 )
                 .with_working_directory(Arc::clone(&self.working))
-                .with_pipe_cancellation(Arc::new(hl_runtime::RuntimePipeCancellation::new(
-                    cancellation.interruption(),
-                ).with_signals(Arc::clone(&self.tasks), thread)))
+                .with_pipe_cancellation(Arc::new(
+                    hl_runtime::RuntimePipeCancellation::new(cancellation.interruption())
+                        .with_signals(Arc::clone(&self.tasks), thread),
+                ))
                 .with_pipe_registry(Arc::clone(&self.ipc_pipes))
                 .with_pipe_signal(Arc::new(signal::PipeSignal {
                     tasks: Arc::clone(&self.tasks),
@@ -599,7 +600,7 @@ mod test {
         let (epoll, source) = hl_runtime::EpollControl::new(64, 64).unwrap();
         let descriptors = super::descriptor_table::Set::with_table(
             source.descriptor_table(),
-            Box::new(std::io::empty()),
+            &crate::composition::StandardStreams::new(std::io::empty(), std::io::sink(), std::io::sink()),
         )
         .unwrap();
         let (descriptors, table) = super::fork_files(&epoll, &descriptors, &source);

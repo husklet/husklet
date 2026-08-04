@@ -272,13 +272,13 @@
             cargo test --workspace --all-targets --locked --offline -j 1 --no-fail-fast
             cargo test --workspace --doc --locked --offline -j 1
 
-            python3 tests/runtime/corpus.py verify
-            python3 tests/runtime/fixture_schema.py --check
-            python3 tests/runtime/priority.py --check
-            PYTHONPATH=tests/runtime python3 -m unittest \
-              tests/runtime/corpus_test.py \
-              tests/runtime/fixture_schema_test.py \
-              tests/runtime/priority_test.py
+            python3 tests/runtime/legacy/corpus.py verify
+            python3 tests/runtime/legacy/fixture_schema.py --check
+            python3 tests/runtime/legacy/priority.py --check
+            PYTHONPATH=tests/runtime/legacy python3 -m unittest \
+              tests/runtime/legacy/corpus_test.py \
+              tests/runtime/legacy/fixture_schema_test.py \
+              tests/runtime/legacy/priority_test.py
 
             runHook postBuild
           '';

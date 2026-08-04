@@ -172,20 +172,10 @@ impl GuestExecutor {
         };
         let mut loader = Loader::new(source, exec_image::ImageSpace::new(Arc::clone(&image_space)), limits);
         let arguments = plan.arguments.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let mut environment = plan.environment.clone();
-        for default in [
-            b"HOME=/root".as_slice(),
-            b"LANG=C.UTF-8",
-            b"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            b"USER=root",
-            b"TERM=xterm",
-        ] {
-            let name = default.split(|byte| *byte == b'=').next().unwrap_or(default);
-            if !environment.iter().any(|entry| entry.starts_with(name) && entry.get(name.len()) == Some(&b'=')) {
-                environment.push(default.to_vec());
-            }
-        }
-        let environment_refs = environment.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        // The Linux execution boundary preserves the caller's environment
+        // byte-for-byte. Product/container defaults belong in the launch-plan
+        // owner; synthesizing them here changes envp cardinality and ordering.
+        let environment_refs = plan.environment.iter().map(Vec::as_slice).collect::<Vec<_>>();
         // Initial auxv identity must match the credentials installed by the
         // runtime route. Exec already projects the live task credentials.
         let uid = routing::launch_identity(plan, "HL_UID", routing::host_user())?;
@@ -216,7 +206,7 @@ impl GuestExecutor {
         if !Arc::ptr_eq(&loaded_space.space(), &image_space) {
             return Err(EngineError::LaunchFailed);
         }
-        image_space.publish_procfs_image(&loaded, guest_executable.clone(), environment.clone());
+        image_space.publish_procfs_image(&loaded, guest_executable.clone(), plan.environment.clone());
         let entry = loaded.dynamic_handoff().start_entry();
         let stack = loaded.initial_stack().stack_pointer();
         let cpu = match isa {
@@ -248,11 +238,12 @@ impl GuestExecutor {
             Arc::clone(&cancellation),
             self.authority.clone(),
             self.entropy_source.clone(),
+            &services.streams,
         )?;
         routed
             .process
             .space()
-            .publish_procfs_image(&loaded, guest_executable.clone(), environment);
+            .publish_procfs_image(&loaded, guest_executable.clone(), plan.environment.clone());
         routed
             .process
             .tasks()
@@ -465,6 +456,7 @@ impl GuestExecutor {
             cancellation,
             None,
             Arc::new(image_data::Entropy),
+            &crate::composition::StandardStreams::default(),
         )
         .map(|routed| routed.router)
     }

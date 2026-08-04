@@ -685,7 +685,8 @@ mod test {
         fn with_object(readiness: u32) -> (Self, Arc<DescriptorTable>, Arc<Object>, i32) {
             let mut fixture = Self::new();
             let table = Arc::new(DescriptorTable::new(POLL_LIMIT as i32).unwrap());
-            let descriptors = Arc::new(Set::with_table(Arc::clone(&table), Box::new(std::io::empty())).unwrap());
+            let streams = crate::composition::StandardStreams::new(std::io::empty(), std::io::sink(), std::io::sink());
+            let descriptors = Arc::new(Set::with_table(Arc::clone(&table), &streams).unwrap());
             let object = Arc::new(Object::new(readiness));
             let installed: Arc<dyn OpenFileDescription> = object.clone();
             let descriptor = table.install(3, installed, DescriptorFlags::default()).unwrap();

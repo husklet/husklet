@@ -197,6 +197,7 @@ impl Builder {
             activation: Arc::new(Activation),
             checkpoint_sink: None,
             checkpoint_source: None,
+            streams: crate::composition::StandardStreams::default(),
         };
         let backend = match EngineBackend::construct(self.isa, plan, services, &factory, workspace.clone()) {
             Ok(value) => value,
@@ -248,6 +249,15 @@ impl Engine {
     /// mounts, networking, identity, and resource policy. The engine retains
     /// ownership of runtime construction and native execution.
     pub fn from_plan(isa: GuestIsa, plan: RuntimePlan) -> Result<Self, EngineError> {
+        Self::from_plan_with_streams(isa, plan, crate::composition::StandardStreams::default())
+    }
+
+    /// Constructs a runtime whose Linux descriptors 0, 1, and 2 use the supplied process streams.
+    pub fn from_plan_with_streams(
+        isa: GuestIsa,
+        plan: RuntimePlan,
+        streams: crate::composition::StandardStreams,
+    ) -> Result<Self, EngineError> {
         let workspace = OwnedWorkspace::create()?;
         let factory = RustRuntimeFactory::new(
             Arc::new(crate::native::GuestExecutor::default()),
@@ -258,6 +268,7 @@ impl Engine {
             activation: Arc::new(Activation),
             checkpoint_sink: None,
             checkpoint_source: None,
+            streams,
         };
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
             .map_err(|_| EngineError::LaunchFailed)?;

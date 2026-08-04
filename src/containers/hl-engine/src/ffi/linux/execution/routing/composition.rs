@@ -1,4 +1,5 @@
 use super::*;
+use crate::composition::StandardStreams;
 
 pub(in crate::ffi::linux::execution) fn launch_identity(
     plan: &RuntimeLaunchPlan,
@@ -88,6 +89,7 @@ pub(in crate::ffi::linux::execution) fn create(
     cancellation: Arc<readiness::Cancellation>,
     authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>,
     entropy: Arc<dyn ports::random::EntropySource>,
+    streams: &StandardStreams,
 ) -> Result<Route, EngineError> {
     let projected = authority.is_some();
     // A rooted container starts as root. A direct, rootless launch inherits
@@ -97,8 +99,7 @@ pub(in crate::ffi::linux::execution) fn create(
     let seccomp_baseline = seccomp_baseline(plan)?;
     let table = assembly.descriptors().descriptor_table();
     let descriptors = Arc::new(
-        descriptor_table::Set::with_table(Arc::clone(&table), Box::new(std::io::stdin()))
-            .expect("valid standard descriptor table"),
+        descriptor_table::Set::with_table(Arc::clone(&table), streams).expect("valid standard descriptor table"),
     );
     let handles = Arc::new(hl_runtime::ProcessHandleRegistry::new());
     let namespace_handles = Arc::new(hl_runtime::NamespaceHandleRegistry::new());
@@ -141,7 +142,9 @@ pub(in crate::ffi::linux::execution) fn create(
                 .replace_credentials(init, launch_credentials)
                 .map_err(|_| EngineError::LaunchFailed)?;
             for (resource, limit) in limit_overrides {
-                tasks.set_limit(init, resource, limit).map_err(|_| EngineError::LaunchFailed)?;
+                tasks
+                    .set_limit(init, resource, limit)
+                    .map_err(|_| EngineError::LaunchFailed)?;
             }
             tasks
                 .snapshot()
@@ -179,13 +182,11 @@ pub(in crate::ffi::linux::execution) fn create(
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value != 0)
         .map(|_| tasks.topology().online());
-    let uptime_seconds = crate::native::HostSyscalls::clock_ns(
-        &crate::ffi::LinuxHost,
-        crate::native::ClockKind::Monotonic,
-    )
-    .unwrap_or(1_000_000_000)
-    .saturating_div(1_000_000_000)
-    .max(1);
+    let uptime_seconds =
+        crate::native::HostSyscalls::clock_ns(&crate::ffi::LinuxHost, crate::native::ClockKind::Monotonic)
+            .unwrap_or(1_000_000_000)
+            .saturating_div(1_000_000_000)
+            .max(1);
     let system = assembly.system();
     let boot_key = plan
         .options
@@ -206,7 +207,11 @@ pub(in crate::ffi::linux::execution) fn create(
         .begin_fork_process(source)
         .and_then(|plan| tasks.commit_fork_process(plan))
         .expect("task registry has process capacity");
-    let executable = super::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
+    // A syscall router can be composed before an executable image is attached
+    // (checkpoint restore and the route-level harness both do this). Linux task
+    // identity still needs a stable initial comm; exec replaces it with the
+    // image basename when an image is present.
+    let executable = super::image::WorkspaceRoot::executable(plan).unwrap_or_else(|| b"/hl-engine".to_vec());
     tasks
         .set_name(child.1, hl_runtime::linux_comm(&executable))
         .map_err(|_| EngineError::LaunchFailed)?;
@@ -453,7 +458,13 @@ mod tests {
         let (limits, overrides) = launch_limits(&plan(options)).unwrap();
 
         assert_eq!(limits.get(Resource::OpenFiles), Some(Limit { soft: 1024, hard: 2048 }));
-        assert_eq!(limits.get(Resource::Core), Some(Limit { soft: u64::MAX, hard: u64::MAX }));
+        assert_eq!(
+            limits.get(Resource::Core),
+            Some(Limit {
+                soft: u64::MAX,
+                hard: u64::MAX
+            })
+        );
         assert_eq!(overrides.len(), 2);
     }
 

@@ -18,6 +18,7 @@ members = [
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
     "src/apps/husklet",
+    "src/apps/testing",
 ]
 default-members = [
     "src/workspaces/hl-ws-term",

@@ -2,6 +2,8 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
+use crate::composition::StandardStreams;
+
 use hl_descriptor::{
     DescriptorError, DescriptorFlags, DescriptorTable, ExactDuplicate, ObjectError, OfdMetadata, OfdTimestamp,
     OpenFileDescription, OperationLease, StatusFlags,
@@ -38,23 +40,21 @@ impl Set {
     pub(super) fn new() -> Result<Self, DescriptorError> {
         Self::with_table(
             Arc::new(DescriptorTable::new(DESCRIPTOR_LIMIT)?),
-            Box::new(std::io::stdin()),
+            &StandardStreams::default(),
         )
     }
 
     #[cfg(test)]
     pub(super) fn with_input(input: Box<dyn Read + Send>) -> Result<Self, DescriptorError> {
-        Self::with_table(Arc::new(DescriptorTable::new(DESCRIPTOR_LIMIT)?), input)
+        let streams = StandardStreams::new(input, std::io::sink(), std::io::sink());
+        Self::with_table(Arc::new(DescriptorTable::new(DESCRIPTOR_LIMIT)?), &streams)
     }
 
-    pub(super) fn with_table(
-        table: Arc<DescriptorTable>,
-        input: Box<dyn Read + Send>,
-    ) -> Result<Self, DescriptorError> {
+    pub(super) fn with_table(table: Arc<DescriptorTable>, streams: &StandardStreams) -> Result<Self, DescriptorError> {
         let objects: [Arc<dyn OpenFileDescription>; 3] = [
-            Arc::new(StandardIo::input(input, 1)),
-            Arc::new(StandardIo::output(Output::Stdout, 2)),
-            Arc::new(StandardIo::output(Output::Stderr, 3)),
+            Arc::new(StandardIo::input(streams.input(), 1)),
+            Arc::new(StandardIo::output(streams.output(), 2)),
+            Arc::new(StandardIo::output(streams.error(), 3)),
         ];
         let mut standard = [0; 3];
         for (number, object) in objects.into_iter().enumerate() {
@@ -173,8 +173,8 @@ impl Set {
 }
 
 enum StandardKind {
-    Input(Mutex<Box<dyn Read + Send>>),
-    Output(Output),
+    Input(Arc<Mutex<Box<dyn Read + Send>>>),
+    Output(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
 struct StandardIo {
@@ -183,14 +183,14 @@ struct StandardIo {
 }
 
 impl StandardIo {
-    fn input(input: Box<dyn Read + Send>, inode: u64) -> Self {
+    fn input(input: Arc<Mutex<Box<dyn Read + Send>>>, inode: u64) -> Self {
         Self {
-            kind: StandardKind::Input(Mutex::new(input)),
+            kind: StandardKind::Input(input),
             inode,
         }
     }
 
-    const fn output(output: Output, inode: u64) -> Self {
+    fn output(output: Arc<Mutex<Box<dyn Write + Send>>>, inode: u64) -> Self {
         Self {
             kind: StandardKind::Output(output),
             inode,
@@ -255,16 +255,42 @@ impl OpenFileDescription for StandardIo {
         let StandardKind::Output(output) = &self.kind else {
             return Err(ObjectError::BadDescriptor);
         };
-        let result = match *output {
-            Output::Stdout => std::io::stdout().lock().write(input),
-            Output::Stderr => std::io::stderr().lock().write(input),
-        };
-        result.map_err(|error| Self::io_errno(&error))
+        output
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .write(input)
+            .map_err(|error| Self::io_errno(&error))
     }
 }
 
-#[derive(Clone, Copy)]
-enum Output {
-    Stdout,
-    Stderr,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn standard_descriptors_use_injected_process_streams() {
+        let output = Capture::default();
+        let error = Capture::default();
+        let streams = StandardStreams::new(std::io::empty(), output.clone(), error.clone());
+        let descriptors = Set::with_table(Arc::new(DescriptorTable::new(DESCRIPTOR_LIMIT).unwrap()), &streams).unwrap();
+
+        assert_eq!(descriptors.pin(1).unwrap().write(b"out\0").unwrap(), 4);
+        assert_eq!(descriptors.pin(2).unwrap().write(b"err\xff").unwrap(), 4);
+        assert_eq!(&*output.0.lock().unwrap(), b"out\0");
+        assert_eq!(&*error.0.lock().unwrap(), b"err\xff");
+    }
 }

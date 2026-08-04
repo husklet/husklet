@@ -343,6 +343,7 @@ impl Program {
             activation: Arc::new(Activation),
             checkpoint_sink: None,
             checkpoint_source: None,
+            streams: crate::composition::StandardStreams::default(),
         };
         let backend = EngineBackend::construct(isa, plan, services, &factory, WorkspacePort)
             .map_err(ProgramError::Composition)?;

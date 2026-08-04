@@ -8,7 +8,6 @@ type Error = Box<dyn std::error::Error>;
 pub(crate) fn group() -> Group {
     let mut scenarios = Vec::new();
     for manifest in [
-        include_str!("../fixtures/languages-dotnet.yaml"),
         include_str!("../fixtures/languages-python.yaml"),
         include_str!("../fixtures/languages-node.yaml"),
         include_str!("../fixtures/languages-ruby.yaml"),
@@ -41,7 +40,7 @@ pub(crate) mod tests {
             .iter()
             .map(|case| case.id)
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(group.scenarios.len(), 55);
-        assert_eq!(ids.len(), 55);
+        assert_eq!(group.scenarios.len(), 51);
+        assert_eq!(ids.len(), 51);
     }
 }

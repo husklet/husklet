@@ -215,6 +215,7 @@ fn run_environment(image: Vec<u8>, name: &str, isa: GuestIsa, environment: Vec<V
         activation: std::sync::Arc::new(Activation),
         checkpoint_sink: None,
         checkpoint_source: None,
+        streams: crate::composition::StandardStreams::default(),
     };
     let result = executor
         .start(isa, &plan, &assembly, &services)
@@ -225,7 +226,7 @@ fn run_environment(image: Vec<u8>, name: &str, isa: GuestIsa, environment: Vec<V
 
 #[test]
 fn environment_stack() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt");
     for (isa, folder) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
         let image = fs::read(root.join(folder).join("environment")).unwrap();
         assert_eq!(
@@ -247,7 +248,7 @@ fn environment_stack() {
 
 #[test]
 fn bootstrap_instructions_execute() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt");
     let arm = fs::read(root.join("aarch64/write")).unwrap();
     let x86 = fs::read(root.join("x86_64/exit")).unwrap();
     let x86_write = fs::read(root.join("x86_64/write")).unwrap();
@@ -304,7 +305,7 @@ fn pthread_clone_executes() {
 
 #[test]
 fn clone_teardown() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/prebuilt");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt");
     for (isa, folder) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
         let image = fs::read(root.join(folder).join("clone")).unwrap();
         assert_eq!(
@@ -843,6 +844,7 @@ fn shared_thread_routes() {
             Arc::clone(&first_cancel),
             None,
             Arc::new(super::image_data::Entropy),
+            &crate::composition::StandardStreams::default(),
         )
         .unwrap();
         let tasks = assembly.tasks();
@@ -1304,6 +1306,7 @@ fn stop_interrupts_running() {
         Arc::clone(&cancellation),
         None,
         Arc::new(super::image_data::Entropy),
+        &crate::composition::StandardStreams::default(),
     )
     .unwrap();
     let threads = Arc::new(super::threads::ThreadSet::new(1).unwrap());
@@ -1350,8 +1353,14 @@ fn unsupported_inventory_exact() {
     use hl_runtime::{RuntimeSyscallTrap, RuntimeTrapOutcome};
 
     let supported = GuestExecutor::supported_syscalls();
-    assert!(supported.contains(&"alarm"), "x86 legacy alarm must reach the task/time runtime");
-    assert!(supported.contains(&"time"), "x86 legacy time must reach the task/time runtime");
+    assert!(
+        supported.contains(&"alarm"),
+        "x86 legacy alarm must reach the task/time runtime"
+    );
+    assert!(
+        supported.contains(&"time"),
+        "x86 legacy time must reach the task/time runtime"
+    );
     assert!(supported.windows(2).all(|pair| pair[0] < pair[1]));
     for name in supported {
         assert!(

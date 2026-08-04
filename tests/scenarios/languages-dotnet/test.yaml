@@ -1,0 +1,42 @@
+cases:
+  - id: languages-dotnet/version-sdk8
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    run:
+      program: /bin/sh
+      arguments: [-c, 'printf "SDK %s\n" "$(dotnet --version | cut -d. -f1)"']
+    expect:
+      stdout_contains: golden/version-sdk8.txt
+
+  - id: languages-dotnet/sum-sdk8
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    fixtures:
+      - source: source/sum/Program.cs
+        destination: /tests/sum/Program.cs
+      - source: source/sum/sum.csproj
+        destination: /tests/sum/sum.csproj
+    run:
+      program: /usr/bin/dotnet
+      arguments: [run, --project, /tests/sum/sum.csproj, -c, Release]
+    expect:
+      stdout_contains: golden/sum-sdk8.txt
+
+  - id: languages-dotnet/fib-sdk9
+    image: mcr.microsoft.com/dotnet/sdk:9.0
+    fixtures:
+      - source: source/fib/Program.cs
+        destination: /tests/fib/Program.cs
+      - source: source/fib/fib.csproj
+        destination: /tests/fib/fib.csproj
+    run:
+      program: /usr/bin/dotnet
+      arguments: [run, --project, /tests/fib/fib.csproj, -c, Release]
+    expect:
+      stdout_contains: golden/fib-sdk9.txt
+
+  - id: languages-dotnet/runtime-info-sdk8
+    image: mcr.microsoft.com/dotnet/runtime:8.0
+    run:
+      program: /bin/sh
+      arguments: [-c, "dotnet --info | grep -o 'Microsoft.NETCore.App 8'"]
+    expect:
+      stdout_contains: golden/runtime-info-sdk8.txt

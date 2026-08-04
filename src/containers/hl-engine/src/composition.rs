@@ -5,6 +5,7 @@ use crate::engine::{
     Engine, EngineError, EngineExit, EnginePhase, Launcher, ProcessId, StopRequest, Workspace, WorkspaceId,
 };
 use crate::launch_plan::RuntimeLaunchPlan;
+use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -31,11 +32,59 @@ pub trait CheckpointSource: Send + Sync {
     fn read(&self, maximum: usize) -> Result<Vec<u8>, CompositionError>;
 }
 
+type StandardInput = Arc<Mutex<Box<dyn Read + Send>>>;
+type StandardOutput = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Process-owned standard streams installed as Linux descriptors 0, 1, and 2.
+///
+/// Clones retain the same underlying stream objects. This matches Linux open-file-description
+/// sharing across descriptor duplication and process forks without consulting process-global I/O.
+#[derive(Clone)]
+pub struct StandardStreams {
+    input: StandardInput,
+    output: StandardOutput,
+    error: StandardOutput,
+}
+
+impl StandardStreams {
+    #[must_use]
+    pub fn new(
+        input: impl Read + Send + 'static,
+        output: impl Write + Send + 'static,
+        error: impl Write + Send + 'static,
+    ) -> Self {
+        Self {
+            input: Arc::new(Mutex::new(Box::new(input))),
+            output: Arc::new(Mutex::new(Box::new(output))),
+            error: Arc::new(Mutex::new(Box::new(error))),
+        }
+    }
+
+    pub(crate) fn input(&self) -> StandardInput {
+        Arc::clone(&self.input)
+    }
+
+    pub(crate) fn output(&self) -> StandardOutput {
+        Arc::clone(&self.output)
+    }
+
+    pub(crate) fn error(&self) -> StandardOutput {
+        Arc::clone(&self.error)
+    }
+}
+
+impl Default for StandardStreams {
+    fn default() -> Self {
+        Self::new(std::io::stdin(), std::io::stdout(), std::io::stderr())
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeServices {
     pub activation: Arc<dyn ActivationChannel>,
     pub checkpoint_sink: Option<Arc<dyn CheckpointSink>>,
     pub checkpoint_source: Option<Arc<dyn CheckpointSource>>,
+    pub streams: StandardStreams,
 }
 
 pub struct RuntimeConstruction<'a> {
