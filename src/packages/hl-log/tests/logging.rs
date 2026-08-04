@@ -76,11 +76,7 @@ fn gate_respects_tag_mask() {
     hl_log::hl_debug!(tag::VULKAN, "vulkan message"); // disabled tag -> no emit
 
     let lines = sink.lines();
-    assert_eq!(
-        lines.len(),
-        1,
-        "only the enabled tag should emit: {lines:?}"
-    );
+    assert_eq!(lines.len(), 1, "only the enabled tag should emit: {lines:?}");
     assert!(lines[0].contains("gpu message"));
     assert!(!lines[0].contains("vulkan"));
 }
@@ -103,14 +99,8 @@ fn gate_respects_level() {
     let lines = sink.lines();
     let joined = lines.join("");
     assert!(joined.contains("err") && joined.contains("warn") && joined.contains("info"));
-    assert!(
-        !joined.contains("debug"),
-        "debug must be filtered: {lines:?}"
-    );
-    assert!(
-        !joined.contains("trace"),
-        "trace must be filtered: {lines:?}"
-    );
+    assert!(!joined.contains("debug"), "debug must be filtered: {lines:?}");
+    assert!(!joined.contains("trace"), "trace must be filtered: {lines:?}");
     assert_eq!(lines.len(), 3);
 }
 
@@ -161,10 +151,7 @@ fn typed_configuration() {
         profiling: tag::ALL,
     }
     .apply();
-    assert_eq!(
-        hl_log::Logging::global().tags(),
-        tag::GPU | tag::WGPU | tag::TRANSPORT
-    );
+    assert_eq!(hl_log::Logging::global().tags(), tag::GPU | tag::WGPU | tag::TRANSPORT);
     assert_eq!(hl_log::Logging::global().level(), Level::Debug);
     assert_eq!(hl_log::Profiling::global().tags(), tag::ALL);
 
@@ -220,10 +207,7 @@ fn sink_format() {
     // Shape: [gpu] D +<ms>ms t<id> module:line: hello 42
     assert!(line.starts_with("[gpu] D "), "got: {line:?}");
     assert!(line.contains("logging:"), "module path present: {line:?}");
-    assert!(
-        line.trim_end().ends_with("hello 42"),
-        "message present: {line:?}"
-    );
+    assert!(line.trim_end().ends_with("hello 42"), "message present: {line:?}");
     assert!(line.ends_with('\n'), "line terminated: {line:?}");
 }
 

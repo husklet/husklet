@@ -88,10 +88,7 @@ impl Span {
     /// A no-op span (tag was disabled). Drop does nothing.
     #[inline]
     pub const fn disabled() -> Span {
-        Span {
-            name: "",
-            start: None,
-        }
+        Span { name: "", start: None }
     }
 }
 

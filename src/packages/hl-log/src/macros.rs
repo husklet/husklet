@@ -104,18 +104,12 @@ macro_rules! hl_error {
 
 /// True-cfg = "verbose logging is compiled in".
 // (documented alias for the long predicate below)
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_warn {
     ($tag:expr, $($arg:tt)+) => { $crate::__hl_do!($tag, $crate::Level::Warn, $($arg)+) };
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_warn {
     ($tag:expr, $($arg:tt)+) => {{
@@ -123,18 +117,12 @@ macro_rules! hl_warn {
     }};
 }
 
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_info {
     ($tag:expr, $($arg:tt)+) => { $crate::__hl_do!($tag, $crate::Level::Info, $($arg)+) };
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_info {
     ($tag:expr, $($arg:tt)+) => {{
@@ -142,18 +130,12 @@ macro_rules! hl_info {
     }};
 }
 
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_debug {
     ($tag:expr, $($arg:tt)+) => { $crate::__hl_do!($tag, $crate::Level::Debug, $($arg)+) };
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_debug {
     ($tag:expr, $($arg:tt)+) => {{
@@ -161,18 +143,12 @@ macro_rules! hl_debug {
     }};
 }
 
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_trace {
     ($tag:expr, $($arg:tt)+) => { $crate::__hl_do!($tag, $crate::Level::Trace, $($arg)+) };
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_trace {
     ($tag:expr, $($arg:tt)+) => {{
@@ -185,10 +161,7 @@ macro_rules! hl_trace {
 // same compile policy as the verbose levels.
 // ---------------------------------------------------------------------------------
 
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_count {
     ($tag:expr, $name:expr) => {{
@@ -197,10 +170,7 @@ macro_rules! hl_count {
         }
     }};
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_count {
     ($tag:expr, $name:expr) => {{
@@ -210,10 +180,7 @@ macro_rules! hl_count {
     }};
 }
 
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_add {
     ($tag:expr, $name:expr, $n:expr) => {{
@@ -222,10 +189,7 @@ macro_rules! hl_add {
         }
     }};
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_add {
     ($tag:expr, $name:expr, $n:expr) => {{
@@ -238,10 +202,7 @@ macro_rules! hl_add {
 /// Open a timing span. Bind the result: `let _s = hl_span!(tag::WGPU, "readback");`.
 /// Records elapsed time on drop when profiling includes the tag; otherwise the
 /// returned guard is inert. In release (without `release-verbose`) it is always inert.
-#[cfg(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-))]
+#[cfg(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose")))]
 #[macro_export]
 macro_rules! hl_span {
     ($tag:expr, $name:expr) => {{
@@ -252,10 +213,7 @@ macro_rules! hl_span {
         }
     }};
 }
-#[cfg(not(all(
-    not(feature = "disabled"),
-    any(debug_assertions, feature = "release-verbose")
-)))]
+#[cfg(not(all(not(feature = "disabled"), any(debug_assertions, feature = "release-verbose"))))]
 #[macro_export]
 macro_rules! hl_span {
     ($tag:expr, $name:expr) => {{

@@ -115,10 +115,7 @@ fn a_closed_tag_emits_no_event() {
     crate::hl_event!(tag::GPU, crate::Level::Error, "should.not.appear", n = 1);
 
     crate::sink::Events::global().reset();
-    assert!(
-        lines.lock().unwrap().is_empty(),
-        "a closed tag must not emit a record"
-    );
+    assert!(lines.lock().unwrap().is_empty(), "a closed tag must not emit a record");
 }
 
 /// The same call site with the tag open emits one record carrying its fields — the positive control for
@@ -138,7 +135,11 @@ fn an_open_tag_emits_the_record() {
     let captured = lines.lock().unwrap();
     assert_eq!(captured.len(), 1);
     assert!(captured[0].contains(r#""event":"frame.refused""#), "{}", captured[0]);
-    assert!(captured[0].contains(r#""id":7"#), "a number stays a number: {}", captured[0]);
+    assert!(
+        captured[0].contains(r#""id":7"#),
+        "a number stays a number: {}",
+        captured[0]
+    );
     assert!(captured[0].contains(r#""why":"no format""#), "{}", captured[0]);
 }
 
@@ -169,7 +170,11 @@ fn a_verdict_is_not_maskable_and_reaches_both_channels() {
 
     let records = records.lock().unwrap();
     assert_eq!(records.len(), 1, "the record is emitted with every tag closed");
-    assert!(records[0].contains(r#""event":"encoder_op.refused_in_pass""#), "{}", records[0]);
+    assert!(
+        records[0].contains(r#""event":"encoder_op.refused_in_pass""#),
+        "{}",
+        records[0]
+    );
     assert!(records[0].contains(r#""pass":3"#), "{}", records[0]);
 
     let sentences = sentences.lock().unwrap();
@@ -211,7 +216,11 @@ fn a_verdict_keeps_its_human_sentence_and_its_fields() {
 
     let records = records.lock().unwrap();
     assert!(records[0].contains(r#""buffer":33"#), "typed field: {}", records[0]);
-    assert!(records[0].contains(r#""reason":"incompatible formats""#), "{}", records[0]);
+    assert!(
+        records[0].contains(r#""reason":"incompatible formats""#),
+        "{}",
+        records[0]
+    );
 
     let sentences = sentences.lock().unwrap();
     assert!(

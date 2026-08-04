@@ -116,10 +116,7 @@ impl<'a> From<&'a str> for TagList<'a> {
                 unrecognised: Vec::new(),
             };
         }
-        if trimmed.is_empty()
-            || trimmed.eq_ignore_ascii_case("off")
-            || trimmed.eq_ignore_ascii_case("none")
-        {
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("off") || trimmed.eq_ignore_ascii_case("none") {
             return Self {
                 tags: Tags::NONE,
                 unrecognised: Vec::new(),
@@ -250,8 +247,8 @@ pub const NONE: Tags = Tags::NONE;
 
 /// Registered tags in deterministic display order.
 pub const TAGS: &[Tag] = &[
-    GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU,
-    EGL, WAYLAND, CONTAINER, IMAGE, DAEMON, UI,
+    GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
+    CONTAINER, IMAGE, DAEMON, UI,
 ];
 
 #[cfg(test)]

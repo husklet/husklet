@@ -188,14 +188,7 @@ impl From<&String> for Value {
 /// Format and dispatch one structured record. Reached only when the caller's gate passed.
 ///
 /// Not `inline`: the cold formatting path stays out of the call site, exactly as [`crate::emit`] does.
-pub fn emit_event(
-    tags: Tags,
-    level: Level,
-    event: &str,
-    module: &str,
-    line: u32,
-    fields: &[(&str, Value)],
-) {
+pub fn emit_event(tags: Tags, level: Level, event: &str, module: &str, line: u32, fields: &[(&str, Value)]) {
     let mut out = String::with_capacity(128);
     out.push_str("{\"event\":");
     let _ = write!(out, "{}", JsonString(event));
@@ -259,13 +252,7 @@ pub fn emit_verdict(tags: Tags, event: &str, module: &str, line: u32, fields: &[
             other => other.write(&mut sentence),
         }
     }
-    crate::emit::emit(
-        tags,
-        Level::Error,
-        module,
-        line,
-        format_args!("{sentence}"),
-    );
+    crate::emit::emit(tags, Level::Error, module, line, format_args!("{sentence}"));
 }
 
 #[cfg(test)]
