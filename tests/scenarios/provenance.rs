@@ -6,7 +6,7 @@ const INVENTORY: &str = include_str!("golden/provenance.tests");
 const IMAGE_MANIFEST: &str = include_str!("golden/images.manifest");
 const SCENARIOS: &str = include_str!("golden/scenario.contracts");
 const EXPECTED: usize = 536;
-const EXPECTED_IMAGES: usize = 133;
+const EXPECTED_IMAGES: usize = 113;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Disposition {
@@ -46,17 +46,14 @@ pub fn audit(strict: bool) -> Result<(), String> {
                 fields.len()
             ));
         }
-        validate_owner(fields[0], fields[1])
-            .map_err(|error| format!("provenance.tests:{}: {error}", index + 1))?;
+        validate_owner(fields[0], fields[1]).map_err(|error| format!("provenance.tests:{}: {error}", index + 1))?;
         let identity = format!("{}::{}", fields[1], fields[2]);
         if !identities.insert(identity.clone()) {
             return Err(format!("duplicate provenance test identity {identity:?}"));
         }
         let disposition = Disposition::parse(fields[3])?;
         if disposition != Disposition::Pending && fields[4] == "-" {
-            return Err(format!(
-                "resolved provenance test {identity:?} has no proof"
-            ));
+            return Err(format!("resolved provenance test {identity:?} has no proof"));
         }
         if disposition == Disposition::Pending {
             pending.push(identity);
@@ -72,30 +69,16 @@ pub fn audit(strict: bool) -> Result<(), String> {
     }
     println!(
         "provenance tests: total={EXPECTED} mapped={} transferred={} superseded={} pending={}",
-        counts
-            .get(&Disposition::Mapped)
-            .copied()
-            .unwrap_or_default(),
-        counts
-            .get(&Disposition::Transferred)
-            .copied()
-            .unwrap_or_default(),
-        counts
-            .get(&Disposition::Superseded)
-            .copied()
-            .unwrap_or_default(),
+        counts.get(&Disposition::Mapped).copied().unwrap_or_default(),
+        counts.get(&Disposition::Transferred).copied().unwrap_or_default(),
+        counts.get(&Disposition::Superseded).copied().unwrap_or_default(),
         pending.len(),
     );
     if strict && !pending.is_empty() {
         return Err(format!(
             "{} historical Rust tests lack one-to-one behavioral proof; first pending: {}",
             pending.len(),
-            pending
-                .iter()
-                .take(10)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
+            pending.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
         ));
     }
     Ok(())
@@ -143,8 +126,8 @@ fn audit_images() -> Result<(), String> {
 
     let mut contracts = BTreeSet::new();
     for (index, line) in SCENARIOS.lines().enumerate() {
-        let value: serde_json::Value = serde_json::from_str(line)
-            .map_err(|error| format!("scenario.contracts:{}: {error}", index + 1))?;
+        let value: serde_json::Value =
+            serde_json::from_str(line).map_err(|error| format!("scenario.contracts:{}: {error}", index + 1))?;
         let image = value
             .get("image")
             .and_then(serde_json::Value::as_str)

@@ -1,0 +1,532 @@
+cases:
+- id: languages/dotnet-version-sdk8
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  class: long
+  timeout: 120
+  execution:
+    native: true
+    diagnostics: true
+  run:
+    program: /bin/sh
+    arguments:
+    - -c
+    - printf "SDK %s\n" "$(dotnet --version | cut -d. -f1)"
+  expect:
+    stdout_contains: golden/dotnet/version.txt
+- id: languages/dotnet-sum-sdk8
+  image: mcr.microsoft.com/dotnet/sdk:8.0
+  class: long
+  timeout: 120
+  execution:
+    native: true
+    diagnostics: true
+  fixtures:
+  - source: source/sum/Program.cs
+    destination: /tests/sum/Program.cs
+  - source: source/sum/sum.csproj
+    destination: /tests/sum/sum.csproj
+  run:
+    program: /usr/bin/dotnet
+    arguments:
+    - run
+    - --project
+    - /tests/sum/sum.csproj
+    - -c
+    - Release
+  expect:
+    stdout_contains: golden/dotnet/sum.txt
+- id: languages/dotnet-fib-sdk9
+  image: mcr.microsoft.com/dotnet/sdk:9.0
+  class: long
+  timeout: 120
+  execution:
+    native: true
+    diagnostics: true
+  fixtures:
+  - source: source/fib/Program.cs
+    destination: /tests/fib/Program.cs
+  - source: source/fib/fib.csproj
+    destination: /tests/fib/fib.csproj
+  run:
+    program: /usr/bin/dotnet
+    arguments:
+    - run
+    - --project
+    - /tests/fib/fib.csproj
+    - -c
+    - Release
+  expect:
+    stdout_contains: golden/dotnet/fibonacci.txt
+- id: languages/dotnet-runtime-info-8
+  image: mcr.microsoft.com/dotnet/runtime:8.0
+  class: long
+  timeout: 120
+  execution:
+    native: true
+    diagnostics: true
+  run:
+    program: /bin/sh
+    arguments:
+    - -c
+    - dotnet --info | grep -o 'Microsoft.NETCore.App 8'
+  expect:
+    stdout_contains: golden/dotnet/runtime.txt
+- id: languages/elixir-sum-116-alpine
+  image: elixir:1.16-alpine
+  class: long
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - elixir
+      - -e
+      - IO.puts Enum.sum(1..1000)
+  expect:
+    stdout_contains: golden/elixir/sum.txt
+- id: languages/elixir-reduce-117
+  image: elixir:1.17-otp-27
+  class: long
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - elixir
+      - -e
+      - IO.puts(Enum.reduce(1..1000,0,&+/2))
+  expect:
+    stdout_contains: golden/elixir/sum.txt
+- id: languages/elixir-version-116
+  image: elixir:1.16
+  class: long
+  timeout: 120
+  actions:
+  - shell:
+      script: elixir --version | grep -o 'Elixir 1.16'
+  expect:
+    stdout_contains: golden/elixir/version.txt
+- id: languages/perl-sum-538
+  image: perl:5.38
+  expect:
+    stdout_contains: golden/values/sum.txt
+  actions:
+  - argv:
+      argv:
+      - perl
+      - -e
+      - $s+=$_ for 1..1000;print $s
+  class: quick
+  timeout: 120
+- id: languages/perl-sort-538-slim
+  image: perl:5.38-slim
+  expect:
+    stdout_contains: golden/values/sequence.txt
+  actions:
+  - argv:
+      argv:
+      - perl
+      - -e
+      - print join(',',sort{$a<=>$b}(3,1,2))
+  class: quick
+  timeout: 120
+- id: languages/perl-primes-538
+  image: perl:5.38
+  expect:
+    stdout_contains: golden/values/primes.txt
+  actions:
+  - argv:
+      argv:
+      - perl
+      - -e
+      - $c=0;for $n (2..9999){$p=1;for $d (2..int(sqrt($n))){if($n%$d==0){$p=0;last}}$c+=$p}print $c
+  class: quick
+  timeout: 120
+- id: languages/perl-mult-repl-540
+  image: perl:5.40
+  expect:
+    stdout_contains: golden/values/answer.txt
+  actions:
+  - shell:
+      script: echo 'print 6*7' | perl
+  class: quick
+  timeout: 120
+- id: languages/php-sum-82-cli
+  image: php:8.2-cli
+  expect:
+    stdout_contains: golden/values/sum.txt
+  actions:
+  - argv:
+      argv:
+      - php
+      - -r
+      - echo array_sum(range(1,1000));
+  class: quick
+  timeout: 120
+- id: languages/php-fib-83-cli
+  image: php:8.3-cli
+  expect:
+    stdout_contains: golden/values/factorial.txt
+  actions:
+  - argv:
+      argv:
+      - php
+      - -r
+      - $a=0;$b=1;for($i=0;$i<50;$i++){$t=$a+$b;$a=$b;$b=$t;}echo $a;
+  class: quick
+  timeout: 120
+- id: languages/php-json-83-cli
+  image: php:8.3-cli
+  expect:
+    stdout_contains: golden/values/jsoncompact.txt
+  actions:
+  - argv:
+      argv:
+      - php
+      - -r
+      - echo json_encode(['s'=>array_sum(range(1,1000))]);
+  class: quick
+  timeout: 120
+- id: languages/php-primes-82-cli
+  image: php:8.2-cli
+  expect:
+    stdout_contains: golden/values/primes.txt
+  actions:
+  - argv:
+      argv:
+      - php
+      - -r
+      - $p=0;for($n=2;$n<10000;$n++){$q=1;for($d=2;$d*$d<=$n;$d++)if($n%$d==0){$q=0;break;}$p+=$q;}echo $p;
+  class: quick
+  timeout: 120
+- id: languages/php-strlen-repl-82-alpine
+  image: php:8.2-cli-alpine
+  expect:
+    stdout_contains: golden/values/length.txt
+  actions:
+  - shell:
+      script: echo '<?php echo "LEN".strlen("hello");' | php
+  class: quick
+  timeout: 120
+- id: languages/ruby-sum-33-alpine
+  image: ruby:3.3-alpine
+  expect:
+    stdout_contains: golden/values/sum.txt
+  actions:
+  - argv:
+      argv:
+      - ruby
+      - -e
+      - puts (1..1000).sum
+  class: quick
+  timeout: 120
+- id: languages/ruby-fib-32-alpine
+  image: ruby:3.2-alpine
+  expect:
+    stdout_contains: golden/values/factorial.txt
+  actions:
+  - argv:
+      argv:
+      - ruby
+      - -e
+      - a,b=0,1;50.times{a,b=b,a+b};puts a
+  class: quick
+  timeout: 120
+- id: languages/ruby-json-33-alpine
+  image: ruby:3.3-alpine
+  expect:
+    stdout_contains: golden/values/jsoncompact.txt
+  actions:
+  - argv:
+      argv:
+      - ruby
+      - -e
+      - require 'json';puts({s:(1..1000).sum}.to_json)
+  class: quick
+  timeout: 120
+- id: languages/ruby-primes-33-alpine
+  image: ruby:3.3-alpine
+  expect:
+    stdout_contains: golden/values/primes.txt
+  actions:
+  - argv:
+      argv:
+      - ruby
+      - -e
+      - puts (2...10000).count{|n| (2..Integer.sqrt(n)).all?{|d| n%d!=0}}
+  class: quick
+  timeout: 120
+- id: languages/ruby-sort-repl-33-slim
+  image: ruby:3.3-slim
+  expect:
+    stdout_contains: golden/values/sequence.txt
+  actions:
+  - shell:
+      script: echo 'puts [3,1,2].sort.join(",")' | ruby
+  class: quick
+  timeout: 120
+- id: languages/python-sum-311-slim
+  image: python:3.11-slim
+  expect:
+    stdout_contains: golden/values/sum.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - print(sum(range(1,1001)))
+  class: quick
+  timeout: 120
+- id: languages/python-fib-312-slim
+  image: python:3.12-slim
+  expect:
+    stdout_contains: golden/values/factorial.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - 'a,b=0,1
+
+        for _ in range(50):a,b=b,a+b
+
+        print(a)'
+  class: quick
+  timeout: 120
+- id: languages/python-primes-313-slim
+  image: python:3.13-slim
+  expect:
+    stdout_contains: golden/values/primes.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - print(sum(1 for n in range(2,10000) if all(n%d for d in range(2,int(n**.5)+1))))
+  class: quick
+  timeout: 120
+- id: languages/python-sum-312-alpine
+  image: python:3.12-alpine
+  expect:
+    stdout_contains: golden/values/sum.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - print(sum(range(1,1001)))
+  class: quick
+  timeout: 120
+- id: languages/python-json-311-alpine
+  image: python:3.11-alpine
+  expect:
+    stdout_contains: golden/values/jsonspaced.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - import json;print(json.dumps({'s':sum(range(1,1001))},sort_keys=True))
+  class: quick
+  timeout: 120
+- id: languages/python-listcomp-313-alpine
+  image: python:3.13-alpine
+  expect:
+    stdout_contains: golden/values/thousand.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - print(len([x*x for x in range(1000)]))
+  class: quick
+  timeout: 120
+- id: languages/python-fib-313-alpine
+  image: python:3.13-alpine
+  expect:
+    stdout_contains: golden/values/factorial.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - 'a,b=0,1
+
+        for _ in range(50):a,b=b,a+b
+
+        print(a)'
+  class: quick
+  timeout: 120
+- id: languages/python-sort-312-alpine
+  image: python:3.12-alpine
+  expect:
+    stdout_contains: golden/values/sequence.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - print(','.join(map(str,sorted([3,1,2]))))
+  class: quick
+  timeout: 120
+- id: languages/python-bigint-repl-312-alpine
+  image: python:3.12-alpine
+  expect:
+    stdout_contains: golden/values/bigint.txt
+  actions:
+  - shell:
+      script: echo 'print(2**100)' | python3
+  class: quick
+  timeout: 120
+- id: languages/python-dictsum-312-slim
+  image: python:3.12-slim
+  expect:
+    stdout_contains: golden/values/dictionary.txt
+  actions:
+  - argv:
+      argv:
+      - python
+      - -c
+      - 'd={i:i for i in range(1,1001)}
+
+        print(''DICT'', sum(d.values()))'
+  class: quick
+  timeout: 120
+- id: languages/node-sum-18-slim
+  image: node:18-slim
+  expect:
+    stdout_contains: golden/values/sum.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - console.log([...Array(1000)].reduce((a,_,i)=>a+i+1,0))
+  class: quick
+  timeout: 120
+- id: languages/node-bigint-20-slim
+  image: node:20-slim
+  expect:
+    stdout_contains: golden/values/factorial.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - let a=0n,b=1n;for(let i=0;i<50;i++){[a,b]=[b,a+b]}console.log(a.toString())
+  class: quick
+  timeout: 120
+- id: languages/node-json-22-slim
+  image: node:22-slim
+  expect:
+    stdout_contains: golden/values/jsoncompact.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - console.log(JSON.stringify({s:[...Array(1000)].reduce((a,_,i)=>a+i+1,0)}))
+  class: quick
+  timeout: 120
+- id: languages/node-add-18-alpine
+  image: node:18-alpine
+  expect:
+    stdout_contains: golden/values/six.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - console.log(1+2+3)
+  class: quick
+  timeout: 120
+- id: languages/node-settimeout-22-alpine
+  image: node:22-alpine
+  expect:
+    stdout_contains: golden/values/tick.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - setTimeout(()=>console.log('TICK'),50)
+  class: quick
+  timeout: 120
+- id: languages/node-sync-22-alpine
+  image: node:22-alpine
+  expect:
+    stdout_contains: golden/values/two.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - console.log(1+1)
+  class: quick
+  timeout: 120
+- id: languages/node-sort-20-alpine
+  image: node:20-alpine
+  expect:
+    stdout_contains: golden/values/sequence.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - console.log([3,1,2].sort().join(','))
+  class: quick
+  timeout: 120
+- id: languages/node-version-repl-22-alpine
+  image: node:22-alpine
+  expect:
+    stdout_contains: golden/values/major.txt
+  actions:
+  - shell:
+      script: echo "console.log('NODEMAJOR', process.version[0])" | node
+  class: quick
+  timeout: 120
+- id: languages/node-primes-20-alpine
+  image: node:20-alpine
+  expect:
+    stdout_contains: golden/values/primelabel.txt
+  actions:
+  - shell:
+      script: node -e "let p=0;for(let n=2;n<10000;n++){let q=1;for(let d=2;d*d<=n;d++)if(n%d===0){q=0;break}p+=q}console.log('PRIMES',p)"
+  class: quick
+  timeout: 120
+- id: languages/node-fib-22-alpine
+  image: node:22-alpine
+  expect:
+    stdout_contains: golden/values/factorial.txt
+  actions:
+  - argv:
+      argv:
+      - node
+      - -e
+      - let a=0n,b=1n;for(let i=0;i<50;i++){[a,b]=[b,a+b]}console.log(a.toString())
+  class: quick
+  timeout: 120
+- id: languages/node-repl-eval-22-alpine
+  image: node:22-alpine
+  expect:
+    stdout_contains: golden/values/repl.txt
+  actions:
+  - shell:
+      script: 'printf ''console.log("R"+(6*7))
+
+        .exit
+
+        '' | node -i 2>&1 | grep -q ''R42'' && echo REPL_OK'
+  class: quick
+  timeout: 120
+- id: languages/node-repl-perf-20-alpine
+  image: node:20-alpine
+  timeout: 25
+  expect:
+    stdout_contains: golden/values/fastrepl.txt
+  actions:
+  - shell:
+      script: 'printf ''1+1
+
+        .exit
+
+        '' | node -i >/dev/null 2>&1 && echo REPL_FAST'
+  class: quick

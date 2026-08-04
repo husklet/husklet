@@ -8,18 +8,10 @@ type Error = Box<dyn std::error::Error>;
 pub(crate) fn group() -> Group {
     let mut scenarios = Vec::new();
     for manifest in [
-        include_str!("../fixtures/languages-python.yaml"),
-        include_str!("../fixtures/languages-node.yaml"),
-        include_str!("../fixtures/languages-ruby.yaml"),
-        include_str!("../fixtures/languages-php.yaml"),
-        include_str!("../fixtures/languages-perl.yaml"),
-        include_str!("../fixtures/languages-elixir.yaml"),
         include_str!("../fixtures/languages-compiled.yaml"),
     ] {
-        scenarios.extend(
-            crate::manifest::load(manifest)
-                .expect("the checked-in language manifest must satisfy the schema"),
-        );
+        scenarios
+            .extend(crate::manifest::load(manifest).expect("the checked-in language manifest must satisfy the schema"));
     }
     Group::new("languages", scenarios)
 }
@@ -40,7 +32,7 @@ pub(crate) mod tests {
             .iter()
             .map(|case| case.id)
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(group.scenarios.len(), 51);
-        assert_eq!(ids.len(), 51);
+        assert_eq!(group.scenarios.len(), 12);
+        assert_eq!(ids.len(), 12);
     }
 }

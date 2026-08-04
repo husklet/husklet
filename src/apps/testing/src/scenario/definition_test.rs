@@ -90,15 +90,16 @@ fn invalid_cross_target_and_path_contracts_are_rejected() {
 #[test]
 fn dotnet_folder_preserves_the_orphan_contract_ids() {
     let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    while !root.join("tests/scenarios/languages-dotnet/test.yaml").is_file() {
+    while !root.join("tests/scenarios/languages/test.yaml").is_file() {
         root = root.parent().expect("workspace root contains dotnet scenario");
     }
-    let directory = root.join("tests/scenarios/languages-dotnet");
+    let directory = root.join("tests/scenarios/languages");
     let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
     let ids = scenario
         .cases
         .iter()
         .map(|case| case.id.as_str())
+        .filter(|id| id.starts_with("languages/dotnet-"))
         .collect::<BTreeSet<_>>();
     assert_eq!(
         ids,
