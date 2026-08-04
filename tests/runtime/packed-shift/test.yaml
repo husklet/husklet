@@ -1,0 +1,18 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+oracle:
+  provider: qemu
+  commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 }
+cases:
+  - id: runtime/packed-shift/scalar-count
+    status: active
+    compat: { class: compatibility }
+    build: { source: scalar_count.c, output: scalar_count, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/packed-shift/scalar_count }
+    run: []
+    timeout: 30
+    expect: { exit: 0, stdout: golden/scalar_count.out }
