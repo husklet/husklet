@@ -139,6 +139,55 @@ hl-runtime = { path = "../../runtime/hl-runtime" }
 }
 
 #[test]
+fn permits_reviewed_dev_edge() {
+    let root = fixture("development-contracts");
+    package(&root, "containers", "hl-client", "");
+    package(
+        &root,
+        "apps",
+        "dockerd",
+        "[dev-dependencies]\nhl-client = { path = \"../../containers/hl-client\" }\n",
+    );
+
+    assert!(findings(&root).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_unreviewed_dev_edge() {
+    let root = fixture("unreviewed-development-contracts");
+    package(&root, "workspaces", "hl-ws", "");
+    package(
+        &root,
+        "apps",
+        "dockerd",
+        "[dev-dependencies]\nhl-ws = { path = \"../../workspaces/hl-ws\" }\n",
+    );
+
+    let values = findings(&root);
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].subject, "dockerd -> hl-ws");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejects_dev_edge_in_production() {
+    let root = fixture("production-development-contract");
+    package(&root, "containers", "hl-client", "");
+    package(
+        &root,
+        "apps",
+        "dockerd",
+        "[dependencies]\nhl-client = { path = \"../../containers/hl-client\" }\n",
+    );
+
+    let values = findings(&root);
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].subject, "dockerd -> hl-client");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recognizes_integrated_layers() {
     let root = fixture("integrated-layers");
     package(&root, "packages", "hl-log", "");

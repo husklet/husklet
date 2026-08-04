@@ -198,8 +198,10 @@ impl Graph {
                     (_, Layer::Application) => Some("the application composition root must never be a dependency"),
                     _ => None,
                 };
-                let policy_violation = (!allowed_edge(&package.name, &target.name))
-                    .then_some("the local dependency is not present in the checked engine package graph");
+                let reviewed = allowed_edge(&package.name, &target.name)
+                    || (dependency.kind == Kind::Development && allowed_development_edge(&package.name, &target.name));
+                let policy_violation =
+                    (!reviewed).then_some("the local dependency is not present in the checked engine package graph");
                 let Some(message) = layer_violation.or(policy_violation) else {
                     continue;
                 };
@@ -458,6 +460,14 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-engine", "hl-provider")
             | ("hl-engine", "hl-ipc")
     )
+}
+
+/// Test-only edges reviewed independently from the production package graph.
+///
+/// Cargo excludes these edges from production builds and permits development
+/// dependency cycles, but they still require an explicit ownership review.
+fn allowed_development_edge(source: &str, target: &str) -> bool {
+    matches!((source, target), ("dockerd", "hl-client"))
 }
 
 fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDependencies) -> Vec<Dependency> {
