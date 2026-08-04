@@ -6,6 +6,12 @@ mod scenario;
 
 #[tokio::main]
 async fn main() {
+    hl_log::Config {
+        logging: hl_log::tag::EXEC.into(),
+        level: hl_log::Level::Error,
+        profiling: hl_log::Tags::NONE,
+    }
+    .apply();
     if let Err(error) = run().await {
         eprintln!("testing: {error}");
         std::process::exit(1);

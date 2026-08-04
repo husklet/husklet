@@ -2670,6 +2670,7 @@ version = "0.1.0"
 dependencies = [
  "hl-container",
  "hl-images",
+ "hl-log",
  "serde",
  "serde_yaml",
  "tempfile",
