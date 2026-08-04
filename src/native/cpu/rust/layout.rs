@@ -53,6 +53,8 @@ pub struct Aarch64Cpu {
     pub loop_iterations: u64,
     pub loop_budget_iterations: u64,
     pub loop_executable: u64,
+    pub active_view_incarnation: u64,
+    pub active_view_authority: u64,
 }
 
 #[repr(C)]
@@ -156,7 +158,9 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, loop_iterations) == 2048);
     assert!(std::mem::offset_of!(Aarch64Cpu, loop_budget_iterations) == 2056);
     assert!(std::mem::offset_of!(Aarch64Cpu, loop_executable) == 2064);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2072);
+    assert!(std::mem::offset_of!(Aarch64Cpu, active_view_incarnation) == 2072);
+    assert!(std::mem::offset_of!(Aarch64Cpu, active_view_authority) == 2080);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2088);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 

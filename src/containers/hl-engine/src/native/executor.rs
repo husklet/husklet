@@ -1149,6 +1149,8 @@ impl NativeAarch64 {
             loop_iterations: 0,
             loop_budget_iterations: 0,
             loop_executable: 0,
+            active_view_incarnation: 0,
+            active_view_authority: 0,
         })
     }
 
@@ -2819,6 +2821,8 @@ mod test {
         assert_eq!(native.0.loop_budget_iterations, 0);
         assert_eq!(native.0.loop_executable, 0);
         assert_eq!(native.0.active_authority, 0);
+        assert_eq!(native.0.active_view_incarnation, 0);
+        assert_eq!(native.0.active_view_authority, 0);
         cpu = Aarch64CpuState::default();
         native.restore(&mut cpu);
         assert_eq!(cpu, expected);

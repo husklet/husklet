@@ -57,6 +57,8 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t loop_iterations;
     uint64_t loop_budget_iterations;
     uint64_t loop_executable;
+    uint64_t active_view_incarnation;
+    uint64_t active_view_authority;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -161,7 +163,9 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_instruction_count, 2040);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_iterations, 2048);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_budget_iterations, 2056);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, loop_executable, 2064);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2072, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, active_view_incarnation, 2072);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, active_view_authority, 2080);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2088, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 

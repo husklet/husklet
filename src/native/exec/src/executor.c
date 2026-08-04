@@ -726,6 +726,21 @@ static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cp
     __atomic_store_n(&cpu->read_token, mapping_incarnation, __ATOMIC_RELEASE);
 }
 
+static void active_view_clear(hl_native_aarch64_cpu *cpu) {
+    cpu->active_view_incarnation = 0;
+    cpu->active_view_authority = 0;
+}
+
+static void active_view_publish(hl_native_aarch64_cpu *cpu, uint64_t mapping_incarnation,
+                                uint64_t authority) {
+    active_view_clear(cpu);
+    if (mapping_incarnation == 0 || authority == 0 || cpu->memory_last <= cpu->memory_first ||
+        cpu->memory_permissions == 0 || (cpu->memory_permissions & ~UINT64_C(7)) != 0)
+        return;
+    cpu->active_view_incarnation = mapping_incarnation;
+    cpu->active_view_authority = authority;
+}
+
 static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu *cpu_handle,
                                     hl_native_aarch64_cpu *cpu,
                                     const hl_native_run_request *request, hl_native_exit *output) {
@@ -757,6 +772,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     cpu->certificate_valid = 0;
     cpu->certificate_delta = 0;
     cpu->active_authority = 0;
+    active_view_clear(cpu);
     cpu->loop_valid = 0;
     cpu->loop_view_count = 0;
     memset(cpu->loop_views, 0, sizeof(cpu->loop_views));
@@ -909,14 +925,17 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
          * never from the translation key baked into generated code.  The
          * execution gate keeps it current until the fully spilled return. */
         cpu->active_authority = memory_mode != 0 ? authority_identity : request->mapping_epoch;
+        active_view_publish(cpu, request->mapping_epoch, expected_authority);
         if (fault_publish != NULL && fault_publish(fault_context, &fault_scope) != HL_NATIVE_OK) {
             cpu->active_authority = 0;
+            active_view_clear(cpu);
             status = hl_native_execution_leave(&execution);
             return status == HL_NATIVE_OK ? HL_NATIVE_STATE : status;
         }
         hl_native_aarch64_enter(cpu, code.entry);
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
+        active_view_clear(cpu);
         int executed_identity = 0;
         if ((cpu->indirect_site & 3u) == 1u) {
             if (!hl_native_cache_execution(executor->cache, cpu->indirect_site, &executed_code))

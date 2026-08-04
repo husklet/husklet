@@ -50,6 +50,8 @@ aarch64	loop_instruction_count	2040	1	u64
 aarch64	loop_iterations	2048	1	u64
 aarch64	loop_budget_iterations	2056	1	u64
 aarch64	loop_executable	2064	1	u64
+aarch64	active_view_incarnation	2072	1	u64
+aarch64	active_view_authority	2080	1	u64
 x86_64	registers	0	16	u64
 x86_64	program	128	1	u64
 x86_64	flags	136	1	u64

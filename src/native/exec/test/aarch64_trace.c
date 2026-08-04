@@ -19,6 +19,36 @@ typedef struct executable_memory {
     uint64_t capacity;
 } executable_memory;
 
+typedef struct active_view_observer {
+    hl_native_aarch64_cpu *cpu;
+    uint64_t incarnation;
+    uint64_t authority;
+    uint64_t publications;
+} active_view_observer;
+
+static uint32_t observe_active_view(void *opaque, const hl_native_fault_scope *scope) {
+    active_view_observer *observer = opaque;
+    (void)scope;
+    observer->incarnation = observer->cpu->active_view_incarnation;
+    observer->authority = observer->cpu->active_view_authority;
+    observer->publications++;
+    return HL_NATIVE_OK;
+}
+
+static void release_active_view(void *opaque, const hl_native_fault_scope *scope) {
+    (void)opaque;
+    (void)scope;
+}
+
+static uint32_t reject_active_view(void *opaque, const hl_native_fault_scope *scope) {
+    active_view_observer *observer = opaque;
+    (void)scope;
+    observer->incarnation = observer->cpu->active_view_incarnation;
+    observer->authority = observer->cpu->active_view_authority;
+    observer->publications++;
+    return HL_NATIVE_STATE;
+}
+
 static hl_native_status executable_reserve(void *opaque, uint64_t capacity, uint64_t alignment,
                                            uint32_t dual, hl_native_mapping *output) {
     executable_memory *memory = opaque;
@@ -865,6 +895,10 @@ int main(void) {
     hl_native_run_request run_request = {.abi = HL_NATIVE_ABI, .size = sizeof(run_request),
                                          .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 7,
                                          .budget = 16, .source = &run_source, .projection = &run_projection};
+    active_view_observer view_observer = {.cpu = &run_state};
+    run_request.fault_context = &view_observer;
+    run_request.fault_publish = observe_active_view;
+    run_request.fault_unpublish = release_active_view;
     hl_native_exit run_output = {.abi = HL_NATIVE_ABI, .size = sizeof(run_output)};
     hl_native_diagnostics cold = {.abi = HL_NATIVE_ABI, .size = sizeof(cold)};
     hl_native_diagnostics warm = cold;
@@ -899,6 +933,9 @@ int main(void) {
         run_state.program = 0x6000;
         CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
         CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.registers[0] == literal_value);
+        CHECK(view_observer.incarnation == 7 &&
+              view_observer.authority == run_request.authority_identity);
+        CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
         hl_native_diagnostics literal_cold = {.abi = HL_NATIVE_ABI, .size = sizeof(literal_cold)};
         hl_native_diagnostics literal_warm = {.abi = HL_NATIVE_ABI, .size = sizeof(literal_warm)};
         CHECK(hl_native_diagnose(run_executor, &literal_cold) == HL_NATIVE_OK);
@@ -914,8 +951,13 @@ int main(void) {
         CHECK(run_request.authority_identity == literal_identity);
         memset(&run_state, 0, sizeof(run_state));
         run_state.program = 0x6000;
+        run_state.active_view_incarnation = UINT64_MAX;
+        run_state.active_view_authority = UINT64_MAX;
         CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
         CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.registers[0] == literal_value);
+        CHECK(view_observer.incarnation == 7 &&
+              view_observer.authority == run_request.authority_identity);
+        CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
         CHECK(hl_native_diagnose(run_executor, &literal_warm) == HL_NATIVE_OK);
         CHECK(literal_warm.publications == literal_cold.publications);
         CHECK(literal_warm.cache_hits > literal_cold.cache_hits);
@@ -989,11 +1031,16 @@ int main(void) {
         run_request = (hl_native_run_request){.abi = HL_NATIVE_ABI, .size = sizeof(run_request),
             .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 7, .budget = 16,
             .source = &run_source, .projection = &run_projection};
+        run_request.fault_context = &view_observer;
+        run_request.fault_publish = observe_active_view;
+        run_request.fault_unpublish = release_active_view;
     }
     run_state.program = 0x4000;
     run_state.flags = UINT64_C(0x40000000);
     run_state.certificate_valid = UINT64_MAX;
     run_state.certificate_delta = UINT64_MAX;
+    run_state.active_view_incarnation = UINT64_MAX;
+    run_state.active_view_authority = UINT64_MAX;
     run_state.loop_valid = UINT64_MAX;
     run_state.loop_view_count = UINT64_MAX;
     memset(run_state.loop_views, 0xff, sizeof(run_state.loop_views));
@@ -1005,8 +1052,16 @@ int main(void) {
     run_state.loop_iterations = UINT64_MAX;
     run_state.loop_budget_iterations = UINT64_MAX;
     run_state.loop_executable = UINT64_MAX;
+    run_request.fault_publish = reject_active_view;
+    CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_STATE);
+    CHECK(view_observer.incarnation == 7 && view_observer.authority == 7);
+    CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
+    run_request.fault_publish = observe_active_view;
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_state.certificate_valid == 0 && run_state.certificate_delta == 0);
+    CHECK(view_observer.publications != 0 && view_observer.incarnation == 7 &&
+          view_observer.authority == 7);
+    CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
     CHECK(run_state.loop_valid == 0 && run_state.loop_view_count == 0 &&
           run_state.loop_views[0][0] == 0 && run_state.loop_views[1][5] == 0 &&
           run_state.loop_mapping_incarnation == 0 && run_state.loop_authority == 0 &&
@@ -1252,6 +1307,7 @@ int main(void) {
     run_state.registers[12] = views.guests[2];
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 3);
+    CHECK(run_state.active_view_incarnation == 0 && run_state.active_view_authority == 0);
     for (size_t index = 0; index < 3; index++) {
         CHECK(run_state.registers[index] == views.values[index][0]);
         CHECK(run_state.registers[index + 3] == views.values[index][0]);

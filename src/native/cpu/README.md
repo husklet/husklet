@@ -16,8 +16,8 @@ may be appended only after comparing every emitter, trampoline, signal capture,
 checkpoint codec, and fork path in the retained engine. Reordering an existing
 field is an ABI break.
 
-`certificate_valid`, `certificate_delta`, `active_authority`, and the `loop_*` fields are AArch64
-native-execution scratch. The authority value is published from the independently
+`certificate_valid`, `certificate_delta`, `active_authority`, `active_view_*`, and the `loop_*`
+fields are AArch64 native-execution scratch. The authority values are published from the independently
 authenticated run request only while the execution gate is held. They are reset
 at every native run and whenever architectural state is captured into the native
 layout. They are deliberately absent from execution checkpoints: fork and restore
@@ -27,6 +27,9 @@ ordinary trace admission and emission must leave them zero.
 Each `loop_views` slot retains the exact authenticated envelope followed by the
 owning projection view bounds, delta, and permissions; owner bounds must not be
 reconstructed from the narrower envelope when publishing dirty records.
+The active-view identity binds the current `memory_*` owner to the validated mapping
+incarnation and run authority. It does not certify an access envelope: generated
+guards must still check bounds and permissions before consuming the owner.
 
 `x86_64.vector_dirty` is diagnostics-only native scratch. Diagnostics-enabled
 translated blocks set it before their first vector-register write, chains carry
