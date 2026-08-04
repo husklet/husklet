@@ -69,8 +69,15 @@ pub(crate) fn texture_copy_layout(
     if width > lw || height > lh {
         return Err(GpuError::OutOfBounds);
     }
-    let bpt = Texture::texel_bytes(&t.desc)
-        .ok_or(GpuError::Unsupported("software: non-color texture format"))?;
+    // Depth32Float has a four-byte transfer representation. Do not use `Texture::texel_bytes` here:
+    // that also describes the oracle's private eight-byte Depth24PlusStencil8 raster storage, which is
+    // not a packed external transfer representation.
+    let bpt = match t.desc.format {
+        TextureFormat::Depth32Float => 4,
+        format => format
+            .bytes_per_texel()
+            .ok_or(GpuError::Unsupported("software: non-color texture format"))?,
+    };
     let row_bytes = bpt
         .checked_mul(width as usize)
         .ok_or(GpuError::OutOfBounds)?;
@@ -599,8 +606,12 @@ pub(crate) fn region_layout(
     bytes_per_row: u32,
     rows_per_image: u32,
 ) -> Result<(usize, usize, usize, usize)> {
-    let bpt = Texture::texel_bytes(&t.desc)
-        .ok_or(GpuError::Unsupported("software: non-color texture format"))?;
+    let bpt = match t.desc.format {
+        TextureFormat::Depth32Float => 4,
+        format => format
+            .bytes_per_texel()
+            .ok_or(GpuError::Unsupported("software: non-color texture format"))?,
+    };
     // The named region must lie inside the LEVEL's own extent, checked without wrapping. Bounding
     // against the base extent would let a region on a small level overhang its plane and write into the
     // next one — levels are contiguous in this allocation, so that would corrupt a neighbour rather than

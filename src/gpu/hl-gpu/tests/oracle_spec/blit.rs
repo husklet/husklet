@@ -126,6 +126,31 @@ fn depth_blit_nearest_scales_values_and_preserves_outside_texels() {
 }
 
 #[test]
+fn packed_depth_stencil_storage_is_not_an_external_copy_layout() {
+    let texture = tex(1, 1, TextureFormat::Depth24PlusStencil8, texture_usage::COPY_DST);
+    let submit = |encoder| Cmd::Submit(CommandBuffer { encoder, signal: None });
+    let whole = try_run(&[
+        Cmd::CreateBuffer(1, buf(8, buffer_usage::COPY_SRC)),
+        Cmd::CreateTexture(1, texture.clone()),
+        submit(vec![Enc::CopyBufferToTexture {
+            src: 1, src_offset: 0, bytes_per_row: 8, dst: 1, mip: 0, width: 1, height: 1,
+        }]),
+    ]);
+    assert!(matches!(whole, Err(hl_gpu::GpuError::Unsupported(_))));
+
+    let region = try_run(&[
+        Cmd::CreateBuffer(1, buf(8, buffer_usage::COPY_SRC)),
+        Cmd::CreateTexture(1, texture),
+        submit(vec![Enc::CopyBufferToTextureRegion {
+            src: 1, src_offset: 0, bytes_per_row: 8, rows_per_image: 1, dst: 1,
+            dst_sub: TextureSubresource::base(), dst_origin: Origin3d::default(),
+            extent: Extent3d { width: 1, height: 1, depth: 1 },
+        }]),
+    ]);
+    assert!(matches!(region, Err(hl_gpu::GpuError::Unsupported(_))));
+}
+
+#[test]
 fn blit_uses_the_named_source_and_destination_mips() {
     let mut source_texture = tex(
         8,

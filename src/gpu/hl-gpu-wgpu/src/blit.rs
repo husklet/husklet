@@ -938,6 +938,12 @@ impl WgpuExecutor {
             )
         };
         let (src_class, dst_class) = (src_fmt.numeric_class(), dst_fmt.numeric_class());
+        let depth = hl_gpu::protocol::model::enums::TextureFormat::Depth32Float;
+        if (src_fmt == depth) != (dst_fmt == depth) {
+            return Err(GpuError::Invalid(
+                "wgpu: depth and color blit formats cannot be mixed",
+            ));
+        }
         if src_class != dst_class {
             return Err(GpuError::Invalid(
                 "wgpu: blit source and destination numeric classes differ",

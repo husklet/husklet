@@ -339,6 +339,11 @@ pub fn cmd_blit_image(
             "vkCmdBlitImage: source and destination formats are not of the same numeric class",
         ));
     }
+    if (src_fmt == TextureFormat::Depth32Float) != (dst_fmt == TextureFormat::Depth32Float) {
+        return Err(GpuError::Invalid(
+            "vkCmdBlitImage: depth and color formats cannot be mixed",
+        ));
+    }
     // Compressed sources have no per-texel byte layout, but the host sampler decodes them natively. They
     // can therefore feed the draw-based blit. Destinations still require a writable color attachment.
     // A compressed source is sampled natively by the host and therefore is a legal blit source. A

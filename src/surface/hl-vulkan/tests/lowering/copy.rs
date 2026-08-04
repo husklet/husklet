@@ -1324,7 +1324,6 @@ fn a_format_with_no_packed_texel_is_refused_for_the_right_reason() {
         ("BC1", vk_format::BC1_RGBA_UNORM_BLOCK),
         ("BC3", vk_format::BC3_UNORM_BLOCK),
         ("BC7", vk_format::BC7_UNORM_BLOCK),
-        ("depth", vk_format::D32_SFLOAT),
     ];
     for (what, format) in unpackable {
         for linear in [false, true] {
@@ -1999,4 +1998,25 @@ fn a_depth_only_blit_records_depth_aspect_and_nearest_scaling() {
         filter: Filter::Nearest,
         mirror: Mirror::NONE,
     }]);
+}
+
+#[test]
+fn a_depth_and_color_blit_is_refused_before_executor_validation() {
+    // Depth-to-depth is served, but mixing depth and color must not reach an incompatible color-render
+    // pipeline with a depth view or target.
+    for as_source in [true, false] {
+        let mut d = dev();
+        let mut s = RecordingSink::with_full_caps();
+        let usage = vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST;
+        let depth = create::create_image(&mut d, &mut s, 4, 4, vk_format::D32_SFLOAT, usage, 1).unwrap();
+        let color = create::create_image(&mut d, &mut s, 4, 4, vk_format::R8G8B8A8_UNORM, usage, 1).unwrap();
+        let (src, dst) = if as_source { (depth, color) } else { (color, depth) };
+        let cb = recording_cb(&mut d);
+        let err = record::cmd_blit_image(
+            &mut d, cb, src, dst, SubresourceLayers::base(), SubresourceLayers::base(),
+            Origin3d::default(), Extent3d { width: 4, height: 4, depth: 1 },
+            Origin3d::default(), Extent3d { width: 4, height: 4, depth: 1 }, false, Mirror::NONE,
+        ).expect_err("depth and color blits must not be mixed");
+        assert!(matches!(err, GpuError::Invalid(m) if m.contains("depth and color")));
+    }
 }
