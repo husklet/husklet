@@ -1,4 +1,4 @@
-use super::{sample_with_metrics, CpuTime, ProcessColumn, ProcessMetrics, ProcessRow, TopOptions};
+use super::{CpuTime, Options, ProcessColumn, ProcessMetrics, ProcessRow, StatsMode, TopOptions, sample_with_metrics};
 use hl_container::{Container, ContainerId, ContainerSpec, ContainerState, Process, Restart};
 use std::{collections::BTreeMap, str::FromStr};
 
@@ -19,6 +19,41 @@ fn running() -> Container {
 }
 
 #[test]
+fn stats_mode_keeps_the_default_stream_open_for_stopped_containers() {
+    assert_eq!(
+        Options::default().mode(false),
+        StatsMode::Stream {
+            stop_when_inactive: false
+        }
+    );
+    assert_eq!(
+        Options::default().mode(true),
+        StatsMode::Stream {
+            stop_when_inactive: true
+        }
+    );
+    assert_eq!(
+        Options {
+            stream: Some("false".into())
+        }
+        .mode(false),
+        StatsMode::Once
+    );
+}
+
+#[test]
+fn stopped_container_sample_does_not_fabricate_live_accounting() {
+    let mut container = running();
+    container.state = ContainerState::Created;
+
+    let sample = ProcessMetrics::empty_sample(&container);
+    assert_eq!(sample.read, "0001-01-01T00:00:00Z");
+    assert_eq!(sample.pids_stats.current, 0);
+    assert_eq!(sample.cpu_stats.online_cpus, 0);
+    assert_eq!(sample.memory_stats.limit, 0);
+}
+
+#[test]
 fn top_options_select_columns_and_reject_unknown_values() {
     let options = TopOptions {
         ps_args: Some("-eo pid,ppid,user,stat,args".into()),
@@ -26,10 +61,7 @@ fn top_options_select_columns_and_reject_unknown_values() {
     };
     let columns = options.columns().unwrap();
     assert_eq!(
-        columns
-            .iter()
-            .map(|column| column.title())
-            .collect::<Vec<_>>(),
+        columns.iter().map(|column| column.title()).collect::<Vec<_>>(),
         ["PID", "PPID", "USER", "STAT", "CMD"]
     );
     let invalid = TopOptions {

@@ -241,6 +241,22 @@ impl Options {
     fn streams(&self) -> bool {
         !matches!(self.stream.as_deref(), Some("0" | "false" | "False" | "no" | "off"))
     }
+
+    fn mode(&self, active: bool) -> StatsMode {
+        if self.streams() {
+            StatsMode::Stream {
+                stop_when_inactive: active,
+            }
+        } else {
+            StatsMode::Once
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatsMode {
+    Once,
+    Stream { stop_when_inactive: bool },
 }
 
 #[hl_design::adapter]
@@ -250,9 +266,18 @@ pub(super) async fn stats(
     Query(options): Query<Options>,
 ) -> ApiResult<Response> {
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
-    if !options.streams() || !container.state.is_active() {
-        return Ok(Json(ProcessMetrics::sample(&container, state.sampler.as_ref(), 0)).into_response());
-    }
+    let initially_active = container.state.is_active();
+    let stop_when_inactive = match options.mode(initially_active) {
+        StatsMode::Once => {
+            let sample = if initially_active {
+                ProcessMetrics::sample(&container, state.sampler.as_ref(), 0)
+            } else {
+                ProcessMetrics::empty_sample(&container)
+            };
+            return Ok(Json(sample).into_response());
+        }
+        StatsMode::Stream { stop_when_inactive } => stop_when_inactive,
+    };
     let containers = state.containers.clone();
     let reference = container.id.to_string();
     let sampler = state.sampler.clone();
@@ -265,20 +290,22 @@ pub(super) async fn stats(
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
             let container = containers.inspect(&reference).await.ok()?;
-            if !container.state.is_active() {
+            let active = container.state.is_active();
+            if stop_when_inactive && !active {
                 return None;
             }
-            let value = ProcessMetrics::sample(&container, sampler.as_ref(), previous);
+            let value = if active {
+                ProcessMetrics::sample(&container, sampler.as_ref(), previous)
+            } else {
+                ProcessMetrics::empty_sample(&container)
+            };
             let next = (index + 1, value.cpu_stats.cpu_usage.total_usage);
             let mut bytes = serde_json::to_vec(&value).ok()?;
             bytes.push(b'\n');
             Some((Ok::<_, std::io::Error>(bytes), next))
         }
     });
-    Ok(Response::builder()
-        .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(Body::from_stream(body))
-        .expect("static stats response is valid"))
+    Ok(Response::new(Body::from_stream(body)))
 }
 
 fn sample_with_metrics(container: &Container, pid: Option<u64>, metrics: ProcessMetrics, previous: u64) -> Stats {
@@ -340,6 +367,15 @@ struct ProcessMetrics {
 }
 
 impl ProcessMetrics {
+    fn empty_sample(container: &Container) -> Stats {
+        let mut sample = sample_with_metrics(container, None, Self::default(), 0);
+        sample.read = "0001-01-01T00:00:00Z".into();
+        sample.cpu_stats.online_cpus = 0;
+        sample.precpu_stats.online_cpus = 0;
+        sample.memory_stats.limit = 0;
+        sample
+    }
+
     fn sample(container: &Container, sampler: &dyn crate::ProcessSampler, previous: u64) -> Stats {
         let pid = match &container.state {
             ContainerState::Running { process_id, .. } | ContainerState::Paused { process_id, .. } => Some(*process_id),
