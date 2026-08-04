@@ -25,9 +25,14 @@ async fn wait_for_path(socket: &Path) -> Result<(), Box<dyn std::error::Error>> 
 }
 
 async fn request(socket: &Path, query: &str) -> Result<(String, Value), Box<dyn std::error::Error>> {
+    request_at(socket, "/v1.43", query).await
+}
+
+async fn request_at(socket: &Path, version: &str, query: &str) -> Result<(String, Value), Box<dyn std::error::Error>> {
     timeout(TIMEOUT, async {
         let mut stream = UnixStream::connect(socket).await?;
-        let request = format!("GET /v1.43/system/df{query} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        let request =
+            format!("GET {version}/system/df{query} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
         stream.write_all(request.as_bytes()).await?;
         let mut response = Vec::new();
         stream.read_to_end(&mut response).await?;
@@ -128,6 +133,26 @@ async fn type_projection() -> Result<(), Box<dyn std::error::Error>> {
             if body != json!({"message": message}) {
                 return Err(format!("{query:?} returned unexpected error {body}").into());
             }
+        }
+
+        let all = projection(json!([]), json!([]), json!([]), json!([]));
+        for version in ["/v1.24", "/v1.41"] {
+            for query in ["?type=volume", "?type=", "?type=network"] {
+                let (status, body) = request_at(&socket, version, query).await?;
+                if !status.starts_with("HTTP/1.1 200") || body != all {
+                    return Err(format!("legacy {version}{query} returned {status}: {body}").into());
+                }
+            }
+        }
+
+        let (status, body) = request_at(&socket, "", "?type=volume").await?;
+        let volume = projection(Value::Null, Value::Null, json!([]), Value::Null);
+        if !status.starts_with("HTTP/1.1 200") || body != volume {
+            return Err(format!("unversioned projection returned {status}: {body}").into());
+        }
+        let (status, body) = request_at(&socket, "", "?type=network").await?;
+        if !status.starts_with("HTTP/1.1 400") || body != json!({"message":"unknown object type: network"}) {
+            return Err(format!("unversioned validation returned {status}: {body}").into());
         }
         Ok::<_, Box<dyn std::error::Error>>(())
     }

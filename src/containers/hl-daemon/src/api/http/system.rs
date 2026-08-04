@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{OriginalUri, Query, State};
 use axum::http::StatusCode;
 use hl_container::ContainerState;
 use hl_images::content::Store;
@@ -80,6 +80,15 @@ struct DiskSelection {
 }
 
 impl DiskSelection {
+    const fn all() -> Self {
+        Self {
+            containers: true,
+            images: true,
+            volumes: true,
+            build_cache: true,
+        }
+    }
+
     fn from_pairs(parameters: Vec<(String, String)>) -> ApiResult<Self> {
         let mut selection = Self::default();
         let mut specified = false;
@@ -102,14 +111,21 @@ impl DiskSelection {
             }
         }
         if !specified {
-            return Ok(Self {
-                containers: true,
-                images: true,
-                volumes: true,
-                build_cache: true,
-            });
+            return Ok(Self::all());
         }
         Ok(selection)
+    }
+
+    fn for_request(uri: &axum::http::Uri, parameters: Vec<(String, String)>) -> ApiResult<Self> {
+        let minor = uri
+            .path()
+            .strip_prefix("/v1.")
+            .and_then(|path| path.split('/').next())
+            .and_then(|minor| minor.parse::<u16>().ok());
+        if minor.is_some_and(|minor| minor < 42) {
+            return Ok(Self::all());
+        }
+        Self::from_pairs(parameters)
     }
 }
 
@@ -126,9 +142,10 @@ pub(super) struct DiskUsageResponse {
 #[hl_design::adapter]
 pub(super) async fn disk(
     State(state): State<DockerState>,
+    OriginalUri(uri): OriginalUri,
     Query(parameters): Query<Vec<(String, String)>>,
 ) -> ApiResult<Json<DiskUsageResponse>> {
-    let selection = DiskSelection::from_pairs(parameters)?;
+    let selection = DiskSelection::for_request(&uri, parameters)?;
     let (containers, images, volumes) = tokio::join!(
         selected_containers(state.clone(), selection.containers),
         selected_images(state.clone(), selection.images),
