@@ -37,6 +37,7 @@
 mod config;
 mod counters;
 mod emit;
+mod environment;
 mod event;
 mod level;
 mod macros;
@@ -51,6 +52,7 @@ mod timing;
 pub use config::Config;
 pub use counters::Counters;
 pub use emit::emit;
+pub use environment::{ConfigurationWarning, EnvironmentConfig, LOG_LEVEL, LOG_TAGS, PROFILE_TAGS};
 pub use event::{emit_event, emit_verdict, emit_verdict_with, Value};
 pub use level::Level;
 pub use sink::{DiscardSink, Events, Output, Sink, StderrSink};
