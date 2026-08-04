@@ -21,9 +21,27 @@ int main(void) {
 #if !defined(__aarch64__)
     return 0;
 #else
+    /* Body emitters are also used transactionally by trace construction,
+     * without the standalone emitter's conservative capacity precheck.  Keep
+     * a red zone around every possible cutoff: a failed guard must never
+     * patch a placeholder at the one-past-end cursor. */
+    uint8_t bounded[HL_A64_PAIR_MAX_BYTES + 32];
+    for (size_t limit = 0; limit <= HL_A64_PAIR_MAX_BYTES; ++limit) {
+        memset(bounded, 0xa5, sizeof(bounded));
+        hl_a64_assembler bounded_assembler;
+        hl_a64_guard bounded_guard = {0};
+        CHECK(hl_a64_assembler_begin(&bounded_assembler, bounded + 16, bounded + 16, limit));
+        if (hl_a64_pair_body(&bounded_assembler, 0xa9bf7bfdu, 0x3ff0,
+                             &bounded_guard, NULL))
+            hl_a64_guard_finish(&bounded_assembler, &bounded_guard);
+        for (size_t index = 0; index < 16; ++index) CHECK(bounded[index] == 0xa5);
+        for (size_t index = 16 + limit; index < sizeof(bounded); ++index)
+            CHECK(bounded[index] == 0xa5);
+    }
+
     long page = sysconf(_SC_PAGESIZE);
     CHECK(page > 0);
-    size_t capacity = (size_t)page * 2;
+    size_t capacity = (size_t)page * 4;
     uint8_t *code = mmap(NULL, capacity, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     CHECK(code != MAP_FAILED);
     hl_a64_assembler assembler;
@@ -31,6 +49,7 @@ int main(void) {
     size_t store = hl_a64_assembler_size(&assembler);
     CHECK(hl_a64_pair_emit(&assembler, 0xa9bf7bfdu, 0x4000)); /* stp x29,x30,[sp,#-16]! */
     size_t load = hl_a64_assembler_size(&assembler);
+    CHECK(load - store <= HL_A64_PAIR_MAX_BYTES);
     CHECK(hl_a64_pair_emit(&assembler, 0xa8c17bfdu, 0x4004)); /* ldp x29,x30,[sp],#16 */
     size_t stolen_store = hl_a64_assembler_size(&assembler);
     CHECK(hl_a64_pair_emit(&assembler, 0xa907c3f1u, 0x4008)); /* stp x17,x16,[sp,#120] */
@@ -63,6 +82,26 @@ int main(void) {
     CHECK(cpu.registers[29] == UINT64_C(0x2929292929292929));
     CHECK(cpu.registers[30] == UINT64_C(0x3030303030303030));
     CHECK(cpu.flags == UINT64_C(0xa0000000));
+
+    memset(stack, 0x5a, 16);
+    cpu.memory_first = (uint64_t)(uintptr_t)stack;
+    cpu.memory_last = top;
+    cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
+    cpu.stack = (uint64_t)(uintptr_t)stack + 8;
+    execute(&cpu, code + store);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.program == 0x4000);
+    CHECK(cpu.stack == (uint64_t)(uintptr_t)stack + 8);
+    CHECK(cpu.fault_address == (uint64_t)(uintptr_t)stack - 8);
+    CHECK(cpu.fault_access == HL_A64_PERMISSION_WRITE && cpu.fault_size == 16);
+    for (unsigned index = 0; index < 16; ++index) CHECK(stack[index] == 0x5a);
+
+    cpu.memory_first = 0;
+    cpu.memory_last = UINT64_MAX;
+    cpu.stack = 8;
+    execute(&cpu, code + store);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.program == 0x4000);
+    CHECK(cpu.stack == 8 && cpu.fault_address == UINT64_MAX - 7);
+    CHECK(cpu.fault_access == HL_A64_PERMISSION_WRITE && cpu.fault_size == 16);
 
     cpu.stack = (uint64_t)(uintptr_t)stack;
     cpu.registers[16] = UINT64_C(0x1616161616161616);

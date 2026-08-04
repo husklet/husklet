@@ -3,6 +3,10 @@
 
 #include "assembler.h"
 
+/* Conservative complete standalone emission bound for a guarded memory
+ * operation, including write journaling and the deferred cold miss path. */
+#define HL_A64_GUARDED_MAX_BYTES 4096u
+
 typedef struct hl_a64_guard {
     uint32_t *below;
     uint32_t *overflow;

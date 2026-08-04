@@ -21,7 +21,7 @@ int main(void) {
     return 0;
 #else
     long page = sysconf(_SC_PAGESIZE);
-    size_t capacity = (size_t)page * 2;
+    size_t capacity = (size_t)page * 4;
     _Alignas(16) uint8_t data[128] = {0};
     uint8_t *code = mmap(NULL, capacity, PROT_READ | PROT_WRITE,
                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

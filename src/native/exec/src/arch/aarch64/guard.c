@@ -29,12 +29,41 @@
 #define OFFSET_CERTIFICATE_VALID ((int)offsetof(hl_native_aarch64_cpu, certificate_valid))
 #define OFFSET_CERTIFICATE_DELTA ((int)offsetof(hl_native_aarch64_cpu, certificate_delta))
 
-static void condition(uint32_t *instruction, const uint8_t *target, unsigned value) {
-    int64_t words = (target - (const uint8_t *)instruction) / 4;
+static int patch_offset(hl_a64_assembler *assembler, uint32_t *instruction,
+                        const uint8_t *target, unsigned bits, int64_t *words) {
+    uintptr_t writable;
+    uintptr_t cursor;
+    uintptr_t site;
+    uintptr_t destination;
+    int64_t limit;
+    if (!hl_a64_assembler_ok(assembler) || instruction == NULL || target == NULL || words == NULL)
+        goto invalid;
+    writable = (uintptr_t)assembler->writable;
+    cursor = (uintptr_t)assembler->cursor;
+    site = (uintptr_t)instruction;
+    destination = (uintptr_t)target;
+    if ((site & 3u) != 0 || (destination & 3u) != 0 || site < writable ||
+        site > cursor || cursor - site < sizeof(*instruction) ||
+        destination < writable || destination > cursor)
+        goto invalid;
+    *words = destination >= site ? (int64_t)((destination - site) / 4u)
+                                 : -(int64_t)((site - destination) / 4u);
+    limit = INT64_C(1) << (bits - 1u);
+    if (*words < -limit || *words >= limit) goto invalid;
+    return 1;
+invalid:
+    if (assembler != NULL) assembler->failed = 1;
+    return 0;
+}
+
+static void condition(hl_a64_assembler *assembler, uint32_t *instruction,
+                      const uint8_t *target, unsigned value) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
     *instruction = 0x54000000u | (((uint32_t)words & 0x7ffffu) << 5) | value;
 }
 
-static void branch(uint32_t *instruction, const uint8_t *target);
+static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
 
 void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc) {
     uint32_t *empty, *contiguous, *above, *below, *overflow, *safe;
@@ -62,16 +91,18 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     safe = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *disjoint = assembler->cursor;
-    condition(above, disjoint, 8u);
-    condition(below, disjoint, 3u);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, above, disjoint, 8u);
+    condition(assembler, below, disjoint, 3u);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
     hl_a64_emit32(assembler, 0xF100423Fu); /* cmp count,#16 */
     overflow = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *safe_target = assembler->cursor;
-    condition(empty, safe_target, 0u);
-    condition(contiguous, safe_target, 0u);
-    branch(safe, safe_target);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, empty, safe_target, 0u);
+    condition(assembler, contiguous, safe_target, 0u);
+    branch(assembler, safe, safe_target);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
     hl_a64_emit32(assembler, 0x8B110210u); /* restore projected EA */
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
@@ -80,9 +111,11 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     uint32_t *after_overflow = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *overflow_target = assembler->cursor;
-    condition(overflow, overflow_target, 2u);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, overflow, overflow_target, 2u);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
-    branch(after_overflow, assembler->cursor);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, after_overflow, assembler->cursor);
 }
 
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
@@ -117,8 +150,9 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     after_merge = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *disjoint = assembler->cursor;
-    condition(above, disjoint, 8u);
-    condition(below, disjoint, 3u);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, above, disjoint, 8u);
+    condition(assembler, below, disjoint, 3u);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
     hl_a64_addi(assembler, 9, CPU, OFFSET_DIRTY_RECORDS);
     hl_a64_addlsl4(assembler, 9, 9, 17);
@@ -133,19 +167,23 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_addi(assembler, 17, 17, 1);
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
     uint8_t *set = assembler->cursor;
-    condition(empty, set, 0u);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, empty, set, 0u);
     hl_a64_str(assembler, 16, CPU, OFFSET_DIRTY_FIRST);
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
     hl_a64_str(assembler, 18, CPU, OFFSET_DIRTY_LAST);
-    branch(after_merge, assembler->cursor);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, after_merge, assembler->cursor);
     after_range = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *contiguous_target = assembler->cursor;
-    condition(contiguous, contiguous_target, 0u);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, contiguous, contiguous_target, 0u);
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
     hl_a64_str(assembler, 18, CPU, OFFSET_DIRTY_LAST);
     uint8_t *range_done = assembler->cursor;
-    branch(after_range, range_done);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, after_range, range_done);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FIRST);
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_VIEW_FIRST);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_LAST);
@@ -161,19 +199,24 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
 }
 
-static void test(uint32_t *instruction, const uint8_t *target, unsigned bit) {
-    int64_t words = (target - (const uint8_t *)instruction) / 4;
+static void test(hl_a64_assembler *assembler, uint32_t *instruction,
+                 const uint8_t *target, unsigned bit) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 14u, &words)) return;
     *instruction = 0x36000000u | ((bit & 0x20u) << 26) | ((bit & 31u) << 19) |
                    (((uint32_t)words & 0x3fffu) << 5) | 17u;
 }
 
-static void branch(uint32_t *instruction, const uint8_t *target) {
-    int64_t words = (target - (const uint8_t *)instruction) / 4;
+static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 26u, &words)) return;
     *instruction = 0x14000000u | ((uint32_t)words & 0x03ffffffu);
 }
 
-static void cbnz(uint32_t *instruction, const uint8_t *target, unsigned reg) {
-    int64_t words = (target - (const uint8_t *)instruction) / 4;
+static void cbnz(hl_a64_assembler *assembler, uint32_t *instruction,
+                 const uint8_t *target, unsigned reg) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 19u, &words)) return;
     *instruction = UINT32_C(0xb5000000) | (((uint32_t)words & UINT32_C(0x7ffff)) << 5) | reg;
 }
 
@@ -229,16 +272,16 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
 
     uint8_t *active_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
-    condition(active[0], active_target, 3u);
-    condition(active[1], active_target, 0u);
-    condition(active[2], active_target, 1u);
-    condition(active[3], active_target, 8u);
+    condition(assembler, active[0], active_target, 3u);
+    condition(assembler, active[1], active_target, 0u);
+    condition(assembler, active[2], active_target, 1u);
+    condition(assembler, active[3], active_target, 8u);
     for (unsigned index = 0; index < 4; ++index) {
         const uint8_t *following = index + 1u < 4 ? starts[index + 1u] : active_target;
-        condition(next[index][0], active_target, 3u);
-        condition(next[index][1], following, 3u);
-        condition(next[index][2], following, 8u);
-        test(next[index][3], following, 0u);
+        condition(assembler, next[index][0], active_target, 3u);
+        condition(assembler, next[index][1], following, 3u);
+        condition(assembler, next[index][2], following, 8u);
+        test(assembler, next[index][3], following, 0u);
     }
 }
 
@@ -302,21 +345,22 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, const uint8
         hl_a64_ldr(assembler, 9, CPU, 9 * 8);
         uint32_t *retry = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
-        branch(retry, resume);
+        if (!hl_a64_assembler_ok(assembler)) return;
+        branch(assembler, retry, resume);
     }
 
     uint8_t *miss = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
-    condition(inactive[0], miss, 3u);
-    condition(inactive[1], miss, 0u);
-    condition(inactive[2], miss, 1u);
-    condition(inactive[3], miss, 8u);
+    condition(assembler, inactive[0], miss, 3u);
+    condition(assembler, inactive[1], miss, 0u);
+    condition(assembler, inactive[2], miss, 1u);
+    condition(assembler, inactive[3], miss, 8u);
     for (unsigned index = 0; index < 4; ++index) {
         const uint8_t *following = index + 1u < 4 ? starts[index + 1u] : miss;
-        condition(next[index][0], miss, 3u);
-        condition(next[index][1], following, 3u);
-        condition(next[index][2], following, 8u);
-        test(next[index][3], following, 1u);
+        condition(assembler, next[index][0], miss, 3u);
+        condition(assembler, next[index][1], following, 3u);
+        condition(assembler, next[index][2], following, 8u);
+        test(assembler, next[index][3], following, 1u);
     }
 }
 
@@ -350,7 +394,7 @@ static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t r
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
     if (required == HL_A64_PERMISSION_READ)
         for (unsigned index = 0; index < 4; ++index)
-            branch(cache_hits[index], assembler->cursor);
+            branch(assembler, cache_hits[index], assembler->cursor);
     guard->resume = assembler->cursor;
     guard->required = required;
     guard->bytes = bytes;
@@ -373,7 +417,8 @@ void hl_a64_guard_begin_mode(hl_a64_assembler *assembler, uint64_t bytes, uint32
     uint32_t *done = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *valid_target = assembler->cursor;
-    cbnz(valid, valid_target, 17u);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    cbnz(assembler, valid, valid_target, 17u);
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, UINT32_C(0xd53b4209));
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -382,7 +427,8 @@ void hl_a64_guard_begin_mode(hl_a64_assembler *assembler, uint64_t bytes, uint32
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, UINT32_C(0xd51b4211));
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    branch(done, assembler->cursor);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, done, assembler->cursor);
 }
 
 void hl_a64_guard_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
@@ -421,11 +467,32 @@ void hl_a64_guard_direct_begin(hl_a64_assembler *assembler, uint64_t bytes, uint
 }
 
 void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard) {
+    /* Placeholder patchers write directly, unlike bounded instruction
+     * emission.  A failed begin may therefore leave a placeholder at the
+     * one-past-end cursor; never patch a guard after capacity exhaustion. */
+    if (!hl_a64_assembler_ok(assembler)) return;
+    if (guard == NULL) {
+        assembler->failed = 1;
+        return;
+    }
+    if (guard->below == NULL) {
+        if (guard->overflow == NULL && guard->above == NULL && guard->permission == NULL &&
+            guard->resume == NULL && guard->required == 0 && guard->bytes == 0)
+            return; /* Non-faulting PRFM emits no guard. */
+        assembler->failed = 1;
+        return;
+    }
+    if (guard->overflow == NULL || guard->above == NULL || guard->permission == NULL ||
+        guard->resume == NULL) {
+        assembler->failed = 1;
+        return;
+    }
     uint8_t *miss = assembler->cursor;
-    condition(guard->below, miss, 3);
-    condition(guard->overflow, miss, 3);
-    condition(guard->above, miss, 8);
-    test(guard->permission, miss, guard->required == HL_A64_PERMISSION_READ ? 0u : 1u);
+    condition(assembler, guard->below, miss, 3);
+    condition(assembler, guard->overflow, miss, 3);
+    condition(assembler, guard->above, miss, 8);
+    test(assembler, guard->permission, miss,
+         guard->required == HL_A64_PERMISSION_READ ? 0u : 1u);
     if (guard->required == HL_A64_PERMISSION_WRITE)
         write_cache(assembler, guard->bytes, guard->resume);
     if (!hl_a64_assembler_ok(assembler)) return;
