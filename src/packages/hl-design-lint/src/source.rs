@@ -4,7 +4,7 @@ use std::{
 };
 
 use proc_macro2::Span;
-use syn::{punctuated::Punctuated, Attribute, Meta, Token};
+use syn::{Attribute, Meta, Token, punctuated::Punctuated};
 
 use crate::{LintError, Result};
 
