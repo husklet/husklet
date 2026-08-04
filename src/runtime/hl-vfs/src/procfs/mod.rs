@@ -10,9 +10,9 @@ mod stat;
 
 pub use cgroup::View as CgroupView;
 pub use model::{
-    AddressSpaceView, CpuModel, CpuTicks, CpuView, DescriptorView, LimitResource, LimitView, MemoryRegionLabel, MemoryRegionView,
-    InternetSocketView, MemoryView, NetworkInterfaceView, NetworkView, NodeKind, ProcessState, ProcessView, SystemView, UnixSocketView,
-    UtsView,
+    AddressSpaceView, CpuModel, CpuTicks, CpuView, DescriptorView, InternetSocketView, LimitResource, LimitView,
+    MemoryRegionLabel, MemoryRegionView, MemoryView, NetworkInterfaceView, NetworkView, NodeKind, ProcessState,
+    ProcessView, SystemView, UnixSocketView, UtsView,
 };
 pub use mount::{MountEntry, MountView};
 pub use source::Source;
@@ -24,7 +24,8 @@ use hl_descriptor::{OfdMetadata, OpenFileDescription};
 
 use crate::OpenIntent;
 
-const PROCESS_IO: &[u8] = b"rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
+const PROCESS_IO: &[u8] =
+    b"rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n";
 const FILESYSTEMS: &[u8] = b"nodev\tsysfs\nnodev\ttmpfs\nnodev\tproc\nnodev\tdevtmpfs\nnodev\tdevpts\nnodev\tmqueue\nnodev\tcgroup2\nnodev\toverlay\n\text3\n\text2\n\text4\n";
 const KERNEL_COMMAND_LINE: &[u8] = b"root=/dev/sda1 ro quiet\n";
 const DEVICES: &[u8] = b"Character devices:\n  1 mem\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n136 pts\n\nBlock devices:\n  7 loop\n  8 sd\n 253 device-mapper\n 259 blkext\n";
@@ -43,6 +44,40 @@ pub enum Error {
 /// Process-filesystem namespace backed by typed domain snapshots.
 pub struct Procfs {
     source: Arc<dyn Source>,
+}
+
+struct Identity([u8; 16]);
+
+impl Identity {
+    fn new(mut bytes: [u8; 16]) -> Self {
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        Self(bytes)
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        let bytes = self.0;
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\n",
+            bytes[0],
+            bytes[1],
+            bytes[2],
+            bytes[3],
+            bytes[4],
+            bytes[5],
+            bytes[6],
+            bytes[7],
+            bytes[8],
+            bytes[9],
+            bytes[10],
+            bytes[11],
+            bytes[12],
+            bytes[13],
+            bytes[14],
+            bytes[15],
+        )
+        .into_bytes()
+    }
 }
 
 impl Procfs {
@@ -170,7 +205,7 @@ impl Procfs {
                 ))))
             }
             model::Node::InterfaceDirectory => {
-                let name = interface_name(path).ok_or(Error::NotFound)?;
+                let name = model::Node::interface_name(path).ok_or(Error::NotFound)?;
                 self.source.network(process)?.interface(name).ok_or(Error::NotFound)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     [
@@ -186,7 +221,7 @@ impl Procfs {
                 ))))
             }
             model::Node::StatisticsDirectory => {
-                let name = interface_name(path).ok_or(Error::NotFound)?;
+                let name = model::Node::interface_name(path).ok_or(Error::NotFound)?;
                 self.source.network(process)?.interface(name).ok_or(Error::NotFound)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     [b"rx_bytes".to_vec(), b"tx_packets".to_vec()],
@@ -194,7 +229,7 @@ impl Procfs {
                 ))))
             }
             model::Node::InterfaceFile(attribute) => {
-                let name = interface_name(path).ok_or(Error::NotFound)?;
+                let name = model::Node::interface_name(path).ok_or(Error::NotFound)?;
                 let network = self.source.network(process)?;
                 let bytes = network.interface(name).ok_or(Error::NotFound)?.attribute(attribute);
                 self.snapshot_file(process, leaf, bytes)
@@ -209,9 +244,7 @@ impl Procfs {
             model::Node::Io => self.snapshot_file(process, leaf, PROCESS_IO.to_vec()),
             model::Node::Maps => self.snapshot_file(process, leaf, self.source.address_space(process)?.maps(false)),
             model::Node::NumaMaps => self.snapshot_file(process, leaf, self.source.address_space(process)?.numa()),
-            model::Node::SmapsRollup => {
-                self.snapshot_file(process, leaf, self.source.address_space(process)?.rollup())
-            }
+            model::Node::SmapsRollup => self.snapshot_file(process, leaf, self.source.address_space(process)?.rollup()),
             model::Node::MapFiles => {
                 let entries = self
                     .source
@@ -285,9 +318,7 @@ impl Procfs {
             }
             model::Node::FdLink(_) => Ok(None),
             model::Node::CpuInfo => self.snapshot_file(0, leaf, self.source.cpu()?.cpuinfo()),
-            model::Node::CpuStat => {
-                self.snapshot_file(0, leaf, self.source.cpu()?.stat(self.source.system()?))
-            }
+            model::Node::CpuStat => self.snapshot_file(0, leaf, self.source.cpu()?.stat(self.source.system()?)),
             model::Node::CpuRange => self.snapshot_file(0, leaf, self.source.cpu()?.range_bytes()),
             model::Node::CpuDirectory => {
                 let cpu = self.source.cpu()?;
@@ -337,15 +368,15 @@ impl Procfs {
                 self.cpu_file(number, leaf, b"0\n".to_vec())
             }
             model::Node::CpuThreadMask(number) | model::Node::CpuCoreMask(number) => {
-                let online = self.source.cpu()?.online();
-                self.cpu_file(number, leaf, format!("{}\n", cpu_mask(online, Some(number))).into_bytes())
+                let cpu = self.source.cpu()?;
+                self.cpu_file(number, leaf, format!("{}\n", cpu.mask(Some(number))).into_bytes())
             }
             model::Node::CpuThreadList(number) | model::Node::CpuCoreList(number) => {
                 self.cpu_file(number, leaf, format!("{number}\n").into_bytes())
             }
             model::Node::CpuPackageMask(number) | model::Node::CpuClusterMask(number) => {
-                let online = self.source.cpu()?.online();
-                self.cpu_file(number, leaf, format!("{}\n", cpu_mask(online, None)).into_bytes())
+                let cpu = self.source.cpu()?;
+                self.cpu_file(number, leaf, format!("{}\n", cpu.mask(None)).into_bytes())
             }
             model::Node::CpuPackageList(number) | model::Node::CpuClusterList(number) => {
                 let cpu = self.source.cpu()?;
@@ -369,8 +400,12 @@ impl Procfs {
             )))),
             model::Node::TtyDrivers => self.snapshot_file(0, leaf, TTY_DRIVERS.to_vec()),
             model::Node::TtyDisciplines => self.snapshot_file(0, leaf, Vec::new()),
-            model::Node::BootIdentity => self.snapshot_file(0, leaf, uuid(self.source.boot_identity()?)),
-            model::Node::RandomIdentity => self.snapshot_file(0, leaf, uuid(self.source.random_identity()?)),
+            model::Node::BootIdentity => {
+                self.snapshot_file(0, leaf, Identity::new(self.source.boot_identity()?).into_bytes())
+            }
+            model::Node::RandomIdentity => {
+                self.snapshot_file(0, leaf, Identity::new(self.source.random_identity()?).into_bytes())
+            }
             model::Node::EntropyAvailable | model::Node::RandomPoolSize => {
                 self.snapshot_file(0, leaf, RANDOM_POOL.to_vec())
             }
@@ -452,7 +487,7 @@ impl Procfs {
             return Ok(Some(format!("net:[{namespace}]").into_bytes()));
         }
         if let Some((process, thread, node)) = model::Node::parse(path, current)
-            && let Some((name, inode)) = static_namespace(node)
+            && let Some((name, inode)) = node.static_namespace()
         {
             self.validate_thread(process, thread)?;
             self.source.process(process)?;
@@ -534,7 +569,7 @@ impl Procfs {
                 let network = self.source.network(process)?;
                 if node != model::Node::InterfaceRoot {
                     network
-                        .interface(interface_name(path).ok_or(Error::NotFound)?)
+                        .interface(model::Node::interface_name(path).ok_or(Error::NotFound)?)
                         .ok_or(Error::NotFound)?;
                 }
                 NodeKind::Directory
@@ -572,7 +607,10 @@ impl Procfs {
                 ) {
                     self.source.memory(process)?;
                 }
-                if matches!(node, model::Node::Mounts | model::Node::MountInfo | model::Node::MountStats) {
+                if matches!(
+                    node,
+                    model::Node::Mounts | model::Node::MountInfo | model::Node::MountStats
+                ) {
                     self.source.mounts(process)?;
                 }
                 if node == model::Node::MapFiles {
@@ -743,14 +781,14 @@ impl Procfs {
             model::Node::InterfaceDirectory | model::Node::StatisticsDirectory => {
                 let network = self.source.network(process)?;
                 network
-                    .interface(interface_name(path).ok_or(Error::NotFound)?)
+                    .interface(model::Node::interface_name(path).ok_or(Error::NotFound)?)
                     .ok_or(Error::NotFound)?;
                 0
             }
             model::Node::InterfaceFile(attribute) => {
                 let network = self.source.network(process)?;
                 network
-                    .interface(interface_name(path).ok_or(Error::NotFound)?)
+                    .interface(model::Node::interface_name(path).ok_or(Error::NotFound)?)
                     .ok_or(Error::NotFound)?
                     .attribute(attribute)
                     .len() as u64
@@ -867,25 +905,29 @@ impl Procfs {
                 format!("{number}\n").len() as u64
             }
             model::Node::CpuThreadMask(number) | model::Node::CpuCoreMask(number) => {
-                let online = self.source.cpu()?.online();
-                if number >= online {
+                let cpu = self.source.cpu()?;
+                if number >= cpu.online() {
                     return Err(Error::NotFound);
                 }
-                cpu_mask(online, Some(number)).len() as u64 + 1
+                cpu.mask(Some(number)).len() as u64 + 1
             }
             model::Node::CpuPackageMask(number) | model::Node::CpuClusterMask(number) => {
-                let online = self.source.cpu()?.online();
-                if number >= online {
+                let cpu = self.source.cpu()?;
+                if number >= cpu.online() {
                     return Err(Error::NotFound);
                 }
-                cpu_mask(online, None).len() as u64 + 1
+                cpu.mask(None).len() as u64 + 1
             }
             model::Node::CpuPackageList(number) | model::Node::CpuClusterList(number) => {
                 let online = self.source.cpu()?.online();
                 if number >= online {
                     return Err(Error::NotFound);
                 }
-                if online == 1 { 2 } else { format!("0-{}\n", online - 1).len() as u64 }
+                if online == 1 {
+                    2
+                } else {
+                    format!("0-{}\n", online - 1).len() as u64
+                }
             }
             model::Node::BlockDirectory => 0,
             model::Node::TtyDirectory => 0,
@@ -918,7 +960,7 @@ impl Procfs {
             metadata.inode = self.source.uts(process)?.namespace;
         } else if node == model::Node::NetworkNamespace {
             metadata.inode = self.source.network(process)?.generation;
-        } else if let Some((_, inode)) = static_namespace(node) {
+        } else if let Some((_, inode)) = node.static_namespace() {
             self.source.process(process)?;
             metadata.inode = inode;
         }
@@ -939,8 +981,7 @@ impl Procfs {
     }
 
     pub fn namespace_inode(&self, path: &[u8], current: u32) -> Result<Option<u64>, Error> {
-        let Some((process, thread, node)) = model::Node::parse(path.strip_prefix(b"/").unwrap_or(path), current)
-        else {
+        let Some((process, thread, node)) = model::Node::parse(path.strip_prefix(b"/").unwrap_or(path), current) else {
             return Ok(None);
         };
         let namespace = matches!(
@@ -958,52 +999,9 @@ impl Procfs {
             return Ok(None);
         }
         self.validate_thread(process, thread)?;
-        self.metadata(path, current).map(|metadata| metadata.map(|value| value.inode))
+        self.metadata(path, current)
+            .map(|metadata| metadata.map(|value| value.inode))
     }
-}
-
-fn uuid(mut bytes: [u8; 16]) -> Vec<u8> {
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\n",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    )
-    .into_bytes()
-}
-
-fn cpu_mask(online: usize, bit: Option<usize>) -> String {
-    let value = bit.map_or_else(
-        || if online == 64 { u64::MAX } else { (1_u64 << online) - 1 },
-        |number| 1_u64 << number,
-    );
-    if online <= 32 {
-        let width = online.div_ceil(4).max(1);
-        return format!("{value:0width$x}");
-    }
-    let width = (online - 32).div_ceil(4).max(1);
-    format!("{:0width$x},{:08x}", value >> 32, value as u32)
-}
-
-fn static_namespace(node: model::Node) -> Option<(&'static str, u64)> {
-    match node {
-        model::Node::CgroupNamespace => Some(("cgroup", 4_026_531_835)),
-        model::Node::IpcNamespace => Some(("ipc", 4_026_531_839)),
-        model::Node::MountNamespace => Some(("mnt", 4_026_531_841)),
-        model::Node::PidNamespace => Some(("pid", 4_026_531_836)),
-        model::Node::TimeNamespace => Some(("time", 4_026_531_834)),
-        model::Node::UserNamespace => Some(("user", 4_026_531_837)),
-        _ => None,
-    }
-}
-
-fn interface_name(path: &[u8]) -> Option<&[u8]> {
-    let path = path
-        .strip_prefix(b"/")
-        .unwrap_or(path)
-        .strip_prefix(b"sys/class/net/")?;
-    Some(path.split(|byte| *byte == b'/').next()?)
 }
 
 #[cfg(test)]

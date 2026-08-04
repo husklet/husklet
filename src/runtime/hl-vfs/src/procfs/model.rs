@@ -207,46 +207,54 @@ impl AddressSpaceView {
             let sharing = if region.shared { 's' } else { 'p' };
             let major = (region.device >> 8) & 0xff;
             let minor = region.device & 0xff;
-            output.extend_from_slice(format!(
-                "{:08x}-{:08x} {read}{write}{execute}{sharing} {:08x} {major:02x}:{minor:02x} {}",
-                region.start, region.end, region.backing_offset, region.inode,
-            ).as_bytes());
+            output.extend_from_slice(
+                format!(
+                    "{:08x}-{:08x} {read}{write}{execute}{sharing} {:08x} {major:02x}:{minor:02x} {}",
+                    region.start, region.end, region.backing_offset, region.inode,
+                )
+                .as_bytes(),
+            );
             if let Some(path) = &region.path {
                 output.push(b' ');
                 output.extend_from_slice(path);
             } else if let Some(label) = region.label {
-                output.extend_from_slice(
-                    match label {
-                        MemoryRegionLabel::Heap => b" [heap]".as_slice(),
-                        MemoryRegionLabel::Stack => b" [stack]",
-                        MemoryRegionLabel::StackGuard => b"",
-                    },
-                );
+                output.extend_from_slice(match label {
+                    MemoryRegionLabel::Heap => b" [heap]".as_slice(),
+                    MemoryRegionLabel::Stack => b" [stack]",
+                    MemoryRegionLabel::StackGuard => b"",
+                });
             }
             output.push(b'\n');
             if smaps {
                 let pages = region.end.saturating_sub(region.start).div_ceil(self.page_bytes);
                 let size = pages.saturating_mul(self.page_bytes) / 1024;
                 let resident = region.resident_pages.saturating_mul(self.page_bytes) / 1024;
-                output.extend_from_slice(format!(
-                    "Size:{size:19} kB\nKernelPageSize:{:9} kB\nMMUPageSize:{:12} kB\n\
+                output.extend_from_slice(
+                    format!(
+                        "Size:{size:19} kB\nKernelPageSize:{:9} kB\nMMUPageSize:{:12} kB\n\
                      Rss:{resident:20} kB\nPss:{resident:20} kB\nShared_Clean:{:11} kB\n\
                      Shared_Dirty:{:11} kB\nPrivate_Clean:{:10} kB\nPrivate_Dirty:{:10} kB\n\
                      Referenced:{resident:13} kB\nAnonymous:{:14} kB\nSwap:{:19} kB\nLocked:{:17} kB\n\
                      VmFlags:{}{}{} mr mw me ac \n",
-                    self.page_bytes / 1024,
-                    self.page_bytes / 1024,
-                    0,
-                    if region.shared { resident } else { 0 },
-                    if region.inode != 0 { resident } else { 0 },
-                    if !region.shared && region.inode == 0 { resident } else { 0 },
-                    if region.inode == 0 { resident } else { 0 },
-                    0,
-                    0,
-                    if read == 'r' { " rd" } else { "" },
-                    if write == 'w' { " wr" } else { "" },
-                    if execute == 'x' { " ex" } else { "" },
-                ).as_bytes());
+                        self.page_bytes / 1024,
+                        self.page_bytes / 1024,
+                        0,
+                        if region.shared { resident } else { 0 },
+                        if region.inode != 0 { resident } else { 0 },
+                        if !region.shared && region.inode == 0 {
+                            resident
+                        } else {
+                            0
+                        },
+                        if region.inode == 0 { resident } else { 0 },
+                        0,
+                        0,
+                        if read == 'r' { " rd" } else { "" },
+                        if write == 'w' { " wr" } else { "" },
+                        if execute == 'x' { " ex" } else { "" },
+                    )
+                    .as_bytes(),
+                );
             }
         }
         output
@@ -404,6 +412,25 @@ impl CpuView {
         self.online
     }
 
+    pub(super) fn mask(&self, bit: Option<usize>) -> String {
+        let value = bit.map_or_else(
+            || {
+                if self.online == 64 {
+                    u64::MAX
+                } else {
+                    (1_u64 << self.online) - 1
+                }
+            },
+            |number| 1_u64 << number,
+        );
+        if self.online <= 32 {
+            let width = self.online.div_ceil(4).max(1);
+            return format!("{value:0width$x}");
+        }
+        let width = (self.online - 32).div_ceil(4).max(1);
+        format!("{:0width$x},{:08x}", value >> 32, value as u32)
+    }
+
     pub(super) fn version(&self) -> Vec<u8> {
         let architecture = match &self.model {
             CpuModel::Aarch64 { .. } => "aarch64",
@@ -416,11 +443,8 @@ impl CpuView {
         let mut output = String::new();
         for cpu in 0..self.online {
             match &self.model {
-                CpuModel::Aarch64 {
-                    hardware,
-                    hardware_second,
-                } => {
-                    let features = capability_names(*hardware, *hardware_second);
+                CpuModel::Aarch64 { .. } => {
+                    let features = self.model.capability_names();
                     output.push_str(&format!(
                         "processor\t: {cpu}\nBogoMIPS\t: 100.00\nFeatures\t: {features}\n\
                          CPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\n\
@@ -446,12 +470,16 @@ impl CpuView {
     }
 
     pub(super) fn stat(&self, system: SystemView) -> Vec<u8> {
-        let aggregate = self.ticks.iter().take(self.online).fold(CpuTicks::default(), |sum, ticks| CpuTicks {
-            user: sum.user.saturating_add(ticks.user),
-            nice: sum.nice.saturating_add(ticks.nice),
-            system: sum.system.saturating_add(ticks.system),
-            idle: sum.idle.saturating_add(ticks.idle),
-        });
+        let aggregate = self
+            .ticks
+            .iter()
+            .take(self.online)
+            .fold(CpuTicks::default(), |sum, ticks| CpuTicks {
+                user: sum.user.saturating_add(ticks.user),
+                nice: sum.nice.saturating_add(ticks.nice),
+                system: sum.system.saturating_add(ticks.system),
+                idle: sum.idle.saturating_add(ticks.idle),
+            });
         let mut output = format!(
             "cpu  {} {} {} {} 0 0 0 0 0 0\n",
             aggregate.user, aggregate.nice, aggregate.system, aggregate.idle,
@@ -478,49 +506,58 @@ impl CpuView {
     }
 }
 
-fn capability_names(hardware: u64, hardware_second: u64) -> String {
-    const FIRST: [&str; 32] = [
-        "fp", "asimd", "evtstrm", "aes", "pmull", "sha1", "sha2", "crc32", "atomics", "fphp", "asimdhp", "cpuid",
-        "asimdrdm", "jscvt", "fcma", "lrcpc", "dcpop", "sha3", "sm3", "sm4", "asimddp", "sha512", "sve", "asimdfhm",
-        "dit", "uscat", "ilrcpc", "flagm", "ssbs", "sb", "paca", "pacg",
-    ];
-    const SECOND: [&str; 22] = [
-        "dcpodp",
-        "sve2",
-        "sveaes",
-        "svepmull",
-        "svebitperm",
-        "svesha3",
-        "svesm4",
-        "flagm2",
-        "frint",
-        "svei8mm",
-        "svef32mm",
-        "svef64mm",
-        "svebf16",
-        "i8mm",
-        "bf16",
-        "dgh",
-        "rng",
-        "bti",
-        "mte",
-        "ecv",
-        "afp",
-        "rpres",
-    ];
-    FIRST
-        .iter()
-        .enumerate()
-        .filter(|(bit, _)| hardware & (1_u64 << bit) != 0)
-        .chain(
-            SECOND
-                .iter()
-                .enumerate()
-                .filter(|(bit, _)| hardware_second & (1_u64 << bit) != 0),
-        )
-        .map(|(_, name)| *name)
-        .collect::<Vec<_>>()
-        .join(" ")
+impl CpuModel {
+    fn capability_names(&self) -> String {
+        const FIRST: [&str; 32] = [
+            "fp", "asimd", "evtstrm", "aes", "pmull", "sha1", "sha2", "crc32", "atomics", "fphp", "asimdhp", "cpuid",
+            "asimdrdm", "jscvt", "fcma", "lrcpc", "dcpop", "sha3", "sm3", "sm4", "asimddp", "sha512", "sve",
+            "asimdfhm", "dit", "uscat", "ilrcpc", "flagm", "ssbs", "sb", "paca", "pacg",
+        ];
+        const SECOND: [&str; 22] = [
+            "dcpodp",
+            "sve2",
+            "sveaes",
+            "svepmull",
+            "svebitperm",
+            "svesha3",
+            "svesm4",
+            "flagm2",
+            "frint",
+            "svei8mm",
+            "svef32mm",
+            "svef64mm",
+            "svebf16",
+            "i8mm",
+            "bf16",
+            "dgh",
+            "rng",
+            "bti",
+            "mte",
+            "ecv",
+            "afp",
+            "rpres",
+        ];
+        let Self::Aarch64 {
+            hardware,
+            hardware_second,
+        } = self
+        else {
+            return String::new();
+        };
+        FIRST
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| hardware & (1_u64 << bit) != 0)
+            .chain(
+                SECOND
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, _)| hardware_second & (1_u64 << bit) != 0),
+            )
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 /// One descriptor identity captured for procfs at open time.
@@ -723,8 +760,18 @@ impl NetworkView {
 
     fn socket_bytes(&self, ipv6: bool, udp: bool) -> Vec<u8> {
         let mut output = Self::socket_header(ipv6, udp);
-        for (slot, socket) in self.internet.iter().filter(|socket| socket.ipv6 == ipv6 && socket.udp == udp).enumerate() {
-            let encode = |bytes: &[u8]| bytes.chunks_exact(4).map(|part| format!("{:08X}", u32::from_le_bytes(part.try_into().unwrap()))).collect::<String>();
+        for (slot, socket) in self
+            .internet
+            .iter()
+            .filter(|socket| socket.ipv6 == ipv6 && socket.udp == udp)
+            .enumerate()
+        {
+            let encode = |bytes: &[u8]| {
+                bytes
+                    .chunks_exact(4)
+                    .map(|part| format!("{:08X}", u32::from_le_bytes(part.try_into().unwrap())))
+                    .collect::<String>()
+            };
             output.extend_from_slice(format!(" {:3}: {}:{:04X} {}:{:04X} {:02X} 00000000:00000000 00:00000000 00000000 0 0 {} 1 0000000000000000 100 0 0 10 0\n", slot, encode(if ipv6 { &socket.local } else { &socket.local[..4] }), socket.local_port, encode(if ipv6 { &socket.remote } else { &socket.remote[..4] }), socket.remote_port, socket.state, socket.inode).as_bytes());
         }
         output
@@ -1074,6 +1121,26 @@ pub(super) enum Node {
 }
 
 impl Node {
+    pub(super) fn static_namespace(self) -> Option<(&'static str, u64)> {
+        match self {
+            Self::CgroupNamespace => Some(("cgroup", 4_026_531_835)),
+            Self::IpcNamespace => Some(("ipc", 4_026_531_839)),
+            Self::MountNamespace => Some(("mnt", 4_026_531_841)),
+            Self::PidNamespace => Some(("pid", 4_026_531_836)),
+            Self::TimeNamespace => Some(("time", 4_026_531_834)),
+            Self::UserNamespace => Some(("user", 4_026_531_837)),
+            _ => None,
+        }
+    }
+
+    pub(super) fn interface_name(path: &[u8]) -> Option<&[u8]> {
+        let path = path
+            .strip_prefix(b"/")
+            .unwrap_or(path)
+            .strip_prefix(b"sys/class/net/")?;
+        path.split(|byte| *byte == b'/').next()
+    }
+
     pub(super) fn entries(self) -> Option<&'static [(&'static [u8], u8)]> {
         const PROCESS: &[(&[u8], u8)] = &[
             (b"cmdline", 8),
@@ -1206,9 +1273,7 @@ impl Node {
             b"proc/sys/kernel/overflowuid" => Some(Self::Sysctl(b"65534\n")),
             b"proc/sys/kernel/overflowgid" => Some(Self::Sysctl(b"65534\n")),
             b"proc/sys/kernel/randomize_va_space" => Some(Self::Sysctl(b"2\n")),
-            b"proc/sys/kernel/shmmax" | b"proc/sys/kernel/shmall" => {
-                Some(Self::Sysctl(b"18446744073692774399\n"))
-            }
+            b"proc/sys/kernel/shmmax" | b"proc/sys/kernel/shmall" => Some(Self::Sysctl(b"18446744073692774399\n")),
             b"proc/sys/kernel/shmmni" => Some(Self::Sysctl(b"4096\n")),
             b"proc/sys/kernel/sem" => Some(Self::Sysctl(b"256\t131072\t500\t512\n")),
             b"proc/sys/vm/max_map_count" => Some(Self::Sysctl(b"1048576\n")),
