@@ -2,8 +2,8 @@
 
 use hl_container::{ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use hl_images::{
-    remote::{Auth, Registry},
     Images, Reference,
+    remote::{Auth, Registry},
 };
 use std::time::Duration;
 
@@ -58,8 +58,7 @@ async fn finite(
             )
             .await?;
         containers.start(name).await?;
-        let status =
-            tokio::time::timeout(Duration::from_secs(seconds), containers.wait(name)).await??;
+        let status = tokio::time::timeout(Duration::from_secs(seconds), containers.wait(name)).await??;
         let logs = containers.logs(name).await?;
         let output = format!(
             "{}{}",
@@ -122,11 +121,7 @@ async fn cleanup(
     root: &hl_images::rootfs::Reference,
 ) -> Result<(), Error> {
     let remove = if containers.inspect(name).await.is_ok() {
-        containers
-            .remove_force(name)
-            .await
-            .map(|_| ())
-            .map_err(Error::from)
+        containers.remove_force(name).await.map(|_| ()).map_err(Error::from)
     } else {
         Ok(())
     };
@@ -148,10 +143,7 @@ fn combine(outcome: Result<(), Error>, cleanup: Result<(), Error>) -> Result<(),
     }
 }
 
-async fn rootfs(
-    images: &Images,
-    raw: &str,
-) -> Result<(hl_images::rootfs::Reference, hl_images::rootfs::View), Error> {
+async fn rootfs(images: &Images, raw: &str) -> Result<(hl_images::rootfs::Reference, hl_images::rootfs::View), Error> {
     let platform = crate::contract::Target::from_env()?.platform();
     let reference: Reference = raw.parse()?;
     let image = match images.resolve(&reference)? {

@@ -7,18 +7,16 @@ pub(super) use futures_util::stream;
 pub(super) use std::io::Read as _;
 
 pub(super) use hl_client::{
-    api::WaitCondition,
-    model::{
-        EventFilter, EventQuery, NetworkConnect, NetworkCreate, NetworkDisconnect, VolumeCreate,
-    },
     Client,
+    api::WaitCondition,
+    model::{EventFilter, EventQuery, NetworkConnect, NetworkCreate, NetworkDisconnect, VolumeCreate},
 };
 pub(super) use hl_container::{Config, ContainerSpec, Containers, Mount, Persistence, Process};
 pub(super) use hl_daemon::{Daemon, Error};
 pub(super) use hl_images::{
+    Descriptor, Digest, LeaseStore, Platform, Reference,
     format::docker::{Archive, Limits},
     remote::{BlobStream, Source},
-    Descriptor, Digest, LeaseStore, Platform, Reference,
 };
 pub(super) use tempfile::TempDir;
 pub(super) use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -41,11 +39,9 @@ pub(super) struct TestDaemon {
 impl TestDaemon {
     pub(super) async fn start(containers: Containers, socket: &std::path::Path) -> Self {
         let (stop, stopped) = oneshot::channel();
-        let task = tokio::spawn(Daemon::new(containers).server(socket).serve_with_shutdown(
-            async move {
-                let _ = stopped.await;
-            },
-        ));
+        let task = tokio::spawn(Daemon::new(containers).server(socket).serve_with_shutdown(async move {
+            let _ = stopped.await;
+        }));
         wait_for_socket(socket).await;
         Self {
             client: Client::unix(socket).unwrap(),
@@ -193,11 +189,7 @@ impl Source for FixtureSource {
         Ok(self.root.clone())
     }
 
-    async fn fetch(
-        &self,
-        _reference: &Reference,
-        descriptor: &Descriptor,
-    ) -> hl_images::Result<BlobStream> {
+    async fn fetch(&self, _reference: &Reference, descriptor: &Descriptor) -> hl_images::Result<BlobStream> {
         let bytes = self
             .blobs
             .get(&descriptor.digest().to_string())
@@ -267,13 +259,7 @@ pub(super) async fn basic_registry(
                 let mut request = vec![0; 16 * 1024];
                 let count = socket.read(&mut request).await.unwrap();
                 let request = String::from_utf8_lossy(&request[..count]);
-                let path = request
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap();
+                let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 if !request
                     .lines()
                     .any(|line| line.eq_ignore_ascii_case(&format!("authorization: {expected}")))

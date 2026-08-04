@@ -304,12 +304,7 @@ impl<'a, M: GuestMemory + ?Sized> GuestMarshaller<'a, M> {
     /// Imports the complete descriptor array without touching payload ranges.
     /// Native vector terminals need this Linux ordering so a later payload
     /// fault can expose an earlier accessible prefix through one host call.
-    pub fn io_vector_records(
-        &self,
-        source: u64,
-        count: usize,
-        access: GuestAccess,
-    ) -> Result<IovecPlan, MarshalError> {
+    pub fn io_vector_records(&self, source: u64, count: usize, access: GuestAccess) -> Result<IovecPlan, MarshalError> {
         let vectors = self.iovec_records(source, count)?;
         for vector in &vectors {
             vector.validate(access)?;

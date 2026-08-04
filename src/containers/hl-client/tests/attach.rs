@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use hl_client::api::{Channel, Session, Size};
+use hl_client::api::{AttachOptions, Channel, Session, Size};
 use hl_client::{Client, Config, Error};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -30,15 +30,13 @@ async fn session_upgrades_writes_closes_and_decodes_ordered_output() {
         let request = request(&mut peer).await;
         let lower = request.to_ascii_lowercase();
         assert!(request.starts_with(
-            "POST /v1.43/containers/example%2Fname/attach?stream=true&stdin=true&stdout=true&stderr=true HTTP/1.1\r\n"
+            "POST /v1.43/containers/example%2Fname/attach?logs=false&stream=true&stdin=true&stdout=true&stderr=true HTTP/1.1\r\n"
         ));
         assert!(lower.contains("connection: upgrade\r\n"));
         assert!(lower.contains("upgrade: tcp\r\n"));
-        peer.write_all(
-            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
-        )
-        .await
-        .unwrap();
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+            .await
+            .unwrap();
 
         let mut input = [0; 6];
         peer.read_exact(&mut input).await.unwrap();
@@ -81,13 +79,11 @@ async fn terminal_session_preserves_raw_chunks_writes_and_eof() {
         let (mut peer, _) = listener.accept().await.unwrap();
         let request = request(&mut peer).await;
         assert!(request.starts_with(
-            "POST /v1.43/containers/terminal/attach?stream=true&stdin=true&stdout=true&stderr=true HTTP/1.1\r\n"
+            "POST /v1.43/containers/terminal/attach?logs=false&stream=true&stdin=true&stdout=true&stderr=true HTTP/1.1\r\n"
         ));
-        peer.write_all(
-            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
-        )
-        .await
-        .unwrap();
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+            .await
+            .unwrap();
 
         let mut input = [0; 6];
         peer.read_exact(&mut input).await.unwrap();
@@ -100,11 +96,7 @@ async fn terminal_session_preserves_raw_chunks_writes_and_eof() {
     });
 
     let client = Client::unix(&socket).unwrap();
-    let mut session = client
-        .containers()
-        .attach_terminal("terminal", true)
-        .await
-        .unwrap();
+    let mut session = client.containers().attach_terminal("terminal", true).await.unwrap();
     assert!(matches!(&session, Session::Terminal(_)));
     session.write(b"hello\n").await.unwrap();
     session.close().await.unwrap();
@@ -115,6 +107,45 @@ async fn terminal_session_preserves_raw_chunks_writes_and_eof() {
         output.extend_from_slice(chunk.bytes());
     }
     assert_eq!(output, b"merged terminal\r\n");
+    assert!(session.next().await.unwrap().is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_attach_options_request_logs_without_live_streaming() {
+    let root = TempDir::new().unwrap();
+    let socket = root.path().join("daemon.sock");
+    let listener = listener(&socket);
+    let server = tokio::spawn(async move {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let request = request(&mut peer).await;
+        assert!(request.starts_with(
+            "POST /v1.43/containers/history/attach?logs=true&stream=false&stdin=false&stdout=true&stderr=false&detachKeys=ctrl%2Dp%2Cctrl%2Dq HTTP/1.1\r\n"
+        ));
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\n\r\n")
+            .await
+            .unwrap();
+        peer.write_all(&[1, 0, 0, 0, 0, 0, 0, 7]).await.unwrap();
+        peer.write_all(b"history").await.unwrap();
+    });
+
+    let client = Client::unix(&socket).unwrap();
+    let mut session = client
+        .containers()
+        .attach_with(
+            "history",
+            &AttachOptions {
+                logs: true,
+                stdout: true,
+                detach_keys: Some("ctrl-p,ctrl-q".into()),
+                ..AttachOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let output = session.next().await.unwrap().unwrap();
+    assert_eq!(output.channel(), Channel::Stdout);
+    assert_eq!(output.bytes(), b"history".as_slice());
     assert!(session.next().await.unwrap().is_none());
     server.await.unwrap();
 }
@@ -135,11 +166,7 @@ async fn session_rejects_a_frame_before_allocating_over_the_limit() {
     });
 
     let client = Client::with_config(Config::unix(&socket).response_limit(4)).unwrap();
-    let mut session = client
-        .containers()
-        .attach("example", false, true, true)
-        .await
-        .unwrap();
+    let mut session = client.containers().attach("example", false, true, true).await.unwrap();
     assert!(matches!(
         session.next().await,
         Err(Error::ResponseTooLarge { limit: 4 })
@@ -149,30 +176,21 @@ async fn session_rejects_a_frame_before_allocating_over_the_limit() {
 
 #[tokio::test]
 async fn session_reports_truncated_frame_part() {
-    for (frame, part) in [
-        (&b"\x01\0\0"[..], "header"),
-        (&b"\x01\0\0\0\0\0\0\x03x"[..], "payload"),
-    ] {
+    for (frame, part) in [(&b"\x01\0\0"[..], "header"), (&b"\x01\0\0\0\0\0\0\x03x"[..], "payload")] {
         let root = TempDir::new().unwrap();
         let socket = root.path().join("daemon.sock");
         let listener = listener(&socket);
         let server = tokio::spawn(async move {
             let (mut peer, _) = listener.accept().await.unwrap();
             request(&mut peer).await;
-            peer.write_all(
-                b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
-            )
-            .await
-            .unwrap();
+            peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+                .await
+                .unwrap();
             peer.write_all(frame).await.unwrap();
         });
 
         let client = Client::unix(&socket).unwrap();
-        let mut session = client
-            .containers()
-            .attach("example", false, true, true)
-            .await
-            .unwrap();
+        let mut session = client.containers().attach("example", false, true, true).await.unwrap();
         assert!(matches!(
             session.next().await,
             Err(Error::Protocol(message)) if message == format!("truncated stream frame {part}")
@@ -189,8 +207,7 @@ async fn container_resize_encodes_docker_height_before_width() {
     let server = tokio::spawn(async move {
         let (mut peer, _) = listener.accept().await.unwrap();
         let request = request(&mut peer).await;
-        assert!(request
-            .starts_with("POST /v1.43/containers/example%2Fname/resize?h=33&w=120 HTTP/1.1\r\n"));
+        assert!(request.starts_with("POST /v1.43/containers/example%2Fname/resize?h=33&w=120 HTTP/1.1\r\n"));
         peer.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
             .await
             .unwrap();

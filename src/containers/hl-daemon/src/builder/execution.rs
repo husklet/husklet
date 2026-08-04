@@ -1,12 +1,12 @@
-use super::cache::{cache_volume_name, Caches};
+use super::cache::{Caches, cache_volume_name};
 use super::context::Context;
 use super::copy::CopyContext;
 use super::remote::RemoteSources;
 use super::{Build, BuildError, BuildNetwork, Builder};
 use hl_container::{ContainerSpec, ExitStatus, Guest, Mount, Process, VolumeSpec};
+use hl_images::RuntimeOverrides;
 use hl_images::build::{CacheSharing, RunMount, Step};
 use hl_images::snapshot::Ownerships;
-use hl_images::RuntimeOverrides;
 use std::path::Path;
 
 impl Builder {
@@ -49,9 +49,9 @@ impl Builder {
                         ..RuntimeOverrides::default()
                     })?;
                     tokio::fs::create_dir_all(root.join(directory.trim_start_matches('/'))).await?;
-                    let program = shell.first().ok_or_else(|| {
-                        hl_images::Error::MalformedOci("RUN shell is empty".into())
-                    })?;
+                    let program = shell
+                        .first()
+                        .ok_or_else(|| hl_images::Error::MalformedOci("RUN shell is empty".into()))?;
                     let mut arguments = shell.iter().skip(1).cloned().collect::<Vec<_>>();
                     arguments.push(command.clone());
                     let mut process = Process::new(program).args(arguments).working_dir(directory);
@@ -109,31 +109,17 @@ impl Builder {
         let mut locks = Vec::new();
         for request in requested {
             match request {
-                RunMount::Bind {
-                    from,
-                    source,
-                    target,
-                } => {
+                RunMount::Bind { from, source, target } => {
                     let source_root = from.map_or(context.root(), |index| built[index].root.path());
-                    mounts.push(Mount::read_only(
-                        Context::new(source_root).source(source)?,
-                        target,
-                    ));
+                    mounts.push(Mount::read_only(Context::new(source_root).source(source)?, target));
                 }
-                RunMount::Cache {
-                    id,
-                    target,
-                    sharing,
-                } => {
+                RunMount::Cache { id, target, sharing } => {
                     let scope = id.as_deref().unwrap_or(target);
                     let name = cache_volume_name(scope, target, *sharing);
                     if matches!(sharing, CacheSharing::Locked | CacheSharing::Private) {
                         locks.push(Caches::lock(&name).await);
                     }
-                    self.containers
-                        .volumes()
-                        .create(VolumeSpec::new(&name))
-                        .await?;
+                    self.containers.volumes().create(VolumeSpec::new(&name)).await?;
                     mounts.push(Mount::volume_read_write(name, target));
                 }
             }
@@ -142,10 +128,7 @@ impl Builder {
     }
 
     fn guest(&self) -> Result<Guest, BuildError> {
-        match (
-            self.platform.os.as_str(),
-            self.platform.architecture.as_str(),
-        ) {
+        match (self.platform.os.as_str(), self.platform.architecture.as_str()) {
             ("linux", "arm64") => Ok(Guest::Aarch64),
             ("linux", "amd64") => Ok(Guest::X86_64),
             _ => Err(hl_images::Error::UnsupportedPlatform {

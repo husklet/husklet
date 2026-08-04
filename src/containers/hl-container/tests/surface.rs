@@ -1,6 +1,4 @@
-use hl_container::{
-    Config, ContainerSpec, ContainerState, Containers, Isolation, Persistence, Process, Sandbox,
-};
+use hl_container::{Config, ContainerSpec, ContainerState, Containers, Isolation, Persistence, Process, Sandbox};
 
 #[test]
 fn general_linux_workloads_default_to_sentry_routing() {
@@ -17,11 +15,10 @@ fn general_linux_workloads_default_to_sentry_routing() {
 #[tokio::test]
 async fn public_headless_surface_creates_inspects_and_removes() {
     let state = tempfile::tempdir().unwrap();
-    let containers =
-        Containers::builder(Config::new(state.path()).persistence(Persistence::Memory))
-            .build()
-            .await
-            .unwrap();
+    let containers = Containers::builder(Config::new(state.path()).persistence(Persistence::Memory))
+        .build()
+        .await
+        .unwrap();
 
     let created = containers
         .create(ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).name("surface"))

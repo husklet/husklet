@@ -77,11 +77,7 @@ impl Network {
     /// Docker's conventional twelve-character display identity.
     #[must_use]
     pub fn short_id(&self) -> String {
-        self.id
-            .trim_start_matches("sha256:")
-            .chars()
-            .take(12)
-            .collect()
+        self.id.trim_start_matches("sha256:").chars().take(12).collect()
     }
 }
 
@@ -154,11 +150,7 @@ pub struct NetworkConnect {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EndpointConfig {
-    #[serde(
-        default,
-        rename = "IPAMConfig",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, rename = "IPAMConfig", skip_serializing_if = "Option::is_none")]
     pub ipam: Option<EndpointIpam>,
     #[serde(default)]
     pub links: Vec<String>,

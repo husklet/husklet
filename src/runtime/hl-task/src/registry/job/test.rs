@@ -335,9 +335,11 @@ fn nonleader_detach_clears_only_the_callers_terminal_association() {
     let restored = crate::TaskRegistry::restore(&registry.snapshot()).unwrap();
     assert_eq!(restored.terminal_session(worker).unwrap(), None);
     assert_eq!(restored.terminal_session(peer).unwrap(), Some(session));
-    assert!(registry
-        .prepare_terminal_transition(worker, crate::TerminalTransition::Detach)
-        .is_err());
+    assert!(
+        registry
+            .prepare_terminal_transition(worker, crate::TerminalTransition::Detach)
+            .is_err()
+    );
 }
 
 #[test]

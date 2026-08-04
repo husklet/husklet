@@ -139,7 +139,6 @@ impl ProcessHandle {
         *self.binding.lock().unwrap_or_else(|error| error.into_inner()) = Some((registry, identity));
     }
 
-
     fn mark_exited(&self) {
         if !self.exited.swap(true, Ordering::AcqRel) {
             self.readiness.notify();
@@ -300,8 +299,13 @@ mod tests {
         let install = table
             .prepare_open(0, object.clone(), StatusFlags::default(), DescriptorFlags::default())
             .unwrap();
-        registry.register(install.description_identity(), object.clone()).unwrap();
-        assert_eq!(object.readiness(Readiness::from_bits(Readiness::READ)), Readiness::default());
+        registry
+            .register(install.description_identity(), object.clone())
+            .unwrap();
+        assert_eq!(
+            object.readiness(Readiness::from_bits(Readiness::READ)),
+            Readiness::default()
+        );
         registry.notify_exit(target);
         assert_eq!(
             object.readiness(Readiness::from_bits(Readiness::READ)),

@@ -46,7 +46,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/fdrss.c, output: fd-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/fdrss.c, inputs: [source/memrss.h], output: fd-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fd-reclamation }
     run: []
     expect: { exit: 0, stdout: golden/fdrss.out }
@@ -56,7 +56,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/forkrss.c, output: fork-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/forkrss.c, inputs: [source/memrss.h], output: fork-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fork-reclamation }
     run: []
     expect: { exit: 0, stdout: golden/forkrss.out }
@@ -66,7 +66,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/mallocfree.c, output: allocator-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/mallocfree.c, inputs: [source/memrss.h], output: allocator-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/allocator-reclamation }
     run: []
     expect: { exit: 0, stdout: golden/mallocfree.out }
@@ -76,7 +76,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/mmapfilerss.c, output: file-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/mmapfilerss.c, inputs: [source/memrss.h], output: file-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/file-mapping-reclamation }
     run: []
     expect: { exit: 0, stdout: golden/mmapfilerss.out }
@@ -86,7 +86,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/mmapfree.c, output: anonymous-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/mmapfree.c, inputs: [source/memrss.h], output: anonymous-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/anonymous-mapping-reclamation }
     run: []
     expect: { exit: 0, stdout: golden/mmapfree.out }
@@ -96,7 +96,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/threadrss.c, output: thread-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/threadrss.c, inputs: [source/memrss.h], output: thread-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/thread-reclamation }
     run: []
     expect: { exit: 0, stdout: golden/threadrss.out }
@@ -661,7 +661,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/dbt_smcrwxrewrite.c, output: dbt-smc-rwx-rewrite, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smcrwxrewrite.c, inputs: [source/dbt.h], output: dbt-smc-rwx-rewrite, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-rwx-rewrite }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smcrwxrewrite.out }
@@ -669,7 +669,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/dbt_smcbounce.c, output: dbt-smc-bounce, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smcbounce.c, inputs: [source/dbt.h], output: dbt-smc-bounce, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-bounce }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smcbounce.out }
@@ -679,7 +679,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/dbt_smcgrow.c, output: dbt-smc-grow, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smcgrow.c, inputs: [source/dbt.h], output: dbt-smc-grow, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-grow }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smcgrow.out }
@@ -687,7 +687,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/dbt_smctrampoline.c, output: dbt-smc-trampoline, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smctrampoline.c, inputs: [source/dbt.h], output: dbt-smc-trampoline, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-trampoline }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smctrampoline.out }
@@ -697,7 +697,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/dbt_smcminijit.c, output: dbt-smc-minijit, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smcminijit.c, inputs: [source/dbt.h], output: dbt-smc-minijit, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-minijit }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smcminijit.out }
@@ -705,7 +705,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/dbt_smcmanyslots.c, output: dbt-smc-manyslots, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smcmanyslots.c, inputs: [source/dbt.h], output: dbt-smc-manyslots, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-manyslots }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smcmanyslots.out }
@@ -713,7 +713,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/dbt_smccrosspage.c, output: dbt-smc-crosspage, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_smccrosspage.c, inputs: [source/dbt.h], output: dbt-smc-crosspage, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-crosspage }
     run: []
     expect: { exit: 0, stdout: golden/dbt_smccrosspage.out }
@@ -729,7 +729,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/dbt_concpatch.c, output: dbt-conc-patch, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_concpatch.c, inputs: [source/dbt.h], output: dbt-conc-patch, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-conc-patch }
     run: []
     expect: { exit: 0, stdout: golden/dbt_concpatch.out }
@@ -739,7 +739,7 @@ cases:
       reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: source/dbt_concmmapexec.c, output: dbt-conc-mmap-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
+    build: { source: source/dbt_concmmapexec.c, inputs: [source/dbt.h], output: dbt-conc-mmap-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-conc-mmap-exec }
     run: []
     expect: { exit: 0, stdout: golden/dbt_concmmapexec.out }

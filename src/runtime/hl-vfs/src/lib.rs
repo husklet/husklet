@@ -56,11 +56,12 @@ pub use permission::{Access, AccessError, AccessIdentity, Capabilities, Umask};
 pub use procfs::{
     AddressSpaceView as ProcfsAddressSpaceView, CgroupView as ProcfsCgroupView, CpuModel as ProcfsCpuModel,
     CpuTicks as ProcfsCpuTicks, CpuView as ProcfsCpuView, DescriptorView as ProcfsDescriptorView, Error as ProcfsError,
-    LimitResource as ProcfsLimitResource, LimitView as ProcfsLimitView, MemoryRegionLabel as ProcfsMemoryRegionLabel,
-    MemoryRegionView as ProcfsMemoryRegionView, MemoryView as ProcfsMemoryView, MountEntry as ProcfsMountEntry,
-    InternetSocketView as ProcfsInternetSocketView, MountView as ProcfsMountView, NetworkInterfaceView as ProcfsNetworkInterfaceView, NetworkView as ProcfsNetworkView,
-    NodeKind as ProcfsNodeKind, ProcessState as ProcfsProcessState, ProcessView as ProcfsProcessView, Procfs,
-    Source as ProcfsSource, StatError as ProcfsStatError, StatInput as ProcfsStatInput, StatState as ProcfsStatState,
+    InternetSocketView as ProcfsInternetSocketView, LimitResource as ProcfsLimitResource, LimitView as ProcfsLimitView,
+    MemoryRegionLabel as ProcfsMemoryRegionLabel, MemoryRegionView as ProcfsMemoryRegionView,
+    MemoryView as ProcfsMemoryView, MountEntry as ProcfsMountEntry, MountView as ProcfsMountView,
+    NetworkInterfaceView as ProcfsNetworkInterfaceView, NetworkView as ProcfsNetworkView, NodeKind as ProcfsNodeKind,
+    ProcessState as ProcfsProcessState, ProcessView as ProcfsProcessView, Procfs, Source as ProcfsSource,
+    StatError as ProcfsStatError, StatInput as ProcfsStatInput, StatState as ProcfsStatState,
     StatView as ProcfsStatView, SystemView as ProcfsSystemView, UnixSocketView as ProcfsUnixSocketView,
     UtsView as ProcfsUtsView,
 };

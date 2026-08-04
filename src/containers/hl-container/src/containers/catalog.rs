@@ -44,9 +44,7 @@ impl Containers {
         name: impl Into<String>,
         value: impl Into<String>,
     ) -> Result<Container> {
-        self.service
-            .set_label(reference, name.into(), value.into())
-            .await
+        self.service.set_label(reference, name.into(), value.into()).await
     }
 
     /// Removes every container that is not currently running or paused.

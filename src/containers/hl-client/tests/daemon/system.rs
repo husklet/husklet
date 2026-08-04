@@ -39,11 +39,7 @@ async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit
     assert!(usage.images.is_empty());
     assert!(usage.volumes.is_empty());
 
-    let error = client
-        .containers()
-        .pause(created.id.as_str())
-        .await
-        .unwrap_err();
+    let error = client.containers().pause(created.id.as_str()).await.unwrap_err();
     assert!(matches!(
         error,
         hl_client::Error::Docker {

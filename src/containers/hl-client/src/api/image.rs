@@ -25,8 +25,7 @@ struct BuildOptions<'a> {
 }
 
 use crate::model::{
-    Distribution, ImageCommit, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary,
-    InspectImage, Search,
+    Distribution, ImageCommit, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary, InspectImage, Search,
 };
 use crate::transport::Transport;
 use crate::uri::Component;
@@ -69,8 +68,7 @@ impl<'a> Images<'a> {
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        self.build_target(reader, tag, dockerfile, arguments, None, false)
-            .await
+        self.build_target(reader, tag, dockerfile, arguments, None, false).await
     }
 
     /// Build through a named Dockerfile target stage.
@@ -152,11 +150,7 @@ impl<'a> Images<'a> {
             .target
             .map(|value| format!("&target={}", Component::opaque(value)))
             .unwrap_or_default();
-        let no_cache = if options.no_cache {
-            "&nocache=true"
-        } else {
-            ""
-        };
+        let no_cache = if options.no_cache { "&nocache=true" } else { "" };
         let network = options
             .network
             .map(|value| format!("&networkmode={}", Component::opaque(value)))
@@ -177,10 +171,7 @@ impl<'a> Images<'a> {
             )
             .await?;
         let mut id = None;
-        for line in bytes
-            .split(|byte| *byte == b'\n')
-            .filter(|line| !line.is_empty())
-        {
+        for line in bytes.split(|byte| *byte == b'\n').filter(|line| !line.is_empty()) {
             let record: BuildRecord = serde_json::from_slice(line)?;
             if let Some(aux) = record.aux {
                 id = Some(aux.id);
@@ -210,9 +201,7 @@ impl<'a> Images<'a> {
         tag: Option<&str>,
         pause: bool,
     ) -> Result<ImageCommit> {
-        let tag = tag.map_or_else(String::new, |value| {
-            format!("&tag={}", Component::opaque(value))
-        });
+        let tag = tag.map_or_else(String::new, |value| format!("&tag={}", Component::opaque(value)));
         self.transport
             .json::<(), ImageCommit>(
                 Method::POST,
@@ -253,11 +242,7 @@ impl<'a> Images<'a> {
                 .map(|change| format!("changes={}", Component::opaque(change))),
         );
         self.transport
-            .json::<(), ImageCommit>(
-                Method::POST,
-                &format!("/commit?{}", parameters.join("&")),
-                None,
-            )
+            .json::<(), ImageCommit>(Method::POST, &format!("/commit?{}", parameters.join("&")), None)
             .await
     }
 
@@ -326,9 +311,7 @@ impl<'a> Images<'a> {
     /// # Errors
     /// Returns transport or Docker API failures, including invalid references.
     pub async fn tag(&self, name: &str, repository: &str, tag: Option<&str>) -> Result<()> {
-        let suffix = tag.map_or_else(String::new, |value| {
-            format!("&tag={}", Component::opaque(value))
-        });
+        let suffix = tag.map_or_else(String::new, |value| format!("&tag={}", Component::opaque(value)));
         self.transport
             .empty(
                 Method::POST,
@@ -348,11 +331,7 @@ impl<'a> Images<'a> {
     /// Returns transport, Docker API, or response-decoding failures.
     pub async fn remove(&self, name: &str) -> Result<Vec<ImageDelete>> {
         self.transport
-            .json::<(), Vec<ImageDelete>>(
-                Method::DELETE,
-                &format!("/images/{}", Component::opaque(name)),
-                None,
-            )
+            .json::<(), Vec<ImageDelete>>(Method::DELETE, &format!("/images/{}", Component::opaque(name)), None)
             .await
     }
 
@@ -394,25 +373,14 @@ impl<'a> Images<'a> {
     ///
     /// # Errors
     /// Returns reader, transport, archive-validation, or image persistence failures.
-    pub async fn import<R>(
-        &self,
-        reader: R,
-        repository: &str,
-        tag: Option<&str>,
-    ) -> Result<ImageLoad>
+    pub async fn import<R>(&self, reader: R, repository: &str, tag: Option<&str>) -> Result<ImageLoad>
     where
         R: AsyncRead + Send + Unpin + 'static,
     {
-        let tag = tag.map_or_else(String::new, |value| {
-            format!("&tag={}", Component::opaque(value))
-        });
+        let tag = tag.map_or_else(String::new, |value| format!("&tag={}", Component::opaque(value)));
         self.transport
             .upload(
-                &format!(
-                    "/images/create?fromSrc=-&repo={}{}",
-                    Component::opaque(repository),
-                    tag
-                ),
+                &format!("/images/create?fromSrc=-&repo={}{}", Component::opaque(repository), tag),
                 reader,
             )
             .await

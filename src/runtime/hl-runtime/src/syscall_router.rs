@@ -235,15 +235,12 @@ impl RuntimeSyscallRouter {
     }
 
     #[must_use]
-    pub fn filesystem_may_block(
-        &self,
-        architecture: GuestArchitecture,
-        cpu: &mut ExecutionCpuSnapshot,
-    ) -> bool {
+    pub fn filesystem_may_block(&self, architecture: GuestArchitecture, cpu: &mut ExecutionCpuSnapshot) -> bool {
         let Ok(frame) = SyscallFrameDecoder::decode(architecture, &CpuRegisters(cpu)) else {
             return false;
         };
-        let SyscallDisposition::Operation(operation) = SyscallDispatcher::route(architecture, frame.raw_number).disposition
+        let SyscallDisposition::Operation(operation) =
+            SyscallDispatcher::route(architecture, frame.raw_number).disposition
         else {
             return false;
         };
@@ -258,15 +255,12 @@ impl RuntimeSyscallRouter {
     }
 
     #[must_use]
-    pub fn descriptor_may_block(
-        &self,
-        architecture: GuestArchitecture,
-        cpu: &mut ExecutionCpuSnapshot,
-    ) -> bool {
+    pub fn descriptor_may_block(&self, architecture: GuestArchitecture, cpu: &mut ExecutionCpuSnapshot) -> bool {
         let Ok(frame) = SyscallFrameDecoder::decode(architecture, &CpuRegisters(cpu)) else {
             return true;
         };
-        let SyscallDisposition::Operation(operation) = SyscallDispatcher::route(architecture, frame.raw_number).disposition
+        let SyscallDisposition::Operation(operation) =
+            SyscallDispatcher::route(architecture, frame.raw_number).disposition
         else {
             return true;
         };

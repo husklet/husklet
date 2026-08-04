@@ -26,9 +26,7 @@ fn encoded_names_survive_commit_reopen_and_fork() {
     let reopened = Snapshots::open(temp.path()).unwrap();
     let view = reopened.view(&id("parent")).unwrap();
     assert_eq!(view.names().physical(Path::new("data/FOO")), physical);
-    let child = reopened
-        .prepare(id("child-active"), Some(&id("parent")))
-        .unwrap();
+    let child = reopened.prepare(id("child-active"), Some(&id("parent"))).unwrap();
     assert_eq!(child.names().guest(&physical), Path::new("data/FOO"));
     child.commit(id("child")).unwrap();
     assert!(temp.path().join("names/committed/child.json").is_file());
@@ -62,11 +60,7 @@ fn opening_another_store_preserves_a_live_draft() {
 
     let other = Snapshots::open(temp.path()).unwrap();
     assert_eq!(fs::read(draft.path().join("marker")).unwrap(), b"live");
-    other
-        .prepare(id("worker-two"), None)
-        .unwrap()
-        .abort()
-        .unwrap();
+    other.prepare(id("worker-two"), None).unwrap().abort().unwrap();
     draft.abort().unwrap();
 }
 
@@ -79,9 +73,7 @@ fn concurrent_stores_do_not_delete_each_others_drafts() {
             let root = root.clone();
             std::thread::spawn(move || {
                 let snapshots = Snapshots::open(root).unwrap();
-                let draft = snapshots
-                    .prepare(id(&format!("worker-{worker}")), None)
-                    .unwrap();
+                let draft = snapshots.prepare(id(&format!("worker-{worker}")), None).unwrap();
                 fs::write(draft.path().join("marker"), worker.to_string()).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(20));
                 assert_eq!(
@@ -107,11 +99,7 @@ fn malformed_names_sidecar_is_rejected() {
         .unwrap()
         .commit(id("bad"))
         .unwrap();
-    fs::write(
-        temp.path().join("names/committed/bad.json"),
-        br#"{"literal":"guest"}"#,
-    )
-    .unwrap();
+    fs::write(temp.path().join("names/committed/bad.json"), br#"{"literal":"guest"}"#).unwrap();
     assert!(snapshots.view(&id("bad")).is_err());
     assert!(snapshots.prepare(id("fork"), Some(&id("bad"))).is_err());
     assert!(!temp.path().join("active/fork").exists());
@@ -124,10 +112,7 @@ fn case_distinct_layer_names_persist_and_export_as_guest_names() {
     let mut tar = Vec::new();
     {
         let mut archive = tar::Builder::new(&mut tar);
-        for (name, body) in [
-            ("data/foo", b"lower".as_slice()),
-            ("data/FOO", b"upper".as_slice()),
-        ] {
+        for (name, body) in [("data/foo", b"lower".as_slice()), ("data/FOO", b"upper".as_slice())] {
             let mut header = tar::Header::new_gnu();
             header.set_size(body.len() as u64);
             header.set_mode(0o644);
@@ -140,18 +125,14 @@ fn case_distinct_layer_names_persist_and_export_as_guest_names() {
         link.set_mode(0o644);
         link.set_link_name("data/FOO").unwrap();
         link.set_cksum();
-        archive
-            .append_data(&mut link, "data/link", &[][..])
-            .unwrap();
+        archive.append_data(&mut link, "data/link", &[][..]).unwrap();
         let mut symlink = tar::Header::new_gnu();
         symlink.set_entry_type(tar::EntryType::Symlink);
         symlink.set_size(0);
         symlink.set_mode(0o777);
         symlink.set_link_name("FOO").unwrap();
         symlink.set_cksum();
-        archive
-            .append_data(&mut symlink, "data/symlink", &[][..])
-            .unwrap();
+        archive.append_data(&mut symlink, "data/symlink", &[][..]).unwrap();
         archive.finish().unwrap();
     }
     let temp = tempfile::tempdir().unwrap();
@@ -226,8 +207,7 @@ fn hardlink_resolves_through_a_case_distinct_directory() {
         link.set_entry_type(tar::EntryType::Link);
         link.set_size(0);
         link.set_mode(0o644);
-        link.set_link_name("usr/share/terminfo/L/LFT-PC850")
-            .unwrap();
+        link.set_link_name("usr/share/terminfo/L/LFT-PC850").unwrap();
         link.set_cksum();
         archive
             .append_data(&mut link, "usr/share/terminfo/l/lft-pc850", &[][..])
@@ -243,12 +223,8 @@ fn hardlink_resolves_through_a_case_distinct_directory() {
     Layer::new(tar.as_slice())
         .apply_with_metadata(&root, owners, names)
         .unwrap();
-    let upper = draft
-        .names()
-        .physical(Path::new("usr/share/terminfo/L/LFT-PC850"));
-    let lower = draft
-        .names()
-        .physical(Path::new("usr/share/terminfo/l/lft-pc850"));
+    let upper = draft.names().physical(Path::new("usr/share/terminfo/L/LFT-PC850"));
+    let lower = draft.names().physical(Path::new("usr/share/terminfo/l/lft-pc850"));
     assert_eq!(
         fs::metadata(root.join(upper)).unwrap().ino(),
         fs::metadata(root.join(lower)).unwrap().ino()
@@ -267,9 +243,7 @@ fn metadata_layer_preserves_same_directory_symlink_target() {
         header.set_mode(0o777);
         header.set_link_name(".").unwrap();
         header.set_cksum();
-        archive
-            .append_data(&mut header, "usr/bin/X11", &[][..])
-            .unwrap();
+        archive.append_data(&mut header, "usr/bin/X11", &[][..]).unwrap();
         archive.finish().unwrap();
     }
     let temp = tempfile::tempdir().unwrap();
@@ -280,10 +254,7 @@ fn metadata_layer_preserves_same_directory_symlink_target() {
     Layer::new(bytes.as_slice())
         .apply_with_metadata(&root, owners, names)
         .unwrap();
-    assert_eq!(
-        fs::read_link(root.join("usr/bin/X11")).unwrap(),
-        Path::new(".")
-    );
+    assert_eq!(fs::read_link(root.join("usr/bin/X11")).unwrap(), Path::new("."));
 }
 
 #[test]

@@ -25,13 +25,8 @@ impl Images {
     ) -> Result<Image> {
         let _span = hl_log::hl_span!(hl_log::tag::IMAGE, "pull");
         hl_log::hl_info!(hl_log::tag::IMAGE, "pull begin reference={reference}");
-        let lease = self
-            .leases
-            .create(BTreeMap::from([("kind".into(), "pull".into())]))?;
-        let result = match self
-            .pull_under_lease(source, &reference, platform, lease.id())
-            .await
-        {
+        let lease = self.leases.create(BTreeMap::from([("kind".into(), "pull".into())]))?;
+        let result = match self.pull_under_lease(source, &reference, platform, lease.id()).await {
             Ok(target) => (|| {
                 let image = Image {
                     name: reference,
@@ -77,14 +72,12 @@ impl Images {
         let manifest_bytes = if manifest.digest() == root.digest() {
             root_bytes
         } else {
-            self.fetch(source, reference, &manifest, lease, true)
-                .await?
+            self.fetch(source, reference, &manifest, lease, true).await?
         };
-        let document: ManifestDocument = serde_json::from_slice(&manifest_bytes)
-            .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let document: ManifestDocument =
+            serde_json::from_slice(&manifest_bytes).map_err(|error| Error::MalformedOci(error.to_string()))?;
         document.validate()?;
-        self.fetch(source, reference, &document.config, lease, false)
-            .await?;
+        self.fetch(source, reference, &document.config, lease, false).await?;
         for layer in &document.layers {
             self.fetch(source, reference, layer, lease, false).await?;
         }
@@ -111,9 +104,7 @@ impl Images {
         let mut stream = source.fetch(reference, descriptor).await?;
         let mut ingest = self.content.ingest(format!("pull-{digest}"))?;
         if capture && descriptor.size() > 16 * 1024 * 1024 {
-            return Err(Error::MalformedOci(
-                "descriptor document exceeds 16 MiB".into(),
-            ));
+            return Err(Error::MalformedOci("descriptor document exceeds 16 MiB".into()));
         }
         let mut bytes = if capture {
             Vec::with_capacity(usize::try_from(descriptor.size()).unwrap_or(0))
@@ -123,12 +114,10 @@ impl Images {
         let mut received = 0_u64;
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            received = received
-                .checked_add(chunk.len() as u64)
-                .ok_or(Error::SizeMismatch {
-                    expected: descriptor.size(),
-                    actual: u64::MAX,
-                })?;
+            received = received.checked_add(chunk.len() as u64).ok_or(Error::SizeMismatch {
+                expected: descriptor.size(),
+                actual: u64::MAX,
+            })?;
             if received > descriptor.size() {
                 return Err(Error::SizeMismatch {
                     expected: descriptor.size(),
@@ -161,13 +150,11 @@ impl Images {
         } else {
             image.target.clone()
         };
-        let document: ManifestDocument =
-            serde_json::from_slice(&self.content.read_document(&manifest)?)
-                .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let document: ManifestDocument = serde_json::from_slice(&self.content.read_document(&manifest)?)
+            .map_err(|error| Error::MalformedOci(error.to_string()))?;
         document.validate()?;
-        let config: ConfigDocument =
-            serde_json::from_slice(&self.content.read_document(&document.config)?)
-                .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let config: ConfigDocument = serde_json::from_slice(&self.content.read_document(&document.config)?)
+            .map_err(|error| Error::MalformedOci(error.to_string()))?;
         config.require_platform(platform)?;
         if config.rootfs.kind != "layers" {
             return Err(Error::MalformedOci(format!(

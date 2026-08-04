@@ -110,6 +110,46 @@ pub struct Metadata {
 }
 
 impl Metadata {
+    /// Construct metadata for a standalone filesystem image.
+    #[must_use]
+    pub fn standalone(platform: Platform, runtime: RuntimeConfig) -> Self {
+        Self {
+            platform,
+            created: None,
+            author: None,
+            labels: BTreeMap::new(),
+            history: Vec::new(),
+            runtime,
+            onbuild: Vec::new(),
+            exposed_ports: std::collections::BTreeSet::new(),
+            volumes: std::collections::BTreeSet::new(),
+            healthcheck: None,
+            stop_signal: None,
+        }
+    }
+
+    /// Apply one container commit's runtime and Docker metadata as a single validated value.
+    ///
+    /// # Errors
+    /// Returns an error without changing the source value when a configuration change is invalid.
+    pub fn committed(
+        mut self,
+        runtime: RuntimeConfig,
+        author: Option<String>,
+        comment: Option<String>,
+        changes: &[String],
+    ) -> Result<Self> {
+        self.runtime = runtime;
+        self.author = author;
+        crate::build::Changes::new(changes).apply(&mut self)?;
+        self.history.push(History {
+            created_by: Some("hl commit".into()),
+            comment,
+            ..History::default()
+        });
+        Ok(self)
+    }
+
     fn created_at_ms(&self) -> Option<u64> {
         self.created
             .as_deref()

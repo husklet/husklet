@@ -34,15 +34,9 @@ pub enum Error {
     #[error("network {0:?} has attached containers")]
     NetworkInUse(String),
     #[error("container {container} is already connected to network {network:?}")]
-    AlreadyConnected {
-        network: String,
-        container: ContainerId,
-    },
+    AlreadyConnected { network: String, container: ContainerId },
     #[error("container {container} is not connected to network {network:?}")]
-    NotConnected {
-        network: String,
-        container: ContainerId,
-    },
+    NotConnected { network: String, container: ContainerId },
     #[error("container {id} is {actual:?}, expected {expected}")]
     InvalidState {
         id: ContainerId,

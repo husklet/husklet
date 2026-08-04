@@ -268,16 +268,25 @@ fn system_prune_preserves_all_and_filtered_operations() {
 
 #[test]
 fn image_prune_defaults_to_dangling_and_accepts_metadata_filters() {
-    let Prune::Selected { values, until } = Prune::image(None).unwrap() else {
+    let prune = Prune::image(None).unwrap();
+    assert!(!prune.requires_metadata());
+    let Prune::Selected { values, until } = prune else {
         panic!("image prune must use a bounded selection")
     };
     assert_eq!(values.get("dangling").unwrap(), &["true"]);
     assert_eq!(until, None);
+    assert!(
+        !Prune::image(Some(r#"{"dangling":["false"]}"#))
+            .unwrap()
+            .requires_metadata()
+    );
 
-    let Prune::Selected { values, until } = Prune::image(Some(
+    let prune = Prune::image(Some(
         r#"{"dangling":["true"],"until":["2"],"label":["stage=build"],"label!":["keep"]}"#,
     ))
-    .unwrap() else {
+    .unwrap();
+    assert!(prune.requires_metadata());
+    let Prune::Selected { values, until } = prune else {
         panic!("filtered image prune must use a bounded selection")
     };
     assert_eq!(values.get("dangling").unwrap(), &["true"]);

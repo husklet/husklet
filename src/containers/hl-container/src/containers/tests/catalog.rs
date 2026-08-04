@@ -14,10 +14,7 @@ async fn resolve_cid_unique_prefix() {
         containers.inspect("aaaaaaaa0000").await.unwrap().spec.name,
         Some("web".into())
     );
-    assert_eq!(
-        containers.inspect("bbbb").await.unwrap().spec.name,
-        Some("db".into())
-    );
+    assert_eq!(containers.inspect("bbbb").await.unwrap().spec.name, Some("db".into()));
 }
 
 #[tokio::test]
@@ -33,23 +30,11 @@ async fn resolve_cid_ambiguous_prefix_is_none() {
 async fn resolve_cid_name_fallback_trims_leading_slash() {
     let containers = resolving_store(&[(RESOLVE_A, "web")]).await;
     assert_eq!(
-        containers
-            .inspect("web")
-            .await
-            .unwrap()
-            .spec
-            .name
-            .as_deref(),
+        containers.inspect("web").await.unwrap().spec.name.as_deref(),
         Some("web")
     );
     assert_eq!(
-        containers
-            .inspect("/web")
-            .await
-            .unwrap()
-            .spec
-            .name
-            .as_deref(),
+        containers.inspect("/web").await.unwrap().spec.name.as_deref(),
         Some("web")
     );
 }
@@ -69,19 +54,10 @@ async fn create_list_inspect_remove_are_consistent() {
     let first = containers.create(spec("first")).await.unwrap();
     let second = containers.create(spec("second")).await.unwrap();
     assert_eq!(containers.inspect("first").await.unwrap(), first);
-    assert_eq!(
-        containers.inspect(&second.id.as_str()[..12]).await.unwrap(),
-        second
-    );
-    assert_eq!(
-        containers.list().await.unwrap(),
-        vec![first.clone(), second]
-    );
+    assert_eq!(containers.inspect(&second.id.as_str()[..12]).await.unwrap(), second);
+    assert_eq!(containers.list().await.unwrap(), vec![first.clone(), second]);
     assert_eq!(containers.remove(first.id.as_str()).await.unwrap(), first);
-    assert!(matches!(
-        containers.inspect("first").await,
-        Err(Error::NotFound(_))
-    ));
+    assert!(matches!(containers.inspect("first").await, Err(Error::NotFound(_))));
 }
 
 #[tokio::test]
@@ -95,10 +71,7 @@ async fn labels_can_be_rotated_without_changing_runtime_state() {
         .unwrap();
     containers.start("labeled").await.unwrap();
 
-    let updated = containers
-        .set_label("labeled", "credential", "digest")
-        .await
-        .unwrap();
+    let updated = containers.set_label("labeled", "credential", "digest").await.unwrap();
 
     assert_eq!(
         updated.spec.labels.get("credential").map(String::as_str),
@@ -126,19 +99,13 @@ async fn prune_removes_inactive_records_and_preserves_running_owners() {
     let running = containers.create(spec("running")).await.unwrap();
     containers.start("running").await.unwrap();
 
-    assert_eq!(
-        containers.prune(&crate::Prune::default()).await.unwrap(),
-        vec![created]
-    );
+    assert_eq!(containers.prune(&crate::Prune::default()).await.unwrap(), vec![created]);
     assert!(matches!(
         containers.inspect("running").await.unwrap().state,
         ContainerState::Running { .. }
     ));
 
-    assert_eq!(
-        containers.wait("running").await.unwrap(),
-        ExitStatus::Code(0)
-    );
+    assert_eq!(containers.wait("running").await.unwrap(), ExitStatus::Code(0));
     assert_eq!(
         containers
             .prune(&crate::Prune::default())
@@ -195,13 +162,7 @@ async fn rejects_invalid_specs_names_and_transitions() {
         containers.create(spec("same")).await,
         Err(Error::NameConflict(_))
     ));
-    assert!(matches!(
-        containers.wait("same").await,
-        Err(Error::InvalidState { .. })
-    ));
+    assert!(matches!(containers.wait("same").await, Err(Error::InvalidState { .. })));
     containers.start("same").await.unwrap();
-    assert!(matches!(
-        containers.start("same").await,
-        Err(Error::AlreadyRunning(_))
-    ));
+    assert!(matches!(containers.start("same").await, Err(Error::AlreadyRunning(_))));
 }

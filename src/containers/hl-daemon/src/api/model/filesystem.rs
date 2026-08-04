@@ -17,8 +17,7 @@ pub struct PathStat {
 impl PathStat {
     pub(crate) fn header(&self) -> Result<String, serde_json::Error> {
         use base64::Engine as _;
-        serde_json::to_vec(self)
-            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+        serde_json::to_vec(self).map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
     }
 }
 
@@ -129,8 +128,7 @@ mod tests {
             "1970-01-01T00:00:00.000000000Z"
         );
         assert_eq!(
-            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_704_067_200))
-                .to_string(),
+            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_704_067_200)).to_string(),
             "2024-01-01T00:00:00.000000000Z"
         );
     }

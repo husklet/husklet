@@ -7,10 +7,8 @@ fn archive_detection_distinguishes_gzip_tar_and_plain_files() {
 
     let root = tempfile::tempdir().unwrap();
     let gzip = root.path().join("payload.tar.gz");
-    let mut encoder = flate2::write::GzEncoder::new(
-        std::fs::File::create(&gzip).unwrap(),
-        flate2::Compression::default(),
-    );
+    let mut encoder =
+        flate2::write::GzEncoder::new(std::fs::File::create(&gzip).unwrap(), flate2::Compression::default());
     encoder.write_all(b"payload").unwrap();
     encoder.finish().unwrap();
 
@@ -20,8 +18,7 @@ fn archive_detection_distinguishes_gzip_tar_and_plain_files() {
     header.set_size(7);
     header.set_mode(0o644);
     header.set_cksum();
-    tar.append_data(&mut header, "payload", &b"payload"[..])
-        .unwrap();
+    tar.append_data(&mut header, "payload", &b"payload"[..]).unwrap();
     tar.finish().unwrap();
 
     let plain = root.path().join("plain");
@@ -70,10 +67,7 @@ fn copy_excludes_and_parents_apply_docker_default_root_ownership() {
     assert!(destination.path().join("filtered/keep").exists());
     assert!(!destination.path().join("filtered/drop.tmp").exists());
     assert!(!destination.path().join("filtered/private").exists());
-    assert_eq!(
-        ownerships.get("filtered/keep"),
-        Some(Ownership { uid: 0, gid: 0 })
-    );
+    assert_eq!(ownerships.get("filtered/keep"), Some(Ownership { uid: 0, gid: 0 }));
     assert_eq!(ownerships.get("filtered/drop.tmp"), None);
 
     Copy {
@@ -91,10 +85,7 @@ fn copy_excludes_and_parents_apply_docker_default_root_ownership() {
     .apply(&mut ownerships)
     .unwrap();
     assert!(destination.path().join("parents/tree/keep").exists());
-    assert_eq!(
-        ownerships.get("parents/tree/keep"),
-        Some(Ownership { uid: 0, gid: 0 })
-    );
+    assert_eq!(ownerships.get("parents/tree/keep"), Some(Ownership { uid: 0, gid: 0 }));
 }
 
 #[cfg(unix)]
@@ -147,8 +138,7 @@ fn add_unpacks_local_tar_while_copy_preserves_it() {
         header.set_size(7);
         header.set_mode(0o644);
         header.set_cksum();
-        tar.append_data(&mut header, "inside", &b"payload"[..])
-            .unwrap();
+        tar.append_data(&mut header, "inside", &b"payload"[..]).unwrap();
         tar.finish().unwrap();
     }
     for (unpack, target) in [(false, "/copied/"), (true, "/added/")] {

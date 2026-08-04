@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use hl_vfs::GuestPath;
 
@@ -54,7 +54,11 @@ impl FsContext {
         if root.as_str() == "/" {
             return path.clone();
         }
-        let Some(suffix) = path.as_str().strip_prefix(root.as_str()).filter(|suffix| suffix.is_empty() || suffix.starts_with('/')) else {
+        let Some(suffix) = path
+            .as_str()
+            .strip_prefix(root.as_str())
+            .filter(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+        else {
             return GuestPath::new("/").expect("root is a valid guest path");
         };
         GuestPath::new(if suffix.is_empty() { "/" } else { suffix }).expect("a suffix of a valid guest path is valid")

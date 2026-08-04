@@ -80,8 +80,16 @@ pub const DEFINITIONS: &[Definition] = &[
     launch!("HL_NAME_BINDS", "live guest basename projection rules", Records),
     launch!("HL_NET_ISOLATE", "disable guest external networking", Flag),
     launch!("HL_NET_HOST", "use the host network stack directly", Flag),
-    launch!("HL_NATIVE_DIAGNOSTICS", "report native execution counters at launch exit", Flag),
-    launch!("HL_NATIVE_EXECUTION", "enable the bounded native execution adapter", Flag),
+    launch!(
+        "HL_NATIVE_DIAGNOSTICS",
+        "report native execution counters at launch exit",
+        Flag
+    ),
+    launch!(
+        "HL_NATIVE_EXECUTION",
+        "enable the bounded native execution adapter",
+        Flag
+    ),
     launch!("HL_PCACHE", "enable persistent translated-code caching", Flag),
     launch!("HL_PCACHE_DIR", "persistent translated-code cache storage", Path),
     launch!("HL_PIDS_MAX", "guest process limit", Integer),

@@ -18,12 +18,7 @@ impl Images<'_> {
     /// # Errors
     /// Returns transport or Docker API failures. Registry failures arrive as progress records with
     /// [`PullProgress::error`] populated.
-    pub async fn pull(
-        &self,
-        image: &str,
-        tag: Option<&str>,
-        platform: Option<&str>,
-    ) -> Result<Pull> {
+    pub async fn pull(&self, image: &str, tag: Option<&str>, platform: Option<&str>) -> Result<Pull> {
         self.pull_with(image, tag, platform, None).await
     }
 
@@ -48,8 +43,7 @@ impl Images<'_> {
         }
         let path = format!("/images/create?{}", query.join("&"));
         let stream = if let Some(credentials) = credentials {
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(credentials)?);
+            let encoded = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(credentials)?);
             self.transport
                 .stream_header(
                     Method::POST,
@@ -73,20 +67,13 @@ impl Images<'_> {
     ///
     /// # Errors
     /// Returns transport or header-encoding failures. Registry failures arrive as progress records.
-    pub async fn push(
-        &self,
-        image: &str,
-        tag: Option<&str>,
-        credentials: Option<&Credentials>,
-    ) -> Result<Push> {
+    pub async fn push(&self, image: &str, tag: Option<&str>, credentials: Option<&Credentials>) -> Result<Push> {
         let mut path = format!("/images/{}/push", Component::opaque(image));
         if let Some(tag) = tag {
-            write!(path, "?tag={}", Component::opaque(tag))
-                .expect("writing to a String cannot fail");
+            write!(path, "?tag={}", Component::opaque(tag)).expect("writing to a String cannot fail");
         }
         let stream = if let Some(credentials) = credentials {
-            let encoded =
-                base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(credentials)?);
+            let encoded = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(credentials)?);
             self.transport
                 .stream_header(
                     Method::POST,

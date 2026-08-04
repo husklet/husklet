@@ -5,10 +5,7 @@ use hl_container::{ContainerSpec, Containers, Isolation, Process, Sandbox};
 use std::{path::Path, time::Duration};
 use tokio::time::sleep;
 
-pub(crate) async fn run(
-    containers: &Containers,
-    rootfs: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let host = reservation.local_addr()?.port();
     drop(reservation);
@@ -16,10 +13,7 @@ pub(crate) async fn run(
     let server = |name: &str| {
         ContainerSpec::from_directory(
             rootfs,
-            Process::new("/bin/sh").args([
-                "-c",
-                "while true; do echo published-ok | nc -l -p 24567 -w 1; done",
-            ]),
+            Process::new("/bin/sh").args(["-c", "while true; do echo published-ok | nc -l -p 24567 -w 1; done"]),
         )
         .name(name)
         .isolation(Isolation {

@@ -1,7 +1,7 @@
 use super::abi;
-use super::virtual_host::{GuestVm, LinuxGuestVm};
 use super::arena::{Ledger, Operation};
 use super::virtual_advice::Advice;
+use super::virtual_host::{GuestVm, LinuxGuestVm};
 use super::virtual_lock::Locks;
 use hl_memory::{AtomicU32Write, Protection};
 use std::collections::BTreeMap;
@@ -89,7 +89,9 @@ impl Memory {
             .ok_or(MemoryError::InvalidRange)?;
         let ownership = context.reserve();
         let host: Arc<dyn GuestVm> = Arc::new(LinuxGuestVm);
-        let address = host.reserve(reservation_length).map_err(|()| MemoryError::OutOfMemory)?;
+        let address = host
+            .reserve(reservation_length)
+            .map_err(|()| MemoryError::OutOfMemory)?;
         let resource = ownership.publish(super::virtual_reservation::Reservation::new(
             address,
             reservation_length,
@@ -267,7 +269,9 @@ impl Memory {
             .collect::<Result<Vec<_>, _>>()?;
         let pins = self.direct_pins.lock().unwrap_or_else(|error| error.into_inner());
         Ok(pins.ranges.values().any(|pin| {
-            ranges.iter().any(|range| pin.start() < range.end() && range.start() < pin.end())
+            ranges
+                .iter()
+                .any(|range| pin.start() < range.end() && range.start() < pin.end())
         }))
     }
 
@@ -550,7 +554,9 @@ impl Memory {
         // SAFETY: the checked range is wholly inside this owner's reservation;
         // no pointer escapes, the transaction mutex excludes adapter access,
         // Linux retains nothing, and mprotect cannot unwind.
-        self.host.protect(address as usize, length, native).map_err(|()| MemoryError::Host)?;
+        self.host
+            .protect(address as usize, length, native)
+            .map_err(|()| MemoryError::Host)?;
         Ok(())
     }
 
@@ -580,7 +586,9 @@ impl Memory {
         // SAFETY: the address and length are this owner's entire live
         // reservation; removing access is fail-closed, Linux retains nothing,
         // and mprotect cannot unwind.
-        let _failed = self.host.protect(self.reservation, self.reservation_length, abi::PROT_NONE);
+        let _failed = self
+            .host
+            .protect(self.reservation, self.reservation_length, abi::PROT_NONE);
     }
 
     pub(super) fn native_protection(protection: Protection) -> Result<i32, MemoryError> {

@@ -14,8 +14,7 @@ impl std::str::FromStr for Command {
 
     fn from_str(value: &str) -> Result<Self> {
         let value = value.trim_start();
-        let json_form =
-            value.starts_with('[') && !value.as_bytes().get(1).is_some_and(u8::is_ascii_whitespace);
+        let json_form = value.starts_with('[') && !value.as_bytes().get(1).is_some_and(u8::is_ascii_whitespace);
         if json_form {
             return serde_json::from_str(value)
                 .map(Self::Exec)
@@ -54,23 +53,17 @@ impl<'a> Changes<'a> {
             let (name, value) = change
                 .trim()
                 .split_once(char::is_whitespace)
-                .ok_or_else(|| {
-                    Error::MalformedOci(format!("commit change {change:?} has no value"))
-                })?;
+                .ok_or_else(|| Error::MalformedOci(format!("commit change {change:?} has no value")))?;
             let value = value.trim();
             let name = name.to_ascii_uppercase();
             match name.as_str() {
                 "CMD" => metadata.runtime.command = value.parse::<Command>()?.into(),
                 "ENTRYPOINT" => metadata.runtime.entrypoint = value.parse::<Command>()?.into(),
-                "ENV" => metadata
-                    .runtime
-                    .environment
-                    .extend(Assignments::new(value).parse()?),
+                "ENV" => metadata.runtime.environment.extend(Assignments::new(value).parse()?),
                 "LABEL" => metadata.labels.extend(Assignments::new(value).parse()?),
                 "WORKDIR" => {
                     metadata.runtime.working_directory =
-                        WorkingDirectory::new(&metadata.runtime.working_directory)
-                            .resolve(value)?;
+                        WorkingDirectory::new(&metadata.runtime.working_directory).resolve(value)?;
                 }
                 "USER" => {
                     if value.is_empty() {
@@ -91,20 +84,15 @@ impl<'a> Changes<'a> {
                 }
                 "VOLUME" => {
                     let volumes = if value.starts_with('[') {
-                        serde_json::from_str(value).map_err(|error| {
-                            Error::MalformedOci(format!("invalid VOLUME: {error}"))
-                        })?
+                        serde_json::from_str(value)
+                            .map_err(|error| Error::MalformedOci(format!("invalid VOLUME: {error}")))?
                     } else {
                         Words::new(value).parse()
                     };
                     metadata.volumes.extend(volumes);
                 }
                 "ONBUILD" => {
-                    let nested = value
-                        .split_whitespace()
-                        .next()
-                        .unwrap_or_default()
-                        .to_ascii_uppercase();
+                    let nested = value.split_whitespace().next().unwrap_or_default().to_ascii_uppercase();
                     if value.is_empty() || matches!(nested.as_str(), "FROM" | "ONBUILD") {
                         return Err(Error::MalformedOci("invalid ONBUILD trigger".into()));
                     }
@@ -114,11 +102,7 @@ impl<'a> Changes<'a> {
                     metadata.stop_signal = Some(value.into());
                 }
                 "STOPSIGNAL" => return Err(Error::MalformedOci("invalid STOPSIGNAL".into())),
-                _ => {
-                    return Err(Error::MalformedOci(format!(
-                        "unsupported commit change {name}"
-                    )))
-                }
+                _ => return Err(Error::MalformedOci(format!("unsupported commit change {name}"))),
             }
             metadata.history.push(History::change(change));
         }
@@ -150,9 +134,9 @@ impl std::str::FromStr for Healthcheck {
             retries: None,
         };
         while let Some(option) = value.strip_prefix("--") {
-            let end = option.find(char::is_whitespace).ok_or_else(|| {
-                Error::MalformedOci("HEALTHCHECK option requires a command".into())
-            })?;
+            let end = option
+                .find(char::is_whitespace)
+                .ok_or_else(|| Error::MalformedOci("HEALTHCHECK option requires a command".into()))?;
             let (option, rest) = option.split_at(end);
             let (name, setting) = option
                 .split_once('=')
@@ -165,10 +149,11 @@ impl std::str::FromStr for Healthcheck {
                     health.start_interval = Some(setting.parse::<Duration>()?.into());
                 }
                 "retries" => {
-                    health.retries =
-                        Some(setting.parse::<u64>().map_err(|_| {
-                            Error::MalformedOci("invalid HEALTHCHECK retries".into())
-                        })?);
+                    health.retries = Some(
+                        setting
+                            .parse::<u64>()
+                            .map_err(|_| Error::MalformedOci("invalid HEALTHCHECK retries".into()))?,
+                    );
                 }
                 _ => return Err(Error::MalformedOci("unknown HEALTHCHECK option".into())),
             }
@@ -181,9 +166,7 @@ impl std::str::FromStr for Healthcheck {
                 || health.start_interval.is_some()
                 || health.retries.is_some()
             {
-                return Err(Error::MalformedOci(
-                    "HEALTHCHECK NONE does not accept options".into(),
-                ));
+                return Err(Error::MalformedOci("HEALTHCHECK NONE does not accept options".into()));
             }
             health.test = vec!["NONE".into()];
             return Ok(health);
@@ -194,9 +177,8 @@ impl std::str::FromStr for Healthcheck {
         health.test = if command.trim_start().starts_with('[') {
             let mut values = vec!["CMD".to_owned()];
             values.extend(
-                serde_json::from_str::<Vec<String>>(command).map_err(|error| {
-                    Error::MalformedOci(format!("invalid HEALTHCHECK CMD: {error}"))
-                })?,
+                serde_json::from_str::<Vec<String>>(command)
+                    .map_err(|error| Error::MalformedOci(format!("invalid HEALTHCHECK CMD: {error}")))?,
             );
             values
         } else {
@@ -245,11 +227,7 @@ impl std::str::FromStr for Duration {
             "s" => 1.0,
             "m" => 60.0,
             "h" => 3_600.0,
-            _ => {
-                return Err(Error::MalformedOci(
-                    "invalid HEALTHCHECK duration unit".into(),
-                ))
-            }
+            _ => return Err(Error::MalformedOci("invalid HEALTHCHECK duration unit".into())),
         };
         std::time::Duration::try_from_secs_f64(number * seconds)
             .ok()
@@ -306,18 +284,14 @@ impl<'a> Environment<'a> {
                     alternate.push(chars.next().expect("peeked character"));
                 }
                 if chars.peek() != Some(&'}') {
-                    return Err(Error::MalformedOci(
-                        "unterminated variable substitution".into(),
-                    ));
+                    return Err(Error::MalformedOci("unterminated variable substitution".into()));
                 }
                 chars.next();
                 let value = self.values.get(&name).map(String::as_str);
                 let set = value.is_some();
                 let nonempty = value.is_some_and(|value| !value.is_empty());
                 let replacement = match (operator.as_str(), set, nonempty) {
-                    ("-", false, _) | (":-", _, false) | ("+", true, _) | (":+", _, true) => {
-                        self.expand(&alternate)?
-                    }
+                    ("-", false, _) | (":-", _, false) | ("+", true, _) | (":+", _, true) => self.expand(&alternate)?,
                     ("" | "-" | ":-", _, _) => value.unwrap_or_default().to_owned(),
                     _ => String::new(),
                 };

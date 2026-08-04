@@ -87,10 +87,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             .unwrap_or_else(|error| error.into_inner())
             .clone();
         let nonblocking = listener_snapshot.nonblocking;
-        if !self.host_projection
-            && nonblocking
-            && matches!(listener_snapshot.state, SocketState::Listening { .. })
-        {
+        if !self.host_projection && nonblocking && matches!(listener_snapshot.state, SocketState::Listening { .. }) {
             return LinuxResult::Error(Errno::EAGAIN);
         }
         let queue = Arc::new(hl_sync::WaitQueue::new());

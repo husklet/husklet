@@ -1,7 +1,6 @@
 use crate::report::ScenarioBatch;
 use hl_container::{
-    ContainerSpec, Containers, ExecSpec, ExecState, ExitStatus, Isolation, Process, Sandbox,
-    Stream, Streams,
+    ContainerSpec, Containers, ExecSpec, ExecState, ExitStatus, Isolation, Process, Sandbox, Stream, Streams,
 };
 use std::{path::Path, time::Duration};
 
@@ -132,32 +131,22 @@ impl<'a> Execs<'a> {
     }
 
     async fn basic(&self) -> Result<(), Error> {
-        self.output(
-            "exec-basic",
-            Process::new("/bin/echo").args(["EXECOK"]),
-            b"EXECOK\n",
-        )
-        .await
+        self.output("exec-basic", Process::new("/bin/echo").args(["EXECOK"]), b"EXECOK\n")
+            .await
     }
 
     async fn env(&self) -> Result<(), Error> {
         self.output(
             "exec-env",
-            Process::new("/bin/printenv")
-                .args(["XX"])
-                .env("XX", "yyval"),
+            Process::new("/bin/printenv").args(["XX"]).env("XX", "yyval"),
             b"yyval\n",
         )
         .await
     }
 
     async fn workdir(&self) -> Result<(), Error> {
-        self.output(
-            "exec-workdir",
-            Process::new("/bin/pwd").working_dir("/etc"),
-            b"/etc\n",
-        )
-        .await
+        self.output("exec-workdir", Process::new("/bin/pwd").working_dir("/etc"), b"/etc\n")
+            .await
     }
 
     async fn user(&self) -> Result<(), Error> {
@@ -190,10 +179,7 @@ impl<'a> Execs<'a> {
         drop(executions.start(&writer.id).await?);
         tokio::time::sleep(Duration::from_millis(500)).await;
         let result = self
-            .command(
-                name,
-                ExecSpec::new(Process::new("/bin/cat").args(["/tmp/d"])),
-            )
+            .command(name, ExecSpec::new(Process::new("/bin/cat").args(["/tmp/d"])))
             .await;
         let _ = self.containers.stop(name, Duration::ZERO).await;
         let (status, output) = result?;
@@ -208,10 +194,7 @@ impl<'a> Execs<'a> {
         let name = "exec-exit";
         self.parent(name).await?;
         let result = self
-            .command(
-                name,
-                ExecSpec::new(Process::new("/bin/sh").args(["-c", "exit 9"])),
-            )
+            .command(name, ExecSpec::new(Process::new("/bin/sh").args(["-c", "exit 9"])))
             .await;
         let _ = self.containers.stop(name, Duration::ZERO).await;
         let (status, _) = result?;

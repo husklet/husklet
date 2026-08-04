@@ -1,8 +1,6 @@
 //! Guest resource compatibility cases.
 
-use hl_container::{
-    ContainerSpec, Containers, ExitStatus, Isolation, Logs, Process, Resources, Sandbox,
-};
+use hl_container::{ContainerSpec, Containers, ExitStatus, Isolation, Logs, Process, Resources, Sandbox};
 use std::{path::Path, time::Duration};
 
 type Error = Box<dyn std::error::Error>;
@@ -26,19 +24,9 @@ async fn limits(containers: &Containers, rootfs: &Path) -> Result<(), Error> {
     let outcome = case.run(containers, rootfs).await?;
     let output = String::from_utf8(outcome.logs.stdout)?;
     if outcome.exit != ExitStatus::Code(0) {
-        return Err(format!(
-            "resource visibility exited with {:?}: {output:?}",
-            outcome.exit
-        )
-        .into());
+        return Err(format!("resource visibility exited with {:?}: {output:?}", outcome.exit).into());
     }
-    for expected in [
-        "MEM:33554432",
-        "PIDS:16",
-        "CPU:200000 100000",
-        "ONLINE:2",
-        "OOM:1",
-    ] {
+    for expected in ["MEM:33554432", "PIDS:16", "CPU:200000 100000", "ONLINE:2", "OOM:1"] {
         if !output.lines().any(|line| line == expected) {
             return Err(format!("resource output omitted {expected:?}: {output:?}").into());
         }
@@ -88,8 +76,7 @@ impl Case<'_> {
     async fn run(&self, containers: &Containers, rootfs: &Path) -> Result<Outcome, Error> {
         let container = containers.create(self.spec(rootfs)).await?;
         containers.start(container.id.as_str()).await?;
-        let waited =
-            tokio::time::timeout(self.timeout, containers.wait(container.id.as_str())).await;
+        let waited = tokio::time::timeout(self.timeout, containers.wait(container.id.as_str())).await;
         let exit = if let Ok(exit) = waited {
             exit?
         } else {

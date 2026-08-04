@@ -210,9 +210,7 @@ fn protect_hole_fails() {
             .0
     });
 
-    let protect = arena
-        .stage(Operation::Protect(0, PAGE * 3, Protection::WRITE))
-        .unwrap();
+    let protect = arena.stage(Operation::Protect(0, PAGE * 3, Protection::WRITE)).unwrap();
     assert!(arena.commit(&[protect]).is_err());
     let ledger = &arena.state.lock().unwrap().mappings;
     assert_eq!(ledger.reservation(64).unwrap().0, before[0]);

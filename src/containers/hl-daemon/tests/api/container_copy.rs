@@ -17,18 +17,13 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .await?;
     let container = containers
-        .create(ContainerSpec::from_directory(
-            &rootfs,
-            Process::new("/bin/true"),
-        ))
+        .create(ContainerSpec::from_directory(&rootfs, Process::new("/bin/true")))
         .await?;
     let socket = work.path().join("daemon.sock");
     let (shutdown, stopped) = oneshot::channel();
-    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(
-        async move {
-            let _ = stopped.await;
-        },
-    ));
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
     wait_for_path(&socket).await?;
     let client = Client::unix(&socket)?;
 
@@ -47,10 +42,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "copy-to did not update the selected container rootfs",
     )?;
 
-    let copied = client
-        .containers()
-        .copy_from(container.id.as_str(), "/outbox")
-        .await?;
+    let copied = client.containers().copy_from(container.id.as_str(), "/outbox").await?;
     require(
         copied.stat().name == "outbox" && copied.stat().size == 10,
         "copy-from metadata did not describe the selected file",
@@ -65,10 +57,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut entry = entries.next().ok_or("copy-from archive was empty")??;
     let mut payload = Vec::new();
     std::io::Read::read_to_end(&mut entry, &mut payload)?;
-    require(
-        payload == b"downloaded",
-        "copy-from returned wrong contents",
-    )?;
+    require(payload == b"downloaded", "copy-from returned wrong contents")?;
 
     let _ = shutdown.send(());
     server.await??;

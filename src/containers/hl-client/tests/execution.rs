@@ -30,14 +30,8 @@ async fn request(stream: &mut UnixStream) -> Vec<u8> {
 }
 
 fn parts(request: &[u8]) -> (&str, &[u8]) {
-    let end = request
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .unwrap();
-    (
-        std::str::from_utf8(&request[..end + 4]).unwrap(),
-        &request[end + 4..],
-    )
+    let end = request.windows(4).position(|window| window == b"\r\n\r\n").unwrap();
+    (std::str::from_utf8(&request[..end + 4]).unwrap(), &request[end + 4..])
 }
 
 fn listener(socket: &Path) -> UnixListener {
@@ -97,11 +91,7 @@ async fn create_and_inspect_use_docker_paths_and_shared_wire_casing() {
         working_dir: "/work".into(),
         ..Default::default()
     };
-    let created = client
-        .executions()
-        .create("example/name", &config)
-        .await
-        .unwrap();
+    let created = client.executions().create("example/name", &config).await.unwrap();
     assert_eq!(created.id, "exec-id");
     let inspected = client.executions().inspect("exec/id").await.unwrap();
     assert_eq!(inspected.id, "exec-id");
@@ -129,13 +119,12 @@ async fn wait_uses_the_blocking_exec_endpoint_and_returns_the_terminal_status() 
         .unwrap();
     });
 
-    let status =
-        Client::with_config(Config::unix(&socket).timeout(std::time::Duration::from_millis(10)))
-            .unwrap()
-            .executions()
-            .wait("exec/id")
-            .await
-            .unwrap();
+    let status = Client::with_config(Config::unix(&socket).timeout(std::time::Duration::from_millis(10)))
+        .unwrap()
+        .executions()
+        .wait("exec/id")
+        .await
+        .unwrap();
 
     assert_eq!(status.status_code, 23);
     server.await.unwrap();
@@ -154,15 +143,10 @@ async fn attached_start_posts_json_then_decodes_frames_bidirectionally() {
         let lower = headers.to_ascii_lowercase();
         assert!(lower.contains("connection: upgrade\r\n"));
         assert!(lower.contains("upgrade: tcp\r\n"));
-        assert_eq!(
-            body,
-            br#"{"Detach":false,"Tty":false,"KillOnDisconnect":false}"#
-        );
-        peer.write_all(
-            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
-        )
-        .await
-        .unwrap();
+        assert_eq!(body, br#"{"Detach":false,"Tty":false,"KillOnDisconnect":false}"#);
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+            .await
+            .unwrap();
         let mut input = [0; 4];
         peer.read_exact(&mut input).await.unwrap();
         assert_eq!(&input, b"in\n\n");
@@ -195,15 +179,10 @@ async fn terminal_attachment_splits_for_concurrent_input_and_output() {
         let captured = request(&mut peer).await;
         let (headers, body) = parts(&captured);
         assert!(headers.starts_with("POST /v1.43/exec/terminal/start HTTP/1.1\r\n"));
-        assert_eq!(
-            body,
-            br#"{"Detach":false,"Tty":true,"KillOnDisconnect":false}"#
-        );
-        peer.write_all(
-            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
-        )
-        .await
-        .unwrap();
+        assert_eq!(body, br#"{"Detach":false,"Tty":true,"KillOnDisconnect":false}"#);
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+            .await
+            .unwrap();
         peer.write_all(b"ready\r\n").await.unwrap();
         let mut input = [0; 5];
         peer.read_exact(&mut input).await.unwrap();
@@ -237,11 +216,9 @@ async fn framed_pipe_attachment_rejects_terminal_split() {
     let server = tokio::spawn(async move {
         let (mut peer, _) = listener.accept().await.unwrap();
         let _ = request(&mut peer).await;
-        peer.write_all(
-            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n",
-        )
-        .await
-        .unwrap();
+        peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+            .await
+            .unwrap();
     });
 
     let session = Client::unix(&socket)
@@ -268,10 +245,7 @@ async fn detached_start_posts_json_without_requesting_an_upgrade() {
         let (headers, body) = parts(&request);
         assert!(headers.starts_with("POST /v1.43/exec/exec-id/start HTTP/1.1\r\n"));
         assert!(!headers.to_ascii_lowercase().contains("upgrade: tcp"));
-        assert_eq!(
-            body,
-            br#"{"Detach":true,"Tty":false,"KillOnDisconnect":false}"#
-        );
+        assert_eq!(body, br#"{"Detach":true,"Tty":false,"KillOnDisconnect":false}"#);
         peer.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
             .await
             .unwrap();

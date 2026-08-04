@@ -27,7 +27,7 @@ impl Generation {
                 return Err(Error::Corrupt(format!(
                     "filesystem generation file {} is not four bytes",
                     path.display()
-                )))
+                )));
             }
         }
         Ok(Self(path))
@@ -70,9 +70,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("generation");
         std::fs::write(&path, [0_u8; 3]).unwrap();
-        assert!(Generation::open(path)
-            .unwrap_err()
-            .to_string()
-            .contains("four bytes"));
+        assert!(Generation::open(path).unwrap_err().to_string().contains("four bytes"));
     }
 }

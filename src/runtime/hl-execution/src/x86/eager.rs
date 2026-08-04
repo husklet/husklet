@@ -305,7 +305,13 @@ impl Eager {
                 source,
                 double,
             } => Some(crate::x86::scalar::conversion::Conversion::mmx_to_float(
-                cpu, memory, destination, source, double, pc, next,
+                cpu,
+                memory,
+                destination,
+                source,
+                double,
+                pc,
+                next,
             )),
             ScalarInstruction::MmxConvertFromFloat {
                 destination,
@@ -313,7 +319,14 @@ impl Eager {
                 double,
                 truncate,
             } => Some(crate::x86::scalar::conversion::Conversion::mmx_from_float(
-                cpu, memory, destination, source, double, truncate, pc, next,
+                cpu,
+                memory,
+                destination,
+                source,
+                double,
+                truncate,
+                pc,
+                next,
             )),
             ScalarInstruction::ConvertFloatWidth {
                 destination,

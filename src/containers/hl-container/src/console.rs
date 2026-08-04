@@ -1,4 +1,4 @@
-use crate::{service::Service, Entry, Error, JournalId, Result};
+use crate::{Entry, Error, JournalId, Result, service::Service};
 use std::sync::Arc;
 
 /// Cursor-based live output session for a container process.
@@ -20,13 +20,7 @@ pub struct Input {
 }
 
 impl Session {
-    pub(crate) fn new(
-        service: Arc<Service>,
-        io: Arc<Io>,
-        id: JournalId,
-        cursor: u64,
-        live_at: u64,
-    ) -> Self {
+    pub(crate) fn new(service: Arc<Service>, io: Arc<Io>, id: JournalId, cursor: u64, live_at: u64) -> Self {
         Self {
             service,
             io,
@@ -46,10 +40,7 @@ impl Session {
         let mut entries = Vec::new();
         while self.cursor < self.live_at {
             let remaining = usize::try_from(self.live_at - self.cursor).unwrap_or(usize::MAX);
-            let mut batch = self
-                .service
-                .history(&self.id, self.cursor, remaining.min(256))
-                .await?;
+            let mut batch = self.service.history(&self.id, self.cursor, remaining.min(256)).await?;
             let Some(last) = batch.last() else {
                 return Err(Error::Corrupt(
                     "output journal ended before the session boundary".into(),
@@ -174,10 +165,7 @@ impl Io {
     }
 
     pub(crate) fn publish(&self, entry: Entry) {
-        let mut live = self
-            .live
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut live = self.live.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         live.push_back(entry);
         if live.len() > Self::LIVE_CAPACITY {
             live.pop_front();

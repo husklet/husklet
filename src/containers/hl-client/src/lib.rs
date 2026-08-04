@@ -119,9 +119,6 @@ impl Client {
     /// # Errors
     /// Returns transport, timeout, HTTP, or response-decoding failures.
     pub async fn version(&self) -> Result<Version> {
-        self.endpoint
-            .transport
-            .get_json_unversioned("/version")
-            .await
+        self.endpoint.transport.get_json_unversioned("/version").await
     }
 }

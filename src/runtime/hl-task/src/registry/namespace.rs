@@ -115,8 +115,7 @@ impl TaskRegistry {
             .user_namespaces
             .get(&process.namespaces.user)
             .is_some_and(|namespace| namespace.owner == process.credentials.effective_user);
-        Ok(visible
-            && (process.credentials.has_capability(crate::CapabilitySets::SYS_ADMIN) || namespace_owner))
+        Ok(visible && (process.credentials.has_capability(crate::CapabilitySets::SYS_ADMIN) || namespace_owner))
     }
 
     pub fn unshare_namespace(&self, process: ProcessId, kind: NamespaceKind) -> Result<NamespaceId, TaskError> {

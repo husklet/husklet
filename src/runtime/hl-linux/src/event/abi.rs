@@ -1,8 +1,8 @@
+use hl_descriptor::Readiness;
 use hl_event::{
     EpollEvent, EpollInterest, EventFdFlags, InotifyMask, SignalFdFlags, SignalMask, TimerFdClock, TimerFdCreateFlags,
     TimerFdSetFlags, TimerSetting,
 };
-use hl_descriptor::Readiness;
 use hl_isa::GuestArchitecture;
 use hl_time::Duration;
 
@@ -284,15 +284,27 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
             | (if linux & 0x4 != 0 { EpollInterest::WRITE } else { 0 })
             | (if linux & 0x2 != 0 { EpollInterest::PRIORITY } else { 0 })
             | (linux & (0x8 | 0x10 | 0x1000_0000 | 0x4000_0000 | 0x8000_0000))
-            | (if linux & 0x2000 != 0 { EpollInterest::READ_HANGUP } else { 0 })
+            | (if linux & 0x2000 != 0 {
+                EpollInterest::READ_HANGUP
+            } else {
+                0
+            })
     }
 
     fn linux_epoll_events(readiness: hl_descriptor::Readiness) -> u32 {
         (readiness.bits() & Readiness::READ)
             | (if readiness.contains(Readiness::WRITE) { 0x4 } else { 0 })
-            | (if readiness.contains(Readiness::PRIORITY) { 0x2 } else { 0 })
+            | (if readiness.contains(Readiness::PRIORITY) {
+                0x2
+            } else {
+                0
+            })
             | (readiness.bits() & (Readiness::ERROR | Readiness::HANGUP))
-            | (if readiness.contains(Readiness::READ_HANGUP) { 0x2000 } else { 0 })
+            | (if readiness.contains(Readiness::READ_HANGUP) {
+                0x2000
+            } else {
+                0
+            })
     }
 
     fn epoll_size(&self) -> usize {

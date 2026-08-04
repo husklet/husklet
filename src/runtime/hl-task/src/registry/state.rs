@@ -69,13 +69,7 @@ impl TaskRegistry {
                 let child_usage = Self::process(state, process)?.cpu_usage.total_nanoseconds();
                 let usage = &mut Self::process_mut(state, parent)?.cpu_usage.children_nanoseconds;
                 *usage = usage.saturating_add(child_usage);
-                Self::queue_child_signal(
-                    state,
-                    parent,
-                    process,
-                    ChildEventKind::Exited(status),
-                    max_pending,
-                )?;
+                Self::queue_child_signal(state, parent, process, ChildEventKind::Exited(status), max_pending)?;
                 Self::process_mut(state, parent)?.children.remove(&process);
                 Self::detach_group_member(state, process)?;
                 Self::release_process(state, process)?;
@@ -105,13 +99,7 @@ impl TaskRegistry {
                 kind: ChildEventKind::Exited(status),
                 sequence,
             });
-            Self::queue_child_signal(
-                state,
-                parent,
-                process,
-                ChildEventKind::Exited(status),
-                max_pending,
-            )?;
+            Self::queue_child_signal(state, parent, process, ChildEventKind::Exited(status), max_pending)?;
         }
         Ok(orphaned)
     }

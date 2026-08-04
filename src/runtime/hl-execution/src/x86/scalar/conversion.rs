@@ -24,15 +24,24 @@ impl Conversion {
                 let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
                 match memory.read(address, 8) {
                     Ok(value) => value,
-                    Err(()) => return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                        instruction, address, AccessKind::Read, 8,
-                    )),
+                    Err(()) => {
+                        return ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                            instruction,
+                            address,
+                            AccessKind::Read,
+                            8,
+                        ));
+                    }
                 }
             }
         };
         let environment = Arithmetic::environment(cpu.mxcsr);
         let format = if double { FloatWidth::Double } else { FloatWidth::Single };
-        let mut output = if double { 0 } else { cpu.vectors[usize::from(destination)] & (u128::MAX << 64) };
+        let mut output = if double {
+            0
+        } else {
+            cpu.vectors[usize::from(destination)] & (u128::MAX << 64)
+        };
         let mut exceptions = 0_u32;
         for lane in 0..2 {
             let signed = i64::from((raw >> (lane * 32)) as u32 as i32);
@@ -67,16 +76,26 @@ impl Conversion {
                 let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
                 let low = match memory.read(address, 8) {
                     Ok(value) => value,
-                    Err(()) => return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                        instruction, address, AccessKind::Read, u64::from(bytes),
-                    )),
+                    Err(()) => {
+                        return ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                            instruction,
+                            address,
+                            AccessKind::Read,
+                            u64::from(bytes),
+                        ));
+                    }
                 };
                 let high = if double {
                     match memory.read(address + 8, 8) {
                         Ok(value) => value,
-                        Err(()) => return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                            instruction, address + 8, AccessKind::Read, 16,
-                        )),
+                        Err(()) => {
+                            return ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                                instruction,
+                                address + 8,
+                                AccessKind::Read,
+                                16,
+                            ));
+                        }
                     }
                 } else {
                     0
@@ -93,8 +112,7 @@ impl Conversion {
         let mut output = 0_u64;
         let mut exceptions = 0_u32;
         for lane in 0..2 {
-            let bits = (raw >> (lane * lane_bits)) as u64
-                & if double { u64::MAX } else { u64::from(u32::MAX) };
+            let bits = (raw >> (lane * lane_bits)) as u64 & if double { u64::MAX } else { u64::from(u32::MAX) };
             let result = environment.to_signed(Value::from_bits(Arithmetic::soft_format(format), bits), 32);
             let invalid = result.flags.contains(ExceptionFlags::INVALID);
             let value = if invalid { 0x8000_0000 } else { result.value as u32 };

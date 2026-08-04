@@ -1,4 +1,4 @@
-use super::{append, Client, CreateContainer, Error};
+use super::{Client, CreateContainer, Error, append};
 
 pub(super) async fn advanced(client: &Client) -> Result<(), Error> {
     let arguments = std::collections::BTreeMap::from([("VALUE".into(), "override".into())]);
@@ -12,12 +12,7 @@ pub(super) async fn advanced(client: &Client) -> Result<(), Error> {
         )
         .await?;
     let image = client.images().inspect("workflow/advanced:test").await?;
-    if image
-        .config
-        .labels
-        .get("org.example.stage")
-        .map(String::as_str)
-        != Some("advanced")
+    if image.config.labels.get("org.example.stage").map(String::as_str) != Some("advanced")
         || image.config.user != "nobody"
         || image.config.entrypoint != ["/bin/sh", "-c"]
     {
@@ -53,10 +48,7 @@ pub(super) async fn advanced(client: &Client) -> Result<(), Error> {
         )
         .into());
     }
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 

@@ -14,9 +14,7 @@ fn references_are_normalized_and_validated() {
     assert_eq!(local.tag(), Some("v1"));
 
     let digest = "a".repeat(64);
-    let pinned: Reference = format!("ghcr.io/husklet/app@sha256:{digest}")
-        .parse()
-        .unwrap();
+    let pinned: Reference = format!("ghcr.io/husklet/app@sha256:{digest}").parse().unwrap();
     assert_eq!(pinned.tag(), None);
     assert_eq!(pinned.manifest_selector(), format!("sha256:{digest}"));
 }

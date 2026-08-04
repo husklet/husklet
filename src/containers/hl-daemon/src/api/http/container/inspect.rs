@@ -11,11 +11,7 @@ pub(in super::super) async fn inspect(
     Query(query): Query<InspectQuery>,
 ) -> ApiResult<Json<InspectContainer>> {
     let include_size = bool::from(query.size.as_deref().unwrap_or_default().parse::<Flag>()?);
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     let container_id = container.id.clone();
     let network_mode = container.spec.network_mode;
     let mut inspect = InspectContainer::from(container.clone());
@@ -35,8 +31,7 @@ pub(in super::super) async fn inspect(
                 source.to_string_lossy().into_owned(),
                 String::new(),
             ),
-            hl_container::MountSource::Volume(name)
-            | hl_container::MountSource::Anonymous(name) => {
+            hl_container::MountSource::Volume(name) | hl_container::MountSource::Anonymous(name) => {
                 let volume = state
                     .containers
                     .volumes()
@@ -82,22 +77,13 @@ pub(in super::super) async fn inspect(
         });
     }
     if network_mode != hl_container::NetworkMode::Host {
-        for network in state
-            .containers
-            .networks()
-            .list()
-            .await
-            .map_err(ApiError::container)?
-        {
+        for network in state.containers.networks().list().await.map_err(ApiError::container)? {
             let Some(endpoint) = network.endpoints.get(&container_id) else {
                 continue;
             };
             inspect.host_config.network_mode.clone_from(&network.name);
             let settings = crate::api::EndpointSettings::from((&network, endpoint));
-            inspect
-                .network_settings
-                .networks
-                .insert(network.name, settings);
+            inspect.network_settings.networks.insert(network.name, settings);
         }
     }
     Ok(Json(inspect))

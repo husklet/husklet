@@ -350,10 +350,7 @@ impl PageModel {
                 *self.pages.get_mut(&page).unwrap() = protection;
             }
         } else {
-            assert_eq!(
-                ledger.protect(affected, protection),
-                Err(MemoryError::Unmapped),
-            );
+            assert_eq!(ledger.protect(affected, protection), Err(MemoryError::Unmapped));
         }
     }
 

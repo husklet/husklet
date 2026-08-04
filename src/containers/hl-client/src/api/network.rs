@@ -1,11 +1,9 @@
 use http::Method;
 
-use crate::model::{
-    Network, NetworkConnect, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune,
-};
+use crate::Result;
+use crate::model::{Network, NetworkConnect, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune};
 use crate::transport::Transport;
 use crate::uri::Component;
-use crate::Result;
 
 /// Typed Docker network operations.
 #[derive(Clone, Copy, Debug)]

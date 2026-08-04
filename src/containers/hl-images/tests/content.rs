@@ -1,8 +1,8 @@
 use std::io::Read;
 
 use hl_images::{
-    content::{FsStore, Store},
     Descriptor, Digest, Error,
+    content::{FsStore, Store},
 };
 
 fn descriptor(bytes: &[u8]) -> Descriptor {
@@ -41,20 +41,12 @@ fn mismatch_and_abort_never_publish_content() {
     let digest: Digest = expected.digest().to_string().parse().unwrap();
     let mut ingest = store.ingest("bad").unwrap();
     ingest.write(b"wrong").unwrap();
-    assert!(matches!(
-        ingest.commit(&expected),
-        Err(Error::DigestMismatch { .. })
-    ));
+    assert!(matches!(ingest.commit(&expected), Err(Error::DigestMismatch { .. })));
     assert!(!store.contains(&digest).unwrap());
 
     let mut ingest = store.ingest("aborted").unwrap();
     ingest.write(b"right").unwrap();
     ingest.abort().unwrap();
     assert!(!store.contains(&digest).unwrap());
-    assert_eq!(
-        std::fs::read_dir(temp.path().join("ingest"))
-            .unwrap()
-            .count(),
-        0
-    );
+    assert_eq!(std::fs::read_dir(temp.path().join("ingest")).unwrap().count(), 0);
 }

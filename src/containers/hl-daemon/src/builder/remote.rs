@@ -30,10 +30,7 @@ impl RemoteSources {
         let mut files = std::collections::BTreeMap::new();
         for stage in recipe.stages.iter().take(recipe.selected + 1) {
             for step in &stage.steps {
-                let Step::Copy {
-                    sources, checksum, ..
-                } = step
-                else {
+                let Step::Copy { sources, checksum, .. } = step else {
                     continue;
                 };
                 for url in sources.iter().filter(|source| source.is_remote()) {
@@ -43,26 +40,17 @@ impl RemoteSources {
                     }
                     let response = client.get(url).send().await?.error_for_status()?;
                     if response.content_length().is_some_and(|size| size > LIMIT) {
-                        return Err(BuildError::Copy(format!(
-                            "remote ADD source exceeds {LIMIT} bytes"
-                        )));
+                        return Err(BuildError::Copy(format!("remote ADD source exceeds {LIMIT} bytes")));
                     }
-                    let parsed = reqwest::Url::parse(url).map_err(|error| {
-                        hl_images::Error::MalformedOci(format!("invalid ADD URL: {error}"))
-                    })?;
+                    let parsed = reqwest::Url::parse(url)
+                        .map_err(|error| hl_images::Error::MalformedOci(format!("invalid ADD URL: {error}")))?;
                     let name = parsed
                         .path_segments()
                         .and_then(Iterator::last)
-                        .filter(|name| {
-                            !name.is_empty()
-                                && *name != "."
-                                && *name != ".."
-                                && !name.contains(['/', '\\'])
-                        })
+                        .filter(|name| !name.is_empty() && *name != "." && *name != ".." && !name.contains(['/', '\\']))
                         .unwrap_or("download")
                         .to_owned();
-                    let digest =
-                        hl_images::Digest::from(<[u8; 32]>::from(Sha256::digest(url.as_bytes())));
+                    let digest = hl_images::Digest::from(<[u8; 32]>::from(Sha256::digest(url.as_bytes())));
                     let root = directory.path().join(digest.encoded());
                     tokio::fs::create_dir(&root).await?;
                     let mut output = tokio::fs::File::create(root.join(&name)).await?;
@@ -73,26 +61,16 @@ impl RemoteSources {
                         let chunk = chunk?;
                         size = size.saturating_add(chunk.len() as u64);
                         if size > LIMIT {
-                            return Err(BuildError::Copy(format!(
-                                "remote ADD source exceeds {LIMIT} bytes"
-                            )));
+                            return Err(BuildError::Copy(format!("remote ADD source exceeds {LIMIT} bytes")));
                         }
                         digest.update(&chunk);
                         output.write_all(&chunk).await?;
                     }
                     output.flush().await?;
                     let digest: [u8; 32] = digest.finalize().into();
-                    if let Some(expected) = checksum
-                        .as_deref()
-                        .and_then(|value| value.strip_prefix("sha256:"))
-                    {
-                        if !hl_images::Digest::from(digest)
-                            .encoded()
-                            .eq_ignore_ascii_case(expected)
-                        {
-                            return Err(BuildError::Copy(format!(
-                                "remote ADD checksum mismatch for {url}"
-                            )));
+                    if let Some(expected) = checksum.as_deref().and_then(|value| value.strip_prefix("sha256:")) {
+                        if !hl_images::Digest::from(digest).encoded().eq_ignore_ascii_case(expected) {
+                            return Err(BuildError::Copy(format!("remote ADD checksum mismatch for {url}")));
                         }
                     }
                     files.insert(url.to_owned(), RemoteFile { root, name, digest });
@@ -112,9 +90,7 @@ impl RemoteSources {
     }
 
     pub(super) fn entries(&self) -> impl Iterator<Item = (&str, &[u8; 32])> {
-        self.files
-            .iter()
-            .map(|(url, file)| (url.as_str(), &file.digest))
+        self.files.iter().map(|(url, file)| (url.as_str(), &file.digest))
     }
 }
 

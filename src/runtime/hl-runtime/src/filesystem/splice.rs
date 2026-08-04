@@ -262,15 +262,14 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Err(_) => return LinuxResult::Error(Errno::EINVAL),
         };
         let cancellation = self.pipe_cancellation.as_ref().map(|port| port.observation());
-        let prepared =
-            match plan
-                .source
-                .prepare_splice_read(plan.input.value, maximum, plan.nonblocking, cancellation)
-            {
-                Ok(Some(prepared)) => prepared,
-                Ok(None) => return LinuxResult::Error(Errno::ENOSYS),
-                Err(error) => return LinuxResult::Error(FileErrno::object(error)),
-            };
+        let prepared = match plan
+            .source
+            .prepare_splice_read(plan.input.value, maximum, plan.nonblocking, cancellation)
+        {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => return LinuxResult::Error(Errno::ENOSYS),
+            Err(error) => return LinuxResult::Error(FileErrno::object(error)),
+        };
         let result = match plan.output.value {
             Some(offset) => plan.target.write_at(offset, prepared.bytes()),
             None => match cancellation {

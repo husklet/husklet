@@ -59,7 +59,9 @@ pub struct RangePlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MremapPlan {
     pub old_range: AddressRange,
+    pub requested_old_length: u64,
     pub new_length: u64,
+    pub requested_new_length: u64,
     pub may_move: bool,
     pub fixed: Option<GuestAddress>,
     pub keep_old: bool,
@@ -267,6 +269,8 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         } else {
             None
         };
+        let requested_old_length = old_length;
+        let requested_new_length = new_length;
         let old_range = Self::range(old_address, old_length, false)?;
         let new_length = Self::round_length(new_length)?;
         if let Some(destination) = fixed {
@@ -280,7 +284,9 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         }
         Ok(MremapPlan {
             old_range,
+            requested_old_length,
             new_length,
+            requested_new_length,
             may_move: flags & MREMAP_MAYMOVE != 0,
             fixed,
             keep_old: flags & MREMAP_DONTUNMAP != 0,

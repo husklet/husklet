@@ -204,11 +204,7 @@ pub trait RuntimePathHost: Send + Sync {
     /// Whether an admitted open can wait for a guest peer or a blocking
     /// provider response. Implementations must return `true` unless they can
     /// prove that `prepare_open` completes without such a wait.
-    fn open_may_block(
-        &self,
-        _base: &DirectoryBaseLease,
-        _plan: &OpenAbiPlan,
-    ) -> Result<bool, RuntimePathError> {
+    fn open_may_block(&self, _base: &DirectoryBaseLease, _plan: &OpenAbiPlan) -> Result<bool, RuntimePathError> {
         Ok(true)
     }
     fn prepare_mutation(

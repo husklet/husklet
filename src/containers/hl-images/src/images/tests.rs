@@ -1,6 +1,5 @@
 use super::{
-    Blob, ConfigDocument, History, Images, IndexDocument, MediaType, RuntimeConfig,
-    RuntimeOverrides,
+    Blob, ConfigDocument, History, Images, IndexDocument, MediaType, Metadata, RuntimeConfig, RuntimeOverrides,
 };
 use crate::{ImageStore, LeaseStore, Platform, Reference};
 
@@ -15,6 +14,29 @@ fn layer(path: &str, bytes: &[u8]) -> Vec<u8> {
     archive.finish().unwrap();
     drop(archive);
     result
+}
+
+#[test]
+fn commit_metadata_applies_changes_and_attribution_to_standalone_base() {
+    let runtime = RuntimeConfig {
+        entrypoint: Vec::new(),
+        command: vec!["old".into()],
+        environment: std::collections::BTreeMap::new(),
+        working_directory: "/".into(),
+        user: String::new(),
+    };
+    let metadata = Metadata::standalone(Platform::linux_arm64(), runtime.clone())
+        .committed(
+            runtime,
+            Some("Ada".into()),
+            Some("snapshot".into()),
+            &["CMD [\"new\"]".into(), "LABEL stage=committed".into()],
+        )
+        .unwrap();
+    assert_eq!(metadata.author.as_deref(), Some("Ada"));
+    assert_eq!(metadata.runtime.command, ["new"]);
+    assert_eq!(metadata.labels.get("stage").map(String::as_str), Some("committed"));
+    assert_eq!(metadata.history.last().unwrap().comment.as_deref(), Some("snapshot"));
 }
 
 #[test]
@@ -55,25 +77,14 @@ fn child_commit_reuses_parent_descriptors_and_appends_one_diff() {
         serde_json::from_slice(&images.content.read_document(&parent.target).unwrap()).unwrap();
     let child_manifest: super::ManifestDocument =
         serde_json::from_slice(&images.content.read_document(&child.target).unwrap()).unwrap();
-    assert_eq!(
-        child_manifest.layers.len(),
-        parent_manifest.layers.len() + 1
-    );
+    assert_eq!(child_manifest.layers.len(), parent_manifest.layers.len() + 1);
     assert_eq!(
         child_manifest.layers[..parent_manifest.layers.len()],
         parent_manifest.layers
     );
-    let child_config: super::ConfigDocument = serde_json::from_slice(
-        &images
-            .content
-            .read_document(&child_manifest.config)
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        child_config.rootfs.diff_ids.len(),
-        child_manifest.layers.len()
-    );
+    let child_config: super::ConfigDocument =
+        serde_json::from_slice(&images.content.read_document(&child_manifest.config).unwrap()).unwrap();
+    assert_eq!(child_config.rootfs.diff_ids.len(), child_manifest.layers.len());
     assert_eq!(images.metadata().list().unwrap().len(), 2);
     let graph = images
         .metadata()
@@ -86,10 +97,7 @@ fn child_commit_reuses_parent_descriptors_and_appends_one_diff() {
     assert!(images.leases.list().unwrap().is_empty());
     let details = images.details(&child, &platform).unwrap();
     assert_eq!(details.author.as_deref(), Some("Ada"));
-    assert_eq!(
-        details.history.last().unwrap().comment.as_deref(),
-        Some("snapshot")
-    );
+    assert_eq!(details.history.last().unwrap().comment.as_deref(), Some("snapshot"));
 }
 
 #[test]
@@ -107,25 +115,12 @@ fn workspace_catalog_resolves_local_first_and_keeps_builds_local() {
     };
     let external_name: Reference = "library/postgres:latest".parse().unwrap();
     let external_image = external
-        .commit(
-            &layer("postgres", b"external"),
-            &runtime,
-            &platform,
-            &external_name,
-        )
+        .commit(&layer("postgres", b"external"), &runtime, &platform, &external_name)
         .unwrap();
-    let images = Images::workspace(
-        Images::open(workspace_root.path()).unwrap(),
-        external.clone(),
-    );
+    let images = Images::workspace(Images::open(workspace_root.path()).unwrap(), external.clone());
 
     assert_eq!(
-        images
-            .resolve(&external_name)
-            .unwrap()
-            .unwrap()
-            .target
-            .digest(),
+        images.resolve(&external_name).unwrap().unwrap().target.digest(),
         external_image.target.digest()
     );
     let unpacked = images.unpack(&external_image, &platform).unwrap();
@@ -133,18 +128,15 @@ fn workspace_catalog_resolves_local_first_and_keeps_builds_local() {
 
     let built_name: Reference = "project/app:dev".parse().unwrap();
     let built = images
-        .commit(
-            &layer("app", b"workspace"),
-            &runtime,
-            &platform,
-            &built_name,
-        )
+        .commit(&layer("app", b"workspace"), &runtime, &platform, &built_name)
         .unwrap();
-    assert!(Images::open(workspace_root.path())
-        .unwrap()
-        .resolve(&built_name)
-        .unwrap()
-        .is_some());
+    assert!(
+        Images::open(workspace_root.path())
+            .unwrap()
+            .resolve(&built_name)
+            .unwrap()
+            .is_some()
+    );
     assert!(external.resolve(&built_name).unwrap().is_none());
     assert_eq!(
         images
@@ -176,24 +168,21 @@ async fn workspace_pull_publishes_external_catalog_only() {
     let image = source
         .commit(&layer("ubuntu", b"external"), &runtime, &platform, &name)
         .unwrap();
-    let layout = crate::format::layout::Layout::open(layout_root.path())
-        .await
-        .unwrap();
+    let layout = crate::format::layout::Layout::open(layout_root.path()).await.unwrap();
     layout.export(&image, source.content()).await.unwrap();
 
     let external = Images::open(external_root.path()).unwrap();
-    let images = Images::workspace(
-        Images::open(workspace_root.path()).unwrap(),
-        external.clone(),
-    );
+    let images = Images::workspace(Images::open(workspace_root.path()).unwrap(), external.clone());
     images.pull(&layout, name.clone(), &platform).await.unwrap();
 
     assert!(external.resolve(&name).unwrap().is_some());
-    assert!(Images::open(workspace_root.path())
-        .unwrap()
-        .resolve(&name)
-        .unwrap()
-        .is_none());
+    assert!(
+        Images::open(workspace_root.path())
+            .unwrap()
+            .resolve(&name)
+            .unwrap()
+            .is_none()
+    );
     let resolved = images.resolve(&name).unwrap().unwrap();
     assert!(images.unpack(&resolved, &platform).is_ok());
 }
@@ -201,9 +190,7 @@ async fn workspace_pull_publishes_external_catalog_only() {
 #[test]
 fn blob_descriptor_matches_exact_bytes_and_digest() {
     let bytes = br#"{"schemaVersion":2}"#;
-    let descriptor = Blob::new(bytes, MediaType::ImageManifest)
-        .descriptor()
-        .unwrap();
+    let descriptor = Blob::new(bytes, MediaType::ImageManifest).descriptor().unwrap();
     assert_eq!(descriptor.size(), bytes.len() as u64);
     assert_eq!(
         descriptor.digest().to_string(),
@@ -246,13 +233,12 @@ fn platform_selection_honors_requested_variant() {
     let selected = index
         .select_platform(&Platform::new("linux", "arm64", Some("v9".into())))
         .unwrap();
-    assert_eq!(
-        selected.digest().to_string(),
-        format!("sha256:{}", "2".repeat(64))
+    assert_eq!(selected.digest().to_string(), format!("sha256:{}", "2".repeat(64)));
+    assert!(
+        index
+            .select_platform(&Platform::new("linux", "arm64", Some("v7".into())))
+            .is_err()
     );
-    assert!(index
-        .select_platform(&Platform::new("linux", "arm64", Some("v7".into())))
-        .is_err());
 }
 
 #[test]
@@ -326,17 +312,13 @@ fn runtime_config(value: serde_json::Value) -> ConfigDocument {
     };
     object.insert("architecture".into(), serde_json::json!("arm64"));
     object.insert("os".into(), serde_json::json!("linux"));
-    object.insert(
-        "rootfs".into(),
-        serde_json::json!({"type":"layers","diff_ids":[]}),
-    );
+    object.insert("rootfs".into(), serde_json::json!({"type":"layers","diff_ids":[]}));
     serde_json::from_value(object.into()).unwrap()
 }
 
 #[test]
 fn config_exposed_ports_sorted_keys() {
-    let config =
-        runtime_config(serde_json::json!({"config":{"ExposedPorts":{"80/tcp":{},"5432/tcp":{}}}}));
+    let config = runtime_config(serde_json::json!({"config":{"ExposedPorts":{"80/tcp":{},"5432/tcp":{}}}}));
     assert_eq!(
         config
             .config
@@ -350,8 +332,7 @@ fn config_exposed_ports_sorted_keys() {
 
 #[test]
 fn config_labels_map() {
-    let config =
-        runtime_config(serde_json::json!({"config":{"Labels":{"a":"b","maintainer":"acme"}}}));
+    let config = runtime_config(serde_json::json!({"config":{"Labels":{"a":"b","maintainer":"acme"}}}));
     let labels = config.config.labels.unwrap();
     assert_eq!(labels.get("a").map(String::as_str), Some("b"));
     assert_eq!(labels.get("maintainer").map(String::as_str), Some("acme"));
@@ -361,12 +342,7 @@ fn config_labels_map() {
 fn config_volumes_sorted_keys() {
     let config = runtime_config(serde_json::json!({"config":{"Volumes":{"/var":{},"/data":{}}}}));
     assert_eq!(
-        config
-            .config
-            .volumes
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
+        config.config.volumes.keys().map(String::as_str).collect::<Vec<_>>(),
         ["/data", "/var"]
     );
 }
@@ -375,10 +351,12 @@ fn config_volumes_sorted_keys() {
 fn config_stop_signal_str() {
     let config = runtime_config(serde_json::json!({"config":{"StopSignal":"SIGQUIT"}}));
     assert_eq!(config.config.stop_signal.as_deref(), Some("SIGQUIT"));
-    assert!(runtime_config(serde_json::json!({"config":{}}))
-        .config
-        .stop_signal
-        .is_none());
+    assert!(
+        runtime_config(serde_json::json!({"config":{}}))
+            .config
+            .stop_signal
+            .is_none()
+    );
 }
 
 #[test]
@@ -404,10 +382,8 @@ fn launch(
         user: String::new(),
     }
     .merge(RuntimeOverrides {
-        entrypoint: override_entrypoint
-            .map(|values| values.iter().map(|value| (*value).into()).collect()),
-        command: override_command
-            .map(|values| values.iter().map(|value| (*value).into()).collect()),
+        entrypoint: override_entrypoint.map(|values| values.iter().map(|value| (*value).into()).collect()),
+        command: override_command.map(|values| values.iter().map(|value| (*value).into()).collect()),
         ..RuntimeOverrides::default()
     })
     .unwrap()
@@ -440,25 +416,14 @@ fn override_alone_when_no_entrypoint() {
 
 #[test]
 fn image_cmd_alone_when_no_entrypoint_no_override() {
-    assert_eq!(
-        launch(&[], &["default", "cmd"], None, None),
-        ["default", "cmd"]
-    );
-    assert_eq!(
-        launch(&[], &["default", "cmd"], None, Some(&[])),
-        ["default", "cmd"]
-    );
+    assert_eq!(launch(&[], &["default", "cmd"], None, None), ["default", "cmd"]);
+    assert_eq!(launch(&[], &["default", "cmd"], None, Some(&[])), ["default", "cmd"]);
 }
 
 #[test]
 fn explicit_entrypoint_obeys_docker_command_merge_rules() {
     assert_eq!(
-        launch(
-            &["/image-entry"],
-            &["image-command"],
-            Some(&["/user-entry"]),
-            None,
-        ),
+        launch(&["/image-entry"], &["image-command"], Some(&["/user-entry"]), None,),
         ["/user-entry"]
     );
     assert_eq!(

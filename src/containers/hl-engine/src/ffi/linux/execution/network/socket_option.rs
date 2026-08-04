@@ -105,7 +105,7 @@ pub(super) fn set(
 pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocketOption, RuntimeNetworkError> {
     let guest = (level, option);
     if guest == (6, 11) {
-        return tcp_info(descriptor);
+        return HostOption::read_tcp_info(descriptor);
     }
     let (level, option) = HostOption::resolve(level, option)?;
     if guest == (1, 13) {
@@ -165,35 +165,35 @@ pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocke
     }
 }
 
-#[cfg(target_os = "linux")]
-fn tcp_info(descriptor: i32) -> Result<GuestSocketOption, RuntimeNetworkError> {
-    let mut bytes = vec![0_u8; 512];
-    let mut length = bytes.len() as libc::socklen_t;
-    // SAFETY: bytes owns writable storage for the advertised capacity and length is a live output cell.
-    let result = unsafe {
-        libc::getsockopt(
-            descriptor,
-            libc::IPPROTO_TCP,
-            libc::TCP_INFO,
-            bytes.as_mut_ptr().cast(),
-            &mut length,
-        )
-    };
-    if result != 0 {
-        return Err(Native::runtime_error());
-    }
-    bytes.truncate(length as usize);
-    Ok(GuestSocketOption::Bytes(bytes))
-}
-
-#[cfg(target_os = "macos")]
-fn tcp_info(_: i32) -> Result<GuestSocketOption, RuntimeNetworkError> {
-    Err(RuntimeNetworkError::Unsupported)
-}
-
 struct HostOption;
 
 impl HostOption {
+    #[cfg(target_os = "linux")]
+    fn read_tcp_info(descriptor: i32) -> Result<GuestSocketOption, RuntimeNetworkError> {
+        let mut bytes = vec![0_u8; 512];
+        let mut length = bytes.len() as libc::socklen_t;
+        // SAFETY: bytes owns writable storage for the advertised capacity and length is a live output cell.
+        let result = unsafe {
+            libc::getsockopt(
+                descriptor,
+                libc::IPPROTO_TCP,
+                libc::TCP_INFO,
+                bytes.as_mut_ptr().cast(),
+                &mut length,
+            )
+        };
+        if result != 0 {
+            return Err(Native::runtime_error());
+        }
+        bytes.truncate(length as usize);
+        Ok(GuestSocketOption::Bytes(bytes))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn read_tcp_info(_: i32) -> Result<GuestSocketOption, RuntimeNetworkError> {
+        Err(RuntimeNetworkError::Unsupported)
+    }
+
     fn resolve(level: i32, option: i32) -> Result<(i32, i32), RuntimeNetworkError> {
         match (level, option) {
             (1, 1) => Ok((libc::SOL_SOCKET, libc::SO_DEBUG)),

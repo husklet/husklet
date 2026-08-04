@@ -12,8 +12,7 @@ async fn image_rootfs_lease_survives_reopen_and_releases_on_remove() {
         .unwrap();
     std::fs::write(active.path().join("marker"), b"rootfs").unwrap();
     active.commit(snapshot.clone()).unwrap();
-    let manager =
-        hl_images::rootfs::Roots::new(snapshots, hl_images::Leases::open(&leases_path).unwrap());
+    let manager = hl_images::rootfs::Roots::new(snapshots, hl_images::Leases::open(&leases_path).unwrap());
     let reference = manager.pin(&snapshot).unwrap();
     let containers = build_with(
         Arc::new(Disk::open(temporary.path().to_owned()).await.unwrap()),
@@ -40,14 +39,7 @@ async fn image_rootfs_lease_survives_reopen_and_releases_on_remove() {
         hl_images::Leases::open(&leases_path).unwrap(),
     );
     assert_eq!(
-        std::fs::read(
-            reopened_manager
-                .open(&reference)
-                .unwrap()
-                .path()
-                .join("marker")
-        )
-        .unwrap(),
+        std::fs::read(reopened_manager.open(&reference).unwrap().path().join("marker")).unwrap(),
         b"rootfs"
     );
     let reopened = build_with(

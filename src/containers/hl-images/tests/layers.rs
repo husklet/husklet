@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use hl_images::{layer::Layer, Error};
+use hl_images::{Error, layer::Layer};
 
 fn archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -34,8 +34,7 @@ fn archive_with_forward_hardlink(target_present: bool) -> Vec<u8> {
             target.set_size(7);
             target.set_mode(0o644);
             target.set_cksum();
-            tar.append_data(&mut target, "target", &b"content"[..])
-                .unwrap();
+            tar.append_data(&mut target, "target", &b"content"[..]).unwrap();
         }
         tar.finish().unwrap();
     }
@@ -95,8 +94,7 @@ fn archive_with_replaced_directory() -> Vec<u8> {
         directory.set_size(0);
         directory.set_mode(0o700);
         directory.set_cksum();
-        tar.append_data(&mut directory, "usr/bin/tool", &[][..])
-            .unwrap();
+        tar.append_data(&mut directory, "usr/bin/tool", &[][..]).unwrap();
 
         let mut link = tar::Header::new_gnu();
         link.set_entry_type(tar::EntryType::Symlink);
@@ -142,6 +140,7 @@ fn archive_with_node_kinds() -> Vec<u8> {
         hardlink.set_link_name("tree/file").unwrap();
         hardlink.set_cksum();
         tar.append_data(&mut hardlink, "tree/hardlink", &[][..]).unwrap();
+
         tar.finish().unwrap();
     }
     bytes
@@ -171,9 +170,7 @@ fn diff_size_counts_regular_payloads_and_excludes_whiteout_headers() {
 #[test]
 fn root_directory_markers_are_ignored() {
     let temp = tempfile::tempdir().unwrap();
-    let report = Layer::new(Cursor::new(archive_with_root()))
-        .apply(temp.path())
-        .unwrap();
+    let report = Layer::new(Cursor::new(archive_with_root())).apply(temp.path()).unwrap();
     assert_eq!(report.entries, 1);
     assert_eq!(std::fs::read(temp.path().join("etc/ok")).unwrap(), b"ok");
 }
@@ -212,10 +209,7 @@ fn readonly_parent_is_temporarily_writable_and_restored() {
         .unwrap();
 
     assert_eq!(std::fs::read(parent.join("value")).unwrap(), b"ok");
-    assert_eq!(
-        std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
-        0o555
-    );
+    assert_eq!(std::fs::metadata(&parent).unwrap().permissions().mode() & 0o777, 0o555);
 }
 
 #[test]
@@ -258,10 +252,7 @@ fn whiteouts_remove_directory_trees_at_any_depth() {
         .unwrap();
     assert_eq!(report.whiteouts, 1);
     assert!(!temp.path().join("top/tree").exists());
-    assert_eq!(
-        std::fs::read_to_string(temp.path().join("top/keep")).unwrap(),
-        "keep"
-    );
+    assert_eq!(std::fs::read_to_string(temp.path().join("top/keep")).unwrap(), "keep");
 }
 
 #[test]
@@ -296,10 +287,7 @@ fn deferred_directory_metadata_does_not_follow_a_replacement_symlink() {
 
     assert_eq!(report.entries, 2);
     let tool = temp.path().join("usr/bin/tool");
-    assert!(std::fs::symlink_metadata(&tool)
-        .unwrap()
-        .file_type()
-        .is_symlink());
+    assert!(std::fs::symlink_metadata(&tool).unwrap().file_type().is_symlink());
     assert_eq!(
         std::fs::read_link(tool).unwrap(),
         std::path::Path::new("missing-target")
@@ -327,14 +315,13 @@ fn replacing_a_lower_symlink_never_writes_through_it() {
         .apply(root.path())
         .unwrap();
     assert_eq!(std::fs::read_to_string(outside.path()).unwrap(), "outside");
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("victim")).unwrap(),
-        "inside"
+    assert_eq!(std::fs::read_to_string(root.path().join("victim")).unwrap(), "inside");
+    assert!(
+        !std::fs::symlink_metadata(root.path().join("victim"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
     );
-    assert!(!std::fs::symlink_metadata(root.path().join("victim"))
-        .unwrap()
-        .file_type()
-        .is_symlink());
 }
 
 #[cfg(unix)]
@@ -359,7 +346,9 @@ fn unresolved_forward_hardlink_fails_after_layer_closure() {
     let error = Layer::new(Cursor::new(archive_with_forward_hardlink(false)))
         .apply(root.path())
         .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("was not present after applying the complete layer"));
+    assert!(
+        error
+            .to_string()
+            .contains("was not present after applying the complete layer")
+    );
 }

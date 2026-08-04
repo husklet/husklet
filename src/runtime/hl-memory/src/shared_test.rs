@@ -74,7 +74,11 @@ fn write_seal_distinguishes_shared_from_private_maps() {
             false,
         )
         .unwrap();
-    assert!(store.add_seals(private, SharedSeal::from_bits(SharedSeal::WRITE)).is_ok());
+    assert!(
+        store
+            .add_seals(private, SharedSeal::from_bits(SharedSeal::WRITE))
+            .is_ok()
+    );
     drop(private_pin);
 
     let shared = store.create(1, 4096).unwrap();
@@ -94,7 +98,11 @@ fn write_seal_distinguishes_shared_from_private_maps() {
         Err(SharedError::Busy)
     );
     drop(shared_pin);
-    assert!(store.add_seals(shared, SharedSeal::from_bits(SharedSeal::WRITE)).is_ok());
+    assert!(
+        store
+            .add_seals(shared, SharedSeal::from_bits(SharedSeal::WRITE))
+            .is_ok()
+    );
 }
 
 #[test]

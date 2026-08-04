@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use hl_container::Error as ContainerError;
 
 use crate::api::DockerError;
@@ -82,13 +82,11 @@ impl ApiError {
             | ContainerError::InvalidExecState { .. }
             | ContainerError::NoTerminal(_)
             | ContainerError::AlreadyRunning(_) => StatusCode::CONFLICT,
-            ContainerError::InvalidSpec(_)
-            | ContainerError::InvalidVolume(_)
-            | ContainerError::InvalidNetwork(_) => StatusCode::BAD_REQUEST,
-            ContainerError::ReadOnly(_) => StatusCode::FORBIDDEN,
-            ContainerError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound => {
-                StatusCode::NOT_FOUND
+            ContainerError::InvalidSpec(_) | ContainerError::InvalidVolume(_) | ContainerError::InvalidNetwork(_) => {
+                StatusCode::BAD_REQUEST
             }
+            ContainerError::ReadOnly(_) => StatusCode::FORBIDDEN,
+            ContainerError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ContainerError::Runtime(_)
             | ContainerError::Corrupt(_)
             | ContainerError::TranslationCache(_)
@@ -103,12 +101,6 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(DockerError {
-                message: self.message,
-            }),
-        )
-            .into_response()
+        (self.status, Json(DockerError { message: self.message })).into_response()
     }
 }

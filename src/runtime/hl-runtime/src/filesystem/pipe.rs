@@ -36,8 +36,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             },
             crate::IpcOpenPipe::descriptions,
         );
-        let shared_status = flags & NONBLOCK
-            | u32::from(flags & direct != 0) * StatusFlags::DIRECT;
+        let shared_status = flags & NONBLOCK | u32::from(flags & direct != 0) * StatusFlags::DIRECT;
         let local = DescriptorFlags::from_bits(u32::from(flags & CLOEXEC != 0) * DescriptorFlags::CLOSE_ON_EXEC);
         let objects: Vec<_> = vec![
             (descriptions[0].clone(), StatusFlags::from_bits(shared_status), local),

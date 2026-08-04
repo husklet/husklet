@@ -312,7 +312,17 @@ mod tests {
         let signals: Arc<dyn hl_runtime::TerminalSignalSink> = Arc::new(DetachedSignals);
         let intent = OpenIntent::from_bits(OpenIntent::READ | OpenIntent::DIRECTORY);
         assert!(matches!(
-            TerminalOpen::prepare(b"/dev/pts", intent, false, &catalog, &bindings, &signals, None, None, false),
+            TerminalOpen::prepare(
+                b"/dev/pts",
+                intent,
+                false,
+                &catalog,
+                &bindings,
+                &signals,
+                None,
+                None,
+                false
+            ),
             Ok(None),
         ));
     }
@@ -374,9 +384,7 @@ mod tests {
         let signals: Arc<dyn hl_runtime::TerminalSignalSink> = Arc::new(DetachedSignals);
         let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
         let credentials = hl_task::ProcessCredentials::new(1000, 1000, &[], 8).unwrap();
-        let (leader, leader_thread) = tasks
-            .create_init(credentials, hl_task::ProcessLimits::empty())
-            .unwrap();
+        let (leader, leader_thread) = tasks.create_init(credentials, hl_task::ProcessLimits::empty()).unwrap();
         let session = tasks.session_id(leader).unwrap();
         let child_plan = tasks.begin_fork_process(leader_thread).unwrap();
         let child = child_plan.process();

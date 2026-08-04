@@ -253,8 +253,8 @@ mod tests {
     use hl_execution::{Aarch64CpuState, CpuState};
     use hl_task::{InterruptSink, ProcessCredentials, ProcessLimits, RegistryConfig};
     use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[derive(Default)]
     struct Interrupt(AtomicBool);
@@ -373,7 +373,9 @@ mod tests {
             }
             if let (Some(tasks), Some(interrupt)) = (&self.tasks, &self.interrupt) {
                 let sink: Arc<dyn InterruptSink> = interrupt.clone();
-                tasks.register_interrupt(thread, sink).map_err(|_| RuntimeThreadError::Invalid)?;
+                tasks
+                    .register_interrupt(thread, sink)
+                    .map_err(|_| RuntimeThreadError::Invalid)?;
             }
             Ok(Box::new(Staged {
                 snapshots: Arc::clone(&self.snapshots),

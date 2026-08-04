@@ -344,3 +344,39 @@ Borrowed callback scopes carry `reserved=1`; bounded query/return preparation
 accepts that tag, while public `scope_leave` accepts only owning `reserved=0`
 scopes. A callback therefore cannot copy its view and decrement the dispatcher's
 lease.
+
+## Guard emission capacity audit
+
+The guard-capacity boundary was compared with retained
+`translator/host/aarch64/asm.c` (`emit32`, `recode_cond`, and the branch
+encoders), `translator/guest/aarch64/translate.c`
+(`emit_a64_soft_guard_begin`, `emit_a64_soft_guard_end`,
+`emit_a64_bus_guard_instruction`, `emit_fold_mem`, and `translate_block`), and
+`translator/guest/aarch64/cache.c` (cache reservation/publication). The retained
+translator owns one write cursor under its JIT/cache lock and admits a block
+only while arena headroom remains; deferred miss sites are patched before the
+cursor is published. It has no recoverable per-emission capacity latch, so a
+failed partial block is not a state that its direct patchers accept.
+
+The Rust-owned native translator instead emits transactionally into a bounded
+per-run scratch array in `run_aarch64`, with each `hl_a64_assembler` owning its
+`writable`, `cursor`, `limit`, and sticky `failed` state. Guard placeholders and
+their deferred cold paths are local to that assembler and have no lock or
+cross-thread lifetime. Consequently every direct placeholder patch must require
+an unfailed assembler, four-byte alignment, a patch site wholly inside
+`[writable, cursor)`, a target inside `[writable, cursor]`, and a representable
+signed branch displacement. A capacity failure must leave the cursor failed and
+must not patch either the one-past-end address or an earlier partial guard.
+
+The cutoff sweep in `test/aarch64_pair.c` exercises every capacity from zero
+through `HL_A64_PAIR_MAX_BYTES` with red zones on both sides. At detached commit
+`1f998433cf98ba8e6c97de18f3b0728cf7389ebc`, the warning-strict AArch64 native
+test built from all native C sources and both entry assembly files and passed.
+This proves the previously observed host-stack overwrite is closed at the
+emitter boundary. Typed native execution separately proved admission with
+`runtime/abi-alloca`; `runtime/abi-recursion` then completed without the former
+abort but returned a deterministic wrong tree value, while both ABI VLA cases
+terminated at guest address `0x03800000`. Those are remaining architectural
+execution divergences, not evidence that guard-capacity memory safety still
+fails. QEMU produced the checked golden output for the identical guest
+artifacts.

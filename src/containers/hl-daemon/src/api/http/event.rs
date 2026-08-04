@@ -39,14 +39,7 @@ impl QueryParameters {
         for key in filters.keys() {
             if !matches!(
                 key.as_str(),
-                "type"
-                    | "event"
-                    | "action"
-                    | "container"
-                    | "image"
-                    | "network"
-                    | "volume"
-                    | "label"
+                "type" | "event" | "action" | "container" | "image" | "network" | "volume" | "label"
             ) {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
@@ -130,11 +123,7 @@ impl std::str::FromStr for Time {
                 _ => return Err(Self::invalid(value)),
             };
             total = total
-                .checked_add(
-                    number
-                        .checked_mul(multiplier)
-                        .ok_or_else(|| Self::invalid(value))?,
-                )
+                .checked_add(number.checked_mul(multiplier).ok_or_else(|| Self::invalid(value))?)
                 .ok_or_else(|| Self::invalid(value))?;
             units += 1;
         }
@@ -147,26 +136,17 @@ impl std::str::FromStr for Time {
 
 impl Time {
     fn invalid(value: &str) -> ApiError {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            format!("invalid Docker time {value:?}"),
-        )
+        ApiError::new(StatusCode::BAD_REQUEST, format!("invalid Docker time {value:?}"))
     }
 }
 
 #[hl_design::adapter]
-pub(super) async fn get(
-    State(state): State<DockerState>,
-    Query(query): Query<QueryParameters>,
-) -> ApiResult<Response> {
+pub(super) async fn get(State(state): State<DockerState>, Query(query): Query<QueryParameters>) -> ApiResult<Response> {
     let subscription = state.events.subscribe(query.event_query()?);
     let body = stream::unfold(subscription, |mut subscription| async move {
         let event = subscription.next().await?;
         let line = event.line().expect("event wire model is serializable");
-        Some((
-            Ok::<_, Infallible>(Frame::data(Bytes::from(line))),
-            subscription,
-        ))
+        Some((Ok::<_, Infallible>(Frame::data(Bytes::from(line))), subscription))
     });
     Response::builder()
         .header(http::header::CONTENT_TYPE, "application/json")
@@ -186,10 +166,7 @@ mod tests {
 
     #[test]
     fn parse_docker_ts_rfc3339() {
-        assert_eq!(
-            "2023-11-14T22:13:20Z".parse::<Time>().unwrap().at(0),
-            1_700_000_000
-        );
+        assert_eq!("2023-11-14T22:13:20Z".parse::<Time>().unwrap().at(0), 1_700_000_000);
         assert_eq!(
             "2023-11-15T00:13:20+02:00".parse::<Time>().unwrap().at(0),
             1_700_000_000
@@ -212,9 +189,7 @@ mod tests {
     #[test]
     fn query_accepts_docker_times_and_rejects_unknown_options_and_filters() {
         let query = QueryParameters {
-            filters: Some(
-                r#"{"image":["alpine"],"network":["frontend"],"volume":["data"]}"#.into(),
-            ),
+            filters: Some(r#"{"image":["alpine"],"network":["frontend"],"volume":["data"]}"#.into()),
             since: Some("1970-01-01T00:00:02Z".into()),
             until: Some("3".into()),
             unsupported: BTreeMap::new(),

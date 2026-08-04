@@ -1,0 +1,652 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/network/accept4
+    status: active
+    compat: { class: compatibility }
+    build: { source: accept4.c, output: accept4, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-accept4 }
+    run: []
+    expect: { exit: 0, stdout: golden/accept4.out }
+  - id: runtime/network/connect-refused
+    status: active
+    compat: { class: compatibility }
+    build: { source: connect_refused.c, output: connect_refused, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-connect_refused }
+    run: []
+    expect: { exit: 0, stdout: golden/connect_refused.out }
+  - id: runtime/network/dns-hostresolver
+    status: active
+    compat: { class: compatibility }
+    build: { source: dns_hostresolver.c, output: dns_hostresolver, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-dns_hostresolver }
+    run: []
+    expect: { exit: 0, stdout: golden/dns_hostresolver.out }
+  - id: runtime/network/getaddrinfo
+    status: active
+    compat: { class: compatibility }
+    build: { source: getaddrinfo.c, output: getaddrinfo, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-getaddrinfo }
+    run: []
+    expect: { exit: 0, stdout: golden/getaddrinfo.out }
+  - id: runtime/network/gethostname
+    status: active
+    compat: { class: compatibility }
+    build: { source: gethostname.c, output: gethostname, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-gethostname }
+    run: []
+    expect: { exit: 0, stdout: golden/gethostname.out }
+  - id: runtime/network/getpeername
+    status: active
+    compat: { class: compatibility }
+    build: { source: getpeername.c, output: getpeername, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-getpeername }
+    run: []
+    expect: { exit: 0, stdout: golden/getpeername.out }
+  - id: runtime/network/ifaces
+    status: active
+    compat: { class: compatibility }
+    build: { source: ifaces.c, output: ifaces, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-ifaces }
+    run: []
+    expect: { exit: 0, stdout: golden/ifaces.out }
+  - id: runtime/network/inet-pton
+    status: active
+    compat: { class: compatibility }
+    build: { source: inet_pton.c, output: inet_pton, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-inet_pton }
+    run: []
+    expect: { exit: 0, stdout: golden/inet_pton.out }
+  - id: runtime/network/listen-tcp
+    status: active
+    compat: { class: compatibility }
+    build: { source: listen_tcp.c, output: listen_tcp, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-listen_tcp }
+    run: []
+    expect: { exit: 0, stdout: golden/listen_tcp.out }
+  - id: runtime/network/lo-any-bridge
+    status: !unsupported
+      reason: "excluded-macos: netns/bridge loopback registration is not emulated on the macOS engine (no network namespaces on Darwin); bind returns EADDRINUSE. Linux engine still runs+passes this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: lo_anybridge.c, output: lo_anybridge, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-lo_anybridge }
+    environment: { HL_NETNS: "hlc228", HL_NETBR: "hlc228br", HL_IP: "172.28.0.5" }
+    run: []
+    expect: { exit: 0, stdout: golden/lo_anybridge.out }
+  - id: runtime/network/lo-any-nonblock
+    status: active
+    compat: { class: compatibility }
+    build: { source: lo_anynonblock.c, inputs: [socket_util.h], output: lo_anynonblock, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-lo_anynonblock }
+    environment: { HL_NETNS: "hlc-lo-any-nonblock" }
+    run: []
+    expect: { exit: 0, stdout: golden/lo_anynonblock.out }
+  - id: runtime/network/icmp-bridge
+    status: active
+    compat: { class: compatibility }
+    build: { source: icmp_bridge.c, output: icmp_bridge, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-icmp_bridge }
+    environment: { HL_NETNS: "hlc228", HL_NETBR: "hlc228br", HL_IP: "172.28.0.5" }
+    run: []
+    expect: { exit: 0, stdout: golden/icmp_bridge.out }
+  - id: runtime/network/msg-dontwait
+    status: active
+    compat: { class: compatibility }
+    build: { source: msg_dontwait.c, output: msg_dontwait, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-msg_dontwait }
+    run: []
+    expect: { exit: 0, stdout: golden/msg_dontwait.out }
+  - id: runtime/network/msg-peek
+    status: active
+    compat: { class: compatibility }
+    build: { source: msg_peek.c, output: msg_peek, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-msg_peek }
+    run: []
+    expect: { exit: 0, stdout: golden/msg_peek.out }
+  - id: runtime/network/msg-waitall
+    status: active
+    compat: { class: compatibility }
+    build: { source: msg_waitall.c, output: msg_waitall, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-msg_waitall }
+    run: []
+    expect: { exit: 0, stdout: golden/msg_waitall.out }
+  - id: runtime/network/peercred
+    status: active
+    compat: { class: compatibility }
+    build: { source: peercred.c, output: peercred, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-peercred }
+    run: []
+    expect: { exit: 0, stdout: golden/peercred.out }
+  - id: runtime/network/poll-accept
+    status: active
+    compat: { class: compatibility }
+    build: { source: poll_accept.c, output: poll_accept, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-poll_accept }
+    run: []
+    expect: { exit: 0, stdout: golden/poll_accept.out }
+  - id: runtime/network/select-multi
+    status: active
+    compat: { class: compatibility }
+    build: { source: select_multi.c, output: select_multi, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-select_multi }
+    run: []
+    expect: { exit: 0, stdout: golden/select_multi.out }
+  - id: runtime/network/sendmsg-addr
+    status: active
+    compat: { class: compatibility }
+    build: { source: sendmsg_addr.c, output: sendmsg_addr, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-sendmsg_addr }
+    run: []
+    expect: { exit: 0, stdout: golden/sendmsg_addr.out }
+  - id: runtime/network/so-linger
+    status: active
+    compat: { class: compatibility }
+    build: { source: so_linger.c, output: so_linger, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-so_linger }
+    run: []
+    expect: { exit: 0, stdout: golden/so_linger.out }
+  - id: runtime/network/sock-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: sock_flags.c, output: sock_flags, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-sock_flags }
+    run: []
+    expect: { exit: 0, stdout: golden/sock_flags.out }
+  - id: runtime/network/sockopt-buf
+    status: active
+    compat: { class: compatibility }
+    build: { source: sockopt_buf.c, output: sockopt_buf, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-sockopt_buf }
+    run: []
+    expect: { exit: 0, stdout: golden/sockopt_buf.out }
+  - id: runtime/network/tcp-bulk
+    status: active
+    compat: { class: compatibility }
+    build: { source: tcp_bulk.c, output: tcp_bulk, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-tcp_bulk }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_bulk.out }
+  - id: runtime/network/tcp-multi
+    status: active
+    compat: { class: compatibility }
+    build: { source: tcp_multi.c, output: tcp_multi, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-tcp_multi }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_multi.out }
+  - id: runtime/network/tcp-shutdown
+    status: active
+    compat: { class: compatibility }
+    build: { source: tcp_shutdown.c, output: tcp_shutdown, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-tcp_shutdown }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_shutdown.out }
+  - id: runtime/network/udp-connected
+    status: active
+    compat: { class: compatibility }
+    build: { source: udp_connected.c, output: udp_connected, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-udp_connected }
+    environment: { HL_NETNS: "udp-connected" }
+    run: []
+    expect: { exit: 0, stdout: golden/udp_connected.out }
+  - id: runtime/network/udp-private
+    status: active
+    compat: { class: compatibility }
+    build: { source: udp_private.c, output: udp_private, flags: [-static-pie, -O2, -pthread] }
+    artifact: { destination: /opt/husklet/network-udp_private }
+    run: []
+    expect: { exit: 0, stdout: golden/udp_private.out }
+  - id: runtime/network/unix-dgram
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_dgram.c, output: unix_dgram, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_dgram }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_dgram.out }
+  - id: runtime/network/unix-dgram-abstract
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_dgramabstract.c, output: unix_dgramabstract, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_dgramabstract }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_dgramabstract.out }
+  - id: runtime/network/unix-stream
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_stream.c, output: unix_stream, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_stream }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_stream.out }
+  - id: runtime/network/v6-unreach
+    status: active
+    compat: { class: compatibility }
+    build: { source: v6_unreach.c, output: v6_unreach, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-v6_unreach }
+    run: []
+    expect: { exit: 0, stdout: golden/v6_unreach.out }
+  - id: runtime/network/writev
+    status: active
+    compat: { class: compatibility }
+    build: { source: writev.c, output: writev, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-writev }
+    run: []
+    expect: { exit: 0, stdout: golden/writev.out }
+  - id: runtime/network/ltp_neterr
+    status: active
+    compat: { class: compatibility }
+    build: { source: ltp_neterr.c, output: ltp_neterr, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-ltp_neterr }
+    run: []
+    expect: { exit: 0, stdout: golden/ltp_neterr.out }
+  - id: runtime/network/net_nonblock
+    status: active
+    compat: { class: compatibility }
+    build: { source: net_nonblock.c, output: net_nonblock, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-net_nonblock }
+    run: []
+    expect: { exit: 0, stdout: golden/net_nonblock.out }
+  - id: runtime/network/net_sendmsg
+    status: active
+    compat: { class: compatibility }
+    build: { source: net_sendmsg.c, output: net_sendmsg, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-net_sendmsg }
+    run: []
+    expect: { exit: 0, stdout: golden/net_sendmsg.out }
+  - id: runtime/network/net_sockopt
+    status: active
+    compat: { class: compatibility }
+    build: { source: net_sockopt.c, output: net_sockopt, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-net_sockopt }
+    run: []
+    expect: { exit: 0, stdout: golden/net_sockopt.out }
+  - id: runtime/network/net_tcp
+    status: active
+    compat: { class: compatibility }
+    build: { source: net_tcp.c, output: net_tcp, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-net_tcp }
+    run: []
+    expect: { exit: 0, stdout: golden/net_tcp.out }
+  - id: runtime/network/net_udp
+    status: active
+    compat: { class: compatibility }
+    build: { source: net_udp.c, output: net_udp, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-net_udp }
+    run: []
+    expect: { exit: 0, stdout: golden/net_udp.out }
+  - id: runtime/network/net_unix
+    status: active
+    compat: { class: compatibility }
+    build: { source: net_unix.c, output: net_unix, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-net_unix }
+    run: []
+    expect: { exit: 0, stdout: golden/net_unix.out }
+  - id: runtime/network/sentry_net
+    status: active
+    compat: { class: compatibility }
+    build: { source: sentry_net.c, output: sentry_net, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-sentry_net }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_net.out }
+  - id: runtime/network/sentry-net-untrusted
+    status: active
+    compat: { class: compatibility }
+    build: { source: sentry_netuntrusted.c, output: sentry_netuntrusted, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/network-sentry_netuntrusted }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_netuntrusted.out }
+  - id: runtime/network/ipv6-loopback
+    status: active
+    compat: { class: compatibility }
+    build: { source: ipv6_loopback.c, inputs: [socket_util.h], output: ipv6_loopback, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-ipv6_loopback }
+    run: []
+    expect: { exit: 0, stdout: golden/ipv6_loopback.out }
+  - id: runtime/network/ipv6-v6only
+    status: active
+    compat: { class: compatibility }
+    build: { source: ipv6_v6only.c, inputs: [socket_util.h], output: ipv6_v6only, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-ipv6_v6only }
+    run: []
+    expect: { exit: 0, stdout: golden/ipv6_v6only.out }
+  - id: runtime/network/dual-wildcard-v6only
+    status: active
+    compat: { class: compatibility }
+    build: { source: dual_wildcardv6only.c, output: dual_wildcardv6only, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-dual_wildcardv6only }
+    run: []
+    expect: { exit: 0, stdout: golden/dual_wildcardv6only.out }
+  - id: runtime/network/dual-wildcard-v6only-bridge
+    status: active
+    compat: { class: compatibility }
+    build: { source: dual_wildcardv6onlybridge.c, output: dual_wildcardv6onlybridge, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-dual_wildcardv6onlybridge }
+    environment: { HL_NETNS: "hlc-dual", HL_NETBR: "hlc-dual-bridge", HL_IP: "172.28.0.5" }
+    run: []
+    expect: { exit: 0, stdout: golden/dual_wildcardv6onlybridge.out }
+  - id: runtime/network/socketpair
+    status: active
+    compat: { class: compatibility }
+    build: { source: socketpair.c, inputs: [socket_util.h], output: socketpair, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-socketpair }
+    run: []
+    expect: { exit: 0, stdout: golden/socketpair.out }
+  - id: runtime/network/scm-rights
+    status: active
+    compat: { class: compatibility }
+    build: { source: scm_rights.c, inputs: [socket_util.h], output: scm_rights, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-scm_rights }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_rights.out }
+  - id: runtime/network/epoll-readiness
+    status: active
+    compat: { class: compatibility }
+    build: { source: epoll_readiness.c, inputs: [socket_util.h], output: epoll_readiness, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-epoll_readiness }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_readiness.out }
+  - id: runtime/network/dup-socket
+    status: active
+    compat: { class: compatibility }
+    build: { source: dup_socket.c, inputs: [socket_util.h], output: dup_socket, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-dup_socket }
+    run: []
+    expect: { exit: 0, stdout: golden/dup_socket.out }
+  - id: runtime/network/fionread
+    status: active
+    compat: { class: compatibility }
+    build: { source: fionread.c, inputs: [socket_util.h], output: fionread, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-fionread }
+    run: []
+    expect: { exit: 0, stdout: golden/fionread.out }
+  - id: runtime/network/nonblock-connect
+    status: active
+    compat: { class: compatibility }
+    build: { source: nonblock_connect.c, inputs: [socket_util.h], output: nonblock_connect, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-nonblock_connect }
+    run: []
+    expect: { exit: 0, stdout: golden/nonblock_connect.out }
+  - id: runtime/network/shutdown-rd
+    status: active
+    compat: { class: compatibility }
+    build: { source: shutdown_rd.c, inputs: [socket_util.h], output: shutdown_rd, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-shutdown_rd }
+    run: []
+    expect: { exit: 0, stdout: golden/shutdown_rd.out }
+  - id: runtime/network/waitall-partial
+    status: active
+    compat: { class: compatibility }
+    build: { source: waitall_partial.c, inputs: [socket_util.h], output: waitall_partial, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-waitall_partial }
+    run: []
+    expect: { exit: 0, stdout: golden/waitall_partial.out }
+  - id: runtime/network/getpeername-notconn
+    status: active
+    compat: { class: compatibility }
+    build: { source: getpeername_notconn.c, inputs: [socket_util.h], output: getpeername_notconn, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-getpeername_notconn }
+    run: []
+    expect: { exit: 0, stdout: golden/getpeername_notconn.out }
+  - id: runtime/network/bufsize
+    status: active
+    compat: { class: compatibility }
+    build: { source: bufsize.c, inputs: [socket_util.h], output: bufsize, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-bufsize }
+    run: []
+    expect: { exit: 0, stdout: golden/bufsize.out }
+  - id: runtime/network/keepalive
+    status: active
+    compat: { class: compatibility }
+    build: { source: keepalive.c, inputs: [socket_util.h], output: keepalive, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-keepalive }
+    run: []
+    expect: { exit: 0, stdout: golden/keepalive.out }
+  - id: runtime/network/accept-backlog
+    status: active
+    compat: { class: compatibility }
+    build: { source: accept_backlog.c, inputs: [socket_util.h], output: accept_backlog, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-accept_backlog }
+    run: []
+    expect: { exit: 0, stdout: golden/accept_backlog.out }
+  - id: runtime/network/recvmsg-trunc
+    status: active
+    compat: { class: compatibility }
+    build: { source: recvmsg_trunc.c, inputs: [socket_util.h], output: recvmsg_trunc, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-recvmsg_trunc }
+    run: []
+    expect: { exit: 0, stdout: golden/recvmsg_trunc.out }
+  - id: runtime/network/sendmsg-iov
+    status: active
+    compat: { class: compatibility }
+    build: { source: sendmsg_iov.c, inputs: [socket_util.h], output: sendmsg_iov, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-sendmsg_iov }
+    run: []
+    expect: { exit: 0, stdout: golden/sendmsg_iov.out }
+  - id: runtime/network/udp-pair
+    status: active
+    compat: { class: compatibility }
+    build: { source: udp_pair.c, inputs: [socket_util.h], output: udp_pair, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-udp_pair }
+    run: []
+    expect: { exit: 0, stdout: golden/udp_pair.out }
+  - id: runtime/network/unix-abstract-stream
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_abstractstream.c, inputs: [socket_util.h], output: unix_abstractstream, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_abstractstream }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_abstractstream.out }
+  - id: runtime/network/poll-events
+    status: active
+    compat: { class: compatibility }
+    build: { source: poll_events.c, inputs: [socket_util.h], output: poll_events, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-poll_events }
+    run: []
+    expect: { exit: 0, stdout: golden/poll_events.out }
+  - id: runtime/network/msg-peek-stream
+    status: active
+    compat: { class: compatibility }
+    build: { source: msg_peekstream.c, inputs: [socket_util.h], output: msg_peekstream, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-msg_peekstream }
+    run: []
+    expect: { exit: 0, stdout: golden/msg_peekstream.out }
+  - id: runtime/network/errpaths
+    status: active
+    compat: { class: compatibility }
+    build: { source: errpaths.c, inputs: [socket_util.h], output: errpaths, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-errpaths }
+    run: []
+    expect: { exit: 0, stdout: golden/errpaths.out }
+  - id: runtime/network/shutdown-wr
+    status: active
+    compat: { class: compatibility }
+    build: { source: shutdown_wr.c, inputs: [socket_util.h], output: shutdown_wr, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-shutdown_wr }
+    run: []
+    expect: { exit: 0, stdout: golden/shutdown_wr.out }
+  - id: runtime/network/so-type
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: so_type.c, inputs: [socket_util.h], output: so_type, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-so_type }
+    run: []
+    expect: { exit: 0, stdout: golden/so_type.out }
+  - id: runtime/network/so-reuseport
+    status: active
+    compat: { class: compatibility }
+    build: { source: so_reuseport.c, inputs: [socket_util.h], output: so_reuseport, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-so_reuseport }
+    run: []
+    expect: { exit: 0, stdout: golden/so_reuseport.out }
+  - id: runtime/network/udp-msg-trunc
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: udp_msgtrunc.c, inputs: [socket_util.h], output: udp_msgtrunc, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-udp_msgtrunc }
+    run: []
+    expect: { exit: 0, stdout: golden/udp_msgtrunc.out }
+  - id: runtime/network/rcvtimeo
+    status: active
+    compat: { class: compatibility }
+    build: { source: rcvtimeo.c, inputs: [socket_util.h], output: rcvtimeo, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-rcvtimeo }
+    run: []
+    expect: { exit: 0, stdout: golden/rcvtimeo.out }
+  - id: runtime/network/async-refused
+    status: active
+    compat: { class: compatibility }
+    build: { source: async_refused.c, inputs: [socket_util.h], output: async_refused, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-async_refused }
+    run: []
+    expect: { exit: 0, stdout: golden/async_refused.out }
+  - id: runtime/network/linger-reset
+    status: !broken
+      reason: "AF_UNIX loopback switch cannot emulate TCP SO_LINGER l_linger=0 abortive RST (peer gets EOF not ECONNRESET); demonstrating test, deferred"
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: linger_reset.c, inputs: [socket_util.h], output: linger_reset, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-linger_reset }
+    run: []
+    expect: { exit: 0, stdout: golden/linger_reset.out }
+  - id: runtime/network/passcred-scm
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: passcred_scm.c, inputs: [socket_util.h], output: passcred_scm, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-passcred_scm }
+    run: []
+    expect: { exit: 0, stdout: golden/passcred_scm.out }
+  - id: runtime/network/unix-seqpacket
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: unix_seqpacket.c, inputs: [socket_util.h], output: unix_seqpacket, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_seqpacket }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_seqpacket.out }
+  - id: runtime/network/mmsg
+    status: active
+    compat: { class: compatibility }
+    build: { source: mmsg.c, inputs: [socket_util.h], output: mmsg, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-mmsg }
+    run: []
+    expect: { exit: 0, stdout: golden/mmsg.out }
+  - id: runtime/network/oob
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: oob.c, inputs: [socket_util.h], output: oob, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-oob }
+    run: []
+    expect: { exit: 0, stdout: golden/oob.out }
+  - id: runtime/network/unix-autobind
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_autobind.c, output: unix_autobind, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_autobind }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_autobind.out }
+  - id: runtime/network/unix-abstract-name
+    status: active
+    compat: { class: compatibility }
+    build: { source: unix_abstractname.c, output: unix_abstractname, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-unix_abstractname }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_abstractname.out }
+  - id: runtime/network/netlink-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: netlink_edges.c, output: netlink_edges, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-netlink_edges }
+    run: []
+    expect: { exit: 0, stdout: golden/netlink_edges.out }
+  - id: runtime/network/udp-switch
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: udp_switch.c, inputs: [socket_util.h], output: udp_switch, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-udp_switch }
+    run: []
+    expect: { exit: 0, stdout: golden/udp_switch.out }
+  - id: runtime/network/tcp-sockopt
+    status: active
+    compat: { class: compatibility }
+    build: { source: tcp_sockopt.c, inputs: [socket_util.h], output: tcp_sockopt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-tcp_sockopt }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_sockopt.out }
+  - id: runtime/network/tcp-pollhup
+    status: !broken
+      reason: "EPOLLHUP reported prematurely on peer full-close while the local write half is open (AF_UNIX switch cannot model TCP half-open teardown, same class as linger-reset); demonstrating test, deferred"
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: tcp_pollhup.c, inputs: [socket_util.h], output: tcp_pollhup, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-tcp_pollhup }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_pollhup.out }
+  - id: runtime/network/ip-sockopt
+    status: active
+    compat: { class: compatibility }
+    build: { source: ip_sockopt.c, inputs: [socket_util.h], output: ip_sockopt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-ip_sockopt }
+    run: []
+    expect: { exit: 0, stdout: golden/ip_sockopt.out }
+  - id: runtime/network/socket-matrix
+    status: !unsupported
+      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: socket_matrix.c, inputs: [socket_util.h], output: socket_matrix, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-socket_matrix }
+    run: []
+    expect: { exit: 0, stdout: golden/socket_matrix.out }
+  - id: runtime/network/sock-ioctl
+    status: active
+    compat: { class: compatibility }
+    build: { source: sock_ioctl.c, inputs: [socket_util.h], output: sock_ioctl, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-sock_ioctl }
+    run: []
+    expect: { exit: 0, stdout: golden/sock_ioctl.out }
+  - id: runtime/network/connect-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: connect_edges.c, inputs: [socket_util.h], output: connect_edges, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-connect_edges }
+    run: []
+    expect: { exit: 0, stdout: golden/connect_edges.out }
+  - id: runtime/network/icmp-loopback
+    status: active
+    compat: { class: compatibility }
+    build: { source: icmp_loopback.c, inputs: [socket_util.h], output: icmp_loopback, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-icmp_loopback }
+    run: []
+    expect: { exit: 0, stdout: golden/icmp_loopback.out }
+  - id: runtime/network/tcp-row
+    status: active
+    compat: { class: compatibility }
+    build: { source: tcp_row.c, output: tcp_row, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/network-tcp_row }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_row.out }
+  - id: runtime/network/provider-loopback
+    status: !unsupported
+      reason: "The fixture requires the retired typed provider-backed socket/file injection protocol, which the canonical folder runner cannot yet express"
+      evidence: "tests/runtime/network/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: provider_loopback.c, output: provider-loopback, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /provider-loopback }
+    run: []
+    expect: { exit: 0, stdout: golden/provider_loopback.out }

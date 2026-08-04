@@ -11,10 +11,7 @@ impl NetworkCreate {
         if self.enable_ipv6
             || self.ingress
             || self.config_only
-            || self
-                .config_from
-                .as_ref()
-                .is_some_and(|value| !value.network.is_empty())
+            || self.config_from.as_ref().is_some_and(|value| !value.network.is_empty())
         {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
@@ -30,11 +27,7 @@ impl NetworkCreate {
         }
         if !self.options.is_empty()
             || !self.scope.is_empty() && self.scope != "local"
-            || self
-                .ipam
-                .options
-                .as_ref()
-                .is_some_and(|value| !value.is_empty())
+            || self.ipam.options.as_ref().is_some_and(|value| !value.is_empty())
             || !self.ipam.driver.is_empty() && self.ipam.driver != "default"
         {
             return Err(ApiError::new(
@@ -42,13 +35,9 @@ impl NetworkCreate {
                 "custom network and IPAM options are not implemented",
             ));
         }
-        let driver = if self.driver.is_empty() {
-            "bridge"
-        } else {
-            &self.driver
-        };
+        let driver = if self.driver.is_empty() { "bridge" } else { &self.driver };
         let mut spec = match driver {
-            "null" => {
+            "none" => {
                 if !self.ipam.config.is_empty() {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
@@ -56,15 +45,11 @@ impl NetworkCreate {
                     ));
                 }
                 NetworkSpec::none(self.name)
-                    .internal(self.internal)
-                    .attachable(self.attachable)
             }
             "bridge" => {
                 let pool = match self.ipam.config.as_slice() {
                     [] => {
-                        let mut value = NetworkSpec::bridge_auto(self.name)
-                            .internal(self.internal)
-                            .attachable(self.attachable);
+                        let mut value = NetworkSpec::bridge_auto(self.name);
                         value.labels = self.labels;
                         return Ok(value);
                     }
@@ -76,11 +61,7 @@ impl NetworkCreate {
                         ));
                     }
                 };
-                if !pool.ip_range.is_empty()
-                    || pool
-                        .auxiliary_addresses
-                        .as_ref()
-                        .is_some_and(|value| !value.is_empty())
+                if !pool.ip_range.is_empty() || pool.auxiliary_addresses.as_ref().is_some_and(|value| !value.is_empty())
                 {
                     return Err(ApiError::new(
                         StatusCode::NOT_IMPLEMENTED,
@@ -88,13 +69,13 @@ impl NetworkCreate {
                     ));
                 }
                 let subnet = pool.subnet()?;
-                let mut value = NetworkSpec::bridge(self.name, subnet)
-                    .internal(self.internal)
-                    .attachable(self.attachable);
+                let mut value = NetworkSpec::bridge(self.name, subnet);
                 if !pool.gateway.is_empty() {
-                    value = value.gateway(pool.gateway.parse().map_err(|_| {
-                        ApiError::new(StatusCode::BAD_REQUEST, "invalid IPv4 gateway")
-                    })?);
+                    value = value.gateway(
+                        pool.gateway
+                            .parse()
+                            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid IPv4 gateway"))?,
+                    );
                 }
                 value
             }
@@ -113,12 +94,7 @@ impl NetworkCreate {
 impl crate::api::EndpointConfig {
     pub(in crate::api::http) fn spec(self) -> ApiResult<EndpointSpec> {
         Fields::from(&self.unsupported).reject("network endpoint")?;
-        if !self.links.is_empty()
-            || self
-                .driver_opts
-                .as_ref()
-                .is_some_and(|value| !value.is_empty())
-        {
+        if !self.links.is_empty() || self.driver_opts.as_ref().is_some_and(|value| !value.is_empty()) {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
                 "endpoint links and driver options are not implemented",
@@ -137,9 +113,11 @@ impl crate::api::EndpointConfig {
                 ));
             }
             if !ipam.ipv4_address.is_empty() {
-                spec = spec.address(ipam.ipv4_address.parse().map_err(|_| {
-                    ApiError::new(StatusCode::BAD_REQUEST, "invalid endpoint IPv4 address")
-                })?);
+                spec = spec.address(
+                    ipam.ipv4_address
+                        .parse()
+                        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid endpoint IPv4 address"))?,
+                );
             }
         }
         Ok(spec)
@@ -174,9 +152,9 @@ impl From<hl_container::Network> for Network {
             .into_iter()
             .map(|(id, endpoint)| {
                 let mac_address = endpoint.mac_address().unwrap_or_default();
-                let address = endpoint.address.map_or_else(String::new, |address| {
-                    format!("{address}/{}", prefix.unwrap_or(32))
-                });
+                let address = endpoint
+                    .address
+                    .map_or_else(String::new, |address| format!("{address}/{}", prefix.unwrap_or(32)));
                 let entry = NetworkContainer {
                     name: endpoint.name,
                     endpoint_id: id.to_string(),
@@ -191,9 +169,7 @@ impl From<hl_container::Network> for Network {
             .subnet
             .map(|subnet| IpamConfig {
                 subnet: format!("{}/{}", subnet.address, subnet.prefix),
-                gateway: value
-                    .gateway
-                    .map_or_else(String::new, |gateway| gateway.to_string()),
+                gateway: value.gateway.map_or_else(String::new, |gateway| gateway.to_string()),
                 ..IpamConfig::default()
             })
             .into_iter()
@@ -201,11 +177,9 @@ impl From<hl_container::Network> for Network {
         Self {
             name: value.name,
             id: value.id.to_string(),
-            created: chrono::DateTime::from_timestamp_millis(
-                i64::try_from(value.created_at_ms).unwrap_or(i64::MAX),
-            )
-            .unwrap_or_default()
-            .to_rfc3339(),
+            created: chrono::DateTime::from_timestamp_millis(i64::try_from(value.created_at_ms).unwrap_or(i64::MAX))
+                .unwrap_or_default()
+                .to_rfc3339(),
             scope: "local".into(),
             driver: match value.driver {
                 NetworkDriver::None => "null",
@@ -219,8 +193,8 @@ impl From<hl_container::Network> for Network {
                 config,
                 ..Ipam::default()
             },
-            internal: value.internal,
-            attachable: value.attachable,
+            internal: value.driver == NetworkDriver::None,
+            attachable: false,
             ingress: false,
             config_from: ConfigFrom::default(),
             config_only: false,
@@ -239,14 +213,20 @@ impl Network {
     }
 }
 
+impl Network {
+    /// Projects Docker's network-list summary without expanding endpoint details.
+    pub(super) fn from_summary(mut value: hl_container::Network) -> Self {
+        value.endpoints.clear();
+        Self::from(value)
+    }
+}
+
 impl IpamConfig {
     fn subnet(&self) -> ApiResult<Subnet> {
-        let (address, prefix) = self.subnet.split_once('/').ok_or_else(|| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "subnet must use IPv4 CIDR notation",
-            )
-        })?;
+        let (address, prefix) = self
+            .subnet
+            .split_once('/')
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "subnet must use IPv4 CIDR notation"))?;
         let address: Ipv4Addr = address
             .parse()
             .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid IPv4 subnet"))?;
@@ -259,8 +239,10 @@ impl IpamConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::api::{EndpointConfig, NetworkCreate};
+    use crate::api::{EndpointConfig, Network, NetworkCreate};
     use axum::http::StatusCode;
+    use hl_container::{ContainerId, Endpoint, Network as RuntimeNetwork, NetworkDriver, NetworkId};
+    use std::collections::BTreeMap;
 
     #[test]
     fn network_create_preserves_and_rejects_meaningful_unknown_fields() {
@@ -297,30 +279,44 @@ mod tests {
     }
 
     #[test]
-    fn null_is_the_driver_token_and_internal_is_preserved() {
-        let request: NetworkCreate = serde_json::from_value(serde_json::json!({
-            "Name": "airgap",
-            "Driver": "null",
-            "Internal": true,
-            "Attachable": true
-        }))
-        .unwrap();
-        let spec = request.spec().unwrap();
-        assert_eq!(spec.driver, hl_container::NetworkDriver::None);
-        assert!(spec.internal);
-        assert!(spec.attachable);
+    fn network_list_summary_omits_endpoint_details() {
+        let container: ContainerId = "00000000000000000000000000000000".parse().unwrap();
+        let endpoint = Endpoint {
+            container: container.clone(),
+            address: Some("10.0.0.2".parse().unwrap()),
+            name: "web".into(),
+            generated_name: false,
+            aliases: Vec::new(),
+        };
+        let runtime = RuntimeNetwork {
+            id: "00000000000000000000000000000001".parse::<NetworkId>().unwrap(),
+            name: "frontend".into(),
+            driver: NetworkDriver::Bridge,
+            subnet: Some(hl_container::Subnet::new("10.0.0.0".parse().unwrap(), 24).unwrap()),
+            gateway: Some("10.0.0.1".parse().unwrap()),
+            labels: BTreeMap::new(),
+            endpoints: [(container, endpoint)].into_iter().collect(),
+            created_at_ms: 0,
+        };
 
-        let defaults: NetworkCreate = serde_json::from_value(serde_json::json!({
-            "Name": "frontend"
-        }))
-        .unwrap();
-        assert!(!defaults.spec().unwrap().attachable);
+        let summary = Network::from_summary(runtime.clone());
+        assert!(summary.containers.is_empty());
+        assert_eq!(
+            serde_json::to_value(summary).unwrap()["Containers"],
+            serde_json::json!({})
+        );
+        assert_eq!(Network::from(runtime).containers.len(), 1);
 
-        let request: NetworkCreate = serde_json::from_value(serde_json::json!({
-            "Name": "airgap",
-            "Driver": "none"
-        }))
-        .unwrap();
-        assert_eq!(request.spec().unwrap_err().status, StatusCode::NOT_IMPLEMENTED);
+        let isolated = RuntimeNetwork {
+            id: "00000000000000000000000000000002".parse().unwrap(),
+            name: "none".into(),
+            driver: NetworkDriver::None,
+            subnet: None,
+            gateway: None,
+            labels: BTreeMap::new(),
+            endpoints: BTreeMap::new(),
+            created_at_ms: 0,
+        };
+        assert_eq!(Network::from_summary(isolated).driver, "null");
     }
 }

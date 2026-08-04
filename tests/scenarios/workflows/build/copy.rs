@@ -1,6 +1,6 @@
 use std::io::Read as _;
 
-use super::{append, support::archive_context, Client, CreateContainer, Error};
+use super::{Client, CreateContainer, Error, append, support::archive_context};
 
 pub(super) async fn modern_copy(client: &Client) -> Result<(), Error> {
     let context = archive_context(
@@ -16,11 +16,7 @@ pub(super) async fn modern_copy(client: &Client) -> Result<(), Error> {
     )?;
     client
         .images()
-        .build(
-            std::io::Cursor::new(context),
-            "workflow/modern-copy:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context), "workflow/modern-copy:test", None)
         .await?;
     let created = client
         .containers()
@@ -43,10 +39,7 @@ pub(super) async fn modern_copy(client: &Client) -> Result<(), Error> {
         )
         .into());
     }
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 
@@ -57,11 +50,7 @@ pub(super) async fn named_ownership(client: &Client) -> Result<(), Error> {
     )?;
     client
         .images()
-        .build(
-            std::io::Cursor::new(context),
-            "workflow/named-ownership:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context), "workflow/named-ownership:test", None)
         .await?;
     let created = client
         .containers()
@@ -84,10 +73,7 @@ pub(super) async fn named_ownership(client: &Client) -> Result<(), Error> {
         )
         .into());
     }
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 
@@ -98,11 +84,7 @@ pub(super) async fn external_image_copy(client: &Client) -> Result<(), Error> {
     )?;
     client
         .images()
-        .build(
-            std::io::Cursor::new(source),
-            "workflow/external-source:test",
-            None,
-        )
+        .build(std::io::Cursor::new(source), "workflow/external-source:test", None)
         .await?;
     let target = archive_context(
         b"FROM workflow/alpine:test AS generated\nRUN echo STAGE > /stage\nFROM workflow/alpine:test\nCOPY --from=generated /stage /stage\nCOPY --from=workflow/external-source:test /external/file /copied/file\nCOPY --from=workflow/external-source:test /external/tree /copied/tree\nCOPY --from=workflow/external-source:test --chmod=0600 /external/file /overridden\nCMD sh -c \"cat /stage /copied/file /copied/tree/nested; stat -c '%u:%g:%a' /copied/file /copied/tree/nested /overridden\"\n",
@@ -110,11 +92,7 @@ pub(super) async fn external_image_copy(client: &Client) -> Result<(), Error> {
     )?;
     client
         .images()
-        .build(
-            std::io::Cursor::new(target),
-            "workflow/external-target:test",
-            None,
-        )
+        .build(std::io::Cursor::new(target), "workflow/external-target:test", None)
         .await?;
     let created = client
         .containers()
@@ -139,10 +117,7 @@ pub(super) async fn external_image_copy(client: &Client) -> Result<(), Error> {
         )
         .into());
     }
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 
@@ -160,11 +135,7 @@ pub(super) async fn ownership(client: &Client) -> Result<(), Error> {
     }
     client
         .images()
-        .build(
-            std::io::Cursor::new(context),
-            "workflow/ownership:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context), "workflow/ownership:test", None)
         .await?;
     let mut stream = client.images().save(&["workflow/ownership:test"]).await?;
     let mut saved = Vec::new();

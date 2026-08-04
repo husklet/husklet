@@ -36,10 +36,9 @@ pub(crate) async fn run(name: &str, containers: &Containers) -> Result<(), Error
         "pty-conformance" => pty::run(containers).await,
         "docker" => docker::run(containers, false).await,
         "docker-full" => docker::run(containers, true).await,
-        known if NAMES.contains(&known) => Err(format!(
-            "workflow {known:?} is inventoried but its typed orchestration is not transferred"
-        )
-        .into()),
+        known if NAMES.contains(&known) => {
+            Err(format!("workflow {known:?} is inventoried but its typed orchestration is not transferred").into())
+        }
         _ => Err(format!("unknown workflow {name:?}").into()),
     }
 }

@@ -37,10 +37,7 @@ impl<'a> Blob<'a> {
             .map_err(|error| Error::MalformedOci(error.to_string()))?;
         DescriptorBuilder::default()
             .media_type(self.media_type.clone())
-            .size(
-                u64::try_from(self.bytes.len())
-                    .map_err(|_| Error::MalformedOci("blob too large".into()))?,
-            )
+            .size(u64::try_from(self.bytes.len()).map_err(|_| Error::MalformedOci("blob too large".into()))?)
             .digest(digest)
             .build()
             .map_err(|error| Error::MalformedOci(error.to_string()))
@@ -68,20 +65,14 @@ impl ConfigDocument {
     where
         D: serde::Deserializer<'de>,
     {
-        Ok(
-            <Option<Vec<History>> as serde::Deserialize>::deserialize(deserializer)?
-                .unwrap_or_default(),
-        )
+        Ok(<Option<Vec<History>> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default())
     }
 
     fn config<'de, D>(deserializer: D) -> std::result::Result<OciRuntimeConfig, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        Ok(
-            <Option<OciRuntimeConfig> as serde::Deserialize>::deserialize(deserializer)?
-                .unwrap_or_default(),
-        )
+        Ok(<Option<OciRuntimeConfig> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default())
     }
 
     pub(super) fn require_platform(&self, wanted: &Platform) -> Result<()> {
@@ -118,11 +109,7 @@ pub(super) struct OciRuntimeConfig {
     user: String,
     #[serde(default)]
     pub(super) labels: Option<BTreeMap<String, String>>,
-    #[serde(
-        default,
-        deserialize_with = "OciRuntimeConfig::on_build",
-        rename = "OnBuild"
-    )]
+    #[serde(default, deserialize_with = "OciRuntimeConfig::on_build", rename = "OnBuild")]
     pub(super) on_build: Vec<String>,
     #[serde(default, deserialize_with = "OciRuntimeConfig::exposed_ports")]
     pub(super) exposed_ports: BTreeMap<String, serde_json::Value>,
@@ -139,37 +126,26 @@ impl OciRuntimeConfig {
     where
         D: serde::Deserializer<'de>,
     {
+        Ok(<Option<Vec<String>> as serde::Deserialize>::deserialize(deserializer)?.unwrap_or_default())
+    }
+
+    fn exposed_ports<'de, D>(deserializer: D) -> std::result::Result<BTreeMap<String, serde_json::Value>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
         Ok(
-            <Option<Vec<String>> as serde::Deserialize>::deserialize(deserializer)?
+            <Option<BTreeMap<String, serde_json::Value>> as serde::Deserialize>::deserialize(deserializer)?
                 .unwrap_or_default(),
         )
     }
 
-    fn exposed_ports<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<BTreeMap<String, serde_json::Value>, D::Error>
+    fn volumes<'de, D>(deserializer: D) -> std::result::Result<BTreeMap<String, serde_json::Value>, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         Ok(
-            <Option<BTreeMap<String, serde_json::Value>> as serde::Deserialize>::deserialize(
-                deserializer,
-            )?
-            .unwrap_or_default(),
-        )
-    }
-
-    fn volumes<'de, D>(
-        deserializer: D,
-    ) -> std::result::Result<BTreeMap<String, serde_json::Value>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(
-            <Option<BTreeMap<String, serde_json::Value>> as serde::Deserialize>::deserialize(
-                deserializer,
-            )?
-            .unwrap_or_default(),
+            <Option<BTreeMap<String, serde_json::Value>> as serde::Deserialize>::deserialize(deserializer)?
+                .unwrap_or_default(),
         )
     }
 }
@@ -180,9 +156,9 @@ impl TryFrom<OciRuntimeConfig> for RuntimeConfig {
     fn try_from(config: OciRuntimeConfig) -> Result<Self> {
         let mut environment = BTreeMap::new();
         for entry in config.env.unwrap_or_default() {
-            let (name, value) = entry.split_once('=').ok_or_else(|| {
-                Error::MalformedOci(format!("environment entry {entry:?} has no '='"))
-            })?;
+            let (name, value) = entry
+                .split_once('=')
+                .ok_or_else(|| Error::MalformedOci(format!("environment entry {entry:?} has no '='")))?;
             environment.insert(name.to_owned(), value.to_owned());
         }
         let runtime = Self {
@@ -210,12 +186,12 @@ impl IndexDocument {
             )));
         }
         let matches_os_arch = |candidate: &&PlatformDescriptor| {
-            candidate.platform.as_ref().is_some_and(|platform| {
-                platform.os == wanted.os && platform.architecture == wanted.architecture
-            })
+            candidate
+                .platform
+                .as_ref()
+                .is_some_and(|platform| platform.os == wanted.os && platform.architecture == wanted.architecture)
         };
-        let candidates: Vec<&PlatformDescriptor> =
-            self.manifests.iter().filter(matches_os_arch).collect();
+        let candidates: Vec<&PlatformDescriptor> = self.manifests.iter().filter(matches_os_arch).collect();
         candidates
             .iter()
             .copied()
@@ -225,13 +201,7 @@ impl IndexDocument {
                     .as_ref()
                     .is_some_and(|platform| platform.variant == wanted.variant)
             })
-            .or_else(|| {
-                wanted
-                    .variant
-                    .is_none()
-                    .then(|| candidates.first().copied())
-                    .flatten()
-            })
+            .or_else(|| wanted.variant.is_none().then(|| candidates.first().copied()).flatten())
             .map(|entry| entry.descriptor.clone())
             .ok_or_else(|| Error::UnsupportedPlatform {
                 os: wanted.os.clone(),

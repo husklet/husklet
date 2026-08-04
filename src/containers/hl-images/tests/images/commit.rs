@@ -28,10 +28,7 @@ fn commit_creates_unpackable_named_image() {
     let unpacked = images.unpack(&image, &Platform::linux_arm64()).unwrap();
     let root = images.rootfs(&unpacked).unwrap();
     let view = images.roots().open(&root).unwrap();
-    assert_eq!(
-        std::fs::read(view.path().join("marker")).unwrap(),
-        b"current"
-    );
+    assert_eq!(std::fs::read(view.path().join("marker")).unwrap(), b"current");
     assert_eq!(unpacked.runtime(), &runtime);
 }
 
@@ -56,15 +53,7 @@ fn imported_rootfs_tar_is_unpackable_as_a_named_image() {
     let unpacked = images.unpack(&image, &Platform::linux_arm64()).unwrap();
     let root = images.rootfs(&unpacked).unwrap();
     assert_eq!(
-        std::fs::read_to_string(
-            images
-                .roots()
-                .open(&root)
-                .unwrap()
-                .path()
-                .join("etc/imported")
-        )
-        .unwrap(),
+        std::fs::read_to_string(images.roots().open(&root).unwrap().path().join("etc/imported")).unwrap(),
         "yes\n"
     );
 }

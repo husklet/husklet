@@ -47,10 +47,7 @@ fn named_fifo_rendezvous_in_both_orders() {
 #[test]
 fn named_fifo_nonblocking_and_unlink_lifetime() {
     let fifo = NamedFifo::new(73);
-    assert!(matches!(
-        fifo.open_writer(true),
-        Err(NamedFifoOpenError::NoReader)
-    ));
+    assert!(matches!(fifo.open_writer(true), Err(NamedFifoOpenError::NoReader)));
     let reader = match fifo.open_reader(true) {
         NamedFifoOpen::Ready(endpoint) => endpoint,
         NamedFifoOpen::Waiting(_) => panic!("nonblocking reader cannot wait"),
@@ -149,10 +146,7 @@ fn named_fifo_readwrite_open_publishes_both_sides_atomically() {
 #[test]
 fn named_fifo_catalog_keeps_linked_fifo_alive_between_opens() {
     let catalog = NamedFifoCatalog::new();
-    let key = NamedFifoKey {
-        device: 4,
-        inode: 5,
-    };
+    let key = NamedFifoKey { device: 4, inode: 5 };
     let identity = catalog.open(key).status().identity;
     assert_eq!(catalog.open(key).status().identity, identity);
 }
@@ -307,7 +301,10 @@ fn forked_writer_retirement_publishes_eof_with_stale_lease() {
     pipe.table.close(pipe.write_fd).unwrap();
     child.close(pipe.write_fd).unwrap();
     let reader = pipe.table.pin(pipe.read_fd).unwrap();
-    assert_eq!(reader.readiness(Readiness::from_bits(Readiness::READ)).bits(), Readiness::HANGUP);
+    assert_eq!(
+        reader.readiness(Readiness::from_bits(Readiness::READ)).bits(),
+        Readiness::HANGUP
+    );
     let mut output = [0_u8; 1];
     assert_eq!(reader.read(&mut output), Ok(0));
     drop(retained);

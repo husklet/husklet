@@ -71,8 +71,6 @@ enum vector_operation {
     VECTOR_TRUNC_DOUBLE_SIGNED,
     VECTOR_FLOAT_ARITHMETIC,
     VECTOR_STRING_EQUAL_EACH,
-    VECTOR_PACKED_SHIFT,
-    VECTOR_BYTE_SHIFT,
 };
 
 enum vector_immediate_form {

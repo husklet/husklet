@@ -13,10 +13,7 @@ pub(super) struct Canonical {
 }
 
 impl Memory {
-    pub(super) fn prepare_canonical(
-        &self,
-        request: hl_memory::MapRequest,
-    ) -> Result<Option<Canonical>, MemoryError> {
+    pub(super) fn prepare_canonical(&self, request: hl_memory::MapRequest) -> Result<Option<Canonical>, MemoryError> {
         let (file, offset) = match request.backing {
             hl_memory::Backing::File { identity, shared: true } => {
                 let files = self.files.lock().unwrap_or_else(|error| error.into_inner());

@@ -1,6 +1,6 @@
+use crate::Result;
 use crate::model::{Authentication, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune};
 use crate::transport::Transport;
-use crate::Result;
 use http::Method;
 
 /// Typed daemon-wide status and storage operations.
@@ -35,9 +35,7 @@ impl<'a> System<'a> {
     /// # Errors
     /// Returns transport, authentication, or response-decoding failures.
     pub async fn authenticate(&self, credentials: &Credentials) -> Result<Authentication> {
-        self.transport
-            .json(Method::POST, "/auth", Some(credentials))
-            .await
+        self.transport.json(Method::POST, "/auth", Some(credentials)).await
     }
 
     /// Read durable image/container disk-usage accounting.
@@ -53,8 +51,7 @@ impl<'a> System<'a> {
     /// # Errors
     /// Returns transport, Docker API, persistence, or response-decoding failures.
     pub async fn prune(&self, volumes: bool) -> Result<SystemPrune> {
-        self.prune_with(volumes, &std::collections::BTreeMap::new())
-            .await
+        self.prune_with(volumes, &std::collections::BTreeMap::new()).await
     }
 
     /// Remove unused resources using Docker `until`, `label`, and `label!` filters.
@@ -66,17 +63,13 @@ impl<'a> System<'a> {
         volumes: bool,
         filters: &std::collections::BTreeMap<String, Vec<String>>,
     ) -> Result<SystemPrune> {
-        let filters = serde_json::to_string(filters)
-            .map_err(|error| crate::Error::Protocol(error.to_string()))?;
+        let filters = serde_json::to_string(filters).map_err(|error| crate::Error::Protocol(error.to_string()))?;
         self.transport
             .json::<(), SystemPrune>(
                 Method::POST,
                 &format!(
                     "/system/prune?volumes={volumes}&filters={}",
-                    percent_encoding::utf8_percent_encode(
-                        &filters,
-                        percent_encoding::NON_ALPHANUMERIC
-                    )
+                    percent_encoding::utf8_percent_encode(&filters, percent_encoding::NON_ALPHANUMERIC)
                 ),
                 None,
             )

@@ -17,9 +17,7 @@ impl Path {
                 Component::RootDir | Component::CurDir => {}
                 Component::Normal(value) => clean.push(value),
                 Component::ParentDir | Component::Prefix(_) => {
-                    return Err(Error::InvalidSpec(
-                        "container path contains traversal".into(),
-                    ));
+                    return Err(Error::InvalidSpec("container path contains traversal".into()));
                 }
             }
         }
@@ -33,9 +31,7 @@ impl Path {
                 Component::Normal(value) => clean.push(value),
                 Component::CurDir => {}
                 Component::RootDir | Component::ParentDir | Component::Prefix(_) => {
-                    return Err(Error::InvalidSpec(
-                        "archive entry contains traversal".into(),
-                    ));
+                    return Err(Error::InvalidSpec("archive entry contains traversal".into()));
                 }
             }
         }
@@ -57,18 +53,14 @@ impl Path {
         let output = self.output(root);
         let existing = Self::nearest(output.parent().unwrap_or(root))?;
         if !fs::canonicalize(existing)?.starts_with(root) {
-            return Err(Error::InvalidSpec(
-                "archive entry escapes through a symlink".into(),
-            ));
+            return Err(Error::InvalidSpec("archive entry escapes through a symlink".into()));
         }
         Ok(())
     }
 
     pub(super) fn validate_link(&self, target: &FsPath) -> Result<()> {
         if target.is_absolute() {
-            return Err(Error::InvalidSpec(
-                "archive symlink target is absolute".into(),
-            ));
+            return Err(Error::InvalidSpec("archive symlink target is absolute".into()));
         }
         let mut resolved = self.0.parent().unwrap_or(FsPath::new("")).to_owned();
         for component in target.components() {
@@ -77,15 +69,11 @@ impl Path {
                 Component::CurDir => {}
                 Component::ParentDir => {
                     if !resolved.pop() {
-                        return Err(Error::InvalidSpec(
-                            "archive symlink escapes extraction root".into(),
-                        ));
+                        return Err(Error::InvalidSpec("archive symlink escapes extraction root".into()));
                     }
                 }
                 Component::RootDir | Component::Prefix(_) => {
-                    return Err(Error::InvalidSpec(
-                        "archive symlink target is unsafe".into(),
-                    ));
+                    return Err(Error::InvalidSpec("archive symlink target is unsafe".into()));
                 }
             }
         }
@@ -120,9 +108,9 @@ impl Path {
 
     pub(super) fn nearest(mut path: &FsPath) -> Result<&FsPath> {
         while !path.exists() {
-            path = path.parent().ok_or_else(|| {
-                Error::InvalidSpec("container path has no existing ancestor".into())
-            })?;
+            path = path
+                .parent()
+                .ok_or_else(|| Error::InvalidSpec("container path has no existing ancestor".into()))?;
         }
         Ok(path)
     }

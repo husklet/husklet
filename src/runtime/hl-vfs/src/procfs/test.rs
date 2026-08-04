@@ -499,7 +499,14 @@ fn process_directory_advertises_discoverable_leaves() {
         .into_iter()
         .map(|entry| entry.name)
         .collect::<Vec<_>>();
-    for name in [b"mountinfo".as_slice(), b"limits", b"environ", b"smaps", b"pagemap", b"io"] {
+    for name in [
+        b"mountinfo".as_slice(),
+        b"limits",
+        b"environ",
+        b"smaps",
+        b"pagemap",
+        b"io",
+    ] {
         assert!(names.iter().any(|entry| entry == name));
     }
 }
@@ -522,16 +529,26 @@ fn common_proc_leaves_use_typed_snapshots() {
     let procfs = procfs();
     let mut bytes = [0; 1024];
     for (path, fields) in [
-        (b"/proc/self/io".as_slice(), [b"rchar".as_slice(), b"read_bytes".as_slice()]),
+        (
+            b"/proc/self/io".as_slice(),
+            [b"rchar".as_slice(), b"read_bytes".as_slice()],
+        ),
         (b"/proc/net/sockstat", [b"sockets:".as_slice(), b"TCP:".as_slice()]),
         (b"/proc/devices", [b"Block devices:".as_slice(), b"loop".as_slice()]),
         (b"/proc/meminfo", [b"AnonPages:".as_slice(), b"Inactive:".as_slice()]),
     ] {
         let file = procfs.open(path, 7, OpenIntent::from_bits(0)).unwrap().unwrap();
         let count = file.read(&mut bytes).unwrap();
-        assert!(fields.iter().all(|field| bytes[..count].windows(field.len()).any(|window| window == *field)));
+        assert!(
+            fields
+                .iter()
+                .all(|field| bytes[..count].windows(field.len()).any(|window| window == *field))
+        );
     }
-    let stat = procfs.open(b"/proc/stat", 7, OpenIntent::from_bits(0)).unwrap().unwrap();
+    let stat = procfs
+        .open(b"/proc/stat", 7, OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
     let count = stat.read(&mut bytes).unwrap();
     let text = std::str::from_utf8(&bytes[..count]).unwrap();
     assert!(!text.contains("intr 0\n"));
@@ -557,10 +574,7 @@ fn synthetic_discovery_directories_are_typed() {
         procfs.read_link(b"/proc/self/ns/net", 7).unwrap(),
         Some(b"net:[11]".to_vec())
     );
-    assert_eq!(
-        procfs.read_link(b"/dev/fd/4", 7).unwrap(),
-        Some(b"/data/file".to_vec())
-    );
+    assert_eq!(procfs.read_link(b"/dev/fd/4", 7).unwrap(), Some(b"/data/file".to_vec()));
 }
 
 #[test]
@@ -577,13 +591,11 @@ fn namespace_links_and_metadata_share_identity() {
         ("uts", "uts:[73]"),
     ] {
         let path = format!("/proc/self/ns/{name}");
-        assert_eq!(procfs.read_link(path.as_bytes(), 7).unwrap(), Some(target.as_bytes().to_vec()));
-        let inode = target
-            .split(['[', ']'])
-            .nth(1)
-            .unwrap()
-            .parse::<u64>()
-            .unwrap();
+        assert_eq!(
+            procfs.read_link(path.as_bytes(), 7).unwrap(),
+            Some(target.as_bytes().to_vec())
+        );
+        let inode = target.split(['[', ']']).nth(1).unwrap().parse::<u64>().unwrap();
         assert_eq!(procfs.metadata(path.as_bytes(), 7).unwrap().unwrap().inode, inode);
     }
 }
@@ -722,7 +734,10 @@ fn maps_and_smaps_share_one_snapshot() {
     assert!(text.contains("Size:                  8 kB\n"));
     assert!(text.contains("Rss:                   8 kB\nPss:                   8 kB\n"));
     assert!(text.ends_with("VmFlags: rd ex mr mw me ac \n"));
-    let numa = procfs.open(b"/proc/self/numa_maps", 7, OpenIntent::from_bits(0)).unwrap().unwrap();
+    let numa = procfs
+        .open(b"/proc/self/numa_maps", 7, OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
     let count = numa.read(&mut bytes).unwrap();
     assert_eq!(
         &bytes[..count],
@@ -733,7 +748,11 @@ fn maps_and_smaps_share_one_snapshot() {
         .unwrap()
         .unwrap();
     let count = rollup.read(&mut bytes).unwrap();
-    assert!(std::str::from_utf8(&bytes[..count]).unwrap().starts_with("00001000-00003000"));
+    assert!(
+        std::str::from_utf8(&bytes[..count])
+            .unwrap()
+            .starts_with("00001000-00003000")
+    );
 }
 
 #[test]
@@ -750,12 +769,12 @@ fn map_files_projects_file_backed_ranges() {
         procfs.read_link(b"/proc/self/map_files/1000-3000", 7).unwrap(),
         Some(b"/bin/program".to_vec())
     );
-    let metadata = procfs
-        .metadata(b"/proc/self/map_files/1000-3000", 7)
-        .unwrap()
-        .unwrap();
+    let metadata = procfs.metadata(b"/proc/self/map_files/1000-3000", 7).unwrap().unwrap();
     assert_eq!(metadata.kind, 10);
-    assert_eq!(procfs.read_link(b"/proc/self/map_files/1000-2000", 7), Err(Error::NotFound));
+    assert_eq!(
+        procfs.read_link(b"/proc/self/map_files/1000-2000", 7),
+        Err(Error::NotFound)
+    );
 }
 
 #[test]
@@ -824,7 +843,10 @@ fn cpu_projection() {
         ("cluster_cpus_list", "0-2\n"),
     ] {
         let path = format!("/sys/devices/system/cpu/cpu2/topology/{leaf}");
-        let file = procfs.open(path.as_bytes(), 7, OpenIntent::from_bits(0)).unwrap().unwrap();
+        let file = procfs
+            .open(path.as_bytes(), 7, OpenIntent::from_bits(0))
+            .unwrap()
+            .unwrap();
         let count = file.read(&mut bytes).unwrap();
         assert_eq!(&bytes[..count], expected.as_bytes());
     }
@@ -922,12 +944,18 @@ fn tuning_projection() {
     let procfs = procfs();
     let mut bytes = [0; 512];
     for (path, expected) in [
-        (b"/proc/sys/kernel/sem".as_slice(), b"256\t131072\t500\t512\n".as_slice()),
+        (
+            b"/proc/sys/kernel/sem".as_slice(),
+            b"256\t131072\t500\t512\n".as_slice(),
+        ),
         (b"/proc/sys/fs/inotify/max_user_instances", b"524288\n"),
         (b"/proc/sys/fs/mqueue/msgsize_max", b"8192\n"),
         (b"/proc/sys/net/ipv4/tcp_congestion_control", b"cubic\n"),
         (b"/sys/class/net/lo/flags", b"0x9\n"),
-        (b"/sys/kernel/mm/transparent_hugepage/enabled", b"always [madvise] never\n"),
+        (
+            b"/sys/kernel/mm/transparent_hugepage/enabled",
+            b"always [madvise] never\n",
+        ),
     ] {
         let file = procfs.open(path, 7, OpenIntent::from_bits(0)).unwrap().unwrap();
         let count = file.read(&mut bytes).unwrap();

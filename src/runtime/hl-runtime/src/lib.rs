@@ -261,7 +261,7 @@ pub use ipc::{CommittedFork as CommittedRuntimeSharedMemoryFork, PreparedFork as
 pub use ipc::{EmptyIpcExec, ExecParticipant, ExecParticipant as IpcExecParticipant};
 pub use memfd::{MemfdBindings, Registry as MemfdRegistry};
 pub use memory::RuntimeMemorySyscalls;
-pub use memory::{BRK_BACKING_IDENTITY, BrkAccount, BrkRegion, BrkSnapshot};
+pub use memory::{AnonymousMemoryAccount, BRK_BACKING_IDENTITY, BrkRegion, BrkSnapshot};
 pub use memory::{DescriptorMappingSource, RuntimeMemoryError, RuntimeMemoryHost};
 pub use network::RuntimeNetworkSyscalls;
 pub use network::{

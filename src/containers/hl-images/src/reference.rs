@@ -52,9 +52,7 @@ impl FromStr for Reference {
             return Err(Error::InvalidReference(raw.into()));
         }
         let (name, digest) = match raw.split_once('@') {
-            Some((name, digest))
-                if !name.is_empty() && !digest.is_empty() && !digest.contains('@') =>
-            {
+            Some((name, digest)) if !name.is_empty() && !digest.is_empty() && !digest.contains('@') => {
                 (name, Some(digest.parse()?))
             }
             Some(_) => return Err(Error::InvalidReference(raw.into())),
@@ -62,30 +60,21 @@ impl FromStr for Reference {
         };
         let last_slash = name.rfind('/');
         let last_colon = name.rfind(':');
-        let (path, tag) =
-            if last_colon.is_some_and(|colon| last_slash.is_none_or(|slash| colon > slash)) {
-                let colon = last_colon.expect("checked");
-                let tag = &name[colon + 1..];
-                if tag.is_empty() {
-                    return Err(Error::InvalidReference(raw.into()));
-                }
-                (&name[..colon], Some(tag.to_owned()))
-            } else {
-                (name, (digest.is_none()).then(|| "latest".to_owned()))
-            };
-        let (registry, repository) = match path.split_once('/') {
-            Some((first, rest))
-                if first == "localhost" || first.contains('.') || first.contains(':') =>
-            {
-                (
-                    if first == "docker.io" {
-                        DOCKER_REGISTRY
-                    } else {
-                        first
-                    },
-                    rest.to_owned(),
-                )
+        let (path, tag) = if last_colon.is_some_and(|colon| last_slash.is_none_or(|slash| colon > slash)) {
+            let colon = last_colon.expect("checked");
+            let tag = &name[colon + 1..];
+            if tag.is_empty() {
+                return Err(Error::InvalidReference(raw.into()));
             }
+            (&name[..colon], Some(tag.to_owned()))
+        } else {
+            (name, (digest.is_none()).then(|| "latest".to_owned()))
+        };
+        let (registry, repository) = match path.split_once('/') {
+            Some((first, rest)) if first == "localhost" || first.contains('.') || first.contains(':') => (
+                if first == "docker.io" { DOCKER_REGISTRY } else { first },
+                rest.to_owned(),
+            ),
             _ => (
                 DOCKER_REGISTRY,
                 if path.contains('/') {
@@ -100,9 +89,7 @@ impl FromStr for Reference {
             || registry == ".."
             || registry.contains('@')
             || repository.is_empty()
-            || repository
-                .split('/')
-                .any(|p| p.is_empty() || p == "." || p == "..")
+            || repository.split('/').any(|p| p.is_empty() || p == "." || p == "..")
         {
             return Err(Error::InvalidReference(raw.into()));
         }
@@ -121,21 +108,14 @@ impl FromStr for Reference {
 }
 
 impl serde::Serialize for Reference {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
 impl<'de> serde::Deserialize<'de> for Reference {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         use serde::de::Error as _;
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(D::Error::custom)
+        String::deserialize(deserializer)?.parse().map_err(D::Error::custom)
     }
 }
 

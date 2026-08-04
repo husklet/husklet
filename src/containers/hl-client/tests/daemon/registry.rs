@@ -31,22 +31,9 @@ async fn anonymous_registry_pull_streams_progress_and_publishes_atomically() {
     assert!(completed.status.unwrap().contains("downloaded newer image"));
     assert!(pull.next().await.unwrap().is_none());
 
-    let inspected = client
-        .images()
-        .inspect("registry.test/team/demo:v2")
-        .await
-        .unwrap();
-    assert_eq!(
-        inspected.repo_tags,
-        ["registry.test/team/demo:v2".to_owned()]
-    );
-    assert!(containers
-        .images()
-        .unwrap()
-        .leases()
-        .list()
-        .unwrap()
-        .is_empty());
+    let inspected = client.images().inspect("registry.test/team/demo:v2").await.unwrap();
+    assert_eq!(inspected.repo_tags, ["registry.test/team/demo:v2".to_owned()]);
+    assert!(containers.images().unwrap().leases().list().unwrap().is_empty());
 
     let invalid = client
         .images()
@@ -108,10 +95,7 @@ async fn authenticated_registry_pull_validates_and_never_leaks_credentials() {
         records.push(record);
     }
     let rendered = serde_json::to_string(&records).unwrap();
-    assert!(
-        records.iter().all(|record| record.error.is_none()),
-        "{rendered}"
-    );
+    assert!(records.iter().all(|record| record.error.is_none()), "{rendered}");
     assert!(!rendered.contains("s3cret-value"));
 
     let rejected_credentials = hl_client::model::Credentials {
@@ -121,12 +105,7 @@ async fn authenticated_registry_pull_validates_and_never_leaks_credentials() {
     };
     let mut rejected = client
         .images()
-        .pull_with(
-            &image,
-            None,
-            Some("linux/arm64"),
-            Some(&rejected_credentials),
-        )
+        .pull_with(&image, None, Some("linux/arm64"), Some(&rejected_credentials))
         .await
         .unwrap();
     let mut rejection = Vec::new();

@@ -61,9 +61,7 @@ impl<M: crate::GuestMemory + ?Sized> crate::ProcessAbi<'_, M> {
             30 if unused(1) => Ok(PrctlPlan::GetTimerSlack),
             31 | 32 => Ok(PrctlPlan::TogglePerfEvents),
             33 if argument == 0 && unused(2) => Ok(PrctlPlan::SetMcePolicy(2)),
-            33 if argument == 1 && arguments[2] <= 2 && unused(3) => {
-                Ok(PrctlPlan::SetMcePolicy(arguments[2] as u32))
-            }
+            33 if argument == 1 && arguments[2] <= 2 && unused(3) => Ok(PrctlPlan::SetMcePolicy(arguments[2] as u32)),
             34 if unused(1) => Ok(PrctlPlan::GetMcePolicy),
             35 => Ok(PrctlPlan::SetMemoryLayout),
             36 if argument <= 1 => Ok(PrctlPlan::SetSubreaper(argument != 0)),

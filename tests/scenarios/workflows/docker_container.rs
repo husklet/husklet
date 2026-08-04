@@ -1,11 +1,8 @@
-use super::{fixture, require, Error};
+use super::{Error, fixture, require};
 use hl_client::{
-    api::Channel,
-    model::{
-        Attachment, CreateContainer, EventFilter, EventQuery, ExecConfig, ExecStart, RestartPolicy,
-        Update,
-    },
     Client,
+    api::Channel,
+    model::{Attachment, CreateContainer, EventFilter, EventQuery, ExecConfig, ExecStart, RestartPolicy, Update},
 };
 
 pub(super) async fn foreground(client: &Client) -> Result<(), Error> {
@@ -44,10 +41,7 @@ pub(super) async fn foreground(client: &Client) -> Result<(), Error> {
         .into());
     }
     super::pass("foreground-output");
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 
@@ -70,10 +64,7 @@ pub(super) async fn interactive(client: &Client) -> Result<(), Error> {
             Some("workflow-interactive"),
         )
         .await?;
-    let mut session = client
-        .containers()
-        .attach(&created.id, true, true, true)
-        .await?;
+    let mut session = client.containers().attach(&created.id, true, true, true).await?;
     client.containers().start(&created.id).await?;
     wait_for_output(client, &created.id, b"ready\n").await?;
 
@@ -96,10 +87,7 @@ pub(super) async fn interactive(client: &Client) -> Result<(), Error> {
             },
         )
         .await?;
-    let mut exec = client
-        .executions()
-        .start(&execution.id, &ExecStart::default())
-        .await?;
+    let mut exec = client.executions().start(&execution.id, &ExecStart::default()).await?;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     while let Some(frame) = exec.next().await? {
@@ -123,14 +111,8 @@ pub(super) async fn interactive(client: &Client) -> Result<(), Error> {
         "interactive-exit",
     )?;
     let logs = client.containers().logs(&created.id, true, true).await?;
-    require(
-        logs.stdout == b"ready\ninteractive:input\n",
-        "interactive-output",
-    )?;
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    require(logs.stdout == b"ready\ninteractive:input\n", "interactive-output")?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 
@@ -164,10 +146,7 @@ pub(super) async fn lifecycle(client: &Client) -> Result<(), Error> {
         )
         .await?;
     require(updated.warnings.is_empty(), "container-update")?;
-    let mut attached = client
-        .containers()
-        .attach(&created.id, true, true, true)
-        .await?;
+    let mut attached = client.containers().attach(&created.id, true, true, true).await?;
     client.containers().start(&created.id).await?;
     attached.write(b"attached\n").await?;
     attached.close().await?;
@@ -176,18 +155,10 @@ pub(super) async fn lifecycle(client: &Client) -> Result<(), Error> {
         "full-attach-exit",
     )?;
     require(
-        client
-            .containers()
-            .logs(&created.id, true, false)
-            .await?
-            .stdout
-            == b"full:attached\n",
+        client.containers().logs(&created.id, true, false).await?.stdout == b"full:attached\n",
         "full-attach-output",
     )?;
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
 
     let until = i64::try_from(
         std::time::SystemTime::now()

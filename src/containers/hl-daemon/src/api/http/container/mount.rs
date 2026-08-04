@@ -9,10 +9,7 @@ impl<'a> From<&'a str> for LegacyBind<'a> {
 }
 
 impl LegacyBind<'_> {
-    pub(super) async fn mount(
-        &self,
-        containers: &hl_container::Containers,
-    ) -> ApiResult<(Mount, Option<String>)> {
+    pub(super) async fn mount(&self, containers: &hl_container::Containers) -> ApiResult<(Mount, Option<String>)> {
         let value = self.0;
         let fields = value.split(':').collect::<Vec<_>>();
         let (source, target, options) = match fields.as_slice() {
@@ -105,10 +102,7 @@ impl crate::api::DockerMount {
         ))
     }
 
-    pub(super) async fn mount(
-        &self,
-        containers: &hl_container::Containers,
-    ) -> ApiResult<(Mount, Option<String>)> {
+    pub(super) async fn mount(&self, containers: &hl_container::Containers) -> ApiResult<(Mount, Option<String>)> {
         match self.kind.as_str() {
             "bind" => self.bind(containers).await,
             "volume" => self.volume(containers).await,
@@ -133,10 +127,7 @@ impl crate::api::DockerMount {
         }
     }
 
-    async fn bind(
-        &self,
-        containers: &hl_container::Containers,
-    ) -> ApiResult<(Mount, Option<String>)> {
+    async fn bind(&self, containers: &hl_container::Containers) -> ApiResult<(Mount, Option<String>)> {
         let mut propagation = hl_container::BindPropagation::RecursivePrivate;
         if let Some(options) = &self.bind_options {
             propagation = match options.propagation.as_str() {
@@ -149,13 +140,13 @@ impl crate::api::DockerMount {
                             "bind propagation {:?} requires host mount propagation support",
                             options.propagation
                         ),
-                    ))
+                    ));
                 }
                 value => {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
                         format!("invalid bind propagation {value:?}"),
-                    ))
+                    ));
                 }
             };
             if options.non_recursive {
@@ -170,16 +161,13 @@ impl crate::api::DockerMount {
                     "bind CreateMountpoint is not implemented",
                 ));
             }
-            if options.read_only.read_only_non_recursive
-                && options.read_only.read_only_force_recursive
-            {
+            if options.read_only.read_only_non_recursive && options.read_only.read_only_force_recursive {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
                     "recursive and non-recursive read-only options conflict",
                 ));
             }
-            if (options.read_only.read_only_non_recursive
-                || options.read_only.read_only_force_recursive)
+            if (options.read_only.read_only_non_recursive || options.read_only.read_only_force_recursive)
                 && !self.read_only
             {
                 return Err(ApiError::new(
@@ -224,10 +212,7 @@ impl crate::api::DockerMount {
         Ok((mount.propagation(propagation), anonymous))
     }
 
-    async fn volume(
-        &self,
-        containers: &hl_container::Containers,
-    ) -> ApiResult<(Mount, Option<String>)> {
+    async fn volume(&self, containers: &hl_container::Containers) -> ApiResult<(Mount, Option<String>)> {
         if self.bind_options.is_some() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -261,22 +246,16 @@ impl crate::api::DockerMount {
             }
             let backing = super::super::volume::LocalOptions::parse(&options)?
                 .expect("non-empty local options must produce a backing source");
-            let mut spec =
-                hl_container::VolumeSpec::new(&self.source).bind(backing.device, backing.read_only);
+            let mut spec = hl_container::VolumeSpec::new(&self.source).bind(backing.device, backing.read_only);
             spec.labels = labels;
             spec.options = options;
-            let volume = containers
-                .volumes()
-                .create(spec)
-                .await
-                .map_err(ApiError::container)?;
+            let volume = containers.volumes().create(spec).await.map_err(ApiError::container)?;
             let access = if self.read_only {
                 hl_container::Access::ReadOnly
             } else {
                 hl_container::Access::ReadWrite
             };
-            let mut selected =
-                Mount::volume(volume.name, Target::try_from(self.target.as_str())?, access);
+            let mut selected = Mount::volume(volume.name, Target::try_from(self.target.as_str())?, access);
             if populate {
                 selected = selected.populate();
             }
@@ -285,15 +264,8 @@ impl crate::api::DockerMount {
             }
             return Ok((selected, None));
         }
-        let (mount, anonymous) = requested_mount(
-            &self.source,
-            &self.target,
-            self.read_only,
-            labels,
-            populate,
-            containers,
-        )
-        .await?;
+        let (mount, anonymous) =
+            requested_mount(&self.source, &self.target, self.read_only, labels, populate, containers).await?;
         let mount = if let Some(value) = subpath {
             mount.subpath(value).map_err(ApiError::container)?
         } else {

@@ -32,9 +32,7 @@ impl Credentials {
         use hl_images::remote::Auth;
         if !self.identity_token.is_empty() {
             if !self.username.is_empty() || !self.password.is_empty() {
-                return Err(
-                    "X-Registry-Auth cannot combine identitytoken with username/password".into(),
-                );
+                return Err("X-Registry-Auth cannot combine identitytoken with username/password".into());
             }
             Ok(Auth::Bearer(self.identity_token))
         } else if !self.username.is_empty() || !self.password.is_empty() {
@@ -79,8 +77,7 @@ mod tests {
 
     #[test]
     fn missing_keys_fall_back_to_empty_strings() {
-        let credentials =
-            Credentials::decode(&registry_auth(&serde_json::json!({"password":"p"}))).unwrap();
+        let credentials = Credentials::decode(&registry_auth(&serde_json::json!({"password":"p"}))).unwrap();
         assert!(credentials.username.is_empty());
         assert_eq!(credentials.password, "p");
         assert_eq!(
@@ -92,12 +89,7 @@ mod tests {
     #[test]
     fn leading_trailing_whitespace_is_trimmed() {
         let auth = registry_auth(&serde_json::json!({"username":"alice"}));
-        assert_eq!(
-            Credentials::decode(&format!("  {auth}\n"))
-                .unwrap()
-                .username,
-            "alice"
-        );
+        assert_eq!(Credentials::decode(&format!("  {auth}\n")).unwrap().username, "alice");
     }
 
     #[test]

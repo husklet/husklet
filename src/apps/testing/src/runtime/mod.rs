@@ -8,13 +8,14 @@ mod ledger;
 mod pool;
 pub(crate) mod scheduler;
 
-use crate::suite::{self, Error, Target};
+use crate::suite::{Error, Target};
 use clap::Args;
 use definition::{App, EngineHost};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-#[allow(dead_code, reason = "consumed by the scenario cache-preflight command in its integration patch")]
+pub(crate) use execution::WorkerOptions;
+
 pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
     image::preflight(name, &target.platform())
 }
@@ -45,6 +46,28 @@ pub async fn run(options: Options) -> Result<(), Error> {
     } else {
         Err(failed.join("\n").into())
     }
+}
+
+pub async fn worker(options: WorkerOptions) -> Result<(), Error> {
+    execution::worker(options).await
+}
+
+fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error> {
+    let options = Options {
+        app: Some(app),
+        case: Some(case.clone()),
+        target: Some(target),
+        jobs: 1,
+        resume: false,
+        results: PathBuf::from("target/testing/runtime/worker.tsv"),
+    };
+    let apps = apps(&options)?;
+    validate_case_ids(&apps)?;
+    let mut planned = require_work(plan(apps, &options), Some(&case))?;
+    if planned.len() != 1 {
+        return Err("runtime worker selection did not resolve exactly one row".into());
+    }
+    Ok(planned.remove(0))
 }
 
 async fn execute(work: Work) -> Completed {
@@ -300,9 +323,23 @@ fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
 
 fn apps(options: &Options) -> Result<Vec<App>, Error> {
     let root = workspace()?.join("tests/runtime");
+    let mut directories = std::fs::read_dir(&root)?
+        .map(|entry| entry.map(|value| value.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    directories.sort();
     let mut result = Vec::new();
-    for manifest in suite::manifests(&root, options.app.as_deref())? {
-        result.push(App::load(&manifest.directory, &manifest.definition)?);
+    for directory in directories.into_iter().filter(|value| value.is_dir()) {
+        let name = directory
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if options.app.as_deref().is_some_and(|selected| selected != name) {
+            continue;
+        }
+        let definition = directory.join("test.yaml");
+        if definition.is_file() {
+            result.push(App::load(&directory, &definition)?);
+        }
     }
     if result.is_empty() {
         return Err(format!("no runtime apps matched under {}", root.display()).into());

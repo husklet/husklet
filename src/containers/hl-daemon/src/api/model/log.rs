@@ -47,12 +47,8 @@ impl LogOptions {
             hl_container::Stream::Stderr => self.streams.stderr,
         };
         stream
-            && self
-                .since_ms
-                .is_none_or(|since| entry.timestamp_ms >= since)
-            && self
-                .until_ms
-                .is_none_or(|until| entry.timestamp_ms <= until)
+            && self.since_ms.is_none_or(|since| entry.timestamp_ms >= since)
+            && self.until_ms.is_none_or(|until| entry.timestamp_ms <= until)
     }
 
     pub(crate) fn replay(&self, mut entries: Vec<hl_container::Entry>) -> Vec<hl_container::Entry> {
@@ -119,11 +115,9 @@ impl LogEncoder {
             hl_container::Stream::Stderr => 1,
         };
         let start = &mut self.starts[index];
-        let timestamp = chrono::DateTime::from_timestamp_millis(
-            i64::try_from(entry.timestamp_ms).unwrap_or(i64::MAX),
-        )
-        .unwrap_or(chrono::DateTime::UNIX_EPOCH)
-        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let timestamp = chrono::DateTime::from_timestamp_millis(i64::try_from(entry.timestamp_ms).unwrap_or(i64::MAX))
+            .unwrap_or(chrono::DateTime::UNIX_EPOCH)
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
         let mut payload = Vec::with_capacity(entry.bytes.len().saturating_add(timestamp.len() + 1));
         for byte in &entry.bytes {
             if *start {
@@ -186,9 +180,8 @@ impl ContainerLogs {
                 return Err(LogProtocolError("reserved header bytes are nonzero".into()));
             }
             let stream = bytes[0];
-            let size =
-                usize::try_from(u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
-                    .map_err(|_| LogProtocolError("frame length exceeds address space".into()))?;
+            let size = usize::try_from(u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]))
+                .map_err(|_| LogProtocolError("frame length exceeds address space".into()))?;
             bytes = &bytes[8..];
             if bytes.len() < size {
                 return Err(LogProtocolError("truncated frame payload".into()));
@@ -251,10 +244,7 @@ mod tests {
     }
     #[test]
     fn multiplexed_logs_reject_truncated_and_unknown_frames() {
-        assert!(matches!(
-            ContainerLogs::decode(&[1, 0, 0]),
-            Err(LogProtocolError(_))
-        ));
+        assert!(matches!(ContainerLogs::decode(&[1, 0, 0]), Err(LogProtocolError(_))));
         assert!(ContainerLogs::decode(&[9, 0, 0, 0, 0, 0, 0, 0]).is_err());
         assert!(ContainerLogs::decode(&[1, 0, 0, 0, 0, 0, 0, 2, 1]).is_err());
     }
@@ -275,9 +265,7 @@ mod tests {
             stream: hl_container::Stream::Stdout,
             bytes: b"-continued\n".to_vec(),
         };
-        let decoded =
-            ContainerLogs::decode(&[encoder.frame(&first), encoder.frame(&second)].concat())
-                .unwrap();
+        let decoded = ContainerLogs::decode(&[encoder.frame(&first), encoder.frame(&second)].concat()).unwrap();
         assert_eq!(
             decoded.stdout,
             b"1970-01-01T00:00:00.000000000Z one\n1970-01-01T00:00:00.000000000Z two-continued\n"
@@ -314,10 +302,7 @@ mod tests {
         }
         .replay(vec![entry]);
         assert_eq!(
-            lines
-                .into_iter()
-                .flat_map(|entry| entry.bytes)
-                .collect::<Vec<_>>(),
+            lines.into_iter().flat_map(|entry| entry.bytes).collect::<Vec<_>>(),
             b"two\nthree\n"
         );
     }

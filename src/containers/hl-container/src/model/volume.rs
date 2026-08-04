@@ -51,15 +51,11 @@ impl VolumeSpec {
             && self.name.len() <= 255
             && self.name != "."
             && self.name != ".."
-            && self
-                .name
-                .bytes()
-                .enumerate()
-                .all(|(index, byte)| match byte {
-                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => true,
-                    b'_' | b'.' | b'-' => index != 0,
-                    _ => false,
-                });
+            && self.name.bytes().enumerate().all(|(index, byte)| match byte {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => true,
+                b'_' | b'.' | b'-' => index != 0,
+                _ => false,
+            });
         if !valid {
             return Err(crate::Error::InvalidVolume(format!(
                 "name {:?} must start with an ASCII letter or digit and contain only letters, digits, '.', '_' or '-'",
@@ -67,14 +63,10 @@ impl VolumeSpec {
             )));
         }
         if self.options.keys().any(String::is_empty) {
-            return Err(crate::Error::InvalidVolume(
-                "option names must not be empty".into(),
-            ));
+            return Err(crate::Error::InvalidVolume("option names must not be empty".into()));
         }
         if self.labels.keys().any(String::is_empty) {
-            return Err(crate::Error::InvalidVolume(
-                "label names must not be empty".into(),
-            ));
+            return Err(crate::Error::InvalidVolume("label names must not be empty".into()));
         }
         Ok(())
     }

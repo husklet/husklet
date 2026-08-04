@@ -21,9 +21,7 @@ impl Overlay {
         let metadata = fs::symlink_metadata(&resolved.path)?;
         let mut archive = tar::Builder::new(writer);
         archive.follow_symlinks(false);
-        let name = relative
-            .file_name()
-            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let name = relative.file_name().map_or_else(|| PathBuf::from("."), PathBuf::from);
         if metadata.is_dir() {
             if !relative.as_os_str().is_empty() {
                 self.append_owned(&mut archive, relative, &name, &resolved.path)?;
@@ -119,11 +117,7 @@ impl Overlay {
         Ok(())
     }
 
-    pub(super) fn ownership(
-        &self,
-        guest: &FsPath,
-        upper: bool,
-    ) -> Result<Option<hl_images::snapshot::Ownership>> {
+    pub(super) fn ownership(&self, guest: &FsPath, upper: bool) -> Result<Option<hl_images::snapshot::Ownership>> {
         if upper {
             let ownership = self
                 .upper_ownership
@@ -162,11 +156,7 @@ impl Overlay {
         } else {
             lower.join(relative)
         };
-        let base = if candidate.starts_with(&upper) {
-            &upper
-        } else {
-            &lower
-        };
+        let base = if candidate.starts_with(&upper) { &upper } else { &lower };
         // The overlay root is itself a valid archive/stat target. Its parent
         // necessarily lies outside the overlay, so validate the root rather
         // than its parent in that case. Non-root targets still use the nearest
@@ -178,9 +168,7 @@ impl Overlay {
         };
         let canonical = fs::canonicalize(Path::nearest(parent)?)?;
         if !canonical.starts_with(base) {
-            return Err(Error::InvalidSpec(
-                "container path escapes its overlay root".into(),
-            ));
+            return Err(Error::InvalidSpec("container path escapes its overlay root".into()));
         }
         Ok(Resolution {
             path: candidate,
@@ -194,15 +182,10 @@ impl Overlay {
             let Component::Normal(name) = component else {
                 continue;
             };
-            if self.upper.join(&parent).join(".wh..wh..opq").exists()
-                && !self.upper.join(&parent).join(name).exists()
-            {
+            if self.upper.join(&parent).join(".wh..wh..opq").exists() && !self.upper.join(&parent).join(name).exists() {
                 return true;
             }
-            let marker = self
-                .upper
-                .join(&parent)
-                .join(format!(".wh.{}", name.to_string_lossy()));
+            let marker = self.upper.join(&parent).join(format!(".wh.{}", name.to_string_lossy()));
             if marker.exists() {
                 return true;
             }
@@ -220,9 +203,7 @@ impl Overlay {
             if canonical.starts_with(&upper) {
                 return Ok(());
             }
-            return Err(Error::InvalidSpec(
-                "container path escapes its overlay root".into(),
-            ));
+            return Err(Error::InvalidSpec("container path escapes its overlay root".into()));
         }
         let source = lower.join(relative);
         let metadata = fs::symlink_metadata(&source)?;
@@ -232,15 +213,11 @@ impl Overlay {
             ));
         }
         if !metadata.is_dir() {
-            return Err(Error::InvalidSpec(
-                "archive destination must be a directory".into(),
-            ));
+            return Err(Error::InvalidSpec("archive destination must be a directory".into()));
         }
         let canonical = fs::canonicalize(&source)?;
         if !canonical.starts_with(&lower) {
-            return Err(Error::InvalidSpec(
-                "container path escapes its overlay root".into(),
-            ));
+            return Err(Error::InvalidSpec("container path escapes its overlay root".into()));
         }
         fs::create_dir_all(&destination)?;
         fs::set_permissions(&destination, metadata.permissions())?;

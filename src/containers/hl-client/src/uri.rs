@@ -1,6 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, CONTROLS, NON_ALPHANUMERIC, utf8_percent_encode};
 
 const SEGMENT: &AsciiSet = &CONTROLS
     .add(b' ')
@@ -33,10 +33,7 @@ impl<'a> Component<'a> {
 
     /// Preserve characters permitted directly in an RFC URI path segment.
     pub(crate) const fn segment(value: &'a str) -> Self {
-        Self {
-            value,
-            set: SEGMENT,
-        }
+        Self { value, set: SEGMENT }
     }
 }
 
@@ -52,13 +49,7 @@ mod tests {
 
     #[test]
     fn policies_preserve_existing_docker_uri_contracts() {
-        assert_eq!(
-            Component::opaque("name/v1-test").to_string(),
-            "name%2Fv1%2Dtest"
-        );
-        assert_eq!(
-            Component::segment("name/v1-test").to_string(),
-            "name%2Fv1-test"
-        );
+        assert_eq!(Component::opaque("name/v1-test").to_string(), "name%2Fv1%2Dtest");
+        assert_eq!(Component::segment("name/v1-test").to_string(), "name%2Fv1-test");
     }
 }

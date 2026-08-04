@@ -1,5 +1,5 @@
 use super::support::fixture;
-use hl_images::{format::layout::Layout, Digest, Error, Images, Platform, Reference};
+use hl_images::{Digest, Error, Images, Platform, Reference, format::layout::Layout};
 
 #[tokio::test]
 async fn oci_layout_export_and_import_round_trip() {
@@ -44,18 +44,13 @@ async fn oci_layout_never_follows_blob_symlinks() {
     let layout = Layout::open(temp.path().join("layout")).await.unwrap();
     layout.export(&image, images.content()).await.unwrap();
     let digest: Digest = image.target.digest().to_string().parse().unwrap();
-    let blob = temp
-        .path()
-        .join("layout/blobs/sha256")
-        .join(digest.encoded());
+    let blob = temp.path().join("layout/blobs/sha256").join(digest.encoded());
     std::fs::remove_file(&blob).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink("/etc/passwd", &blob).unwrap();
     let imported = Images::open(temp.path().join("imported")).unwrap();
     assert!(matches!(
-        imported
-            .pull(&layout, reference, &Platform::linux_arm64())
-            .await,
+        imported.pull(&layout, reference, &Platform::linux_arm64()).await,
         Err(Error::InvalidMetadata(_))
     ));
 }

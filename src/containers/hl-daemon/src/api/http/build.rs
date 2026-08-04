@@ -1,8 +1,8 @@
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use hl_images::Reference;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -48,13 +48,8 @@ impl BuildQuery {
         let Some(value) = self.buildargs.as_deref() else {
             return Ok(BTreeMap::new());
         };
-        let values =
-            serde_json::from_str::<BTreeMap<String, Option<String>>>(value).map_err(|error| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid buildargs: {error}"),
-                )
-            })?;
+        let values = serde_json::from_str::<BTreeMap<String, Option<String>>>(value)
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid buildargs: {error}")))?;
         Ok(values
             .into_iter()
             .filter_map(|(name, value)| value.map(|value| (name, value)))
@@ -123,12 +118,9 @@ impl BuildQuery {
         let Some(value) = self.platform.as_deref().filter(|value| !value.is_empty()) else {
             return Ok(supported.clone());
         };
-        let requested = value.parse::<hl_images::Platform>().map_err(|error| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("invalid platform: {error}"),
-            )
-        })?;
+        let requested = value
+            .parse::<hl_images::Platform>()
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid platform: {error}")))?;
         if requested != *supported {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -161,8 +153,7 @@ pub(super) async fn create(
     let mut received = 0_u64;
     let mut digest = Sha256::new();
     while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
-        let chunk =
-            chunk.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+        let chunk = chunk.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         received = received.saturating_add(chunk.len() as u64);
         if received > 8 * 1024 * 1024 * 1024 {
             return Err(ApiError::new(
@@ -173,17 +164,12 @@ pub(super) async fn create(
         digest.update(&chunk);
         context.write_all(&chunk).await.map_err(ApiError::io)?;
     }
-    context
-        .seek(std::io::SeekFrom::Start(0))
-        .await
-        .map_err(ApiError::io)?;
+    context.seek(std::io::SeekFrom::Start(0)).await.map_err(ApiError::io)?;
     digest.update(query.dockerfile.as_bytes());
-    digest.update(serde_json::to_vec(&arguments).map_err(|error| {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            format!("invalid buildargs: {error}"),
-        )
-    })?);
+    digest.update(
+        serde_json::to_vec(&arguments)
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid buildargs: {error}")))?,
+    );
     digest.update(query.target.as_deref().unwrap_or_default().as_bytes());
     digest.update(query.platform.as_deref().unwrap_or_default().as_bytes());
     let cache = (!query.nocache).then(|| {
@@ -257,9 +243,7 @@ impl BuildOutput {
 }
 
 #[hl_design::adapter]
-pub(super) async fn prune(
-    State(state): State<DockerState>,
-) -> ApiResult<Json<crate::api::BuildPrune>> {
+pub(super) async fn prune(State(state): State<DockerState>) -> ApiResult<Json<crate::api::BuildPrune>> {
     let images = state.containers.images().map_err(ApiError::container)?;
     let report = tokio::task::spawn_blocking(move || {
         for image in images.list()? {
@@ -328,10 +312,7 @@ mod tests {
             assert!(value.validate().is_ok());
         }
         value.networkmode = Some("named-network".into());
-        assert_eq!(
-            value.network().unwrap(),
-            BuildNetwork::Named("named-network".into())
-        );
+        assert_eq!(value.network().unwrap(), BuildNetwork::Named("named-network".into()));
         value.networkmode = Some("container:parent".into());
         assert_eq!(
             value.validate().unwrap_err().status,
@@ -340,14 +321,10 @@ mod tests {
         let mut value = query();
         value.platform = Some("linux/amd64".into());
         assert!(value.validate().is_ok());
-        assert!(value
-            .target_platform(&hl_images::Platform::linux_arm64())
-            .is_err());
+        assert!(value.target_platform(&hl_images::Platform::linux_arm64()).is_err());
         value.platform = Some("linux/arm64".into());
         assert_eq!(
-            value
-                .target_platform(&hl_images::Platform::linux_arm64())
-                .unwrap(),
+            value.target_platform(&hl_images::Platform::linux_arm64()).unwrap(),
             hl_images::Platform::linux_arm64()
         );
         let mut value = query();
@@ -388,14 +365,8 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(
-            lines[0],
-            serde_json::json!({"stream":"Successfully built\n"})
-        );
-        assert_eq!(
-            lines[1],
-            serde_json::json!({"aux":{"ID":"sha256:identity"}})
-        );
+        assert_eq!(lines[0], serde_json::json!({"stream":"Successfully built\n"}));
+        assert_eq!(lines[1], serde_json::json!({"aux":{"ID":"sha256:identity"}}));
 
         let quiet = BuildOutput::Quiet
             .success("sha256:identity")

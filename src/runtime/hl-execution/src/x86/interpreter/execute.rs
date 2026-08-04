@@ -253,7 +253,12 @@ impl ScalarInterpreter {
                     VectorMemory::staged_transfer(staged, cpu, memory, vector, operand, store, false, next, instruction)
                 }
             }
-            ScalarInstruction::VexVectorTest { left, right, lane, wide } => {
+            ScalarInstruction::VexVectorTest {
+                left,
+                right,
+                lane,
+                wide,
+            } => {
                 let right = Self::vex_read(cpu, memory, right, wide, next, instruction)?;
                 let left = [cpu.vectors[usize::from(left)], cpu.vector_upper[usize::from(left)]];
                 let mask = match lane {
@@ -264,10 +269,19 @@ impl ScalarInterpreter {
                 let halves = if wide { 2 } else { 1 };
                 let zero = (0..halves).all(|half| left[half] & right[half] & mask == 0);
                 let carry = (0..halves).all(|half| !left[half] & right[half] & mask == 0);
-                staged.flags = crate::FlagState::default().with(Flag::Zero, zero).with(Flag::Carry, carry);
+                staged.flags = crate::FlagState::default()
+                    .with(Flag::Zero, zero)
+                    .with(Flag::Carry, carry);
                 Ok(Staged::Cpu(staged))
             }
-            ScalarInstruction::VexMaskedMemory { vector, mask, address, lane, store, wide } => {
+            ScalarInstruction::VexMaskedMemory {
+                vector,
+                mask,
+                address,
+                lane,
+                store,
+                wide,
+            } => {
                 let base = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
                 let masks = [cpu.vectors[usize::from(mask)], cpu.vector_upper[usize::from(mask)]];
                 let data = [cpu.vectors[usize::from(vector)], cpu.vector_upper[usize::from(vector)]];
@@ -281,7 +295,10 @@ impl ScalarInterpreter {
                             let lane_address = base + u64::from(index) * u64::from(lane);
                             let value = memory.read(lane_address, lane).map_err(|()| {
                                 ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                                    instruction, lane_address, AccessKind::Read, u64::from(lane),
+                                    instruction,
+                                    lane_address,
+                                    AccessKind::Read,
+                                    u64::from(lane),
                                 ))
                             })?;
                             output[half] |= u128::from(value) << shift;
@@ -301,20 +318,43 @@ impl ScalarInterpreter {
                             let lane_address = base + u64::from(index) * u64::from(lane);
                             reservations[count] = Some(memory.reserve_write(lane_address, lane).map_err(|()| {
                                 ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                                    instruction, lane_address, AccessKind::Write, u64::from(lane),
+                                    instruction,
+                                    lane_address,
+                                    AccessKind::Write,
+                                    u64::from(lane),
                                 ))
                             })?);
                             values[count] = (data[half] >> shift) as u64;
                             count += 1;
                         }
                     }
-                    Ok(Staged::Sparse(staged, reservations, values, count as u8, base, if wide { 32 } else { 16 }))
+                    Ok(Staged::Sparse(
+                        staged,
+                        reservations,
+                        values,
+                        count as u8,
+                        base,
+                        if wide { 32 } else { 16 },
+                    ))
                 }
             }
-            ScalarInstruction::VectorMaskedStore { source, mask, mmx, address } => {
+            ScalarInstruction::VectorMaskedStore {
+                source,
+                mask,
+                mmx,
+                address,
+            } => {
                 let base = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
-                let data = if mmx { u128::from(cpu.read_mmx(source)) } else { cpu.vectors[usize::from(source)] };
-                let selection = if mmx { u128::from(cpu.read_mmx(mask)) } else { cpu.vectors[usize::from(mask)] };
+                let data = if mmx {
+                    u128::from(cpu.read_mmx(source))
+                } else {
+                    cpu.vectors[usize::from(source)]
+                };
+                let selection = if mmx {
+                    u128::from(cpu.read_mmx(mask))
+                } else {
+                    cpu.vectors[usize::from(mask)]
+                };
                 let bytes = if mmx { 8_u8 } else { 16 };
                 let mut reservations = std::array::from_fn(|_| None);
                 let mut values = [0_u64; 8];
@@ -326,10 +366,7 @@ impl ScalarInterpreter {
                         continue;
                     }
                     let start = index;
-                    while index < bytes
-                        && index - start < 8
-                        && selection >> (u32::from(index) * 8 + 7) & 1 != 0
-                    {
+                    while index < bytes && index - start < 8 && selection >> (u32::from(index) * 8 + 7) & 1 != 0 {
                         index += 1;
                     }
                     let length = index - start;
@@ -347,7 +384,12 @@ impl ScalarInterpreter {
                 }
                 Ok(Staged::Sparse(staged, reservations, values, count as u8, base, bytes))
             }
-            ScalarInstruction::VexAes { operation, destination, first, second } => {
+            ScalarInstruction::VexAes {
+                operation,
+                destination,
+                first,
+                second,
+            } => {
                 let second = Self::vex_read_bytes(cpu, memory, second, 16, next, instruction)?[0];
                 let first = cpu.vectors[usize::from(first)];
                 staged.vectors[usize::from(destination)] = crate::x86::vector::Aes::execute(first, second, operation);
@@ -479,7 +521,11 @@ impl ScalarInterpreter {
                 Ok(Staged::Cpu(staged))
             }
             ScalarInstruction::VexPackedDoubleConvert {
-                destination, source, from_integer, truncate, wide,
+                destination,
+                source,
+                from_integer,
+                truncate,
+                wide,
             } => {
                 use crate::x86::scalar::arithmetic::Arithmetic as FloatArithmetic;
                 use hl_softfloat::{ExceptionFlags, RoundingMode, Value};
@@ -487,7 +533,9 @@ impl ScalarInterpreter {
                 let input_bytes = (if from_integer { lanes * 4 } else { lanes * 8 }) as u8;
                 let input = Self::vex_read_bytes(cpu, memory, source, input_bytes, next, instruction)?;
                 let mut environment = FloatArithmetic::environment(cpu.mxcsr);
-                if truncate { environment.rounding = RoundingMode::TowardZero; }
+                if truncate {
+                    environment.rounding = RoundingMode::TowardZero;
+                }
                 let mut output = [0_u128; 2];
                 let mut exceptions = 0;
                 for lane in 0..lanes {
@@ -673,8 +721,7 @@ impl ScalarInterpreter {
                             hl_softfloat::Value::from_bits(hl_softfloat::Format::Binary32, u64::from(bits)),
                             32,
                         );
-                        exceptions |= crate::x86::scalar::arithmetic::Arithmetic::exceptions(result.flags)
-                            & !(1 << 1);
+                        exceptions |= crate::x86::scalar::arithmetic::Arithmetic::exceptions(result.flags) & !(1 << 1);
                         if result.flags.contains(hl_softfloat::ExceptionFlags::INVALID) {
                             0x8000_0000
                         } else {
@@ -708,7 +755,11 @@ impl ScalarInterpreter {
                 let source_bits = u32::from(FloatArithmetic::bytes(source_format)) * 8;
                 let destination_bits = u32::from(FloatArithmetic::bytes(destination_format)) * 8;
                 let lanes = if packed {
-                    if wide { 256 / destination_bits } else { 128 / destination_bits }
+                    if wide {
+                        256 / destination_bits
+                    } else {
+                        128 / destination_bits
+                    }
                 } else {
                     1
                 };
@@ -728,14 +779,21 @@ impl ScalarInterpreter {
                 for lane in 0..lanes {
                     let source_half = (lane * source_bits / 128) as usize;
                     let source_shift = lane * source_bits % 128;
-                    let mask = if source_bits == 64 { u128::from(u64::MAX) } else { u128::from(u32::MAX) };
+                    let mask = if source_bits == 64 {
+                        u128::from(u64::MAX)
+                    } else {
+                        u128::from(u32::MAX)
+                    };
                     let bits = ((input[source_half] >> source_shift) & mask) as u64;
                     let result = environment.convert(
                         hl_softfloat::Value::from_bits(FloatArithmetic::soft_format(source_format), bits),
                         FloatArithmetic::soft_format(destination_format),
                     );
                     let value = crate::x86::scalar::conversion::Conversion::converted_nan(
-                        result.value.bits(), bits, source_format, destination_format,
+                        result.value.bits(),
+                        bits,
+                        source_format,
+                        destination_format,
                     );
                     let destination_half = (lane * destination_bits / 128) as usize;
                     let destination_shift = lane * destination_bits % 128;
@@ -744,8 +802,8 @@ impl ScalarInterpreter {
                     } else {
                         u128::from(u32::MAX)
                     } << destination_shift;
-                    output[destination_half] = (output[destination_half] & !destination_mask)
-                        | (u128::from(value) << destination_shift);
+                    output[destination_half] =
+                        (output[destination_half] & !destination_mask) | (u128::from(value) << destination_shift);
                     exceptions |= FloatArithmetic::exceptions(result.flags);
                     if cpu.mxcsr & (1 << 6) != 0 {
                         exceptions &= !(1 << 1);
@@ -755,7 +813,11 @@ impl ScalarInterpreter {
                 }
                 staged.vectors[usize::from(destination)] = output[0];
                 staged.vector_upper[usize::from(destination)] =
-                    if packed && wide && destination_format == crate::FloatWidth::Double { output[1] } else { 0 };
+                    if packed && wide && destination_format == crate::FloatWidth::Double {
+                        output[1]
+                    } else {
+                        0
+                    };
                 staged.mxcsr |= exceptions;
                 Ok(Staged::Cpu(staged))
             }
@@ -848,8 +910,7 @@ impl ScalarInterpreter {
                     } else {
                         u128::from(u64::MAX)
                     };
-                    output[half] =
-                        (output[half] & !(mask << shift)) | ((u128::from(value) & mask) << shift);
+                    output[half] = (output[half] & !(mask << shift)) | ((u128::from(value) & mask) << shift);
                     let exceptions = crate::x86::scalar::arithmetic::Arithmetic::exceptions(result.flags) & !(1 << 1);
                     staged.mxcsr |= exceptions;
                 }
@@ -2257,7 +2318,11 @@ impl ScalarInterpreter {
                         usize::from((immediate >> (lane * 2)) & 3)
                     };
                     let values = if variable { left[half] } else { right[half] };
-                    let mask = if qword { u128::from(u64::MAX) } else { u128::from(u32::MAX) };
+                    let mask = if qword {
+                        u128::from(u64::MAX)
+                    } else {
+                        u128::from(u32::MAX)
+                    };
                     result[half] |= ((values >> (selected * bits)) & mask) << (lane * bits);
                 }
             }
@@ -2279,7 +2344,11 @@ impl ScalarInterpreter {
         if operation == VexOperation::MultipleSad {
             return [
                 VectorLane::sad(left[0], right[0], immediate & 7),
-                if wide { VectorLane::sad(left[1], right[1], (immediate >> 3) & 7) } else { 0 },
+                if wide {
+                    VectorLane::sad(left[1], right[1], (immediate >> 3) & 7)
+                } else {
+                    0
+                },
             ];
         }
         if matches!(

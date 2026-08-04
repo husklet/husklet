@@ -167,10 +167,12 @@ fn active_signal_frames_round_trip() {
             stack_pointer: 0x20_000,
         }]
     );
-    assert!(snapshot.threads[0]
-        .signals
-        .deferred
-        .contains(SignalNumber::new(10).unwrap()));
+    assert!(
+        snapshot.threads[0]
+            .signals
+            .deferred
+            .contains(SignalNumber::new(10).unwrap())
+    );
     assert_eq!(TaskRegistry::restore(&snapshot).unwrap().snapshot(), snapshot);
 }
 

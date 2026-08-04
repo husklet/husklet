@@ -100,14 +100,32 @@ pub enum VexOperation {
     SubtractWord,
     SubtractDword,
     SubtractQword,
-    Saturating { subtract: bool, unsigned: bool, word: bool },
-    Extrema { maximum: bool, unsigned: bool, bytes: u8 },
-    Average { word: bool },
+    Saturating {
+        subtract: bool,
+        unsigned: bool,
+        word: bool,
+    },
+    Extrema {
+        maximum: bool,
+        unsigned: bool,
+        bytes: u8,
+    },
+    Average {
+        word: bool,
+    },
     MultiplyAddWords,
     MultiplyAddBytes,
-    Horizontal { subtract: bool, saturating: bool, dword: bool },
-    Sign { bytes: u8 },
-    Absolute { bytes: u8 },
+    Horizontal {
+        subtract: bool,
+        saturating: bool,
+        dword: bool,
+    },
+    Sign {
+        bytes: u8,
+    },
+    Absolute {
+        bytes: u8,
+    },
     MultiplyHighRoundWord,
     HorizontalMinimumWord,
     SumAbsoluteDifferences,
@@ -126,8 +144,12 @@ pub enum VexOperation {
     PackUnsignedDwordWord,
     PermuteDword,
     PermuteQword,
-    PermuteLaneDword { variable: bool },
-    PermuteLaneQword { variable: bool },
+    PermuteLaneDword {
+        variable: bool,
+    },
+    PermuteLaneQword {
+        variable: bool,
+    },
     ShuffleByte,
     ShiftLeftVariableDword,
     ShiftLeftVariableQword,

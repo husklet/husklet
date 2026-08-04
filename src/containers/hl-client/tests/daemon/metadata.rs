@@ -34,12 +34,7 @@ async fn compatibility_metadata_surfaces_are_typed_and_truthful() {
         .unwrap();
     assert_eq!(authentication.status, "Login Succeeded");
     assert!(authentication.identity_token.is_empty());
-    assert!(client
-        .images()
-        .search("alpine", Some(5))
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(client.images().search("alpine", Some(5)).await.unwrap().is_empty());
 
     let distribution = raw_http(
         &socket,
@@ -57,12 +52,7 @@ async fn compatibility_metadata_surfaces_are_typed_and_truthful() {
 async fn container_changes_compare_owned_rootfs_with_immutable_image_baseline() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     let socket = root.path().join("run/docker.sock");
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn({
@@ -91,12 +81,7 @@ async fn container_changes_compare_owned_rootfs_with_immutable_image_baseline() 
         )
         .await
         .unwrap();
-    assert!(client
-        .containers()
-        .changes(&created.id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(client.containers().changes(&created.id).await.unwrap().is_empty());
 
     let container = containers.inspect(&created.id).await.unwrap();
     let hl_container::Rootfs::Image(reference) = container.spec.rootfs else {
@@ -134,11 +119,7 @@ async fn container_changes_compare_owned_rootfs_with_immutable_image_baseline() 
         ]
     );
 
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }

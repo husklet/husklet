@@ -53,9 +53,7 @@ impl Changes {
                 let kind = match (before.entries.get(&path), after.entries.get(&path)) {
                     (None, Some(_)) => Some(ChangeKind::Added),
                     (Some(_), None) => Some(ChangeKind::Deleted),
-                    (Some(left), Some(right))
-                        if !left.same(right, &before.root, &after.root, &path) =>
-                    {
+                    (Some(left), Some(right)) if !left.same(right, &before.root, &after.root, &path) => {
                         Some(ChangeKind::Modified)
                     }
                     _ => None,
@@ -98,13 +96,8 @@ impl Inventory {
         })
     }
 
-    fn walk(
-        root: &FsPath,
-        relative: &FsPath,
-        entries: &mut BTreeMap<PathBuf, Entry>,
-    ) -> Result<()> {
-        let mut children =
-            fs::read_dir(root.join(relative))?.collect::<std::io::Result<Vec<_>>>()?;
+    fn walk(root: &FsPath, relative: &FsPath, entries: &mut BTreeMap<PathBuf, Entry>) -> Result<()> {
+        let mut children = fs::read_dir(root.join(relative))?.collect::<std::io::Result<Vec<_>>>()?;
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             let path = relative.join(child.file_name());

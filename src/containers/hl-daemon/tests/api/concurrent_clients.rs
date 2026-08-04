@@ -23,8 +23,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         creates.spawn(async move {
             service
                 .create(
-                    ContainerSpec::from_directory(rootfs, Process::new("/bin/true"))
-                        .name(format!("parallel-{index}")),
+                    ContainerSpec::from_directory(rootfs, Process::new("/bin/true")).name(format!("parallel-{index}")),
                 )
                 .await
                 .map(|container| container.id.to_string())
@@ -44,11 +43,9 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let socket = work.path().join("daemon.sock");
     let (shutdown, stopped) = oneshot::channel();
-    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(
-        async move {
-            let _ = stopped.await;
-        },
-    ));
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
     wait_for_path(&socket).await?;
     let client = Client::unix(&socket)?;
     let mut readers = JoinSet::new();

@@ -47,11 +47,7 @@ fn cross_process_gc_preserves_a_live_committed_container_root() {
     let collector = Images::open(temporary.path()).unwrap();
     let executable = std::env::current_exe().unwrap();
     let mut holder = std::process::Command::new(executable)
-        .args([
-            "--ignored",
-            "--exact",
-            "suite::lease::root_lease_holder_process",
-        ])
+        .args(["--ignored", "--exact", "suite::lease::root_lease_holder_process"])
         .env("HL_ROOT_HOLDER_STORE", temporary.path())
         .spawn()
         .unwrap();
@@ -66,11 +62,7 @@ fn cross_process_gc_preserves_a_live_committed_container_root() {
     let snapshot = std::fs::read_to_string(temporary.path().join("holder-ready")).unwrap();
     collector.gc().unwrap();
     assert!(
-        temporary
-            .path()
-            .join("snapshots/committed")
-            .join(snapshot)
-            .is_dir(),
+        temporary.path().join("snapshots/committed").join(snapshot).is_dir(),
         "collector removed the other process's live committed root"
     );
     std::fs::write(temporary.path().join("collect-finished"), b"").unwrap();
@@ -102,15 +94,7 @@ fn unpacked_image_lease_bridges_unpack_to_rootfs_across_gc() {
     assert!(report.snapshots_kept > 0);
     let root = images.rootfs(&unpacked).unwrap();
     assert_eq!(
-        std::fs::read(
-            images
-                .roots()
-                .open(&root)
-                .unwrap()
-                .path()
-                .join("usr/bin/python"),
-        )
-        .unwrap(),
+        std::fs::read(images.roots().open(&root).unwrap().path().join("usr/bin/python"),).unwrap(),
         b"guest executable"
     );
     images.roots().release(&root).unwrap();
@@ -145,15 +129,7 @@ fn unpack_rebuilds_a_legacy_empty_non_scratch_chain() {
     let repaired = images.unpack(&image, &Platform::linux_arm64()).unwrap();
     let root = images.rootfs(&repaired).unwrap();
     assert_eq!(
-        std::fs::read(
-            images
-                .roots()
-                .open(&root)
-                .unwrap()
-                .path()
-                .join("usr/bin/python"),
-        )
-        .unwrap(),
+        std::fs::read(images.roots().open(&root).unwrap().path().join("usr/bin/python"),).unwrap(),
         b"restored executable"
     );
     images.roots().release(&root).unwrap();

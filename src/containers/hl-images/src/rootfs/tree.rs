@@ -6,9 +6,9 @@ use std::{
 };
 
 use crate::{
+    Error, Result,
     rootfs::{Change, ChangeKind},
     snapshot::View as SnapshotView,
-    Error, Result,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,13 +39,7 @@ impl Tree {
         let mut upper_entries = BTreeMap::new();
         let mut whiteouts = BTreeSet::new();
         let mut opaque = BTreeSet::new();
-        Self::walk_overlay(
-            upper,
-            Path::new(""),
-            &mut upper_entries,
-            &mut whiteouts,
-            &mut opaque,
-        )?;
+        Self::walk_overlay(upper, Path::new(""), &mut upper_entries, &mut whiteouts, &mut opaque)?;
         for directory in opaque {
             let prefix = directory.join("");
             tree.entries
@@ -65,8 +59,7 @@ impl Tree {
     }
 
     fn walk(&mut self, view: &SnapshotView, physical: &Path) -> Result<()> {
-        let mut children =
-            fs::read_dir(view.path().join(physical))?.collect::<std::io::Result<Vec<_>>>()?;
+        let mut children = fs::read_dir(view.path().join(physical))?.collect::<std::io::Result<Vec<_>>>()?;
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             let physical_path = physical.join(child.file_name());
@@ -95,8 +88,7 @@ impl Tree {
         whiteouts: &mut BTreeSet<PathBuf>,
         opaque: &mut BTreeSet<PathBuf>,
     ) -> Result<()> {
-        let mut children =
-            fs::read_dir(view.path().join(physical))?.collect::<std::io::Result<Vec<_>>>()?;
+        let mut children = fs::read_dir(view.path().join(physical))?.collect::<std::io::Result<Vec<_>>>()?;
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             let physical_path = physical.join(child.file_name());
@@ -104,18 +96,14 @@ impl Tree {
             let name = guest
                 .file_name()
                 .and_then(|name| name.to_str())
-                .ok_or_else(|| {
-                    Error::InvalidMetadata(format!("rootfs path is not UTF-8: {}", guest.display()))
-                })?;
+                .ok_or_else(|| Error::InvalidMetadata(format!("rootfs path is not UTF-8: {}", guest.display())))?;
             if name == ".wh..wh..opq" {
                 opaque.insert(guest.parent().unwrap_or(Path::new("")).to_owned());
                 continue;
             }
             if let Some(name) = name.strip_prefix(".wh.") {
                 if name.is_empty() {
-                    return Err(Error::InvalidMetadata(
-                        "empty overlay whiteout target".into(),
-                    ));
+                    return Err(Error::InvalidMetadata("empty overlay whiteout target".into()));
                 }
                 whiteouts.insert(guest.parent().unwrap_or(Path::new("")).join(name));
                 continue;
@@ -172,9 +160,7 @@ impl Entry {
         {
             return Ok(false);
         }
-        Ok(self.kind != 1
-            || self.source == other.source
-            || fs::read(&self.source)? == fs::read(&other.source)?)
+        Ok(self.kind != 1 || self.source == other.source || fs::read(&self.source)? == fs::read(&other.source)?)
     }
 }
 
@@ -215,9 +201,9 @@ impl Changes {
 mod tests {
     use super::*;
     use crate::{
+        Leases,
         rootfs::Roots,
         snapshot::{Id, Snapshots},
-        Leases,
     };
 
     #[test]
@@ -240,10 +226,7 @@ mod tests {
             .set("owner", crate::snapshot::Ownership { uid: 1, gid: 1 })
             .unwrap();
         draft.commit(lower.clone()).unwrap();
-        let roots = Roots::new(
-            snapshots,
-            Leases::open(root.path().join("metadata")).unwrap(),
-        );
+        let roots = Roots::new(snapshots, Leases::open(root.path().join("metadata")).unwrap());
         let reference = roots.fork_overlay(&lower).unwrap();
         let overlay = roots.open_overlay(&reference).unwrap();
         std::fs::write(overlay.upper().join("modify"), b"after").unwrap();
@@ -257,10 +240,7 @@ mod tests {
         std::fs::write(
             root.path()
                 .join("snapshots/ownership/committed")
-                .join(format!(
-                    "{}.json",
-                    reference.overlay().unwrap().upper().as_str()
-                )),
+                .join(format!("{}.json", reference.overlay().unwrap().upper().as_str())),
             br#"{"owner":{"uid":2,"gid":2}}"#,
         )
         .unwrap();
@@ -306,10 +286,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(
-            std::fs::read(overlay.lower().join("modify")).unwrap(),
-            b"before"
-        );
+        assert_eq!(std::fs::read(overlay.lower().join("modify")).unwrap(), b"before");
         assert!(overlay.lower().join("delete").exists());
 
         let overlay = roots.open_overlay(&reference).unwrap();
@@ -328,15 +305,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
-        assert!(entries
-            .iter()
-            .any(|entry| entry.0 == Path::new(".wh.delete")));
-        assert!(entries
-            .iter()
-            .any(|entry| entry.0 == Path::new("opaque/.wh..wh..opq")));
-        assert!(entries
-            .iter()
-            .any(|entry| entry.0 == Path::new("owner") && entry.1 == 2 && entry.2 == 2));
+        assert!(entries.iter().any(|entry| entry.0 == Path::new(".wh.delete")));
+        assert!(entries.iter().any(|entry| entry.0 == Path::new("opaque/.wh..wh..opq")));
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.0 == Path::new("owner") && entry.1 == 2 && entry.2 == 2)
+        );
         assert!(!entries.iter().any(|entry| entry.0 == Path::new("keep")));
     }
 }

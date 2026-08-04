@@ -194,9 +194,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 [current.real_group, current.effective_group, current.saved_group],
             )
         };
-        if identifier != u32::MAX
-            && (current.may_setid() || allowed.contains(&identifier) || old == identifier)
-        {
+        if identifier != u32::MAX && (current.may_setid() || allowed.contains(&identifier) || old == identifier) {
             if user {
                 current.filesystem_user = identifier;
             } else {

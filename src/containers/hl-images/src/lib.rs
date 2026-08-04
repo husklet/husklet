@@ -8,6 +8,7 @@ mod image;
 mod images;
 mod lease;
 mod platform;
+mod prune;
 mod reference;
 mod transfer;
 
@@ -27,6 +28,7 @@ pub use images::{
 pub use lease::{Lease, LeaseStore, Leases};
 pub use oci_spec::image::Descriptor;
 pub use platform::{Platform, PlatformError};
+pub use prune::{GraphPruneReport, PrunedGraph};
 pub use reference::Reference;
 pub use transfer::{CopyReport, DescriptorGraph, Successors, Target, copy_graph};
 

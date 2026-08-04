@@ -157,14 +157,12 @@ impl Decoder {
                     wide: length != 0,
                 })
             }
-            (1, 0xf0, 3) if source == 0 && decoded.address.is_some() => {
-                Ok(ScalarInstruction::VexVectorTransport {
-                    vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
-                    operand: Self::source(decoded)?,
-                    store: false,
-                    wide: length != 0,
-                })
-            }
+            (1, 0xf0, 3) if source == 0 && decoded.address.is_some() => Ok(ScalarInstruction::VexVectorTransport {
+                vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
+                operand: Self::source(decoded)?,
+                store: false,
+                wide: length != 0,
+            }),
             (1, 0xe6, 1 | 2 | 3) if source == 0 => Ok(ScalarInstruction::VexPackedDoubleConvert {
                 destination: decoded.register.ok_or(ScalarIrError::Invalid)?,
                 source: Self::source(decoded)?,
@@ -324,7 +322,11 @@ impl Decoder {
                     .or_else(|| decoded.address.map(crate::ScalarOperand::Memory))
                     .ok_or(ScalarIrError::Invalid)?,
                 wide: w,
-                format: if pp == 2 { FloatWidth::Single } else { FloatWidth::Double },
+                format: if pp == 2 {
+                    FloatWidth::Single
+                } else {
+                    FloatWidth::Double
+                },
                 merge: Some(source),
             }),
             (1, 0x70, 1) if source == 0 => Self::binary(decoded, source, length, VexOperation::ShuffleDword),
@@ -337,8 +339,8 @@ impl Decoder {
                 to_integer: pp != 0,
                 truncate: pp == 2,
             }),
-            (1, 0x5a, 0..=3)
-                if (pp < 2 && source == 0) || (pp >= 2 && length == 0) => Ok(ScalarInstruction::VexFloatWidth {
+            (1, 0x5a, 0..=3) if (pp < 2 && source == 0) || (pp >= 2 && length == 0) => {
+                Ok(ScalarInstruction::VexFloatWidth {
                     destination: decoded.register.ok_or(ScalarIrError::Invalid)?,
                     first: source,
                     source: Self::source(decoded)?,
@@ -349,7 +351,8 @@ impl Decoder {
                     },
                     packed: pp < 2,
                     wide: length != 0,
-                }),
+                })
+            }
             (1, 0xc2, 0..=3) => Ok(ScalarInstruction::VexCompare {
                 destination: decoded.register.ok_or(ScalarIrError::Invalid)?,
                 first: source,
@@ -545,9 +548,7 @@ impl Decoder {
             (2, 0x40, 1) if !w => Self::binary(decoded, source, length, VexOperation::MultiplyLowDword),
             (3, 0x40, 1) => Self::binary(decoded, source, length, VexOperation::DotSingle),
             (3, 0x41, 1) if length == 0 => Self::binary(decoded, source, length, VexOperation::DotDouble),
-            (3, 0x44, 1) if length == 0 && !w => {
-                Self::binary(decoded, source, length, VexOperation::CarrylessMultiply)
-            }
+            (3, 0x44, 1) if length == 0 && !w => Self::binary(decoded, source, length, VexOperation::CarrylessMultiply),
             (3, 0x42, 1) if !w => Self::binary(decoded, source, length, VexOperation::MultipleSad),
             (2, 0x38..=0x3f, 1) => Self::binary(
                 decoded,
@@ -651,30 +652,30 @@ impl Decoder {
             ),
             (2, 0x18, 1) => Self::binary(decoded, source, length, VexOperation::BroadcastDword),
             (2, 0x19, 1) => Self::binary(decoded, source, length, VexOperation::BroadcastQword),
-            (2, 0x2a, 1) if source == 0 && decoded.address.is_some() => {
-                Ok(ScalarInstruction::VexVectorTransport {
-                    vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
-                    operand: Self::source(decoded)?,
-                    store: false,
-                    wide: length != 0,
-                })
-            }
+            (2, 0x2a, 1) if source == 0 && decoded.address.is_some() => Ok(ScalarInstruction::VexVectorTransport {
+                vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
+                operand: Self::source(decoded)?,
+                store: false,
+                wide: length != 0,
+            }),
             (2, 0x17 | 0x0e | 0x0f, 1) if source == 0 => Ok(ScalarInstruction::VexVectorTest {
                 left: decoded.register.ok_or(ScalarIrError::Invalid)?,
                 right: Self::source(decoded)?,
-                lane: match decoded.opcode { 0x0e => 4, 0x0f => 8, _ => 0 },
+                lane: match decoded.opcode {
+                    0x0e => 4,
+                    0x0f => 8,
+                    _ => 0,
+                },
                 wide: length != 0,
             }),
-            (2, 0x2c..=0x2f, 1) if !w && decoded.address.is_some() => {
-                Ok(ScalarInstruction::VexMaskedMemory {
-                    vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
-                    mask: source,
-                    address: decoded.address.ok_or(ScalarIrError::Invalid)?,
-                    lane: if decoded.opcode & 1 == 0 { 4 } else { 8 },
-                    store: decoded.opcode >= 0x2e,
-                    wide: length != 0,
-                })
-            }
+            (2, 0x2c..=0x2f, 1) if !w && decoded.address.is_some() => Ok(ScalarInstruction::VexMaskedMemory {
+                vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
+                mask: source,
+                address: decoded.address.ok_or(ScalarIrError::Invalid)?,
+                lane: if decoded.opcode & 1 == 0 { 4 } else { 8 },
+                store: decoded.opcode >= 0x2e,
+                wide: length != 0,
+            }),
             (2, 0x8c | 0x8e, 1) if decoded.address.is_some() => Ok(ScalarInstruction::VexMaskedMemory {
                 vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
                 mask: source,
@@ -708,9 +709,7 @@ impl Decoder {
                 first: 0,
                 second: Self::source(decoded)?,
             }),
-            (2, 0x1a | 0x5a, 1)
-                if length != 0 && !w && source == 0 && decoded.register_operand.is_none() =>
-            {
+            (2, 0x1a | 0x5a, 1) if length != 0 && !w && source == 0 && decoded.register_operand.is_none() => {
                 Self::binary(decoded, source, length, VexOperation::Broadcast128)
             }
             (3, 0x18 | 0x38, 1) if length != 0 && !w => Self::binary(decoded, source, length, VexOperation::Insert128),

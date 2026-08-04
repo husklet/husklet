@@ -45,18 +45,12 @@ impl Path {
                 Component::CurDir => {}
                 Component::Normal(part) => normalized.push(part),
                 _ => {
-                    return Err(Self::error_at(
-                        path,
-                        "path is not a normalized relative path",
-                    ));
+                    return Err(Self::error_at(path, "path is not a normalized relative path"));
                 }
             }
         }
         if normalized.as_os_str().is_empty() {
-            return Err(Self::error_at(
-                path,
-                "path is not a normalized relative path",
-            ));
+            return Err(Self::error_at(path, "path is not a normalized relative path"));
         }
         Ok(Self(normalized))
     }
@@ -68,18 +62,12 @@ impl Path {
 
     #[must_use]
     pub fn name(&self) -> &str {
-        self.0
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
+        self.0.file_name().and_then(|value| value.to_str()).unwrap_or_default()
     }
 
     #[must_use]
     pub fn is_device(&self) -> bool {
-        self.0
-            .components()
-            .next()
-            .is_some_and(|part| part.as_os_str() == "dev")
+        self.0.components().next().is_some_and(|part| part.as_os_str() == "dev")
     }
 
     /// Validate that a symlink target remains syntactically within the rootfs.
@@ -96,10 +84,7 @@ impl Path {
             }
             return Ok(());
         }
-        let mut depth = self
-            .0
-            .parent()
-            .map_or(0, |parent| parent.components().count());
+        let mut depth = self.0.parent().map_or(0, |parent| parent.components().count());
         for component in target.components() {
             match component {
                 Component::Normal(_) => depth += 1,
@@ -145,8 +130,7 @@ impl Path {
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    fs::create_dir(&current)
-                        .map_err(|source| self.io("create parent directory", source))?;
+                    fs::create_dir(&current).map_err(|source| self.io("create parent directory", source))?;
                 }
                 Err(source) => return Err(self.io("inspect parent directory", source)),
             }
@@ -173,11 +157,7 @@ impl Path {
     pub(crate) fn relative_to(&self, from: &FsPath) -> PathBuf {
         let from = from.components().collect::<Vec<_>>();
         let to = self.0.components().collect::<Vec<_>>();
-        let shared = from
-            .iter()
-            .zip(&to)
-            .take_while(|(left, right)| left == right)
-            .count();
+        let shared = from.iter().zip(&to).take_while(|(left, right)| left == right).count();
         let mut path = PathBuf::new();
         for _ in shared..from.len() {
             path.push("..");
@@ -198,8 +178,7 @@ impl Path {
     /// Returns filesystem failures.
     pub fn remove(&self, destination: &FsPath) -> Result<()> {
         if destination.symlink_metadata()?.is_dir() {
-            fs::remove_dir_all(destination)
-                .map_err(|source| self.io("remove directory", source))?;
+            fs::remove_dir_all(destination).map_err(|source| self.io("remove directory", source))?;
         } else {
             fs::remove_file(destination).map_err(|source| self.io("remove file", source))?;
         }

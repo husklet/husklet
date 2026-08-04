@@ -2,13 +2,13 @@ use std::path::Path;
 
 use crate::report::ScenarioBatch;
 use hl_client::{
-    model::{CreateContainer, VolumeCreate},
     Client,
+    model::{CreateContainer, VolumeCreate},
 };
 
 use super::{
-    execution::{execute, pass, request},
     Error, IMAGE,
+    execution::{execute, pass, request},
 };
 
 pub(super) async fn run_docker_contracts(client: &Client) -> Result<(), Error> {
@@ -127,14 +127,8 @@ impl<'a> Managed<'a> {
         pass(
             volume.driver == "local"
                 && inspected.scope == "local"
-                && inspected
-                    .options
-                    .get("type")
-                    .is_some_and(|value| value == "none")
-                && inspected
-                    .options
-                    .get("o")
-                    .is_some_and(|value| value == "bind,ro"),
+                && inspected.options.get("type").is_some_and(|value| value == "none")
+                && inspected.options.get("o").is_some_and(|value| value == "bind,ro"),
             "dockervol/local-bind-inspect",
         )?;
         volumes.remove(name, false).await?;
@@ -206,10 +200,7 @@ impl<'a> Managed<'a> {
             error.contains("in use") || error.contains("referenced") || error.contains("cannot"),
             "dockervol/mount-volume-inuse",
         )?;
-        self.client
-            .containers()
-            .remove(&held.id, true, false)
-            .await?;
+        self.client.containers().remove(&held.id, true, false).await?;
         volumes.remove(&volume.name, false).await?;
         pass(
             !volumes
@@ -234,22 +225,12 @@ impl<'a> Managed<'a> {
             .await?;
         self.client.containers().start(&anonymous.id).await?;
         pass(
-            self.client
-                .containers()
-                .wait(&anonymous.id)
-                .await?
-                .status_code
-                == 0,
+            self.client.containers().wait(&anonymous.id).await?.status_code == 0,
             "dockervol/anon-exit",
         )?;
         let inspect = self.client.containers().inspect(&anonymous.id).await?;
         pass(
-            self.client
-                .containers()
-                .logs(&anonymous.id, true, false)
-                .await?
-                .stdout
-                == b"ANON\n"
+            self.client.containers().logs(&anonymous.id, true, false).await?.stdout == b"ANON\n"
                 && inspect
                     .metadata
                     .mounts
@@ -257,10 +238,7 @@ impl<'a> Managed<'a> {
                     .any(|mount| mount.kind == "volume" && mount.destination == "/data"),
             "dockervol/anon-volume",
         )?;
-        self.client
-            .containers()
-            .remove(&anonymous.id, false, true)
-            .await?;
+        self.client.containers().remove(&anonymous.id, false, true).await?;
         Ok(())
     }
 
@@ -279,10 +257,7 @@ impl<'a> Managed<'a> {
             "ls -1 /cache | wc -l | tr -d ' '",
         )
         .await?;
-        pass(
-            first.0 == b"hi\n1\n" && second.0 == b"0\n",
-            "dockervol/tmpfs-fresh",
-        )?;
+        pass(first.0 == b"hi\n1\n" && second.0 == b"0\n", "dockervol/tmpfs-fresh")?;
         let mounted = tmpfs(
             self.client,
             "tmpfs-inspect",
@@ -313,10 +288,7 @@ impl<'a> Managed<'a> {
             })
             .await?;
         std::fs::create_dir_all(Path::new(&volume.mountpoint).join("safe"))?;
-        std::fs::write(
-            Path::new(&volume.mountpoint).join("safe/value"),
-            b"SUBPATH_OK\n",
-        )?;
+        std::fs::write(Path::new(&volume.mountpoint).join("safe/value"), b"SUBPATH_OK\n")?;
         std::os::unix::fs::symlink("/tmp", Path::new(&volume.mountpoint).join("escape"))?;
         let request = |subpath: &str| -> Result<CreateContainer, Error> {
             Ok(serde_json::from_value(serde_json::json!({
@@ -346,10 +318,7 @@ impl<'a> Managed<'a> {
                 .containers()
                 .create(&request(path)?, Some(&id.replace('/', "-")))
                 .await?;
-            pass(
-                self.client.containers().start(&created.id).await.is_err(),
-                id,
-            )?;
+            pass(self.client.containers().start(&created.id).await.is_err(), id)?;
         }
         Ok(())
     }
@@ -393,10 +362,7 @@ impl<'a> Managed<'a> {
             pass(
                 self.client
                     .containers()
-                    .create(
-                        &request(propagation, non_recursive)?,
-                        Some(&id.replace('/', "-")),
-                    )
+                    .create(&request(propagation, non_recursive)?, Some(&id.replace('/', "-")))
                     .await
                     .is_err(),
                 id,

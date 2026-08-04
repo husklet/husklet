@@ -1,7 +1,6 @@
 use super::{
-    Account, Assignments, Base, CacheSharing, Command, CopySource, Duration, Healthcheck,
-    InstructionParser, OwnershipSpec, Platform, Recipe, RunMount, Source, Step, Words,
-    WorkingDirectory,
+    Account, Assignments, Base, CacheSharing, Command, CopySource, Duration, Healthcheck, InstructionParser,
+    OwnershipSpec, Platform, Recipe, RunMount, Source, Step, Words, WorkingDirectory,
 };
 use std::collections::BTreeMap;
 
@@ -12,15 +11,18 @@ fn parses_build_arguments_and_runtime_config() {
         ("BASE".into(), "alpine:latest".into()),
         ("VALUE".into(), "override".into()),
     ]);
-    let recipe = Recipe::parse_with("ARG BASE\nFROM ${BASE}\nARG VALUE=default\nENV RESULT=${VALUE}\nRUN echo $VALUE\nCMD echo $RESULT\n", &supplied, None).unwrap();
+    let recipe = Recipe::parse_with(
+        "ARG BASE\nFROM ${BASE}\nARG VALUE=default\nENV RESULT=${VALUE}\nRUN echo $VALUE\nCMD echo $RESULT\n",
+        &supplied,
+        None,
+    )
+    .unwrap();
     assert_eq!(recipe.selected, 0);
     assert!(
         matches!(&recipe.stages[0].base, Base::Image(image) if image.to_string() == "docker.io/library/alpine:latest")
     );
     assert_eq!(recipe.stages[0].runtime.environment["RESULT"], "override");
-    assert!(
-        matches!(&recipe.stages[0].steps[0], Step::Run { environment, .. } if environment["VALUE"] == "override")
-    );
+    assert!(matches!(&recipe.stages[0].steps[0], Step::Run { environment, .. } if environment["VALUE"] == "override"));
     assert_eq!(
         recipe.stages[0]
             .history
@@ -61,20 +63,15 @@ fn build_argument_declarations_apply_defaults_and_supplied_values() {
 
 #[test]
 fn pre_from_argument_does_not_leak_into_stage_without_redeclaration() {
-    let recipe = Recipe::parse(
-        "ARG SECRET=global\nFROM alpine\nENV LEAK=$SECRET\nARG SECRET\nENV DECLARED=$SECRET\n",
-    )
-    .unwrap();
+    let recipe =
+        Recipe::parse("ARG SECRET=global\nFROM alpine\nENV LEAK=$SECRET\nARG SECRET\nENV DECLARED=$SECRET\n").unwrap();
     assert_eq!(recipe.stages[0].runtime.environment["LEAK"], "");
     assert_eq!(recipe.stages[0].runtime.environment["DECLARED"], "global");
 }
 
 #[test]
 fn expands_docker_argument_defaults_alternates_and_unset_values() {
-    let supplied = BTreeMap::from([
-        ("EMPTY".into(), String::new()),
-        ("SET".into(), "present".into()),
-    ]);
+    let supplied = BTreeMap::from([("EMPTY".into(), String::new()), ("SET".into(), "present".into())]);
     let recipe = Recipe::parse_with(
             "ARG BASE\nARG EMPTY\nARG SET\nFROM ${BASE:-alpine:latest}\nARG EMPTY\nARG SET\nENV A=${MISSING-default} B=${EMPTY:-fallback} C=${SET:+alternate} D=$MISSING E=${EMPTY-default} F=${MISSING+alternate} G=${SET+alternate}\nCOPY ${MISSING:-source} /target\n",
             &supplied,
@@ -117,10 +114,8 @@ fn parses_multistage_copy_and_target() {
 
 #[test]
 fn parses_external_image_copy_source() {
-    let recipe = Recipe::parse(
-        "FROM alpine AS build\nFROM alpine\nCOPY --from=example/tools:1 /bin/tool /tool\n",
-    )
-    .unwrap();
+    let recipe =
+        Recipe::parse("FROM alpine AS build\nFROM alpine\nCOPY --from=example/tools:1 /bin/tool /tool\n").unwrap();
     assert!(matches!(
         &recipe.stages[1].steps[0],
         Step::Copy {
@@ -145,10 +140,7 @@ fn expands_automatic_platform_arguments_and_from_selector() {
         .unwrap();
     assert_eq!(recipe.stages[0].platform, Some(build));
     assert_eq!(recipe.stages[1].platform, Some(target));
-    assert_eq!(
-        recipe.stages[1].runtime.environment["TARGET"],
-        "linux/arm/v7"
-    );
+    assert_eq!(recipe.stages[1].runtime.environment["TARGET"], "linux/arm/v7");
     assert_eq!(recipe.stages[1].runtime.environment["ARCH"], "arm");
     assert_eq!(recipe.stages[1].runtime.environment["VARIANT"], "v7");
     assert_eq!(recipe.stages[1].runtime.environment["BUILD"], "arm64");
@@ -161,10 +153,7 @@ fn parses_typed_run_cache_and_read_only_bind_mounts() {
             "FROM alpine AS source\nRUN echo x > /x\nFROM alpine\nRUN --mount=type=cache,id=compile,target=/cache,sharing=locked --mount=type=bind,from=source,source=/x,target=/input,ro cat /input > /result\n",
         )
         .unwrap();
-    let Step::Run {
-        command, mounts, ..
-    } = &recipe.stages[1].steps[0]
-    else {
+    let Step::Run { command, mounts, .. } = &recipe.stages[1].steps[0] else {
         panic!("expected RUN step");
     };
     assert_eq!(command, "cat /input > /result");
@@ -199,9 +188,9 @@ fn parses_typed_run_cache_and_read_only_bind_mounts() {
 #[test]
 fn parses_copy_excludes_parents_and_link_policy() {
     let recipe = Recipe::parse(
-            "FROM alpine\nCOPY --exclude=*.tmp --exclude=private/ --parents --link=false ./src/file /root/\n",
-        )
-        .unwrap();
+        "FROM alpine\nCOPY --exclude=*.tmp --exclude=private/ --parents --link=false ./src/file /root/\n",
+    )
+    .unwrap();
     assert!(matches!(
         &recipe.stages[0].steps[0],
         Step::Copy {
@@ -228,9 +217,9 @@ fn parses_copy_excludes_parents_and_link_policy() {
 fn parses_remote_add_checksum_and_rejects_git_sources() {
     let checksum = "a".repeat(64);
     let recipe = Recipe::parse(&format!(
-            "FROM alpine\nADD --checksum=sha256:{checksum} https://example.test/archive.tar /download\n"
-        ))
-        .unwrap();
+        "FROM alpine\nADD --checksum=sha256:{checksum} https://example.test/archive.tar /download\n"
+    ))
+    .unwrap();
     assert!(matches!(
         &recipe.stages[0].steps[0],
         Step::Copy {
@@ -265,14 +254,9 @@ fn rejects_malformed_configuration() {
 
 #[test]
 fn preserves_shell_and_exec_command_forms() {
-    let recipe =
-        Recipe::parse("FROM alpine AS exec\nCMD [\"echo\",\"hi\"]\nFROM alpine\nCMD [ -f /x ]\n")
-            .unwrap();
+    let recipe = Recipe::parse("FROM alpine AS exec\nCMD [\"echo\",\"hi\"]\nFROM alpine\nCMD [ -f /x ]\n").unwrap();
     assert_eq!(recipe.stages[0].runtime.command, ["echo", "hi"]);
-    assert_eq!(
-        recipe.stages[1].runtime.command,
-        ["/bin/sh", "-c", "[ -f /x ]"]
-    );
+    assert_eq!(recipe.stages[1].runtime.command, ["/bin/sh", "-c", "[ -f /x ]"]);
     assert!(Recipe::parse("FROM alpine\nCMD [\"echo\", 1]\n").is_err());
     assert!(Recipe::parse("FROM alpine\nCMD [not json]\n").is_err());
 }
@@ -300,11 +284,10 @@ fn command_healthcheck_and_duration_grammars_preserve_boundaries() {
         assert!(invalid.parse::<Duration>().is_err(), "accepted {invalid:?}");
     }
 
-    let health: serde_json::Value =
-        "--interval=1s --interval=2s --timeout=500ms --retries=3 CMD [\"check\",\"now\"]"
-            .parse::<Healthcheck>()
-            .unwrap()
-            .into();
+    let health: serde_json::Value = "--interval=1s --interval=2s --timeout=500ms --retries=3 CMD [\"check\",\"now\"]"
+        .parse::<Healthcheck>()
+        .unwrap()
+        .into();
     assert_eq!(health["Interval"], 2_000_000_000_u64);
     assert_eq!(health["Timeout"], 500_000_000_u64);
     assert_eq!(health["Retries"], 3_u64);
@@ -315,8 +298,7 @@ fn command_healthcheck_and_duration_grammars_preserve_boundaries() {
 
 #[test]
 fn parses_escape_directive_and_continuation() {
-    let recipe =
-        Recipe::parse("# escape=`\nFROM alpine\nRUN echo first `\n && echo second\n").unwrap();
+    let recipe = Recipe::parse("# escape=`\nFROM alpine\nRUN echo first `\n && echo second\n").unwrap();
     assert!(matches!(
         &recipe.stages[0].steps[0],
         Step::Run { command, .. } if command == "echo first  && echo second"
@@ -330,13 +312,8 @@ fn lexical_entities_preserve_quotes_escapes_and_long_continuations() {
         ["one", "two three", "four five", "six seven"]
     );
     assert_eq!(
-        Assignments::new(r#"A="one two" B=three\ four"#)
-            .parse()
-            .unwrap(),
-        [
-            ("A".into(), "one two".into()),
-            ("B".into(), "three four".into())
-        ]
+        Assignments::new(r#"A="one two" B=three\ four"#).parse().unwrap(),
+        [("A".into(), "one two".into()), ("B".into(), "three four".into())]
     );
     assert!(Assignments::new(r#"A="unterminated"#).parse().is_err());
     assert_eq!(
@@ -376,9 +353,7 @@ fn rejects_unterminated_variable_substitution() {
     ] {
         let error = Recipe::parse(dockerfile).unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("unterminated variable substitution"),
+            error.to_string().contains("unterminated variable substitution"),
             "unexpected error for {dockerfile:?}: {error}"
         );
     }
@@ -386,14 +361,9 @@ fn rejects_unterminated_variable_substitution() {
 
 #[test]
 fn normalizes_workdir_parent_components() {
-    let recipe = Recipe::parse(
-        "FROM alpine\nWORKDIR /workspace/one\nWORKDIR ../two\nWORKDIR ./three/../four\n",
-    )
-    .unwrap();
-    assert_eq!(
-        recipe.stages[0].runtime.working_directory,
-        "/workspace/two/four"
-    );
+    let recipe =
+        Recipe::parse("FROM alpine\nWORKDIR /workspace/one\nWORKDIR ../two\nWORKDIR ./three/../four\n").unwrap();
+    assert_eq!(recipe.stages[0].runtime.working_directory, "/workspace/two/four");
 }
 
 #[test]
@@ -402,22 +372,14 @@ fn rejects_malformed_environment_and_label_assignments() {
     assert_eq!(recipe.stages[0].runtime.environment["A"], "1");
     assert_eq!(recipe.stages[0].runtime.environment["B"], "two");
     assert_eq!(recipe.stages[0].labels["owner"], "husklet");
-    for dockerfile in [
-        "FROM alpine\nLABEL A=1 broken\n",
-        "FROM alpine\nENV A=\"unterminated\n",
-    ] {
-        assert!(
-            Recipe::parse(dockerfile).is_err(),
-            "accepted {dockerfile:?}"
-        );
+    for dockerfile in ["FROM alpine\nLABEL A=1 broken\n", "FROM alpine\nENV A=\"unterminated\n"] {
+        assert!(Recipe::parse(dockerfile).is_err(), "accepted {dockerfile:?}");
     }
 }
 
 #[test]
 fn parses_numeric_copy_ownership() {
-    let recipe =
-        Recipe::parse("FROM alpine\nCOPY --chown=12:34 one /one\nADD --chown=56 two /two\n")
-            .unwrap();
+    let recipe = Recipe::parse("FROM alpine\nCOPY --chown=12:34 one /one\nADD --chown=56 two /two\n").unwrap();
     assert!(matches!(
         recipe.stages[0].steps[0],
         Step::Copy {
@@ -454,9 +416,6 @@ fn parses_image_metadata_instructions() {
         ["53/udp", "80/tcp"]
     );
     assert_eq!(stage.volumes.iter().cloned().collect::<Vec<_>>(), ["/data"]);
-    assert_eq!(
-        stage.healthcheck.as_ref().unwrap()["Interval"],
-        5_000_000_000_u64
-    );
+    assert_eq!(stage.healthcheck.as_ref().unwrap()["Interval"], 5_000_000_000_u64);
     assert_eq!(stage.healthcheck.as_ref().unwrap()["Retries"], 3);
 }

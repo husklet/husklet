@@ -41,9 +41,7 @@ pub(crate) use log::LogEncoder;
 pub use log::{ContainerLogs, LogOptions, LogProtocolError, LogStreams};
 pub use process::{EnvError, EnvVar, EnvVars};
 pub use stats::{BlockIo, Cpu, CpuUsage, Memory, Pids, Stats, Throttling, Top};
-pub use system::{
-    BuildCache, BuildCacheKind, DiskUsage, Plugin, SystemInfo, SystemPrune, Version,
-};
+pub use system::{DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version, VolumeUsage};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DockerError {

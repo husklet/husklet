@@ -7,11 +7,11 @@ use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
+    Descriptor, Digest, Error, Image, Reference, Result,
     content::{FsStore, Store},
     copy_graph,
     remote::{BlobStream, Source},
     transfer::{CopyReport, Target},
-    Descriptor, Digest, Error, Image, Reference, Result,
 };
 
 const LAYOUT_VERSION: &str = "1.0.0";
@@ -34,23 +34,21 @@ impl Layout {
         let layout = Self { root };
         let marker = layout.root.join("oci-layout");
         if marker.exists() {
-            let value: serde_json::Value =
-                serde_json::from_slice(&tokio::fs::read(&marker).await?)?;
-            if value
-                .get("imageLayoutVersion")
-                .and_then(serde_json::Value::as_str)
-                != Some(LAYOUT_VERSION)
-            {
+            let value: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&marker).await?)?;
+            if value.get("imageLayoutVersion").and_then(serde_json::Value::as_str) != Some(LAYOUT_VERSION) {
                 return Err(Error::MalformedOci("unsupported OCI layout version".into()));
             }
         } else {
-            layout
-                .publish(&marker, br#"{"imageLayoutVersion":"1.0.0"}"#)
-                .await?;
+            layout.publish(&marker, br#"{"imageLayoutVersion":"1.0.0"}"#).await?;
         }
         let index = layout.root.join("index.json");
         if !index.exists() {
-            layout.publish(&index, br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}"#).await?;
+            layout
+                .publish(
+                    &index,
+                    br#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}"#,
+                )
+                .await?;
         }
         Ok(layout)
     }
@@ -178,12 +176,10 @@ impl Source for Layout {
 impl Target for Layout {
     async fn contains(&self, descriptor: &Descriptor) -> Result<bool> {
         let digest: Digest = descriptor.digest().to_string().parse()?;
-        match tokio::fs::symlink_metadata(self.root.join("blobs/sha256").join(digest.encoded()))
-            .await
-        {
-            Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::InvalidMetadata(
-                format!("layout blob {digest} is a symlink"),
-            )),
+        match tokio::fs::symlink_metadata(self.root.join("blobs/sha256").join(digest.encoded())).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(Error::InvalidMetadata(format!("layout blob {digest} is a symlink")))
+            }
             Ok(metadata) => Ok(metadata.is_file()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error.into()),
@@ -207,12 +203,10 @@ impl Target for Layout {
         let mut hash = Sha256::new();
         while let Some(chunk) = content.next().await {
             let chunk = chunk?;
-            size = size
-                .checked_add(chunk.len() as u64)
-                .ok_or(Error::SizeMismatch {
-                    expected: descriptor.size(),
-                    actual: u64::MAX,
-                })?;
+            size = size.checked_add(chunk.len() as u64).ok_or(Error::SizeMismatch {
+                expected: descriptor.size(),
+                actual: u64::MAX,
+            })?;
             if size > descriptor.size() {
                 let _ = tokio::fs::remove_file(&temporary).await;
                 return Err(Error::SizeMismatch {

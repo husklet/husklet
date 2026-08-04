@@ -15,8 +15,7 @@ impl EpollInterest {
     pub const EXCLUSIVE: u32 = 1 << 28;
     pub const ONESHOT: u32 = 1 << 30;
     pub const EDGE_TRIGGERED: u32 = 1 << 31;
-    const READINESS: u32 =
-        Self::READ | Self::WRITE | Self::PRIORITY | Self::ERROR | Self::HANGUP | Self::READ_HANGUP;
+    const READINESS: u32 = Self::READ | Self::WRITE | Self::PRIORITY | Self::ERROR | Self::HANGUP | Self::READ_HANGUP;
     const ALLOWED: u32 = Self::READINESS | Self::EXCLUSIVE | Self::ONESHOT | Self::EDGE_TRIGGERED;
 
     #[must_use]

@@ -4,12 +4,7 @@ use super::support::*;
 async fn container_update_persists_effective_settings_and_rejects_unknown_fields() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     let socket = root.path().join("run/docker.sock");
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn({
@@ -70,9 +65,7 @@ async fn container_update_persists_effective_settings_and_rejects_unknown_fields
         .update(
             &created.id,
             &hl_client::model::Update {
-                unsupported: [("CpuShares".into(), serde_json::json!(128))]
-                    .into_iter()
-                    .collect(),
+                unsupported: [("CpuShares".into(), serde_json::json!(128))].into_iter().collect(),
                 ..Default::default()
             },
         )
@@ -86,11 +79,7 @@ async fn container_update_persists_effective_settings_and_rejects_unknown_fields
         }
     ));
 
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }

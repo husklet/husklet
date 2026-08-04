@@ -30,7 +30,7 @@ impl MemoryAccount {
     }
 }
 
-impl hl_runtime::BrkAccount for MemoryAccount {
+impl hl_runtime::AnonymousMemoryAccount for MemoryAccount {
     fn reserve(&self, bytes: u64) -> bool {
         let mut current = self.current.lock().unwrap_or_else(|error| error.into_inner());
         let Some(next) = current.checked_add(bytes).filter(|next| *next <= self.limit) else {
@@ -55,7 +55,7 @@ impl hl_runtime::BrkAccount for MemoryAccount {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hl_runtime::BrkAccount;
+    use hl_runtime::AnonymousMemoryAccount;
 
     #[test]
     fn current_updates_visible_memory() {

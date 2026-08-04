@@ -26,13 +26,9 @@ impl Containers {
     pub async fn filesystem_usage(&self, reference: &str) -> Result<FilesystemUsage> {
         let container = self.inspect(reference).await?;
         let writable = match &container.spec.rootfs {
-            crate::Rootfs::Image(rootfs) if rootfs.overlay().is_some() => Some(
-                self.images()?
-                    .roots()
-                    .open_overlay(rootfs)?
-                    .upper()
-                    .to_owned(),
-            ),
+            crate::Rootfs::Image(rootfs) if rootfs.overlay().is_some() => {
+                Some(self.images()?.roots().open_overlay(rootfs)?.upper().to_owned())
+            }
             crate::Rootfs::Image(_) | crate::Rootfs::Directory(_) => None,
         };
         let filesystem = self.filesystem(reference).await?;

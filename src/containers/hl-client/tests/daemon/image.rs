@@ -21,9 +21,7 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
             .unwrap();
         Digest::sha256(&config).to_string()
     };
-    tokio::fs::write(&archive_path, &archive)
-        .await
-        .unwrap();
+    tokio::fs::write(&archive_path, &archive).await.unwrap();
     let client = &daemon.client;
     let quiet = client
         .images()
@@ -38,36 +36,21 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
         .load(tokio::fs::File::open(&archive_path).await.unwrap())
         .await
         .unwrap();
-    assert_eq!(
-        loaded.stream,
-        "Loaded image: docker.io/scenario/fixture:v1\n"
-    );
+    assert_eq!(loaded.stream, "Loaded image: docker.io/scenario/fixture:v1\n");
     let listed = client.images().list().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].repo_tags, ["docker.io/scenario/fixture:v1"]);
 
-    let inspected = client
-        .images()
-        .inspect("scenario/fixture:v1")
-        .await
-        .unwrap();
+    let inspected = client.images().inspect("scenario/fixture:v1").await.unwrap();
     assert_eq!(inspected.id, listed[0].id);
     assert_eq!(inspected.id, expected_id);
     assert_eq!(inspected.os, "linux");
     assert_eq!(inspected.architecture, "arm64");
     assert_eq!(inspected.created, "2026-07-15T12:34:56Z");
-    let distribution = client
-        .images()
-        .distribution("scenario/fixture:v1")
-        .await
-        .unwrap();
+    let distribution = client.images().distribution("scenario/fixture:v1").await.unwrap();
     assert_ne!(distribution.descriptor.digest().to_string(), inspected.id);
     assert_eq!(distribution.platforms, [Platform::linux_arm64()]);
-    let history = client
-        .images()
-        .history("scenario/fixture:v1")
-        .await
-        .unwrap();
+    let history = client.images().history("scenario/fixture:v1").await.unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].id, inspected.id);
     assert_eq!(history[0].created, 1_784_118_896);
@@ -139,11 +122,7 @@ async fn image_archive_tag_save_remove_and_prune_share_wire_contracts() {
         ));
     }
 
-    let mut archive = client
-        .images()
-        .save(&["docker.io/scenario/copy:v2"])
-        .await
-        .unwrap();
+    let mut archive = client.images().save(&["docker.io/scenario/copy:v2"]).await.unwrap();
     let mut saved = Vec::new();
     while let Some(chunk) = archive.next_chunk().await.unwrap() {
         saved.extend_from_slice(&chunk);
@@ -154,15 +133,10 @@ async fn image_archive_tag_save_remove_and_prune_share_wire_contracts() {
         .unwrap()
         .map(|entry| entry.unwrap().path().unwrap().into_owned())
         .collect();
-    assert!(paths
-        .iter()
-        .any(|path| path == std::path::Path::new("manifest.json")));
+    assert!(paths.iter().any(|path| path == std::path::Path::new("manifest.json")));
 
     let removed = client.images().remove("scenario/copy:v2").await.unwrap();
-    assert_eq!(
-        removed[0].untagged.as_deref(),
-        Some("docker.io/scenario/copy:v2")
-    );
+    assert_eq!(removed[0].untagged.as_deref(), Some("docker.io/scenario/copy:v2"));
     assert_eq!(client.images().list().await.unwrap()[0].repo_tags.len(), 1);
     let pruned = client.images().prune().await.unwrap();
     assert!(pruned.images_deleted.is_empty());
@@ -175,12 +149,7 @@ async fn image_archive_tag_save_remove_and_prune_share_wire_contracts() {
 async fn build_accepts_the_standard_bridge_network_mode() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     let socket = root.path().join("run/docker.sock");
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn({
@@ -210,11 +179,7 @@ async fn build_accepts_the_standard_bridge_network_mode() {
         .await
         .unwrap();
     assert!(id.starts_with("sha256:"));
-    let image = client
-        .images()
-        .inspect("scenario/bridge-build:v1")
-        .await
-        .unwrap();
+    let image = client.images().inspect("scenario/bridge-build:v1").await.unwrap();
     assert_eq!(image.config.labels["test.network"], "bridge");
 
     stop.send(()).unwrap();
@@ -249,12 +214,7 @@ async fn build_accepts_an_existing_named_network_and_rejects_a_missing_one() {
     };
     let id = client
         .images()
-        .build_with_network(
-            context(),
-            "scenario/named-network-build:v1",
-            None,
-            "build-backend",
-        )
+        .build_with_network(context(), "scenario/named-network-build:v1", None, "build-backend")
         .await
         .unwrap();
     assert!(id.starts_with("sha256:"));
@@ -282,21 +242,13 @@ async fn build_accepts_an_existing_named_network_and_rejects_a_missing_one() {
     client.containers().start(&container.id).await.unwrap();
     let status = client.containers().wait(&container.id).await.unwrap();
     assert_eq!(status.status_code, 0);
-    let logs = client
-        .containers()
-        .logs(&container.id, true, true)
-        .await
-        .unwrap();
+    let logs = client.containers().logs(&container.id, true, true).await.unwrap();
     assert!(
         String::from_utf8_lossy(&logs.stdout).contains("10.77.0."),
         "RUN network snapshot did not contain the named subnet: {:?}",
         String::from_utf8_lossy(&logs.stdout)
     );
-    client
-        .containers()
-        .remove(&container.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&container.id, false, false).await.unwrap();
 
     let error = client
         .images()
@@ -310,11 +262,7 @@ async fn build_accepts_an_existing_named_network_and_rejects_a_missing_one() {
             ..
         }
     ));
-    assert!(client
-        .images()
-        .inspect("scenario/missing-network:v1")
-        .await
-        .is_err());
+    assert!(client.images().inspect("scenario/missing-network:v1").await.is_err());
     assert!(client.containers().list(true).await.unwrap().is_empty());
 
     daemon.stop().await;

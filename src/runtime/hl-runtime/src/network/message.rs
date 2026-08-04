@@ -383,7 +383,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
             };
             return match staged.commit(&GuestMarshaller::new(&self.memory, self.architecture)) {
-                Ok(()) => LinuxResult::Value(if flags & MSG_TRUNC != 0 { full as u64 } else { count as u64 }),
+                Ok(()) => LinuxResult::Value(if flags & MSG_TRUNC != 0 {
+                    full as u64
+                } else {
+                    count as u64
+                }),
                 Err(error) => LinuxResult::Error(SocketErrno::marshal(error)),
             };
         }

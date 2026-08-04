@@ -8,9 +8,7 @@ impl Volumes {
         let _guard = self.operation.lock().await;
         for mount in mounts.iter().filter(|mount| mount.populate) {
             let name = match &mount.source {
-                MountSource::Volume(name)
-                | MountSource::Anonymous(name)
-                | MountSource::Tmpfs(name) => name,
+                MountSource::Volume(name) | MountSource::Anonymous(name) | MountSource::Tmpfs(name) => name,
                 MountSource::Bind(_) => {
                     return Err(Error::InvalidSpec(
                         "bind mounts cannot request rootfs population".into(),
@@ -46,9 +44,7 @@ impl Volumes {
                     source.display()
                 )));
             }
-            if let Err(error) =
-                Directory::from(&canonical_source).copy_to(&Directory::from(&volume.path))
-            {
+            if let Err(error) = Directory::from(&canonical_source).copy_to(&Directory::from(&volume.path)) {
                 Directory::from(&volume.path).clear().await?;
                 return Err(error.into());
             }
@@ -63,10 +59,7 @@ impl Volumes {
         for volume in &volumes {
             if let VolumeSource::Bind { device, .. } = &volume.source {
                 let canonical = tokio::fs::canonicalize(device).await.map_err(|error| {
-                    Error::Corrupt(format!(
-                        "volume {:?} bind device is unavailable: {error}",
-                        volume.name
-                    ))
+                    Error::Corrupt(format!("volume {:?} bind device is unavailable: {error}", volume.name))
                 })?;
                 let directory = tokio::fs::metadata(&canonical).await?.is_dir();
                 if canonical != *device || !directory {
@@ -114,16 +107,10 @@ mod tests {
         std::fs::create_dir_all(root.join(".create/recovered/_data")).unwrap();
         let root = std::fs::canonicalize(root).unwrap();
         let storage = Arc::new(Memory::default());
-        let volume = Volume::from_spec(
-            VolumeSpec::new("recovered"),
-            root.join("recovered/_data"),
-            now_ms(),
-        );
+        let volume = Volume::from_spec(VolumeSpec::new("recovered"), root.join("recovered/_data"), now_ms());
         storage.insert(&volume).await.unwrap();
 
-        let volumes = Volumes::open(storage.clone(), storage, root.clone())
-            .await
-            .unwrap();
+        let volumes = Volumes::open(storage.clone(), storage, root.clone()).await.unwrap();
         assert_eq!(volumes.inspect("recovered").await.unwrap(), volume);
         assert!(root.join("recovered/_data").is_dir());
         assert!(!root.join(".create/recovered").exists());
@@ -144,19 +131,9 @@ mod tests {
         std::fs::create_dir_all(root.join(".create/abandoned")).unwrap();
         std::fs::create_dir_all(root.join("unknown")).unwrap();
 
-        let reopened = Volumes::open(storage.clone(), storage, root.clone())
-            .await
-            .unwrap();
+        let reopened = Volumes::open(storage.clone(), storage, root.clone()).await.unwrap();
         assert_eq!(
-            std::fs::read(
-                reopened
-                    .inspect("restored")
-                    .await
-                    .unwrap()
-                    .path()
-                    .join("payload")
-            )
-            .unwrap(),
+            std::fs::read(reopened.inspect("restored").await.unwrap().path().join("payload")).unwrap(),
             b"kept"
         );
         assert!(!root.join(".trash/abandoned").exists());
@@ -186,10 +163,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            std::fs::read(volume.path().join("nested/value")).unwrap(),
-            b"inside"
-        );
+        assert_eq!(std::fs::read(volume.path().join("nested/value")).unwrap(), b"inside");
         assert!(!volume.path().join("outside").exists());
     }
 }

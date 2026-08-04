@@ -38,9 +38,7 @@ impl Builder {
                 source,
                 sources: selected,
                 target,
-                directory: directory
-                    .as_deref()
-                    .unwrap_or(&context.inherited.working_directory),
+                directory: directory.as_deref().unwrap_or(&context.inherited.working_directory),
                 destination: context.root,
                 unpack,
                 mode: *mode,
@@ -66,17 +64,16 @@ impl Builder {
         match from {
             None => apply(context.context.root(), &local, *unpack),
             Some(CopySource::Stage(index)) => {
-                let source = context.built.get(*index).ok_or_else(|| {
-                    hl_images::Error::MalformedOci("COPY depends on an unavailable stage".into())
-                })?;
+                let source = context
+                    .built
+                    .get(*index)
+                    .ok_or_else(|| hl_images::Error::MalformedOci("COPY depends on an unavailable stage".into()))?;
                 apply(source.root.path(), &local, *unpack)
             }
             Some(CopySource::Image(reference)) => {
                 let images = self.containers.images()?;
                 let image = images.resolve(reference)?.ok_or_else(|| {
-                    hl_images::Error::InvalidMetadata(format!(
-                        "COPY source image {reference} is not local"
-                    ))
+                    hl_images::Error::InvalidMetadata(format!("COPY source image {reference} is not local"))
                 })?;
                 let unpacked = images.unpack(&image, &self.platform)?;
                 let owned = images.rootfs(&unpacked)?;
@@ -100,10 +97,7 @@ impl<'a> Accounts<'a> {
 
     fn resolve(&self, value: &OwnershipSpec) -> Result<Ownership, BuildError> {
         if let (Account::Id(uid), None) = (&value.user, &value.group) {
-            return Ok(Ownership {
-                uid: *uid,
-                gid: *uid,
-            });
+            return Ok(Ownership { uid: *uid, gid: *uid });
         }
         let mut identity = value.user.to_string();
         if let Some(group) = &value.group {
@@ -112,12 +106,10 @@ impl<'a> Accounts<'a> {
         }
         let (uid, gid) = Process::resolve_user(&identity, self.root)?;
         Ok(Ownership {
-            uid: u32::try_from(uid).map_err(|_| {
-                hl_images::Error::MalformedOci(format!("COPY --chown uid {uid} is invalid"))
-            })?,
-            gid: u32::try_from(gid).map_err(|_| {
-                hl_images::Error::MalformedOci(format!("COPY --chown gid {gid} is invalid"))
-            })?,
+            uid: u32::try_from(uid)
+                .map_err(|_| hl_images::Error::MalformedOci(format!("COPY --chown uid {uid} is invalid")))?,
+            gid: u32::try_from(gid)
+                .map_err(|_| hl_images::Error::MalformedOci(format!("COPY --chown gid {gid} is invalid")))?,
         })
     }
 }
@@ -131,11 +123,7 @@ pub(super) struct CopyContext<'a> {
     pub(super) remotes: &'a RemoteSources,
 }
 
-pub(super) fn copy_root(
-    source: &Path,
-    ownerships: &Ownerships,
-    target: &Path,
-) -> Result<Ownerships, BuildError> {
+pub(super) fn copy_root(source: &Path, ownerships: &Ownerships, target: &Path) -> Result<Ownerships, BuildError> {
     let mut bytes = Vec::new();
     ownerships.archive(source, &mut bytes)?;
     let mut copied = Ownerships::memory();
@@ -198,17 +186,10 @@ impl Archive {
         Ok(end.iter().all(|byte| *byte == 0))
     }
 
-    fn unpack(
-        self,
-        source: &Path,
-        destination: &Path,
-        ownerships: &mut Ownerships,
-    ) -> Result<(), BuildError> {
+    fn unpack(self, source: &Path, destination: &Path, ownerships: &mut Ownerships) -> Result<(), BuildError> {
         match self {
-            Self::Gzip => hl_images::layer::Layer::new(flate2::read::GzDecoder::new(
-                std::fs::File::open(source)?,
-            ))
-            .apply_with_ownership(destination, ownerships)?,
+            Self::Gzip => hl_images::layer::Layer::new(flate2::read::GzDecoder::new(std::fs::File::open(source)?))
+                .apply_with_ownership(destination, ownerships)?,
             Self::Tar => hl_images::layer::Layer::new(std::fs::File::open(source)?)
                 .apply_with_ownership(destination, ownerships)?,
         };
@@ -290,9 +271,7 @@ impl Copy<'_> {
             copied = copied.saturating_add(1);
         }
         if copied == 0 {
-            return Err(BuildError::Copy(
-                "all COPY/ADD sources were excluded".into(),
-            ));
+            return Err(BuildError::Copy("all COPY/ADD sources were excluded".into()));
         }
         Ok(())
     }
@@ -326,19 +305,12 @@ impl Copy<'_> {
                 .components()
                 .any(|component| !matches!(component, std::path::Component::Normal(_)))
         {
-            return Err(BuildError::Copy(format!(
-                "invalid --parents source {value:?}"
-            )));
+            return Err(BuildError::Copy(format!("invalid --parents source {value:?}")));
         }
         Ok(path.into())
     }
 
-    fn append<W: Write>(
-        &self,
-        archive: &mut tar::Builder<W>,
-        source: &Path,
-        target: &Path,
-    ) -> Result<(), BuildError> {
+    fn append<W: Write>(&self, archive: &mut tar::Builder<W>, source: &Path, target: &Path) -> Result<(), BuildError> {
         archive.append_dir(target, source)?;
         self.append_children(archive, source, source, target)
     }

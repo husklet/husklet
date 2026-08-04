@@ -36,18 +36,8 @@ fn build_network_policy_maps_to_valid_container_specs() {
 fn build_cache_identity_is_deterministic() {
     let arguments = BTreeMap::from([("MODE".into(), "release".into())]);
     let context = [0x5a; 32];
-    let first = build_cache_key(
-        "FROM scratch\nRUN true\n",
-        &arguments,
-        Some("runtime"),
-        context,
-    );
-    let second = build_cache_key(
-        "FROM scratch\nRUN true\n",
-        &arguments,
-        Some("runtime"),
-        context,
-    );
+    let first = build_cache_key("FROM scratch\nRUN true\n", &arguments, Some("runtime"), context);
+    let second = build_cache_key("FROM scratch\nRUN true\n", &arguments, Some("runtime"), context);
     assert_eq!(first, second);
     assert_eq!(first.len(), 64);
     assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));

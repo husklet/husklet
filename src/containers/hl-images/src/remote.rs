@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::{stream, Stream, StreamExt};
-use oci_client::{secrets::RegistryAuth, Client};
+use futures_util::{Stream, StreamExt, stream};
+use oci_client::{Client, secrets::RegistryAuth};
 use std::pin::Pin;
 use tokio::io::AsyncReadExt;
 
-use crate::{content::FsStore, Descriptor, Digest, Error, Image, Reference, Result};
+use crate::{Descriptor, Digest, Error, Image, Reference, Result, content::FsStore};
 
 pub(crate) const MANIFEST_MEDIA_TYPES: &[&str] = &[
     "application/vnd.oci.image.manifest.v1+json",
@@ -28,9 +28,7 @@ impl Auth {
     fn registry(&self) -> RegistryAuth {
         match self {
             Self::Anonymous => RegistryAuth::Anonymous,
-            Self::Basic { username, password } => {
-                RegistryAuth::Basic(username.clone(), password.clone())
-            }
+            Self::Basic { username, password } => RegistryAuth::Basic(username.clone(), password.clone()),
             Self::Bearer(token) => RegistryAuth::Bearer(token.clone()),
         }
     }
@@ -78,18 +76,12 @@ impl Registry {
     pub async fn push(&self, image: &Image, target: &Reference, content: &FsStore) -> Result<()> {
         let remote = target.remote()?;
         self.client
-            .auth(
-                &remote,
-                &self.auth.registry(),
-                oci_client::RegistryOperation::Push,
-            )
+            .auth(&remote, &self.auth.registry(), oci_client::RegistryOperation::Push)
             .await
             .map_err(Self::error)?;
-        let manifest = content
-            .read_bounded(&image.target, 16 * 1024 * 1024)
-            .await?;
-        let document: Manifest = serde_json::from_slice(&manifest)
-            .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let manifest = content.read_bounded(&image.target, 16 * 1024 * 1024).await?;
+        let document: Manifest =
+            serde_json::from_slice(&manifest).map_err(|error| Error::MalformedOci(error.to_string()))?;
         for descriptor in std::iter::once(&document.config).chain(&document.layers) {
             let digest: Digest = descriptor.digest().to_string().parse()?;
             Self::verify(content.path(&digest), descriptor).await?;
@@ -104,9 +96,7 @@ impl Registry {
             .media_type()
             .to_string()
             .parse()
-            .map_err(|error| {
-                Error::MalformedOci(format!("invalid manifest media type: {error}"))
-            })?;
+            .map_err(|error| Error::MalformedOci(format!("invalid manifest media type: {error}")))?;
         self.client
             .push_manifest_raw(&remote, manifest, media)
             .await
@@ -124,19 +114,12 @@ impl Registry {
         subject: &Digest,
         artifact_type: Option<&str>,
     ) -> Result<Vec<Descriptor>> {
-        let reference: oci_client::Reference = format!(
-            "{}/{}@{subject}",
-            repository.registry(),
-            repository.repository()
-        )
-        .parse()
-        .map_err(|error| Error::InvalidReference(format!("{error}")))?;
+        let reference: oci_client::Reference =
+            format!("{}/{}@{subject}", repository.registry(), repository.repository())
+                .parse()
+                .map_err(|error| Error::InvalidReference(format!("{error}")))?;
         self.client
-            .auth(
-                &reference,
-                &self.auth.registry(),
-                oci_client::RegistryOperation::Pull,
-            )
+            .auth(&reference, &self.auth.registry(), oci_client::RegistryOperation::Pull)
             .await
             .map_err(Self::error)?;
         let index = self
@@ -158,10 +141,8 @@ impl Registry {
             .get("mediaType")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| Error::MalformedOci("manifest has no mediaType".into()))?;
-        serde_json::from_value(
-            serde_json::json!({ "mediaType": media_type, "digest": digest, "size": bytes.len() }),
-        )
-        .map_err(Into::into)
+        serde_json::from_value(serde_json::json!({ "mediaType": media_type, "digest": digest, "size": bytes.len() }))
+            .map_err(Into::into)
     }
 
     async fn stream(

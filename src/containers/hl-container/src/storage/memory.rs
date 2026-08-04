@@ -1,7 +1,6 @@
 use super::{Containers, Execs, Logs, NetworkStore, VolumeStore};
 use crate::{
-    model::now_ms, Container, ContainerId, Entry, Error, Exec, ExecId, JournalId, Network, Result,
-    Stream, Volume,
+    Container, ContainerId, Entry, Error, Exec, ExecId, JournalId, Network, Result, Stream, Volume, model::now_ms,
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -117,10 +116,7 @@ impl Execs for Memory {
     }
 
     async fn remove_parent(&self, id: &ContainerId) -> Result<()> {
-        self.execs
-            .write()
-            .await
-            .retain(|_, exec| &exec.container != id);
+        self.execs.write().await.retain(|_, exec| &exec.container != id);
         Ok(())
     }
 }
@@ -136,10 +132,7 @@ impl Containers for Memory {
     async fn insert(&self, container: &Container) -> Result<()> {
         let mut values = self.values.write().await;
         if values.contains_key(&container.id) {
-            return Err(Error::Corrupt(format!(
-                "duplicate container {}",
-                container.id
-            )));
+            return Err(Error::Corrupt(format!("duplicate container {}", container.id)));
         }
         values.insert(container.id.clone(), container.clone());
         Ok(())

@@ -1,12 +1,17 @@
+mod worker;
+
 use super::{Error, definition::App, image::TestImage};
 use crate::suite::Target;
 use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
-use std::sync::Arc;
-use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+use serde::{Deserialize, Serialize};
+use std::{fs, sync::Arc, time::Duration};
 use tokio::time::Instant;
+
+pub(crate) use worker::Options as WorkerOptions;
 
 const CAPTURE_LIMIT: usize = 1024 * 1024;
 
+#[derive(Clone, Deserialize, Serialize)]
 pub enum CaseResult {
     Passed(String, Option<u16>),
     Failed(String, Option<u16>, String),
@@ -28,6 +33,19 @@ impl CaseResult {
 }
 
 pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Result<Vec<CaseResult>, Error> {
+    let case = &app.cases[case_index];
+    let timeout = case.soak.as_ref().map_or_else(
+        || Duration::from_secs(case.timeout),
+        super::scheduler::Plan::total_duration,
+    );
+    worker::run(&app.name, &case.id, target, timeout).await
+}
+
+pub(crate) async fn worker(options: WorkerOptions) -> Result<(), Error> {
+    worker::execute(options).await
+}
+
+async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Result<Vec<CaseResult>, Error> {
     let execution = app.execution.container()?;
     let building = Arc::clone(&app);
     let artifact = tokio::task::spawn_blocking(move || {
@@ -47,12 +65,26 @@ pub async fn run_case(app: Arc<App>, case_index: usize, target: Target) -> Resul
         fs::create_dir_all(parent)?;
     }
     fs::copy(&artifact, &destination)?;
-    fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))?;
+    make_executable(&destination)?;
     let results = CaseExecution::new(&app, case, target, fixture.path(), &containers, execution)
         .run()
         .await;
     fixture.release()?;
     Ok(results)
+}
+
+#[cfg(unix)]
+fn make_executable(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(windows)]
+fn make_executable(_path: &std::path::Path) -> std::io::Result<()> {
+    // Windows has no executable permission bit. The guest loader consumes the
+    // staged Linux image as bytes, so copying it completed this host-side step.
+    Ok(())
 }
 
 struct CaseExecution<'a> {

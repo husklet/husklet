@@ -6,14 +6,14 @@ mod filesystem;
 mod image;
 mod lifecycle;
 
+pub use builder::Builder;
 #[cfg(test)]
 pub(crate) use builder::test_containers;
-pub use builder::Builder;
 pub use filesystem::FilesystemUsage;
 pub use image::CommitMetadata;
 pub use lifecycle::{LifecycleAction, LifecycleEvent, LifecycleEvents};
 
-use crate::{service::Service, Config};
+use crate::{Config, service::Service};
 use std::sync::Arc;
 
 /// Cheaply clonable, headless container lifecycle service.

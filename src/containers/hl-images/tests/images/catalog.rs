@@ -10,11 +10,7 @@ fn image_catalog_writer_process() {
     };
     let writer = std::env::var("HL_IMAGE_WRITER_ID").unwrap();
     let store = FsImageStore::open(&root).unwrap();
-    std::fs::write(
-        std::path::Path::new(&root).join(format!("ready-{writer}")),
-        b"",
-    )
-    .unwrap();
+    std::fs::write(std::path::Path::new(&root).join(format!("ready-{writer}")), b"").unwrap();
     while !std::path::Path::new(&root).join("go").exists() {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
@@ -89,18 +85,10 @@ fn catalog_keeps_colliding_legacy_path_spellings_distinct_without_path_projectio
         target: descriptor("application/vnd.oci.image.manifest.v1+json", b"second"),
     };
     store.put_all([first.clone(), second.clone()]).unwrap();
-    assert_eq!(
-        store.get(&first.name).unwrap().unwrap().target,
-        first.target
-    );
-    assert_eq!(
-        store.get(&second.name).unwrap().unwrap().target,
-        second.target
-    );
+    assert_eq!(store.get(&first.name).unwrap().unwrap().target, first.target);
+    assert_eq!(store.get(&second.name).unwrap().unwrap().target, second.target);
     assert!("../outside:latest".parse::<Reference>().is_err());
-    assert!("host/repository/../../outside:latest"
-        .parse::<Reference>()
-        .is_err());
+    assert!("host/repository/../../outside:latest".parse::<Reference>().is_err());
 }
 
 #[test]
@@ -111,11 +99,7 @@ fn concurrent_processes_preserve_every_catalog_name() {
     let mut children = (0..WRITERS)
         .map(|writer| {
             std::process::Command::new(&executable)
-                .args([
-                    "--ignored",
-                    "--exact",
-                    "suite::catalog::image_catalog_writer_process",
-                ])
+                .args(["--ignored", "--exact", "suite::catalog::image_catalog_writer_process"])
                 .env("HL_IMAGE_WRITER_ROOT", temp.path())
                 .env("HL_IMAGE_WRITER_ID", writer.to_string())
                 .spawn()
@@ -124,10 +108,7 @@ fn concurrent_processes_preserve_every_catalog_name() {
         .collect::<Vec<_>>();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while (0..WRITERS).any(|writer| !temp.path().join(format!("ready-{writer}")).exists()) {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "writers did not become ready"
-        );
+        assert!(std::time::Instant::now() < deadline, "writers did not become ready");
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
     std::fs::write(temp.path().join("go"), b"").unwrap();
@@ -153,10 +134,7 @@ fn build_cache_graphs_are_prunable_independently_of_ordinary_tags() {
         target: descriptor("application/vnd.oci.image.manifest.v1+json", b"cache"),
     };
     store.put_all([ordinary.clone(), cache.clone()]).unwrap();
-    let selected = BTreeSet::from([
-        ordinary.target.digest().to_string(),
-        cache.target.digest().to_string(),
-    ]);
+    let selected = BTreeSet::from([ordinary.target.digest().to_string(), cache.target.digest().to_string()]);
     let removed = store.remove_graphs(&selected).unwrap();
     assert_eq!(removed.len(), 1);
     assert_eq!(removed[0].digest(), cache.target.digest());
@@ -172,16 +150,13 @@ fn build_cache_graphs_are_prunable_independently_of_ordinary_tags() {
         name: "hl-build-cache/mixed:v1".parse().unwrap(),
         target: shared,
     };
-    store
-        .put_all([cache_alias.clone(), ordinary_alias.clone()])
-        .unwrap();
-    assert!(store
-        .remove_graphs(&BTreeSet::from([ordinary_alias
-            .target
-            .digest()
-            .to_string()]))
-        .unwrap()
-        .is_empty());
+    store.put_all([cache_alias.clone(), ordinary_alias.clone()]).unwrap();
+    assert!(
+        store
+            .remove_graphs(&BTreeSet::from([ordinary_alias.target.digest().to_string()]))
+            .unwrap()
+            .is_empty()
+    );
     assert!(store.get(&ordinary_alias.name).unwrap().is_some());
     assert!(store.get(&cache_alias.name).unwrap().is_some());
 }

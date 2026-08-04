@@ -1,6 +1,7 @@
 use hl_client::{Client, Config as ClientConfig};
 use hl_container::{Config, ContainerSpec, Containers, NetworkSpec, Process, Subnet, VolumeSpec};
 use hl_daemon::Daemon;
+use hl_images::{Platform, Reference, RuntimeConfig};
 use std::{net::Ipv4Addr, path::Path, time::Duration};
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -79,19 +80,45 @@ async fn system_prune_reclaims_unused_resources_and_respects_volume_selection() 
         .create(VolumeSpec::new("unused-volume"))
         .await
         .unwrap();
+    let mut layer = Vec::new();
+    {
+        let mut archive = tar::Builder::new(&mut layer);
+        let body = b"unused\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive.append_data(&mut header, "unused", &body[..]).unwrap();
+        archive.finish().unwrap();
+    }
+    let images = fixture.containers.images().unwrap();
+    let image_name: Reference = "system/unused:latest".parse().unwrap();
+    let image = images
+        .commit(
+            &layer,
+            &RuntimeConfig {
+                entrypoint: Vec::new(),
+                command: vec!["/bin/true".into()],
+                environment: Default::default(),
+                working_directory: "/".into(),
+                user: String::new(),
+            },
+            &Platform::linux_arm64(),
+            &image_name,
+        )
+        .unwrap();
+    let image_digest = image.target.digest().to_string();
+    images.remove(&image_name).unwrap();
 
     let first = fixture.client.system().prune(false).await.unwrap();
     assert_eq!(first.containers_deleted, vec![container.id.to_string()]);
     assert_eq!(first.networks_deleted, vec![network.name]);
+    assert_eq!(first.images_deleted.len(), 1);
+    assert_eq!(first.images_deleted[0].deleted.as_deref(), Some(image_digest.as_str()));
+    assert!(first.space_reclaimed > 0);
     assert!(first.volumes_deleted.is_empty());
     assert_eq!(
-        fixture
-            .containers
-            .volumes()
-            .inspect(&volume.name)
-            .await
-            .unwrap()
-            .name,
+        fixture.containers.volumes().inspect(&volume.name).await.unwrap().name,
         volume.name
     );
 

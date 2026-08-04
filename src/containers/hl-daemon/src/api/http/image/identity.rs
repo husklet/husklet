@@ -19,9 +19,9 @@ pub(in super::super) async fn inspect(
             images.details(&image, &platform)?,
         ))
     })
-        .await
-        .map_err(ApiError::task)?
-        .map_err(ApiError::image)?;
+    .await
+    .map_err(ApiError::task)?
+    .map_err(ApiError::image)?;
     let mut repo_tags: Vec<_> = state
         .image_records()
         .await?
@@ -83,9 +83,9 @@ pub(in super::super) async fn history(
             images.details(&image, &platform)?,
         ))
     })
-        .await
-        .map_err(ApiError::task)?
-        .map_err(ApiError::image)?;
+    .await
+    .map_err(ApiError::task)?
+    .map_err(ApiError::image)?;
     let size = i64::try_from(selected.target.size()).unwrap_or(i64::MAX);
     let tags = state
         .image_records()
@@ -149,9 +149,9 @@ pub(in super::super) async fn tag(
         images.tag(&source, target)?;
         Ok::<_, hl_images::Error>(id)
     })
-        .await
-        .map_err(ApiError::task)?
-        .map_err(ApiError::image)?;
+    .await
+    .map_err(ApiError::task)?
+    .map_err(ApiError::image)?;
     state.events.image("tag", source_id, value);
     Ok(StatusCode::CREATED)
 }

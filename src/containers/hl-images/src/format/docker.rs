@@ -6,7 +6,7 @@ use std::{
     path::{Component, Path},
 };
 
-use crate::{content::Store, Descriptor, Digest, Error, Image, Images, Result};
+use crate::{Descriptor, Digest, Error, Image, Images, Result, content::Store};
 
 const OCI_MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
 const OCI_CONFIG: &str = "application/vnd.oci.image.config.v1+json";
@@ -69,9 +69,7 @@ impl Archive {
             }
             let name = path.to_string_lossy().into_owned();
             if members.contains_key(&name) {
-                return Err(Error::MalformedOci(format!(
-                    "duplicate archive member {name}"
-                )));
+                return Err(Error::MalformedOci(format!("duplicate archive member {name}")));
             }
             let destination = staging.path().join(format!("member-{count}"));
             let mut file = File::create(&destination)?;
@@ -87,14 +85,12 @@ impl Archive {
             members.insert(name, (destination, size));
         }
         let manifest = Self::metadata(&members, "manifest.json", limits.max_metadata_bytes)?;
-        let records: Vec<DockerManifest> = serde_json::from_slice(&manifest)
-            .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let records: Vec<DockerManifest> =
+            serde_json::from_slice(&manifest).map_err(|error| Error::MalformedOci(error.to_string()))?;
         let mut imported = Vec::new();
         for record in records {
             if record.repo_tags.is_empty() {
-                return Err(Error::MalformedOci(
-                    "Docker manifest entry has no RepoTags".into(),
-                ));
+                return Err(Error::MalformedOci("Docker manifest entry has no RepoTags".into()));
             }
             let config_bytes = Self::metadata(&members, &record.config, limits.max_metadata_bytes)?;
             let config = images.store_bytes(OCI_CONFIG, &config_bytes)?;
@@ -136,8 +132,7 @@ impl Archive {
                 written: &mut written,
             };
             for image in selected {
-                let document: OciManifest =
-                    serde_json::from_reader(images.content().reader(&image.target)?)?;
+                let document: OciManifest = serde_json::from_reader(images.content().reader(&image.target)?)?;
                 let config_digest: Digest = document.config.digest().to_string().parse()?;
                 let config_name = format!("{}.json", config_digest.encoded());
                 archive.content(&document.config, &config_name)?;
@@ -148,7 +143,9 @@ impl Archive {
                     archive.layer(layer, &name)?;
                     layer_names.push(name);
                 }
-                manifest.push(serde_json::json!({"Config":config_name,"RepoTags":[image.name.to_string()],"Layers":layer_names}));
+                manifest.push(
+                    serde_json::json!({"Config":config_name,"RepoTags":[image.name.to_string()],"Layers":layer_names}),
+                );
             }
             let bytes = serde_json::to_vec(&manifest)?;
             archive.bytes("manifest.json", &bytes)?;
@@ -160,9 +157,7 @@ impl Archive {
     fn member(path: &Path) -> Result<std::path::PathBuf> {
         if path.as_os_str().is_empty()
             || path.is_absolute()
-            || path
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_)))
+            || path.components().any(|part| !matches!(part, Component::Normal(_)))
         {
             return Err(Error::UnsafeArchive {
                 path: path.to_owned(),
@@ -172,18 +167,12 @@ impl Archive {
         Ok(path.to_owned())
     }
 
-    fn metadata(
-        members: &HashMap<String, (std::path::PathBuf, u64)>,
-        name: &str,
-        limit: u64,
-    ) -> Result<Vec<u8>> {
+    fn metadata(members: &HashMap<String, (std::path::PathBuf, u64)>, name: &str, limit: u64) -> Result<Vec<u8>> {
         let (path, size) = members
             .get(name)
             .ok_or_else(|| Error::MalformedOci(format!("missing archive member {name}")))?;
         if *size > limit {
-            return Err(Error::MalformedOci(format!(
-                "metadata member {name} exceeds limit"
-            )));
+            return Err(Error::MalformedOci(format!("metadata member {name} exceeds limit")));
         }
         std::fs::read(path).map_err(Into::into)
     }
@@ -251,9 +240,8 @@ impl Images {
             size += count as u64;
         }
         let digest = Digest::from(<[u8; 32]>::from(hash.finalize()));
-        let descriptor: Descriptor = serde_json::from_value(
-            serde_json::json!({"mediaType":media,"digest":digest.to_string(),"size":size}),
-        )?;
+        let descriptor: Descriptor =
+            serde_json::from_value(serde_json::json!({"mediaType":media,"digest":digest.to_string(),"size":size}))?;
         if !self.content().contains(&digest)? {
             let mut ingest = self.content().ingest(format!("archive-{digest}"))?;
             let mut file = File::open(path)?;
@@ -310,9 +298,7 @@ impl<W: Write> DockerWriter<'_, W> {
             self.tar.append_data(&mut header, name, decoded)?;
             Ok(())
         } else if media.ends_with("+zstd") {
-            Err(Error::MalformedOci(
-                "cannot export zstd layer to Docker archive".into(),
-            ))
+            Err(Error::MalformedOci("cannot export zstd layer to Docker archive".into()))
         } else {
             let mut header = tar::Header::new_gnu();
             header.set_size(descriptor.size());

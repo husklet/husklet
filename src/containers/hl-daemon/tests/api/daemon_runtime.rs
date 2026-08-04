@@ -1,10 +1,10 @@
 //! Daemon-mediated attach, logs, and exec against a live socket.
 
-use crate::api::support::{require, wait_for_path, TIMEOUT};
+use crate::api::support::{TIMEOUT, require, wait_for_path};
 use hl_client::{
-    api::Channel,
-    model::{Attachment, ExecConfig, ExecStart, LogOptions, LogStreams},
     Client,
+    api::{AttachOptions, Channel},
+    model::{Attachment, ExecConfig, ExecStart, LogOptions, LogStreams},
 };
 use hl_container::{Console, ContainerSpec, Containers, Isolation, Process, Sandbox};
 use hl_daemon::Daemon;
@@ -14,11 +14,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-pub(crate) async fn run(
-    containers: Containers,
-    rootfs: &Path,
-    work: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run(containers: Containers, rootfs: &Path, work: &Path) -> Result<(), Box<dyn std::error::Error>> {
     containers
         .create(
             ContainerSpec::from_directory(
@@ -44,35 +40,22 @@ pub(crate) async fn run(
     log_container(&containers, rootfs).await?;
     let socket = work.join("runtime.sock");
     let (shutdown, stopped) = oneshot::channel();
-    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(
-        async move {
-            let _ = stopped.await;
-        },
-    ));
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
     wait_for_path(&socket).await?;
     let client = Client::unix(&socket)?;
     logs(&client).await?;
-    let mut session = client
-        .containers()
-        .attach("daemon-runtime", true, true, true)
-        .await?;
+    let mut session = client.containers().attach("daemon-runtime", true, true, true).await?;
     client.containers().start("daemon-runtime").await?;
     exec(&client, rootfs).await?;
     session.write(b"input\n").await?;
     session.close().await?;
     require(
-        client
-            .containers()
-            .wait("daemon-runtime")
-            .await?
-            .status_code
-            == 23,
+        client.containers().wait("daemon-runtime").await?.status_code == 23,
         "daemon Alpine process returned the wrong exit status",
     )?;
-    let logs = client
-        .containers()
-        .logs("daemon-runtime", true, true)
-        .await?;
+    let logs = client.containers().logs("daemon-runtime", true, true).await?;
     if logs.stdout != b"daemon:alpine:input:shared\n" || logs.stderr != b"daemon-error\n" {
         return Err(format!(
             "daemon Alpine output mismatch: stdout={:?} stderr={:?}",
@@ -81,22 +64,16 @@ pub(crate) async fn run(
         )
         .into());
     }
-    let first = session
-        .next()
-        .await?
-        .ok_or("daemon attach stdout missing")?;
-    let second = session
-        .next()
-        .await?
-        .ok_or("daemon attach stderr missing")?;
+    let first = session.next().await?.ok_or("daemon attach stdout missing")?;
+    let second = session.next().await?.ok_or("daemon attach stderr missing")?;
     let frames = [&first, &second];
     require(
         frames.iter().any(|frame| {
-            frame.channel() == Channel::Stdout
-                && frame.bytes().as_ref() == b"daemon:alpine:input:shared\n"
-        }) && frames.iter().any(|frame| {
-            frame.channel() == Channel::Stderr && frame.bytes().as_ref() == b"daemon-error\n"
-        }) && session.next().await?.is_none(),
+            frame.channel() == Channel::Stdout && frame.bytes().as_ref() == b"daemon:alpine:input:shared\n"
+        }) && frames
+            .iter()
+            .any(|frame| frame.channel() == Channel::Stderr && frame.bytes().as_ref() == b"daemon-error\n")
+            && session.next().await?.is_none(),
         "daemon attach did not preserve both multiplexed streams",
     )?;
     let _ = shutdown.send(());
@@ -141,7 +118,69 @@ async fn logs(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
             sleep(Duration::from_millis(10)).await;
         }
     })
-    .await??;
+    .await
+    .map_err(|_| "timed out waiting for initial attach history")??;
+
+    let history_options = AttachOptions {
+        logs: true,
+        stdout: true,
+        ..AttachOptions::default()
+    };
+    let mut replay = containers.attach_with("daemon-logs", &history_options).await?;
+    let mut replayed = Vec::new();
+    while let Some(output) = timeout(TIMEOUT, replay.next())
+        .await
+        .map_err(|_| "logs-only attach did not terminate")??
+    {
+        require(
+            output.channel() == Channel::Stdout,
+            "logs-only attach changed output channel",
+        )?;
+        replayed.extend_from_slice(output.bytes());
+    }
+    require(
+        replayed == b"history-one\nhistory-two\n",
+        "logs-only attach did not stop at its replay boundary",
+    )?;
+
+    let mut empty = containers
+        .attach_with(
+            "daemon-logs",
+            &AttachOptions {
+                stream: true,
+                ..AttachOptions::default()
+            },
+        )
+        .await?;
+    require(
+        timeout(TIMEOUT, empty.next())
+            .await
+            .map_err(|_| "empty attach did not terminate")??
+            .is_none(),
+        "attach with no selected standard streams remained live",
+    )?;
+
+    let mut replay_and_follow = containers
+        .attach_with(
+            "daemon-logs",
+            &AttachOptions {
+                stream: true,
+                ..history_options.clone()
+            },
+        )
+        .await?;
+    let mut attached_history = Vec::new();
+    while attached_history.len() < replayed.len() {
+        let output = timeout(TIMEOUT, replay_and_follow.next())
+            .await
+            .map_err(|_| "replay-and-follow attach timed out during history")??
+            .ok_or("replay-and-follow attach omitted history")?;
+        attached_history.extend_from_slice(output.bytes());
+    }
+    require(
+        attached_history == replayed,
+        "replay-and-follow attach changed historical output",
+    )?;
 
     let mut logs = containers
         .logs_stream(
@@ -161,16 +200,24 @@ async fn logs(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     input.close().await?;
 
     let history = timeout(TIMEOUT, logs.next())
-        .await??
+        .await
+        .map_err(|_| "logs stream timed out during history")??
         .ok_or("followed logs omitted history")?;
     let live = timeout(TIMEOUT, logs.next())
-        .await??
+        .await
+        .map_err(|_| "logs stream timed out during live output")??
         .ok_or("followed logs omitted live output")?;
+    let attached_live = timeout(TIMEOUT, replay_and_follow.next())
+        .await
+        .map_err(|_| "replay-and-follow attach timed out during live output")??
+        .ok_or("replay-and-follow attach omitted live output")?;
     require(
         history.channel() == Channel::Stdout
             && history.bytes().as_ref() == b"history-two\n"
             && live.channel() == Channel::Stdout
-            && live.bytes().as_ref() == b"live:release\n",
+            && live.bytes().as_ref() == b"live:release\n"
+            && attached_live.channel() == Channel::Stdout
+            && attached_live.bytes().as_ref() == b"live:release\n",
         "logs did not bridge selected tail history into live output",
     )?;
     require(
@@ -204,10 +251,7 @@ async fn exec(client: &Client, rootfs: &Path) -> Result<(), Box<dyn std::error::
             },
         )
         .await?;
-    let mut execution = client
-        .executions()
-        .start(&exec.id, &ExecStart::default())
-        .await?;
+    let mut execution = client.executions().start(&exec.id, &ExecStart::default()).await?;
     let running_pid = client.executions().inspect(&exec.id).await?.pid;
     require(running_pid > 0, "running daemon exec did not expose its process ID")?;
     execution.write(b"value\n").await?;
@@ -216,11 +260,13 @@ async fn exec(client: &Client, rootfs: &Path) -> Result<(), Box<dyn std::error::
     let exec_stderr = execution.next().await?.ok_or("exec stderr missing")?;
     let exec_frames = [&exec_stdout, &exec_stderr];
     require(
-        exec_frames.iter().any(|frame| {
-            frame.channel() == Channel::Stdout && frame.bytes().as_ref() == b"exec:alpine:value\n"
-        }) && exec_frames.iter().any(|frame| {
-            frame.channel() == Channel::Stderr && frame.bytes().as_ref() == b"exec-error\n"
-        }) && execution.next().await?.is_none(),
+        exec_frames
+            .iter()
+            .any(|frame| frame.channel() == Channel::Stdout && frame.bytes().as_ref() == b"exec:alpine:value\n")
+            && exec_frames
+                .iter()
+                .any(|frame| frame.channel() == Channel::Stderr && frame.bytes().as_ref() == b"exec-error\n")
+            && execution.next().await?.is_none(),
         "daemon exec did not preserve exact process output",
     )?;
     let exec_inspect = client.executions().inspect(&exec.id).await?;

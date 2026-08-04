@@ -65,12 +65,7 @@ async fn create_uses_the_shared_request_and_decodes_the_volume() {
         unsupported: BTreeMap::new(),
     };
 
-    let created = Client::unix(&socket)
-        .unwrap()
-        .volumes()
-        .create(&request)
-        .await
-        .unwrap();
+    let created = Client::unix(&socket).unwrap().volumes().create(&request).await.unwrap();
     assert_eq!(created.name, "cache");
     assert_eq!(created.driver, "local");
     assert_eq!(created.labels["purpose"], "test");
@@ -91,10 +86,7 @@ async fn list_and_inspect_preserve_docker_models_and_encode_names() {
     assert_eq!(result.volumes.len(), 1);
     assert_eq!(result.volumes[0].name, "a");
     assert_eq!(result.warnings, ["degraded"]);
-    assert!(captured
-        .await
-        .unwrap()
-        .starts_with("GET /v1.43/volumes HTTP/1.1\r\n"));
+    assert!(captured.await.unwrap().starts_with("GET /v1.43/volumes HTTP/1.1\r\n"));
 
     let socket = root.path().join("inspect.sock");
     let inspected = volume("cache/name");
@@ -106,10 +98,12 @@ async fn list_and_inspect_preserve_docker_models_and_encode_names() {
         .await
         .unwrap();
     assert_eq!(result.name, "cache/name");
-    assert!(captured
-        .await
-        .unwrap()
-        .starts_with("GET /v1.43/volumes/cache%2Fname HTTP/1.1\r\n"));
+    assert!(
+        captured
+            .await
+            .unwrap()
+            .starts_with("GET /v1.43/volumes/cache%2Fname HTTP/1.1\r\n")
+    );
 }
 
 #[tokio::test]
@@ -123,10 +117,12 @@ async fn remove_encodes_force_and_preserves_conflict_status() {
         .remove("cache/name", true)
         .await
         .unwrap();
-    assert!(captured
-        .await
-        .unwrap()
-        .starts_with("DELETE /v1.43/volumes/cache%2Fname?force=true HTTP/1.1\r\n"));
+    assert!(
+        captured
+            .await
+            .unwrap()
+            .starts_with("DELETE /v1.43/volumes/cache%2Fname?force=true HTTP/1.1\r\n")
+    );
 
     let socket = root.path().join("conflict.sock");
     let captured = peer(&socket, "409 Conflict", r#"{"message":"volume is in use"}"#);
@@ -152,12 +148,7 @@ async fn prune_posts_without_a_body_and_decodes_reclaimed_space() {
     let socket = root.path().join("daemon.sock");
     let response = r#"{"VolumesDeleted":["one","two"],"SpaceReclaimed":42}"#;
     let captured = peer(&socket, "200 OK", response);
-    let result = Client::unix(&socket)
-        .unwrap()
-        .volumes()
-        .prune()
-        .await
-        .unwrap();
+    let result = Client::unix(&socket).unwrap().volumes().prune().await.unwrap();
     assert_eq!(
         result,
         VolumePrune {

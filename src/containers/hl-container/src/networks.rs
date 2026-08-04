@@ -45,9 +45,7 @@ impl Networks {
             ));
         }
         if let Some(existing) = self.storage.get(&spec.name).await? {
-            if existing.driver != spec.driver
-                || existing.driver == NetworkDriver::Bridge && existing.subnet.is_none()
-            {
+            if existing.driver != spec.driver || existing.driver == NetworkDriver::Bridge && existing.subnet.is_none() {
                 return Err(Error::NetworkConflict(spec.name));
             }
             existing.validate()?;
@@ -65,21 +63,11 @@ impl Networks {
         let _guard = self.operation.lock().await;
         if let Some(existing) = self.storage.get(&spec.name).await? {
             if existing.compatible(&spec) {
-                if spec.driver == NetworkDriver::None {
-                    return Err(Error::NetworkConflict(spec.name));
-                }
                 return Ok(existing);
             }
             return Err(Error::NetworkConflict(spec.name));
         }
         let existing = self.storage.list().await?;
-        if spec.driver == NetworkDriver::None
-            && existing
-                .iter()
-                .any(|network| network.driver == NetworkDriver::None)
-        {
-            return Err(Error::NetworkConflict(spec.name));
-        }
         let pool = Pool::from(existing.as_slice());
         if spec.driver == NetworkDriver::Bridge && spec.subnet.is_none() {
             spec.subnet = Some(pool.allocate()?);
@@ -120,13 +108,13 @@ impl Networks {
         Ok(())
     }
 
-    /// Lists every durable network in name and ID order.
+    /// Lists every durable network in name order.
     ///
     /// # Errors
     /// Returns persistence or record-decoding failures.
     pub async fn list(&self) -> Result<Vec<Network>> {
         let mut values = self.storage.list().await?;
-        values.sort_by(|left, right| left.name.cmp(&right.name).then_with(|| left.id.cmp(&right.id)));
+        values.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(values)
     }
 
@@ -462,29 +450,19 @@ impl Networks {
     }
 
     async fn resolve_network(&self, reference: &str) -> Result<Network> {
-        let networks = self.storage.list().await?;
-        if let Some(network) = networks.iter().find(|network| network.id.as_str() == reference) {
-            return Ok(network.clone());
-        }
-        let names = networks
-            .iter()
-            .filter(|network| network.name == reference)
+        let matches = self
+            .storage
+            .list()
+            .await?
+            .into_iter()
+            .filter(|network| {
+                network.name == reference
+                    || network.id.as_str() == reference
+                    || network.id.as_str().starts_with(reference)
+            })
             .collect::<Vec<_>>();
-        match names.as_slice() {
-            [network] => return Ok((*network).clone()),
-            [] => {}
-            _ => {
-                return Err(Error::InvalidNetwork(format!(
-                    "network reference {reference:?} is ambiguous"
-                )));
-            }
-        }
-        let prefixes = networks
-            .iter()
-            .filter(|network| network.id.as_str().starts_with(reference))
-            .collect::<Vec<_>>();
-        match prefixes.as_slice() {
-            [network] => Ok((*network).clone()),
+        match matches.as_slice() {
+            [network] => Ok(network.clone()),
             [] => Err(Error::NetworkNotFound(reference.into())),
             _ => Err(Error::InvalidNetwork(format!(
                 "network reference {reference:?} is ambiguous"

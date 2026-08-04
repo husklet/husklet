@@ -536,7 +536,7 @@ fn safe_output(output: &str) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Execution};
+    use super::{App, EngineHost, Execution};
     use std::{fs, path::Path};
 
     #[test]
@@ -674,4 +674,28 @@ mod tests {
         assert!(invalid.is_err());
     }
 
+    #[test]
+    fn host_exclusion_is_typed_validated_and_oracle_active() {
+        let row = |hosts: &str, reason: &str, evidence: &str| {
+            format!(
+                "  - id: runtime/one\n    build: {{ source: one.c, output: one, flags: [] }}\n    artifact: {{ destination: /opt/one }}\n    status: !host-excluded\n      hosts: {hosts}\n      reason: {reason:?}\n      evidence: {evidence:?}\n    compat: {{ class: compatibility }}\n    run: []\n    expect: {{ exit: 0, stdout: golden/one.out }}\n"
+            )
+        };
+
+        let app = category(&row("[macos]", "retained exclusion", "EVIDENCE.md")).unwrap();
+        assert!(app.cases[0].inactive(EngineHost::Macos).is_some());
+        assert!(app.cases[0].inactive(EngineHost::Linux).is_none());
+        assert!(app.cases[0].status.oracle_inactive().is_none());
+
+        for invalid in [
+            row("[]", "reason", "evidence"),
+            row("[macos, macos]", "reason", "evidence"),
+            row("[linux, macos, windows]", "reason", "evidence"),
+            row("[solaris]", "reason", "evidence"),
+            row("[macos]", "", "evidence"),
+            row("[macos]", "reason", ""),
+        ] {
+            assert!(category(&invalid).is_err());
+        }
+    }
 }

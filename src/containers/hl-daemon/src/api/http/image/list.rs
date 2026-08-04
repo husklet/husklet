@@ -144,6 +144,15 @@ pub(in super::super) enum Prune {
 }
 
 impl Prune {
+    pub(super) fn requires_metadata(&self) -> bool {
+        match self {
+            Self::All => false,
+            Self::Selected { values, until } => {
+                until.is_some() || values.contains_key("label") || values.contains_key("label!")
+            }
+        }
+    }
+
     pub(in super::super) fn image(filters: Option<&str>) -> ApiResult<Self> {
         let mut values: BTreeMap<String, Vec<String>> = filters
             .filter(|value| !value.is_empty())
@@ -194,6 +203,7 @@ impl Prune {
 
     pub(in super::super) async fn execute(self, state: &DockerState) -> ApiResult<ImagePrune> {
         let images = state.containers.images().map_err(ApiError::container)?;
+        let requires_metadata = self.requires_metadata();
         let report = match self {
             Self::All => tokio::task::spawn_blocking(move || images.gc())
                 .await
@@ -206,42 +216,58 @@ impl Prune {
                     .filter_map(|container| container.spec.image.as_ref().map(ToString::to_string))
                     .collect::<std::collections::BTreeSet<_>>();
                 let graphs = images.graphs().map_err(ApiError::image)?;
-                let selected = graphs
-                    .into_iter()
-                    .filter(hl_images::Graph::filterable)
-                    .filter(|graph| {
-                        !referenced.contains(&graph.target.digest().to_string())
-                            && graph.names.iter().all(|name| !referenced.contains(name))
-                    })
-                    .filter(|graph| until.is_none_or(|until| graph.created_at_ms.is_some_and(|v| v < until)))
-                    .filter(|graph| {
-                        values.get("dangling").is_none_or(|filters| {
-                            filters.iter().any(|value| {
-                                Field::new("dangling", Some(value))
-                                    .boolean()
-                                    .is_ok_and(|expected| graph.names.is_empty() == expected)
+                let selected =
+                    graphs
+                        .into_iter()
+                        .filter(|graph| !requires_metadata || graph.filterable())
+                        .filter(|graph| {
+                            !referenced.contains(&graph.target.digest().to_string())
+                                && graph.names.iter().all(|name| !referenced.contains(name))
+                        })
+                        .filter(|graph| until.is_none_or(|until| graph.created_at_ms.is_some_and(|v| v < until)))
+                        .filter(|graph| {
+                            values.get("dangling").is_none_or(|filters| {
+                                filters.iter().any(|value| {
+                                    Field::new("dangling", Some(value))
+                                        .boolean()
+                                        .is_ok_and(|expected| graph.names.is_empty() == expected)
+                                })
                             })
                         })
-                    })
-                    .filter(|graph| {
-                        let labels = graph.labels.as_ref().expect("filterable graph has labels");
-                        values
-                            .get("label")
-                            .is_none_or(|filters| filters.iter().any(|value| ImageSelection::label(labels, value)))
-                            && values
-                                .get("label!")
-                                .is_none_or(|filters| filters.iter().all(|value| !ImageSelection::label(labels, value)))
-                    })
-                    .collect::<Vec<_>>();
+                        .filter(|graph| {
+                            values.get("label").is_none_or(|filters| {
+                                graph.labels.as_ref().is_some_and(|labels| {
+                                    filters.iter().any(|value| ImageSelection::label(labels, value))
+                                })
+                            }) && values.get("label!").is_none_or(|filters| {
+                                graph.labels.as_ref().is_some_and(|labels| {
+                                    filters.iter().all(|value| !ImageSelection::label(labels, value))
+                                })
+                            })
+                        })
+                        .collect::<Vec<_>>();
                 let digests = selected.iter().map(|graph| graph.target.digest().to_string()).collect();
                 let scope = if values.get("dangling").is_some_and(|values| values == &["false"]) {
                     hl_images::GraphPruneScope::AllUnused
                 } else {
                     hl_images::GraphPruneScope::Dangling
                 };
-                let deleted = selected
+                let prune_images = images.clone();
+                let report = tokio::task::spawn_blocking(move || prune_images.prune_graphs_with(&digests, scope))
+                    .await
+                    .map_err(ApiError::task)?
+                    .map_err(ApiError::image)?;
+                let retained = images
+                    .graphs()
+                    .map_err(ApiError::image)?
+                    .into_iter()
+                    .map(|graph| graph.target.digest().to_string())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let deleted = report
+                    .graphs_removed
                     .iter()
                     .flat_map(|graph| {
+                        let digest = graph.target.digest().to_string();
                         graph
                             .names
                             .iter()
@@ -250,16 +276,12 @@ impl Prune {
                                 untagged: Some(name),
                                 deleted: None,
                             })
-                            .chain(std::iter::once(crate::api::ImageDelete {
+                            .chain((!retained.contains(&digest)).then_some(crate::api::ImageDelete {
                                 untagged: None,
-                                deleted: Some(graph.target.digest().to_string()),
+                                deleted: Some(digest),
                             }))
                     })
                     .collect();
-                let report = tokio::task::spawn_blocking(move || images.prune_graphs_with(&digests, scope))
-                    .await
-                    .map_err(ApiError::task)?
-                    .map_err(ApiError::image)?;
                 return Ok(ImagePrune {
                     images_deleted: deleted,
                     space_reclaimed: i64::try_from(report.content_bytes_removed).unwrap_or(i64::MAX),

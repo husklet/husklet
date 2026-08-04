@@ -37,10 +37,7 @@ impl<'a> Events<'a> {
         } else {
             format!("?{}", parameters.join("&"))
         };
-        let stream = self
-            .transport
-            .stream(Method::GET, &format!("/events{suffix}"))
-            .await?;
+        let stream = self.transport.stream(Method::GET, &format!("/events{suffix}")).await?;
         Ok(EventStream::new(stream))
     }
 }

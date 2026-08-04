@@ -1,0 +1,4 @@
+create badflag=1 ok=1 badsize=1
+ready rd=1 both=1 to0=1 to=1
+oneshot os1=1 os2=0 os3=1
+ctl add=1 exist=1 noent=1 self=1 perm=1 del=1 delno=1

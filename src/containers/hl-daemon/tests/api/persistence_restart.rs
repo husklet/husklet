@@ -12,19 +12,14 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let identity = {
         let containers = Containers::builder(Config::new(&state)).build().await?;
         containers
-            .create(
-                ContainerSpec::from_directory(&rootfs, Process::new("/bin/true")).name("durable"),
-            )
+            .create(ContainerSpec::from_directory(&rootfs, Process::new("/bin/true")).name("durable"))
             .await?
             .id
     };
 
     let reopened = Containers::builder(Config::new(&state)).build().await?;
     let restored = reopened.inspect("durable").await?;
-    require(
-        restored.id == identity,
-        "restart changed container identity",
-    )?;
+    require(restored.id == identity, "restart changed container identity")?;
     require(
         reopened.list().await?.len() == 1,
         "restart did not restore exactly one record",

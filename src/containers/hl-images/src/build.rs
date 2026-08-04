@@ -10,9 +10,7 @@ mod value;
 #[cfg(test)]
 use instruction::{Assignments, WorkingDirectory};
 use instruction::{InstructionParser, Words};
-pub use model::{
-    Account, Base, CacheSharing, CopySource, OwnershipSpec, Recipe, RunMount, Source, Stage, Step,
-};
+pub use model::{Account, Base, CacheSharing, CopySource, OwnershipSpec, Recipe, RunMount, Source, Stage, Step};
 use stage::Draft;
 pub use value::Changes;
 use value::Environment;
@@ -32,11 +30,7 @@ impl Recipe {
     ///
     /// # Errors
     /// Returns an error when instructions, substitutions, stage references, or values are invalid.
-    pub fn parse_with(
-        text: &str,
-        supplied: &BTreeMap<String, String>,
-        target: Option<&str>,
-    ) -> Result<Self> {
+    pub fn parse_with(text: &str, supplied: &BTreeMap<String, String>, target: Option<&str>) -> Result<Self> {
         Self::parse_with_platforms(text, supplied, target, None, None)
     }
 
@@ -78,10 +72,7 @@ impl Recipe {
                     .map(str::parse::<Platform>)
                     .transpose()
                     .map_err(|error| Error::MalformedOci(error.to_string()))?;
-                if words
-                    .first()
-                    .is_some_and(|word| word.starts_with("--platform="))
-                {
+                if words.first().is_some_and(|word| word.starts_with("--platform=")) {
                     words.remove(0);
                 }
                 let name = if words.len() == 3 && words[1].eq_ignore_ascii_case("AS") {
@@ -94,16 +85,8 @@ impl Recipe {
                 let base = names
                     .get(&words[0])
                     .copied()
-                    .or_else(|| {
-                        words[0]
-                            .parse::<usize>()
-                            .ok()
-                            .filter(|index| *index < stages.len())
-                    })
-                    .map_or_else(
-                        || words[0].parse().map(Base::Image),
-                        |index| Ok(Base::Stage(index)),
-                    )?;
+                    .or_else(|| words[0].parse::<usize>().ok().filter(|index| *index < stages.len()))
+                    .map_or_else(|| words[0].parse().map(Base::Image), |index| Ok(Base::Stage(index)))?;
                 let index = stages.len();
                 if let Some(name) = &name {
                     if names.insert(name.clone(), index).is_some() {
@@ -111,10 +94,7 @@ impl Recipe {
                     }
                 }
                 let mut draft = Draft::new(index, name, base, platform);
-                draft
-                    .stage
-                    .history
-                    .push(History::instruction("FROM", &raw, true));
+                draft.stage.history.push(History::instruction("FROM", &raw, true));
                 current = Some(draft);
                 continue;
             }
@@ -133,37 +113,25 @@ impl Recipe {
         Ok(Self { stages, selected })
     }
 
-    fn platform_arguments(
-        build: Option<&Platform>,
-        target: Option<&Platform>,
-    ) -> BTreeMap<String, String> {
+    fn platform_arguments(build: Option<&Platform>, target: Option<&Platform>) -> BTreeMap<String, String> {
         let mut arguments = BTreeMap::new();
         for (prefix, platform) in [("BUILD", build), ("TARGET", target)] {
             let Some(platform) = platform else { continue };
             arguments.insert(format!("{prefix}PLATFORM"), platform.to_string());
             arguments.insert(format!("{prefix}OS"), platform.os.clone());
             arguments.insert(format!("{prefix}ARCH"), platform.architecture.clone());
-            arguments.insert(
-                format!("{prefix}VARIANT"),
-                platform.variant.clone().unwrap_or_default(),
-            );
+            arguments.insert(format!("{prefix}VARIANT"), platform.variant.clone().unwrap_or_default());
         }
         arguments
     }
 
-    fn selected_stage(
-        target: Option<&str>,
-        names: &BTreeMap<String, usize>,
-        stage_count: usize,
-    ) -> Result<usize> {
+    fn selected_stage(target: Option<&str>, names: &BTreeMap<String, usize>, stage_count: usize) -> Result<usize> {
         target.map_or(Ok(stage_count - 1), |target| {
             names
                 .get(target)
                 .copied()
                 .or_else(|| target.parse().ok().filter(|index| *index < stage_count))
-                .ok_or_else(|| {
-                    Error::MalformedOci(format!("target stage {target:?} was not found"))
-                })
+                .ok_or_else(|| Error::MalformedOci(format!("target stage {target:?} was not found")))
         })
     }
 }
@@ -190,10 +158,7 @@ fn argument(
         if let Some(value) = value {
             stage.arguments.insert(key.into(), value);
         }
-        stage
-            .stage
-            .history
-            .push(History::instruction("ARG", raw, true));
+        stage.stage.history.push(History::instruction("ARG", raw, true));
     } else if let Some(value) = value {
         global_output.insert(key.into(), value);
     }

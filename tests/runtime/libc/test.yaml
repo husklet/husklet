@@ -1,0 +1,677 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/libc/absdiv
+    status: active
+    compat: { class: compatibility }
+    build: { source: absdiv.c, output: absdiv, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-absdiv }
+    run: []
+    expect: { exit: 0, stdout: golden/absdiv.out }
+  - id: runtime/libc/assert-off
+    status: active
+    compat: { class: compatibility }
+    build: { source: assert_off.c, output: assert-off, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-assert-off }
+    run: []
+    expect: { exit: 0, stdout: golden/assert_off.out }
+  - id: runtime/libc/atox
+    status: active
+    compat: { class: compatibility }
+    build: { source: atox.c, output: atox, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-atox }
+    run: []
+    expect: { exit: 0, stdout: golden/atox.out }
+  - id: runtime/libc/bsearch
+    status: active
+    compat: { class: compatibility }
+    build: { source: bsearch.c, output: bsearch, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-bsearch }
+    run: []
+    expect: { exit: 0, stdout: golden/bsearch.out }
+  - id: runtime/libc/ctype-class
+    status: active
+    compat: { class: compatibility }
+    build: { source: ctype_class.c, output: ctype-class, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-ctype-class }
+    run: []
+    expect: { exit: 0, stdout: golden/ctype_class.out }
+  - id: runtime/libc/ctype-conv
+    status: active
+    compat: { class: compatibility }
+    build: { source: ctype_conv.c, output: ctype-conv, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-ctype-conv }
+    run: []
+    expect: { exit: 0, stdout: golden/ctype_conv.out }
+  - id: runtime/libc/errno-sym
+    status: active
+    compat: { class: compatibility }
+    build: { source: errno_sym.c, output: errno-sym, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-errno-sym }
+    run: []
+    expect: { exit: 0, stdout: golden/errno_sym.out }
+  - id: runtime/libc/fgets-fputs
+    status: active
+    compat: { class: compatibility }
+    build: { source: fgets_fputs.c, output: fgets-fputs, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fgets-fputs }
+    run: []
+    expect: { exit: 0, stdout: golden/fgets_fputs.out }
+  - id: runtime/libc/fread-fwrite
+    status: active
+    compat: { class: compatibility }
+    build: { source: fread_fwrite.c, output: fread-fwrite, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fread-fwrite }
+    run: []
+    expect: { exit: 0, stdout: golden/fread_fwrite.out }
+  - id: runtime/libc/fscanf
+    status: active
+    compat: { class: compatibility }
+    build: { source: fscanf.c, output: fscanf, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fscanf }
+    run: []
+    expect: { exit: 0, stdout: golden/fscanf.out }
+  - id: runtime/libc/fseek-ftell
+    status: active
+    compat: { class: compatibility }
+    build: { source: fseek_ftell.c, output: fseek-ftell, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fseek-ftell }
+    run: []
+    expect: { exit: 0, stdout: golden/fseek_ftell.out }
+  - id: runtime/libc/getline
+    status: active
+    compat: { class: compatibility }
+    build: { source: getline.c, output: getline, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-getline }
+    run: []
+    expect: { exit: 0, stdout: golden/getline.out }
+  - id: runtime/libc/locale-c
+    status: active
+    compat: { class: compatibility }
+    build: { source: locale_c.c, output: locale-c, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-locale-c }
+    run: []
+    expect: { exit: 0, stdout: golden/locale_c.out }
+  - id: runtime/libc/math-class
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_class.c, output: math-class, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-class }
+    run: []
+    expect: { exit: 0, stdout: golden/math_class.out }
+  - id: runtime/libc/math-explog
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_explog.c, output: math-explog, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-explog }
+    run: []
+    expect: { exit: 0, stdout: golden/math_explog.out }
+  - id: runtime/libc/math-frexp
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_frexp.c, output: math-frexp, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-frexp }
+    run: []
+    expect: { exit: 0, stdout: golden/math_frexp.out }
+  - id: runtime/libc/math-gamma
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_gamma.c, output: math-gamma, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-gamma }
+    run: []
+    expect: { exit: 0, stdout: golden/math_gamma.out }
+  - id: runtime/libc/math-hyper
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_hyper.c, output: math-hyper, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-hyper }
+    run: []
+    expect: { exit: 0, stdout: golden/math_hyper.out }
+  - id: runtime/libc/math-misc
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_misc.c, output: math-misc, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-misc }
+    run: []
+    expect: { exit: 0, stdout: golden/math_misc.out }
+  - id: runtime/libc/math-mod
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_mod.c, output: math-mod, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-mod }
+    run: []
+    expect: { exit: 0, stdout: golden/math_mod.out }
+  - id: runtime/libc/math-round
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_round.c, output: math-round, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-round }
+    run: []
+    expect: { exit: 0, stdout: golden/math_round.out }
+  - id: runtime/libc/math-trig
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_trig.c, output: math-trig, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-trig }
+    run: []
+    expect: { exit: 0, stdout: golden/math_trig.out }
+  - id: runtime/libc/mbs-wcs
+    status: active
+    compat: { class: compatibility }
+    build: { source: mbs_wcs.c, output: mbs-wcs, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-mbs-wcs }
+    run: []
+    expect: { exit: 0, stdout: golden/mbs_wcs.out }
+  - id: runtime/libc/mem-move
+    status: active
+    compat: { class: compatibility }
+    build: { source: mem_move.c, output: mem-move, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-mem-move }
+    run: []
+    expect: { exit: 0, stdout: golden/mem_move.out }
+  - id: runtime/libc/printf-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_flags.c, output: printf-flags, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_flags.out }
+  - id: runtime/libc/printf-float
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_float.c, output: printf-float, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-float }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_float.out }
+  - id: runtime/libc/printf-hexfloat
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_hexfloat.c, output: printf-hexfloat, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-hexfloat }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_hexfloat.out }
+  - id: runtime/libc/printf-int
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_int.c, output: printf-int, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-int }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_int.out }
+  - id: runtime/libc/printf-len
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_len.c, output: printf-len, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-len }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_len.out }
+  - id: runtime/libc/printf-limits
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_neg.c, output: printf-limits, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-limits }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_neg.out }
+  - id: runtime/libc/printf-pos
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_pos.c, output: printf-pos, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-pos }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_pos.out }
+  - id: runtime/libc/printf-str
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_str.c, output: printf-str, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-str }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_str.out }
+  - id: runtime/libc/qsort-int
+    status: active
+    compat: { class: compatibility }
+    build: { source: qsort_int.c, output: qsort-int, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-qsort-int }
+    run: []
+    expect: { exit: 0, stdout: golden/qsort_int.out }
+  - id: runtime/libc/qsort-str
+    status: active
+    compat: { class: compatibility }
+    build: { source: qsort_str.c, output: qsort-str, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-qsort-str }
+    run: []
+    expect: { exit: 0, stdout: golden/qsort_str.out }
+  - id: runtime/libc/qsort-struct
+    status: active
+    compat: { class: compatibility }
+    build: { source: qsort_struct.c, output: qsort-struct, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-qsort-struct }
+    run: []
+    expect: { exit: 0, stdout: golden/qsort_struct.out }
+  - id: runtime/libc/rand-seq
+    status: active
+    compat: { class: compatibility }
+    build: { source: rand_seq.c, output: rand-seq, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-rand-seq }
+    run: []
+    expect: { exit: 0, stdout: golden/rand_seq.out }
+  - id: runtime/libc/setjmp-val
+    status: active
+    compat: { class: compatibility }
+    build: { source: setjmp_val.c, output: setjmp-val, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-setjmp-val }
+    run: []
+    expect: { exit: 0, stdout: golden/setjmp_val.out }
+  - id: runtime/libc/setvbuf
+    status: active
+    compat: { class: compatibility }
+    build: { source: setvbuf.c, output: setvbuf, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-setvbuf }
+    run: []
+    expect: { exit: 0, stdout: golden/setvbuf.out }
+  - id: runtime/libc/snprintf-ret
+    status: active
+    compat: { class: compatibility }
+    build: { source: snprintf_ret.c, output: snprintf-ret, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-snprintf-ret }
+    run: []
+    expect: { exit: 0, stdout: golden/snprintf_ret.out }
+  - id: runtime/libc/sscanf-mix
+    status: active
+    compat: { class: compatibility }
+    build: { source: sscanf_mix.c, output: sscanf-mix, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-sscanf-mix }
+    run: []
+    expect: { exit: 0, stdout: golden/sscanf_mix.out }
+  - id: runtime/libc/sscanf-num
+    status: active
+    compat: { class: compatibility }
+    build: { source: sscanf_num.c, output: sscanf-num, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-sscanf-num }
+    run: []
+    expect: { exit: 0, stdout: golden/sscanf_num.out }
+  - id: runtime/libc/sscanf-str
+    status: active
+    compat: { class: compatibility }
+    build: { source: sscanf_str.c, output: sscanf-str, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-sscanf-str }
+    run: []
+    expect: { exit: 0, stdout: golden/sscanf_str.out }
+  - id: runtime/libc/str-cmp
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_cmp.c, output: str-cmp, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-cmp }
+    run: []
+    expect: { exit: 0, stdout: golden/str_cmp.out }
+  - id: runtime/libc/str-copy
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_copy.c, output: str-copy, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-copy }
+    run: []
+    expect: { exit: 0, stdout: golden/str_copy.out }
+  - id: runtime/libc/str-dup
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_dup.c, output: str-dup, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-dup }
+    run: []
+    expect: { exit: 0, stdout: golden/str_dup.out }
+  - id: runtime/libc/str-search
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_search.c, output: str-search, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-search }
+    run: []
+    expect: { exit: 0, stdout: golden/str_search.out }
+  - id: runtime/libc/str-tok
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_tok.c, output: str-tok, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-tok }
+    run: []
+    expect: { exit: 0, stdout: golden/str_tok.out }
+  - id: runtime/libc/str-xfrm
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_xfrm.c, output: str-xfrm, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-xfrm }
+    run: []
+    expect: { exit: 0, stdout: golden/str_xfrm.out }
+  - id: runtime/libc/strerror
+    status: active
+    compat: { class: compatibility }
+    build: { source: strerror.c, output: strerror, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strerror }
+    run: []
+    expect: { exit: 0, stdout: golden/strerror.out }
+  - id: runtime/libc/strto-float
+    status: active
+    compat: { class: compatibility }
+    build: { source: strto_float.c, output: strto-float, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strto-float }
+    run: []
+    expect: { exit: 0, stdout: golden/strto_float.out }
+  - id: runtime/libc/strtol
+    status: active
+    compat: { class: compatibility }
+    build: { source: strtol.c, output: strtol, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strtol }
+    run: []
+    expect: { exit: 0, stdout: golden/strtol.out }
+  - id: runtime/libc/strtoll
+    status: active
+    compat: { class: compatibility }
+    build: { source: strtoll.c, output: strtoll, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strtoll }
+    run: []
+    expect: { exit: 0, stdout: golden/strtoll.out }
+  - id: runtime/libc/strtoul
+    status: active
+    compat: { class: compatibility }
+    build: { source: strtoul.c, output: strtoul, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strtoul }
+    run: []
+    expect: { exit: 0, stdout: golden/strtoul.out }
+  - id: runtime/libc/time-asctime
+    status: active
+    compat: { class: compatibility }
+    build: { source: time_asctime.c, output: time-asctime, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-time-asctime }
+    run: []
+    expect: { exit: 0, stdout: golden/time_asctime.out }
+  - id: runtime/libc/time-diff
+    status: active
+    compat: { class: compatibility }
+    build: { source: time_diff.c, output: time-diff, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-time-diff }
+    run: []
+    expect: { exit: 0, stdout: golden/time_diff.out }
+  - id: runtime/libc/time-gmtime
+    status: active
+    compat: { class: compatibility }
+    build: { source: time_gmtime.c, output: time-gmtime, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-time-gmtime }
+    run: []
+    expect: { exit: 0, stdout: golden/time_gmtime.out }
+  - id: runtime/libc/time-mktime
+    status: active
+    compat: { class: compatibility }
+    build: { source: time_mktime.c, output: time-mktime, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-time-mktime }
+    run: []
+    expect: { exit: 0, stdout: golden/time_mktime.out }
+  - id: runtime/libc/time-strftime
+    status: active
+    compat: { class: compatibility }
+    build: { source: time_strftime.c, output: time-strftime, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-time-strftime }
+    run: []
+    expect: { exit: 0, stdout: golden/time_strftime.out }
+  - id: runtime/libc/time-strftime-num
+    status: active
+    compat: { class: compatibility }
+    build: { source: strftime_num.c, output: time-strftime-num, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-time-strftime-num }
+    run: []
+    expect: { exit: 0, stdout: golden/strftime_num.out }
+  - id: runtime/libc/ungetc
+    status: active
+    compat: { class: compatibility }
+    build: { source: ungetc.c, output: ungetc, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-ungetc }
+    run: []
+    expect: { exit: 0, stdout: golden/ungetc.out }
+  - id: runtime/libc/wchar-str
+    status: active
+    compat: { class: compatibility }
+    build: { source: wchar_str.c, output: wchar-str, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-wchar-str }
+    run: []
+    expect: { exit: 0, stdout: golden/wchar_str.out }
+  - id: runtime/libc/wctype-class
+    status: active
+    compat: { class: compatibility }
+    build: { source: wctype_class.c, output: wctype-class, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-wctype-class }
+    run: []
+    expect: { exit: 0, stdout: golden/wctype_class.out }
+  - id: runtime/libc/malloc-big
+    status: active
+    compat: { class: compatibility }
+    build: { source: malloc_big.c, output: malloc-big, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-malloc-big }
+    run: []
+    expect: { exit: 0, stdout: golden/malloc_big.out }
+  - id: runtime/libc/align-alloc
+    status: active
+    compat: { class: compatibility }
+    build: { source: align_alloc.c, output: align-alloc, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-align-alloc }
+    run: []
+    expect: { exit: 0, stdout: golden/align_alloc.out }
+  - id: runtime/libc/calloc-zero
+    status: active
+    compat: { class: compatibility }
+    build: { source: calloc_zero.c, output: calloc-zero, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-calloc-zero }
+    run: []
+    expect: { exit: 0, stdout: golden/calloc_zero.out }
+  - id: runtime/libc/realloc-chain
+    status: active
+    compat: { class: compatibility }
+    build: { source: realloc_chain.c, output: realloc-chain, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-realloc-chain }
+    run: []
+    expect: { exit: 0, stdout: golden/realloc_chain.out }
+  - id: runtime/libc/fmemopen-rw
+    status: active
+    compat: { class: compatibility }
+    build: { source: fmemopen_rw.c, output: fmemopen-rw, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fmemopen-rw }
+    run: []
+    expect: { exit: 0, stdout: golden/fmemopen_rw.out }
+  - id: runtime/libc/open-memstream
+    status: active
+    compat: { class: compatibility }
+    build: { source: open_memstream.c, output: open-memstream, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-open-memstream }
+    run: []
+    expect: { exit: 0, stdout: golden/open_memstream.out }
+  - id: runtime/libc/freopen
+    status: active
+    compat: { class: compatibility }
+    build: { source: freopen_t.c, output: freopen, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-freopen }
+    run: []
+    expect: { exit: 0, stdout: golden/freopen_t.out }
+  - id: runtime/libc/fpos
+    status: active
+    compat: { class: compatibility }
+    build: { source: fpos_test.c, output: fpos, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fpos }
+    run: []
+    expect: { exit: 0, stdout: golden/fpos_test.out }
+  - id: runtime/libc/ungetc-multi
+    status: active
+    compat: { class: compatibility }
+    build: { source: ungetc_multi.c, output: ungetc-multi, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-ungetc-multi }
+    run: []
+    expect: { exit: 0, stdout: golden/ungetc_multi.out }
+  - id: runtime/libc/mem-extra
+    status: active
+    compat: { class: compatibility }
+    build: { source: mem_extra.c, output: mem-extra, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-mem-extra }
+    run: []
+    expect: { exit: 0, stdout: golden/mem_extra.out }
+  - id: runtime/libc/str-extra
+    status: active
+    compat: { class: compatibility }
+    build: { source: str_extra.c, output: str-extra, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-str-extra }
+    run: []
+    expect: { exit: 0, stdout: golden/str_extra.out }
+  - id: runtime/libc/explicit-bzero
+    status: active
+    compat: { class: compatibility }
+    build: { source: explicit_bzero.c, output: explicit-bzero, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-explicit-bzero }
+    run: []
+    expect: { exit: 0, stdout: golden/explicit_bzero.out }
+  - id: runtime/libc/fnmatch
+    status: active
+    compat: { class: compatibility }
+    build: { source: fnmatch_t.c, output: fnmatch, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fnmatch }
+    run: []
+    expect: { exit: 0, stdout: golden/fnmatch_t.out }
+  - id: runtime/libc/regex
+    status: active
+    compat: { class: compatibility }
+    build: { source: regex_t.c, output: regex, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-regex }
+    run: []
+    expect: { exit: 0, stdout: golden/regex_t.out }
+  - id: runtime/libc/env
+    status: active
+    compat: { class: compatibility }
+    build: { source: env_t.c, output: env, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-env }
+    run: []
+    expect: { exit: 0, stdout: golden/env_t.out }
+  - id: runtime/libc/getopt
+    status: active
+    compat: { class: compatibility }
+    build: { source: getopt_t.c, output: getopt, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-getopt }
+    run: []
+    expect: { exit: 0, stdout: golden/getopt_t.out }
+  - id: runtime/libc/sysconf
+    status: active
+    compat: { class: compatibility }
+    build: { source: sysconf_t.c, output: sysconf, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-sysconf }
+    run: []
+    expect: { exit: 0, stdout: golden/sysconf_t.out }
+  - id: runtime/libc/nl-langinfo
+    status: active
+    compat: { class: compatibility }
+    build: { source: nl_langinfo.c, output: nl-langinfo, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-nl-langinfo }
+    run: []
+    expect: { exit: 0, stdout: golden/nl_langinfo.out }
+  - id: runtime/libc/sigsetjmp
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigsetjmp_t.c, output: sigsetjmp, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-sigsetjmp }
+    run: []
+    expect: { exit: 0, stdout: golden/sigsetjmp_t.out }
+  - id: runtime/libc/atexit-order
+    status: active
+    compat: { class: compatibility }
+    build: { source: atexit_order.c, output: atexit-order, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-atexit-order }
+    run: []
+    expect: { exit: 0, stdout: golden/atexit_order.out }
+  - id: runtime/libc/vla-alloca
+    status: active
+    compat: { class: compatibility }
+    build: { source: vla_alloca.c, output: vla-alloca, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-vla-alloca }
+    run: []
+    expect: { exit: 0, stdout: golden/vla_alloca.out }
+  - id: runtime/libc/strftime-utc
+    status: active
+    compat: { class: compatibility }
+    build: { source: strftime_utc.c, output: strftime-utc, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strftime-utc }
+    run: []
+    environment: { TZ: "UTC" }
+    expect: { exit: 0, stdout: golden/strftime_utc.out }
+  - id: runtime/libc/strptime
+    status: active
+    compat: { class: compatibility }
+    build: { source: strptime_t.c, output: strptime, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strptime }
+    run: []
+    environment: { TZ: "UTC" }
+    expect: { exit: 0, stdout: golden/strptime_t.out }
+  - id: runtime/libc/mktime-utc
+    status: active
+    compat: { class: compatibility }
+    build: { source: mktime_utc.c, output: mktime-utc, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-mktime-utc }
+    run: []
+    environment: { TZ: "UTC" }
+    expect: { exit: 0, stdout: golden/mktime_utc.out }
+  - id: runtime/libc/localtime-utc
+    status: active
+    compat: { class: compatibility }
+    build: { source: localtime_utc.c, output: localtime-utc, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-localtime-utc }
+    run: []
+    environment: { TZ: "UTC" }
+    expect: { exit: 0, stdout: golden/localtime_utc.out }
+  - id: runtime/libc/strtod-round
+    status: active
+    compat: { class: compatibility }
+    build: { source: strtod_round.c, output: strtod-round, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-strtod-round }
+    run: []
+    expect: { exit: 0, stdout: golden/strtod_round.out }
+  - id: runtime/libc/printf-prec
+    status: active
+    compat: { class: compatibility }
+    build: { source: printf_prec.c, output: printf-prec, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-printf-prec }
+    run: []
+    expect: { exit: 0, stdout: golden/printf_prec.out }
+  - id: runtime/libc/scanf-set
+    status: active
+    compat: { class: compatibility }
+    build: { source: scanf_set.c, output: scanf-set, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-scanf-set }
+    run: []
+    expect: { exit: 0, stdout: golden/scanf_set.out }
+  - id: runtime/libc/qsort-large
+    status: active
+    compat: { class: compatibility }
+    build: { source: qsort_large.c, output: qsort-large, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-qsort-large }
+    run: []
+    expect: { exit: 0, stdout: golden/qsort_large.out }
+  - id: runtime/libc/fenv-round
+    status: active
+    compat: { class: compatibility }
+    build: { source: fenv_round.c, output: fenv-round, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-fenv-round }
+    run: []
+    expect: { exit: 0, stdout: golden/fenv_round.out }
+  - id: runtime/libc/math-exact
+    status: active
+    compat: { class: compatibility }
+    build: { source: math_exact.c, output: math-exact, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-math-exact }
+    run: []
+    expect: { exit: 0, stdout: golden/math_exact.out }
+  - id: runtime/libc/wmem
+    status: active
+    compat: { class: compatibility }
+    build: { source: wmem.c, output: wmem, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-wmem }
+    run: []
+    expect: { exit: 0, stdout: golden/wmem.out }
+  - id: runtime/libc/div-family
+    status: active
+    compat: { class: compatibility }
+    build: { source: div_family.c, output: div-family, flags: [-static, -O2, -std=gnu11, -lm] }
+    artifact: { destination: /opt/husklet/libc-div-family }
+    run: []
+    expect: { exit: 0, stdout: golden/div_family.out }

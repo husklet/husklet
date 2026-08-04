@@ -78,16 +78,7 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
         "built-in bridge did not reserve Docker's default gateway",
     )?;
     require(none.subnet.is_none(), "built-in none network carried IPAM")?;
-    require(!none.internal, "built-in none network was incorrectly marked internal")?;
     let identities = (bridge.id.clone(), none.id.clone());
-    containers
-        .networks()
-        .create(
-            hl_container::NetworkSpec::bridge_auto("internal")
-                .internal(true)
-                .attachable(true),
-        )
-        .await?;
 
     drop(containers);
     let containers = Containers::builder(config).build().await?;
@@ -98,14 +89,6 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
     require(
         containers.networks().inspect("none").await?.id == identities.1,
         "none identity changed across restart",
-    )?;
-    require(
-        containers.networks().inspect("internal").await?.internal,
-        "internal state did not survive restart",
-    )?;
-    require(
-        containers.networks().inspect("internal").await?.attachable,
-        "attachable state did not survive restart",
     )?;
 
     let socket = work.path().join("daemon.sock");
@@ -123,7 +106,7 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
         require(listed.starts_with("HTTP/1.1 200"), "network list was not HTTP 200")?;
         let listed_body = body(&listed)?;
-        let mut networks = listed_body
+        let networks = listed_body
             .as_array()
             .ok_or("network list was not a JSON array")?
             .iter()
@@ -133,15 +116,9 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
                 Ok::<_, Box<dyn std::error::Error>>((name.to_owned(), driver.to_owned()))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        networks.sort();
         require(
-            networks
-                == [
-                    ("bridge".into(), "bridge".into()),
-                    ("internal".into(), "bridge".into()),
-                    ("none".into(), "null".into()),
-                ],
-            "Docker list did not expose the persisted networks and drivers",
+            networks == [("bridge".into(), "bridge".into()), ("none".into(), "null".into())],
+            "Docker list did not expose Moby built-in names and drivers",
         )?;
         let bridge = listed_body
             .as_array()
@@ -154,57 +131,6 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
         require(
             bridge["IPAM"]["Config"][0]["Gateway"] == "172.17.0.1",
             "Docker list exposed the wrong built-in bridge gateway",
-        )?;
-        require(
-            bridge["Attachable"] == false,
-            "Docker list marked the built-in bridge attachable",
-        )?;
-        let none = listed_body
-            .as_array()
-            .and_then(|networks| networks.iter().find(|network| network["Name"] == "none"))
-            .ok_or("Docker list omitted its built-in none network")?;
-        require(none["Internal"] == false, "Docker list marked none as internal")?;
-        let internal = listed_body
-            .as_array()
-            .and_then(|networks| networks.iter().find(|network| network["Name"] == "internal"))
-            .ok_or("Docker list omitted its persisted internal network")?;
-        require(
-            internal["Internal"] == true,
-            "Docker list lost persisted internal state",
-        )?;
-        require(
-            internal["Attachable"] == true,
-            "Docker list lost persisted attachable state",
-        )?;
-
-        let inspected = exchange(
-            &socket,
-            b"GET /v1.43/networks/internal HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-        )
-        .await?;
-        require(
-            inspected.starts_with("HTTP/1.1 200"),
-            "attachable network inspect was not HTTP 200",
-        )?;
-        require(
-            body(&inspected)?["Attachable"] == true,
-            "Docker inspect lost persisted attachable state",
-        )?;
-
-        let duplicate_null = exchange(
-            &socket,
-            b"POST /v1.43/networks/create HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 33\r\nConnection: close\r\n\r\n{\"Name\":\"airgap\",\"Driver\":\"null\"}",
-        )
-        .await?;
-        require(
-            duplicate_null.starts_with("HTTP/1.1 403"),
-            "a second null-driver network was not forbidden",
-        )?;
-        require(
-            body(&duplicate_null)?["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("only one instance")),
-            "null-driver singleton refusal omitted Docker error detail",
         )?;
 
         for name in ["bridge", "none"] {

@@ -55,13 +55,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 arguments[3] as u32,
                 arguments[4] as u32,
             ),
-            "chown" => abi.chownat(
-                -100,
-                arguments[0],
-                arguments[1] as u32,
-                arguments[2] as u32,
-                0,
-            ),
+            "chown" => abi.chownat(-100, arguments[0], arguments[1] as u32, arguments[2] as u32, 0),
             "utime" => abi.utime(arguments[0], arguments[1]),
             "utimes" => abi.utimes(-100, arguments[0], arguments[1]),
             "futimesat" => abi.futimesat(arguments[0] as i32, arguments[1], arguments[2]),
@@ -81,9 +75,13 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Err(error) => return LinuxResult::Error(FileErrno::marshal(error)),
         };
         let prepared_unlink = match (&plan, &self.unix_socket_paths) {
-            (FsMutationPlan::Unlink { target, directory: false }, Some(paths)) => {
-                paths.prepare_unlink(&target.path)
-            }
+            (
+                FsMutationPlan::Unlink {
+                    target,
+                    directory: false,
+                },
+                Some(paths),
+            ) => paths.prepare_unlink(&target.path),
             _ => None,
         };
         let prepared = if let FsMutationPlan::Chmod { target, mode } = &plan

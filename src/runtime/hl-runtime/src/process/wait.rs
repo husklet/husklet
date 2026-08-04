@@ -1,4 +1,6 @@
-use hl_linux::{Errno, GuestMarshaller, GuestMemory, LinuxResult, ProcessAbi, ResourceUsage, RestartKind, SignalAbi, WaitKind};
+use hl_linux::{
+    Errno, GuestMarshaller, GuestMemory, LinuxResult, ProcessAbi, ResourceUsage, RestartKind, SignalAbi, WaitKind,
+};
 use hl_task::{
     ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector, ChildWaitOptions, PreparedChildWait,
     PreparedWaitSelection, ProcessId, SignalDisposition, SignalInfo, SignalNumber, TraceWait,
@@ -50,7 +52,13 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         })
     }
 
-    fn finish_prepared_wait(&self, prepared: PreparedChildWait<'_>, pid: i32, status: u64, usage: u64) -> Option<LinuxResult> {
+    fn finish_prepared_wait(
+        &self,
+        prepared: PreparedChildWait<'_>,
+        pid: i32,
+        status: u64,
+        usage: u64,
+    ) -> Option<LinuxResult> {
         match prepared {
             PreparedChildWait::Selection(selection) => Some(
                 self.trace_wait4(pid, status)
@@ -91,7 +99,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         Some(LinuxResult::Value(event.tracee.number() as u64))
     }
 
-    fn finish_wait4(&self, selection: PreparedWaitSelection<'_>, status_pointer: u64, usage_pointer: u64) -> LinuxResult {
+    fn finish_wait4(
+        &self,
+        selection: PreparedWaitSelection<'_>,
+        status_pointer: u64,
+        usage_pointer: u64,
+    ) -> LinuxResult {
         let event = selection.event();
         let usage = match selection.usage() {
             Ok(value) => Self::wait_usage(value),
@@ -172,10 +185,16 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 Err(_) => return LinuxResult::Error(Errno::ECHILD),
             };
             match prepared {
-                PreparedChildWait::Selection(selection) => return self.finish_waitid(selection, plan.information, plan.usage),
+                PreparedChildWait::Selection(selection) => {
+                    return self.finish_waitid(selection, plan.information, plan.usage);
+                }
                 PreparedChildWait::NoChange => {
                     let zero = [0_u8; 128];
-                    if GuestMarshaller::new(&self.memory, self.architecture).copy_to(plan.information, &zero).fault.is_some() {
+                    if GuestMarshaller::new(&self.memory, self.architecture)
+                        .copy_to(plan.information, &zero)
+                        .fault
+                        .is_some()
+                    {
                         return LinuxResult::Error(Errno::EFAULT);
                     }
                     return LinuxResult::Value(0);
@@ -198,12 +217,24 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let signal = SignalNumber::new(17).expect("SIGCHLD");
         let (code, status) = match event.kind {
             ChildEventKind::Exited(hl_task::ExitStatus::Code(status)) => (1, u64::from(status)),
-            ChildEventKind::Exited(hl_task::ExitStatus::Signal { signal, dumped_core: false }) => (2, u64::from(signal)),
-            ChildEventKind::Exited(hl_task::ExitStatus::Signal { signal, dumped_core: true }) => (3, u64::from(signal)),
+            ChildEventKind::Exited(hl_task::ExitStatus::Signal {
+                signal,
+                dumped_core: false,
+            }) => (2, u64::from(signal)),
+            ChildEventKind::Exited(hl_task::ExitStatus::Signal {
+                signal,
+                dumped_core: true,
+            }) => (3, u64::from(signal)),
             ChildEventKind::Stopped(signal) => (5, u64::from(signal.get())),
             ChildEventKind::Continued => (6, 18),
         };
-        let info = SignalInfo { signal, code, sender_process: event.child.number(), value: status, ..SignalInfo::bare(signal) };
+        let info = SignalInfo {
+            signal,
+            code,
+            sender_process: event.child.number(),
+            value: status,
+            ..SignalInfo::bare(signal)
+        };
         let reaped = match selection.commit() {
             Ok(event) => event,
             Err(_) => return LinuxResult::Error(Errno::ECHILD),

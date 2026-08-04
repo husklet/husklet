@@ -20,14 +20,8 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let listed = service.containers().list().await?;
-    require(
-        listed.len() == 1,
-        "headless list did not return exactly one container",
-    )?;
-    require(
-        listed[0].id == created.id,
-        "headless list returned the wrong identity",
-    )?;
+    require(listed.len() == 1, "headless list did not return exactly one container")?;
+    require(listed[0].id == created.id, "headless list returned the wrong identity")?;
     require(
         service.containers().inspect("scenario").await?.id == created.id,
         "headless name lookup returned the wrong identity",

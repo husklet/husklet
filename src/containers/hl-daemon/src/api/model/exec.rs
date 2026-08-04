@@ -51,10 +51,7 @@ impl ExecConfig {
         Ok(())
     }
 
-    pub(crate) fn process(
-        &self,
-        parent: &hl_container::Process,
-    ) -> Result<hl_container::Process, String> {
+    pub(crate) fn process(&self, parent: &hl_container::Process) -> Result<hl_container::Process, String> {
         self.validate()?;
         let (program, arguments) = self
             .command
@@ -98,11 +95,7 @@ pub struct ExecStart {
     /// Extension: terminate and remove this exec when its attached client disappears unexpectedly.
     #[serde(default, rename = "KillOnDisconnect")]
     pub kill_on_disconnect: bool,
-    #[serde(
-        default,
-        rename = "ConsoleSize",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, rename = "ConsoleSize", skip_serializing_if = "Option::is_none")]
     pub console_size: Option<[u64; 2]>,
     #[serde(flatten, default)]
     pub unsupported: std::collections::BTreeMap<String, serde_json::Value>,
@@ -118,8 +111,7 @@ impl ExecStart {
             return Ok(None);
         };
         let rows = u16::try_from(height).map_err(|_| "terminal height exceeds 65535".to_owned())?;
-        let columns =
-            u16::try_from(width).map_err(|_| "terminal width exceeds 65535".to_owned())?;
+        let columns = u16::try_from(width).map_err(|_| "terminal width exceeds 65535".to_owned())?;
         hl_container::Size::new(rows, columns)
             .map(Some)
             .map_err(|error| error.to_string())
@@ -228,9 +220,7 @@ mod tests {
         let decoded: ExecConfig = serde_json::from_slice(&encoded).unwrap();
 
         assert_eq!(decoded.command, ["google-chrome", URL]);
-        let process = decoded
-            .process(&hl_container::Process::new("/bin/true"))
-            .unwrap();
+        let process = decoded.process(&hl_container::Process::new("/bin/true")).unwrap();
         assert_eq!(process.program, "google-chrome");
         assert_eq!(process.args, [URL]);
     }
@@ -294,9 +284,9 @@ mod tests {
                 user: user.to_owned(),
                 ..ExecConfig::default()
             };
-            let process = config.process(&parent).unwrap_or_else(|error| {
-                panic!("exec User {user:?} rejected at transport: {error}")
-            });
+            let process = config
+                .process(&parent)
+                .unwrap_or_else(|error| panic!("exec User {user:?} rejected at transport: {error}"));
             assert_eq!(
                 (process.uid, process.gid),
                 (Some(11), Some(12)),
@@ -317,12 +307,14 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!((size.rows(), size.columns()), (41, 109));
-        assert!(ExecStart {
-            tty: true,
-            console_size: Some([0, 109]),
-            ..Default::default()
-        }
-        .size()
-        .is_err());
+        assert!(
+            ExecStart {
+                tty: true,
+                console_size: Some([0, 109]),
+                ..Default::default()
+            }
+            .size()
+            .is_err()
+        );
     }
 }

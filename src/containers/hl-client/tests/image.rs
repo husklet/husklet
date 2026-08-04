@@ -32,7 +32,9 @@ async fn commit_uses_typed_response_and_encoded_query() {
         .unwrap();
     assert_eq!(result.id, "sha256:new");
     let request = captured.await.unwrap();
-    assert!(request.starts_with(
-        "POST /v1.43/commit?container=container%2Fname&repo=example%2Frepo&tag=v1&pause=true HTTP/1.1"
-    ));
+    assert!(
+        request.starts_with(
+            "POST /v1.43/commit?container=container%2Fname&repo=example%2Frepo&tag=v1&pause=true HTTP/1.1"
+        )
+    );
 }

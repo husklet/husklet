@@ -1,6 +1,6 @@
 use crate::Result;
 use nix::{
-    fcntl::{open, OFlag},
+    fcntl::{OFlag, open},
     sys::stat::Mode,
 };
 use std::{
@@ -18,27 +18,15 @@ pub enum TranslationCacheError {
     #[error("translation cache path must be a directory: {}", .0.display())]
     NotDirectory(PathBuf),
     #[error("could not create translation cache directory {}: {source}", path.display())]
-    Create {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    Create { path: PathBuf, source: std::io::Error },
     #[error("could not inspect translation cache path {}: {source}", path.display())]
-    Inspect {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    Inspect { path: PathBuf, source: std::io::Error },
     #[error("could not verify translation cache directory {}: {source}", path.display())]
-    Verify {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    Verify { path: PathBuf, source: std::io::Error },
     #[error("could not securely open translation cache directory {}: {source}", path.display())]
     Open { path: PathBuf, source: nix::Error },
     #[error("could not make translation cache directory private {}: {source}", path.display())]
-    Permissions {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    Permissions { path: PathBuf, source: std::io::Error },
 }
 
 #[derive(Clone, Debug)]
@@ -73,19 +61,14 @@ impl TranslationCache {
                     })?;
             }
             Err(source) => {
-                return Err(TranslationCacheError::Inspect {
-                    path: self.0,
-                    source,
-                }
-                .into());
+                return Err(TranslationCacheError::Inspect { path: self.0, source }.into());
             }
         }
 
-        let metadata =
-            fs::symlink_metadata(&self.0).map_err(|source| TranslationCacheError::Verify {
-                path: self.0.clone(),
-                source,
-            })?;
+        let metadata = fs::symlink_metadata(&self.0).map_err(|source| TranslationCacheError::Verify {
+            path: self.0.clone(),
+            source,
+        })?;
         if metadata.file_type().is_symlink() {
             return Err(TranslationCacheError::Symlink(self.0).into());
         }
@@ -162,7 +145,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
     fn translation_cache_requires_an_absolute_path() {
@@ -179,11 +162,9 @@ mod tests {
     #[tokio::test]
     async fn service_construction_rejects_a_relative_translation_cache() {
         let temporary = tempfile::tempdir().unwrap();
-        let result = crate::Containers::builder(
-            Config::new(temporary.path()).translation_cache("relative/cache"),
-        )
-        .build()
-        .await;
+        let result = crate::Containers::builder(Config::new(temporary.path()).translation_cache("relative/cache"))
+            .build()
+            .await;
         let Err(error) = result else {
             panic!("relative translation cache unexpectedly accepted");
         };
@@ -199,10 +180,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let directory = temporary.path().join("nested/cache");
 
-        assert_eq!(
-            TranslationCache::new(directory.clone()).prepare().unwrap(),
-            directory
-        );
+        assert_eq!(TranslationCache::new(directory.clone()).prepare().unwrap(), directory);
         let mode = fs::metadata(&directory).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
     }

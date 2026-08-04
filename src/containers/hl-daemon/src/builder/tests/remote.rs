@@ -38,31 +38,20 @@ async fn remote_add_fetches_validates_and_keeps_archives_opaque() {
         header.set_size(6);
         header.set_mode(0o644);
         header.set_cksum();
-        archive
-            .append_data(&mut header, "inside", &b"inside"[..])
-            .unwrap();
+        archive.append_data(&mut header, "inside", &b"inside"[..]).unwrap();
         archive.finish().unwrap();
     }
     let url = serve_once(archive_bytes.clone(), "archive.tar").await;
-    let checksum = hl_images::Digest::sha256(&archive_bytes)
-        .encoded()
-        .to_owned();
+    let checksum = hl_images::Digest::sha256(&archive_bytes).encoded().to_owned();
     let recipe = Recipe::parse(&format!(
         "FROM scratch\nADD --checksum=sha256:{checksum} {url} /artifact.tar\n"
     ))
     .unwrap();
     let remotes = RemoteSources::fetch(&recipe).await.unwrap();
-    let digest = *remotes
-        .entries()
-        .find(|(source, _)| *source == url)
-        .unwrap()
-        .1;
+    let digest = *remotes.entries().find(|(source, _)| *source == url).unwrap().1;
     let remote = remotes.get(&url).unwrap();
     assert_eq!(hl_images::Digest::from(digest).encoded(), checksum);
-    assert_eq!(
-        std::fs::read(remote.root().join(remote.name())).unwrap(),
-        archive_bytes
-    );
+    assert_eq!(std::fs::read(remote.root().join(remote.name())).unwrap(), archive_bytes);
 
     let selected = [remote.name().to_owned()];
     let destination = tempfile::tempdir().unwrap();
@@ -94,10 +83,7 @@ async fn remote_add_fetches_validates_and_keeps_archives_opaque() {
             & 0o777,
         0o600
     );
-    assert_eq!(
-        ownerships.get("artifact.tar"),
-        Some(Ownership { uid: 12, gid: 34 })
-    );
+    assert_eq!(ownerships.get("artifact.tar"), Some(Ownership { uid: 12, gid: 34 }));
 
     let url = serve_once(archive_bytes, "file").await;
     let bad = Recipe::parse(&format!(
@@ -105,9 +91,11 @@ async fn remote_add_fetches_validates_and_keeps_archives_opaque() {
         "0".repeat(64)
     ))
     .unwrap();
-    assert!(RemoteSources::fetch(&bad)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("checksum mismatch"));
+    assert!(
+        RemoteSources::fetch(&bad)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("checksum mismatch")
+    );
 }

@@ -5,10 +5,7 @@ use hl_container::{ContainerSpec, Containers, ExitStatus, Isolation, Process, Sa
 use std::{path::Path, time::Duration};
 use tokio::time::{sleep, timeout};
 
-pub(crate) async fn run(
-    containers: &Containers,
-    rootfs: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let network = containers
         .networks()
         .create(hl_container::NetworkSpec::bridge(
@@ -25,10 +22,7 @@ pub(crate) async fn run(
         .create(
             ContainerSpec::from_directory(
                 rootfs,
-                Process::new("/bin/sh").args([
-                    "-c",
-                    "while true; do echo bridge-ok | nc -l -p 23456 -w 1; done",
-                ]),
+                Process::new("/bin/sh").args(["-c", "while true; do echo bridge-ok | nc -l -p 23456 -w 1; done"]),
             )
             .name("network-server")
             .isolation(isolation),
@@ -46,19 +40,11 @@ pub(crate) async fn run(
         .await?;
     containers
         .networks()
-        .connect(
-            &network.name,
-            server.id.as_str(),
-            hl_container::EndpointSpec::default(),
-        )
+        .connect(&network.name, server.id.as_str(), hl_container::EndpointSpec::default())
         .await?;
     containers
         .networks()
-        .connect(
-            &network.name,
-            client.id.as_str(),
-            hl_container::EndpointSpec::default(),
-        )
+        .connect(&network.name, client.id.as_str(), hl_container::EndpointSpec::default())
         .await?;
     containers.start(server.id.as_str()).await?;
     sleep(Duration::from_secs(1)).await;

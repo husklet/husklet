@@ -33,10 +33,7 @@ pub(crate) async fn run() -> Result<(), Error> {
     );
     wait(&socket).await?;
     let client = Client::unix(&socket)?;
-    client
-        .images()
-        .load(tokio::fs::File::open(archive).await?)
-        .await?;
+    client.images().load(tokio::fs::File::open(archive).await?).await?;
     let result = async {
         managed::run_docker_contracts(&client).await?;
         let scenarios = crate::registry::volume::group()
@@ -69,18 +66,15 @@ pub(crate) fn archive(work: &Path) -> Result<std::path::PathBuf, Error> {
     let source = env::var_os("HL_ALPINE_ARCHIVE").ok_or("HL_ALPINE_ARCHIVE is required")?;
     let mut layer = Vec::new();
     flate2::read::GzDecoder::new(std::fs::File::open(&source)?).read_to_end(&mut layer)?;
-    let digest = Sha256::digest(&layer)
-        .iter()
-        .fold(String::new(), |mut digest, byte| {
-            write!(digest, "{byte:02x}").expect("writing to a String cannot fail");
-            digest
-        });
+    let digest = Sha256::digest(&layer).iter().fold(String::new(), |mut digest, byte| {
+        write!(digest, "{byte:02x}").expect("writing to a String cannot fail");
+        digest
+    });
     let config = serde_json::to_vec(
         &serde_json::json!({"architecture":"arm64","os":"linux","config":{"Cmd":["/bin/sh"]},"rootfs":{"type":"layers","diff_ids":[format!("sha256:{digest}")]}}),
     )?;
-    let manifest = serde_json::to_vec(
-        &serde_json::json!([{"Config":"config.json","RepoTags":[IMAGE],"Layers":["layer.tar"]}]),
-    )?;
+    let manifest =
+        serde_json::to_vec(&serde_json::json!([{"Config":"config.json","RepoTags":[IMAGE],"Layers":["layer.tar"]}]))?;
     let path = work.join("alpine.tar");
     let mut tar = tar::Builder::new(std::fs::File::create(&path)?);
     for (name, bytes) in [

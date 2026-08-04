@@ -6,6 +6,11 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
     let containers = service(Arc::clone(&runtime)).await;
     containers
         .networks()
+        .create(NetworkSpec::none("isolated"))
+        .await
+        .unwrap();
+    containers
+        .networks()
         .create(NetworkSpec::bridge(
             "bridge-test",
             Subnet::new("10.90.0.0".parse().unwrap(), 24).unwrap(),
@@ -29,7 +34,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
         .unwrap();
     containers
         .networks()
-        .connect("none", "none-owner", EndpointSpec::default())
+        .connect("isolated", "none-owner", EndpointSpec::default())
         .await
         .unwrap();
     containers
@@ -39,16 +44,13 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
         .unwrap();
     containers
         .networks()
-        .connect("none", "conflict", EndpointSpec::default())
+        .connect("isolated", "conflict", EndpointSpec::default())
         .await
         .unwrap();
 
     containers.start("none-owner").await.unwrap();
     assert!(matches!(
-        containers
-            .networks()
-            .disconnect("none", "none-owner")
-            .await,
+        containers.networks().disconnect("isolated", "none-owner").await,
         Err(Error::InvalidState { .. })
     ));
     containers.wait("none-owner").await.unwrap();
@@ -104,10 +106,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
 async fn legacy_predefined_bridge_survives_reopen() {
     let storage = Arc::new(Memory::default());
     let legacy = Network::from_spec(
-        NetworkSpec::bridge(
-            "bridge",
-            Subnet::new("172.18.0.0".parse().unwrap(), 16).unwrap(),
-        ),
+        NetworkSpec::bridge("bridge", Subnet::new("172.18.0.0".parse().unwrap(), 16).unwrap()),
         7,
     );
     crate::storage::NetworkStore::insert(storage.as_ref(), &legacy)
@@ -173,12 +172,16 @@ async fn generated_identity_access_follows_rootfs_writability() {
 
     let launches = runtime.mounts.lock().unwrap();
     for target in ["/etc/hosts", "/etc/resolv.conf", "/etc/hostname"] {
-        assert!(launches[0]
-            .iter()
-            .any(|mount| mount.1 == std::path::Path::new(target) && mount.2 == Access::ReadWrite));
-        assert!(launches[1]
-            .iter()
-            .any(|mount| mount.1 == std::path::Path::new(target) && mount.2 == Access::ReadOnly));
+        assert!(
+            launches[0]
+                .iter()
+                .any(|mount| mount.1 == std::path::Path::new(target) && mount.2 == Access::ReadWrite)
+        );
+        assert!(
+            launches[1]
+                .iter()
+                .any(|mount| mount.1 == std::path::Path::new(target) && mount.2 == Access::ReadOnly)
+        );
     }
     let resolver = launches[2]
         .iter()
@@ -212,14 +215,8 @@ async fn custom_bridge_identity_mounts_include_peers_and_exec_reuses_files() {
         .create(spec("web").isolation(connected).hostname("web-host"))
         .await
         .unwrap();
-    containers
-        .create(spec("database").isolation(connected))
-        .await
-        .unwrap();
-    containers
-        .create(spec("late").isolation(connected))
-        .await
-        .unwrap();
+    containers.create(spec("database").isolation(connected)).await.unwrap();
+    containers.create(spec("late").isolation(connected)).await.unwrap();
     containers
         .networks()
         .connect(
@@ -257,8 +254,7 @@ async fn custom_bridge_identity_mounts_include_peers_and_exec_reuses_files() {
 
     let launches = runtime.mounts.lock().unwrap().clone();
     assert_eq!(launches.len(), 2);
-    let identity = |mounts: &Vec<(std::path::PathBuf, std::path::PathBuf, Access)>,
-                    target: &str| {
+    let identity = |mounts: &Vec<(std::path::PathBuf, std::path::PathBuf, Access)>, target: &str| {
         mounts
             .iter()
             .find(|mount| mount.1 == std::path::Path::new(target))
@@ -280,10 +276,7 @@ async fn custom_bridge_identity_mounts_include_peers_and_exec_reuses_files() {
         "nameserver 127.0.0.11\noptions ndots:0\n"
     );
     for target in ["/etc/hosts", "/etc/resolv.conf", "/etc/hostname"] {
-        assert_eq!(
-            identity(&launches[0], target).0,
-            identity(&launches[1], target).0
-        );
+        assert_eq!(identity(&launches[0], target).0, identity(&launches[1], target).0);
     }
 
     let directory = hosts.0.parent().unwrap().to_owned();
@@ -296,10 +289,7 @@ async fn published_ports_are_durable_and_only_apply_to_the_owner_process() {
     let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
     let containers = service(Arc::clone(&runtime)).await;
     let publish = crate::Publication::tcp("0.0.0.0".parse().unwrap(), 18080, 8080).unwrap();
-    containers
-        .create(spec("published").publish(publish))
-        .await
-        .unwrap();
+    containers.create(spec("published").publish(publish)).await.unwrap();
 
     containers.start("published").await.unwrap();
     containers.wait("published").await.unwrap();
@@ -319,8 +309,7 @@ async fn published_ports_are_durable_and_only_apply_to_the_owner_process() {
 #[tokio::test]
 async fn automatic_host_ports_are_allocated_atomically_and_durably() {
     let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
-    let automatic =
-        |guest| crate::Publication::tcp(std::net::Ipv4Addr::UNSPECIFIED, 0, guest).unwrap();
+    let automatic = |guest| crate::Publication::tcp(std::net::Ipv4Addr::UNSPECIFIED, 0, guest).unwrap();
     let first = containers
         .create(spec("automatic-first").publish(automatic(80)))
         .await
@@ -333,13 +322,7 @@ async fn automatic_host_ports_are_allocated_atomically_and_durably() {
     assert_eq!(first.spec.publish[0].host, 49152);
     assert_eq!(second.spec.publish[0].host, 49153);
     assert_eq!(
-        containers
-            .inspect("automatic-first")
-            .await
-            .unwrap()
-            .spec
-            .publish[0]
-            .host,
+        containers.inspect("automatic-first").await.unwrap().spec.publish[0].host,
         49152
     );
 }
@@ -357,17 +340,9 @@ async fn published_host_address_is_durable_and_reaches_the_runtime() {
     containers.start("loopback-published").await.unwrap();
     containers.wait("loopback-published").await.unwrap();
 
+    assert_eq!(runtime.publishes.lock().unwrap().as_slice(), &[vec![publish]]);
     assert_eq!(
-        runtime.publishes.lock().unwrap().as_slice(),
-        &[vec![publish]]
-    );
-    assert_eq!(
-        containers
-            .inspect("loopback-published")
-            .await
-            .unwrap()
-            .spec
-            .publish,
+        containers.inspect("loopback-published").await.unwrap().spec.publish,
         vec![publish]
     );
 }
@@ -399,9 +374,11 @@ async fn automatic_publication_attaches_the_default_bridge_at_launch() {
         assert_eq!(launches[0][0].driver, crate::NetworkDriver::Bridge);
     }
     let bridge = containers.networks().inspect("bridge").await.unwrap();
-    assert!(bridge
-        .endpoints
-        .contains_key(&containers.inspect("default-published").await.unwrap().id));
+    assert!(
+        bridge
+            .endpoints
+            .contains_key(&containers.inspect("default-published").await.unwrap().id)
+    );
 }
 
 #[tokio::test]
@@ -439,13 +416,7 @@ async fn stopped_member_can_join_a_network_with_active_peers() {
         .await
         .unwrap();
     assert_eq!(
-        containers
-            .networks()
-            .inspect("runtime")
-            .await
-            .unwrap()
-            .endpoints
-            .len(),
+        containers.networks().inspect("runtime").await.unwrap().endpoints.len(),
         2
     );
     containers.wait("server").await.unwrap();

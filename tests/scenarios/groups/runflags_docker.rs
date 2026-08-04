@@ -1,14 +1,14 @@
 //! Docker-owned run flag contracts driven through the typed client.
 
 use hl_client::{
-    model::{CreateContainer, ExposedPorts, HostConfig, List, PortBinding, PortBindings},
     Client,
+    model::{CreateContainer, ExposedPorts, HostConfig, List, PortBinding, PortBindings},
 };
 use hl_container::Containers;
 use hl_daemon::Daemon;
 use hl_images::{
-    format::docker::{Archive, Limits},
     Digest, Reference,
+    format::docker::{Archive, Limits},
 };
 use serde_json::json;
 use std::{collections::BTreeMap, path::Path, time::Duration};
@@ -18,12 +18,7 @@ use tokio::sync::oneshot;
 type Error = Box<dyn std::error::Error>;
 const IMAGE: &str = "alpine:3.20";
 
-pub(super) async fn run(
-    id: &str,
-    containers: &Containers,
-    rootfs: &Path,
-    work: &Path,
-) -> Result<(), Error> {
+pub(super) async fn run(id: &str, containers: &Containers, rootfs: &Path, work: &Path) -> Result<(), Error> {
     let reference: Reference = IMAGE.parse()?;
     if containers.images()?.resolve(&reference)?.is_none() {
         seed(containers, rootfs)?;
@@ -84,19 +79,11 @@ fn seed(containers: &Containers, rootfs: &Path) -> Result<(), Error> {
     append(&mut archive, "config.json", &config)?;
     append(&mut archive, "layer.tar", &layer)?;
     append(&mut archive, "manifest.json", &manifest)?;
-    Archive::load(
-        &archive.into_inner()?[..],
-        &containers.images()?,
-        Limits::default(),
-    )?;
+    Archive::load(&archive.into_inner()?[..], &containers.images()?, Limits::default())?;
     Ok(())
 }
 
-fn append(
-    archive: &mut tar::Builder<Vec<u8>>,
-    path: &str,
-    bytes: &[u8],
-) -> Result<(), std::io::Error> {
+fn append(archive: &mut tar::Builder<Vec<u8>>, path: &str, bytes: &[u8]) -> Result<(), std::io::Error> {
     let mut header = tar::Header::new_gnu();
     header.set_size(bytes.len() as u64);
     header.set_mode(0o644);
@@ -125,10 +112,7 @@ async fn publish(client: &Client) -> Result<(), Error> {
         }),
         ..request
     };
-    client
-        .containers()
-        .create(&request, Some("rf-auto-port"))
-        .await?;
+    client.containers().create(&request, Some("rf-auto-port")).await?;
     client.containers().start("rf-auto-port").await?;
     let inspect = client.containers().inspect("rf-auto-port").await?;
     let binding = inspect
@@ -150,10 +134,7 @@ async fn auto_remove(client: &Client) -> Result<(), Error> {
         auto_remove: true,
         ..HostConfig::default()
     });
-    client
-        .containers()
-        .create(&request, Some("rf-auto-remove"))
-        .await?;
+    client.containers().create(&request, Some("rf-auto-remove")).await?;
     client.containers().start("rf-auto-remove").await?;
     client.containers().wait("rf-auto-remove").await?;
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -176,10 +157,7 @@ async fn named_user(client: &Client) -> Result<(), Error> {
 
 async fn bridge(client: &Client) -> Result<(), Error> {
     let request = request(["/bin/sleep", "30"]);
-    client
-        .containers()
-        .create(&request, Some("rf-bridge"))
-        .await?;
+    client.containers().create(&request, Some("rf-bridge")).await?;
     client.containers().start("rf-bridge").await?;
     let network = client.networks().inspect("bridge").await?;
     require(
@@ -197,12 +175,7 @@ async fn environment(client: &Client) -> Result<(), Error> {
     completed(client, "rf-env", request, "FOO=barbaz").await
 }
 
-async fn completed(
-    client: &Client,
-    name: &str,
-    request: CreateContainer,
-    marker: &str,
-) -> Result<(), Error> {
+async fn completed(client: &Client, name: &str, request: CreateContainer, marker: &str) -> Result<(), Error> {
     client.containers().create(&request, Some(name)).await?;
     client.containers().start(name).await?;
     let wait = client.containers().wait(name).await?;
@@ -224,10 +197,7 @@ fn request<const N: usize>(arguments: [&str; N]) -> CreateContainer {
 async fn cleanup(client: &Client) {
     if let Ok(containers) = client.containers().list(List::default().all()).await {
         for container in containers {
-            let _ = client
-                .containers()
-                .remove(&container.metadata.id, true, true)
-                .await;
+            let _ = client.containers().remove(&container.metadata.id, true, true).await;
         }
     }
 }
@@ -243,9 +213,5 @@ async fn wait(socket: &Path) -> Result<(), Error> {
 }
 
 fn require(value: bool, message: &'static str) -> Result<(), Error> {
-    if value {
-        Ok(())
-    } else {
-        Err(message.into())
-    }
+    if value { Ok(()) } else { Err(message.into()) }
 }

@@ -52,7 +52,5 @@ fn commit_changes_apply_runtime_and_image_metadata_and_reject_unknowns() {
         changes.iter().map(String::as_str).collect::<Vec<_>>()
     );
     assert!(metadata.history.iter().all(|entry| entry.empty_layer));
-    assert!(Changes::new(&["FROM alpine".into()])
-        .apply(&mut metadata)
-        .is_err());
+    assert!(Changes::new(&["FROM alpine".into()]).apply(&mut metadata).is_err());
 }

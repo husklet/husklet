@@ -1,6 +1,4 @@
-use crate::{
-    model::ResolvedMount, service::NetworkConfig, Access, Container, NetworkDriver, Result,
-};
+use crate::{Access, Container, NetworkDriver, Result, model::ResolvedMount, service::NetworkConfig};
 use std::{
     fmt::Write as _,
     path::{Path, PathBuf},
@@ -17,21 +15,13 @@ impl Identity {
         Self { root }
     }
 
-    pub(crate) fn prepare(
-        &self,
-        container: &Container,
-        networks: &[NetworkConfig],
-    ) -> Result<Vec<ResolvedMount>> {
+    pub(crate) fn prepare(&self, container: &Container, networks: &[NetworkConfig]) -> Result<Vec<ResolvedMount>> {
         let directory = self.directory(container);
         std::fs::create_dir_all(&directory)?;
         self.generation(container)?;
         let hostname = container.hostname();
         Self::write(&directory, "hostname", format!("{hostname}\n").as_bytes())?;
-        Self::write(
-            &directory,
-            "hosts",
-            Self::hosts(container, networks).as_bytes(),
-        )?;
+        Self::write(&directory, "hosts", Self::hosts(container, networks).as_bytes())?;
         Self::write(
             &directory,
             "resolv.conf",
@@ -57,11 +47,7 @@ impl Identity {
     pub(crate) fn refresh(&self, container: &Container, networks: &[NetworkConfig]) -> Result<()> {
         let directory = self.directory(container);
         self.generation(container)?;
-        Self::write(
-            &directory,
-            "hosts",
-            Self::hosts(container, networks).as_bytes(),
-        )?;
+        Self::write(&directory, "hosts", Self::hosts(container, networks).as_bytes())?;
         Self::write(
             &directory,
             "resolv.conf",
@@ -78,10 +64,7 @@ impl Identity {
         }
     }
 
-    pub(crate) fn generation(
-        &self,
-        container: &Container,
-    ) -> Result<crate::generation::Generation> {
+    pub(crate) fn generation(&self, container: &Container) -> Result<crate::generation::Generation> {
         let directory = self.directory(container);
         std::fs::create_dir_all(&directory)?;
         crate::generation::Generation::open(directory.join("generation"))
@@ -109,8 +92,7 @@ impl Identity {
             }
             let custom = network.name != "bridge";
             let mut endpoints = network.endpoints.iter().collect::<Vec<_>>();
-            endpoints
-                .sort_by_key(|endpoint| (endpoint.container != container.id, endpoint.address));
+            endpoints.sort_by_key(|endpoint| (endpoint.container != container.id, endpoint.address));
             for endpoint in endpoints {
                 if !custom && endpoint.container != container.id {
                     continue;
@@ -126,8 +108,7 @@ impl Identity {
                         names.push(hostname);
                     }
                 }
-                writeln!(contents, "{address}\t{}", names.join(" "))
-                    .expect("writing to String cannot fail");
+                writeln!(contents, "{address}\t{}", names.join(" ")).expect("writing to String cannot fail");
             }
         }
         for (name, address) in &container.spec.hosts {
@@ -147,9 +128,7 @@ impl Identity {
             return Ok(contents);
         }
         if !container.spec.isolation.network_isolated
-            || networks
-                .iter()
-                .any(|network| network.driver == NetworkDriver::Bridge)
+            || networks.iter().any(|network| network.driver == NetworkDriver::Bridge)
         {
             Ok("nameserver 127.0.0.11\noptions ndots:0\n".into())
         } else {

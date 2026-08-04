@@ -328,12 +328,7 @@ impl Filesystem {
         }
     }
 
-    fn extract_file<R: Read>(
-        root: &FsPath,
-        path: &Path,
-        output: &FsPath,
-        entry: &mut tar::Entry<'_, R>,
-    ) -> Result<()> {
+    fn extract_file<R: Read>(root: &FsPath, path: &Path, output: &FsPath, entry: &mut tar::Entry<'_, R>) -> Result<()> {
         path.replace(root)?;
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent)?;
@@ -348,12 +343,7 @@ impl Filesystem {
         Ok(())
     }
 
-    fn extract_symlink<R: Read>(
-        root: &FsPath,
-        path: &Path,
-        output: &FsPath,
-        entry: &tar::Entry<'_, R>,
-    ) -> Result<()> {
+    fn extract_symlink<R: Read>(root: &FsPath, path: &Path, output: &FsPath, entry: &tar::Entry<'_, R>) -> Result<()> {
         let target = entry
             .link_name()?
             .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;

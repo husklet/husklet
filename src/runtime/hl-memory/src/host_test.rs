@@ -207,7 +207,12 @@ fn aperture_contract() {
     assert_eq!(lease.storage_address(GuestAddress::new(0x1234), 8), Some(0x1000_1234));
     assert_eq!(lease.storage_address(GuestAddress::new(0xffff), 2), None);
     // The aperture covers holes and therefore cannot imply access authority.
-    assert!(coordinator.ledger().resolve(GuestAddress::new(0x8000), Protection::READ).is_none());
+    assert!(
+        coordinator
+            .ledger()
+            .resolve(GuestAddress::new(0x8000), Protection::READ)
+            .is_none()
+    );
 
     let (started_tx, started_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
@@ -253,7 +258,7 @@ fn projection_blocks_mapping_transitions_and_checks_access() {
     worker.join().unwrap();
     assert!(
         coordinator
-        .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 7)
+            .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 7)
             .is_err()
     );
 }
@@ -267,7 +272,10 @@ fn direct_authority_is_generation_qualified_and_blocks_transitions() {
     let lease = coordinator
         .project_direct(GuestAddress::new(0x1000), 16, Protection::READ, 17)
         .unwrap();
-    assert_eq!(lease.range(), AddressRange::nonempty(GuestAddress::new(0x1000), 16).unwrap());
+    assert_eq!(
+        lease.range(),
+        AddressRange::nonempty(GuestAddress::new(0x1000), 16).unwrap()
+    );
     assert_eq!(lease.storage_address(), 0x1000_1000);
     assert_eq!(lease.protection(), Protection::READ);
     assert_eq!(lease.generation().incarnation, 17);
@@ -292,8 +300,10 @@ fn existing_projection_converts_to_narrow_read_authority_and_returns() {
     coordinator.map(mapped).unwrap();
     let projection = coordinator
         .project_contiguous(
-            GuestAddress::new(0x1000), 16,
-            Protection::READ.union(Protection::WRITE), 23,
+            GuestAddress::new(0x1000),
+            16,
+            Protection::READ.union(Protection::WRITE),
+            23,
         )
         .unwrap();
     let authority = projection.into_direct(Protection::READ).unwrap();
@@ -325,9 +335,15 @@ fn additional_projection_retains_execute_identity_and_dirty_ownership() {
         .project_contiguous(GuestAddress::new(0x1000), 16, Protection::READ, 1)
         .unwrap();
 
-    let read = lease.project_additional(GuestAddress::new(0x3000), 16, Protection::READ).unwrap();
-    let write = lease.project_additional(GuestAddress::new(0x3000), 16, Protection::WRITE).unwrap();
-    let other = lease.project_additional(GuestAddress::new(0x5000), 16, Protection::WRITE).unwrap();
+    let read = lease
+        .project_additional(GuestAddress::new(0x3000), 16, Protection::READ)
+        .unwrap();
+    let write = lease
+        .project_additional(GuestAddress::new(0x3000), 16, Protection::WRITE)
+        .unwrap();
+    let other = lease
+        .project_additional(GuestAddress::new(0x5000), 16, Protection::WRITE)
+        .unwrap();
 
     assert_eq!(read.protection, Protection::READ.union(Protection::EXECUTE));
     assert_eq!(write.protection, Protection::WRITE.union(Protection::EXECUTE));
@@ -349,12 +365,12 @@ fn writable_projection_requires_publication_or_rolls_back() {
     drop(lease);
     assert!(
         coordinator
-        .host
-        .state
-        .lock()
-        .unwrap()
-        .transcript
-        .iter()
+            .host
+            .state
+            .lock()
+            .unwrap()
+            .transcript
+            .iter()
             .any(|entry| entry.starts_with("rollback:"))
     );
     coordinator
@@ -364,12 +380,12 @@ fn writable_projection_requires_publication_or_rolls_back() {
         .unwrap();
     assert!(
         coordinator
-        .host
-        .state
-        .lock()
-        .unwrap()
-        .transcript
-        .iter()
+            .host
+            .state
+            .lock()
+            .unwrap()
+            .transcript
+            .iter()
             .any(|entry| entry.starts_with("commit-external:"))
     );
 }
@@ -413,11 +429,7 @@ fn projection_reuse_cap() {
     );
     for page in 2..crate::LIVE_PROJECTION_MAXIMUM {
         lease
-            .project_additional(
-                GuestAddress::new(0x1000 + page as u64 * 0x1000),
-                1,
-                Protection::READ,
-            )
+            .project_additional(GuestAddress::new(0x1000 + page as u64 * 0x1000), 1, Protection::READ)
             .unwrap();
     }
     assert_eq!(lease.projection_count(), crate::LIVE_PROJECTION_MAXIMUM + 1);
@@ -630,18 +642,34 @@ fn coherent_shared_projection_preserves_backing_while_direct_projection_reconcil
     let lease = coherent
         .project_contiguous(GuestAddress::new(0x3000), 4, Protection::WRITE, 1)
         .unwrap();
-    coherent.host.state.lock().unwrap().bytes.extend((0..4).map(|offset| (0x3000 + offset, b'X')));
+    coherent
+        .host
+        .state
+        .lock()
+        .unwrap()
+        .bytes
+        .extend((0..4).map(|offset| (0x3000 + offset, b'X')));
     lease.publish_written().unwrap();
     let mut visible = [0; 4];
-    observer.read(GuestAddress::new(0x5000), &mut visible, Protection::READ).unwrap();
+    observer
+        .read(GuestAddress::new(0x5000), &mut visible, Protection::READ)
+        .unwrap();
     assert_eq!(&visible, b"LIVE");
 
     let lease = direct
         .project_contiguous(GuestAddress::new(0x4000), 4, Protection::WRITE, 1)
         .unwrap();
-    direct.host.state.lock().unwrap().bytes.extend((0..4).map(|offset| (0x4000 + offset, b'R')));
+    direct
+        .host
+        .state
+        .lock()
+        .unwrap()
+        .bytes
+        .extend((0..4).map(|offset| (0x4000 + offset, b'R')));
     lease.publish_written().unwrap();
-    observer.read(GuestAddress::new(0x5000), &mut visible, Protection::READ).unwrap();
+    observer
+        .read(GuestAddress::new(0x5000), &mut visible, Protection::READ)
+        .unwrap();
     assert_eq!(&visible, b"RRRR");
 }
 
@@ -702,7 +730,13 @@ fn projection_dirty_journal_keeps_disjoint_executable_views_exact() {
     assert_ne!(coordinator.executable_token(first_range, 1), first_token);
     assert_eq!(coordinator.executable_token(second_range, 1), second_token);
     let transcript = &coordinator.host.state.lock().unwrap().transcript;
-    assert_eq!(transcript.iter().filter(|entry| entry.starts_with("commit-external:")).count(), 1);
+    assert_eq!(
+        transcript
+            .iter()
+            .filter(|entry| entry.starts_with("commit-external:"))
+            .count(),
+        1
+    );
     assert!(transcript.iter().any(|entry| entry.starts_with("rollback:")));
 }
 

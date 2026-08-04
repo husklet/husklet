@@ -8,16 +8,10 @@ async fn attachments_read_the_same_durable_order_without_stealing_logs() {
     let mut slow = containers.attach("attached").await.unwrap();
     containers.start("attached").await.unwrap();
 
-    let fast_entries = vec![
-        fast.next().await.unwrap().unwrap(),
-        fast.next().await.unwrap().unwrap(),
-    ];
+    let fast_entries = vec![fast.next().await.unwrap().unwrap(), fast.next().await.unwrap().unwrap()];
     containers.wait("attached").await.unwrap();
     tokio::time::sleep(Duration::from_millis(25)).await;
-    let slow_entries = vec![
-        slow.next().await.unwrap().unwrap(),
-        slow.next().await.unwrap().unwrap(),
-    ];
+    let slow_entries = vec![slow.next().await.unwrap().unwrap(), slow.next().await.unwrap().unwrap()];
     assert_eq!(fast_entries, slow_entries);
     assert_eq!(fast_entries[0].sequence, 1);
     assert!(fast_entries[0].timestamp_ms > 0);
@@ -131,16 +125,10 @@ async fn automatic_restart_allocates_terminal_at_latest_size() {
         .unwrap();
 
     containers.start("terminal-restart").await.unwrap();
-    containers
-        .resize("terminal-restart", resized)
-        .await
-        .unwrap();
+    containers.resize("terminal-restart", resized).await.unwrap();
     containers.wait("terminal-restart").await.unwrap();
 
-    assert_eq!(
-        *runtime.terminals.lock().unwrap(),
-        vec![Some(initial), Some(resized)]
-    );
+    assert_eq!(*runtime.terminals.lock().unwrap(), vec![Some(initial), Some(resized)]);
 }
 
 #[tokio::test]
@@ -149,10 +137,7 @@ async fn execution_terminal_resize_is_independent_and_durable() {
     runtime.delay = Duration::from_secs(1);
     let runtime = Arc::new(runtime);
     let containers = service(Arc::clone(&runtime)).await;
-    containers
-        .create(spec("exec-terminal-parent"))
-        .await
-        .unwrap();
+    containers.create(spec("exec-terminal-parent")).await.unwrap();
     containers.start("exec-terminal-parent").await.unwrap();
     let initial = Size::new(27, 91).unwrap();
     let resized = Size::new(44, 144).unwrap();
@@ -164,16 +149,9 @@ async fn execution_terminal_resize_is_independent_and_durable() {
         .unwrap();
 
     let _session = containers.executions().start(&execution.id).await.unwrap();
-    containers
-        .executions()
-        .resize(&execution.id, resized)
-        .await
-        .unwrap();
+    containers.executions().resize(&execution.id, resized).await.unwrap();
 
-    assert_eq!(
-        *runtime.terminals.lock().unwrap(),
-        vec![None, Some(initial)]
-    );
+    assert_eq!(*runtime.terminals.lock().unwrap(), vec![None, Some(initial)]);
     assert_eq!(*runtime.resizes.lock().unwrap(), vec![resized]);
     assert_eq!(
         containers
@@ -211,12 +189,14 @@ async fn execution_signal_targets_only_the_exec_process() {
         .unwrap();
 
     assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::Hangup]);
-    assert!(containers
-        .inspect("exec-signal-parent")
-        .await
-        .unwrap()
-        .state
-        .is_active());
+    assert!(
+        containers
+            .inspect("exec-signal-parent")
+            .await
+            .unwrap()
+            .state
+            .is_active()
+    );
 }
 
 #[tokio::test]
@@ -266,12 +246,7 @@ async fn killing_an_execution_force_stops_it_without_stopping_the_container() {
         .unwrap();
 
     assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Kill]);
-    assert!(containers
-        .inspect("exec-kill-parent")
-        .await
-        .unwrap()
-        .state
-        .is_active());
+    assert!(containers.inspect("exec-kill-parent").await.unwrap().state.is_active());
     let domains = runtime.domains.lock().unwrap();
     assert_eq!(domains.len(), 2);
     assert_eq!(domains[0].0, domains[1].0);
@@ -293,10 +268,7 @@ async fn completed_execution_can_be_removed_but_running_execution_cannot() {
         .create("exec-remove-parent", ExecSpec::new(Process::new("fake")))
         .await
         .unwrap();
-    assert_eq!(
-        containers.executions().list().await.unwrap(),
-        vec![execution.clone()]
-    );
+    assert_eq!(containers.executions().list().await.unwrap(), vec![execution.clone()]);
     let mut session = containers.executions().start(&execution.id).await.unwrap();
 
     assert!(matches!(
@@ -329,10 +301,7 @@ async fn executions_are_single_use_and_keep_independent_output() {
 
     let exec = containers
         .executions()
-        .create(
-            "exec-parent",
-            ExecSpec::new(Process::new("/bin/echo").args(["exec"])),
-        )
+        .create("exec-parent", ExecSpec::new(Process::new("/bin/echo").args(["exec"])))
         .await
         .unwrap();
     let mut session = containers.executions().start(&exec.id).await.unwrap();
@@ -352,10 +321,7 @@ async fn executions_are_single_use_and_keep_independent_output() {
             ..
         }
     ));
-    assert_eq!(
-        containers.logs("exec-parent").await.unwrap().stdout,
-        b"fake-out\n"
-    );
+    assert_eq!(containers.logs("exec-parent").await.unwrap().stdout, b"fake-out\n");
 }
 
 #[tokio::test]
@@ -392,28 +358,16 @@ async fn execution_wait_reports_runtime_failure_instead_of_fabricating_an_exit_s
     runtime.delay = Duration::from_millis(30);
     runtime.fail_wait.store(true, Ordering::SeqCst);
     let containers = service(Arc::new(runtime)).await;
-    containers
-        .create(spec("exec-wait-failure-parent"))
-        .await
-        .unwrap();
+    containers.create(spec("exec-wait-failure-parent")).await.unwrap();
     containers.start("exec-wait-failure-parent").await.unwrap();
     let execution = containers
         .executions()
-        .create(
-            "exec-wait-failure-parent",
-            ExecSpec::new(Process::new("fake")),
-        )
+        .create("exec-wait-failure-parent", ExecSpec::new(Process::new("fake")))
         .await
         .unwrap();
     let _session = containers.executions().start(&execution.id).await.unwrap();
 
-    let error = containers
-        .executions()
-        .wait(&execution.id)
-        .await
-        .unwrap_err();
+    let error = containers.executions().wait(&execution.id).await.unwrap_err();
 
-    assert!(
-        matches!(error, Error::Runtime(message) if message == "runtime failed: injected wait failure")
-    );
+    assert!(matches!(error, Error::Runtime(message) if message == "runtime failed: injected wait failure"));
 }

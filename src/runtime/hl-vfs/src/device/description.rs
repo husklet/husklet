@@ -249,7 +249,10 @@ mod tests {
         let mut output = [0; 1];
         assert_eq!(terminal.read(&mut output), Err(ObjectError::WouldBlock));
         assert_eq!(terminal.probe_read(output.len()), Ok(None));
-        assert_eq!(terminal.metadata().unwrap().special_device, Id::new(5, 1).linux_encoded());
+        assert_eq!(
+            terminal.metadata().unwrap().special_device,
+            Id::new(5, 1).linux_encoded()
+        );
         assert_eq!(terminal.readiness(Readiness::from_bits(Readiness::READ)).bits(), 0);
     }
 }

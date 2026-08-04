@@ -26,9 +26,9 @@ pub use message::receive::PreparedMessageReceive;
 pub use pipe::snapshot::{NamedFifoSnapshot, PipeSnapshot};
 pub use pipe::transfer::{PipeTransfer, PipeTransferMode};
 pub use pipe::{
-    DEFAULT_PIPE_CAPACITY, MAX_PIPE_CAPACITY, PIPE_BUF, PIPE_CAPACITY_GRANULE, Pipe, PipeCreateError, PipeEndpoint,
-    PipeStatus, NamedFifo, NamedFifoCatalog, NamedFifoKey, NamedFifoOpen, NamedFifoOpenError, NamedFifoStatus,
-    NamedFifoWait,
+    DEFAULT_PIPE_CAPACITY, MAX_PIPE_CAPACITY, NamedFifo, NamedFifoCatalog, NamedFifoKey, NamedFifoOpen,
+    NamedFifoOpenError, NamedFifoStatus, NamedFifoWait, PIPE_BUF, PIPE_CAPACITY_GRANULE, Pipe, PipeCreateError,
+    PipeEndpoint, PipeStatus,
 };
 pub use posix_queue::{
     MqAccess, MqAttributes, MqDescription, MqError, MqEvent, MqLimits, MqNamespace, MqOpen, MqReceipt,

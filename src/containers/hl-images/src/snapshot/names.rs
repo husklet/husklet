@@ -32,11 +32,7 @@ impl Name {
     pub(super) fn relative(from: &Path, to: &Path) -> PathBuf {
         let from = from.components().collect::<Vec<_>>();
         let to = to.components().collect::<Vec<_>>();
-        let shared = from
-            .iter()
-            .zip(&to)
-            .take_while(|(left, right)| left == right)
-            .count();
+        let shared = from.iter().zip(&to).take_while(|(left, right)| left == right).count();
         let mut path = PathBuf::new();
         for _ in shared..from.len() {
             path.push("..");
@@ -51,11 +47,7 @@ impl Name {
         let value = path
             .to_str()
             .ok_or_else(|| Error::InvalidMetadata("snapshot name path is not UTF-8".into()))?;
-        if value.is_empty()
-            || path.is_absolute()
-            || path
-                .components()
-                .any(|part| !matches!(part, Component::Normal(_)))
+        if value.is_empty() || path.is_absolute() || path.components().any(|part| !matches!(part, Component::Normal(_)))
         {
             return Err(Error::InvalidMetadata(format!(
                 "unsafe snapshot name path {}",
@@ -128,10 +120,7 @@ impl Names {
             source,
         })?;
         let entries: Entries = serde_json::from_slice(&bytes).map_err(|error| {
-            Error::InvalidMetadata(format!(
-                "malformed snapshot names sidecar {}: {error}",
-                path.display()
-            ))
+            Error::InvalidMetadata(format!("malformed snapshot names sidecar {}: {error}", path.display()))
         })?;
         for (physical, guest) in &entries.0 {
             let physical = Name::from_path(Path::new(physical))?;
@@ -166,9 +155,7 @@ impl Names {
         self.entries
             .0
             .iter()
-            .find_map(|(physical, mapped)| {
-                (Path::new(mapped) == guest).then(|| Path::new(physical))
-            })
+            .find_map(|(physical, mapped)| (Path::new(mapped) == guest).then(|| Path::new(physical)))
             .unwrap_or(guest)
     }
 
@@ -200,9 +187,7 @@ impl Names {
         }
         let physical = guest.encoded(0);
         let path = physical.as_path().to_owned();
-        self.entries
-            .0
-            .insert(physical.into_string(), guest.into_string());
+        self.entries.0.insert(physical.into_string(), guest.into_string());
         self.save()?;
         Ok(path)
     }
@@ -227,10 +212,7 @@ impl Names {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| {
-                Error::InvalidMetadata(format!(
-                    "snapshot name is not UTF-8: {}",
-                    guest.as_path().display()
-                ))
+                Error::InvalidMetadata(format!("snapshot name is not UTF-8: {}", guest.as_path().display()))
             })?;
         let directory = root.join(&physical_parent);
         if directory.is_dir() {
@@ -239,8 +221,7 @@ impl Names {
                 let entry = entry?;
                 let physical = physical_parent.join(entry.file_name());
                 let visible = self.guest(&physical);
-                let Some(visible_name) = visible.file_name().and_then(|value| value.to_str())
-                else {
+                let Some(visible_name) = visible.file_name().and_then(|value| value.to_str()) else {
                     continue;
                 };
                 if visible_name == name {
@@ -254,27 +235,16 @@ impl Names {
                 for salt in 0..u32::MAX {
                     let encoded = guest.encoded(salt);
                     let candidate = Name::from_path(
-                        &physical_parent.join(
-                            encoded
-                                .as_path()
-                                .file_name()
-                                .expect("encoded name has a leaf"),
-                        ),
+                        &physical_parent.join(encoded.as_path().file_name().expect("encoded name has a leaf")),
                     )?;
-                    if !root.join(candidate.as_path()).exists()
-                        || self.guest(candidate.as_path()) == guest.as_path()
-                    {
+                    if !root.join(candidate.as_path()).exists() || self.guest(candidate.as_path()) == guest.as_path() {
                         let path = candidate.as_path().to_owned();
-                        self.entries
-                            .0
-                            .insert(candidate.into_string(), guest.into_string());
+                        self.entries.0.insert(candidate.into_string(), guest.into_string());
                         self.save()?;
                         return Ok(path);
                     }
                 }
-                return Err(Error::InvalidMetadata(
-                    "snapshot name encoding space exhausted".into(),
-                ));
+                return Err(Error::InvalidMetadata("snapshot name encoding space exhausted".into()));
             }
         }
         Ok(physical_parent.join(name))
@@ -294,9 +264,7 @@ impl Names {
         fs::create_dir_all(parent)?;
         let temporary = parent.join(format!(
             ".{}.{}.tmp",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("names"),
+            path.file_name().and_then(|name| name.to_str()).unwrap_or("names"),
             uuid::Uuid::new_v4().simple()
         ));
         let result = (|| -> Result<()> {

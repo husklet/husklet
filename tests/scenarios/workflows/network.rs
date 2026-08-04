@@ -1,8 +1,6 @@
 //! User-defined network, endpoint allocation, naming, and isolation workflow.
 
-use hl_container::{
-    ContainerSpec, Containers, EndpointSpec, Isolation, NetworkSpec, Process, Subnet,
-};
+use hl_container::{ContainerSpec, Containers, EndpointSpec, Isolation, NetworkSpec, Process, Subnet};
 use std::net::Ipv4Addr;
 use tempfile::TempDir;
 
@@ -24,11 +22,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
         ))
         .await?;
     require(
-        networks
-            .list()
-            .await?
-            .iter()
-            .any(|network| network.name == "hlnet"),
+        networks.list().await?.iter().any(|network| network.name == "hlnet"),
         "network-created",
     )?;
 
@@ -47,27 +41,21 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
         .await?;
     containers
         .create(
-            ContainerSpec::from_directory(
-                &client_root,
-                Process::new("/bin/sh").args(["-c", "exit 0"]),
-            )
-            .name("net-cli")
-            .isolation(networked()),
+            ContainerSpec::from_directory(&client_root, Process::new("/bin/sh").args(["-c", "exit 0"]))
+                .name("net-cli")
+                .isolation(networked()),
         )
         .await?;
     let server = networks
         .connect("hlnet", "net-srv", EndpointSpec::default().name("net-srv"))
         .await?;
-    let address = server
-        .address
-        .ok_or("server endpoint omitted its address")?;
+    let address = server.address.ok_or("server endpoint omitted its address")?;
     containers.remove_force("net-cli").await?;
     containers
         .create(
             ContainerSpec::from_directory(
                 &client_root,
-                Process::new("/bin/sh")
-                    .args(["-c", &format!("nc net-srv 8080; nc {address} 8080")]),
+                Process::new("/bin/sh").args(["-c", &format!("nc net-srv 8080; nc {address} 8080")]),
             )
             .name("net-cli")
             .isolation(networked()),
@@ -94,11 +82,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
         )
         .await?;
     networks
-        .connect(
-            "hlnet2",
-            "net-other",
-            EndpointSpec::default().name("net-other"),
-        )
+        .connect("hlnet2", "net-other", EndpointSpec::default().name("net-other"))
         .await?;
     require(
         !networks
@@ -133,10 +117,7 @@ impl Topology<'_> {
         )?;
         let inspected = self.containers.networks().inspect(network).await?;
         require(
-            inspected
-                .endpoints
-                .values()
-                .any(|endpoint| endpoint.name == "net-srv"),
+            inspected.endpoints.values().any(|endpoint| endpoint.name == "net-srv"),
             "network-inspect-lists-member",
         )
     }
@@ -165,10 +146,7 @@ impl Topology<'_> {
             .into());
         }
         require(true, "client-exit")?;
-        require(
-            output.stdout == b"bridge-ok\nbridge-ok\n",
-            "reach-by-name-and-ip",
-        )?;
+        require(output.stdout == b"bridge-ok\nbridge-ok\n", "reach-by-name-and-ip")?;
         require(
             self.containers.wait("net-srv").await? == hl_container::ExitStatus::Code(0),
             "server-exit",

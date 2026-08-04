@@ -14,12 +14,7 @@ pub(super) struct Draft {
 }
 
 impl Draft {
-    pub(super) fn new(
-        index: usize,
-        name: Option<String>,
-        base: Base,
-        platform: Option<Platform>,
-    ) -> Self {
+    pub(super) fn new(index: usize, name: Option<String>, base: Base, platform: Option<Platform>) -> Self {
         Self {
             index,
             stage: Stage {
@@ -55,12 +50,7 @@ impl Draft {
         self.stage
     }
 
-    pub(super) fn apply(
-        &mut self,
-        name: &str,
-        raw: &str,
-        names: &BTreeMap<String, usize>,
-    ) -> Result<()> {
+    pub(super) fn apply(&mut self, name: &str, raw: &str, names: &BTreeMap<String, usize>) -> Result<()> {
         let mut variables = self.arguments.clone();
         variables.extend(self.stage.runtime.environment.clone());
         let expanded = Self::expand(name, raw, &variables)?;
@@ -74,8 +64,7 @@ impl Draft {
             "COPY" | "ADD" => self.copy(name, &expanded, names)?,
             "WORKDIR" => {
                 self.stage.runtime.working_directory =
-                    WorkingDirectory::new(&self.stage.runtime.working_directory)
-                        .resolve(&expanded)?;
+                    WorkingDirectory::new(&self.stage.runtime.working_directory).resolve(&expanded)?;
                 self.stage.working_directory = Some(self.stage.runtime.working_directory.clone());
             }
             "CMD" => {
@@ -97,15 +86,13 @@ impl Draft {
                 self.stage.runtime.user = expanded;
                 self.stage.user = Some(self.stage.runtime.user.clone());
             }
-            "LABEL" => self
-                .stage
-                .labels
-                .extend(Assignments::new(&expanded).parse()?),
+            "LABEL" => self.stage.labels.extend(Assignments::new(&expanded).parse()?),
             "ONBUILD" => {
                 let instruction = expanded.trim();
-                let forbidden = instruction.split_whitespace().next().is_some_and(|name| {
-                    matches!(name.to_ascii_uppercase().as_str(), "FROM" | "ONBUILD")
-                });
+                let forbidden = instruction
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|name| matches!(name.to_ascii_uppercase().as_str(), "FROM" | "ONBUILD"));
                 if instruction.is_empty() || forbidden {
                     return Err(Error::MalformedOci("invalid ONBUILD trigger".into()));
                 }
@@ -142,14 +129,12 @@ impl Draft {
             other => {
                 return Err(Error::MalformedOci(format!(
                     "Dockerfile instruction {other} is not supported"
-                )))
+                )));
             }
         }
-        self.stage.history.push(History::instruction(
-            name,
-            raw,
-            !matches!(name, "RUN" | "COPY" | "ADD"),
-        ));
+        self.stage
+            .history
+            .push(History::instruction(name, raw, !matches!(name, "RUN" | "COPY" | "ADD")));
         Ok(())
     }
 
@@ -188,12 +173,7 @@ impl Draft {
                 from = names
                     .get(value)
                     .copied()
-                    .or_else(|| {
-                        value
-                            .parse::<usize>()
-                            .ok()
-                            .filter(|index| *index < self.index)
-                    })
+                    .or_else(|| value.parse::<usize>().ok().filter(|index| *index < self.index))
                     .map(CopySource::Stage)
                     .or_else(|| value.parse().ok().map(CopySource::Image));
                 false
@@ -240,9 +220,7 @@ impl Draft {
         }
         .validate()?;
         if words.len() < 2 {
-            return Err(Error::MalformedOci(format!(
-                "{name} requires sources and target"
-            )));
+            return Err(Error::MalformedOci(format!("{name} requires sources and target")));
         }
         if value.contains("--from=") && from.is_none() {
             return Err(Error::MalformedOci(
@@ -251,9 +229,7 @@ impl Draft {
         }
         let target = words.pop().expect("at least two words");
         if words.len() > 1 && !target.ends_with('/') {
-            return Err(Error::MalformedOci(
-                "multi-source COPY target must end with '/'".into(),
-            ));
+            return Err(Error::MalformedOci("multi-source COPY target must end with '/'".into()));
         }
         if parents && !target.ends_with('/') {
             return Err(Error::MalformedOci(
@@ -277,12 +253,7 @@ impl Draft {
         Ok(())
     }
 
-    fn run(
-        &mut self,
-        value: &str,
-        variables: BTreeMap<String, String>,
-        names: &BTreeMap<String, usize>,
-    ) -> Result<()> {
+    fn run(&mut self, value: &str, variables: BTreeMap<String, String>, names: &BTreeMap<String, usize>) -> Result<()> {
         let mut command = value.trim_start();
         let mut mounts = Vec::new();
         while let Some(value) = command.strip_prefix("--mount=") {
@@ -335,9 +306,7 @@ impl CopyOptions<'_> {
             ));
         }
         if self.value.contains("--exclude=") && self.excludes.is_empty() {
-            return Err(Error::MalformedOci(
-                "COPY/ADD --exclude requires a pattern".into(),
-            ));
+            return Err(Error::MalformedOci("COPY/ADD --exclude requires a pattern".into()));
         }
         Ok(())
     }
@@ -346,25 +315,16 @@ impl CopyOptions<'_> {
 struct Sources<'a>(&'a [Source]);
 
 impl Sources<'_> {
-    fn validate(
-        &self,
-        name: &str,
-        from: Option<&CopySource>,
-        checksum: Option<&str>,
-    ) -> Result<()> {
+    fn validate(&self, name: &str, from: Option<&CopySource>, checksum: Option<&str>) -> Result<()> {
         let remote = self.0.iter().filter(|source| source.is_remote()).count();
         if name == "COPY" && remote > 0 {
-            return Err(Error::MalformedOci(
-                "COPY does not support remote URL sources".into(),
-            ));
+            return Err(Error::MalformedOci("COPY does not support remote URL sources".into()));
         }
         if remote > 0 && from.is_some() {
             return Err(Error::MalformedOci("remote ADD cannot use --from".into()));
         }
         if self.0.iter().any(|source| matches!(source, Source::Git(_))) {
-            return Err(Error::MalformedOci(
-                "ADD Git sources are not supported".into(),
-            ));
+            return Err(Error::MalformedOci("ADD Git sources are not supported".into()));
         }
         if let Some(value) = checksum {
             let digest = value
@@ -391,9 +351,7 @@ impl RunMount {
         for option in value.split(',') {
             let (name, value) = option.split_once('=').unwrap_or((option, "true"));
             if options.insert(name, value).is_some() {
-                return Err(Error::MalformedOci(format!(
-                    "duplicate RUN --mount option {name}"
-                )));
+                return Err(Error::MalformedOci(format!("duplicate RUN --mount option {name}")));
             }
         }
         let kind = options.remove("type").unwrap_or("bind");
@@ -418,12 +376,8 @@ impl RunMount {
         match kind {
             "cache" => Self::cache(target, &mut options),
             "bind" => Self::bind(target, &mut options, names, stage),
-            "secret" | "ssh" | "tmpfs" => Err(Error::MalformedOci(format!(
-                "RUN --mount=type={kind} is not supported"
-            ))),
-            _ => Err(Error::MalformedOci(format!(
-                "unsupported RUN mount type {kind:?}"
-            ))),
+            "secret" | "ssh" | "tmpfs" => Err(Error::MalformedOci(format!("RUN --mount=type={kind} is not supported"))),
+            _ => Err(Error::MalformedOci(format!("unsupported RUN mount type {kind:?}"))),
         }
     }
 
@@ -432,11 +386,7 @@ impl RunMount {
             "shared" => CacheSharing::Shared,
             "locked" => CacheSharing::Locked,
             "private" => CacheSharing::Private,
-            value => {
-                return Err(Error::MalformedOci(format!(
-                    "unsupported cache sharing {value:?}"
-                )))
-            }
+            value => return Err(Error::MalformedOci(format!("unsupported cache sharing {value:?}"))),
         };
         let id = options.remove("id").map(str::to_owned);
         Self::reject_options(options)?;
@@ -454,9 +404,7 @@ impl RunMount {
         stage: usize,
     ) -> Result<Self> {
         if options.remove("rw").is_some() || options.remove("readwrite").is_some() {
-            return Err(Error::MalformedOci(
-                "writable RUN bind mounts are not supported".into(),
-            ));
+            return Err(Error::MalformedOci("writable RUN bind mounts are not supported".into()));
         }
         for name in ["ro", "readonly"] {
             if options.remove(name).is_some_and(|value| value != "true") {
@@ -475,9 +423,7 @@ impl RunMount {
                     .get(value)
                     .copied()
                     .or_else(|| value.parse().ok().filter(|index| *index < stage))
-                    .ok_or_else(|| {
-                        Error::MalformedOci("RUN bind source stage was not found".into())
-                    })
+                    .ok_or_else(|| Error::MalformedOci("RUN bind source stage was not found".into()))
             })
             .transpose()?;
         Self::reject_options(options)?;
@@ -490,9 +436,7 @@ impl RunMount {
 
     fn reject_options(options: &BTreeMap<&str, &str>) -> Result<()> {
         if let Some(name) = options.keys().next() {
-            return Err(Error::MalformedOci(format!(
-                "unsupported RUN --mount option {name}"
-            )));
+            return Err(Error::MalformedOci(format!("unsupported RUN --mount option {name}")));
         }
         Ok(())
     }

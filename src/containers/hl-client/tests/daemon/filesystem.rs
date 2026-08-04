@@ -55,20 +55,8 @@ async fn container_inspect_size_accounts_executed_rootfs_writes() {
     assert!(!ordinary_wire.contains("\"SizeRootFs\""));
 
     client.containers().start(&created.id).await.unwrap();
-    assert_eq!(
-        client
-            .containers()
-            .wait(&created.id)
-            .await
-            .unwrap()
-            .status_code,
-        0
-    );
-    let sized = client
-        .containers()
-        .inspect_with_size(&created.id, true)
-        .await
-        .unwrap();
+    assert_eq!(client.containers().wait(&created.id).await.unwrap().status_code, 0);
+    let sized = client.containers().inspect_with_size(&created.id, true).await.unwrap();
     assert!(sized.size_rw.is_some_and(|bytes| bytes >= 7));
     assert!(sized.size_root_fs > sized.size_rw);
     let sized_wire = raw_http(
@@ -93,11 +81,7 @@ async fn container_inspect_size_accounts_executed_rootfs_writes() {
     .await;
     assert!(invalid.starts_with("HTTP/1.1 400"));
 
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }
@@ -142,15 +126,7 @@ async fn image_list_shared_size_accounts_executed_child_layers() {
         .await
         .unwrap();
     client.containers().start(&created.id).await.unwrap();
-    assert_eq!(
-        client
-            .containers()
-            .wait(&created.id)
-            .await
-            .unwrap()
-            .status_code,
-        0
-    );
+    assert_eq!(client.containers().wait(&created.id).await.unwrap().status_code, 0);
     client
         .images()
         .commit(&created.id, "scenario/shared-child", Some("v1"), false)
@@ -158,11 +134,7 @@ async fn image_list_shared_size_accounts_executed_child_layers() {
         .unwrap();
     client
         .images()
-        .tag(
-            "scenario/runnable:v1",
-            "scenario/runnable-alias",
-            Some("v1"),
-        )
+        .tag("scenario/runnable:v1", "scenario/runnable-alias", Some("v1"))
         .await
         .unwrap();
 
@@ -173,15 +145,9 @@ async fn image_list_shared_size_accounts_executed_child_layers() {
     let accounted = client.images().list_with_shared_size(true).await.unwrap();
     assert_eq!(accounted.len(), 2);
     assert!(accounted.iter().all(|image| image.shared_size > 0));
-    assert!(accounted
-        .iter()
-        .all(|image| image.shared_size <= image.size));
+    assert!(accounted.iter().all(|image| image.shared_size <= image.size));
 
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
 }
@@ -246,32 +212,11 @@ async fn explicit_rw_local_bind_volume_persists_executed_writes() {
         .await
         .unwrap();
     client.containers().start(&created.id).await.unwrap();
-    assert_eq!(
-        client
-            .containers()
-            .wait(&created.id)
-            .await
-            .unwrap()
-            .status_code,
-        0
-    );
+    assert_eq!(client.containers().wait(&created.id).await.unwrap().status_code, 0);
     assert_eq!(std::fs::read(device.join("value")).unwrap(), b"mounted");
-    assert!(
-        client
-            .containers()
-            .inspect(&created.id)
-            .await
-            .unwrap()
-            .metadata
-            .mounts[0]
-            .read_write
-    );
+    assert!(client.containers().inspect(&created.id).await.unwrap().metadata.mounts[0].read_write);
 
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     client.volumes().remove("rw-local", false).await.unwrap();
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
@@ -324,22 +269,9 @@ async fn legacy_host_config_tmpfs_executes_and_is_reclaimed() {
         .await
         .unwrap();
     client.containers().start(&created.id).await.unwrap();
+    assert_eq!(client.containers().wait(&created.id).await.unwrap().status_code, 0);
     assert_eq!(
-        client
-            .containers()
-            .wait(&created.id)
-            .await
-            .unwrap()
-            .status_code,
-        0
-    );
-    assert_eq!(
-        client
-            .containers()
-            .logs(&created.id, true, true)
-            .await
-            .unwrap()
-            .stdout,
+        client.containers().logs(&created.id, true, true).await.unwrap().stdout,
         b"ephemeral"
     );
     let inspect = client.containers().inspect(&created.id).await.unwrap();
@@ -348,11 +280,7 @@ async fn legacy_host_config_tmpfs_executes_and_is_reclaimed() {
     let mountpoint = std::path::PathBuf::from(&inspect.metadata.mounts[0].source);
     assert!(mountpoint.join("value").exists());
 
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     assert!(!mountpoint.exists());
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();

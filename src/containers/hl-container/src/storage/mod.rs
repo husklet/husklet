@@ -1,9 +1,7 @@
 mod file;
 mod memory;
 
-use crate::{
-    Container, ContainerId, Entry, Exec, ExecId, JournalId, Network, Result, Stream, Volume,
-};
+use crate::{Container, ContainerId, Entry, Exec, ExecId, JournalId, Network, Result, Stream, Volume};
 use async_trait::async_trait;
 
 pub(crate) use file::Disk;

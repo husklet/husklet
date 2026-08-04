@@ -11,7 +11,9 @@ use hl_memory::{
     Backing, MapRequest, MappingCoordinator, MappingHost, Placement, Protection, SharedError, SharedObjectStore,
 };
 
-use crate::{BrkRegion, DescriptorMappingSource, MemfdRegistry, RuntimeMemoryHost, memory::errno::ErrorMap};
+use crate::{BrkRegion, DescriptorMappingSource, MemfdRegistry, RuntimeMemoryHost};
+
+use super::{AnonymousMemoryLease, charge::ChargeTransitionError, errno::ErrorMap};
 
 const MMAP_MINIMUM_ADDRESS: u64 = 32 * 1024;
 
@@ -25,6 +27,7 @@ pub struct RuntimeMemorySyscalls<H: MappingHost, M: GuestMemory> {
     memfds: Arc<MemfdRegistry>,
     shared: Option<(Arc<SharedObjectStore>, u64)>,
     brk: Option<BrkRegion<H>>,
+    anonymous_charge: Option<Arc<AnonymousMemoryLease>>,
     next_anonymous: AtomicU64,
     minimum_address: u64,
     address_limit: u64,
@@ -124,6 +127,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             memfds: Arc::new(MemfdRegistry::new()),
             shared: None,
             brk: None,
+            anonymous_charge: None,
             next_anonymous: AtomicU64::new(1),
             minimum_address: MMAP_MINIMUM_ADDRESS,
             address_limit: u64::MAX & !4095,
@@ -158,13 +162,14 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
 
     #[must_use]
     pub fn with_brk(mut self, brk: BrkRegion<H>) -> Self {
+        self.anonymous_charge = brk.lease();
         self.brk = Some(brk);
         self
     }
 
     #[must_use]
-    pub fn brk_account(&self) -> Option<Arc<dyn crate::BrkAccount>> {
-        self.brk.as_ref().and_then(BrkRegion::account)
+    pub fn anonymous_account(&self) -> Option<Arc<dyn crate::AnonymousMemoryAccount>> {
+        self.anonymous_charge.as_ref().map(|lease| lease.account())
     }
 
     #[must_use]
@@ -197,6 +202,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             .as_ref()
             .map(|value| value.fork(Arc::clone(&coordinator)))
             .transpose()?;
+        let anonymous_charge = brk.as_ref().and_then(BrkRegion::lease);
         Ok(Self {
             coordinator,
             descriptors,
@@ -207,6 +213,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             memfds: Arc::clone(&self.memfds),
             shared: self.shared.as_ref().map(|(store, _)| (Arc::clone(store), owner)),
             brk,
+            anonymous_charge,
             next_anonymous: AtomicU64::new(self.next_anonymous.load(std::sync::atomic::Ordering::Relaxed)),
             minimum_address: self.minimum_address,
             address_limit: self.address_limit,
@@ -371,9 +378,32 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             backing,
             backing_offset: plan.offset,
         };
-        match self.coordinator.map(request) {
+        let charge = matches!(plan.source, MapSource::Anonymous { .. }) && !plan.no_reserve;
+        let replaced = match placement {
+            Placement::Fixed(start) => AddressRange::nonempty(start, plan.length).ok(),
+            Placement::FixedNoReplace(_) | Placement::Anywhere { .. } => None,
+        };
+        let before = AnonymousMemoryLease::total(&self.coordinator.ledger().regions()).unwrap_or(u64::MAX);
+        let removed = replaced.map_or(0, |range| {
+            Self::charged_overlap(&self.coordinator.ledger().regions(), range)
+        });
+        let new_charge = charge.then_some(plan.requested_length).unwrap_or(0);
+        let target = before.saturating_sub(removed).saturating_add(new_charge);
+        let operation = || {
+            if charge {
+                self.coordinator.map_charged(request, new_charge)
+            } else {
+                self.coordinator.map(request)
+            }
+        };
+        let result = match &self.anonymous_charge {
+            Some(lease) => lease.transition(target, operation),
+            None => operation().map_err(ChargeTransitionError::Operation),
+        };
+        match result {
             Ok(address) => LinuxResult::Value(address.get()),
-            Err(error) => LinuxResult::Error(ErrorMap::ledger(error)),
+            Err(ChargeTransitionError::Limit) => LinuxResult::Error(Errno::ENOMEM),
+            Err(ChargeTransitionError::Operation(error)) => LinuxResult::Error(ErrorMap::ledger(error)),
         }
     }
 
@@ -479,7 +509,19 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             {
                 return LinuxResult::Value(0);
             }
-            None => self.coordinator.unmap(plan.range),
+            None => match &self.anonymous_charge {
+                Some(lease) => {
+                    let before = AnonymousMemoryLease::total(&self.coordinator.ledger().regions()).unwrap_or(u64::MAX);
+                    let removed = Self::charged_overlap(&self.coordinator.ledger().regions(), plan.range);
+                    lease
+                        .transition(before.saturating_sub(removed), || self.coordinator.unmap(plan.range))
+                        .map_err(|error| match error {
+                            ChargeTransitionError::Limit => hl_memory::MemoryError::InvariantViolation,
+                            ChargeTransitionError::Operation(error) => error,
+                        })
+                }
+                None => self.coordinator.unmap(plan.range),
+            },
         };
         match result {
             Ok(()) => LinuxResult::Value(0),
@@ -513,13 +555,18 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         if plan.keep_old && !matches!(resolution.region.backing(), Backing::Anonymous { shared: false, .. }) {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        if plan.new_length <= plan.old_range.length() && plan.fixed.is_none() && !plan.keep_old {
-            return self.shrink_remap(plan.old_range, plan.new_length);
+        if plan.new_length <= plan.old_range.length()
+            && plan.requested_new_length <= plan.requested_old_length
+            && plan.fixed.is_none()
+            && !plan.keep_old
+        {
+            return self.shrink_remap(plan);
         }
         if let Some(destination) = plan.fixed {
             return self.relocate_remap(
                 plan.old_range,
                 plan.new_length,
+                plan.requested_new_length,
                 Placement::Fixed(destination),
                 plan.keep_old,
                 resolution,
@@ -529,6 +576,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             return self.relocate_remap(
                 plan.old_range,
                 plan.new_length,
+                plan.requested_new_length,
                 Placement::Anywhere {
                     minimum: plan.old_range.end(),
                     maximum: GuestAddress::new(self.address_limit),
@@ -538,13 +586,14 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
                 resolution,
             );
         }
-        let extension = self.extend_remap(plan.old_range, plan.new_length, resolution);
+        let extension = self.extend_remap(plan, resolution);
         if extension != LinuxResult::Error(Errno::EEXIST) || !plan.may_move {
             return extension;
         }
         self.relocate_remap(
             plan.old_range,
             plan.new_length,
+            plan.requested_new_length,
             Placement::Anywhere {
                 minimum: GuestAddress::new(4096),
                 maximum: GuestAddress::new(self.address_limit),
@@ -555,25 +604,58 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         )
     }
 
-    fn shrink_remap(&self, old: AddressRange, new_length: u64) -> LinuxResult {
-        if new_length == old.length() {
-            return LinuxResult::Value(old.start().get());
-        }
-        let tail = match AddressRange::nonempty(
-            GuestAddress::new(old.start().get() + new_length),
-            old.length() - new_length,
-        ) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
-        match self.coordinator.unmap(tail) {
-            Ok(()) => LinuxResult::Value(old.start().get()),
-            Err(error) => LinuxResult::Error(ErrorMap::ledger(error)),
-        }
+    pub(super) fn charged_overlap(regions: &[hl_memory::Region], range: AddressRange) -> u64 {
+        regions
+            .iter()
+            .filter_map(|region| region.charge())
+            .map(|charge| {
+                let first = charge.start().max(range.start());
+                let last = charge.end().min(range.end());
+                last.get().saturating_sub(first.get())
+            })
+            .sum()
     }
 
-    fn extend_remap(&self, old: AddressRange, new_length: u64, source: hl_memory::Resolution) -> LinuxResult {
-        let extra = new_length - old.length();
+    fn shrink_remap(&self, plan: hl_linux::MremapPlan) -> LinuxResult {
+        let removed_charge = AddressRange::nonempty(
+            GuestAddress::new(plan.old_range.start().get() + plan.requested_new_length),
+            plan.old_range
+                .end()
+                .get()
+                .saturating_sub(plan.old_range.start().get().saturating_add(plan.requested_new_length)),
+        )
+        .ok();
+        let logical_tail = AddressRange::nonempty(
+            GuestAddress::new(plan.old_range.start().get() + plan.requested_new_length),
+            plan.new_length.saturating_sub(plan.requested_new_length),
+        )
+        .ok();
+        let page_tail = AddressRange::nonempty(
+            GuestAddress::new(plan.old_range.start().get() + plan.new_length),
+            plan.old_range.length().saturating_sub(plan.new_length),
+        )
+        .ok();
+        if logical_tail.is_none() && page_tail.is_none() {
+            return LinuxResult::Value(plan.old_range.start().get());
+        }
+        let regions = self.coordinator.ledger().regions();
+        let before = AnonymousMemoryLease::total(&regions).unwrap_or(u64::MAX);
+        let removed = removed_charge.map_or(0, |range| Self::charged_overlap(&regions, range));
+        let mut batch = hl_memory::MappingBatch::new();
+        if let Some(range) = page_tail {
+            batch.push(hl_memory::MappingOperation::Unmap(range));
+        }
+        if let Some(range) = logical_tail {
+            batch.push(hl_memory::MappingOperation::Uncharge(range));
+        }
+        self.accounted(before.saturating_sub(removed), || {
+            self.coordinator.apply(&batch).map(|_| plan.old_range.start())
+        })
+    }
+
+    fn extend_remap(&self, plan: hl_linux::MremapPlan, source: hl_memory::Resolution) -> LinuxResult {
+        let old = plan.old_range;
+        let extra = plan.new_length - old.length();
         let request = MapRequest {
             placement: Placement::FixedNoReplace(old.end()),
             length: extra,
@@ -582,9 +664,45 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             backing: source.region.backing(),
             backing_offset: source.backing_offset + old.length(),
         };
-        match self.coordinator.map(request) {
-            Ok(_) => LinuxResult::Value(old.start().get()),
-            Err(error) => LinuxResult::Error(ErrorMap::ledger(error)),
+        let reserved = source.region.reserved();
+        let mut batch = hl_memory::MappingBatch::new();
+        if extra != 0 {
+            if reserved {
+                batch.push(hl_memory::MappingOperation::MapCharged(request, 0));
+            } else {
+                batch.push(hl_memory::MappingOperation::Map(request));
+            }
+        }
+        if reserved && plan.requested_new_length > plan.requested_old_length {
+            let start = GuestAddress::new(old.start().get() + plan.requested_old_length);
+            let added = match AddressRange::nonempty(start, plan.requested_new_length - plan.requested_old_length) {
+                Ok(range) => range,
+                Err(_) => return LinuxResult::Error(Errno::ENOMEM),
+            };
+            batch.push(hl_memory::MappingOperation::Charge(added));
+        }
+        let before = AnonymousMemoryLease::total(&self.coordinator.ledger().regions()).unwrap_or(u64::MAX);
+        let added = reserved
+            .then_some(plan.requested_new_length.saturating_sub(plan.requested_old_length))
+            .unwrap_or(0);
+        self.accounted(before.saturating_add(added), || {
+            self.coordinator.apply(&batch).map(|_| old.start())
+        })
+    }
+
+    pub(super) fn accounted(
+        &self,
+        target: u64,
+        operation: impl FnOnce() -> Result<GuestAddress, hl_memory::MemoryError>,
+    ) -> LinuxResult {
+        let result = match &self.anonymous_charge {
+            Some(lease) => lease.transition(target, operation),
+            None => operation().map_err(ChargeTransitionError::Operation),
+        };
+        match result {
+            Ok(address) => LinuxResult::Value(address.get()),
+            Err(ChargeTransitionError::Limit) => LinuxResult::Error(Errno::ENOMEM),
+            Err(ChargeTransitionError::Operation(error)) => LinuxResult::Error(ErrorMap::ledger(error)),
         }
     }
 

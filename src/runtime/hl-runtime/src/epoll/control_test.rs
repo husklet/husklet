@@ -7,7 +7,7 @@ use hl_event::{SignalFdFlags, SignalMask};
 use hl_ipc::Pipe;
 use hl_task::{ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry};
 
-use crate::{event::CatalogBoundEvent, Control, ControlError, GraphError, RuntimeDescriptorTable, TaskSignalQueue};
+use crate::{Control, ControlError, GraphError, RuntimeDescriptorTable, TaskSignalQueue, event::CatalogBoundEvent};
 
 struct ControlFixture {
     control: Arc<Control>,
@@ -130,12 +130,7 @@ fn transferred_epoll_retains_pipe() {
     ));
     let child_descriptors = child.descriptor_table();
     let prepared = child_descriptors
-        .prepare_open(
-            0,
-            bound.clone(),
-            StatusFlags::default(),
-            DescriptorFlags::default(),
-        )
+        .prepare_open(0, bound.clone(), StatusFlags::default(), DescriptorFlags::default())
         .unwrap();
     let identity = prepared.description_identity();
     fixture.control.register_epoll(identity, object);

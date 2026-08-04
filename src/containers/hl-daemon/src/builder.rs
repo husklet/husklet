@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use hl_container::{ContainerSpec, Containers, ExitStatus};
 use hl_images::build::{Base, CopySource, Recipe, Step};
-use hl_images::{snapshot::Ownerships, Image, Platform, Reference};
+use hl_images::{Image, Platform, Reference, snapshot::Ownerships};
 mod cache;
 mod context;
 mod copy;
@@ -107,23 +107,13 @@ pub(crate) struct Builds {
 
 impl Builds {
     pub(crate) async fn lock(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
-        let lock = self
-            .locks
-            .lock()
-            .await
-            .entry(key.to_owned())
-            .or_default()
-            .clone();
+        let lock = self.locks.lock().await.entry(key.to_owned()).or_default().clone();
         lock.lock_owned().await
     }
 }
 
 impl Builder {
-    pub(crate) fn new(
-        containers: Containers,
-        platform: Platform,
-        source: Arc<dyn hl_images::remote::Source>,
-    ) -> Self {
+    pub(crate) fn new(containers: Containers, platform: Platform, source: Arc<dyn hl_images::remote::Source>) -> Self {
         Self {
             containers,
             platform,
@@ -165,11 +155,7 @@ impl Builder {
         Ok(())
     }
 
-    pub(crate) async fn build(
-        &self,
-        context: impl Read,
-        request: BuildRequest<'_>,
-    ) -> Result<Image, BuildError> {
+    pub(crate) async fn build(&self, context: impl Read, request: BuildRequest<'_>) -> Result<Image, BuildError> {
         let BuildRequest {
             dockerfile,
             name,
@@ -185,13 +171,8 @@ impl Builder {
         let source = context.read(dockerfile)?;
         context.ignore(dockerfile)?;
         let context_digest = context.digest()?;
-        let recipe = Recipe::parse_with_platforms(
-            &source,
-            arguments,
-            target,
-            Some(&self.platform),
-            Some(&self.platform),
-        )?;
+        let recipe =
+            Recipe::parse_with_platforms(&source, arguments, target, Some(&self.platform), Some(&self.platform))?;
         if let BuildNetwork::Named(network) = &self.network {
             self.containers.networks().inspect(network).await?;
         }
@@ -225,16 +206,11 @@ impl Builder {
         }
         let mut built = Vec::new();
         for stage in recipe.stages.iter().take(recipe.selected + 1) {
-            built.push(
-                self.stage(&context, stage, &built, &images, &remotes)
-                    .await?,
-            );
+            built.push(self.stage(&context, stage, &built, &images, &remotes).await?);
         }
         let selected = &built[recipe.selected];
         let mut layer = Vec::new();
-        selected
-            .ownerships
-            .archive(selected.root.path(), &mut layer)?;
+        selected.ownerships.archive(selected.root.path(), &mut layer)?;
         let metadata = hl_images::Metadata {
             author: None,
             platform: self.platform.clone(),

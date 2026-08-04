@@ -1,166 +1,107 @@
-# Network catalog oracle
+# Network compatibility oracle audit
 
-This audit covers the socket identity/catalog and namespace-observation domain
-owned by `hl-network`. It supports the catalog unit and checkpoint tests; it does
-not claim full network syscall parity.
+The retained implementation was studied read-only in
+`../engine/src/linux_abi/syscall/net.c`, especially `svc_net`,
+`net_precheck`, `net_sockaddr_copyout_begin`, `net_message_bounce_begin`, and
+the send/receive message, option, accept, connect, bind, shutdown, ioctl, and
+poll branches. Supporting ownership and lifecycle paths were checked in
+`../engine/src/linux_abi/syscall/binding.c` (socket syscall binding and
+`SCM_RIGHTS`), `../engine/src/linux_abi/syscall/event.c` (epoll descriptor
+readiness), `../engine/src/linux_abi/syscall/nonpie_args.h` (guest pointer
+admission), `../engine/src/linux_abi/host_poll.h` (host readiness), and
+`../engine/src/linux_abi/fork.c` (descriptor transfer during fork). The
+namespace and checkpoint call graphs were also followed through
+`../engine/src/linux_abi/container/netns.c` (`sock_object_new`,
+`sock_pair_identity_assign`, `fd_carry_sock`, `netns_tcp_bind_note`,
+`netns_tcp_listen_note`, `netns_tcp_emit`, `br_init`, `br_for_ip`, and endpoint
+reset), `../engine/src/linux_abi/checkpoint.c` (`ckpt_capture_socket_state`,
+`ckpt_capture_socket_queue`, `ckpt_prepare_restore_sockets`, and the socket
+queue/state restore passes), and `../engine/src/linux_abi/host_socket.h` plus
+`../engine/src/host/windows/socket.c` (POSIX and Winsock creation, readiness,
+error translation, cancellation, and final close).
 
-## Retained C audit
+The C engine records socket family, type, protocol, peer projection, and
+private-network routing beside each host descriptor. `svc_net` validates guest
+addresses and flag widths before host calls, translates Linux sockaddr,
+msghdr/iovec/control layouts in both directions, and commits output lengths
+only after successful guest copies. Blocking calls use host readiness and
+signal interruption; nonblocking operations preserve `EAGAIN`,
+`EINPROGRESS`, `SO_ERROR`, partial transfers, and message boundaries. Accepted
+and duplicated descriptors inherit open-file-description state while
+`CLOEXEC` remains descriptor-local. Last close releases host/private endpoints.
+Fork transfers live descriptors and reconstructs their recorded identity.
+The POSIX implementation relies on kernel open-file-description locking and
+readiness. The Windows adapter instead protects its refcounted socket object,
+connect state, pending error, and close transition with a critical section and
+wakes blocked operations through its event before the last reference closes
+the Winsock handle. Checkpoint runs while the process is quiescent, captures
+each shared socket object once, and restores peer topology before descriptor
+aliases and queued rights. No network state is owned by guest-ISA assembly;
+guest syscall numbering is selected above this domain.
 
-Read-only files and entry points studied:
+Linux hosts mostly delegate INET and UNIX mechanics after ABI validation.
+The macOS branch translates option, message, ioctl, and sockaddr constants and
+uses private AF_UNIX routing to model container loopback, UDP, DNS, ICMP, and
+netlink behavior. Those branches explain the manifest's explicit macOS
+unsupported cases. The abortive-linger and half-open TCP cases remain typed
+known bugs because the private AF_UNIX transport cannot reproduce the required
+TCP reset/HUP ordering.
 
-- `../engine/src/linux_abi/syscall/net.c`: socket syscall dispatch for
-  `socket`, `socketpair`, `bind`, `listen`, `accept`, and `connect`.
-- `../engine/src/linux_abi/container/netns.c`: the `g_sock_*`, `g_lo_*`,
-  `g_br_*`, and `g_tcp_*` socket catalogs; `sock_object_new`,
-  `sock_object_pair`, `fd_carry_sock`, `netns_tcp_bind_note`,
-  `netns_tcp_listen_note`, `netns_tcp_emit`, and the close/reset paths.
-- `../engine/src/linux_abi/container/vfs.c`: `/proc/net/tcp` and
-  `/proc/net/tcp6` synthesis through `netns_tcp_emit`.
-- `../engine/src/linux_abi/checkpoint.c`: `ckpt_socket_state`,
-  `ckpt_capture_socket_state`, `ckpt_capture_socket_queue`,
-  `ckpt_prepare_restore_sockets`, `ckpt_restore_socket_queue_load`,
-  `ckpt_prepare_restore_socket_states`, and socket teardown.
-- `../engine/src/host/windows/socket.c`: Windows host socket creation, bind,
-  listen, accept, connect, close, and AF_UNIX-pair construction adapters.
-- `../engine/src/linux_abi/host_socket.h` and `host_poll.h`: POSIX direct
-  descriptor behavior, Windows guest/host vocabulary translation, readiness
-  sampling, and mixed-descriptor polling.
-- `../engine/src/linux_abi/syscall/event.c`: poll/epoll registration, wakeup,
-  timeout, oneshot, and spurious-wakeup ordering.
-
-The retained engine indexes process-global, bounded arrays by guest descriptor.
-An atomic nonzero sequence supplies socket-object identity; socket pairs record
-both endpoint identities, while dup copies the same endpoint identity and all
-emulation metadata. The descriptor lifecycle owns reset and final peer cleanup.
-There is no catalog-wide mutex: syscall/process serialization and fixed array
-slots provide the C ownership model, while checkpoint uses a stopped/quiescent
-process phase. Listen-table observation walks the arrays without a second state
-object. Checkpoint capture records each shared object once, captures queued
-frames and rights, and restores peer topology before descriptor aliases. Restore
-recreates host sockets, options, bind state, listen backlog, and queued traffic;
-failure preserves the host errno in the syscall path or aborts the restore
-transaction. AF_UNIX pathname length handling has a macOS-specific `fchdir`
-fallback, and Windows uses Winsock/AF_UNIX adapters. Guest syscall numbering is
-architecture-specific above this domain; socket catalog identity is not.
-
-For the open-file-description lane, the retained POSIX path lets kernel file
-descriptions own status flags, blocking, readiness, and final close. Dup aliases
-therefore share the host OFD. Windows instead stores a refcounted socket object
-behind handle-table entries; its critical section protects flags, connect state,
-pending error, close state, and event delivery. Duplicate publishes another
-handle entry holding the same object. Close first removes the handle entry, then
-marks the object closing and signals its event so blocked receive/accept/connect
-operations leave promptly; the last reference closes the Winsock socket and
-event. `WSAEWOULDBLOCK`, `WSAEINPROGRESS`, and `WSAEALREADY` are distinguished,
-blocking retries wait in bounded slices, and asynchronous completion is reported
-as write readiness plus a latched one-shot error. POSIX errno passes through the
-syscall boundary; Windows conditions are explicitly translated. Neither host
-adapter contains guest-ISA branches.
-
-## Capability matrix
-
-| Capability | Retained C owner | Rust owner | Status |
-|---|---|---|---|
-| stable socket identity and descriptor aliasing | `g_sock_object`, `g_sock_peer_object`, `fd_carry_sock` | `NetworkCatalog` generation-qualified `SocketId`; descriptor aliasing remains descriptor-owned | implemented, different safer ownership |
-| bounded allocation and stale identity rejection | `HL_NFD` arrays and reset | `NetworkCatalog::{allocate,slot,slot_mut}` | implemented |
-| paired endpoint identity/lifetime | `sock_object_pair`, peer arrays | `CatalogSocket::UnixPair` shared by two slots | implemented |
-| listener pending FIFO/backlog | host accept plus backlog metadata | `catalog/unix.rs` atomic connect/accept transaction | implemented and unit-tested |
-| namespace-wide coherent observation | unlocked `netns_tcp_emit` array walk | `NetworkCatalog::namespace_view` under one slots lock | implemented; Rust is coherent |
-| port ownership and collision admission | per-fd loopback/bridge port arrays | `NetworkCatalog::claim_port` and owned `PortCheckpoint` set | implemented |
-| catalog mutation/checkpoint exclusion | stopped process checkpoint phase | `CheckpointActivity` admission/freeze/thaw | implemented and concurrency-tested |
-| socket/pair checkpoint topology | socket state and endpoint restore tables | `catalog/checkpoint.rs` plus `NetworkSocketState` | implemented and unit-tested |
-| host resource recreation and accepted sockets | host `socket`/bind/listen plus restore tables | `NetworkCatalogRestore` consumer port | implemented |
-| queued payload and `SCM_RIGHTS` checkpoint | queue frame capture/restore | Unix transport snapshots and descriptor/runtime adapters | partial; full cross-domain parity remains to be proven |
-| host-specific socket mechanics | POSIX paths and Windows Winsock adapter | `NetworkSocketResource` adapters selected above `hl-network` | implemented boundary; target evidence remains required |
-| OFD-shared token, flags, and final close | kernel OFD on POSIX; refcounted Windows socket object | `SocketDescription` plus descriptor-owned aliases | implemented and concurrency-tested |
-| blocking wake and cancellation | kernel poll/epoll; Windows object event and closing flag | `blocking.rs`, `ReadinessRegistry`, `OperationCancellation`, host `cancel` port | implemented and concurrency-tested |
-| asynchronous connect/error latch | errno plus poll writability; Windows connecting/pending-error state | `SocketConnectStatus` under the description lock | implemented and unit-tested |
-| host error vocabulary translation | native errno / typed Windows conditions | `platform.rs` consumer-owned port, converted to `ObjectError` | implemented; detailed Linux errno mapping remains personality-owned |
-
-## Semantics and remaining evidence
-
-Catalog operations hold the Rust slots mutex only for in-memory identity and
-snapshot transitions. Host reconstruction is intentionally performed while
-building a not-yet-published catalog, matching the retained restore transaction;
-ordinary live catalog operations do not hold this lock across host calls.
-`Capacity`, `Stale`, `Invalid`, and checkpoint errors remain typed here and are
-converted to Linux errno only by the Linux personality. The focused unit tests
-prove allocation generations, atomic AF_UNIX connection rollback, backlog FIFO,
-freeze admission, and checkpoint validation. Full syscall errno, blocking,
-cancellation, cross-process descriptor passing, both guest ISAs, and Windows
-restore behavior require the broader compatibility gates and are not claimed by
-this structural lane.
-
-## Multi-interface launch and switch selection audit
-
-This section records the retained implementation studied for the `HL_NETIFS`
-launch projection and immutable Rust interface selection policy. It does not
-claim that the Rust runtime already implements the retained AF_UNIX switch.
-
-Read-only retained sources and entry points studied:
-
-- `../engine/src/core/options.c`: `hl_option_definitions` and the
-  `hl_options_{init,set,get,bind_process,destroy}` lifetime.
-- `../engine/src/core/launch.c`: `cfd_read_full`, `launch_string`,
-  `launch_strings_valid`, `hl_read_config_file`, and the
-  `APPLY_OPTION("HL_NETIFS", ...)` projection.
-- `../engine/include/hl/config.h`: `hl_launch_config` and its
-  `network_interfaces_offset` wire field.
-- `../engine/pkgs/rust/src/{config,network,wire}.rs`: the retained typed
-  producer, eight-interface bound, legacy-field exclusion, and canonical
-  newline serialization.
-- `../engine/src/linux_abi/container/netns.c`: `HL_NETIF_MAX`, `br_interface`,
-  `br_parse_ip`, `br_init`, `br_on`, `br_for_ip`,
-  `br_connect_interface`, `br_bind_interface`, bridge path/alias/ephemeral
-  allocation, UDP switch state and reference ownership, ICMP routing, and
-  `dns_local_lookup`.
-- `../engine/src/linux_abi/syscall/net.c`: bind and connect dispatch, including
-  stream, datagram, and ICMP ordering.
-- `../engine/src/core/target/{aarch64,x86_64}.c`: both targets include the same
-  network namespace implementation; no assembly participates in this domain.
-
-The launch reader owns the decoded wire and option strings for the runner's
-lifetime. `br_init` copies selected values into process-global bounded arrays on
-first use. It sets its one-shot flag before parsing, has no lock or retry, and
-has no interface-state teardown; bridge directories persist. Per-descriptor TCP
-and UDP interface identities are copied on dup/fork, while UDP paths use shared
-atomic references so the last alias removes owned endpoints. Rust instead owns
-parsed interfaces immutably per engine in `NetworkPolicy`.
-
-`HL_NETIFS` takes precedence over legacy `HL_NETBR` plus `HL_IP`. Records are
-`bridge=IPv4/prefix` in launch order, with bridge length 1 through 40, a nonzero
-IPv4 address, prefix 0 through 32, and at most eight entries. Retained parsing
-stops at the first malformed row while preserving earlier rows and ignores rows
-beyond eight; the Rust producer rejects invalid resolved configuration before
-launch, while the Rust decoder rejects the entire malformed record set. Legacy
-input creates one `/16` interface. Bridge directory creation uses mode 0700;
-POSIX passes the mode and Windows' compatibility wrapper drops it.
-
-Connect excludes `127/8` and selects the first launch-ordered subnet match,
-including for overlapping prefixes. Bind excludes `127/8`, assigns the
-unspecified address to interface zero, performs a complete exact-own-address
-scan, and only then performs the ordered subnet scan. Prefix zero matches every
-non-loopback address; prefix 32 matches only the configured address. TCP bind
-creates wildcard aliases for the other attached interfaces. UDP persists the
-selected local and peer interface across bind/connect/send; ICMP rejects an
-unmatched non-loopback destination with `ENETUNREACH`; DNS scans each bridge's
-`.names` file in interface order. Path validation can return `EINVAL` or
-`ENAMETOOLONG`; ephemeral exhaustion returns `EADDRINUSE`; connect preserves
-host errors after bounded retry. Selection is common across host and guest
-architectures; only socket and directory adapters vary by host.
-
-| Capability | Rust owner | Status |
+| Retained C capability | Rust owner | Coverage in this folder |
 |---|---|---|
-| ordered, bounded `HL_NETIFS` launch serialization | `hl-container` engine spec | implemented with strict producer validation |
-| immutable interface parsing and namespace inventory | `hl-network::NetworkPolicy` | implemented |
-| ordered connect and exact-before-subnet bind selection | `hl-network::NetworkPolicy` | implemented and focused-unit-tested |
-| selected-interface propagation into live TCP/UDP operations | `hl-network::EgressRoute` plus `hl-runtime::RuntimeNetworkHost` | implemented through the host port; existing host defaults still ignore identity |
-| AF_UNIX bridge rendezvous, wildcard aliases, retry, and endpoint teardown | network domain plus runtime descriptor adapter | missing |
-| per-interface `.names` lookup and ICMP source selection | network/runtime composition | missing |
+| socket family/type/protocol creation and policy | `hl-network::SocketNamespace`, `hl-runtime::network::syscalls` | socket matrix, socketpair, TCP/UDP/UNIX/IPv6/ICMP |
+| bind, connect, listen, accept4 and shutdown state transitions | `hl-network::SocketDescription`, `hl-runtime::network::{syscalls,accept}` | connect edges/refusal, backlog, nonblocking connect, shutdown |
+| sockaddr and option ABI conversion with in/out lengths | `hl-linux::network::abi`, `hl-runtime::network::{types,options}` | names, buffer/type/linger/keepalive/IP/TCP options |
+| stream/datagram partial I/O and readiness | `hl-runtime::network::{data,wait}`, `hl-event` adapter | peek/waitall/truncation, poll, epoll, FIONREAD, timeouts |
+| msghdr/iovec/control translation and batching | `hl-runtime::network::{message,transfer}`, `hl-network::ancillary` | sendmsg, recvmsg, writev, mmsg, credentials and rights |
+| descriptor identity across dup, fork, close, and `SCM_RIGHTS` | `hl-descriptor`, `hl-runtime::fork::network`, `hl-runtime::network::import` | dup socket, private UDP fork, SCM_RIGHTS |
+| UNIX pathname/abstract/autobind namespace | `hl-network::unix`, runtime VFS pathname adapter | stream/datagram/seqpacket/abstract/autobind/name cases |
+| interface, netlink, DNS, ICMP and procfs projections | `hl-runtime::network::{ioctl,netlink}`, `hl-runtime::procfs::network`, concrete host adapter | interfaces/ioctl/netlink/DNS/ICMP/tcp-row |
+| cancellation, snapshot and teardown ownership | `hl-network::{blocking,checkpoint}`, `hl-runtime::checkpoint::network` | timeout, peer-close, fork/dup and last-close behaviors |
 
-Focused evidence covers two serialized interfaces, stable order and distinct
-prefixes, bounds and malformed fields, overlapping-prefix connect order,
-exact-own-address bind priority, wildcard bind, `/0`, `/32`, loopback exclusion,
-and the distinction between the synthetic introspection interface and configured
-switch membership. Full TCP/UDP switch behavior remains a later compatibility
-gate and must not be inferred from these tests.
+All 87 legacy registrations are represented independently in `test.yaml` with
+their original targets, compile flags, environment, expected exit status, and
+byte-exact golden output. `active` means the compatibility contract remains
+enabled. `!unsupported` preserves an explicit host limitation and `!broken`
+preserves a known behavioral divergence; neither is silently treated as a
+passing case.
+
+The provider-loopback source was audited against
+`../engine/include/hl/host_services.h`, `../engine/src/linux_abi/syscall/binding.c`, and
+the epoll/descriptor integration. Injected socket/file identities survive dup
+and fork, `CLOEXEC` closes only the descriptor edge, and readiness follows the
+provider subscription lifetime. The folder runner cannot yet construct that
+typed injection, so the case is visibly unsupported. Rust ownership maps to
+provider-backed `hl-network`/`hl-vfs` objects and `hl-runtime` adapters.
+
+## Provider evidence
+
+| Gate | Result | Meaning |
+|---|---:|---|
+| AArch64/x86-64 cross-build | 174/174 | all 87 retained registrations build for both ISAs |
+| active direct QEMU rows | 142/154 | byte-exact provider parity; 12 host-environment differences listed below |
+| typed unsupported/broken rows | 20 rows | enumerated but deliberately excluded from the active provider count |
+| provider-loopback cross-build | 2/2 | source builds for both ISAs |
+| provider-loopback direct QEMU | 0/2 | expected step-1 `ENOENT` without typed descriptor injection |
+
+On 2026-08-04, a direct source-provider gate used all 18 logical CPUs and fresh
+temporary outputs. Both pinned cross-compilers successfully built all 87
+manifest registrations: 174/174 AArch64 and x86-64 static artifacts. Source
+bytes match the retained fixtures after the intentional include rename from
+`net_util.h`/`net_socket_util.h` to `socket_util.h`; all 87 golden files are
+byte-identical to the retained expected output.
+
+Direct QEMU execution is provider evidence, not Rust-engine status. Of 154
+active registration/ISA rows, 142 matched exit status and stdout byte-for-byte.
+Two initially colliding abstract-socket rows passed when rerun sequentially.
+The remaining 12 rows are the same six host-environment-sensitive contracts on
+both ISAs: DNS injection, fixed interface projection, private bridge ICMP,
+forced IPv6 unreachable routing, dual-stack bind policy, and one host-specific
+IP socket-option value. These results do not reclassify their typed engine
+status. The ten explicitly unsupported/broken registrations remain visible but
+were not counted as QEMU active rows.
+
+`provider-loopback` is an additional residual provider contract beyond those
+87 registrations. Its source and `provider-loopback ok\n` golden are preserved,
+but direct native execution cannot pass because the retired typed provider must
+inject its descriptors; its typed unsupported status records that runner gap.

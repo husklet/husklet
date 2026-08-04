@@ -48,11 +48,7 @@ async fn network_client_and_server_share_headless_topology() {
     assert_eq!(inspected.containers.len(), 1);
     assert_eq!(inspected.containers.values().next().unwrap().name, "job");
 
-    let error = client
-        .networks()
-        .remove("isolated", false)
-        .await
-        .unwrap_err();
+    let error = client.networks().remove("isolated", false).await.unwrap_err();
     assert!(matches!(
         error,
         hl_client::Error::Docker {
@@ -72,10 +68,7 @@ async fn network_client_and_server_share_headless_topology() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        client.networks().prune().await.unwrap().networks_deleted,
-        ["isolated"]
-    );
+    assert_eq!(client.networks().prune().await.unwrap().networks_deleted, ["isolated"]);
     client
         .networks()
         .create(&NetworkCreate {
@@ -93,13 +86,7 @@ async fn network_client_and_server_share_headless_topology() {
             ..
         })
     ));
-    assert!(client
-        .networks()
-        .prune()
-        .await
-        .unwrap()
-        .networks_deleted
-        .is_empty());
+    assert!(client.networks().prune().await.unwrap().networks_deleted.is_empty());
 
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
@@ -135,11 +122,7 @@ async fn forced_network_removal_uses_the_docker_delete_contract() {
         })
         .await
         .unwrap();
-    client
-        .networks()
-        .remove("force-candidate", true)
-        .await
-        .unwrap();
+    client.networks().remove("force-candidate", true).await.unwrap();
     assert!(matches!(
         client.networks().inspect("force-candidate").await,
         Err(hl_client::Error::Docker {
@@ -202,12 +185,7 @@ fn volume_subpath_request(subpath: &str) -> hl_client::model::CreateContainer {
 async fn create_attaches_multiple_networks_with_aliases_atomically() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     for (name, address) in [("frontend", "10.81.0.0"), ("backend", "10.82.0.0")] {
         containers
             .networks()
@@ -235,19 +213,23 @@ async fn create_attaches_multiple_networks_with_aliases_atomically() {
     wait_for_socket(&socket).await;
     let client = Client::unix(&socket).unwrap();
 
-    assert!(client
-        .containers()
-        .create(&multi_network_request("missing"), Some("invalid-multi"))
-        .await
-        .is_err());
+    assert!(
+        client
+            .containers()
+            .create(&multi_network_request("missing"), Some("invalid-multi"))
+            .await
+            .is_err()
+    );
     assert!(containers.inspect("invalid-multi").await.is_err());
-    assert!(containers
-        .networks()
-        .inspect("frontend")
-        .await
-        .unwrap()
-        .endpoints
-        .is_empty());
+    assert!(
+        containers
+            .networks()
+            .inspect("frontend")
+            .await
+            .unwrap()
+            .endpoints
+            .is_empty()
+    );
 
     let created = client
         .containers()
@@ -255,22 +237,12 @@ async fn create_attaches_multiple_networks_with_aliases_atomically() {
         .await
         .unwrap();
     assert_eq!(
-        client
-            .networks()
-            .inspect("frontend")
-            .await
-            .unwrap()
-            .containers[&created.id]
-            .name,
+        client.networks().inspect("frontend").await.unwrap().containers[&created.id].name,
         "valid-multi"
     );
     assert_eq!(
-        containers
-            .networks()
-            .inspect("backend")
-            .await
-            .unwrap()
-            .endpoints[&containers.inspect(&created.id).await.unwrap().id]
+        containers.networks().inspect("backend").await.unwrap().endpoints
+            [&containers.inspect(&created.id).await.unwrap().id]
             .aliases,
         ["database"]
     );
@@ -283,12 +255,7 @@ async fn create_attaches_multiple_networks_with_aliases_atomically() {
 async fn volume_subpath_create_preserves_access_and_rejects_unsafe_resolution() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     let volume = containers
         .volumes()
         .create(hl_container::VolumeSpec::new("subpath-data"))
@@ -297,11 +264,7 @@ async fn volume_subpath_create_preserves_access_and_rejects_unsafe_resolution() 
     std::fs::create_dir_all(volume.path().join("tenant/alpha")).unwrap();
     std::fs::write(volume.path().join("tenant/alpha/value"), b"safe").unwrap();
     std::fs::create_dir(root.path().join("outside-subpath")).unwrap();
-    std::os::unix::fs::symlink(
-        root.path().join("outside-subpath"),
-        volume.path().join("escape"),
-    )
-    .unwrap();
+    std::os::unix::fs::symlink(root.path().join("outside-subpath"), volume.path().join("escape")).unwrap();
     let socket = root.path().join("subpath.sock");
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn({
@@ -321,10 +284,7 @@ async fn volume_subpath_create_preserves_access_and_rejects_unsafe_resolution() 
 
     let valid = client
         .containers()
-        .create(
-            &volume_subpath_request("tenant/alpha"),
-            Some("subpath-valid"),
-        )
+        .create(&volume_subpath_request("tenant/alpha"), Some("subpath-valid"))
         .await
         .unwrap();
     assert_eq!(
@@ -341,10 +301,7 @@ async fn volume_subpath_create_preserves_access_and_rejects_unsafe_resolution() 
         containers.inspect(&valid.id).await.unwrap().spec.mounts[0].access,
         hl_container::Access::ReadOnly
     );
-    for (name, path) in [
-        ("subpath-missing-api", "missing"),
-        ("subpath-escape-api", "escape"),
-    ] {
+    for (name, path) in [("subpath-missing-api", "missing"), ("subpath-escape-api", "escape")] {
         let created = client
             .containers()
             .create(&volume_subpath_request(path), Some(name))
@@ -352,14 +309,13 @@ async fn volume_subpath_create_preserves_access_and_rejects_unsafe_resolution() 
             .unwrap();
         assert!(client.containers().start(&created.id).await.is_err());
     }
-    assert!(client
-        .containers()
-        .create(
-            &volume_subpath_request("../outside"),
-            Some("subpath-parent-api")
-        )
-        .await
-        .is_err());
+    assert!(
+        client
+            .containers()
+            .create(&volume_subpath_request("../outside"), Some("subpath-parent-api"))
+            .await
+            .is_err()
+    );
 
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();

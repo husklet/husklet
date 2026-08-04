@@ -46,10 +46,7 @@ impl Id {
             None => diff.clone(),
             Some(parent) => {
                 let encoded = parent.as_str().strip_prefix("chain-").ok_or_else(|| {
-                    Error::InvalidMetadata(format!(
-                        "snapshot {} is not a layer chain",
-                        parent.as_str()
-                    ))
+                    Error::InvalidMetadata(format!("snapshot {} is not a layer chain", parent.as_str()))
                 })?;
                 let parent: Digest = format!("sha256:{encoded}").parse()?;
                 Digest::sha256(format!("{parent} {diff}").as_bytes())
@@ -153,12 +150,7 @@ impl Snapshots {
                 let parent_path = self.root.join("committed").join(parent.as_str());
                 let result = Tree::from(parent_path.as_path())
                     .copy_to(&path)
-                    .and_then(|()| {
-                        Ownerships::fork(
-                            &self.ownership_path("committed", parent),
-                            ownership_path.clone(),
-                        )
-                    })
+                    .and_then(|()| Ownerships::fork(&self.ownership_path("committed", parent), ownership_path.clone()))
                     .and_then(|ownership| {
                         Names::fork(&self.names_path("committed", parent), names_path.clone())
                             .map(|names| (ownership, names))
@@ -170,9 +162,9 @@ impl Snapshots {
                 }
                 result?
             }
-            None => match Ownerships::create(ownership_path.clone()).and_then(|ownership| {
-                Names::create(names_path.clone()).map(|names| (ownership, names))
-            }) {
+            None => match Ownerships::create(ownership_path.clone())
+                .and_then(|ownership| Names::create(names_path.clone()).map(|names| (ownership, names)))
+            {
                 Ok(metadata) => metadata,
                 Err(error) => {
                     let _ = fs::remove_dir_all(&path);
@@ -457,10 +449,7 @@ impl Draft {
             .root
             .join("ownership/committed")
             .join(format!("{}.json", id.as_str()));
-        let names_target = self
-            .root
-            .join("names/committed")
-            .join(format!("{}.json", id.as_str()));
+        let names_target = self.root.join("names/committed").join(format!("{}.json", id.as_str()));
         fs::rename(&self.path, &target)?;
         let ownership_path = self
             .ownership

@@ -7,23 +7,23 @@ impl Service {
         let generation = self.identity.generation(&container)?;
         let filesystem = match &container.spec.rootfs {
             Rootfs::Image(reference) if reference.overlay().is_some() => {
-                let manager = self.rootfs.clone().ok_or_else(|| {
-                    Error::InvalidSpec("image rootfs requires a configured rootfs manager".into())
-                })?;
+                let manager = self
+                    .rootfs
+                    .clone()
+                    .ok_or_else(|| Error::InvalidSpec("image rootfs requires a configured rootfs manager".into()))?;
                 let reference = reference.clone();
-                let (lower, upper, lower_ownership, upper_ownership) =
-                    tokio::task::spawn_blocking(move || {
-                        manager.open_overlay(&reference).map(|view| {
-                            (
-                                view.lower().to_owned(),
-                                view.upper().to_owned(),
-                                view.lower_ownership().clone(),
-                                view.upper_ownership().clone(),
-                            )
-                        })
+                let (lower, upper, lower_ownership, upper_ownership) = tokio::task::spawn_blocking(move || {
+                    manager.open_overlay(&reference).map(|view| {
+                        (
+                            view.lower().to_owned(),
+                            view.upper().to_owned(),
+                            view.lower_ownership().clone(),
+                            view.upper_ownership().clone(),
+                        )
                     })
-                    .await
-                    .map_err(|error| Error::Io(std::io::Error::other(error)))??;
+                })
+                .await
+                .map_err(|error| Error::Io(std::io::Error::other(error)))??;
                 crate::Filesystem::overlay(lower, upper, lower_ownership, upper_ownership, mounts)
             }
             _ => crate::Filesystem::new(self.rootfs_path(&container.spec.rootfs).await?, mounts),
@@ -45,9 +45,10 @@ impl Service {
                 "filesystem changes require an image-backed rootfs".into(),
             ));
         };
-        let manager = self.rootfs.clone().ok_or_else(|| {
-            Error::InvalidSpec("image rootfs requires a configured rootfs manager".into())
-        })?;
+        let manager = self
+            .rootfs
+            .clone()
+            .ok_or_else(|| Error::InvalidSpec("image rootfs requires a configured rootfs manager".into()))?;
         tokio::task::spawn_blocking(move || {
             manager
                 .changes(&reference)?
@@ -85,9 +86,10 @@ impl Service {
         match rootfs {
             Rootfs::Directory(path) => Ok((path.clone(), None, Vec::new())),
             Rootfs::Image(reference) => {
-                let manager = self.rootfs.clone().ok_or_else(|| {
-                    Error::InvalidSpec("image rootfs requires a configured rootfs manager".into())
-                })?;
+                let manager = self
+                    .rootfs
+                    .clone()
+                    .ok_or_else(|| Error::InvalidSpec("image rootfs requires a configured rootfs manager".into()))?;
                 let reference = reference.clone();
                 tokio::task::spawn_blocking(move || {
                     if reference.overlay().is_some() {

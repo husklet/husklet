@@ -5,12 +5,7 @@ use super::support::*;
 async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     let daemon = Daemon::new(containers.clone());
     let socket = root.path().join("run/docker.sock");
     let (stop, stopped) = oneshot::channel();
@@ -30,13 +25,9 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
         image: "scenario/fixture:v1".into(),
         cmd: Some(vec!["overridden".into()]),
         env: Some(vec!["REQUEST=yes".into()]),
-        volumes: [("/anonymous".into(), serde_json::json!({}))]
-            .into_iter()
-            .collect(),
+        volumes: [("/anonymous".into(), serde_json::json!({}))].into_iter().collect(),
         exposed_ports: hl_client::model::ExposedPorts(
-            [("8080/tcp".into(), serde_json::json!({}))]
-                .into_iter()
-                .collect(),
+            [("8080/tcp".into(), serde_json::json!({}))].into_iter().collect(),
         ),
         host_config: Some(hl_client::model::HostConfig {
             mounts: vec![hl_client::model::DockerMount {
@@ -76,10 +67,7 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     assert_eq!(durable.spec.publish[0].port.guest, 8080);
     let inspected = client.containers().inspect(&created.id).await.unwrap();
     assert_eq!(
-        inspected.network_settings.ports["8080/tcp"]
-            .as_ref()
-            .unwrap()[0]
-            .host_port,
+        inspected.network_settings.ports["8080/tcp"].as_ref().unwrap()[0].host_port,
         "49152"
     );
     assert_eq!(
@@ -90,12 +78,9 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
         image: "scenario/fixture:v1".into(),
         host_config: Some(hl_client::model::HostConfig {
             port_bindings: hl_client::model::PortBindings(
-                [(
-                    "53/udp".into(),
-                    Some(vec![hl_client::model::PortBinding::default()]),
-                )]
-                .into_iter()
-                .collect(),
+                [("53/udp".into(), Some(vec![hl_client::model::PortBinding::default()]))]
+                    .into_iter()
+                    .collect(),
             ),
             ..Default::default()
         }),
@@ -132,9 +117,7 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
         .await
         .unwrap();
     let loopback = client.containers().inspect(&loopback.id).await.unwrap();
-    let binding = &loopback.network_settings.ports["8080/tcp"]
-        .as_ref()
-        .unwrap()[0];
+    let binding = &loopback.network_settings.ports["8080/tcp"].as_ref().unwrap()[0];
     assert_eq!(binding.host_ip, "127.0.0.1");
     assert_eq!(binding.host_port, "18080");
     let host = hl_client::model::CreateContainer {
@@ -156,26 +139,21 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
         }),
         ..Default::default()
     };
-    let host = client
-        .containers()
-        .create(&host, Some("host-networked"))
-        .await
-        .unwrap();
+    let host = client.containers().create(&host, Some("host-networked")).await.unwrap();
     assert_eq!(host.warnings.len(), 1);
     assert!(host.warnings[0].contains("Published ports are discarded"));
     let durable_host = containers.inspect(&host.id).await.unwrap();
-    assert_eq!(
-        durable_host.spec.network_mode,
-        hl_container::NetworkMode::Host
-    );
+    assert_eq!(durable_host.spec.network_mode, hl_container::NetworkMode::Host);
     assert!(durable_host.spec.publish.is_empty());
-    assert!(containers
-        .networks()
-        .list()
-        .await
-        .unwrap()
-        .iter()
-        .all(|network| !network.endpoints.contains_key(&durable_host.id)));
+    assert!(
+        containers
+            .networks()
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .all(|network| !network.endpoints.contains_key(&durable_host.id))
+    );
     let host_inspect = client.containers().inspect(&host.id).await.unwrap();
     assert_eq!(host_inspect.host_config.network_mode, "host");
     assert!(host_inspect.network_settings.networks.is_empty());
@@ -222,11 +200,7 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
         })
     ));
     assert!(containers.inspect("unsupported-bind").await.is_err());
-    client
-        .containers()
-        .remove(&created.id, false, true)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, true).await.unwrap();
     assert!(matches!(
         containers.volumes().inspect(&anonymous).await,
         Err(hl_container::Error::VolumeNotFound(_))
@@ -247,10 +221,7 @@ async fn assert_created_mounts(
     assert_eq!(inspected.metadata.image, "docker.io/scenario/fixture:v1");
     assert_eq!(inspected.metadata.mounts.len(), 2);
     assert!(inspected.metadata.mounts.iter().any(|mount| {
-        mount.kind == "volume"
-            && mount.name == "named-data"
-            && mount.destination == "/data"
-            && mount.read_write
+        mount.kind == "volume" && mount.name == "named-data" && mount.destination == "/data" && mount.read_write
     }));
     let anonymous = durable
         .spec
@@ -262,10 +233,7 @@ async fn assert_created_mounts(
         })
         .expect("Config.Volumes did not create an anonymous semantic mount");
     let volume = containers.volumes().inspect(&anonymous).await.unwrap();
-    assert_eq!(
-        std::fs::read(volume.path.join("seed")).unwrap(),
-        b"from-image"
-    );
+    assert_eq!(std::fs::read(volume.path.join("seed")).unwrap(), b"from-image");
     let payload = docker_tar(&[("value", b"mounted")]);
     containers
         .filesystem(id)
@@ -273,9 +241,6 @@ async fn assert_created_mounts(
         .unwrap()
         .extract("/anonymous", &payload[..], hl_container::Limits::default())
         .unwrap();
-    assert_eq!(
-        std::fs::read(volume.path.join("value")).unwrap(),
-        b"mounted"
-    );
+    assert_eq!(std::fs::read(volume.path.join("value")).unwrap(), b"mounted");
     anonymous
 }

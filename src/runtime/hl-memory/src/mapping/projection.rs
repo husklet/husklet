@@ -4,8 +4,8 @@ use std::sync::atomic::Ordering;
 use hl_isa::{AddressRange, GuestAddress};
 
 use super::host::Coordinator;
-use super::port::MemoryAccessHost;
 use super::port::HostProjection;
+use super::port::MemoryAccessHost;
 use crate::{Backing, MemoryError, Protection};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,7 +72,10 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             return Err(MemoryError::InvariantViolation);
         }
         self.project_contiguous(address, length, required, incarnation)
-            .map(|projection| DirectAuthorityLease { projection, protection: required })
+            .map(|projection| DirectAuthorityLease {
+                projection,
+                protection: required,
+            })
     }
 
     pub fn project_contiguous(
@@ -158,7 +161,10 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         if !self.allows(protection) {
             return Err(MemoryError::InvariantViolation);
         }
-        Ok(DirectAuthorityLease { projection: self, protection })
+        Ok(DirectAuthorityLease {
+            projection: self,
+            protection,
+        })
     }
     pub const fn range(&self) -> AddressRange {
         self.range
@@ -194,7 +200,11 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         if contains(primary, range, required) {
             return Ok(primary);
         }
-        if let Some(existing) = self.additional.iter().find(|entry| contains(entry.view, range, required)) {
+        if let Some(existing) = self
+            .additional
+            .iter()
+            .find(|entry| contains(entry.view, range, required))
+        {
             return Ok(existing.view);
         }
         if self.additional.len() == LIVE_PROJECTION_MAXIMUM {
@@ -259,10 +269,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         let region = resolution.region.range();
         let aligned = address.get() / maximum * maximum;
         let first = aligned.max(region.start().get());
-        let last = first
-            .checked_add(maximum)
-            .unwrap_or(u64::MAX)
-            .min(region.end().get());
+        let last = first.checked_add(maximum).unwrap_or(u64::MAX).min(region.end().get());
         if last < access.end().get() {
             return self.project_additional(address, length, required);
         }
@@ -296,10 +303,11 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                 return Err(error);
             }
             if let Some(resolution) = self.coordinator.ledger.resolve(self.range.start(), Protection::WRITE) {
-                executable.extend(
-                    self.coordinator
-                        .executable_write_ranges(self.range.start(), resolution, self.range.length()),
-                );
+                executable.extend(self.coordinator.executable_write_ranges(
+                    self.range.start(),
+                    resolution,
+                    self.range.length(),
+                ));
             }
         }
         for index in 0..self.additional.len() {
@@ -311,10 +319,11 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                     return Err(error);
                 }
                 if let Some(resolution) = self.coordinator.ledger.resolve(view.range.start(), Protection::WRITE) {
-                    executable.extend(
-                        self.coordinator
-                            .executable_write_ranges(view.range.start(), resolution, view.range.length()),
-                    );
+                    executable.extend(self.coordinator.executable_write_ranges(
+                        view.range.start(),
+                        resolution,
+                        view.range.length(),
+                    ));
                 }
             }
         }
@@ -404,11 +413,10 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                     range.length(),
                 )?;
             }
-            executable.extend(self.coordinator.executable_write_ranges(
-                range.start(),
-                resolution,
-                range.length(),
-            ));
+            executable.extend(
+                self.coordinator
+                    .executable_write_ranges(range.start(), resolution, range.length()),
+            );
             self.coordinator.invalidate_exclusive(*range)?;
         }
         self.coordinator
@@ -474,7 +482,5 @@ impl<H: MemoryAccessHost> Drop for ProjectionLease<'_, H> {
 }
 
 fn contains(view: ProjectionView, requested: AddressRange, required: Protection) -> bool {
-    view.range.start() <= requested.start()
-        && view.range.end() >= requested.end()
-        && view.protection.contains(required)
+    view.range.start() <= requested.start() && view.range.end() >= requested.end() && view.protection.contains(required)
 }

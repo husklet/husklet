@@ -5,12 +5,12 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 
 use crate::{
+    Descriptor, DescriptorKind as _, Digest, Error, Reference, Result,
     content::{FsStore, Store},
     remote::{BlobStream, Source},
-    Descriptor, DescriptorKind as _, Digest, Error, Reference, Result,
 };
 
 /// Supplies direct successors of an OCI descriptor (index, manifest, or artifact manifest).
@@ -27,9 +27,7 @@ impl Successors for FsStore {
             return Ok(Vec::new());
         }
         if descriptor.size() > MAX_DOCUMENT {
-            return Err(Error::MalformedOci(
-                "descriptor document exceeds 16 MiB".into(),
-            ));
+            return Err(Error::MalformedOci("descriptor document exceeds 16 MiB".into()));
         }
         let mut bytes = Vec::with_capacity(usize::try_from(descriptor.size()).unwrap_or(0));
         Store::reader(self, descriptor)?.read_to_end(&mut bytes)?;
@@ -78,10 +76,7 @@ pub async fn copy_graph(
             queue.extend(DescriptorGraph::successors(&descriptor, &bytes)?);
             report.bytes += bytes.len() as u64;
             target
-                .push(
-                    &descriptor,
-                    Box::pin(stream::once(async move { Ok(bytes) })),
-                )
+                .push(&descriptor, Box::pin(stream::once(async move { Ok(bytes) })))
                 .await?;
         } else {
             report.bytes += descriptor.size();
@@ -98,13 +93,10 @@ impl DescriptorGraph {
     async fn collect(mut stream: BlobStream, descriptor: &Descriptor) -> Result<Bytes> {
         const MAX_DOCUMENT: u64 = 16 * 1024 * 1024;
         if descriptor.size() > MAX_DOCUMENT {
-            return Err(Error::MalformedOci(
-                "descriptor document exceeds 16 MiB".into(),
-            ));
+            return Err(Error::MalformedOci("descriptor document exceeds 16 MiB".into()));
         }
-        let expected = usize::try_from(descriptor.size()).map_err(|_| {
-            Error::MalformedOci("descriptor document exceeds host address space".into())
-        })?;
+        let expected = usize::try_from(descriptor.size())
+            .map_err(|_| Error::MalformedOci("descriptor document exceeds host address space".into()))?;
         let mut data = Vec::with_capacity(expected);
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -139,8 +131,8 @@ impl DescriptorGraph {
     }
 
     fn successors(descriptor: &Descriptor, bytes: &[u8]) -> Result<Vec<Descriptor>> {
-        let value: serde_json::Value = serde_json::from_slice(bytes)
-            .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let value: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|error| Error::MalformedOci(error.to_string()))?;
         let media = descriptor.media_type().to_string();
         let mut result = Vec::new();
         if media.contains("index") || media.contains("manifest.list") {
@@ -149,18 +141,15 @@ impl DescriptorGraph {
             result.extend(Self::descriptors(&value, "blobs")?);
             if let Some(subject) = value.get("subject") {
                 result.push(
-                    serde_json::from_value(subject.clone())
-                        .map_err(|error| Error::MalformedOci(error.to_string()))?,
+                    serde_json::from_value(subject.clone()).map_err(|error| Error::MalformedOci(error.to_string()))?,
                 );
             }
         } else {
             let config = value
                 .get("config")
                 .ok_or_else(|| Error::MalformedOci("manifest has no config".into()))?;
-            result.push(
-                serde_json::from_value(config.clone())
-                    .map_err(|error| Error::MalformedOci(error.to_string()))?,
-            );
+            result
+                .push(serde_json::from_value(config.clone()).map_err(|error| Error::MalformedOci(error.to_string()))?);
             result.extend(Self::descriptors(&value, "layers")?);
         }
         Ok(result)
@@ -174,10 +163,7 @@ impl DescriptorGraph {
         entries
             .iter()
             .cloned()
-            .map(|entry| {
-                serde_json::from_value(entry)
-                    .map_err(|error| Error::MalformedOci(error.to_string()))
-            })
+            .map(|entry| serde_json::from_value(entry).map_err(|error| Error::MalformedOci(error.to_string())))
             .collect()
     }
 
@@ -201,10 +187,7 @@ impl DescriptorGraph {
 
     /// # Errors
     /// This in-memory source is infallible; the result preserves the generic traversal surface.
-    pub fn from_edges(
-        root: Descriptor,
-        edges: HashMap<String, Vec<Descriptor>>,
-    ) -> Result<Vec<Descriptor>> {
+    pub fn from_edges(root: Descriptor, edges: HashMap<String, Vec<Descriptor>>) -> Result<Vec<Descriptor>> {
         struct Edges(HashMap<String, Vec<Descriptor>>);
         impl Successors for Edges {
             fn successors(&self, descriptor: &Descriptor) -> Result<Vec<Descriptor>> {

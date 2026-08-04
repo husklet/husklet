@@ -36,11 +36,7 @@ pub(super) struct OomFile {
 }
 
 impl OomFile {
-    pub(super) const fn new(
-        source: std::sync::Arc<dyn super::Source>,
-        process: u32,
-        metadata: OfdMetadata,
-    ) -> Self {
+    pub(super) const fn new(source: std::sync::Arc<dyn super::Source>, process: u32, metadata: OfdMetadata) -> Self {
         Self {
             source,
             process,

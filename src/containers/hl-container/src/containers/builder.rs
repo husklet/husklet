@@ -1,9 +1,9 @@
 use super::Containers;
 use crate::{
+    Config, Persistence, Result,
     engine::Engine,
     service::{Dependencies, Runtime, Service},
     storage::{Disk, Memory, Storage},
-    Config, Persistence, Result,
 };
 use std::sync::Arc;
 
@@ -29,8 +29,7 @@ impl<S: Storage + 'static> Assembly<S> {
     async fn build(self) -> Result<Containers> {
         let volume_storage: Arc<dyn crate::storage::VolumeStore> = self.storage.clone();
         let container_storage: Arc<dyn crate::storage::Containers> = self.storage.clone();
-        let volumes =
-            crate::Volumes::open(volume_storage, container_storage, self.volume_root).await?;
+        let volumes = crate::Volumes::open(volume_storage, container_storage, self.volume_root).await?;
         let network_storage: Arc<dyn crate::storage::NetworkStore> = self.storage.clone();
         let network_containers: Arc<dyn crate::storage::Containers> = self.storage.clone();
         let networks = crate::Networks::new(
@@ -43,9 +42,7 @@ impl<S: Storage + 'static> Assembly<S> {
         networks
             .ensure_predefined(crate::NetworkSpec::bridge("bridge", bridge))
             .await?;
-        networks
-            .ensure_predefined(crate::NetworkSpec::none("none"))
-            .await?;
+        networks.ensure_predefined(crate::NetworkSpec::none("none")).await?;
         networks.reconcile().await?;
         let service = Arc::new(Service::new(Dependencies {
             storage: self.storage,
@@ -181,13 +178,5 @@ pub(crate) async fn test_containers(
 ) -> Result<Containers> {
     let root = std::env::temp_dir().join(format!("hl-container-{}", uuid::Uuid::new_v4()));
     let runtime_root = root.join("runtime");
-    build_with(
-        storage,
-        runtime,
-        None,
-        None,
-        root,
-        runtime_root,
-    )
-    .await
+    build_with(storage, runtime, None, None, root, runtime_root).await
 }

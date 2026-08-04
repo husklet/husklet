@@ -1,4 +1,4 @@
-use crate::{service::Service, Exec, ExecId, ExecSpec, Result, Session};
+use crate::{Exec, ExecId, ExecSpec, Result, Session, service::Service};
 use std::sync::Arc;
 
 /// Cheaply clonable service for additional processes owned by containers.

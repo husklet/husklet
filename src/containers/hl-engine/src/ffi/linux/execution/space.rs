@@ -240,15 +240,24 @@ impl AddressSpace {
         } else {
             region.backing()
         };
+        let charge = region.charge().map_or(0, |charge| {
+            let first = charge.start().max(range.start());
+            let last = charge.end().min(range.end());
+            last.get().saturating_sub(first.get())
+        });
         mappings
-            .map_inherited(MapRequest {
-                placement: Placement::Fixed(range.start()),
-                length: range.length(),
-                alignment: 4096,
-                protection: Protection::READ.union(Protection::WRITE),
-                backing,
-                backing_offset,
-            })
+            .map_inherited_reserved(
+                MapRequest {
+                    placement: Placement::Fixed(range.start()),
+                    length: range.length(),
+                    alignment: 4096,
+                    protection: Protection::READ.union(Protection::WRITE),
+                    backing,
+                    backing_offset,
+                },
+                charge,
+                region.reserved(),
+            )
             .map_err(|_| Error::Memory)?;
         let copy_length = self.copy_length(
             source,

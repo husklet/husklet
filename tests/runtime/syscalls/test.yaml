@@ -1,0 +1,759 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/syscalls/aio-pread
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/aio_pread.c, output: aio-pread, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/aio-pread }
+    run: []
+    expect: { exit: 0, stdout: golden/aio_pread.out }
+  - id: runtime/syscalls/aio-persist
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/aio_persist.c, output: aio-persist, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/aio-persist }
+    run: []
+    expect: { exit: 0, stdout: golden/aio_persist.out }
+  - id: runtime/syscalls/aio-bad-opcode
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/aio_badop.c, output: aio-bad-opcode, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/aio-bad-opcode }
+    run: []
+    expect: { exit: 0, stdout: golden/aio_badop.out }
+  - id: runtime/syscalls/clock-linux
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clock_linux.c, output: clock-linux, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/clock-linux }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_linux.out }
+  - id: runtime/syscalls/copy-file-range
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/copy_range.c, output: copy-file-range, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/copy-file-range }
+    run: []
+    expect: { exit: 0, stdout: golden/copy_range.out }
+  - id: runtime/syscalls/epoll-et
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_et.c, output: epoll-et, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-et }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_et.out }
+  - id: runtime/syscalls/epoll-mod
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_mod.c, output: epoll-mod, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-mod }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_mod.out }
+  - id: runtime/syscalls/epoll-oneshot
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_oneshot.c, output: epoll-oneshot, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-oneshot }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_oneshot.out }
+  - id: runtime/syscalls/epoll-pwait
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_pwait.c, output: epoll-pwait, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-pwait }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_pwait.out }
+  - id: runtime/syscalls/epoll-pwait2
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/epoll_pwait2.c, output: epoll-pwait2, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-pwait2 }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_pwait2.out }
+  - id: runtime/syscalls/epoll-reblock-fin
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/epoll_fin.c, output: epoll-reblock-fin, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-reblock-fin }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_fin.out }
+  - id: runtime/syscalls/epoll-reblock-inf
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_inf.c, output: epoll-reblock-inf, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-reblock-inf }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_inf.out }
+  - id: runtime/syscalls/eventfd-nonblock
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eventfd_nonblock.c, output: eventfd-nonblock, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/eventfd-nonblock }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_nonblock.out }
+  - id: runtime/syscalls/fanotify
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fanotify.c, output: fanotify, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/fanotify }
+    run: []
+    expect: { exit: 0, stdout: golden/fanotify.out }
+  - id: runtime/syscalls/fdreuse-guard
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fd_guard.c, output: fdreuse-guard, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/fdreuse-guard }
+    run: []
+    expect: { exit: 0, stdout: golden/fd_guard.out }
+  - id: runtime/syscalls/fstatfs
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fstatfs.c, output: fstatfs, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/fstatfs }
+    run: []
+    expect: { exit: 0, stdout: golden/fstatfs.out }
+  - id: runtime/syscalls/getcpu
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getcpu.c, output: getcpu, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/getcpu }
+    run: []
+    expect: { exit: 0, stdout: golden/getcpu.out }
+  - id: runtime/syscalls/getrandom-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getrandom_flags.c, output: getrandom-flags, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/getrandom-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/getrandom_flags.out }
+  - id: runtime/syscalls/gettid
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/gettid.c, output: gettid, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/gettid }
+    run: []
+    expect: { exit: 0, stdout: golden/gettid.out }
+  - id: runtime/syscalls/gettid-fork-ident
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/gettid_fork.c, output: gettid-fork-ident, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/gettid-fork-ident }
+    run: []
+    expect: { exit: 0, stdout: golden/gettid_fork.out }
+  - id: runtime/syscalls/gettid-worker-fork
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/worker_fork.c, output: gettid-worker-fork, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/gettid-worker-fork }
+    run: []
+    expect: { exit: 0, stdout: golden/worker_fork.out }
+  - id: runtime/syscalls/getpid-fork-pid-cache
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getpid_cache.c, output: getpid-fork-pid-cache, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/getpid-fork-pid-cache }
+    run: []
+    expect: { exit: 0, stdout: golden/getpid_cache.out }
+  - id: runtime/syscalls/high-fd-emul
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/highfd_emul.c, output: high-fd-emul, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/high-fd-emul }
+    run: []
+    expect: { exit: 0, stdout: golden/highfd_emul.out }
+  - id: runtime/syscalls/inotify-modify
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_modify.c, output: inotify-modify, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/inotify-modify }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_modify.out }
+  - id: runtime/syscalls/inotify-moves
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_moves.c, output: inotify-moves, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/inotify-moves }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_moves.out }
+  - id: runtime/syscalls/io-uring
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/io_uring.c, output: io-uring, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/io-uring }
+    run: []
+    expect: { exit: 0, stdout: golden/io_uring.out }
+  - id: runtime/syscalls/ioprio
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ioprio.c, output: ioprio, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/ioprio }
+    run: []
+    expect: { exit: 0, stdout: golden/ioprio.out }
+  - id: runtime/syscalls/membarrier
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/membarrier.c, output: membarrier, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/membarrier }
+    run: []
+    expect: { exit: 0, stdout: golden/membarrier.out }
+  - id: runtime/syscalls/memfd-seal
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_seal.c, output: memfd-seal, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/memfd-seal }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_seal.out }
+  - id: runtime/syscalls/personality
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/personality.c, output: personality, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/personality }
+    run: []
+    expect: { exit: 0, stdout: golden/personality.out }
+  - id: runtime/syscalls/pidfd-open
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pidfd_open.c, output: pidfd-open, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/pidfd-open }
+    run: []
+    expect: { exit: 0, stdout: golden/pidfd_open.out }
+  - id: runtime/syscalls/pidfd-signal
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/pidfd_signal.c, output: pidfd-signal, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/pidfd-signal }
+    run: []
+    expect: { exit: 0, stdout: golden/pidfd_signal.out }
+  - id: runtime/syscalls/poll-select-epoll
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/poll_epoll.c, output: poll-select-epoll, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/poll-select-epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/poll_epoll.out }
+  - id: runtime/syscalls/prctl-dumpable
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_dumpable.c, output: prctl-dumpable, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/prctl-dumpable }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_dumpable.out }
+  - id: runtime/syscalls/prctl-ltp
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/prctl_guard.c, output: prctl-ltp, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/prctl-ltp }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_guard.out }
+  - id: runtime/syscalls/prctl-nnp
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_nnp.c, output: prctl-nnp, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/prctl-nnp }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_nnp.out }
+  - id: runtime/syscalls/prctl-pdeathsig
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_pdeathsig.c, output: prctl-pdeathsig, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/prctl-pdeathsig }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_pdeathsig.out }
+  - id: runtime/syscalls/proc-bootid
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/proc_bootid.c, output: proc-bootid, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/proc-bootid }
+    run: []
+    expect: { exit: 0, stdout: golden/proc_bootid.out }
+  - id: runtime/syscalls/proc-fork-registry
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_registry.c, output: proc-fork-registry, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/proc-fork-registry }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_registry.out }
+  - id: runtime/syscalls/process-vm
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/process_vm.c, output: process-vm, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/process-vm }
+    run: []
+    expect: { exit: 0, stdout: golden/process_vm.out }
+  - id: runtime/syscalls/sched-affinity
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sched_affinity.c, output: sched-affinity, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/sched-affinity }
+    run: []
+    expect: { exit: 0, stdout: golden/sched_affinity.out }
+  - id: runtime/syscalls/sched-setaffinity-errors
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/affinity_errors.c, output: sched-setaffinity-errors, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/syscalls/sched-setaffinity-errors }
+    run: []
+    expect: { exit: 0, stdout: golden/affinity_errors.out }
+  - id: runtime/syscalls/sched-yield
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sched_yield.c, output: sched-yield, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/sched-yield }
+    run: []
+    expect: { exit: 0, stdout: golden/sched_yield.out }
+  - id: runtime/syscalls/signalfd-rt
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/signalfd_rt.c, output: signalfd-rt, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/signalfd-rt }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_rt.out }
+  - id: runtime/syscalls/syncfs
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/syncfs.c, output: syncfs, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/syncfs }
+    run: []
+    expect: { exit: 0, stdout: golden/syncfs.out }
+  - id: runtime/syscalls/tee
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/tee.c, output: tee, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/tee }
+    run: []
+    expect: { exit: 0, stdout: golden/tee.out }
+  - id: runtime/syscalls/timerfd-gettime
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/timerfd_gettime.c, output: timerfd-gettime, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/timerfd-gettime }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_gettime.out }
+  - id: runtime/syscalls/timerfd-interval
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/timerfd_interval.c, output: timerfd-interval, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/timerfd-interval }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_interval.out }
+  - id: runtime/syscalls/unshare-files
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/unshare_files.c, output: unshare-files, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/unshare-files }
+    run: []
+    expect: { exit: 0, stdout: golden/unshare_files.out }
+  - id: runtime/syscalls/vmsplice
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vmsplice.c, output: vmsplice, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/vmsplice }
+    run: []
+    expect: { exit: 0, stdout: golden/vmsplice.out }
+  - id: runtime/syscalls/faccessat-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/faccessat_flags.c, output: faccessat-flags, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/faccessat-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/faccessat_flags.out }
+  - id: runtime/syscalls/statx-fields
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/statx_fields.c, output: statx-fields, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/statx-fields }
+    run: []
+    expect: { exit: 0, stdout: golden/statx_fields.out }
+  - id: runtime/syscalls/close-range-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/close_flags.c, output: close-range-flags, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/close-range-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/close_flags.out }
+  - id: runtime/syscalls/prctl-name
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_name.c, output: prctl-name, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/prctl-name }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_name.out }
+  - id: runtime/syscalls/getrandom-len
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/getrandom_len.c, output: getrandom-len, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/getrandom-len }
+    run: []
+    expect: { exit: 0, stdout: golden/getrandom_len.out }
+  - id: runtime/syscalls/sysinfo-uname
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sysinfo_uname.c, output: sysinfo-uname, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/sysinfo-uname }
+    run: []
+    expect: { exit: 0, stdout: golden/sysinfo_uname.out }
+  - id: runtime/syscalls/sendfile-splice
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sendfile_splice.c, output: sendfile-splice, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/sendfile-splice }
+    run: []
+    expect: { exit: 0, stdout: golden/sendfile_splice.out }
+  - id: runtime/syscalls/umask-open
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/umask_open.c, output: umask-open, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/umask-open }
+    run: []
+    expect: { exit: 0, stdout: golden/umask_open.out }
+  - id: runtime/syscalls/eloop-stat
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eloop_stat.c, output: eloop-stat, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/eloop-stat }
+    run: []
+    expect: { exit: 0, stdout: golden/eloop_stat.out }
+  - id: runtime/syscalls/clock-gettime-efault
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clock_efault.c, output: clock-gettime-efault, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/clock-gettime-efault }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_efault.out }
+  - id: runtime/syscalls/rlimit-nofile-emfile
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/rlimit_nofile.c, output: rlimit-nofile-emfile, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/rlimit-nofile-emfile }
+    run: []
+    expect: { exit: 0, stdout: golden/rlimit_nofile.out }
+  - id: runtime/syscalls/rlimit-fsize
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/rlimit_fsize.c, output: rlimit-fsize, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/rlimit-fsize }
+    run: []
+    expect: { exit: 0, stdout: golden/rlimit_fsize.out }
+  - id: runtime/syscalls/pipe2-badflag
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/pipe2_badflag.c, output: pipe2-badflag, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/pipe2-badflag }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe2_badflag.out }
+  - id: runtime/syscalls/sigaction-sigsetsize
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sigaction_sigsetsize.c, output: sigaction-sigsetsize, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/sigaction-sigsetsize }
+    run: []
+    expect: { exit: 0, stdout: golden/sigaction_sigsetsize.out }
+  - id: runtime/syscalls/faccessat-badmode
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/faccessat_badmode.c, output: faccessat-badmode, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/faccessat-badmode }
+    run: []
+    expect: { exit: 0, stdout: golden/faccessat_badmode.out }
+  - id: runtime/syscalls/getrandom-badflag
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getrandom_badflag.c, output: getrandom-badflag, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/getrandom-badflag }
+    run: []
+    expect: { exit: 0, stdout: golden/getrandom_badflag.out }
+  - id: runtime/syscalls/prctl-timerslack
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_timerslack.c, output: prctl-timerslack, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/prctl-timerslack }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_timerslack.out }
+  - id: runtime/syscalls/pwritev2-rwf
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/pwritev2_rwf.c, output: pwritev2-rwf, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/pwritev2-rwf }
+    run: []
+    expect: { exit: 0, stdout: golden/pwritev2_rwf.out }
+  - id: runtime/syscalls/sendfile-offset
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sendfile_offset.c, output: sendfile-offset, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/sendfile-offset }
+    run: []
+    expect: { exit: 0, stdout: golden/sendfile_offset.out }
+  - id: runtime/syscalls/cfr-overlap
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/cfr_overlap.c, output: cfr-overlap, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/cfr-overlap }
+    run: []
+    expect: { exit: 0, stdout: golden/cfr_overlap.out }
+  - id: runtime/syscalls/pipe-size-dup3
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/pipe_dup3.c, output: pipe-size-dup3, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/pipe-size-dup3 }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_dup3.out }
+  - id: runtime/syscalls/iov-max
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/iov_max.c, output: iov-max, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/iov-max }
+    run: []
+    expect: { exit: 0, stdout: golden/iov_max.out }
+  - id: runtime/syscalls/splice-offset
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/splice_offset.c, output: splice-offset, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/splice-offset }
+    run: []
+    expect: { exit: 0, stdout: golden/splice_offset.out }
+  - id: runtime/syscalls/rlimit-fsize-ops
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fsize_ops.c, output: rlimit-fsize-ops, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/rlimit-fsize-ops }
+    run: []
+    expect: { exit: 0, stdout: golden/fsize_ops.out }
+  - id: runtime/syscalls/inotify-fdreserve
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_fdreserve.c, output: inotify-fdreserve, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/inotify-fdreserve }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_fdreserve.out }
+  - id: runtime/syscalls/inotify-epoll
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_epoll.c, output: inotify-epoll, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/inotify-epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_epoll.out }
+  - id: runtime/syscalls/meminfo-consistency
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/meminfo_consistency.c, output: meminfo-consistency, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/meminfo-consistency }
+    run: []
+    expect: { exit: 0, stdout: golden/meminfo_consistency.out }
+  - id: runtime/syscalls/resource-accounting
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/resource_accounting.c, output: resource-accounting, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/resource-accounting }
+    run: []
+    expect: { exit: 0, stdout: golden/resource_accounting.out }
+  - id: runtime/syscalls/seccomp-probe
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/seccomp_probe.c, output: seccomp-probe, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/seccomp-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/seccomp_probe.out }
+  - id: runtime/syscalls/fcntl-cmds
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fcntl_probe.c, output: fcntl-cmds, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/fcntl-cmds }
+    run: []
+    expect: { exit: 0, stdout: golden/fcntl_probe.out }
+  - id: runtime/syscalls/modern-procfd
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/modern_procfd.c, output: modern-procfd, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/modern-procfd }
+    run: []
+    expect: { exit: 0, stdout: golden/modern_procfd.out }
+  - id: runtime/syscalls/memfd-seals
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/memfd_seals.c, output: memfd-seals, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/memfd-seals }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_seals.out }
+  - id: runtime/syscalls/rng-quality
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/rng_quality.c, output: rng-quality, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/rng-quality }
+    run: []
+    expect: { exit: 0, stdout: golden/rng_quality.out }
+  - id: runtime/syscalls/getentropy-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getentropy_probe.c, output: getentropy-probe, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/getentropy-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/getentropy_probe.out }
+  - id: runtime/syscalls/output-buffer-fault
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/output_fault.c, output: output-buffer-fault, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/output-buffer-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/output_fault.out }
+  - id: runtime/syscalls/output-buffer-fault2
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/output_fault2.c, output: output-buffer-fault2, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/output-buffer-fault2 }
+    run: []
+    expect: { exit: 0, stdout: golden/output_fault2.out }
+  - id: runtime/syscalls/output-buffer-fault3
+    status: !unsupported
+      reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/output_fault3.c, output: output-buffer-fault3, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/output-buffer-fault3 }
+    run: []
+    expect: { exit: 0, stdout: golden/output_fault3.out }
+  - id: runtime/syscalls/iov-bounds
+    status: !broken
+      reason: "QEMU user-mode output diverges from the retained engine compatibility contract"
+      evidence: "tests/runtime/syscalls/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/iov_bounds.c, output: iov-bounds, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/iov-bounds }
+    run: []
+    expect: { exit: 0, stdout: golden/iov_bounds.out }
+  - id: runtime/syscalls/clockelapsed
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clock_elapsed.c, output: clockelapsed, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/clockelapsed }
+    run: []
+    expect: { exit: 0, stdout: golden/clock_elapsed.out }
+  - id: runtime/syscalls/epoll
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_shared.c, output: epoll, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_shared.out }
+  - id: runtime/syscalls/epoll-dup-lifetime
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_lifetime.c, output: epoll-dup-lifetime, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-dup-lifetime }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_lifetime.out }
+  - id: runtime/syscalls/epoll-edge
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_edge.c, output: epoll-edge, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-edge }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_edge_shared.out }
+  - id: runtime/syscalls/epoll-fork-inherit
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_fork.c, output: epoll-fork-inherit, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-fork-inherit }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_fork.out }
+  - id: runtime/syscalls/epoll-highfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/epoll_highfd.c, output: epoll-highfd, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/epoll-highfd }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_highfd.out }
+  - id: runtime/syscalls/eventfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eventfd_shared.c, output: eventfd, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/eventfd }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_shared.out }
+  - id: runtime/syscalls/eventfd-sema
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/eventfd_semaphore.c, output: eventfd-sema, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/eventfd-sema }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_semaphore.out }
+  - id: runtime/syscalls/fd-reuse-guard
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fd_reuse.c, output: fd-reuse-guard, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/fd-reuse-guard }
+    run: []
+    expect: { exit: 0, stdout: golden/fd_reuse.out }
+  - id: runtime/syscalls/inotify
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inotify_shared.c, output: inotify, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/inotify }
+    run: []
+    expect: { exit: 0, stdout: golden/inotify_shared.out }
+  - id: runtime/syscalls/mmapshared
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mmap_shared.c, output: mmapshared, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/mmapshared }
+    run: []
+    expect: { exit: 0, stdout: golden/mmap_shared.out }
+  - id: runtime/syscalls/statx-agree
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/statx_agree.c, output: statx-agree, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/statx-agree }
+    run: []
+    expect: { exit: 0, stdout: golden/statx_agree_shared.out }
+  - id: runtime/syscalls/timerfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/timerfd_shared.c, output: timerfd, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/syscalls/timerfd }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_shared.out }

@@ -59,23 +59,12 @@ impl LogStream {
         let channel = match self.buffer[0] {
             1 => Channel::Stdout,
             2 => Channel::Stderr,
-            value => {
-                return Err(Error::Protocol(format!(
-                    "invalid log stream identifier {value}"
-                )))
-            }
+            value => return Err(Error::Protocol(format!("invalid log stream identifier {value}"))),
         };
         if self.buffer[1..4] != [0, 0, 0] {
-            return Err(Error::Protocol(
-                "log stream frame reserved bytes are not zero".into(),
-            ));
+            return Err(Error::Protocol("log stream frame reserved bytes are not zero".into()));
         }
-        let length = u32::from_be_bytes([
-            self.buffer[4],
-            self.buffer[5],
-            self.buffer[6],
-            self.buffer[7],
-        ]) as usize;
+        let length = u32::from_be_bytes([self.buffer[4], self.buffer[5], self.buffer[6], self.buffer[7]]) as usize;
         if length > self.frame_limit {
             return Err(Error::ResponseTooLarge {
                 limit: self.frame_limit,
@@ -92,10 +81,7 @@ impl LogStream {
 
     async fn next_terminal(&mut self) -> Result<Option<Output>> {
         if !self.buffer.is_empty() {
-            return Ok(Some(Output::new(
-                Channel::Stdout,
-                self.buffer.split().freeze(),
-            )));
+            return Ok(Some(Output::new(Channel::Stdout, self.buffer.split().freeze())));
         }
         match self.stream.next_chunk().await? {
             Some(bytes) => {
@@ -149,11 +135,7 @@ mod tests {
         }
     }
 
-    async fn stream(
-        chunks: Vec<Vec<u8>>,
-        limit: usize,
-        terminal: bool,
-    ) -> (tempfile::TempDir, LogStream) {
+    async fn stream(chunks: Vec<Vec<u8>>, limit: usize, terminal: bool) -> (tempfile::TempDir, LogStream) {
         let root = tempfile::tempdir().unwrap();
         let listener = UnixListener::bind(root.path().join("daemon.sock")).unwrap();
         tokio::spawn(async move {
@@ -222,28 +204,20 @@ mod tests {
     #[tokio::test]
     async fn malformed_and_truncated_frames_are_rejected() {
         let (_root, mut logs) = stream(vec![vec![1, 0, 0]], 64, false).await;
-        assert!(
-            matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("header"))
-        );
+        assert!(matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("header")));
 
         let mut reserved = frame(1, b"x");
         reserved[2] = 1;
         let (_root, mut logs) = stream(vec![reserved], 64, false).await;
-        assert!(
-            matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("reserved"))
-        );
+        assert!(matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("reserved")));
 
         let (_root, mut logs) = stream(vec![frame(9, b"x")], 64, false).await;
-        assert!(
-            matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("identifier"))
-        );
+        assert!(matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("identifier")));
 
         let mut payload = frame(1, b"hello");
         payload.truncate(payload.len() - 2);
         let (_root, mut logs) = stream(vec![payload], 64, false).await;
-        assert!(
-            matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("payload"))
-        );
+        assert!(matches!(logs.next().await, Err(Error::Protocol(message)) if message.contains("payload")));
     }
 
     #[tokio::test]
@@ -251,10 +225,7 @@ mod tests {
         let mut header = frame(1, &[]);
         header[4..8].copy_from_slice(&65_u32.to_be_bytes());
         let (_root, mut logs) = stream(vec![header], 64, false).await;
-        assert!(matches!(
-            logs.next().await,
-            Err(Error::ResponseTooLarge { limit: 64 })
-        ));
+        assert!(matches!(logs.next().await, Err(Error::ResponseTooLarge { limit: 64 })));
     }
 
     #[tokio::test]
@@ -271,8 +242,7 @@ mod tests {
                 bytes.push(byte[0]);
             }
             let first = bytes.split(|byte| *byte == b'\r').next().unwrap();
-            sent.send(String::from_utf8(first.to_vec()).unwrap())
-                .unwrap();
+            sent.send(String::from_utf8(first.to_vec()).unwrap()).unwrap();
             socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
                 .await
@@ -290,11 +260,7 @@ mod tests {
             timestamps: true,
             tail: Some(17),
         };
-        let mut logs = client
-            .containers()
-            .logs_stream("id/unsafe", &options)
-            .await
-            .unwrap();
+        let mut logs = client.containers().logs_stream("id/unsafe", &options).await.unwrap();
         assert_eq!(logs.next().await.unwrap(), None);
         assert_eq!(
             received.await.unwrap(),

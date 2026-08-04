@@ -65,10 +65,7 @@ impl TaskProcfs {
             .iter()
             .find(|candidate| candidate.id.number() == process)
             .ok_or(ProcfsError::NotFound)?;
-        let leader = registry
-            .threads
-            .iter()
-            .find(|thread| thread.id == process.leader);
+        let leader = registry.threads.iter().find(|thread| thread.id == process.leader);
         if leader.is_none() && process.lifecycle != ProcessLifecycle::Zombie {
             return Err(ProcfsError::Invalid);
         }
@@ -100,11 +97,13 @@ impl TaskProcfs {
             ProcessLifecycle::Zombie => ProcfsStatState::Zombie,
             ProcessLifecycle::Stopped => ProcfsStatState::Stopped,
             ProcessLifecycle::Exiting => ProcfsStatState::Dead,
-            ProcessLifecycle::Starting | ProcessLifecycle::Running => match leader.ok_or(ProcfsError::Invalid)?.lifecycle {
-                hl_task::ThreadLifecycle::Blocked => ProcfsStatState::Sleeping,
-                hl_task::ThreadLifecycle::Exiting => ProcfsStatState::Dead,
-                hl_task::ThreadLifecycle::Starting | hl_task::ThreadLifecycle::Runnable => ProcfsStatState::Running,
-            },
+            ProcessLifecycle::Starting | ProcessLifecycle::Running => {
+                match leader.ok_or(ProcfsError::Invalid)?.lifecycle {
+                    hl_task::ThreadLifecycle::Blocked => ProcfsStatState::Sleeping,
+                    hl_task::ThreadLifecycle::Exiting => ProcfsStatState::Dead,
+                    hl_task::ThreadLifecycle::Starting | hl_task::ThreadLifecycle::Runnable => ProcfsStatState::Running,
+                }
+            }
         };
         let group = i32::try_from(process.process_group.number()).map_err(|_| ProcfsError::Invalid)?;
         let session_id = i32::try_from(process.session.number()).map_err(|_| ProcfsError::Invalid)?;

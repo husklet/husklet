@@ -68,6 +68,7 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
     containers
         .create(ContainerSpec::from_directory(&new_root, Process::new("/bin/true")).name("selected"))
         .await?;
+
     let socket = work.path().join("daemon.sock");
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
@@ -82,11 +83,13 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
             assert!(container.get("SizeRootFs").is_none());
         }
     }
+
     let sized = request(&socket, "/v1.43/containers/json?all=true&size=1&limit=1").await?;
     let sized = sized.as_array().ok_or("sized list was not an array")?;
     assert_eq!(sized.len(), 1);
     assert_eq!(sized[0]["SizeRw"], 0);
     assert!(sized[0]["SizeRootFs"].as_u64().is_some_and(|size| size > 0));
+
     let invalid = exchange(&socket, "/v1.43/containers/json?all=true&size=maybe").await?;
     assert!(invalid.starts_with("HTTP/1.1 400"));
 

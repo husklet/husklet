@@ -51,10 +51,7 @@ impl Config {
         if self.socket.as_os_str().is_empty() {
             return Err(Error::Config("socket path is empty".into()));
         }
-        let version = self
-            .api_version
-            .strip_prefix('v')
-            .unwrap_or(&self.api_version);
+        let version = self.api_version.strip_prefix('v').unwrap_or(&self.api_version);
         let (major, minor) = version
             .split_once('.')
             .ok_or_else(|| Error::Config("API version must be vMAJOR.MINOR".into()))?;

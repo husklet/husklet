@@ -44,11 +44,23 @@ async fn alpine_runtime_contracts() -> Result<(), Error> {
     let containers = containers_for(work.path()).await?;
 
     api::named_volume::run(work.path(), &rootfs).await?;
-    api::observability::run(&containers, &rootfs, work.path()).await?;
     api::headless_runtime::run(&containers, &rootfs).await?;
     api::resources::run(&containers, &rootfs).await?;
     api::network_bridge::run(&containers, &rootfs).await?;
     api::port_publishing::run(&containers, &rootfs).await?;
+    api::daemon_runtime::run(containers, &rootfs, work.path()).await
+}
+
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn attach_runtime_contracts() -> Result<(), Error> {
+    let work = TempDir::new()?;
+    let rootfs = work.path().join("rootfs");
+    let archive = env::var_os("HL_ALPINE_ARCHIVE")
+        .map(PathBuf::from)
+        .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;
+    unpack(archive, rootfs.clone()).await?;
+    let containers = containers_for(work.path()).await?;
     api::daemon_runtime::run(containers, &rootfs, work.path()).await
 }
 

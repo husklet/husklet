@@ -187,9 +187,10 @@ impl std::str::FromStr for Account {
 
     fn from_str(value: &str) -> Result<Self> {
         if value.bytes().all(|byte| byte.is_ascii_digit()) {
-            return value.parse().map(Self::Id).map_err(|_| {
-                Error::MalformedOci("COPY/ADD --chown account ID is out of range".into())
-            });
+            return value
+                .parse()
+                .map(Self::Id)
+                .map_err(|_| Error::MalformedOci("COPY/ADD --chown account ID is out of range".into()));
         }
 
         if value

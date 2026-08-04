@@ -1,8 +1,8 @@
 //! Compose project topology, labels, network, volume, and teardown workflows.
 
 use hl_container::{
-    ContainerSpec, Containers, EndpointSpec, ExecSpec, ExecState, ExitStatus, Isolation,
-    NetworkSpec, Process, Sandbox, Stream, Subnet, VolumeSpec,
+    ContainerSpec, Containers, EndpointSpec, ExecSpec, ExecState, ExitStatus, Isolation, NetworkSpec, Process, Sandbox,
+    Stream, Subnet, VolumeSpec,
 };
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -30,10 +30,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
             ContainerSpec::from_directory(
                 &api,
                 Process::new("/bin/sh")
-                    .args([
-                        "-c",
-                        "printf 'api-marker:%s\\n' \"$COMPOSE_VALUE\"; exec sleep 60",
-                    ])
+                    .args(["-c", "printf 'api-marker:%s\\n' \"$COMPOSE_VALUE\"; exec sleep 60"])
                     .env("COMPOSE_VALUE", &interpolated),
             )
             .name("hlcompose-api-1")
@@ -117,27 +114,15 @@ impl Project<'_> {
         self.containers.start("hlcompose-worker-1").await?;
         tokio::time::sleep(Duration::from_millis(100)).await;
         check(
-            self.containers
-                .inspect("hlcompose-api-1")
-                .await?
-                .state
-                .is_active()
-                && self
-                    .containers
-                    .inspect("hlcompose-worker-1")
-                    .await?
-                    .state
-                    .is_active(),
+            self.containers.inspect("hlcompose-api-1").await?.state.is_active()
+                && self.containers.inspect("hlcompose-worker-1").await?.state.is_active(),
             "up-ran",
         )?;
         let api = String::from_utf8(self.containers.logs("hlcompose-api-1").await?.stdout)?;
         let worker = String::from_utf8(self.containers.logs("hlcompose-worker-1").await?.stdout)?;
         check(api.contains("api-marker:"), "logs-api-marker")?;
         check(worker.contains("worker-marker"), "logs-worker-marker")?;
-        check(
-            api.contains("api-marker:compose-resolved"),
-            "logs-env-interp",
-        )?;
+        check(api.contains("api-marker:compose-resolved"), "logs-env-interp")?;
         self.execution().await
     }
 
@@ -176,10 +161,7 @@ impl Project<'_> {
         let networks = self.containers.networks();
         networks.remove("hlcompose_appnet").await?;
         self.containers.volumes().remove("hlcompose_shared").await?;
-        check(
-            self.containers.list().await?.is_empty(),
-            "down-removed-containers",
-        )?;
+        check(self.containers.list().await?.is_empty(), "down-removed-containers")?;
         check(
             !networks
                 .list()
@@ -211,12 +193,9 @@ pub(super) async fn multinet(containers: &Containers) -> Result<(), Error> {
         .await?;
     containers
         .create(
-            ContainerSpec::from_directory(
-                &app_root,
-                Process::new("/bin/sh").args(["-c", "exec sleep 60"]),
-            )
-            .name("hlmnet-app-1")
-            .isolation(networked()),
+            ContainerSpec::from_directory(&app_root, Process::new("/bin/sh").args(["-c", "exec sleep 60"]))
+                .name("hlmnet-app-1")
+                .isolation(networked()),
         )
         .await?;
     containers
@@ -240,18 +219,10 @@ pub(super) async fn multinet(containers: &Containers) -> Result<(), Error> {
         )
         .await?;
     networks
-        .connect(
-            "hlmnet_front",
-            "hlmnet-app-1",
-            EndpointSpec::default().name("app"),
-        )
+        .connect("hlmnet_front", "hlmnet-app-1", EndpointSpec::default().name("app"))
         .await?;
     let second = networks
-        .connect(
-            "hlmnet_back",
-            "hlmnet-app-1",
-            EndpointSpec::default().name("app"),
-        )
+        .connect("hlmnet_back", "hlmnet-app-1", EndpointSpec::default().name("app"))
         .await;
     second?;
     Multinet { containers }.finish().await
@@ -317,14 +288,14 @@ impl Multinet<'_> {
         self.containers.start("hlmnet-app-1").await?;
         let executions = self.containers.executions();
         let execution = executions
-        .create(
-            "hlmnet-app-1",
-            ExecSpec::new(Process::new("/bin/sh").args([
-                "-c",
-                "printf '%s-%s\\n' \"$(nc -w 3 front-peer 9200)\" \"$(nc -w 3 back-peer 9201)\"",
-            ])),
-        )
-        .await?;
+            .create(
+                "hlmnet-app-1",
+                ExecSpec::new(Process::new("/bin/sh").args([
+                    "-c",
+                    "printf '%s-%s\\n' \"$(nc -w 3 front-peer 9200)\" \"$(nc -w 3 back-peer 9201)\"",
+                ])),
+            )
+            .await?;
         let mut session = executions.start(&execution.id).await?;
         let output = tokio::time::timeout(Duration::from_secs(10), async {
             let mut output = Vec::new();

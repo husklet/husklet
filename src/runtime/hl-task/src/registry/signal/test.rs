@@ -586,12 +586,18 @@ fn pending_batch_drains_high_to_low() {
     let (registry, process, thread) = Fixture::registry(8);
     for signal in [12, 10, 15] {
         registry
-            .enqueue_signal(PendingTarget::Process(process), Fixture::info(signal, u64::from(signal)))
+            .enqueue_signal(
+                PendingTarget::Process(process),
+                Fixture::info(signal, u64::from(signal)),
+            )
             .unwrap();
     }
 
     for signal in [15, 12, 10] {
-        assert_eq!(Fixture::enter_handler(&registry, thread).signal, Fixture::number(signal));
+        assert_eq!(
+            Fixture::enter_handler(&registry, thread).signal,
+            Fixture::number(signal)
+        );
         assert!(registry.prepare_deliverable_signal(thread).unwrap().is_none());
         Fixture::return_handler(&registry, thread);
     }
@@ -615,12 +621,16 @@ fn realtime_batch_preserves_fifo() {
 #[test]
 fn standard_batch_coalesces() {
     let (registry, process, thread) = Fixture::registry(8);
-    assert!(registry
-        .enqueue_signal(PendingTarget::Process(process), Fixture::info(12, 1))
-        .unwrap());
-    assert!(!registry
-        .enqueue_signal(PendingTarget::Process(process), Fixture::info(12, 2))
-        .unwrap());
+    assert!(
+        registry
+            .enqueue_signal(PendingTarget::Process(process), Fixture::info(12, 1))
+            .unwrap()
+    );
+    assert!(
+        !registry
+            .enqueue_signal(PendingTarget::Process(process), Fixture::info(12, 2))
+            .unwrap()
+    );
 
     assert_eq!(Fixture::enter_handler(&registry, thread).value, 1);
     Fixture::return_handler(&registry, thread);
@@ -632,7 +642,10 @@ fn handler_arrival_nests_before_deferred_batch() {
     let (registry, process, thread) = Fixture::registry(8);
     for signal in [12, 10] {
         registry
-            .enqueue_signal(PendingTarget::Process(process), Fixture::info(signal, u64::from(signal)))
+            .enqueue_signal(
+                PendingTarget::Process(process),
+                Fixture::info(signal, u64::from(signal)),
+            )
             .unwrap();
     }
     assert_eq!(Fixture::enter_handler(&registry, thread).signal, Fixture::number(12));
@@ -653,7 +666,10 @@ fn nonlocal_unwind_releases_exact_scopes() {
     let (registry, process, thread) = Fixture::registry(8);
     for signal in [12, 10] {
         registry
-            .enqueue_signal(PendingTarget::Process(process), Fixture::info(signal, u64::from(signal)))
+            .enqueue_signal(
+                PendingTarget::Process(process),
+                Fixture::info(signal, u64::from(signal)),
+            )
             .unwrap();
     }
     assert_eq!(Fixture::enter_handler(&registry, thread).signal, Fixture::number(12));
@@ -673,7 +689,10 @@ fn synchronous_fault_bypasses_deferred_batch() {
     let (registry, process, thread) = Fixture::registry(8);
     for signal in [12, 10] {
         registry
-            .enqueue_signal(PendingTarget::Process(process), Fixture::info(signal, u64::from(signal)))
+            .enqueue_signal(
+                PendingTarget::Process(process),
+                Fixture::info(signal, u64::from(signal)),
+            )
             .unwrap();
     }
     assert_eq!(Fixture::enter_handler(&registry, thread).signal, Fixture::number(12));
@@ -703,7 +722,10 @@ fn deferred_readiness() {
             )
             .unwrap();
         registry
-            .enqueue_signal(PendingTarget::Process(process), Fixture::info(signal, u64::from(signal)))
+            .enqueue_signal(
+                PendingTarget::Process(process),
+                Fixture::info(signal, u64::from(signal)),
+            )
             .unwrap();
     }
     assert_eq!(Fixture::enter_handler(&registry, thread).signal, Fixture::number(12));
@@ -711,9 +733,11 @@ fn deferred_readiness() {
     assert_eq!(registry.dequeue_signal(thread).unwrap(), None);
     assert!(!registry.has_interrupting_signal(thread, None).unwrap());
     assert_eq!(registry.restart_interrupted_signal(thread).unwrap(), None);
-    assert!(!registry
-        .has_deliverable_except(thread, SignalMask::from_bits(0))
-        .unwrap());
+    assert!(
+        !registry
+            .has_deliverable_except(thread, SignalMask::from_bits(0))
+            .unwrap()
+    );
 }
 
 #[test]
@@ -755,7 +779,10 @@ fn handler_fork() {
     let (registry, process, thread) = Fixture::registry(8);
     for signal in [12, 10] {
         registry
-            .enqueue_signal(PendingTarget::Process(process), Fixture::info(signal, u64::from(signal)))
+            .enqueue_signal(
+                PendingTarget::Process(process),
+                Fixture::info(signal, u64::from(signal)),
+            )
             .unwrap();
     }
     assert_eq!(Fixture::enter_handler(&registry, thread).signal, Fixture::number(12));

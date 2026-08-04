@@ -13,38 +13,21 @@ async fn observability_client_exposes_stats_and_rejects_top_for_inactive_process
         .unwrap();
     let socket = root.path().join("observe.sock");
     let (stop, stopped) = oneshot::channel();
-    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(
-        async move {
-            let _ = stopped.await;
-        },
-    ));
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
     wait_for_socket(&socket).await;
     let client = Client::unix(&socket).unwrap();
 
-    let stats = client
-        .containers()
-        .stats(container.id.as_str())
-        .await
-        .unwrap();
+    let stats = client.containers().stats(container.id.as_str()).await.unwrap();
     assert_eq!(stats.id, container.id.as_str());
     assert_eq!(stats.pids_stats.current, 0);
     assert_eq!(stats.num_procs, 0);
     assert_eq!(stats.memory_stats.usage, 0);
-    let mut stream = client
-        .containers()
-        .stats_stream(container.id.as_str())
-        .await
-        .unwrap();
-    assert_eq!(
-        stream.next().await.unwrap().unwrap().id,
-        container.id.as_str()
-    );
+    let mut stream = client.containers().stats_stream(container.id.as_str()).await.unwrap();
+    assert_eq!(stream.next().await.unwrap().unwrap().id, container.id.as_str());
     assert!(stream.next().await.unwrap().is_none());
-    assert!(client
-        .containers()
-        .top(container.id.as_str())
-        .await
-        .is_err());
+    assert!(client.containers().top(container.id.as_str()).await.is_err());
     let error = client
         .containers()
         .top_with(container.id.as_str(), Some("-eo pid,unsupported"))
@@ -64,10 +47,7 @@ async fn container_archive_round_trip_streams_through_typed_client() {
     std::fs::write(rootfs.join("source"), b"from-container").unwrap();
     let containers = containers(&root).await;
     let created = containers
-        .create(ContainerSpec::from_directory(
-            &rootfs,
-            Process::new("/bin/true"),
-        ))
+        .create(ContainerSpec::from_directory(&rootfs, Process::new("/bin/true")))
         .await
         .unwrap();
     let socket = root.path().join("run/docker.sock");
@@ -75,16 +55,8 @@ async fn container_archive_round_trip_streams_through_typed_client() {
     let client = &daemon.client;
 
     for error in [
-        client
-            .containers()
-            .stat("missing", "/source")
-            .await
-            .unwrap_err(),
-        client
-            .containers()
-            .copy_from("missing", "/source")
-            .await
-            .unwrap_err(),
+        client.containers().stat("missing", "/source").await.unwrap_err(),
+        client.containers().copy_from("missing", "/source").await.unwrap_err(),
     ] {
         assert!(matches!(
             error,
@@ -95,11 +67,7 @@ async fn container_archive_round_trip_streams_through_typed_client() {
         ));
     }
 
-    let stat = client
-        .containers()
-        .stat(created.id.as_str(), "/source")
-        .await
-        .unwrap();
+    let stat = client.containers().stat(created.id.as_str(), "/source").await.unwrap();
     assert_eq!(stat.name, "source");
     assert_eq!(stat.size, 14);
 
@@ -124,11 +92,7 @@ async fn container_archive_round_trip_streams_through_typed_client() {
     let uploaded = docker_tar(&[("nested/copied", b"to-container")]);
     client
         .containers()
-        .copy_to(
-            created.id.as_str(),
-            "/inbox",
-            std::io::Cursor::new(uploaded),
-        )
+        .copy_to(created.id.as_str(), "/inbox", std::io::Cursor::new(uploaded))
         .await
         .unwrap();
     assert_eq!(
@@ -136,11 +100,7 @@ async fn container_archive_round_trip_streams_through_typed_client() {
         b"to-container"
     );
 
-    let mut exported = client
-        .containers()
-        .export(created.id.as_str())
-        .await
-        .unwrap();
+    let mut exported = client.containers().export(created.id.as_str()).await.unwrap();
     let mut export_bytes = Vec::new();
     while let Some(chunk) = exported.next_chunk().await.unwrap() {
         export_bytes.extend_from_slice(&chunk);
@@ -151,9 +111,7 @@ async fn container_archive_round_trip_streams_through_typed_client() {
         .map(|entry| entry.unwrap().path().unwrap().into_owned())
         .collect::<Vec<_>>();
     assert!(names.iter().any(|path| path.ends_with("source")));
-    assert!(names
-        .iter()
-        .any(|path| path.ends_with("inbox/nested/copied")));
+    assert!(names.iter().any(|path| path.ends_with("inbox/nested/copied")));
 
     daemon.stop().await;
 }

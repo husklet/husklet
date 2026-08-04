@@ -47,22 +47,9 @@ async fn extra_hosts_are_resolved_from_the_guest_hosts_file() {
         .await
         .unwrap();
     client.containers().start(&created.id).await.unwrap();
+    assert_eq!(client.containers().wait(&created.id).await.unwrap().status_code, 0);
     assert_eq!(
-        client
-            .containers()
-            .wait(&created.id)
-            .await
-            .unwrap()
-            .status_code,
-        0
-    );
-    assert_eq!(
-        client
-            .containers()
-            .logs(&created.id, true, true)
-            .await
-            .unwrap()
-            .stdout,
+        client.containers().logs(&created.id, true, true).await.unwrap().stdout,
         b"203.0.113.9\tdatabase\n"
     );
     assert_eq!(

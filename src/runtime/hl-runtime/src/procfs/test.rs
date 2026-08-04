@@ -121,7 +121,10 @@ fn task_projection() {
     assert_eq!(view.allowed_list, "0-5");
     assert_eq!(source.cpu().unwrap().online(), 6);
     tasks.set_thread_blocked(thread, true).unwrap();
-    assert_eq!(source.process(process.number()).unwrap().state, ProcfsProcessState::Sleeping);
+    assert_eq!(
+        source.process(process.number()).unwrap().state,
+        ProcfsProcessState::Sleeping
+    );
     tasks.set_thread_blocked(thread, false).unwrap();
     assert!(
         view.limits
@@ -225,7 +228,6 @@ fn zombie_stat_keeps_identity() {
     tasks.reap(parent, child).unwrap();
     assert_eq!(source.stat(child.number()), Err(ProcfsError::NotFound));
 }
-
 
 #[test]
 fn live_task_identity() {

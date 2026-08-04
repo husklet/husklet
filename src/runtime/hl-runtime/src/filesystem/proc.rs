@@ -15,10 +15,7 @@ impl DescriptorLink {
         if path.starts_with(b"/") {
             return Self::resolve(path);
         }
-        if !matches!(
-            base,
-            b"/proc/self/fd" | b"/proc/self/fd/" | b"/dev/fd" | b"/dev/fd/"
-        ) {
+        if !matches!(base, b"/proc/self/fd" | b"/proc/self/fd/" | b"/dev/fd" | b"/dev/fd/") {
             return None;
         }
         if path.is_empty() || path.contains(&b'/') {

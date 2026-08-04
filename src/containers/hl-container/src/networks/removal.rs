@@ -31,9 +31,7 @@ impl Networks {
         let _guard = self.operation.lock().await;
         let network = self.resolve_network(reference).await?;
         if network.predefined() {
-            return Err(Error::InvalidNetwork(
-                "predefined networks cannot be removed".into(),
-            ));
+            return Err(Error::InvalidNetwork("predefined networks cannot be removed".into()));
         }
         if !network.endpoints.is_empty() && matches!(removal, Removal::Unused) {
             return Err(Error::NetworkInUse(network.name));

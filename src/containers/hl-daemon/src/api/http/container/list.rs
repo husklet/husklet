@@ -199,20 +199,12 @@ impl NetworkPlan {
     }
 
     async fn ensure_none(containers: &hl_container::Containers) -> ApiResult<()> {
-        match containers.networks().inspect("none").await {
-            Ok(network) if network.driver == NetworkDriver::None => Ok(()),
-            Ok(_) => Err(ApiError::new(
-                StatusCode::CONFLICT,
-                "none network name belongs to another network driver",
-            )),
-            Err(ContainerError::NetworkNotFound(_)) => containers
-                .networks()
-                .create(NetworkSpec::none("none"))
-                .await
-                .map(|_| ())
-                .map_err(ApiError::container),
-            Err(error) => Err(ApiError::container(error)),
-        }
+        containers
+            .networks()
+            .create(NetworkSpec::none("none"))
+            .await
+            .map(|_| ())
+            .map_err(ApiError::container)
     }
 
     pub(super) async fn ensure_bridge(containers: &hl_container::Containers) -> ApiResult<()> {

@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use hl_client::model::{
-    ConfigFrom, EndpointConfig, EndpointIpam, Ipam, IpamConfig, NetworkConnect, NetworkCreate,
-    NetworkDisconnect, NetworkPrune,
-};
 use hl_client::Client;
+use hl_client::model::{
+    ConfigFrom, EndpointConfig, EndpointIpam, Ipam, IpamConfig, NetworkConnect, NetworkCreate, NetworkDisconnect,
+    NetworkPrune,
+};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
@@ -88,18 +88,10 @@ async fn list_and_inspect_decode_models_and_encode_references() {
     let root = TempDir::new().unwrap();
     let socket = root.path().join("list.sock");
     let captured = peer(&socket, "200 OK", &format!("[{}]", network("isolated")));
-    let listed = Client::unix(&socket)
-        .unwrap()
-        .networks()
-        .list()
-        .await
-        .unwrap();
+    let listed = Client::unix(&socket).unwrap().networks().list().await.unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].name, "isolated");
-    assert!(captured
-        .await
-        .unwrap()
-        .starts_with("GET /v1.43/networks HTTP/1.1\r\n"));
+    assert!(captured.await.unwrap().starts_with("GET /v1.43/networks HTTP/1.1\r\n"));
 
     let socket = root.path().join("inspect.sock");
     let captured = peer(&socket, "200 OK", &network("team/net"));
@@ -110,10 +102,12 @@ async fn list_and_inspect_decode_models_and_encode_references() {
         .await
         .unwrap();
     assert_eq!(inspected.name, "team/net");
-    assert!(captured
-        .await
-        .unwrap()
-        .starts_with("GET /v1.43/networks/team%2Fnet HTTP/1.1\r\n"));
+    assert!(
+        captured
+            .await
+            .unwrap()
+            .starts_with("GET /v1.43/networks/team%2Fnet HTTP/1.1\r\n")
+    );
 }
 
 #[tokio::test]
@@ -172,19 +166,16 @@ async fn remove_and_prune_use_exact_paths_and_decode_results() {
         .remove("network/name", true)
         .await
         .unwrap();
-    assert!(captured
-        .await
-        .unwrap()
-        .starts_with("DELETE /v1.43/networks/network%2Fname?force=true HTTP/1.1\r\n"));
+    assert!(
+        captured
+            .await
+            .unwrap()
+            .starts_with("DELETE /v1.43/networks/network%2Fname?force=true HTTP/1.1\r\n")
+    );
 
     let socket = root.path().join("prune.sock");
     let captured = peer(&socket, "200 OK", r#"{"NetworksDeleted":["one","two"]}"#);
-    let result = Client::unix(&socket)
-        .unwrap()
-        .networks()
-        .prune()
-        .await
-        .unwrap();
+    let result = Client::unix(&socket).unwrap().networks().prune().await.unwrap();
     assert_eq!(
         result,
         NetworkPrune {

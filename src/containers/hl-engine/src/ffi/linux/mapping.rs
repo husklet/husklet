@@ -248,14 +248,19 @@ impl MappingHost for MappingHostAdapter {
         self.check_range(address.get(), request.length)?;
         let capability = self.arena.prepare_canonical(request).map_err(Self::memory_error)?;
         let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
-        let prior = stages.reservations.last_key_value().map(|(_, reservation)| &reservation.sparse);
+        let prior = stages
+            .reservations
+            .last_key_value()
+            .map(|(_, reservation)| &reservation.sparse);
         let sparse = self
             .sparse
             .prepare_map(
                 prior,
                 address.get(),
                 request.length,
-                capability.as_ref().map(|capability| (&capability.file, capability.offset)),
+                capability
+                    .as_ref()
+                    .map(|capability| (&capability.file, capability.offset)),
             )
             .map_err(Self::memory_error)?;
         let arena = self
@@ -269,7 +274,10 @@ impl MappingHost for MappingHostAdapter {
     fn stage_unmap(&self, range: AddressRange) -> Result<u64, MemoryError> {
         self.check_range(range.start().get(), range.length())?;
         let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
-        let prior = stages.reservations.last_key_value().map(|(_, reservation)| &reservation.sparse);
+        let prior = stages
+            .reservations
+            .last_key_value()
+            .map(|(_, reservation)| &reservation.sparse);
         let sparse = self
             .sparse
             .prepare_unmap(prior, range.start().get(), range.length())
@@ -285,7 +293,10 @@ impl MappingHost for MappingHostAdapter {
     fn stage_protect(&self, range: AddressRange, protection: Protection) -> Result<u64, MemoryError> {
         self.check_range(range.start().get(), range.length())?;
         let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
-        let prior = stages.reservations.last_key_value().map(|(_, reservation)| &reservation.sparse);
+        let prior = stages
+            .reservations
+            .last_key_value()
+            .map(|(_, reservation)| &reservation.sparse);
         let sparse = self.sparse.prepare_same(prior);
         let arena = self
             .arena
@@ -346,7 +357,10 @@ impl MappingHost for MappingHostAdapter {
         self.check_range(destination.get(), request.length)?;
         let capability = self.arena.prepare_canonical(request).map_err(Self::memory_error)?;
         let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
-        let prior = stages.reservations.last_key_value().map(|(_, reservation)| &reservation.sparse);
+        let prior = stages
+            .reservations
+            .last_key_value()
+            .map(|(_, reservation)| &reservation.sparse);
         let sparse = self
             .sparse
             .prepare_remap(
@@ -355,7 +369,9 @@ impl MappingHost for MappingHostAdapter {
                 destination.get(),
                 request.length,
                 keep_source,
-                capability.as_ref().map(|capability| (&capability.file, capability.offset)),
+                capability
+                    .as_ref()
+                    .map(|capability| (&capability.file, capability.offset)),
             )
             .map_err(Self::memory_error)?;
         let arena = self
@@ -380,9 +396,15 @@ impl BackingChangeHost for MappingHostAdapter {
             return Err(MemoryError::InvariantViolation);
         }
         let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
-        let prior = stages.reservations.last_key_value().map(|(_, reservation)| &reservation.sparse);
+        let prior = stages
+            .reservations
+            .last_key_value()
+            .map(|(_, reservation)| &reservation.sparse);
         let sparse = self.sparse.prepare_same(prior);
-        let arena = self.arena.stage(Operation::Backing(change)).map_err(Self::memory_error)?;
+        let arena = self
+            .arena
+            .stage(Operation::Backing(change))
+            .map_err(Self::memory_error)?;
         stages.reservations.insert(arena, StageReservation { arena, sparse });
         Ok(arena)
     }

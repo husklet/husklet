@@ -317,7 +317,11 @@ impl Lane {
         let soft = Arithmetic::soft_format(format);
         let lane_bits = u32::from(Arithmetic::bytes(format)) * 8;
         let lanes = 128 / lane_bits;
-        let lane_mask = if lane_bits == 64 { u128::from(u64::MAX) } else { u128::from(u32::MAX) };
+        let lane_mask = if lane_bits == 64 {
+            u128::from(u64::MAX)
+        } else {
+            u128::from(u32::MAX)
+        };
         let mut sum = hl_softfloat::Value::from_bits(soft, 0);
         let mut exceptions = 0;
         for index in 0..lanes {

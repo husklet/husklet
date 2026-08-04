@@ -5,26 +5,18 @@ use hl_client::Client;
 use tempfile::TempDir;
 
 use super::{
-    execution::{execute, pass},
     Error,
+    execution::{execute, pass},
 };
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "declarative bind-volume compatibility table"
-)]
+#[allow(clippy::too_many_lines, reason = "declarative bind-volume compatibility table")]
 pub(super) async fn binds(
     client: &Client,
     scenarios: &std::collections::BTreeMap<&str, crate::contract::Scenario>,
     reports: &mut ScenarioBatch,
 ) -> Result<(), Error> {
     const CASES: [(&str, &str, &str, &str); 16] = [
-        (
-            "volumes/write-seen-on-host",
-            "",
-            "echo CWROTE > /data/f.txt",
-            "",
-        ),
+        ("volumes/write-seen-on-host", "", "echo CWROTE > /data/f.txt", ""),
         (
             "volumes/host-seen-in-container",
             "h.txt:HSEED\n",
@@ -109,12 +101,7 @@ pub(super) async fn binds(
             "mkdir -p /data/x/y && touch /data/x/y/z.txt && find /data -name z.txt",
             "/data/x/y/z.txt\n",
         ),
-        (
-            "volumes/cmd-wc-bytes",
-            "b:abcde",
-            "wc -c < /data/b | tr -d ' '",
-            "5\n",
-        ),
+        ("volumes/cmd-wc-bytes", "b:abcde", "wc -c < /data/b | tr -d ' '", "5\n"),
     ];
     let selected = env::var("HL_VOLUME_CASE").ok();
     let mut failures = Vec::new();
@@ -142,8 +129,9 @@ pub(super) async fn binds(
         let result: Result<(), Error> = match execution {
             Ok(output) => {
                 let state = match *id {
-                    "volumes/write-seen-on-host" => std::fs::read(host.path().join("f.txt"))
-                        .is_ok_and(|bytes| bytes == b"CWROTE\n"),
+                    "volumes/write-seen-on-host" => {
+                        std::fs::read(host.path().join("f.txt")).is_ok_and(|bytes| bytes == b"CWROTE\n")
+                    }
                     "volumes/delete-propagates" => !host.path().join("d.txt").exists(),
                     _ => true,
                 };
@@ -170,12 +158,7 @@ pub(super) async fn binds(
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "{} volume cases failed: {}",
-            failures.len(),
-            failures.join(", ")
-        )
-        .into())
+        Err(format!("{} volume cases failed: {}", failures.len(), failures.join(", ")).into())
     }
 }
 fn seed_files(root: &Path, seed: &str) -> Result<(), Error> {

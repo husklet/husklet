@@ -1,5 +1,8 @@
 use tokio::process::{Child, Command};
 
+/// Owns a spawned host process and, on Unix, every descendant that remains in
+/// its dedicated process group. This is intentionally separate from guest task
+/// lifecycle: it protects the host from escaped scenario tooling.
 #[allow(dead_code, reason = "reserved for typed host-action and image-import subprocesses")]
 pub(super) struct ProcessGroup {
     child: Child,
@@ -81,6 +84,7 @@ mod tests {
             .trim()
             .parse::<u32>()
             .unwrap();
+
         assert!(
             tokio::time::timeout(Duration::from_millis(20), process.wait())
                 .await

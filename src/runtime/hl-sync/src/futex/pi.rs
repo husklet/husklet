@@ -118,9 +118,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
             waiters: VecDeque::new(),
         });
         let observed = self.memory.load(key).map_err(Self::memory_error)?;
-        if observed & FUTEX_TID_MASK != (self.number)(caller)
-            || state.owner.is_some_and(|owner| owner != caller)
-        {
+        if observed & FUTEX_TID_MASK != (self.number)(caller) || state.owner.is_some_and(|owner| owner != caller) {
             return Err(PiFutexError::Permission);
         }
         // The futex word is Linux's ownership authority. A racing userspace

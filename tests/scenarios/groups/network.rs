@@ -3,11 +3,11 @@
 use super::{registry, runner::Runner, volume};
 use crate::report::ScenarioBatch;
 use hl_client::{
-    model::{
-        Attachment, CreateContainer, EndpointConfig, EndpointsConfig, ExecConfig, ExecStart,
-        HostConfig, NetworkConnect, NetworkCreate, NetworkingConfig,
-    },
     Client, Config,
+    model::{
+        Attachment, CreateContainer, EndpointConfig, EndpointsConfig, ExecConfig, ExecStart, HostConfig,
+        NetworkConnect, NetworkCreate, NetworkingConfig,
+    },
 };
 use hl_container::Containers;
 use hl_daemon::Daemon;
@@ -20,33 +20,18 @@ type Error = Box<dyn std::error::Error>;
 pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let selected = std::env::var("HL_SCENARIO_CASE").ok();
     let mut failures = Vec::new();
-    if selected
-        .as_deref()
-        .is_none_or(|id| id.starts_with("dockernet/"))
-    {
+    if selected.as_deref().is_none_or(|id| id.starts_with("dockernet/")) {
         if let Err(error) = docker(containers, selected.as_deref()).await {
             failures.push(error.to_string());
         }
     }
-    if selected
-        .as_deref()
-        .is_none_or(|id| id.starts_with("networking/"))
-    {
-        if let Err(error) = Runner::from_env(containers)?
-            .run(registry::networking::group())
-            .await
-        {
+    if selected.as_deref().is_none_or(|id| id.starts_with("networking/")) {
+        if let Err(error) = Runner::from_env(containers)?.run(registry::networking::group()).await {
             failures.push(error.to_string());
         }
     }
-    if selected
-        .as_deref()
-        .is_none_or(|id| id.starts_with("netinstall/"))
-    {
-        if let Err(error) = Runner::from_env(containers)?
-            .run(registry::netinstall::group())
-            .await
-        {
+    if selected.as_deref().is_none_or(|id| id.starts_with("netinstall/")) {
+        if let Err(error) = Runner::from_env(containers)?.run(registry::netinstall::group()).await {
             failures.push(error.to_string());
         }
     }
@@ -77,10 +62,7 @@ async fn docker(containers: &Containers, selected: Option<&str>) -> Result<(), E
     );
     wait(&socket).await?;
     let client = Client::with_config(Config::unix(&socket).timeout(Duration::from_secs(45)))?;
-    client
-        .images()
-        .load(tokio::fs::File::open(archive).await?)
-        .await?;
+    client.images().load(tokio::fs::File::open(archive).await?).await?;
     let cases = [
         "dockernet/create-ls",
         "dockernet/rm",
@@ -142,23 +124,13 @@ async fn docker_case(client: &Client, id: &str) -> Result<(), Error> {
         .await?;
     let result = match id {
         "dockernet/create-ls" => check(
-            client
-                .networks()
-                .list()
-                .await?
-                .iter()
-                .any(|item| item.name == network),
+            client.networks().list().await?.iter().any(|item| item.name == network),
             "network omitted from list",
         ),
         "dockernet/rm" => {
             client.networks().remove(&network, false).await?;
             check(
-                !client
-                    .networks()
-                    .list()
-                    .await?
-                    .iter()
-                    .any(|item| item.name == network),
+                !client.networks().list().await?.iter().any(|item| item.name == network),
                 "removed network remained listed",
             )
         }
@@ -179,10 +151,7 @@ async fn docker_case(client: &Client, id: &str) -> Result<(), Error> {
     };
     cleanup(client, &network).await;
     if id == "dockernet/create-multi-alias" {
-        let _ = client
-            .networks()
-            .remove(&format!("{network}-second"), false)
-            .await;
+        let _ = client.networks().remove(&format!("{network}-second"), false).await;
     }
     result
 }
@@ -199,10 +168,7 @@ async fn host_mode(client: &Client) -> Result<(), Error> {
         network_mode: "host".into(),
         ..HostConfig::default()
     });
-    let created = client
-        .containers()
-        .create(&request, Some("host-mode-client"))
-        .await?;
+    let created = client.containers().create(&request, Some("host-mode-client")).await?;
     check(
         created.warnings.is_empty(),
         "host mode unexpectedly reported a warning without publications",
@@ -212,10 +178,7 @@ async fn host_mode(client: &Client) -> Result<(), Error> {
     let logs = client.containers().logs(&created.id, true, true).await?;
     tokio::time::timeout(Duration::from_secs(10), server).await???;
     let inspect = client.containers().inspect(&created.id).await?;
-    check(
-        status.status_code == 0,
-        "host-mode client exited unsuccessfully",
-    )?;
+    check(status.status_code == 0, "host-mode client exited unsuccessfully")?;
     check(
         logs.stdout.windows(9).any(|value| value == b"HOSTNETOK"),
         "guest could not reach a host-loopback listener",
@@ -301,10 +264,7 @@ async fn multi_alias(client: &Client, first: &str) -> Result<(), Error> {
             },
         )
         .await?;
-    let mut session = client
-        .executions()
-        .start(&execution.id, &ExecStart::default())
-        .await?;
+    let mut session = client.executions().start(&execution.id, &ExecStart::default()).await?;
     let mut output = Vec::new();
     while let Some(frame) = session.next().await? {
         output.extend_from_slice(frame.bytes());
@@ -379,19 +339,12 @@ async fn reach(client: &Client, network: &str, late: bool) -> Result<(), Error> 
                     stderr: true,
                     ..Attachment::default()
                 },
-                command: vec![
-                    "/bin/sh".into(),
-                    "-c".into(),
-                    format!("nc -w 3 {server_name} 9000"),
-                ],
+                command: vec!["/bin/sh".into(), "-c".into(), format!("nc -w 3 {server_name} 9000")],
                 ..ExecConfig::default()
             },
         )
         .await?;
-    let mut session = client
-        .executions()
-        .start(&execution.id, &ExecStart::default())
-        .await?;
+    let mut session = client.executions().start(&execution.id, &ExecStart::default()).await?;
     let mut output = Vec::new();
     while let Some(frame) = session.next().await? {
         output.extend_from_slice(frame.bytes());
@@ -428,21 +381,14 @@ fn network_request(command: &str, network: &str) -> CreateContainer {
 async fn cleanup(client: &Client, network: &str) {
     if let Ok(items) = client.containers().list(true).await {
         for item in items {
-            let _ = client
-                .containers()
-                .remove(&item.metadata.id, true, true)
-                .await;
+            let _ = client.containers().remove(&item.metadata.id, true, true).await;
         }
     }
     let _ = client.networks().remove(network, true).await;
 }
 
 fn check(ok: bool, message: &str) -> Result<(), Error> {
-    if ok {
-        Ok(())
-    } else {
-        Err(message.into())
-    }
+    if ok { Ok(()) } else { Err(message.into()) }
 }
 async fn wait(path: &Path) -> Result<(), Error> {
     tokio::time::timeout(Duration::from_secs(5), async {

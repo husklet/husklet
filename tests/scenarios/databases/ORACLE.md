@@ -8,9 +8,9 @@ and output substring. The 34 server cases retain `host_port`; the five
 version or in-memory SQLite cases retain no explicit resource. Expected
 substring bytes are stored without a trailing line feed under `golden/`.
 
-The five Mongo contracts keep startup and readiness in their single bounded
-shell action because the typed readiness lifecycle remains rejected by
-`validate_supported` in the executor:
+Exactly five of the 44 legacy cases are not copied into `test.yaml` because
+they require the typed readiness lifecycle already represented by the schema
+but still rejected by `validate_supported` in the executor:
 
 - `databases/mongo-agg-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
 - `databases/mongo-count-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
@@ -18,9 +18,10 @@ shell action because the typed readiness lifecycle remains rejected by
 - `databases/mongo-filter-count-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
 - `databases/mongo-version-8`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.
 
-The shell action preserves startup, probe, retry/delay, diagnostic-log, image,
-command, and output contracts without introducing an opaque action dispatcher.
-It can be reduced to typed readiness metadata when the ordered adapter lands.
+Omitting these cases is an explicit executor-capability gap, not a passing or
+unsupported verdict. Their startup, probe, retry/delay, diagnostic-log, image,
+command, and output contracts remain authoritative in the legacy fixture until
+the ordered readiness adapter lands.
 
 The two SQLite cases formerly embedded Python programs in shell heredocs.
 Those exact payload bytes now live in `source/sqlite_join.py` and

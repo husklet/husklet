@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    snapshot::{Id, Snapshots, View as SnapshotView},
     Error, LeaseStore, Leases, Result,
+    snapshot::{Id, Snapshots, View as SnapshotView},
 };
 
 mod tree;
@@ -79,10 +79,7 @@ mod tests {
         let draft = snapshots.prepare(lower.clone(), None).unwrap();
         std::fs::write(draft.path().join("value"), b"lower").unwrap();
         draft.commit(lower.clone()).unwrap();
-        let roots = Roots::new(
-            snapshots,
-            Leases::open(root.path().join("metadata")).unwrap(),
-        );
+        let roots = Roots::new(snapshots, Leases::open(root.path().join("metadata")).unwrap());
         let reference = roots.fork_overlay(&lower).unwrap();
         let view = roots.open_overlay(&reference).unwrap();
         assert_eq!(std::fs::read(view.lower().join("value")).unwrap(), b"lower");
@@ -235,10 +232,10 @@ impl Roots {
         match self.pin(&id) {
             Ok(mut reference) => {
                 reference.baseline = Some(parent.clone());
-                if let Err(error) = self.leases.add(
-                    reference.lease_id(),
-                    format!("snapshot:{}", parent.as_str()),
-                ) {
+                if let Err(error) = self
+                    .leases
+                    .add(reference.lease_id(), format!("snapshot:{}", parent.as_str()))
+                {
                     let _ = self.leases.delete(reference.lease_id());
                     let _ = self.snapshots.remove(&id);
                     return Err(error);
@@ -261,9 +258,7 @@ impl Roots {
     pub fn fork_overlay(&self, parent: &Id) -> Result<Reference> {
         self.snapshots.view(parent)?;
         let upper = Id::new(format!("upper-{}", uuid::Uuid::new_v4().simple()))?;
-        self.snapshots
-            .prepare(upper.clone(), None)?
-            .commit(upper.clone())?;
+        self.snapshots.prepare(upper.clone(), None)?.commit(upper.clone())?;
         let mut reference = self.pin(&upper)?;
         let work = format!("work-{}", uuid::Uuid::new_v4().simple());
         reference.baseline = Some(parent.clone());
@@ -273,10 +268,10 @@ impl Roots {
             upper: upper.clone(),
             work,
         });
-        if let Err(error) = self.leases.add(
-            reference.lease_id(),
-            format!("snapshot:{}", parent.as_str()),
-        ) {
+        if let Err(error) = self
+            .leases
+            .add(reference.lease_id(), format!("snapshot:{}", parent.as_str()))
+        {
             let _ = self.leases.delete(reference.lease_id());
             let _ = self.snapshots.remove(&upper);
             return Err(error);
@@ -333,9 +328,10 @@ impl Roots {
     /// # Errors
     /// Returns an error when the reference predates baseline tracking or its parent is absent.
     pub fn baseline(&self, reference: &Reference) -> Result<SnapshotView> {
-        let parent = reference.baseline.as_ref().ok_or_else(|| {
-            Error::InvalidMetadata("rootfs reference has no baseline snapshot".into())
-        })?;
+        let parent = reference
+            .baseline
+            .as_ref()
+            .ok_or_else(|| Error::InvalidMetadata("rootfs reference has no baseline snapshot".into()))?;
         let lease = self
             .leases
             .get(reference.lease_id())?

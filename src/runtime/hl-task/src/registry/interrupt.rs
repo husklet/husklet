@@ -63,9 +63,7 @@ impl TaskRegistry {
             return Ok(true);
         }
         let process = Self::process(state, thread_state.process)?;
-        let blocked = SignalMask::from_bits(
-            thread_state.signals.mask.bits() | thread_state.signals.deferred.bits(),
-        );
+        let blocked = SignalMask::from_bits(thread_state.signals.mask.bits() | thread_state.signals.deferred.bits());
         let deliverable = thread_state
             .signals
             .pending
@@ -89,7 +87,9 @@ mod test {
     use std::time::Duration;
 
     use super::*;
-    use crate::{PendingTarget, ProcessCredentials, ProcessLimits, RegistryConfig, SignalInfo, SignalMask, SignalNumber};
+    use crate::{
+        PendingTarget, ProcessCredentials, ProcessLimits, RegistryConfig, SignalInfo, SignalMask, SignalNumber,
+    };
 
     #[derive(Default)]
     struct Token(AtomicBool);
@@ -134,7 +134,9 @@ mod test {
         let token = Arc::new(Token::default());
         registry.register_interrupt(thread, token.clone()).unwrap();
         let signal = SignalNumber::new(10).unwrap();
-        registry.set_signal_mask(thread, SignalMask::from_bits(0).with(signal)).unwrap();
+        registry
+            .set_signal_mask(thread, SignalMask::from_bits(0).with(signal))
+            .unwrap();
         registry
             .enqueue_signal(PendingTarget::Process(process), SignalInfo::bare(signal))
             .unwrap();
@@ -210,7 +212,10 @@ mod test {
         registry.clear_cancellation(thread).unwrap();
         assert!(!token.0.load(Ordering::Acquire));
         registry.exit_process(process, crate::ExitStatus::Code(0)).unwrap();
-        assert!(matches!(registry.register_interrupt(thread, token), Err(TaskError::InvalidThread)));
+        assert!(matches!(
+            registry.register_interrupt(thread, token),
+            Err(TaskError::InvalidThread)
+        ));
     }
 
     #[test]

@@ -14,10 +14,7 @@ impl TaskRegistry {
             // path so SIGCONT advances the control generation and wakes the
             // scheduler; exit and setpgid cannot fail after their task-state
             // transition merely because a standard signal coalesced.
-            let _ = self.enqueue_signal(
-                PendingTarget::Process(process),
-                SignalInfo::bare(hangup),
-            );
+            let _ = self.enqueue_signal(PendingTarget::Process(process), SignalInfo::bare(hangup));
             let _ = self.enqueue_signal(
                 PendingTarget::Process(process),
                 SignalInfo::bare(SignalNumber::CONTINUE),
@@ -84,9 +81,8 @@ impl TaskRegistry {
             .into_iter()
             .chain(process.signals.pending.snapshot())
         {
-            let blocked = SignalMask::from_bits(
-                thread_state.signals.mask.bits() | thread_state.signals.deferred.bits(),
-            );
+            let blocked =
+                SignalMask::from_bits(thread_state.signals.mask.bits() | thread_state.signals.deferred.bits());
             if !info.is_synchronous() && blocked.contains(info.signal) {
                 continue;
             }

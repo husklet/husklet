@@ -76,9 +76,7 @@ impl Persistence for Native {
             .ok_or_else(|| crate::Error::InvalidMetadata("metadata path has no parent".into()))?;
         let temporary = parent.join(format!(
             ".{}.tmp-{}",
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("metadata"),
+            path.file_name().and_then(|value| value.to_str()).unwrap_or("metadata"),
             uuid::Uuid::new_v4()
         ));
         let result = (|| {
@@ -99,9 +97,9 @@ impl Persistence for Native {
     fn remove(&self, path: &Path) -> Result<bool> {
         match fs::remove_file(path) {
             Ok(()) => {
-                let parent = path.parent().ok_or_else(|| {
-                    crate::Error::InvalidMetadata("blob path has no parent".into())
-                })?;
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| crate::Error::InvalidMetadata("blob path has no parent".into()))?;
                 File::open(parent)?.sync_all()?;
                 Ok(true)
             }

@@ -9,8 +9,8 @@ mod sources;
 mod syscalls;
 mod timer;
 
+#[cfg(test)]
+pub(crate) use catalog::CatalogBoundEvent;
 pub use operations::{OperationError, OperationRegistry};
 pub use sources::{SignalEventSource, SourceError, TimerEventSource, WatchEventSource};
 pub use syscalls::RuntimeEventSyscalls;
-#[cfg(test)]
-pub(crate) use catalog::CatalogBoundEvent;

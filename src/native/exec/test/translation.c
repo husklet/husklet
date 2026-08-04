@@ -207,6 +207,29 @@ int main(void) {
         .kind = HL_NATIVE_INVALIDATE, .mapping_epoch = 10, .first = 0xb000, .last = 0xb004};
     CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
     CHECK(*(const uint32_t *)code.entry == safe_link.expected);
+
+    const hl_native_translation_key cycle_left = {0xc000, 10, 9, 0xc000, 0xc004, 0, 0};
+    const hl_native_translation_key cycle_right = {0xd000, 10, 9, 0xd000, 0xd004, 0, 0};
+    const hl_native_provenance cycle_left_map = {.code_offset = 0, .code_size = 4, .guest = 0xc000};
+    const hl_native_provenance cycle_right_map = {.code_offset = 0, .code_size = 4, .guest = 0xd000};
+    const hl_native_relocation cycle_left_link = {.code_offset = 0, .target_guest = 0xd000,
+        .target_instruction_epoch = 9, .target_epoch_known = 1, .expected = 0x14000000u};
+    const hl_native_relocation cycle_right_link = {.code_offset = 0, .target_guest = 0xc000,
+        .target_instruction_epoch = 9, .target_epoch_known = 1, .expected = 0x14000000u};
+    const hl_native_emission cycle_left_emission = {.bytes = bytes, .size = sizeof(bytes), .body_offset = 0,
+        .provenance = &cycle_left_map, .provenance_count = 1,
+        .relocations = &cycle_left_link, .relocation_count = 1};
+    const hl_native_emission cycle_right_emission = {.bytes = bytes, .size = sizeof(bytes), .body_offset = 0,
+        .provenance = &cycle_right_map, .provenance_count = 1,
+        .relocations = &cycle_right_link, .relocation_count = 1};
+    CHECK(hl_native_translation_publish(executor, &cycle_left, &cycle_left_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_lookup(executor, &cycle_left, &code) == HL_NATIVE_HIT);
+    const uint32_t *cycle_left_entry = code.entry;
+    CHECK(*cycle_left_entry == cycle_left_link.expected);
+    CHECK(hl_native_translation_publish(executor, &cycle_right, &cycle_right_emission) == HL_NATIVE_OK);
+    CHECK(*cycle_left_entry == cycle_left_link.expected);
+    CHECK(hl_native_translation_lookup(executor, &cycle_right, &code) == HL_NATIVE_HIT);
+    CHECK(*(const uint32_t *)code.entry != cycle_right_link.expected);
 #endif
     hl_native_destroy(executor);
     CHECK(host.release_calls == 1);

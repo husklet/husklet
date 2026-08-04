@@ -45,19 +45,11 @@ pub struct PushProgress {
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(
-        rename = "progressDetail",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "progressDetail", default, skip_serializing_if = "Option::is_none")]
     pub progress_detail: Option<ProgressDetail>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(
-        rename = "errorDetail",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "errorDetail", default, skip_serializing_if = "Option::is_none")]
     pub error_detail: Option<DockerError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aux: Option<PushAux>,
@@ -119,13 +111,10 @@ impl ImageSummary {
     /// First repository tag, falling back to Docker's short image identity.
     #[must_use]
     pub fn name(&self) -> String {
-        self.repo_tags.first().cloned().unwrap_or_else(|| {
-            self.id
-                .trim_start_matches("sha256:")
-                .chars()
-                .take(12)
-                .collect()
-        })
+        self.repo_tags
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.id.trim_start_matches("sha256:").chars().take(12).collect())
     }
 }
 
@@ -216,19 +205,11 @@ pub struct PullProgress {
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(
-        rename = "progressDetail",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "progressDetail", default, skip_serializing_if = "Option::is_none")]
     pub progress_detail: Option<ProgressDetail>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    #[serde(
-        rename = "errorDetail",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "errorDetail", default, skip_serializing_if = "Option::is_none")]
     pub error_detail: Option<DockerError>,
 }
 
@@ -262,10 +243,7 @@ mod tests {
         let progress = PullProgress {
             status: Some("Downloading".into()),
             id: Some("abc123".into()),
-            progress_detail: Some(ProgressDetail {
-                current: 5,
-                total: 10,
-            }),
+            progress_detail: Some(ProgressDetail { current: 5, total: 10 }),
             ..PullProgress::default()
         };
         assert_eq!(
@@ -282,10 +260,7 @@ mod tests {
             ..PullProgress::default()
         })
         .unwrap();
-        assert_eq!(
-            status,
-            serde_json::json!({"status": "Digest: sha256:deadbeef"})
-        );
+        assert_eq!(status, serde_json::json!({"status": "Digest: sha256:deadbeef"}));
         assert!(status.get("progressDetail").is_none());
         assert!(status.get("id").is_none());
 
@@ -313,10 +288,7 @@ mod tests {
             serde_json::json!({"SpaceReclaimed": 0})
         );
         assert_eq!(
-            serde_json::to_value(ImageCommit {
-                id: "sha256:id".into()
-            })
-            .unwrap(),
+            serde_json::to_value(ImageCommit { id: "sha256:id".into() }).unwrap(),
             serde_json::json!({"Id": "sha256:id"})
         );
     }

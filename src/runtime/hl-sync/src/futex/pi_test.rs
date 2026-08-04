@@ -160,17 +160,15 @@ fn interrupted_front_advances_precise_queue() {
     let first_interruption = Arc::new(Interruption::new());
     let first_table = Arc::clone(&table);
     let first_signal = Arc::clone(&first_interruption);
-    let first_waiter = thread::spawn(move || {
-        first_table.lock(key, first, Some(owner), false, None, &first_signal, &Clock)
-    });
+    let first_waiter =
+        thread::spawn(move || first_table.lock(key, first, Some(owner), false, None, &first_signal, &Clock));
     while table.waiter_observations(key).len() != 1 {
         thread::yield_now();
     }
 
     let second_table = Arc::clone(&table);
-    let second_waiter = thread::spawn(move || {
-        second_table.lock(key, second, Some(owner), false, None, &Interruption::new(), &Clock)
-    });
+    let second_waiter =
+        thread::spawn(move || second_table.lock(key, second, Some(owner), false, None, &Interruption::new(), &Clock));
     while table.waiter_observations(key).len() != 2 {
         thread::yield_now();
     }
@@ -277,16 +275,14 @@ fn owner_death_hands_off_precise_queue_in_order() {
         .unwrap();
 
     let first_table = Arc::clone(&table);
-    let first_waiter = thread::spawn(move || {
-        first_table.lock(key, first, Some(owner), false, None, &Interruption::new(), &Clock)
-    });
+    let first_waiter =
+        thread::spawn(move || first_table.lock(key, first, Some(owner), false, None, &Interruption::new(), &Clock));
     while table.waiter_observations(key).len() != 1 {
         thread::yield_now();
     }
     let second_table = Arc::clone(&table);
-    let second_waiter = thread::spawn(move || {
-        second_table.lock(key, second, Some(owner), false, None, &Interruption::new(), &Clock)
-    });
+    let second_waiter =
+        thread::spawn(move || second_table.lock(key, second, Some(owner), false, None, &Interruption::new(), &Clock));
     while table.waiter_observations(key).len() != 2 {
         thread::yield_now();
     }

@@ -1,16 +1,12 @@
 use std::io::Write as _;
 
-use super::{append, Client, CreateContainer, Error};
+use super::{Client, CreateContainer, Error, append};
 
 pub(super) async fn multistage(client: &Client) -> Result<(), Error> {
     let context = multistage_context()?;
     client
         .images()
-        .build(
-            std::io::Cursor::new(context.clone()),
-            "workflow/multistage:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context.clone()), "workflow/multistage:test", None)
         .await?;
     let created = client
         .containers()
@@ -34,10 +30,7 @@ pub(super) async fn multistage(client: &Client) -> Result<(), Error> {
         )
         .into());
     }
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
 
     client
         .images()

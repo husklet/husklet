@@ -9,42 +9,42 @@ cases:
   - id: runtime/procfs/sysctl
     status: active
     compat: { class: compatibility }
-    build: { source: sysctl.c, output: sysctl, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: sysctl.c, inputs: [pf.h], output: sysctl, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/sysctl }
     run: []
     expect: { exit: 0, stdout: golden/shared/sysctl.out }
   - id: runtime/procfs/meminfo
     status: active
     compat: { class: compatibility }
-    build: { source: meminfo.c, output: meminfo, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: meminfo.c, inputs: [pf.h], output: meminfo, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/meminfo }
     run: []
     expect: { exit: 0, stdout: golden/shared/meminfo.out }
   - id: runtime/procfs/stat
     status: active
     compat: { class: compatibility }
-    build: { source: pstat.c, output: pstat, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: pstat.c, inputs: [pf.h], output: pstat, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/pstat }
     run: []
     expect: { exit: 0, stdout: golden/shared/pstat.out }
   - id: runtime/procfs/selfstat
     status: active
     compat: { class: compatibility }
-    build: { source: selfstat.c, output: selfstat, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfstat.c, inputs: [pf.h], output: selfstat, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfstat }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfstat.out }
   - id: runtime/procfs/selfstatus
     status: active
     compat: { class: compatibility }
-    build: { source: selfstatus.c, output: selfstatus, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfstatus.c, inputs: [pf.h], output: selfstatus, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfstatus }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfstatus.out }
   - id: runtime/procfs/selfcaps
     status: active
     compat: { class: compatibility }
-    build: { source: selfcaps.c, output: selfcaps, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfcaps.c, inputs: [pf.h], output: selfcaps, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfcaps }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfcaps.out }
@@ -72,35 +72,35 @@ cases:
   - id: runtime/procfs/cpuinfo
     status: active
     compat: { class: compatibility }
-    build: { source: cpuinfo.c, output: cpuinfo, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: cpuinfo.c, inputs: [pf.h], output: cpuinfo, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/cpuinfo }
     run: []
     expect: { exit: 0, stdout: golden/shared/cpuinfo.out }
   - id: runtime/procfs/misc
     status: active
     compat: { class: compatibility }
-    build: { source: miscfiles.c, output: miscfiles, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: miscfiles.c, inputs: [pf.h], output: miscfiles, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/miscfiles }
     run: []
     expect: { exit: 0, stdout: golden/shared/miscfiles.out }
   - id: runtime/procfs/net
     status: active
     compat: { class: compatibility }
-    build: { source: netfiles.c, output: netfiles, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: netfiles.c, inputs: [pf.h], output: netfiles, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/netfiles }
     run: []
     expect: { exit: 0, stdout: golden/shared/netfiles.out }
   - id: runtime/procfs/net2
     status: active
     compat: { class: compatibility }
-    build: { source: netfiles2.c, output: netfiles2, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: netfiles2.c, inputs: [pf.h], output: netfiles2, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/netfiles2 }
     run: []
     expect: { exit: 0, stdout: golden/shared/netfiles2.out }
   - id: runtime/procfs/maps
     status: active
     compat: { class: compatibility }
-    build: { source: maps.c, output: maps, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: maps.c, inputs: [pf.h], output: maps, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/maps }
     run: []
     expect: { exit: 0, stdout: golden/shared/maps.out }
@@ -114,7 +114,7 @@ cases:
   - id: runtime/procfs/sysfs
     status: active
     compat: { class: compatibility }
-    build: { source: sysfs.c, output: sysfs, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: sysfs.c, inputs: [pf.h], output: sysfs, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/sysfs }
     run: []
     expect: { exit: 0, stdout: golden/shared/sysfs.out }
@@ -129,7 +129,7 @@ cases:
   - id: runtime/procfs/mountinfo-bind
     status: active
     compat: { class: compatibility }
-    build: { source: bindmount.c, output: bindmount, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: bindmount.c, inputs: [pf.h], output: bindmount, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/bindmount }
     environment: { HL_VOLUMES: "/mnt:/tmp" }
     run: []
@@ -209,21 +209,21 @@ cases:
   - id: runtime/procfs/selflimits
     status: active
     compat: { class: compatibility }
-    build: { source: selflimits.c, output: selflimits, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selflimits.c, inputs: [pf.h], output: selflimits, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selflimits }
     run: []
     expect: { exit: 0, stdout: golden/shared/selflimits.out }
   - id: runtime/procfs/selfstatm
     status: active
     compat: { class: compatibility }
-    build: { source: selfstatm.c, output: selfstatm, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfstatm.c, inputs: [pf.h], output: selfstatm, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfstatm }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfstatm.out }
   - id: runtime/procfs/selftask
     status: active
     compat: { class: compatibility }
-    build: { source: selftask.c, output: selftask, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selftask.c, inputs: [pf.h], output: selftask, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selftask }
     run: []
     expect: { exit: 0, stdout: golden/shared/selftask.out }
@@ -237,21 +237,21 @@ cases:
   - id: runtime/procfs/selfoom
     status: active
     compat: { class: compatibility }
-    build: { source: selfoom.c, output: selfoom, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfoom.c, inputs: [pf.h], output: selfoom, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfoom }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfoom.out }
   - id: runtime/procfs/selfcgroup
     status: active
     compat: { class: compatibility }
-    build: { source: selfcgroup.c, output: selfcgroup, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfcgroup.c, inputs: [pf.h], output: selfcgroup, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfcgroup }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfcgroup.out }
   - id: runtime/procfs/unamehost
     status: active
     compat: { class: compatibility }
-    build: { source: unamehost.c, output: unamehost, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: unamehost.c, inputs: [pf.h], output: unamehost, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/unamehost }
     run: []
     expect: { exit: 0, stdout: golden/shared/unamehost.out }
@@ -265,21 +265,21 @@ cases:
   - id: runtime/procfs/selfmounts
     status: active
     compat: { class: compatibility }
-    build: { source: selfmounts.c, output: selfmounts, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfmounts.c, inputs: [pf.h], output: selfmounts, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfmounts }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfmounts.out }
   - id: runtime/procfs/cpucount
     status: active
     compat: { class: compatibility }
-    build: { source: cpucount.c, output: cpucount, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: cpucount.c, inputs: [pf.h], output: cpucount, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/cpucount }
     run: []
     expect: { exit: 0, stdout: golden/shared/cpucount.out }
   - id: runtime/procfs/cpusysfs
     status: active
     compat: { class: compatibility }
-    build: { source: cpusysfs.c, output: cpusysfs, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: cpusysfs.c, inputs: [pf.h], output: cpusysfs, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/cpusysfs }
     run: []
     expect: { exit: 0, stdout: golden/shared/cpusysfs.out }
@@ -297,7 +297,7 @@ cases:
       reason: "/proc/self/comm ignores PR_SET_NAME and reports a stale name in the engine"
       evidence: "tests/runtime/procfs/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: selfcomm.c, output: selfcomm, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfcomm.c, inputs: [pf.h], output: selfcomm, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfcomm }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfcomm.out }
@@ -306,7 +306,7 @@ cases:
       reason: "excluded-macos: child /proc/<pid>/stat comm surfacing is not emulated on the macOS engine. Linux engine still runs+passes this."
       evidence: "tests/runtime/procfs/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: forkself.c, output: forkself, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: forkself.c, inputs: [pf.h], output: forkself, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/forkself }
     run: []
     expect: { exit: 0, stdout: golden/shared/forkself.out }
@@ -315,7 +315,7 @@ cases:
       reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
       evidence: "tests/runtime/procfs/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: selfvm.c, output: selfvm, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfvm.c, inputs: [pf.h], output: selfvm, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfvm }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfvm.out }
@@ -343,7 +343,7 @@ cases:
   - id: runtime/procfs/umask
     status: active
     compat: { class: compatibility }
-    build: { source: selfumask.c, output: selfumask, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: selfumask.c, inputs: [pf.h], output: selfumask, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/selfumask }
     run: []
     expect: { exit: 0, stdout: golden/shared/selfumask.out }
@@ -361,21 +361,21 @@ cases:
       reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
       evidence: "tests/runtime/procfs/ORACLE.md"
     compat: { class: compatibility }
-    build: { source: peerid.c, output: peerid, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: peerid.c, inputs: [pf.h], output: peerid, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/peerid }
     run: []
     expect: { exit: 0, stdout: golden/shared/peerid.out }
   - id: runtime/procfs/cgroup-ro
     status: active
     compat: { class: compatibility }
-    build: { source: cgroupro.c, output: cgroupro, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: cgroupro.c, inputs: [pf.h], output: cgroupro, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/cgroupro }
     run: []
     expect: { exit: 0, stdout: golden/shared/cgroupro.out }
   - id: runtime/procfs/net-iso
     status: active
     compat: { class: compatibility }
-    build: { source: procnet_iso.c, output: procnet_iso, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: procnet_iso.c, inputs: [pf.h], output: procnet_iso, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/procnet_iso }
     run: []
     expect: { exit: 0, stdout: golden/shared/procnet_iso.out }
@@ -410,14 +410,14 @@ cases:
   - id: runtime/procfs/mapnames
     status: active
     compat: { class: compatibility }
-    build: { source: mapnames.c, output: mapnames, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: mapnames.c, inputs: [pf.h], output: mapnames, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/mapnames }
     run: []
     expect: { exit: 0, stdout: golden/shared/mapnames.out }
   - id: runtime/procfs/cpumodel
     status: active
     compat: { class: compatibility }
-    build: { source: cpumodel.c, output: cpumodel, flags: [-static, -O2, -std=gnu11, -I.] }
+    build: { source: cpumodel.c, inputs: [pf.h], output: cpumodel, flags: [-static, -O2, -std=gnu11, -I.] }
     artifact: { destination: /opt/husklet/procfs/cpumodel }
     run: []
     expect: { exit: 0, stdout: golden/shared/cpumodel.out }

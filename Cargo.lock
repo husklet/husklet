@@ -1073,6 +1073,7 @@ name = "hl-container"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "flate2",
  "hl-engine",
  "hl-fs",
  "hl-images",

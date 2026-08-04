@@ -56,19 +56,12 @@ pub(super) async fn create(
     Json(request): Json<NetworkCreate>,
 ) -> ApiResult<(StatusCode, Json<NetworkCreated>)> {
     let spec = request.spec()?;
-    let null_driver = spec.driver == NetworkDriver::None;
     let network = state
         .containers
         .networks()
         .create(spec)
         .await
-        .map_err(|error| match error {
-            hl_container::Error::NetworkConflict(_) if null_driver => ApiError::new(
-                StatusCode::FORBIDDEN,
-                "only one instance of the \"null\" network is allowed",
-            ),
-            error => ApiError::container(error),
-        })?;
+        .map_err(ApiError::container)?;
     let mut attributes = network.labels.clone();
     attributes.insert("name".into(), network.name.clone());
     attributes.insert(
@@ -92,10 +85,7 @@ pub(super) async fn create(
 }
 
 #[hl_design::adapter]
-pub(super) async fn inspect(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-) -> ApiResult<Json<Network>> {
+pub(super) async fn inspect(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<Json<Network>> {
     state
         .containers
         .networks()
@@ -180,12 +170,9 @@ pub(super) async fn connect(
         "network",
         "connect",
         network.id.to_string(),
-        [
-            ("name".into(), network.name),
-            ("container".into(), request.container),
-        ]
-        .into_iter()
-        .collect(),
+        [("name".into(), network.name), ("container".into(), request.container)]
+            .into_iter()
+            .collect(),
     );
     Ok(StatusCode::OK)
 }
@@ -197,12 +184,7 @@ pub(super) async fn disconnect(
     Json(request): Json<NetworkDisconnect>,
 ) -> ApiResult<StatusCode> {
     Fields::from(&request.unsupported).reject("network disconnect")?;
-    match state
-        .containers
-        .networks()
-        .disconnect(&id, &request.container)
-        .await
-    {
+    match state.containers.networks().disconnect(&id, &request.container).await {
         Ok(_) => {
             let network = state
                 .containers
@@ -214,12 +196,9 @@ pub(super) async fn disconnect(
                 "network",
                 "disconnect",
                 network.id.to_string(),
-                [
-                    ("name".into(), network.name),
-                    ("container".into(), request.container),
-                ]
-                .into_iter()
-                .collect(),
+                [("name".into(), network.name), ("container".into(), request.container)]
+                    .into_iter()
+                    .collect(),
             );
             Ok(StatusCode::OK)
         }
@@ -269,7 +248,7 @@ pub(super) async fn prune(
     State(state): State<DockerState>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<NetworkPrune>> {
-    let filters = Filters::parse(query.filters)?;
+    let filters = PruneFilters::parse(query.filters.as_deref())?;
     let service = state.containers.networks();
     let mut deleted = Vec::new();
     for network in service.list().await.map_err(ApiError::container)? {
@@ -289,9 +268,7 @@ pub(super) async fn prune(
                     );
                     deleted.push(network.name);
                 }
-                Err(
-                    hl_container::Error::NetworkInUse(_) | hl_container::Error::NetworkNotFound(_),
-                ) => {}
+                Err(hl_container::Error::NetworkInUse(_) | hl_container::Error::NetworkNotFound(_)) => {}
                 Err(error) => return Err(ApiError::container(error)),
             }
         }

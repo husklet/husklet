@@ -1,4 +1,5 @@
 use super::*;
+use crate::{GraphPruneReport, PrunedGraph};
 
 impl Images {
     /// Remove content and snapshots unreachable from named images and active leases.
@@ -64,11 +65,15 @@ impl Images {
     ///
     /// # Errors
     /// Returns an error for invalid graph metadata, missing content, or durable-store failures.
-    pub fn prune_graphs(&self, digests: &BTreeSet<String>) -> Result<GcReport> {
+    pub fn prune_graphs(&self, digests: &BTreeSet<String>) -> Result<GraphPruneReport> {
         self.prune_graphs_with(digests, crate::GraphPruneScope::Dangling)
     }
 
     /// Atomically forget selected graphs within the requested name scope.
+    ///
+    /// A workspace composition applies the selection only to its workspace-owned catalog. External
+    /// fallback catalogs are shared read sources and are not mutated implicitly. The returned graph
+    /// list identifies only records whose workspace catalog committed their removal.
     ///
     /// Callers selecting `AllUnused` must exclude graphs referenced by live
     /// containers or another external owner before invoking this operation.
@@ -76,10 +81,22 @@ impl Images {
     ///
     /// # Errors
     /// Returns an error for invalid graph metadata, missing content, or durable-store failures.
-    pub fn prune_graphs_with(&self, digests: &BTreeSet<String>, scope: crate::GraphPruneScope) -> Result<GcReport> {
-        let mut report = GcReport::default();
+    pub fn prune_graphs_with(
+        &self,
+        digests: &BTreeSet<String>,
+        scope: crate::GraphPruneScope,
+    ) -> Result<GraphPruneReport> {
+        self.prune_local_graphs_with(digests, scope)
+    }
+
+    fn prune_local_graphs_with(
+        &self,
+        digests: &BTreeSet<String>,
+        scope: crate::GraphPruneScope,
+    ) -> Result<GraphPruneReport> {
+        let mut report = GraphPruneReport::default();
         for (id, pending) in self.metadata.pending_prunes()? {
-            self.remove_pending(&id, &pending.content, &mut report)?;
+            self.remove_pending(&id, &pending.content, &mut report.gc)?;
         }
 
         let (generation, graphs) = self.metadata.graph_snapshot()?;
@@ -122,7 +139,7 @@ impl Images {
 
         candidates.retain(|digest, _| {
             if live.contains(digest) {
-                report.content_kept += 1;
+                report.gc.content_kept += 1;
                 false
             } else {
                 true
@@ -131,7 +148,13 @@ impl Images {
         let Some((id, pending)) = self.metadata.stage_prune(generation, digests, candidates, scope)? else {
             return Ok(report);
         };
-        self.remove_pending(&id, &pending.content, &mut report)?;
+        self.remove_pending(&id, &pending.content, &mut report.gc)?;
+        report
+            .graphs_removed
+            .extend(selected.into_iter().map(|graph| PrunedGraph {
+                target: graph.target.clone(),
+                names: graph.names.clone(),
+            }));
         Ok(report)
     }
 

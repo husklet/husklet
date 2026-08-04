@@ -49,8 +49,7 @@ impl<M: hl_linux::GuestMemory> RuntimeProcessSyscalls<M> {
             return Ok(());
         };
         let machine = port.snapshot(self.thread).map_err(|_| Errno::EIO)?;
-        self
-            .tasks
+        self.tasks
             .unwind_signal_frames(self.thread, Self::stack_pointer(&machine))
             .map(|_| ())
             .map_err(|_| Errno::ESRCH)

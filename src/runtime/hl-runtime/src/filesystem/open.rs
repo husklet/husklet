@@ -50,7 +50,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             return false;
         };
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
-            && super::proc::DescriptorLink::resolve_at(base.path().as_str().as_bytes(), plan.operand.path.as_bytes()).is_some()
+            && super::proc::DescriptorLink::resolve_at(base.path().as_str().as_bytes(), plan.operand.path.as_bytes())
+                .is_some()
         {
             return false;
         }

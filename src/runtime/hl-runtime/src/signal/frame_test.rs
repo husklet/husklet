@@ -294,7 +294,12 @@ fn frame_publish_retry() {
     assert_eq!(runtime.deliver_forced_frame(), LinuxResult::Error(hl_linux::Errno::EIO));
     assert_eq!(state.lock().unwrap().machine, machine);
     assert_eq!(
-        fixture.tasks.prepare_forced_delivery(fixture.thread).unwrap().info().signal,
+        fixture
+            .tasks
+            .prepare_forced_delivery(fixture.thread)
+            .unwrap()
+            .info()
+            .signal,
         signal,
     );
 }
@@ -313,7 +318,11 @@ fn frame_depth_overflow_continues_delivery() {
             .unwrap();
     }
     for depth in 0..32 {
-        let prepared = fixture.tasks.prepare_deliverable_signal(fixture.thread).unwrap().unwrap();
+        let prepared = fixture
+            .tasks
+            .prepare_deliverable_signal(fixture.thread)
+            .unwrap()
+            .unwrap();
         fixture.tasks.force_signal_delivery(prepared).unwrap();
         let forced = fixture.tasks.prepare_forced_delivery(fixture.thread).unwrap();
         fixture
@@ -344,9 +353,18 @@ fn frame_depth_overflow_continues_delivery() {
     }));
     let port = Arc::new(Port(state.clone()));
     let runtime = fixture.runtime(GuestArchitecture::Aarch64, port);
-    assert_eq!(runtime.deliver_signal_boundary(), Ok(crate::SignalBoundaryOutcome::Handled));
+    assert_eq!(
+        runtime.deliver_signal_boundary(),
+        Ok(crate::SignalBoundaryOutcome::Handled)
+    );
     assert_ne!(state.lock().unwrap().machine, machine);
-    assert!(!fixture.tasks.pending_signal_mask(fixture.thread).unwrap().contains(signal));
+    assert!(
+        !fixture
+            .tasks
+            .pending_signal_mask(fixture.thread)
+            .unwrap()
+            .contains(signal)
+    );
 }
 
 #[test]
@@ -439,7 +457,10 @@ fn nonlocal_unwind_reconciles_frame_scope() {
         }));
         let port = Arc::new(Port(state.clone()));
         let runtime = fixture.runtime(architecture, port);
-        assert_eq!(runtime.deliver_signal_boundary(), Ok(crate::SignalBoundaryOutcome::Handled));
+        assert_eq!(
+            runtime.deliver_signal_boundary(),
+            Ok(crate::SignalBoundaryOutcome::Handled)
+        );
 
         match &mut state.lock().unwrap().machine {
             SignalMachine::Aarch64(machine) => machine.stack_pointer = 0x20_000,
@@ -452,7 +473,10 @@ fn nonlocal_unwind_reconciles_frame_scope() {
             .tasks
             .enqueue_signal(PendingTarget::Thread(fixture.thread), SignalInfo::bare(later))
             .unwrap();
-        assert_eq!(runtime.deliver_signal_boundary(), Ok(crate::SignalBoundaryOutcome::Handled));
+        assert_eq!(
+            runtime.deliver_signal_boundary(),
+            Ok(crate::SignalBoundaryOutcome::Handled)
+        );
         let pending = fixture.tasks.pending_signal_mask(fixture.thread).unwrap();
         assert!(pending.contains(later));
         assert!(!pending.contains(deferred));

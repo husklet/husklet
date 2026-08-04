@@ -16,10 +16,7 @@ pub enum Error {
     #[error("response exceeded configured limit of {limit} bytes")]
     ResponseTooLarge { limit: usize },
     #[error("Docker API returned HTTP {status}: {message}")]
-    Docker {
-        status: http::StatusCode,
-        message: String,
-    },
+    Docker { status: http::StatusCode, message: String },
     #[error("invalid Docker response: {0}")]
     Decode(#[from] serde_json::Error),
     #[error("Docker protocol violation: {0}")]
@@ -28,10 +25,8 @@ pub enum Error {
 
 impl Error {
     pub(crate) fn docker(status: http::StatusCode, bytes: &[u8]) -> Self {
-        let message = serde_json::from_slice::<hl_daemon::api::DockerError>(bytes).map_or_else(
-            |_| String::from_utf8_lossy(bytes).into_owned(),
-            |error| error.message,
-        );
+        let message = serde_json::from_slice::<hl_daemon::api::DockerError>(bytes)
+            .map_or_else(|_| String::from_utf8_lossy(bytes).into_owned(), |error| error.message);
         Self::Docker { status, message }
     }
 }

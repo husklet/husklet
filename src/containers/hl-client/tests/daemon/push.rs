@@ -4,12 +4,7 @@ use super::support::*;
 async fn registry_push_streams_typed_errors_and_rejects_malformed_auth() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
-    Archive::load(
-        &docker_archive()[..],
-        &containers.images().unwrap(),
-        Limits::default(),
-    )
-    .unwrap();
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
     let socket = root.path().join("run/docker.sock");
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn({
@@ -26,11 +21,7 @@ async fn registry_push_streams_typed_errors_and_rejects_malformed_auth() {
     wait_for_socket(&socket).await;
 
     let client = Client::unix(&socket).unwrap();
-    let mut push = client
-        .images()
-        .push("missing/image", Some("v1"), None)
-        .await
-        .unwrap();
+    let mut push = client.images().push("missing/image", Some("v1"), None).await.unwrap();
     let error = push.next().await.unwrap().unwrap();
     assert!(error.error.unwrap().contains("missing/image:v1"));
     assert!(error.error_detail.is_some());

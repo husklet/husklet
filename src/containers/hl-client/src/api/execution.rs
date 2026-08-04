@@ -48,10 +48,7 @@ impl<'a> Executions<'a> {
     /// Returns transport, lookup, lifecycle, runtime, persistence, or decoding failures.
     pub async fn wait(&self, id: &str) -> Result<Wait> {
         self.transport
-            .blocking_json(
-                Method::POST,
-                &format!("/exec/{}/wait", Component::segment(id)),
-            )
+            .blocking_json(Method::POST, &format!("/exec/{}/wait", Component::segment(id)))
             .await
     }
 
@@ -62,17 +59,11 @@ impl<'a> Executions<'a> {
     /// failures from the daemon.
     pub async fn start(&self, id: &str, config: &ExecStart) -> Result<Session> {
         if config.detach {
-            return Err(Error::Protocol(
-                "attached exec start cannot set Detach=true".into(),
-            ));
+            return Err(Error::Protocol("attached exec start cannot set Detach=true".into()));
         }
         let stream = self
             .transport
-            .upgrade_json(
-                Method::POST,
-                &format!("/exec/{}/start", Component::segment(id)),
-                config,
-            )
+            .upgrade_json(Method::POST, &format!("/exec/{}/start", Component::segment(id)), config)
             .await?;
         if config.tty {
             Ok(Session::terminal(stream, self.transport.response_limit()))
@@ -87,16 +78,10 @@ impl<'a> Executions<'a> {
     /// Returns a protocol error for an attached request, or transport, state, and daemon failures.
     pub async fn start_detached(&self, id: &str, config: &ExecStart) -> Result<()> {
         if !config.detach {
-            return Err(Error::Protocol(
-                "detached exec start requires Detach=true".into(),
-            ));
+            return Err(Error::Protocol("detached exec start requires Detach=true".into()));
         }
         self.transport
-            .empty_json(
-                Method::POST,
-                &format!("/exec/{}/start", Component::segment(id)),
-                config,
-            )
+            .empty_json(Method::POST, &format!("/exec/{}/start", Component::segment(id)), config)
             .await
     }
 

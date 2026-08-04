@@ -224,9 +224,7 @@ impl TaskRegistry {
             .transpose()?
             .unwrap_or_default();
         let signals = match transition {
-            TerminalTransition::Detach if session_wide => {
-                [SignalNumber::new(1).ok(), Some(SignalNumber::CONTINUE)]
-            }
+            TerminalTransition::Detach if session_wide => [SignalNumber::new(1).ok(), Some(SignalNumber::CONTINUE)],
             TerminalTransition::SessionLeaderExit => [SignalNumber::new(1).ok(), None],
             TerminalTransition::Detach => [None, None],
         };

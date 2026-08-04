@@ -1,4 +1,4 @@
-use hl_client::{model::CreateContainer, Client};
+use hl_client::{Client, model::CreateContainer};
 use hl_container::Containers;
 use hl_daemon::Daemon;
 use tempfile::TempDir;
@@ -41,11 +41,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
     let api = client.containers();
     images.load(tokio::fs::File::open(base).await?).await?;
     let id = images
-        .build(
-            std::io::Cursor::new(context()?),
-            "workflow/built:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context()?), "workflow/built:test", None)
         .await?;
     if id.is_empty() {
         return Err("build returned an empty image ID".into());
@@ -73,11 +69,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
     api.remove(&created.id, false, false).await?;
 
     let simple = images
-        .build(
-            std::io::Cursor::new(simple_context()?),
-            "workflow/simple:test",
-            None,
-        )
+        .build(std::io::Cursor::new(simple_context()?), "workflow/simple:test", None)
         .await?;
     if simple.is_empty() {
         return Err("simple build returned an empty image ID".into());

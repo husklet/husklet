@@ -84,10 +84,7 @@ impl HardLinks {
                 break;
             }
         }
-        let link = self
-            .0
-            .first()
-            .expect("unresolved hard-link set is non-empty");
+        let link = self.0.first().expect("unresolved hard-link set is non-empty");
         Err(link
             .path
             .error("hardlink target was not present after applying the complete layer"))
@@ -125,9 +122,7 @@ impl Directories {
                 continue;
             };
             if metadata.is_dir() && !metadata.file_type().is_symlink() {
-                directory
-                    .path
-                    .set_mode(&directory.destination, directory.mode)?;
+                directory.path.set_mode(&directory.destination, directory.mode)?;
             }
         }
         if let Some(ownerships) = ownerships {
@@ -167,11 +162,7 @@ impl<R: Read> Layer<R> {
     /// # Errors
     /// Returns an error for malformed archives, unsafe paths or nodes,
     /// ownership persistence failures, or filesystem failures.
-    pub fn apply_with_ownership(
-        &mut self,
-        root: impl AsRef<FsPath>,
-        ownerships: &mut Ownerships,
-    ) -> Result<Report> {
+    pub fn apply_with_ownership(&mut self, root: impl AsRef<FsPath>, ownerships: &mut Ownerships) -> Result<Report> {
         self.apply_to(root.as_ref(), Some(ownerships), None)
     }
 
@@ -275,13 +266,10 @@ impl Path {
                         path.remove(destination)?;
                     }
                 }
-                fs::create_dir_all(destination)
-                    .map_err(|source| path.io("create directory", source))?;
-                backlog.directories.push(
-                    path.clone(),
-                    destination.to_owned(),
-                    entry.header().mode()?,
-                );
+                fs::create_dir_all(destination).map_err(|source| path.io("create directory", source))?;
+                backlog
+                    .directories
+                    .push(path.clone(), destination.to_owned(), entry.header().mode()?);
             }
             tar::EntryType::Regular | tar::EntryType::GNUSparse => {
                 fs::create_dir_all(destination.parent().unwrap_or(root))?;
@@ -298,9 +286,7 @@ impl Path {
                 path.set_mode(destination, entry.header().mode()?)?;
             }
             tar::EntryType::Symlink => {
-                let target = entry
-                    .link_name()?
-                    .ok_or_else(|| path.error("missing symlink target"))?;
+                let target = entry.link_name()?.ok_or_else(|| path.error("missing symlink target"))?;
                 path.validate_link(&target)?;
                 let target = if target.is_absolute() {
                     target.into_owned()
@@ -359,11 +345,7 @@ impl Path {
         root: &FsPath,
         names: &mut Names,
     ) -> Result<PathBuf> {
-        let joined = self
-            .as_path()
-            .parent()
-            .unwrap_or(FsPath::new(""))
-            .join(target);
+        let joined = self.as_path().parent().unwrap_or(FsPath::new("")).join(target);
         let guest_target = Self::normalize(&joined)?;
         let physical_target = names.resolve(root, guest_target.as_path())?;
         let physical_target = Self::new(&physical_target)?;
@@ -390,10 +372,9 @@ impl Path {
                 .as_path()
                 .parent()
                 .ok_or_else(|| path.error("opaque whiteout has no parent"))?;
-            let physical = names.as_deref_mut().map_or_else(
-                || Ok(parent.to_owned()),
-                |names| names.resolve(root, parent),
-            )?;
+            let physical = names
+                .as_deref_mut()
+                .map_or_else(|| Ok(parent.to_owned()), |names| names.resolve(root, parent))?;
             let directory = Path::new(&physical)?.destination(root);
             if directory.exists() {
                 for child in fs::read_dir(directory)? {
@@ -410,22 +391,12 @@ impl Path {
             // consume it without allowing an empty target to resolve to its parent.
             return Ok(true);
         }
-        let guest_victim = path
-            .as_path()
-            .parent()
-            .unwrap_or(FsPath::new(""))
-            .join(target);
-        let physical_victim = names.map_or_else(
-            || Ok(guest_victim.clone()),
-            |names| names.resolve(root, &guest_victim),
-        )?;
+        let guest_victim = path.as_path().parent().unwrap_or(FsPath::new("")).join(target);
+        let physical_victim =
+            names.map_or_else(|| Ok(guest_victim.clone()), |names| names.resolve(root, &guest_victim))?;
         let victim = root.join(physical_victim);
         if let Some(ownerships) = ownerships {
-            let victim = path
-                .as_path()
-                .parent()
-                .unwrap_or(FsPath::new(""))
-                .join(target);
+            let victim = path.as_path().parent().unwrap_or(FsPath::new("")).join(target);
             ownerships.discard_tree(&victim, true)?;
         }
         if victim.exists() || victim.symlink_metadata().is_ok() {
@@ -437,38 +408,22 @@ impl Path {
 
 impl Ownership {
     fn from_header(header: &tar::Header, path: &Path) -> Result<Self> {
-        let uid = if header
-            .as_old()
-            .uid
-            .iter()
-            .all(|byte| matches!(byte, 0 | b' '))
-        {
+        let uid = if header.as_old().uid.iter().all(|byte| matches!(byte, 0 | b' ')) {
             0
         } else {
             header.uid()?
         };
-        let gid = if header
-            .as_old()
-            .gid
-            .iter()
-            .all(|byte| matches!(byte, 0 | b' '))
-        {
+        let gid = if header.as_old().gid.iter().all(|byte| matches!(byte, 0 | b' ')) {
             0
         } else {
             header.gid()?
         };
         Ok(Self {
             uid: uid.try_into().map_err(|_| {
-                Error::InvalidMetadata(format!(
-                    "layer uid exceeds u32 for {}",
-                    path.as_path().display()
-                ))
+                Error::InvalidMetadata(format!("layer uid exceeds u32 for {}", path.as_path().display()))
             })?,
             gid: gid.try_into().map_err(|_| {
-                Error::InvalidMetadata(format!(
-                    "layer gid exceeds u32 for {}",
-                    path.as_path().display()
-                ))
+                Error::InvalidMetadata(format!("layer gid exceeds u32 for {}", path.as_path().display()))
             })?,
         })
     }

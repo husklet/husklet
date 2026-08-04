@@ -1,12 +1,42 @@
 use super::*;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::{MemfdRegistry, RuntimeFilesystemSyscalls, RuntimeMemoryError};
+use crate::{AnonymousMemoryAccount, BrkSnapshot, MemfdRegistry, RuntimeFilesystemSyscalls, RuntimeMemoryError};
 use hl_descriptor::{DescriptorFlags, ObjectKind, OpenFileDescription, StatusFlags};
 use hl_isa::{AddressRange, GuestAddress};
 use hl_linux::{DescriptorIoSyscalls, GuestAccess, GuestFault, SyscallFamily};
 use hl_memory::{FileIdentity, MemoryError, Protection, SharedLimits, SharedObjectStore, SharedSeal};
+
+#[derive(Debug)]
+struct MmapAccount {
+    limit: u64,
+    current: AtomicU64,
+}
+
+impl AnonymousMemoryAccount for MmapAccount {
+    fn reserve(&self, bytes: u64) -> bool {
+        self.current
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(bytes).filter(|next| *next <= self.limit)
+            })
+            .is_ok()
+    }
+
+    fn refund(&self, bytes: u64) {
+        assert!(
+            self.current
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| current
+                    .checked_sub(bytes))
+                .is_ok()
+        );
+    }
+
+    fn current(&self) -> u64 {
+        self.current.load(Ordering::Acquire)
+    }
+}
 
 #[derive(Clone, Debug)]
 struct Memory {
@@ -218,6 +248,242 @@ impl Fixture {
             name,
             family: SyscallFamily::Memory,
         }
+    }
+
+    fn accounted_runtime(
+        &self,
+        architecture: GuestArchitecture,
+        limit: u64,
+    ) -> (RuntimeMemorySyscalls<Mapping, Memory>, Arc<MmapAccount>) {
+        let account = Arc::new(MmapAccount {
+            limit,
+            current: AtomicU64::new(0),
+        });
+        let brk = BrkRegion::new(
+            Arc::clone(&self.coordinator),
+            BrkSnapshot {
+                lower: GuestAddress::new(0x10_0000),
+                current: GuestAddress::new(0x10_0000),
+                upper: GuestAddress::new(0x20_0000),
+                backing_identity: 91,
+            },
+        )
+        .unwrap()
+        .with_account(account.clone())
+        .unwrap();
+        (self.runtime(architecture).with_brk(brk), account)
+    }
+}
+
+#[test]
+fn mmap_limit_noreserve_and_exact_unmap_both_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, account) = fixture.accounted_runtime(architecture, 4097);
+        let mmap = Fixture::operation("mmap");
+        let munmap = Fixture::operation("munmap");
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 4095, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 4095);
+        assert_eq!(
+            runtime.handle(mmap, [0x6000, 3, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Error(Errno::ENOMEM)
+        );
+        assert_eq!(account.current(), 4095);
+        assert_eq!(
+            runtime.handle(mmap, [0x8000, 8193, 3, 0x4032, u64::MAX, 0]),
+            LinuxResult::Value(0x8000)
+        );
+        assert_eq!(account.current(), 4095);
+        assert_eq!(
+            runtime.handle(mmap, [0x6000, 2, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x6000)
+        );
+        assert_eq!(account.current(), 4097);
+        assert_eq!(
+            runtime.handle(munmap, [0x4000, 4096, 0, 0, 0, 0]),
+            LinuxResult::Value(0)
+        );
+        assert_eq!(account.current(), 2);
+        assert_eq!(
+            runtime.handle(munmap, [0x4000, 4096, 0, 0, 0, 0]),
+            LinuxResult::Value(0)
+        );
+        assert_eq!(account.current(), 2);
+    }
+}
+
+#[test]
+fn mmap_failure_and_fixed_replacement_are_transactional_both_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, account) = fixture.accounted_runtime(architecture, 5000);
+        let mmap = Fixture::operation("mmap");
+        fixture.mapping.0.lock().unwrap().fail_commit = true;
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 3000, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Error(Errno::EINVAL)
+        );
+        assert_eq!(account.current(), 0);
+        fixture.mapping.0.lock().unwrap().fail_commit = false;
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 3000, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(
+            runtime.handle(mmap, [0x5000, 4096, 3, 0x4032, u64::MAX, 0]),
+            LinuxResult::Value(0x5000)
+        );
+        assert_eq!(account.current(), 3000);
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 5000, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 5000);
+    }
+}
+
+#[test]
+fn mremap_raw_growth_shrink_and_limit_both_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, account) = fixture.accounted_runtime(architecture, 5000);
+        let mmap = Fixture::operation("mmap");
+        let mremap = Fixture::operation("mremap");
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 1, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 1);
+        assert_eq!(
+            runtime.handle(mremap, [0x4000, 1, 4095, 0, 0, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 4095);
+        assert_eq!(
+            runtime.handle(mremap, [0x4000, 4095, 5000, 0, 0, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 5000);
+        assert_eq!(
+            runtime.handle(mremap, [0x4000, 5000, 5001, 0, 0, 0]),
+            LinuxResult::Error(Errno::ENOMEM)
+        );
+        assert_eq!(account.current(), 5000);
+        assert_eq!(
+            runtime.handle(mremap, [0x4000, 5000, 7, 0, 0, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 7);
+        assert!(
+            fixture
+                .coordinator
+                .ledger()
+                .resolve(GuestAddress::new(0x5000), Protection::NONE)
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn mremap_move_and_dontunmap_account_once_both_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, account) = fixture.accounted_runtime(architecture, 8192);
+        let mmap = Fixture::operation("mmap");
+        let mremap = Fixture::operation("mremap");
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 4096, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(
+            runtime.handle(mmap, [0x8000, 4096, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x8000)
+        );
+        assert_eq!(account.current(), 8192);
+        assert_eq!(
+            runtime.handle(mremap, [0x4000, 4096, 4096, 3, 0x8000, 0]),
+            LinuxResult::Value(0x8000)
+        );
+        assert_eq!(
+            account.current(),
+            4096,
+            "fixed move replaces rather than duplicates charge"
+        );
+        assert_eq!(
+            runtime.handle(mremap, [0x8000, 4096, 4096, 5, 0, 0]),
+            LinuxResult::Value(0x9000)
+        );
+        assert_eq!(account.current(), 8192, "DONTUNMAP owns both mappings");
+        assert_eq!(
+            runtime.handle(mremap, [0x8000, 4096, 4096, 5, 0, 0]),
+            LinuxResult::Error(Errno::ENOMEM)
+        );
+        assert_eq!(account.current(), 8192);
+    }
+}
+
+#[test]
+fn brk_and_mmap_share_container_limit_both_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, account) = fixture.accounted_runtime(architecture, 4096);
+        let brk = Fixture::operation("brk");
+        let mmap = Fixture::operation("mmap");
+        let munmap = Fixture::operation("munmap");
+        assert_eq!(
+            runtime.handle(brk, [0x10_0bb8, 0, 0, 0, 0, 0]),
+            LinuxResult::Value(0x10_0bb8)
+        );
+        assert_eq!(account.current(), 3000);
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 1097, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Error(Errno::ENOMEM)
+        );
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 1096, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        assert_eq!(account.current(), 4096);
+        assert_eq!(
+            runtime.handle(munmap, [0x4000, 4096, 0, 0, 0, 0]),
+            LinuxResult::Value(0)
+        );
+        assert_eq!(account.current(), 3000);
+        assert_eq!(
+            runtime.handle(brk, [0x10_1000, 0, 0, 0, 0, 0]),
+            LinuxResult::Value(0x10_1000)
+        );
+        assert_eq!(account.current(), 4096);
+    }
+}
+
+#[test]
+fn mremap_failure_refunds_growth_both_isas() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let fixture = Fixture::new();
+        let (mut runtime, account) = fixture.accounted_runtime(architecture, 8192);
+        let mmap = Fixture::operation("mmap");
+        let mremap = Fixture::operation("mremap");
+        assert_eq!(
+            runtime.handle(mmap, [0x4000, 4096, 3, 0x32, u64::MAX, 0]),
+            LinuxResult::Value(0x4000)
+        );
+        fixture.mapping.0.lock().unwrap().fail_commit = true;
+        assert_eq!(
+            runtime.handle(mremap, [0x4000, 4096, 8192, 0, 0, 0]),
+            LinuxResult::Error(Errno::EINVAL)
+        );
+        assert_eq!(account.current(), 4096);
+        assert!(
+            fixture
+                .coordinator
+                .ledger()
+                .resolve(GuestAddress::new(0x5000), Protection::NONE)
+                .is_none()
+        );
     }
 }
 

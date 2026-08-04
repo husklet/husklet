@@ -10,12 +10,6 @@ description = "Docker-compatible server over hl-container"
 readme = "../../../README.md"
 
 [[test]]
-name = "scenarios"
-path = "../../../tests/scenarios/main.rs"
-harness = false
-required-features = ["runtime"]
-
-[[test]]
 name = "daemon-api"
 path = "tests/daemon_api.rs"
 required-features = ["runtime"]

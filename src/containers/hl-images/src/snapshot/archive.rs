@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use super::{names::Name, Names, Ownerships};
+use super::{Names, Ownerships, names::Name};
 use crate::{Error, Result};
 
 struct Entry<'a> {
@@ -73,9 +73,7 @@ fn append_children<W: Write>(
 impl Entry<'_> {
     fn append<W: Write>(&self, archive: &mut tar::Builder<W>) -> Result<()> {
         let source = self.root.join(self.relative);
-        let guest = self
-            .names
-            .map_or(self.relative, |names| names.guest(self.relative));
+        let guest = self.names.map_or(self.relative, |names| names.guest(self.relative));
         let metadata = fs::symlink_metadata(&source)?;
         let mut header = tar::Header::new_gnu();
         header.set_metadata_in_mode(&metadata, tar::HeaderMode::Complete);
@@ -92,13 +90,7 @@ impl Entry<'_> {
             header.set_size(0);
             header.set_cksum();
             archive.append_data(&mut header, guest, &[][..])?;
-            append_children(
-                archive,
-                self.root,
-                self.relative,
-                self.ownerships,
-                self.names,
-            )?;
+            append_children(archive, self.root, self.relative, self.ownerships, self.names)?;
         } else if metadata.file_type().is_symlink() {
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
@@ -107,11 +99,7 @@ impl Entry<'_> {
                 if target.is_absolute() {
                     return target.clone();
                 }
-                let joined = self
-                    .relative
-                    .parent()
-                    .unwrap_or(Path::new(""))
-                    .join(&target);
+                let joined = self.relative.parent().unwrap_or(Path::new("")).join(&target);
                 let physical = Name::normalize(&joined);
                 let guest_target = names.guest(&physical);
                 Name::relative(guest.parent().unwrap_or(Path::new("")), guest_target)

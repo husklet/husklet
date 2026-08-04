@@ -29,26 +29,27 @@ pub(super) struct ArenaWrite {
     widths: Vec<u8>,
 }
 
-fn prepare_spans(memory: &impl ImageMemory, address: u64, length: u64) -> Result<ArenaWrite, ()> {
-    let lease = ImageMemory::lease(memory);
-    let transaction = lease
-        .mappings()
-        .prepare_write_spans(GuestAddress::new(address), length)
-        .map_err(|_| ())?;
-    Ok(ArenaWrite {
-        lease,
-        transaction,
-        widths: Vec::new(),
-    })
-}
+impl ArenaWrite {
+    fn prepare(memory: &impl ImageMemory, address: u64, length: u64) -> Result<Self, ()> {
+        let lease = ImageMemory::lease(memory);
+        let transaction = lease
+            .mappings()
+            .prepare_write_spans(GuestAddress::new(address), length)
+            .map_err(|_| ())?;
+        Ok(Self {
+            lease,
+            transaction,
+            widths: Vec::new(),
+        })
+    }
 
-fn commit_spans(reservation: ArenaWrite, input: &[u8]) -> Result<(), ()> {
-    reservation
-        .lease
-        .mappings()
-        .commit_write_spans(reservation.transaction, input)
-        .map(drop)
-        .map_err(|_| ())
+    fn commit(self, input: &[u8]) -> Result<(), ()> {
+        self.lease
+            .mappings()
+            .commit_write_spans(self.transaction, input)
+            .map(drop)
+            .map_err(|_| ())
+    }
 }
 
 macro_rules! impl_operand_memory {
@@ -71,14 +72,14 @@ macro_rules! impl_operand_memory {
             }
 
             fn reserve_write(&self, address: u64, bytes: u8) -> Result<Self::Reservation, ()> {
-                let mut reservation = prepare_spans(self, address, u64::from(bytes))?;
+                let mut reservation = ArenaWrite::prepare(self, address, u64::from(bytes))?;
                 reservation.widths.push(bytes);
                 Ok(reservation)
             }
 
             fn commit_write(&mut self, reservation: Self::Reservation, value: u64) -> Result<(), ()> {
                 let bytes = reservation.widths[0];
-                commit_spans(reservation, &value.to_le_bytes()[..usize::from(bytes)])
+                reservation.commit(&value.to_le_bytes()[..usize::from(bytes)])
             }
 
             fn reserve_write_batch(&self, writes: &[(u64, u8)]) -> Result<Self::BatchReservation, u64> {
@@ -92,7 +93,7 @@ macro_rules! impl_operand_memory {
                     next = next.checked_add(u64::from(*bytes)).ok_or(*address)?;
                 }
                 let length = next.checked_sub(writes[0].0).ok_or(writes[0].0)?;
-                let mut reservation = prepare_spans(self, writes[0].0, length).map_err(|_| writes[0].0)?;
+                let mut reservation = ArenaWrite::prepare(self, writes[0].0, length).map_err(|_| writes[0].0)?;
                 reservation.widths = writes.iter().map(|(_, bytes)| *bytes).collect();
                 Ok(reservation)
             }
@@ -105,7 +106,7 @@ macro_rules! impl_operand_memory {
                 for (bytes, value) in reservation.widths.iter().zip(values) {
                     output.extend_from_slice(&value.to_le_bytes()[..usize::from(*bytes)]);
                 }
-                commit_spans(reservation, &output)
+                reservation.commit(&output)
             }
         }
 

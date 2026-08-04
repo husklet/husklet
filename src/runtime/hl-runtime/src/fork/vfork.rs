@@ -86,10 +86,7 @@ mod test {
     }
 
     fn identities() -> (ThreadId, ProcessId) {
-        (
-            ThreadId::from_wire(1, 1).unwrap(),
-            ProcessId::from_wire(2, 1).unwrap(),
-        )
+        (ThreadId::from_wire(1, 1).unwrap(), ProcessId::from_wire(2, 1).unwrap())
     }
 
     #[test]

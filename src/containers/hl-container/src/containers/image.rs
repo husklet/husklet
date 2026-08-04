@@ -14,24 +14,24 @@ impl Containers {
     /// # Errors
     /// Returns lookup, image metadata, or change validation failures.
     pub async fn validate_commit(&self, reference: &str, changes: &[String]) -> Result<()> {
-        if changes.is_empty() {
-            return Ok(());
-        }
         let container = self.inspect(reference).await?;
-        let parent_name = container.spec.image.as_ref().ok_or_else(|| {
-            crate::Error::InvalidSpec("commit changes require an image-backed container".into())
-        })?;
         let images = self.images()?;
-        let parent = images.resolve(parent_name)?.ok_or_else(|| {
-            crate::Error::Corrupt(format!("parent image {parent_name} is missing"))
-        })?;
         let platform = match container.spec.guest {
             crate::Guest::Aarch64 => hl_images::Platform::linux_arm64(),
             crate::Guest::X86_64 => hl_images::Platform::linux_amd64(),
         };
-        let mut metadata = images.details(&parent, &platform)?;
-        hl_images::build::Changes::new(changes)
-            .apply(&mut metadata)
+        let runtime = commit_runtime(&container)?;
+        let metadata = if let Some(parent_name) = &container.spec.image {
+            let parent = images
+                .resolve(parent_name)?
+                .ok_or_else(|| crate::Error::Corrupt(format!("parent image {parent_name} is missing")))?;
+            images.details(&parent, &platform)?
+        } else {
+            hl_images::Metadata::standalone(platform, runtime.clone())
+        };
+        metadata
+            .committed(runtime, None, None, changes)
+            .map(|_| ())
             .map_err(Into::into)
     }
     /// Snapshot a stopped container's merged filesystem as a named OCI image.
@@ -52,39 +52,23 @@ impl Containers {
                 expected: "stopped for a coherent image commit",
             });
         }
-        let process = &container.spec.process;
-        let runtime = hl_images::RuntimeConfig {
-            entrypoint: vec![process.program.clone()],
-            command: process.args.clone(),
-            environment: process.env.text()?,
-            working_directory: process.working_dir.to_string_lossy().into_owned(),
-            user: process.uid.map_or_else(String::new, |uid| {
-                process
-                    .gid
-                    .map_or_else(|| uid.to_string(), |gid| format!("{uid}:{gid}"))
-            }),
-        };
+        let runtime = commit_runtime(&container)?;
         let platform = match container.spec.guest {
             crate::Guest::Aarch64 => hl_images::Platform::linux_arm64(),
             crate::Guest::X86_64 => hl_images::Platform::linux_amd64(),
         };
         let images = self.images()?;
-        if let (crate::Rootfs::Image(rootfs), Some(parent_name)) =
-            (&container.spec.rootfs, &container.spec.image)
-        {
+        if let (crate::Rootfs::Image(rootfs), Some(parent_name)) = (&container.spec.rootfs, &container.spec.image) {
             if let Ok(overlay) = images.roots().open_overlay(rootfs) {
-                let parent = images.resolve(parent_name)?.ok_or_else(|| {
-                    crate::Error::Corrupt(format!("parent image {parent_name} is missing"))
-                })?;
-                let mut metadata = images.details(&parent, &platform)?;
-                metadata.runtime = runtime;
-                metadata.author = commit.author;
-                hl_images::build::Changes::new(&commit.changes).apply(&mut metadata)?;
-                metadata.history.push(hl_images::History {
-                    created_by: Some("hl commit".into()),
-                    comment: commit.comment,
-                    ..hl_images::History::default()
-                });
+                let parent = images
+                    .resolve(parent_name)?
+                    .ok_or_else(|| crate::Error::Corrupt(format!("parent image {parent_name} is missing")))?;
+                let metadata = images.details(&parent, &platform)?.committed(
+                    runtime,
+                    commit.author,
+                    commit.comment,
+                    &commit.changes,
+                )?;
                 let mut layer = Vec::new();
                 overlay.archive_upper(&mut layer)?;
                 return images
@@ -94,9 +78,13 @@ impl Containers {
         }
         let mut layer = Vec::new();
         self.filesystem(reference).await?.archive("/", &mut layer)?;
-        images
-            .commit(&layer, &runtime, &platform, &name)
-            .map_err(Into::into)
+        let metadata = hl_images::Metadata::standalone(platform, runtime.clone()).committed(
+            runtime,
+            commit.author,
+            commit.comment,
+            &commit.changes,
+        )?;
+        images.build(&layer, &name, &metadata).map_err(Into::into)
     }
 
     /// Returns the runtime-neutral OCI image service used by this container service.
@@ -144,13 +132,11 @@ impl Containers {
         let candidate = root_store.fork_overlay(image.snapshot())?;
         let mut rootfs = match root_store.open_overlay(&candidate) {
             Ok(view)
-                if self
-                    .service
-                    .validate_overlay(&crate::service::OverlayConfig {
-                        lower: view.lower().to_owned(),
-                        upper: view.upper().to_owned(),
-                        work: view.work().to_owned(),
-                    }) =>
+                if self.service.validate_overlay(&crate::service::OverlayConfig {
+                    lower: view.lower().to_owned(),
+                    upper: view.upper().to_owned(),
+                    work: view.work().to_owned(),
+                }) =>
             {
                 candidate
             }
@@ -209,4 +195,19 @@ impl Containers {
             }
         }
     }
+}
+
+fn commit_runtime(container: &Container) -> Result<hl_images::RuntimeConfig> {
+    let process = &container.spec.process;
+    Ok(hl_images::RuntimeConfig {
+        entrypoint: vec![process.program.clone()],
+        command: process.args.clone(),
+        environment: process.env.text()?,
+        working_directory: process.working_dir.to_string_lossy().into_owned(),
+        user: process.uid.map_or_else(String::new, |uid| {
+            process
+                .gid
+                .map_or_else(|| uid.to_string(), |gid| format!("{uid}:{gid}"))
+        }),
+    })
 }

@@ -7,7 +7,7 @@ mod process;
 mod report;
 mod scheduler;
 
-use crate::suite::{self, Error};
+use crate::suite::Error;
 use definition::Scenario;
 pub(crate) use options::Options;
 pub(crate) use report::{CachePreflightOptions, ProvenanceOptions};
@@ -39,20 +39,29 @@ pub async fn run(options: Options) -> Result<(), Error> {
 }
 
 fn scenarios(options: &Options) -> Result<Vec<Scenario>, Error> {
-    let result = load_scenarios(options.scenario.as_deref())?;
-    let result = options.select_cases(result)?;
-    if result.is_empty() {
-        let root = workspace()?.join("tests/scenarios");
-        return Err(format!("no scenarios matched under {}", root.display()).into());
-    }
-    Ok(result)
+    let scenarios = load_scenarios(options.scenario.as_deref())?;
+    Ok(options.select_cases(scenarios)?)
 }
 
 fn load_scenarios(selected: Option<&str>) -> Result<Vec<Scenario>, Error> {
     let root = workspace()?.join("tests/scenarios");
+    let mut directories = std::fs::read_dir(&root)?
+        .map(|entry| entry.map(|value| value.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    directories.sort();
     let mut result = Vec::new();
-    for manifest in suite::manifests(&root, selected)? {
-        result.push(Scenario::load(&manifest.directory, &manifest.definition)?);
+    for directory in directories.into_iter().filter(|value| value.is_dir()) {
+        let name = directory
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if selected.is_some_and(|selected| selected != name) {
+            continue;
+        }
+        let definition = directory.join("test.yaml");
+        if definition.is_file() {
+            result.push(Scenario::load(&directory, &definition)?);
+        }
     }
     if result.is_empty() {
         return Err(format!("no scenarios matched under {}", root.display()).into());

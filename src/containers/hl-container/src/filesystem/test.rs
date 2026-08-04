@@ -53,10 +53,7 @@ impl OverlayFixture {
         fs::write(upper.join("data/.wh.deleted"), b"").unwrap();
         let mut ownership = hl_images::snapshot::Ownerships::memory();
         ownership
-            .set(
-                "data/lower",
-                hl_images::snapshot::Ownership { uid: 41, gid: 42 },
-            )
+            .set("data/lower", hl_images::snapshot::Ownership { uid: 41, gid: 42 })
             .unwrap();
         let filesystem = Filesystem::overlay(
             lower.clone(),
@@ -130,10 +127,7 @@ fn archives_and_extracts_files_with_mount_routing() {
             Limits::default(),
         )
         .unwrap();
-    assert_eq!(
-        fs::read(root.join("target/nested/file")).unwrap(),
-        b"copied"
-    );
+    assert_eq!(fs::read(root.join("target/nested/file")).unwrap(), b"copied");
     assert_eq!(fs::read(root.join("target/nested/keep")).unwrap(), b"keep");
 }
 
@@ -152,9 +146,7 @@ fn root_archive_contains_root_entries_without_private_snapshot_name() {
         .map(|entry| entry.unwrap().path().unwrap().into_owned())
         .collect::<Vec<_>>();
     assert!(paths.iter().any(|path| path == FsPath::new("bin/tool")));
-    assert!(paths
-        .iter()
-        .all(|path| !path.starts_with("container-private-id")));
+    assert!(paths.iter().all(|path| !path.starts_with("container-private-id")));
 }
 
 #[test]
@@ -179,10 +171,7 @@ fn overlay_routes_reads_whiteouts_copy_up_writes_and_merged_archives() {
             true,
         )
         .unwrap();
-    assert_eq!(
-        fs::read(upper.join("data/sub/written")).unwrap(),
-        b"copy-up"
-    );
+    assert_eq!(fs::read(upper.join("data/sub/written")).unwrap(), b"copy-up");
     assert!(!lower.join("data/sub/written").exists());
     #[cfg(unix)]
     assert_eq!(
@@ -203,9 +192,7 @@ fn overlay_routes_reads_whiteouts_copy_up_writes_and_merged_archives() {
         .collect::<Vec<_>>();
     assert!(paths.iter().any(|path| path == FsPath::new("data/lower")));
     assert!(paths.iter().any(|path| path == FsPath::new("data/copied")));
-    assert!(paths
-        .iter()
-        .any(|path| path == FsPath::new("data/sub/written")));
+    assert!(paths.iter().any(|path| path == FsPath::new("data/sub/written")));
     assert!(!paths.iter().any(|path| path == FsPath::new("data/deleted")));
 
     let mut root_bytes = Vec::new();
@@ -215,15 +202,9 @@ fn overlay_routes_reads_whiteouts_copy_up_writes_and_merged_archives() {
         .unwrap()
         .map(|entry| entry.unwrap().path().unwrap().into_owned())
         .collect::<Vec<_>>();
-    assert!(root_paths
-        .iter()
-        .any(|path| path == FsPath::new("data/lower")));
-    assert!(root_paths
-        .iter()
-        .any(|path| path == FsPath::new("data/copied")));
-    assert!(!root_paths
-        .iter()
-        .any(|path| path == FsPath::new("data/deleted")));
+    assert!(root_paths.iter().any(|path| path == FsPath::new("data/lower")));
+    assert!(root_paths.iter().any(|path| path == FsPath::new("data/copied")));
+    assert!(!root_paths.iter().any(|path| path == FsPath::new("data/deleted")));
 }
 
 #[test]
@@ -251,13 +232,7 @@ fn overlay_preserves_ownership_and_confines_symbolic_links() {
         })
         .unwrap();
     assert_eq!(lower_header, (41, 42));
-    let upper_ownership = filesystem
-        .overlay
-        .as_ref()
-        .unwrap()
-        .upper_ownership
-        .lock()
-        .unwrap();
+    let upper_ownership = filesystem.overlay.as_ref().unwrap().upper_ownership.lock().unwrap();
     let ownership_entries = upper_ownership
         .iter()
         .map(|(path, ownership)| (path.to_owned(), ownership))
@@ -273,9 +248,11 @@ fn overlay_preserves_ownership_and_confines_symbolic_links() {
         let outside = fixture.temporary.path().join("outside");
         fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, fixture.lower.join("escape")).unwrap();
-        assert!(filesystem
-            .extract("/escape", &tar(&[("bad", b"bad")])[..], Limits::default())
-            .is_err());
+        assert!(
+            filesystem
+                .extract("/escape", &tar(&[("bad", b"bad")])[..], Limits::default())
+                .is_err()
+        );
     }
 }
 
@@ -301,27 +278,24 @@ fn rejects_traversal_symlink_escape_readonly_and_limits() {
 
     assert!(filesystem.stat("/../outside").is_err());
     #[cfg(unix)]
-    assert!(filesystem
-        .extract("/escape", &tar(&[("owned", b"no")])[..], Limits::default())
-        .is_err());
+    assert!(
+        filesystem
+            .extract("/escape", &tar(&[("owned", b"no")])[..], Limits::default())
+            .is_err()
+    );
     assert!(matches!(
-        filesystem.extract(
-            "/readonly",
-            &tar(&[("owned", b"no")])[..],
-            Limits::default()
-        ),
+        filesystem.extract("/readonly", &tar(&[("owned", b"no")])[..], Limits::default()),
         Err(Error::ReadOnly(_))
     ));
-    assert!(filesystem
-        .extract(
-            "/target",
-            &tar(&[("large", b"too large")])[..],
-            Limits {
-                entries: 1,
-                bytes: 2
-            }
-        )
-        .is_err());
+    assert!(
+        filesystem
+            .extract(
+                "/target",
+                &tar(&[("large", b"too large")])[..],
+                Limits { entries: 1, bytes: 2 }
+            )
+            .is_err()
+    );
     assert!(!outside.join("owned").exists());
     assert!(!readonly.join("owned").exists());
 }
@@ -339,22 +313,16 @@ fn malformed_late_entry_does_not_partially_mutate() {
         file.set_size(7);
         file.set_mode(0o644);
         file.set_cksum();
-        archive
-            .append_data(&mut file, "would-exist", &b"partial"[..])
-            .unwrap();
+        archive.append_data(&mut file, "would-exist", &b"partial"[..]).unwrap();
         let mut fifo = tar::Header::new_gnu();
         fifo.set_entry_type(tar::EntryType::Fifo);
         fifo.set_size(0);
         fifo.set_mode(0o644);
         fifo.set_cksum();
-        archive
-            .append_data(&mut fifo, "unsupported", &b""[..])
-            .unwrap();
+        archive.append_data(&mut fifo, "unsupported", &b""[..]).unwrap();
         archive.finish().unwrap();
     }
-    assert!(filesystem
-        .extract("/target", &bytes[..], Limits::default())
-        .is_err());
+    assert!(filesystem.extract("/target", &bytes[..], Limits::default()).is_err());
     assert!(!root.join("target/would-exist").exists());
 }
 
@@ -415,17 +383,12 @@ fn successful_external_write_advances_the_shared_epoch() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("root");
     fs::create_dir_all(root.join("target")).unwrap();
-    let generation =
-        crate::generation::Generation::open(temporary.path().join("generation")).unwrap();
+    let generation = crate::generation::Generation::open(temporary.path().join("generation")).unwrap();
     let filesystem = Filesystem::new(root, Vec::new()).with_generation(generation.clone());
     let before = fs::read(generation.path()).unwrap();
 
     filesystem
-        .extract(
-            "/target",
-            &tar(&[("visible", b"now")])[..],
-            Limits::default(),
-        )
+        .extract("/target", &tar(&[("visible", b"now")])[..], Limits::default())
         .unwrap();
 
     assert_ne!(fs::read(generation.path()).unwrap(), before);

@@ -1,7 +1,6 @@
 #include "run.h"
 
 #include "entry.h"
-#include "flags.h"
 #include "frontend.h"
 #include "projection.h"
 #include "word.h"
@@ -102,82 +101,36 @@ typedef struct x86_rep {
     uint8_t length;
     uint8_t width;
     uint8_t move;
-    uint8_t compare;
-    uint8_t scan;
-    uint8_t repeat;
-    uint8_t repeat_not_equal;
-    uint8_t address_32;
-    uint8_t segment;
 } x86_rep;
 
 typedef enum x86_rep_result {
     X86_REP_SCALAR = 0,
     X86_REP_COMPLETE = 1,
     X86_REP_EPOCH = 2,
-    X86_REP_RESOLVE = 3,
     X86_REP_FATAL = -1,
 } x86_rep_result;
 
 static int rep_decode(const uint8_t *bytes, size_t size, x86_rep *rep) {
-    size_t cursor = 0;
-    uint8_t operand_16 = 0;
-    uint8_t rex = 0;
     uint8_t opcode;
-    if (bytes == NULL || rep == NULL) return 0;
-    memset(rep, 0, sizeof(*rep));
-    while (cursor < size && cursor < 15u) {
-        uint8_t prefix = bytes[cursor];
-        if (prefix == 0x66u) operand_16 = 1u;
-        else if (prefix == 0x67u) rep->address_32 = 1u;
-        else if (prefix == 0x64u) rep->segment = 1u;
-        else if (prefix == 0x65u) rep->segment = 2u;
-        else if (prefix == 0xf2u || prefix == 0xf3u) {
-            rep->repeat = 1u;
-            rep->repeat_not_equal = prefix == 0xf2u;
-        } else break;
-        ++cursor;
+    if (bytes == NULL || rep == NULL || size < 2 || bytes[0] != 0xf3u) return 0;
+    if (bytes[1] == 0xa4u || bytes[1] == 0xaau) {
+        opcode = bytes[1];
+        rep->width = 1u;
+        rep->length = 2u;
+    } else if (bytes[1] == 0xa5u || bytes[1] == 0xabu) {
+        opcode = bytes[1];
+        rep->width = 4u;
+        rep->length = 2u;
+    } else if (size >= 3 && (bytes[1] == 0x66u || bytes[1] == 0x48u) &&
+               (bytes[2] == 0xa5u || bytes[2] == 0xabu)) {
+        opcode = bytes[2];
+        rep->width = bytes[1] == 0x66u ? 2u : 8u;
+        rep->length = 3u;
+    } else {
+        return 0;
     }
-    if (cursor < size && (bytes[cursor] & 0xf0u) == 0x40u) rex = bytes[cursor++];
-    if (cursor >= size || cursor >= 15u) return 0;
-    opcode = bytes[cursor++];
-    if (opcode != 0xa4u && opcode != 0xa5u && opcode != 0xa6u && opcode != 0xa7u &&
-        opcode != 0xaau && opcode != 0xabu && opcode != 0xaeu && opcode != 0xafu)
-        return 0;
-    rep->width = (opcode & 1u) == 0u ? 1u :
-                 (rex & 8u) != 0u ? 8u : operand_16 != 0u ? 2u : 4u;
-    rep->length = (uint8_t)cursor;
     rep->move = opcode == 0xa4u || opcode == 0xa5u;
-    rep->compare = opcode == 0xa6u || opcode == 0xa7u;
-    rep->scan = opcode == 0xaeu || opcode == 0xafu;
-    if (!rep->move && opcode != 0xaau && opcode != 0xabu && !rep->compare && !rep->scan)
-        return 0;
-    /* The bulk owner is useful only for repeated stores/moves. Bare forms and
-     * LODS remain in generated scalar lowering. */
-    if (!rep->repeat && !rep->compare && !rep->scan) return 0;
     return 1;
-}
-
-static uint64_t rep_mask(size_t width) {
-    return width == 8u ? UINT64_MAX : (UINT64_C(1) << (width * 8u)) - 1u;
-}
-
-static uint64_t rep_sub_flags(uint64_t left, uint64_t right, size_t width,
-                              uint64_t preserved) {
-    uint64_t mask = rep_mask(width);
-    uint64_t sign = UINT64_C(1) << (width * 8u - 1u);
-    uint64_t result = (left - right) & mask;
-    uint64_t flags = preserved & ~(HL_X86_RFLAGS_CF | HL_X86_RFLAGS_PF |
-                                    HL_X86_RFLAGS_AF | HL_X86_RFLAGS_ZF |
-                                    HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF);
-    left &= mask;
-    right &= mask;
-    if (left < right) flags |= HL_X86_RFLAGS_CF;
-    if (__builtin_parity((unsigned)(uint8_t)result) == 0) flags |= HL_X86_RFLAGS_PF;
-    if (((left ^ right ^ result) & UINT64_C(0x10)) != 0) flags |= HL_X86_RFLAGS_AF;
-    if (result == 0) flags |= HL_X86_RFLAGS_ZF;
-    if ((result & sign) != 0) flags |= HL_X86_RFLAGS_SF;
-    if (((left ^ right) & (left ^ result) & sign) != 0) flags |= HL_X86_RFLAGS_OF;
-    return flags;
 }
 
 static const hl_native_projection_view *rep_view(const x86_run_views *cache, uint64_t address,
@@ -248,11 +201,9 @@ static int rep_dirty_full(const hl_native_x86_64_cpu *cpu,
  * callbacks and precise fault exits. */
 static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache,
                                   hl_native_x86_64_cpu *cpu, uint64_t *budget) {
-    uint64_t count = rep->repeat ? (rep->address_32 ? (uint32_t)cpu->registers[1] : cpu->registers[1]) : 1u;
+    uint64_t count = cpu->registers[1];
     uint64_t source = cpu->registers[6];
     uint64_t destination = cpu->registers[7];
-    uint64_t source_address;
-    uint64_t destination_address;
     int backward = (cpu->flags & (UINT64_C(1) << 10)) != 0;
     const hl_native_projection_view *source_view = NULL;
     const hl_native_projection_view *destination_view;
@@ -267,80 +218,21 @@ static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache
         cpu->budget = *budget;
         return X86_REP_COMPLETE;
     }
-    source = rep->address_32 ? (uint32_t)source : source;
-    destination = rep->address_32 ? (uint32_t)destination : destination;
-    if (__builtin_add_overflow(source,
-            rep->segment == 1u ? cpu->fs : rep->segment == 2u ? cpu->gs : 0u,
-            &source_address))
-        return X86_REP_SCALAR;
-    destination_address = destination;
-    if (*budget == 0) return X86_REP_SCALAR;
-    destination_view = rep_view(cache, destination_address, rep->width,
-                                rep->compare || rep->scan ? 1u : 2u);
-    if (destination_view == NULL) {
-        cpu->fault_address = destination_address;
-        cpu->fault_access = rep->compare || rep->scan ? HL_NATIVE_ACCESS_READ : HL_NATIVE_ACCESS_WRITE;
-        cpu->fault_size = rep->width;
-        return X86_REP_RESOLVE;
-    }
-    destination_span = rep_span(destination_view, destination_address, rep->width, backward);
-    if (rep->move || rep->compare) {
-        source_view = rep_view(cache, source_address, rep->width, 1u);
-        if (source_view == NULL) {
-            cpu->fault_address = source_address;
-            cpu->fault_access = HL_NATIVE_ACCESS_READ;
-            cpu->fault_size = rep->width;
-            return X86_REP_RESOLVE;
-        }
-        source_span = rep_span(source_view, source_address, rep->width, backward);
+    if (*budget == 0 || destination > UINT64_MAX - rep->width) return X86_REP_SCALAR;
+    destination_view = rep_view(cache, destination, rep->width, 2u);
+    if (destination_view == NULL) return X86_REP_SCALAR;
+    destination_span = rep_span(destination_view, destination, rep->width, backward);
+    if (rep->move) {
+        if (source > UINT64_MAX - rep->width) return X86_REP_SCALAR;
+        source_view = rep_view(cache, source, rep->width, 1u);
+        if (source_view == NULL) return X86_REP_SCALAR;
+        source_span = rep_span(source_view, source, rep->width, backward);
     }
     elements = destination_span / rep->width;
-    if ((rep->move || rep->compare) && elements > source_span / rep->width)
-        elements = source_span / rep->width;
+    if (rep->move && elements > source_span / rep->width) elements = source_span / rep->width;
     if ((uint64_t)elements > count) elements = (size_t)count;
     if ((uint64_t)elements > *budget) elements = (size_t)*budget;
     if (elements == 0) return X86_REP_SCALAR;
-    if (rep->compare || rep->scan) {
-        uint64_t step = backward ? (uint64_t)-(int64_t)rep->width : rep->width;
-        uint64_t accumulator = cpu->registers[0] & rep_mask(rep->width);
-        size_t completed = 0;
-        int stopped = 0;
-        for (; completed < elements; ++completed) {
-            uint64_t offset = completed * step;
-            uint64_t left = accumulator;
-            uint64_t right = 0;
-            if (rep->compare) {
-                const uint8_t *host = (const uint8_t *)(uintptr_t)
-                    (source_view->host_first + source_address + offset - source_view->guest_first);
-                memcpy(&left, host, rep->width);
-            }
-            {
-                const uint8_t *host = (const uint8_t *)(uintptr_t)
-                    (destination_view->host_first + destination_address + offset - destination_view->guest_first);
-                memcpy(&right, host, rep->width);
-            }
-            cpu->flags = rep_sub_flags(left, right, rep->width, cpu->flags);
-            if (rep->repeat &&
-                ((((left ^ right) & rep_mask(rep->width)) == 0u) ==
-                 (rep->repeat_not_equal != 0u))) {
-                ++completed;
-                stopped = 1;
-                break;
-            }
-        }
-        source = rep->address_32 ? (uint32_t)(source + completed * step) : source + completed * step;
-        destination = rep->address_32 ? (uint32_t)(destination + completed * step) : destination + completed * step;
-        if (rep->compare) cpu->registers[6] = source;
-        cpu->registers[7] = destination;
-        if (rep->repeat)
-            cpu->registers[1] = rep->address_32 ? (uint32_t)(count - completed) : count - completed;
-        cpu->executed += completed;
-        *budget -= completed;
-        cpu->budget = *budget;
-        if (!rep->repeat || stopped || cpu->registers[1] == 0)
-            cpu->program += rep->length;
-        return X86_REP_COMPLETE;
-    }
     hl_native_projection projection = {destination_view, 1,
                                        destination_view->mapping_incarnation, 0};
     size_t bytes = elements * rep->width;
@@ -348,10 +240,10 @@ static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache
     if (rep_dirty_full(cpu, destination_view, first, bytes)) return X86_REP_EPOCH;
     if (!hl_x86_projection_resolve(&projection, cpu, first, bytes, 2u)) return X86_REP_SCALAR;
     uint8_t *destination_host = (uint8_t *)(uintptr_t)
-        (destination_view->host_first + destination_address - destination_view->guest_first);
+        (destination_view->host_first + destination - destination_view->guest_first);
     if (rep->move) {
         const uint8_t *source_host = (const uint8_t *)(uintptr_t)
-            (source_view->host_first + source_address - source_view->guest_first);
+            (source_view->host_first + source - source_view->guest_first);
         rep_copy(destination_host, source_host, elements, rep->width, backward);
     } else {
         rep_fill(destination_host, cpu->registers[0], elements, rep->width, backward);
@@ -361,14 +253,9 @@ static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache
      * guest bytes have changed. */
     if (!hl_x86_projection_written(cpu, first, bytes)) return X86_REP_FATAL;
     step = (uint64_t)bytes;
-    cpu->registers[7] = rep->address_32 ?
-        (uint32_t)(backward ? destination - step : destination + step) :
-        backward ? destination - step : destination + step;
-    if (rep->move)
-        cpu->registers[6] = rep->address_32 ?
-            (uint32_t)(backward ? source - step : source + step) :
-            backward ? source - step : source + step;
-    cpu->registers[1] = rep->address_32 ? (uint32_t)(count - elements) : count - elements;
+    cpu->registers[7] = backward ? destination - step : destination + step;
+    if (rep->move) cpu->registers[6] = backward ? source - step : source + step;
+    cpu->registers[1] -= elements;
     cpu->executed += elements;
     *budget -= elements;
     cpu->budget = *budget;
@@ -755,10 +642,6 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             ? rep_execute(&rep, &operand_views, cpu, &budget) : X86_REP_SCALAR;
         if (rep_result == X86_REP_FATAL) return fatal_exit(&execution, output, X86_FATAL_REASON);
         if (rep_result == X86_REP_EPOCH) return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, pc);
-        if (rep_result == X86_REP_RESOLVE) {
-            cpu->reason = HL_NATIVE_EXIT_FALLBACK;
-            goto handle_reason;
-        }
         if (rep_result == X86_REP_COMPLETE) {
             if ((cpu->executable_written & 4u) != 0)
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
@@ -865,7 +748,6 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         if (loop_active) {
             continue;
         }
-handle_reason:
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&
             cpu->fault_size != 0 && operand_resolver != NULL) {
             hl_native_projection_view view = {0};

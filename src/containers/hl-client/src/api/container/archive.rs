@@ -73,10 +73,7 @@ impl Containers<'_> {
     /// Returns transport, lookup, filesystem, or protocol failures.
     pub async fn export(&self, id: &str) -> Result<Stream> {
         self.transport
-            .stream(
-                Method::GET,
-                &format!("/containers/{}/export", Component::opaque(id)),
-            )
+            .stream(Method::GET, &format!("/containers/{}/export", Component::opaque(id)))
             .await
     }
 
@@ -95,13 +92,7 @@ impl Containers<'_> {
     ///
     /// # Errors
     /// Returns transport, lookup, archive-validation, ownership, or filesystem failures.
-    pub async fn copy_to_owned<R>(
-        &self,
-        id: &str,
-        path: &str,
-        archive: R,
-        copy_uid_gid: bool,
-    ) -> Result<()>
+    pub async fn copy_to_owned<R>(&self, id: &str, path: &str, archive: R, copy_uid_gid: bool) -> Result<()>
     where
         R: tokio::io::AsyncRead + Send + Unpin + 'static,
     {

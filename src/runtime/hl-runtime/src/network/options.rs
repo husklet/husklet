@@ -1,4 +1,6 @@
-use hl_linux::{BpfInstruction, Errno, GuestAccess, GuestMarshaller, GuestMemory, GuestSocketOption, LinuxResult, NetworkAbi};
+use hl_linux::{
+    BpfInstruction, Errno, GuestAccess, GuestMarshaller, GuestMemory, GuestSocketOption, LinuxResult, NetworkAbi,
+};
 use hl_network::{SocketConnectError, SocketConnectStatus, SocketProtocol, SocketState, SocketType};
 
 use crate::{

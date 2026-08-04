@@ -1,15 +1,15 @@
 use async_trait::async_trait;
 use bytes::Bytes;
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 use futures_util::stream;
-use hl_images::{remote::Source, Descriptor, Digest, Error, Reference};
+use hl_images::{Descriptor, Digest, Error, Reference, remote::Source};
 use std::{
     collections::HashMap,
     io::Write,
     path::Path,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -31,11 +31,7 @@ impl FaultPersistence {
     fn fails(counter: &AtomicUsize) -> bool {
         counter
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-                if value > 0 {
-                    Some(value - 1)
-                } else {
-                    None
-                }
+                if value > 0 { Some(value - 1) } else { None }
             })
             .is_ok_and(|previous| previous == 1)
     }
@@ -78,11 +74,7 @@ impl Source for BrokenSource {
     async fn resolve(&self, _: &Reference) -> hl_images::Result<Descriptor> {
         Ok(self.root.clone())
     }
-    async fn fetch(
-        &self,
-        _: &Reference,
-        _: &Descriptor,
-    ) -> hl_images::Result<hl_images::remote::BlobStream> {
+    async fn fetch(&self, _: &Reference, _: &Descriptor) -> hl_images::Result<hl_images::remote::BlobStream> {
         let bytes = match self.kind {
             Broken::Oversized => {
                 let mut value = self.bytes.to_vec();
@@ -104,27 +96,22 @@ impl Source for MemorySource {
     async fn resolve(&self, _: &Reference) -> hl_images::Result<Descriptor> {
         Ok(self.root.clone())
     }
-    async fn fetch(
-        &self,
-        _: &Reference,
-        descriptor: &Descriptor,
-    ) -> hl_images::Result<hl_images::remote::BlobStream> {
+    async fn fetch(&self, _: &Reference, descriptor: &Descriptor) -> hl_images::Result<hl_images::remote::BlobStream> {
         let bytes = self
             .blobs
             .get(&descriptor.digest().to_string())
             .cloned()
             .ok_or_else(|| Error::Registry(format!("missing {}", descriptor.digest())))?;
-        let chunks = bytes
-            .chunks(3)
-            .map(Bytes::copy_from_slice)
-            .map(Ok)
-            .collect::<Vec<_>>();
+        let chunks = bytes.chunks(3).map(Bytes::copy_from_slice).map(Ok).collect::<Vec<_>>();
         Ok(Box::pin(stream::iter(chunks)))
     }
 }
 
 pub(super) fn descriptor(media: &str, bytes: &[u8]) -> Descriptor {
-    serde_json::from_value(serde_json::json!({"mediaType":media,"digest":Digest::sha256(bytes).to_string(),"size":bytes.len()})).unwrap()
+    serde_json::from_value(
+        serde_json::json!({"mediaType":media,"digest":Digest::sha256(bytes).to_string(),"size":bytes.len()}),
+    )
+    .unwrap()
 }
 pub(super) fn tar_file(path: &str, content: &[u8]) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -187,10 +174,7 @@ pub(super) fn fixture(diff_override: Option<String>) -> (MemorySource, Descripto
     let config_bytes = serde_json::to_vec(&serde_json::json!({"architecture":"arm64","os":"linux","config":{"Entrypoint":["/bin/app"],"Cmd":["serve"],"Env":["A=old","B=two","A=new"],"WorkingDir":"/work","User":"1000:1000"},"rootfs":{"type":"layers","diff_ids":[Digest::sha256(&base_tar).to_string(),diff]}})).unwrap();
     let config = descriptor("application/vnd.oci.image.config.v1+json", &config_bytes);
     let manifest_bytes = serde_json::to_vec(&serde_json::json!({"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":config,"layers":[base,layer]})).unwrap();
-    let manifest = descriptor(
-        "application/vnd.oci.image.manifest.v1+json",
-        &manifest_bytes,
-    );
+    let manifest = descriptor("application/vnd.oci.image.manifest.v1+json", &manifest_bytes);
     let index_bytes = serde_json::to_vec(&serde_json::json!({"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[merge_descriptor(&manifest, serde_json::json!({"os":"linux","architecture":"arm64","variant":"v8"}))]})).unwrap();
     let index = descriptor("application/vnd.oci.image.index.v1+json", &index_bytes);
     let blobs = HashMap::from([
@@ -225,10 +209,7 @@ pub(super) fn scratch_fixture() -> MemorySource {
         "layers": []
     }))
     .unwrap();
-    let manifest = descriptor(
-        "application/vnd.oci.image.manifest.v1+json",
-        &manifest_bytes,
-    );
+    let manifest = descriptor("application/vnd.oci.image.manifest.v1+json", &manifest_bytes);
     let index_bytes = serde_json::to_vec(&serde_json::json!({
         "schemaVersion": 2,
         "mediaType": "application/vnd.oci.image.index.v1+json",
@@ -258,10 +239,7 @@ pub(super) fn invalid_config_fixture() -> MemorySource {
         "layers": []
     }))
     .unwrap();
-    let manifest = descriptor(
-        "application/vnd.oci.image.manifest.v1+json",
-        &manifest_bytes,
-    );
+    let manifest = descriptor("application/vnd.oci.image.manifest.v1+json", &manifest_bytes);
     let index_bytes = serde_json::to_vec(&serde_json::json!({
         "schemaVersion": 2,
         "mediaType": "application/vnd.oci.image.index.v1+json",
@@ -280,14 +258,8 @@ pub(super) fn invalid_config_fixture() -> MemorySource {
         ])),
     }
 }
-pub(super) fn merge_descriptor(
-    descriptor: &Descriptor,
-    platform: serde_json::Value,
-) -> serde_json::Value {
+pub(super) fn merge_descriptor(descriptor: &Descriptor, platform: serde_json::Value) -> serde_json::Value {
     let mut value = serde_json::to_value(descriptor).unwrap();
-    value
-        .as_object_mut()
-        .unwrap()
-        .insert("platform".into(), platform);
+    value.as_object_mut().unwrap().insert("platform".into(), platform);
     value
 }

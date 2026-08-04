@@ -426,15 +426,7 @@ mod tests {
         for (bits, size) in [(8_u8, 0_u32), (16, 1), (32, 2)] {
             for high in [false, true] {
                 let word = 0x0e21_2800 | size << 22 | u32::from(high) << 30 | 30 << 5 | 31;
-                let (expected, saturated) = vector_reference(
-                    source,
-                    prior,
-                    bits,
-                    0,
-                    false,
-                    NarrowMode::Truncate,
-                    high,
-                );
+                let (expected, saturated) = vector_reference(source, prior, bits, 0, false, NarrowMode::Truncate, high);
                 let mut cpu = Aarch64CpuState {
                     fpsr: 0x80,
                     ..Default::default()
@@ -472,16 +464,19 @@ mod tests {
             (0x6ea1_296a, true, false),
         ];
         for (word, source_signed, destination_signed) in cases {
-            assert!(matches!(
-                Aarch64Decoder::decode(word).unwrap().instruction,
-                Aarch64Instruction::SimdWide {
-                    operation: SimdWideOperation::SaturatingNarrow {
-                        source_signed: decoded_source,
-                        destination_signed: decoded_destination,
-                    },
-                    ..
-                } if decoded_source == source_signed && decoded_destination == destination_signed
-            ), "{word:#010x}");
+            assert!(
+                matches!(
+                    Aarch64Decoder::decode(word).unwrap().instruction,
+                    Aarch64Instruction::SimdWide {
+                        operation: SimdWideOperation::SaturatingNarrow {
+                            source_signed: decoded_source,
+                            destination_signed: decoded_destination,
+                        },
+                        ..
+                    } if decoded_source == source_signed && decoded_destination == destination_signed
+                ),
+                "{word:#010x}"
+            );
         }
     }
 

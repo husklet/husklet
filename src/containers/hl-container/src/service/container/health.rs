@@ -1,6 +1,6 @@
 use super::{
-    now_ms, Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck, JournalId, Probe,
-    ProcessConfig, Result, Running, Service, Signal,
+    Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck, JournalId, Probe,
+    ProcessConfig, Result, Running, Service, Signal, now_ms,
 };
 
 impl Service {
@@ -43,7 +43,7 @@ impl Service {
             .networks
             .launch(&container.id, container.spec.isolation, container.spec.network_mode)
             .await?;
-        let process = Self::health_process(container, check);
+        let process = Self::health_process(container, check)?;
         let requested_mounts = container.spec.mounts.clone();
         let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
@@ -171,7 +171,7 @@ impl Service {
         true
     }
 
-    fn health_process(container: &Container, check: &Healthcheck) -> crate::Process {
+    fn health_process(container: &Container, check: &Healthcheck) -> Result<crate::Process> {
         let mut process = container.spec.process.clone();
         process.console = crate::Console::default();
         match &check.command {
@@ -191,7 +191,8 @@ impl Service {
                 process.args = vec!["-c".into(), command.clone()];
             }
         }
-        process
+        process.validate()?;
+        Ok(process)
     }
 
     fn failed_probe(started_at_ms: u64, error: impl std::fmt::Display) -> Probe {
@@ -235,13 +236,15 @@ mod tests {
         let output = output.await.unwrap();
         assert_eq!(output.len(), crate::model::OUTPUT_LIMIT);
         assert!(output.bytes().all(|byte| byte == b'x'));
-        assert!(sender
-            .send(LogChunk {
-                stream: Stream::Stdout,
-                bytes: b"late".to_vec(),
-            })
-            .await
-            .is_err());
+        assert!(
+            sender
+                .send(LogChunk {
+                    stream: Stream::Stdout,
+                    bytes: b"late".to_vec(),
+                })
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -263,12 +266,14 @@ mod tests {
             .expect("collector must not wait for inherited senders")
             .unwrap();
         assert_eq!(output, "complete");
-        assert!(sender
-            .send(LogChunk {
-                stream: Stream::Stdout,
-                bytes: b"late".to_vec(),
-            })
-            .await
-            .is_err());
+        assert!(
+            sender
+                .send(LogChunk {
+                    stream: Stream::Stdout,
+                    bytes: b"late".to_vec(),
+                })
+                .await
+                .is_err()
+        );
     }
 }

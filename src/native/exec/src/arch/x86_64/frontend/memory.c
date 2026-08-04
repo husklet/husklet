@@ -650,12 +650,6 @@ static uint32_t vector_operation_words(const instruction *item) {
         return 28u + constant_words(item->pc) + (item->live_chain != 0u ? 18u : 0u);
     case VECTOR_STRING_EQUAL_EACH: return 96u;
     case VECTOR_INSERT_WORD: return 1u;
-    case VECTOR_PACKED_SHIFT: {
-        uint32_t words = constant_words((uint64_t)item->vector_lane * 8u) + 6u;
-        words += item->variable_count != 0u ? 1u : constant_words(item->vector_immediate);
-        return words + (item->vector_subopcode != 6u ? 1u : 0u);
-    }
-    case VECTOR_BYTE_SHIFT: return 2u;
     default: return 1u;
     }
 }
@@ -914,43 +908,6 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0x0e013e30); /* umov w16,v17.b[0] */
         words[(*cursor)++] = UINT32_C(0x0e113e20) | destination; /* umov wd,v17.b[8] */
         words[(*cursor)++] = UINT32_C(0x2a000000) | destination << 16 | 8u << 10 | 16u << 5 | destination;
-    } else if (item->vector_kind == VECTOR_PACKED_SHIFT) {
-        uint32_t bits = lane * 8u;
-        uint32_t amount = item->variable_count != 0u ? 0u : item->vector_immediate;
-        uint32_t size = lane == 2u ? 1u : lane == 4u ? 2u : 3u;
-        uint32_t imm5 = lane;
-        if (item->variable_count != 0u)
-            words[(*cursor)++] = UINT32_C(0x4e083c00) | source << 5 | 16u; /* umov x16,vs.d[0] */
-        else
-            emit_constant(words, cursor, 16u, amount);
-        emit_constant(words, cursor, 19u, bits);
-        words[(*cursor)++] = UINT32_C(0xd53b4216); /* mrs x22,nzcv */
-        words[(*cursor)++] = UINT32_C(0xeb13021f); /* cmp x16,x19 */
-        words[(*cursor)++] = UINT32_C(0x9a908270); /* csel x16,x19,x16,hi */
-        words[(*cursor)++] = UINT32_C(0xd51b4216); /* msr nzcv,x22 */
-        if (item->vector_subopcode != 6u)
-            words[(*cursor)++] = UINT32_C(0xcb1003f0); /* neg x16 */
-        words[(*cursor)++] = UINT32_C(0x4e000c00) | imm5 << 16 | 16u << 5 | 17u; /* dup shift */
-        words[(*cursor)++] = (item->vector_subopcode == 4u ? UINT32_C(0x4e204400) :
-                                                                  UINT32_C(0x6e204400)) |
-                             size << 22 | 17u << 16 | destination << 5 | destination;
-    } else if (item->vector_kind == VECTOR_BYTE_SHIFT) {
-        uint32_t count = item->vector_immediate;
-        if (count >= 16u)
-            words[(*cursor)++] = UINT32_C(0x6e201c00) | destination << 16 |
-                                 destination << 5 | destination; /* eor vd,vd,vd */
-        else if (count == 0u)
-            words[(*cursor)++] = UINT32_C(0x4ea01c00) | destination << 16 |
-                                 destination << 5 | destination; /* mov vd,vd */
-        else {
-            words[(*cursor)++] = UINT32_C(0x6e201c00) | 17u << 16 | 17u << 5 | 17u; /* zero v17 */
-            if (item->vector_subopcode == 3u)
-                words[(*cursor)++] = UINT32_C(0x6e000000) | 17u << 16 | destination << 5 |
-                                     count << 11 | destination; /* ext vd,vd,v17,#count */
-            else
-                words[(*cursor)++] = UINT32_C(0x6e000000) | destination << 16 | 17u << 5 |
-                                     (16u - count) << 11 | destination; /* ext vd,v17,vd,#16-count */
-        }
     } else
         words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | source << 5 | destination;
 }

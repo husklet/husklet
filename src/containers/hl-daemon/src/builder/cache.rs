@@ -29,9 +29,7 @@ pub(super) fn cache_name(
         digest.update(remote_digest);
     }
     let digest = hl_images::Digest::from(<[u8; 32]>::from(digest.finalize()));
-    Ok(Some(
-        format!("hl-build-cache/{}:cache", digest.encoded()).parse()?,
-    ))
+    Ok(Some(format!("hl-build-cache/{}:cache", digest.encoded()).parse()?))
 }
 
 pub(super) fn build_cache_key(

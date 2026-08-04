@@ -1,8 +1,8 @@
 use super::support::{descriptor, docker_save_archive, fixture, tar_file};
 use hl_images::{
+    Digest, Error, ImageStore, Images, LeaseStore, Platform, RuntimeConfig,
     content::Store,
     format::docker::{Archive, Limits},
-    Digest, Error, ImageStore, Images, LeaseStore, Platform, RuntimeConfig,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,21 +28,11 @@ async fn docker_archive_round_trip_preserves_runtime_and_rootfs() {
     let imported = Images::open(temp.path().join("imported")).unwrap();
     let loaded = Archive::load(&archive[..], &imported, Limits::default()).unwrap();
     assert_eq!(loaded.len(), 1);
-    let unpacked = imported
-        .unpack(&loaded[0], &Platform::linux_arm64())
-        .unwrap();
+    let unpacked = imported.unpack(&loaded[0], &Platform::linux_arm64()).unwrap();
     assert_eq!(unpacked.runtime().argv(), vec!["/bin/app", "serve"]);
     let root = imported.rootfs(&unpacked).unwrap();
     assert_eq!(
-        std::fs::read_to_string(
-            imported
-                .roots()
-                .open(&root)
-                .unwrap()
-                .path()
-                .join("etc/release")
-        )
-        .unwrap(),
+        std::fs::read_to_string(imported.roots().open(&root).unwrap().path().join("etc/release")).unwrap(),
         "husklet\n"
     );
 }
@@ -97,9 +87,7 @@ fn docker_archive_rejects_links_and_bounds_before_import() {
         header.set_mode(0o777);
         header.set_link_name("/etc/passwd").unwrap();
         header.set_cksum();
-        builder
-            .append_data(&mut header, "manifest.json", &b""[..])
-            .unwrap();
+        builder.append_data(&mut header, "manifest.json", &b""[..]).unwrap();
         builder.finish().unwrap();
     }
     assert!(matches!(
@@ -132,22 +120,20 @@ fn docker_archive_accepts_oci_layout_directories() {
         directory.set_size(0);
         directory.set_mode(0o755);
         directory.set_cksum();
-        builder
-            .append_data(&mut directory, "blobs/", std::io::empty())
-            .unwrap();
+        builder.append_data(&mut directory, "blobs/", std::io::empty()).unwrap();
         let manifest = b"[]";
         let mut file = tar::Header::new_gnu();
         file.set_size(manifest.len() as u64);
         file.set_mode(0o644);
         file.set_cksum();
-        builder
-            .append_data(&mut file, "manifest.json", &manifest[..])
-            .unwrap();
+        builder.append_data(&mut file, "manifest.json", &manifest[..]).unwrap();
         builder.finish().unwrap();
     }
-    assert!(Archive::load(&archive[..], &images, Limits::default())
-        .unwrap()
-        .is_empty());
+    assert!(
+        Archive::load(&archive[..], &images, Limits::default())
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -226,9 +212,7 @@ fn docker_archive_restores_platform_and_labels_from_oci_config() {
         &serde_json::json!({"owner": "husklet"}),
     );
     let loaded = Archive::load(&archive[..], &images, Limits::default()).unwrap();
-    let details = images
-        .details(&loaded[0], &Platform::linux_arm64())
-        .unwrap();
+    let details = images.details(&loaded[0], &Platform::linux_arm64()).unwrap();
     assert_eq!(details.platform, Platform::linux_arm64());
     assert_eq!(details.labels["owner"], "husklet");
 }
@@ -256,15 +240,10 @@ fn repeated_docker_archive_load_atomically_replaces_same_name() {
     }
     let image = images.resolve(&name.parse().unwrap()).unwrap().unwrap();
     assert_eq!(
-        images
-            .details(&image, &Platform::linux_arm64())
-            .unwrap()
-            .labels["version"],
+        images.details(&image, &Platform::linux_arm64()).unwrap().labels["version"],
         "second"
     );
-    let report = images
-        .prune_graphs(&BTreeSet::from([replaced.unwrap()]))
-        .unwrap();
+    let report = images.prune_graphs(&BTreeSet::from([replaced.unwrap()])).unwrap();
     assert!(report.content_removed > 0);
     assert_eq!(images.metadata().list().unwrap().len(), 1);
 }
@@ -332,13 +311,7 @@ fn docker_archive_layers_apply_whiteouts_in_order() {
     let loaded = Archive::load(&archive[..], &images, Limits::default()).unwrap();
     let unpacked = images.unpack(&loaded[0], &Platform::linux_arm64()).unwrap();
     let root = images.rootfs(&unpacked).unwrap();
-    assert!(!images
-        .roots()
-        .open(&root)
-        .unwrap()
-        .path()
-        .join("data/removed")
-        .exists());
+    assert!(!images.roots().open(&root).unwrap().path().join("data/removed").exists());
 }
 
 #[test]
@@ -352,10 +325,7 @@ fn gc_respects_content_leases() {
     ingest.write(bytes).unwrap();
     ingest.commit(&descriptor).unwrap();
     let lease = images.leases().create(BTreeMap::new()).unwrap();
-    images
-        .leases()
-        .add(lease.id(), format!("content:{digest}"))
-        .unwrap();
+    images.leases().add(lease.id(), format!("content:{digest}")).unwrap();
     assert_eq!(images.gc().unwrap().content_kept, 1);
     images.leases().delete(lease.id()).unwrap();
     let report = images.gc().unwrap();
@@ -369,9 +339,7 @@ fn failed_multi_image_archive_publishes_no_names() {
     let images = Images::open(temp.path()).unwrap();
     let layer = tar_file("ok", b"ok");
     let diff = Digest::sha256(&layer).to_string();
-    let config =
-        serde_json::to_vec(&serde_json::json!({"rootfs":{"type":"layers","diff_ids":[diff]}}))
-            .unwrap();
+    let config = serde_json::to_vec(&serde_json::json!({"rootfs":{"type":"layers","diff_ids":[diff]}})).unwrap();
     let manifest = serde_json::to_vec(&serde_json::json!([
         {"Config":"config.json","RepoTags":["example.test/ok:v1"],"Layers":["layer.tar"]},
         {"Config":"missing.json","RepoTags":["example.test/bad:v1"],"Layers":["layer.tar"]}

@@ -40,10 +40,7 @@ impl Prune {
         self.before_ms
             .is_none_or(|timestamp| container.created_at_ms < timestamp)
             && self.labels.iter().all(|label| label.matches(container))
-            && self
-                .excluded_labels
-                .iter()
-                .all(|label| !label.matches(container))
+            && self.excluded_labels.iter().all(|label| !label.matches(container))
     }
 }
 

@@ -14,8 +14,8 @@ pub struct SocketIoctl<H: RuntimeNetworkHost> {
 
 impl<H: RuntimeNetworkHost> SocketIoctl<H> {
     pub fn new(host: Arc<H>, sockets: Arc<RuntimeSocketRegistry<H>>) -> Self {
-        let policy = hl_network::NetworkPolicy::from_launch(false, b"", b"", b"")
-            .expect("default namespace interface policy");
+        let policy =
+            hl_network::NetworkPolicy::from_launch(false, b"", b"", b"").expect("default namespace interface policy");
         Self { host, sockets, policy }
     }
 
@@ -63,7 +63,9 @@ impl<H: RuntimeNetworkHost> SocketIoctlPort for SocketIoctl<H> {
     }
 
     fn at_urgent_mark(&self, identity: DescriptionIdentity) -> Result<Option<bool>, ()> {
-        let Some(socket) = self.sockets.get(identity) else { return Ok(None) };
+        let Some(socket) = self.sockets.get(identity) else {
+            return Ok(None);
+        };
         match &socket.kind {
             RuntimeSocketKind::Host { token, .. } => self.host.at_urgent_mark(*token).map(Some).map_err(|_| ()),
             RuntimeSocketKind::Unix { .. } | RuntimeSocketKind::UnixStandalone { .. } => Err(()),

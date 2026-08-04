@@ -27,8 +27,103 @@ async fn all_unused_scope_removes_selected_named_graph_atomically() {
         .unwrap();
     assert!(report.content_removed > 0);
     assert!(report.content_bytes_removed > 0);
+    assert_eq!(report.graphs_removed.len(), 1);
+    assert_eq!(report.graphs_removed[0].target.digest(), image.target.digest());
+    assert_eq!(report.graphs_removed[0].names, BTreeSet::from([image.name.to_string()]));
     assert!(images.resolve(&image.name).unwrap().is_none());
     assert!(images.metadata().graphs().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn workspace_prune_does_not_report_or_remove_an_external_graph() {
+    let workspace_root = tempfile::tempdir().unwrap();
+    let external_root = tempfile::tempdir().unwrap();
+    let external = Images::open(external_root.path()).unwrap();
+    let (source, _) = fixture(None);
+    let image = external
+        .pull(
+            &source,
+            "example.test/external:latest".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+    let images = Images::workspace(Images::open(workspace_root.path()).unwrap(), external.clone());
+    let selected = BTreeSet::from([image.target.digest().to_string()]);
+
+    let report = images
+        .prune_graphs_with(&selected, hl_images::GraphPruneScope::AllUnused)
+        .unwrap();
+
+    assert!(report.graphs_removed.is_empty());
+    assert_eq!(report.content_bytes_removed, 0);
+    assert!(external.resolve(&image.name).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn workspace_prune_reports_only_the_local_record_for_a_shared_descriptor_graph() {
+    let workspace_root = tempfile::tempdir().unwrap();
+    let external_root = tempfile::tempdir().unwrap();
+    let external = Images::open(external_root.path()).unwrap();
+    let (source, _) = fixture(None);
+    let external_image = external
+        .pull(
+            &source,
+            "example.test/shared:external".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+    let images = Images::workspace(Images::open(workspace_root.path()).unwrap(), external.clone());
+    images.size(&external_image).unwrap();
+    let local_name = "example.test/shared:local".parse().unwrap();
+    images.tag(&external_image, local_name).unwrap();
+    let selected = BTreeSet::from([external_image.target.digest().to_string()]);
+
+    let report = images
+        .prune_graphs_with(&selected, hl_images::GraphPruneScope::AllUnused)
+        .unwrap();
+
+    assert_eq!(report.graphs_removed.len(), 1);
+    assert_eq!(report.graphs_removed[0].target.digest(), external_image.target.digest());
+    assert_eq!(
+        report.graphs_removed[0].names,
+        BTreeSet::from(["example.test/shared:local".into()])
+    );
+    assert_eq!(images.graphs().unwrap().len(), 1);
+    assert!(external.resolve(&external_image.name).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn dangling_prune_does_not_treat_a_shadowed_external_alias_as_unnamed() {
+    let workspace_root = tempfile::tempdir().unwrap();
+    let external_root = tempfile::tempdir().unwrap();
+    let workspace = Images::open(workspace_root.path()).unwrap();
+    let external = Images::open(external_root.path()).unwrap();
+    let name = "example.test/shadow:latest";
+    let (external_source, _) = fixture(None);
+    let external_image = external
+        .pull(&external_source, name.parse().unwrap(), &Platform::linux_arm64())
+        .await
+        .unwrap();
+    let (local_source, _) = fixture(Some(Digest::sha256(b"local-root").to_string()));
+    let local_image = workspace
+        .pull(&local_source, name.parse().unwrap(), &Platform::linux_arm64())
+        .await
+        .unwrap();
+    let images = Images::workspace(workspace, external);
+    let selected = BTreeSet::from([
+        local_image.target.digest().to_string(),
+        external_image.target.digest().to_string(),
+    ]);
+
+    let report = images.prune_graphs(&selected).unwrap();
+
+    assert!(report.graphs_removed.is_empty());
+    assert_eq!(
+        images.resolve(&name.parse().unwrap()).unwrap().unwrap().target,
+        local_image.target
+    );
 }
 
 #[tokio::test]

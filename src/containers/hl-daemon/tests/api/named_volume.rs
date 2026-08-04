@@ -37,8 +37,7 @@ pub(crate) async fn run(work: &Path, rootfs: &Path) -> Result<(), Box<dyn std::e
         .create(
             ContainerSpec::from_directory(
                 rootfs,
-                Process::new("/bin/sh")
-                    .args(["-c", "read value < /data/value; printf '%s\\n' \"$value\""]),
+                Process::new("/bin/sh").args(["-c", "read value < /data/value; printf '%s\\n' \"$value\""]),
             )
             .name("volume-reader")
             .isolation(Isolation {

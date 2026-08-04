@@ -1,0 +1,27 @@
+version: 1
+chains:
+  - id: nested/arm64-amd64-arm64
+    layers:
+      - artifact:
+          path: target/nested/host/hl-engine-linux-aarch64
+        guest_isa: arm64
+      - artifact:
+          path: target/nested/foreign/hl-engine-linux-x86_64
+          source: foreign-build
+          build: nix build .#nested-foreign-engines -L --option cores 0 --max-jobs auto
+        guest_isa: amd64
+      - artifact:
+          path: target/nested/foreign/hl-engine-linux-aarch64
+          source: foreign-build
+          build: nix build .#nested-foreign-engines -L --option cores 0 --max-jobs auto
+        guest_isa: arm64
+        options:
+          native_execution: true
+          native_diagnostics: true
+    guest:
+      path: target/testing/runtime/core/arm64/core
+    timeout_seconds: 120
+    capture_limit_bytes: 1048576
+    expect:
+      exit: 42
+      stdout: golden/hello.txt

@@ -1,7 +1,7 @@
 use super::{
-    ApiError, ApiResult, Archive, AsyncWriteExt, BTreeMap, Body, Deserialize, DockerState, Field,
-    Fields, ImageLoad, IntoResponse, Json, Limits, Query, ReaderStream, Response, Seek, SeekFrom,
-    State, StatusCode, MAX_IMAGE_ARCHIVE_BYTES,
+    ApiError, ApiResult, Archive, AsyncWriteExt, BTreeMap, Body, Deserialize, DockerState, Field, Fields, ImageLoad,
+    IntoResponse, Json, Limits, MAX_IMAGE_ARCHIVE_BYTES, Query, ReaderStream, Response, Seek, SeekFrom, State,
+    StatusCode,
 };
 
 #[derive(Default, Deserialize)]
@@ -22,8 +22,7 @@ pub(in super::super) async fn load(
     let mut received = 0_u64;
     let mut stream = body.into_data_stream();
     while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
-        let chunk =
-            chunk.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+        let chunk = chunk.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         received = received.saturating_add(chunk.len() as u64);
         if received > MAX_IMAGE_ARCHIVE_BYTES {
             return Err(ApiError::new(

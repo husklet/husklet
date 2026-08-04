@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use hl_descriptor::{
-    ObjectError, OperationCancellation, PreparedAtomicRead as AtomicRead,
-    PreparedSpliceRead as SpliceRead,
+    ObjectError, OperationCancellation, PreparedAtomicRead as AtomicRead, PreparedSpliceRead as SpliceRead,
 };
 
 use crate::pipe::{EndpointDirection, PipeEndpoint, PipeShared};

@@ -13,9 +13,7 @@ pub struct NamedFifoCatalog {
     next_identity: std::sync::atomic::AtomicU64,
 }
 
-use super::{
-    DEFAULT_PIPE_CAPACITY, EndpointDirection, PipeCreateError, PipeEndpoint, PipeShared, PipeState,
-};
+use super::{DEFAULT_PIPE_CAPACITY, EndpointDirection, PipeCreateError, PipeEndpoint, PipeShared, PipeState};
 use hl_descriptor::ReadinessRegistry;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,7 +84,8 @@ impl NamedFifo {
     }
 
     pub fn open_reader(&self, nonblocking: bool) -> NamedFifoOpen {
-        self.open(EndpointDirection::Read, nonblocking).expect("reader open cannot fail")
+        self.open(EndpointDirection::Read, nonblocking)
+            .expect("reader open cannot fail")
     }
 
     pub fn open_writer(&self, nonblocking: bool) -> Result<NamedFifoOpen, NamedFifoOpenError> {
@@ -120,11 +119,7 @@ impl NamedFifo {
         (reader, writer)
     }
 
-    fn open(
-        &self,
-        direction: EndpointDirection,
-        nonblocking: bool,
-    ) -> Result<NamedFifoOpen, NamedFifoOpenError> {
+    fn open(&self, direction: EndpointDirection, nonblocking: bool) -> Result<NamedFifoOpen, NamedFifoOpenError> {
         let mut state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
         if direction == EndpointDirection::Write && nonblocking && state.readers == 0 {
             return Err(NamedFifoOpenError::NoReader);

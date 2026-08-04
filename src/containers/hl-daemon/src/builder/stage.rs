@@ -2,8 +2,8 @@ use super::context::Context;
 use super::copy::copy_root;
 use super::remote::RemoteSources;
 use super::{BaseState, Build, BuildError, Builder};
-use hl_images::build::{Base, Recipe, Stage};
 use hl_images::RuntimeOverrides;
+use hl_images::build::{Base, Recipe, Stage};
 use std::path::Path;
 
 impl Builder {
@@ -33,10 +33,9 @@ impl Builder {
             let dockerfile = format!("FROM scratch\n{}\n", triggers.join("\n"));
             Some(Recipe::parse(&dockerfile)?.stages.remove(0))
         };
-        let triggered = trigger.as_ref().map_or_else(
-            || Ok(base.clone()),
-            |trigger| base.merge(trigger.overrides()),
-        )?;
+        let triggered = trigger
+            .as_ref()
+            .map_or_else(|| Ok(base.clone()), |trigger| base.merge(trigger.overrides()))?;
         let runtime = triggered.merge(RuntimeOverrides {
             command: stage.command.clone(),
             entrypoint: stage.entrypoint.clone(),
@@ -65,21 +64,9 @@ impl Builder {
         }
         let mut steps = trigger
             .iter()
-            .flat_map(|trigger| {
-                trigger
-                    .steps
-                    .iter()
-                    .cloned()
-                    .map(|step| (step, base.clone()))
-            })
+            .flat_map(|trigger| trigger.steps.iter().cloned().map(|step| (step, base.clone())))
             .collect::<Vec<_>>();
-        steps.extend(
-            stage
-                .steps
-                .iter()
-                .cloned()
-                .map(|step| (step, triggered.clone())),
-        );
+        steps.extend(stage.steps.iter().cloned().map(|step| (step, triggered.clone())));
         self.apply_steps(context, built, root.path(), steps, &mut ownerships, remotes)
             .await?;
         Ok(Build {
@@ -105,11 +92,9 @@ impl Builder {
     ) -> Result<BaseState, BuildError> {
         match &stage.base {
             Base::Image(reference) => {
-                let image = images.resolve(reference)?.ok_or_else(|| {
-                    hl_images::Error::InvalidMetadata(format!(
-                        "base image {reference} is not local"
-                    ))
-                })?;
+                let image = images
+                    .resolve(reference)?
+                    .ok_or_else(|| hl_images::Error::InvalidMetadata(format!("base image {reference} is not local")))?;
                 let unpacked = images.unpack(&image, &self.platform)?;
                 let owned = images.rootfs(&unpacked)?;
                 let view = images.roots().open(&owned)?;
@@ -129,9 +114,9 @@ impl Builder {
                 })
             }
             Base::Stage(index) => {
-                let source = built.get(*index).ok_or_else(|| {
-                    hl_images::Error::MalformedOci("stage depends on an unavailable stage".into())
-                })?;
+                let source = built
+                    .get(*index)
+                    .ok_or_else(|| hl_images::Error::MalformedOci("stage depends on an unavailable stage".into()))?;
                 let ownerships = copy_root(source.root.path(), &source.ownerships, root)?;
                 Ok(BaseState {
                     base: source.runtime.clone(),

@@ -94,13 +94,7 @@ impl TaskRegistry {
         let mut state = self.lock();
         let process = Self::thread(&state, forced.thread)?.process;
         let action = Self::delivery_info(&state, process, info)?;
-        let epoch = Self::apply_default_transition(
-            &mut state,
-            process,
-            info.signal,
-            action,
-            self.max_pending_signals,
-        )?;
+        let epoch = Self::apply_default_transition(&mut state, process, info.signal, action, self.max_pending_signals)?;
         drop(state);
         if action == DeliveryAction::Stop {
             self.child_ready.notify_all();
@@ -194,7 +188,11 @@ impl TaskRegistry {
         Self::ensure_thread_unreserved(&state, thread)?;
         let signals = &mut Self::thread_mut(&mut state, thread)?.signals;
         let mut count = 0;
-        while signals.frames.last().is_some_and(|frame| stack_pointer > frame.stack_pointer) {
+        while signals
+            .frames
+            .last()
+            .is_some_and(|frame| stack_pointer > frame.stack_pointer)
+        {
             signals.deferred = signals
                 .frames
                 .pop()

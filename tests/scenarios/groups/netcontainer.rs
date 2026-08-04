@@ -1,7 +1,6 @@
 use crate::report::ScenarioBatch;
 use hl_container::{
-    ContainerSpec, Containers, EndpointSpec, ExitStatus, Isolation, NetworkSpec, Process, Sandbox,
-    Subnet,
+    ContainerSpec, Containers, EndpointSpec, ExitStatus, Isolation, NetworkSpec, Process, Sandbox, Subnet,
 };
 use std::{path::Path, time::Duration};
 
@@ -75,11 +74,9 @@ impl<'a> NetworkCases<'a> {
                     &["redis-ip-server", "redis-ip-set", "redis-ip-client"],
                     self.redis_ip().await,
                 ),
-                "netcontainer/nc-echo-by-name" => (
-                    "nc-name-net",
-                    &["nc-name-server", "nc-name-client"],
-                    self.nc().await,
-                ),
+                "netcontainer/nc-echo-by-name" => {
+                    ("nc-name-net", &["nc-name-server", "nc-name-client"], self.nc().await)
+                }
                 "netcontainer/ping-by-name" => (
                     "ping-name-net",
                     &["ping-name-server", "ping-name-client"],
@@ -141,11 +138,7 @@ impl<'a> NetworkCases<'a> {
         Ok(())
     }
 
-    async fn attach(
-        &self,
-        network: &str,
-        container: &str,
-    ) -> Result<hl_container::Endpoint, Error> {
+    async fn attach(&self, network: &str, container: &str) -> Result<hl_container::Endpoint, Error> {
         Ok(self
             .containers
             .networks()
@@ -160,16 +153,12 @@ impl<'a> NetworkCases<'a> {
         name: &str,
         process: Process,
     ) -> Result<(ExitStatus, Vec<u8>), Error> {
-        self.containers
-            .create(Self::spec(rootfs, name, process))
-            .await?;
+        self.containers.create(Self::spec(rootfs, name, process)).await?;
         if let Some(network) = network {
             self.attach(network, name).await?;
         }
         self.containers.start(name).await?;
-        let Ok(status) =
-            tokio::time::timeout(Duration::from_secs(10), self.containers.wait(name)).await
-        else {
+        let Ok(status) = tokio::time::timeout(Duration::from_secs(10), self.containers.wait(name)).await else {
             if let Ok(logs) = self.containers.logs(name).await {
                 eprintln!("{name} stdout: {}", String::from_utf8_lossy(&logs.stdout));
                 eprintln!("{name} stderr: {}", String::from_utf8_lossy(&logs.stderr));
@@ -192,18 +181,9 @@ impl<'a> NetworkCases<'a> {
         let _ = self.containers.remove_force(name).await;
     }
 
-    async fn redis_server(
-        &self,
-        rootfs: &Path,
-        network: &str,
-        name: &str,
-    ) -> Result<hl_container::Endpoint, Error> {
+    async fn redis_server(&self, rootfs: &Path, network: &str, name: &str) -> Result<hl_container::Endpoint, Error> {
         self.containers
-            .create(Self::spec(
-                rootfs,
-                name,
-                Process::new("/usr/local/bin/redis-server"),
-            ))
+            .create(Self::spec(rootfs, name, Process::new("/usr/local/bin/redis-server")))
             .await?;
         let endpoint = self.attach(network, name).await?;
         self.containers.start(name).await?;
@@ -229,20 +209,13 @@ impl<'a> NetworkCases<'a> {
     async fn redis_name(&self) -> Result<(), Error> {
         let network = "redis-name-net";
         self.network(network, 1).await?;
-        self.redis_server(self.redis_name, network, "redis-name-server")
-            .await?;
+        self.redis_server(self.redis_name, network, "redis-name-server").await?;
         let set = self
             .one_shot(
                 self.redis_name,
                 Some(network),
                 "redis-name-set",
-                Process::new("/usr/local/bin/redis-cli").args([
-                    "-h",
-                    "redis-name-server",
-                    "set",
-                    "foo",
-                    "barbar",
-                ]),
+                Process::new("/usr/local/bin/redis-cli").args(["-h", "redis-name-server", "set", "foo", "barbar"]),
             )
             .await;
         let get = self
@@ -250,21 +223,13 @@ impl<'a> NetworkCases<'a> {
                 self.redis_name,
                 Some(network),
                 "redis-name-get",
-                Process::new("/usr/local/bin/redis-cli").args([
-                    "-h",
-                    "redis-name-server",
-                    "get",
-                    "foo",
-                ]),
+                Process::new("/usr/local/bin/redis-cli").args(["-h", "redis-name-server", "get", "foo"]),
             )
             .await;
         self.cleanup("redis-name-server").await;
         let (set_status, _) = set?;
         let (get_status, output) = get?;
-        if set_status == ExitStatus::Code(0)
-            && get_status == ExitStatus::Code(0)
-            && output == b"barbar\n"
-        {
+        if set_status == ExitStatus::Code(0) && get_status == ExitStatus::Code(0) && output == b"barbar\n" {
             Ok(())
         } else {
             Err(format!("set={set_status:?} get={get_status:?} stdout={output:?}").into())
@@ -274,9 +239,7 @@ impl<'a> NetworkCases<'a> {
     async fn redis_ip(&self) -> Result<(), Error> {
         let network = "redis-ip-net";
         self.network(network, 2).await?;
-        let endpoint = self
-            .redis_server(self.redis_ip, network, "redis-ip-server")
-            .await?;
+        let endpoint = self.redis_server(self.redis_ip, network, "redis-ip-server").await?;
         let address = endpoint.address.ok_or("redis endpoint has no address")?;
         let address = address.to_string();
         let set = self
@@ -284,8 +247,7 @@ impl<'a> NetworkCases<'a> {
                 self.redis_ip,
                 Some(network),
                 "redis-ip-set",
-                Process::new("/usr/local/bin/redis-cli")
-                    .args(["-h", &address, "set", "k", "ipval"]),
+                Process::new("/usr/local/bin/redis-cli").args(["-h", &address, "set", "k", "ipval"]),
             )
             .await;
         let get = self
@@ -299,10 +261,7 @@ impl<'a> NetworkCases<'a> {
         self.cleanup("redis-ip-server").await;
         let (set_status, _) = set?;
         let (status, output) = get?;
-        if set_status == ExitStatus::Code(0)
-            && status == ExitStatus::Code(0)
-            && output == b"ipval\n"
-        {
+        if set_status == ExitStatus::Code(0) && status == ExitStatus::Code(0) && output == b"ipval\n" {
             Ok(())
         } else {
             Err(format!("status={status:?} stdout={output:?}").into())
@@ -314,8 +273,7 @@ impl<'a> NetworkCases<'a> {
             .create(Self::spec(
                 self.busybox,
                 name,
-                Process::new("/bin/sh")
-                    .args(["-c", "while true; do echo NCREPLY | nc -l -p 7000; done"]),
+                Process::new("/bin/sh").args(["-c", "while true; do echo NCREPLY | nc -l -p 7000; done"]),
             ))
             .await?;
         self.attach(network, name).await?;
@@ -347,11 +305,7 @@ impl<'a> NetworkCases<'a> {
 
     async fn sleep_server(&self, network: &str, name: &str) -> Result<(), Error> {
         self.containers
-            .create(Self::spec(
-                self.alpine,
-                name,
-                Process::new("/bin/sleep").args(["60"]),
-            ))
+            .create(Self::spec(self.alpine, name, Process::new("/bin/sleep").args(["60"])))
             .await?;
         self.attach(network, name).await?;
         self.containers.start(name).await?;
@@ -414,15 +368,9 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Er
     let redis_name = crate::fixture::Fixture::materialize("redis:alpine").await?;
     let redis_ip = crate::fixture::Fixture::materialize("redis:alpine").await?;
     let busybox = crate::fixture::Fixture::materialize("busybox:latest").await?;
-    let result = NetworkCases::new(
-        containers,
-        rootfs,
-        redis_name.path(),
-        redis_ip.path(),
-        busybox.path(),
-    )
-    .run()
-    .await;
+    let result = NetworkCases::new(containers, rootfs, redis_name.path(), redis_ip.path(), busybox.path())
+        .run()
+        .await;
     redis_name.release()?;
     redis_ip.release()?;
     busybox.release()?;

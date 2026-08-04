@@ -47,7 +47,8 @@ impl fmt::Debug for PendingSocket {
 
 impl OpenFileDescription for PendingSocket {
     fn transfer_dependencies(&self) -> Vec<DescriptionRef> {
-        self.current().map_or_else(|_| Vec::new(), |object| object.transfer_dependencies())
+        self.current()
+            .map_or_else(|_| Vec::new(), |object| object.transfer_dependencies())
     }
 
     fn kind(&self) -> ObjectKind {

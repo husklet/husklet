@@ -330,18 +330,11 @@ impl Arithmetic {
             Shift::Right => value >> (bits - 1) & 1 != 0,
             Shift::ArithmeticRight => false,
         };
-        let defined = Flag::Carry.mask()
-            | Flag::Parity.mask()
-            | Flag::Zero.mask()
-            | Flag::Sign.mask()
-            | Flag::Overflow.mask();
+        let defined =
+            Flag::Carry.mask() | Flag::Parity.mask() | Flag::Zero.mask() | Flag::Sign.mask() | Flag::Overflow.mask();
         let values = Self::common(width, result)
             | if carry { Flag::Carry.mask() } else { 0 }
-            | if overflow {
-                Flag::Overflow.mask()
-            } else {
-                0
-            };
+            | if overflow { Flag::Overflow.mask() } else { 0 };
         Self {
             result,
             flags: FlagUpdate {
@@ -446,9 +439,11 @@ mod test {
     #[test]
     fn logical_operations_clear_auxiliary() {
         let original = FlagState::from_bits(Flag::Auxiliary.mask());
-        assert!(!original
-            .apply(Arithmetic::logic(IntegerWidth::Byte, 0x8b).flags)
-            .contains(Flag::Auxiliary));
+        assert!(
+            !original
+                .apply(Arithmetic::logic(IntegerWidth::Byte, 0x8b).flags)
+                .contains(Flag::Auxiliary)
+        );
     }
 
     #[test]

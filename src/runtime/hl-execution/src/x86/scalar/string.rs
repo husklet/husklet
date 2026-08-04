@@ -161,7 +161,12 @@ mod tests {
 
     #[test]
     fn packed_string_family_decodes_output_and_length_forms() {
-        for (opcode, explicit, mask) in [(0x60, true, true), (0x61, true, false), (0x62, false, true), (0x63, false, false)] {
+        for (opcode, explicit, mask) in [
+            (0x60, true, true),
+            (0x61, true, false),
+            (0x62, false, true),
+            (0x63, false, false),
+        ] {
             let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x3a, opcode, 0xc1, 0x08], 0).unwrap();
             assert!(matches!(
                 decoded.instruction,
@@ -176,9 +181,15 @@ mod tests {
 
     #[test]
     fn packed_string_mask_and_explicit_lengths_match_sse42() {
-        assert_eq!(super::PackedString::explicit_length(u64::from(u32::MAX - 2), false, 16), 3);
+        assert_eq!(
+            super::PackedString::explicit_length(u64::from(u32::MAX - 2), false, 16),
+            3
+        );
         assert_eq!(super::PackedString::explicit_length(u64::MAX - 2, true, 16), 3);
         assert_eq!(super::PackedString::mask(0b1001, 0, 16), 0b1001);
-        assert_eq!(super::PackedString::mask(0b0101, 0x40, 16) & u128::from(u32::MAX), 0x00ff_00ff);
+        assert_eq!(
+            super::PackedString::mask(0b0101, 0x40, 16) & u128::from(u32::MAX),
+            0x00ff_00ff
+        );
     }
 }

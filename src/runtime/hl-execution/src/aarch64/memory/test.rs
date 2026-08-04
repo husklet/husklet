@@ -664,7 +664,10 @@ fn structure_post_index() {
 #[test]
 fn prefetch_hints_are_non_faulting_nops() {
     for word in [0xf980_0000, 0xf880_0000, 0xf8a1_6800, 0xd800_0020] {
-        assert_eq!(Aarch64Decoder::decode(word).unwrap().instruction, Aarch64Instruction::Nop);
+        assert_eq!(
+            Aarch64Decoder::decode(word).unwrap().instruction,
+            Aarch64Instruction::Nop
+        );
     }
 }
 

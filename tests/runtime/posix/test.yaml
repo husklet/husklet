@@ -1,0 +1,711 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/posix/access
+    status: active
+    compat: { class: compatibility }
+    build: { source: access.c, output: access, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-access }
+    run: []
+    expect: { exit: 0, stdout: golden/access.out }
+  - id: runtime/posix/apt-pty
+    status: active
+    compat: { class: compatibility }
+    build: { source: apt_pty.c, output: apt-pty, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-apt-pty }
+    run: []
+    expect: { exit: 0, stdout: golden/apt_pty.out }
+  - id: runtime/posix/apt-pty-devpts
+    status: active
+    compat: { class: compatibility }
+    build: { source: apt_devpts.c, output: apt-pty-devpts, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-apt-pty-devpts }
+    run: []
+    expect: { exit: 0, stdout: golden/apt_devpts.out }
+  - id: runtime/posix/chmodchown
+    status: !broken
+      reason: "Unprivileged QEMU cannot satisfy the engine-root chown/fchown fixture contract"
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: chmodchown.c, output: chmodchown, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-chmodchown }
+    run: []
+    expect: { exit: 0, stdout: golden/chmodchown.out }
+  - id: runtime/posix/clockid
+    status: active
+    compat: { class: compatibility }
+    build: { source: clockid.c, output: clockid, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-clockid }
+    run: []
+    expect: { exit: 0, stdout: golden/clockid.out }
+  - id: runtime/posix/dup
+    status: active
+    compat: { class: compatibility }
+    build: { source: dup.c, output: dup, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-dup }
+    run: []
+    expect: { exit: 0, stdout: golden/dup.out }
+  - id: runtime/posix/dup3
+    status: active
+    compat: { class: compatibility }
+    build: { source: dup3.c, output: dup3, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-dup3 }
+    run: []
+    expect: { exit: 0, stdout: golden/dup3.out }
+  - id: runtime/posix/execself
+    status: active
+    compat: { class: compatibility }
+    build: { source: execself.c, output: execself, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-execself }
+    run: []
+    expect: { exit: 0, stdout: golden/execself.out }
+  - id: runtime/posix/fcntlmisc
+    status: active
+    compat: { class: compatibility }
+    build: { source: fcntlmisc.c, output: fcntlmisc, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-fcntlmisc }
+    run: []
+    expect: { exit: 0, stdout: golden/fcntlmisc.out }
+  - id: runtime/posix/fstatat
+    status: active
+    compat: { class: compatibility }
+    build: { source: fstatat.c, output: fstatat, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-fstatat }
+    run: []
+    expect: { exit: 0, stdout: golden/fstatat.out }
+  - id: runtime/posix/fsync
+    status: active
+    compat: { class: compatibility }
+    build: { source: fsync.c, output: fsync, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-fsync }
+    run: []
+    expect: { exit: 0, stdout: golden/fsync.out }
+  - id: runtime/posix/flock
+    status: active
+    compat: { class: compatibility }
+    build: { source: ftruncate_lock.c, output: flock, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-flock }
+    run: []
+    expect: { exit: 0, stdout: golden/ftruncate_lock.out }
+  - id: runtime/posix/getcwdchdir
+    status: active
+    compat: { class: compatibility }
+    build: { source: getcwdchdir.c, output: getcwdchdir, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-getcwdchdir }
+    run: []
+    expect: { exit: 0, stdout: golden/getcwdchdir.out }
+  - id: runtime/posix/getdents64
+    status: active
+    compat: { class: compatibility }
+    build: { source: getdents64.c, output: getdents64, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-getdents64 }
+    run: []
+    expect: { exit: 0, stdout: golden/getdents64.out }
+  - id: runtime/posix/getids
+    status: active
+    compat: { class: compatibility }
+    build: { source: getids.c, output: getids, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-getids }
+    run: []
+    expect: { exit: 0, stdout: golden/getids.out }
+  - id: runtime/posix/getrlimit
+    status: active
+    compat: { class: compatibility }
+    build: { source: getrlimit.c, output: getrlimit, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-getrlimit }
+    run: []
+    expect: { exit: 0, stdout: golden/getrlimit.out }
+  - id: runtime/posix/iovec
+    status: active
+    compat: { class: compatibility }
+    build: { source: iovec.c, output: iovec, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-iovec }
+    run: []
+    expect: { exit: 0, stdout: golden/iovec.out }
+  - id: runtime/posix/killraise
+    status: active
+    compat: { class: compatibility }
+    build: { source: killraise.c, output: killraise, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-killraise }
+    run: []
+    expect: { exit: 0, stdout: golden/killraise.out }
+  - id: runtime/posix/linksym
+    status: active
+    compat: { class: compatibility }
+    build: { source: linksym.c, output: linksym, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-linksym }
+    run: []
+    expect: { exit: 0, stdout: golden/linksym.out }
+  - id: runtime/posix/lseek
+    status: active
+    compat: { class: compatibility }
+    build: { source: lseek.c, output: lseek, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-lseek }
+    run: []
+    expect: { exit: 0, stdout: golden/lseek.out }
+  - id: runtime/posix/madvise
+    status: active
+    compat: { class: compatibility }
+    build: { source: madvise.c, output: madvise, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-madvise }
+    run: []
+    expect: { exit: 0, stdout: golden/madvise.out }
+  - id: runtime/posix/mkdirrmdir
+    status: active
+    compat: { class: compatibility }
+    build: { source: mkdirrmdir.c, output: mkdirrmdir, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-mkdirrmdir }
+    run: []
+    expect: { exit: 0, stdout: golden/mkdirrmdir.out }
+  - id: runtime/posix/mmapanon2
+    status: active
+    compat: { class: compatibility }
+    build: { source: mmapanon2.c, output: mmapanon2, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-mmapanon2 }
+    run: []
+    expect: { exit: 0, stdout: golden/mmapanon2.out }
+  - id: runtime/posix/mmapfile
+    status: active
+    compat: { class: compatibility }
+    build: { source: mmapfile.c, output: mmapfile, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-mmapfile }
+    run: []
+    expect: { exit: 0, stdout: golden/mmapfile.out }
+  - id: runtime/posix/nanosleep
+    status: active
+    compat: { class: compatibility }
+    build: { source: nanosleep.c, output: nanosleep, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-nanosleep }
+    run: []
+    expect: { exit: 0, stdout: golden/nanosleep.out }
+  - id: runtime/posix/openat
+    status: active
+    compat: { class: compatibility }
+    build: { source: openat.c, output: openat, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-openat }
+    run: []
+    expect: { exit: 0, stdout: golden/openat.out }
+  - id: runtime/posix/openflags
+    status: active
+    compat: { class: compatibility }
+    build: { source: openflags.c, output: openflags, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-openflags }
+    run: []
+    expect: { exit: 0, stdout: golden/openflags.out }
+  - id: runtime/posix/pipe2
+    status: active
+    compat: { class: compatibility }
+    build: { source: pipe2.c, output: pipe2, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pipe2 }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe2.out }
+  - id: runtime/posix/pipe2way
+    status: active
+    compat: { class: compatibility }
+    build: { source: pipe2way.c, output: pipe2way, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pipe2way }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe2way.out }
+  - id: runtime/posix/pollpipe
+    status: active
+    compat: { class: compatibility }
+    build: { source: pollpipe.c, output: pollpipe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pollpipe }
+    run: []
+    expect: { exit: 0, stdout: golden/pollpipe.out }
+  - id: runtime/posix/ppoll
+    status: active
+    compat: { class: compatibility }
+    build: { source: ppoll.c, output: ppoll, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-ppoll }
+    run: []
+    expect: { exit: 0, stdout: golden/ppoll.out }
+  - id: runtime/posix/preadwrite
+    status: active
+    compat: { class: compatibility }
+    build: { source: preadwrite.c, output: preadwrite, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-preadwrite }
+    run: []
+    expect: { exit: 0, stdout: golden/preadwrite.out }
+  - id: runtime/posix/pty-fork-devpts
+    status: active
+    compat: { class: compatibility }
+    build: { source: pts_fork.c, output: pty-fork-devpts, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-fork-devpts }
+    run: []
+    expect: { exit: 0, stdout: golden/pts_fork.out }
+  - id: runtime/posix/pty
+    status: active
+    compat: { class: compatibility }
+    build: { source: pty.c, output: pty, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty }
+    run: []
+    expect: { exit: 0, stdout: golden/pty.out }
+  - id: runtime/posix/pty-devpts
+    status: active
+    compat: { class: compatibility }
+    build: { source: pty_devpts.c, output: pty-devpts, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-devpts }
+    run: []
+    expect: { exit: 0, stdout: golden/pty_devpts.out }
+  - id: runtime/posix/pty-devpts-ls
+    status: active
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: devpts_ls.c, output: pty-devpts-ls, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-devpts-ls }
+    run: []
+    expect: { exit: 0, stdout: golden/devpts_ls.out }
+  - id: runtime/posix/readdir-dtype
+    status: active
+    compat: { class: compatibility }
+    build: { source: readdir_dtype.c, output: readdir-dtype, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-readdir-dtype }
+    run: []
+    expect: { exit: 0, stdout: golden/readdir_dtype.out }
+  - id: runtime/posix/rename
+    status: active
+    compat: { class: compatibility }
+    build: { source: rename.c, output: rename, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-rename }
+    run: []
+    expect: { exit: 0, stdout: golden/rename.out }
+  - id: runtime/posix/rw
+    status: active
+    compat: { class: compatibility }
+    build: { source: rw.c, output: rw, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-rw }
+    run: []
+    expect: { exit: 0, stdout: golden/rw.out }
+  - id: runtime/posix/selectpipe
+    status: active
+    compat: { class: compatibility }
+    build: { source: selectpipe.c, output: selectpipe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-selectpipe }
+    run: []
+    expect: { exit: 0, stdout: golden/selectpipe.out }
+  - id: runtime/posix/sendfile2
+    status: active
+    compat: { class: compatibility }
+    build: { source: sendfile.c, output: sendfile2, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-sendfile2 }
+    run: []
+    expect: { exit: 0, stdout: golden/sendfile.out }
+  - id: runtime/posix/setpgid
+    status: active
+    compat: { class: compatibility }
+    build: { source: setpgid.c, output: setpgid, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-setpgid }
+    run: []
+    expect: { exit: 0, stdout: golden/setpgid.out }
+  - id: runtime/posix/sigmask
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigmask.c, output: sigmask, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-sigmask }
+    run: []
+    expect: { exit: 0, stdout: golden/sigmask.out }
+  - id: runtime/posix/statfam
+    status: active
+    compat: { class: compatibility }
+    build: { source: statfam.c, output: statfam, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-statfam }
+    run: []
+    expect: { exit: 0, stdout: golden/statfam.out }
+  - id: runtime/posix/statx
+    status: active
+    compat: { class: compatibility }
+    build: { source: statx.c, output: statx, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-statx }
+    run: []
+    expect: { exit: 0, stdout: golden/statx.out }
+  - id: runtime/posix/sysconf
+    status: active
+    compat: { class: compatibility }
+    build: { source: sysconf.c, output: sysconf, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-sysconf }
+    run: []
+    expect: { exit: 0, stdout: golden/sysconf.out }
+  - id: runtime/posix/truncate
+    status: active
+    compat: { class: compatibility }
+    build: { source: truncate.c, output: truncate, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-truncate }
+    run: []
+    expect: { exit: 0, stdout: golden/truncate.out }
+  - id: runtime/posix/umask
+    status: active
+    compat: { class: compatibility }
+    build: { source: umask.c, output: umask, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-umask }
+    run: []
+    expect: { exit: 0, stdout: golden/umask.out }
+  - id: runtime/posix/uname
+    status: active
+    compat: { class: compatibility }
+    build: { source: uname.c, output: uname, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-uname }
+    run: []
+    expect: { exit: 0, stdout: golden/uname.out }
+  - id: runtime/posix/utimensat
+    status: active
+    compat: { class: compatibility }
+    build: { source: utimensat.c, output: utimensat, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-utimensat }
+    run: []
+    expect: { exit: 0, stdout: golden/utimensat.out }
+  - id: runtime/posix/waitstatus
+    status: active
+    compat: { class: compatibility }
+    build: { source: waitstatus.c, output: waitstatus, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-waitstatus }
+    run: []
+    expect: { exit: 0, stdout: golden/waitstatus.out }
+  - id: runtime/posix/pthcancel
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthcancel.c, output: pthcancel, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthcancel }
+    run: []
+    expect: { exit: 0, stdout: golden/pthcancel.out }
+  - id: runtime/posix/pthbarrier
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthbarrier.c, output: pthbarrier, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthbarrier }
+    run: []
+    expect: { exit: 0, stdout: golden/pthbarrier.out }
+  - id: runtime/posix/pthspin
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthspin.c, output: pthspin, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthspin }
+    run: []
+    expect: { exit: 0, stdout: golden/pthspin.out }
+  - id: runtime/posix/pthrwlock
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthrwlock.c, output: pthrwlock, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthrwlock }
+    run: []
+    expect: { exit: 0, stdout: golden/pthrwlock.out }
+  - id: runtime/posix/pthattr
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthattr.c, output: pthattr, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthattr }
+    run: []
+    expect: { exit: 0, stdout: golden/pthattr.out }
+  - id: runtime/posix/pthkey
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthkey.c, output: pthkey, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthkey }
+    run: []
+    expect: { exit: 0, stdout: golden/pthkey.out }
+  - id: runtime/posix/pthatfork
+    status: active
+    compat: { class: compatibility }
+    build: { source: pthatfork.c, output: pthatfork, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pthatfork }
+    run: []
+    expect: { exit: 0, stdout: golden/pthatfork.out }
+  - id: runtime/posix/semnamed
+    status: active
+    compat: { class: compatibility }
+    build: { source: semnamed.c, output: semnamed, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-semnamed }
+    run: []
+    expect: { exit: 0, stdout: golden/semnamed.out }
+  - id: runtime/posix/mqueue
+    status: active
+    compat: { class: compatibility }
+    build: { source: mqueue.c, output: mqueue, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-mqueue }
+    run: []
+    expect: { exit: 0, stdout: golden/mqueue.out }
+  - id: runtime/posix/shmshare
+    status: active
+    compat: { class: compatibility }
+    build: { source: shmshare.c, output: shmshare, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-shmshare }
+    run: []
+    expect: { exit: 0, stdout: golden/shmshare.out }
+  - id: runtime/posix/timerthread
+    status: active
+    compat: { class: compatibility }
+    build: { source: timerthread.c, output: timerthread, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-timerthread }
+    run: []
+    expect: { exit: 0, stdout: golden/timerthread.out }
+  - id: runtime/posix/clocknano
+    status: active
+    compat: { class: compatibility }
+    build: { source: clocknano.c, output: clocknano, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-clocknano }
+    run: []
+    expect: { exit: 0, stdout: golden/clocknano.out }
+  - id: runtime/posix/sigqueuewait
+    status: active
+    compat: { class: compatibility }
+    build: { source: sigqueuewait.c, output: sigqueuewait, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-sigqueuewait }
+    run: []
+    expect: { exit: 0, stdout: golden/sigqueuewait.out }
+  - id: runtime/posix/addrinfo
+    status: active
+    compat: { class: compatibility }
+    build: { source: addrinfo.c, output: addrinfo, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-addrinfo }
+    run: []
+    expect: { exit: 0, stdout: golden/addrinfo.out }
+  - id: runtime/posix/inetpton
+    status: active
+    compat: { class: compatibility }
+    build: { source: inetpton.c, output: inetpton, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-inetpton }
+    run: []
+    expect: { exit: 0, stdout: golden/inetpton.out }
+  - id: runtime/posix/ifindex
+    status: active
+    compat: { class: compatibility }
+    build: { source: ifindex.c, output: ifindex, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-ifindex }
+    run: []
+    expect: { exit: 0, stdout: golden/ifindex.out }
+  - id: runtime/posix/fnmatchglob
+    status: active
+    compat: { class: compatibility }
+    build: { source: fnmatchglob.c, output: fnmatchglob, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-fnmatchglob }
+    run: []
+    expect: { exit: 0, stdout: golden/fnmatchglob.out }
+  - id: runtime/posix/regexbr
+    status: active
+    compat: { class: compatibility }
+    build: { source: regexbr.c, output: regexbr, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-regexbr }
+    run: []
+    expect: { exit: 0, stdout: golden/regexbr.out }
+  - id: runtime/posix/wordexpt
+    status: active
+    compat: { class: compatibility }
+    build: { source: wordexpt.c, output: wordexpt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-wordexpt }
+    run: []
+    expect: { exit: 0, stdout: golden/wordexpt.out }
+  - id: runtime/posix/strftimet
+    status: active
+    compat: { class: compatibility }
+    build: { source: strftimet.c, output: strftimet, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-strftimet }
+    run: []
+    expect: { exit: 0, stdout: golden/strftimet.out }
+  - id: runtime/posix/pwgr
+    status: active
+    compat: { class: compatibility }
+    build: { source: pwgr.c, output: pwgr, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pwgr }
+    run: []
+    expect: { exit: 0, stdout: golden/pwgr.out }
+  - id: runtime/posix/confstrt
+    status: active
+    compat: { class: compatibility }
+    build: { source: confstrt.c, output: confstrt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-confstrt }
+    run: []
+    expect: { exit: 0, stdout: golden/confstrt.out }
+  - id: runtime/posix/pathconft
+    status: active
+    compat: { class: compatibility }
+    build: { source: pathconft.c, output: pathconft, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pathconft }
+    run: []
+    expect: { exit: 0, stdout: golden/pathconft.out }
+  - id: runtime/posix/openptyt
+    status: active
+    compat: { class: compatibility }
+    build: { source: openptyt.c, output: openptyt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-openptyt }
+    run: []
+    expect: { exit: 0, stdout: golden/openptyt.out }
+  - id: runtime/posix/selectfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: selectfd.c, output: selectfd, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-selectfd }
+    run: []
+    expect: { exit: 0, stdout: golden/selectfd.out }
+  - id: runtime/posix/pollbig
+    status: active
+    compat: { class: compatibility }
+    build: { source: pollbig.c, output: pollbig, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pollbig }
+    run: []
+    expect: { exit: 0, stdout: golden/pollbig.out }
+  - id: runtime/posix/scandirt
+    status: active
+    compat: { class: compatibility }
+    build: { source: scandirt.c, output: scandirt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-scandirt }
+    run: []
+    expect: { exit: 0, stdout: golden/scandirt.out }
+  - id: runtime/posix/nftwt
+    status: active
+    compat: { class: compatibility }
+    build: { source: nftwt.c, output: nftwt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-nftwt }
+    run: []
+    expect: { exit: 0, stdout: golden/nftwt.out }
+  - id: runtime/posix/mkstempt
+    status: active
+    compat: { class: compatibility }
+    build: { source: mkstempt.c, output: mkstempt, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-mkstempt }
+    run: []
+    expect: { exit: 0, stdout: golden/mkstempt.out }
+  - id: runtime/posix/flockfilet
+    status: active
+    compat: { class: compatibility }
+    build: { source: flockfilet.c, output: flockfilet, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-flockfilet }
+    run: []
+    expect: { exit: 0, stdout: golden/flockfilet.out }
+  - id: runtime/posix/freopent
+    status: active
+    compat: { class: compatibility }
+    build: { source: freopent.c, output: freopent, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-freopent }
+    run: []
+    expect: { exit: 0, stdout: golden/freopent.out }
+  - id: runtime/posix/rusaget
+    status: active
+    compat: { class: compatibility }
+    build: { source: rusaget.c, output: rusaget, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-rusaget }
+    run: []
+    expect: { exit: 0, stdout: golden/rusaget.out }
+  - id: runtime/posix/pthread-cancel-async
+    status: !broken
+      reason: "PTHREAD_CANCEL_ASYNCHRONOUS: SIGCANCEL delivery FIXED (SI_TKILL siginfo now stamped, no longer a silent hang), but glibc async cancellation forced-unwinds through the signal frame and libgcc does not recognize the engine sentinel handler-return trampoline as an rt_sigreturn signal frame -> crash; needs a real recognizable signal-return trampoline (large per-arch signal-frame ABI change), deferred"
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: pthcancelasync.c, output: pthread-cancel-async, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/posix-pthread-cancel-async }
+    run: []
+    expect: { exit: 0, stdout: golden/pthcancelasync.out }
+  - id: runtime/posix/mq-notify-thread
+    status: !broken
+      reason: "mq_notify SIGEV_THREAD callback never fires: glibc drives SIGEV_THREAD via an AF_NETLINK notify socket + helper thread, so firing the callback needs writing the NOTIFY_COOKIE datagram to that netlink socket on message arrival (netlink notify-socket emulation) -- too large, DEFERRED. SIGEV_SIGNAL/SIGEV_NONE fully emulated."
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: mqnotify.c, output: mq-notify-thread, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/posix-mq-notify-thread }
+    run: []
+    expect: { exit: 0, stdout: golden/mqnotify.out }
+  - id: runtime/posix/termios-raw
+    status: active
+    compat: { class: compatibility }
+    build: { source: termraw.c, output: termios-raw, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-termios-raw }
+    run: []
+    expect: { exit: 0, stdout: golden/termraw.out }
+  - id: runtime/posix/pty-ldisc
+    status: active
+    compat: { class: compatibility }
+    build: { source: ptyldisc.c, output: pty-ldisc, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-ldisc }
+    run: []
+    expect: { exit: 0, stdout: golden/ptyldisc.out }
+  - id: runtime/posix/pty-canon
+    status: active
+    compat: { class: compatibility }
+    build: { source: ptycanon.c, output: pty-canon, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-canon }
+    run: []
+    expect: { exit: 0, stdout: golden/ptycanon.out }
+  - id: runtime/posix/pty-jobsig
+    status: active
+    compat: { class: compatibility }
+    build: { source: ptyjobsig.c, output: pty-jobsig, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-jobsig }
+    run: []
+    expect: { exit: 0, stdout: golden/ptyjobsig.out }
+  - id: runtime/posix/pty-ctl
+    status: !unsupported
+      reason: "excluded-macos: TIOCGSID/tcgetsid session-id ioctl returns ENOTTY on the macOS engine (Darwin tty backend gap); TIOCPKT/devtty work. Linux engine still runs+passes this."
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: ptyctl.c, output: pty-ctl, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-pty-ctl }
+    run: []
+    expect: { exit: 0, stdout: golden/ptyctl.out }
+  - id: runtime/posix/ctty-session
+    status: !unsupported
+      reason: "excluded-macos: tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: ctty_session.c, output: ctty-session, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-ctty-session }
+    run: []
+    expect: { exit: 0, stdout: golden/ctty_session.out }
+  - id: runtime/posix/tty-notty
+    status: !unsupported
+      reason: "excluded-macos: tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: tty_notty.c, output: tty-notty, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-tty-notty }
+    run: []
+    expect: { exit: 0, stdout: golden/tty_notty.out }
+  - id: runtime/posix/tty-suspend
+    status: !unsupported
+      reason: "excluded-macos: tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: tty_suspend.c, output: tty-suspend, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-tty-suspend }
+    run: []
+    expect: { exit: 0, stdout: golden/tty_suspend.out }
+  - id: runtime/posix/tty-leaderhup
+    status: active
+    compat: { class: compatibility }
+    build: { source: tty_leaderhup.c, output: tty-leaderhup, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-tty-leaderhup }
+    run: []
+    expect: { exit: 0, stdout: golden/tty_leaderhup.out }
+  - id: runtime/posix/tty-bg-access
+    status: active
+    compat: { class: compatibility }
+    build: { source: tty_access.c, output: tty-bg-access, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-tty-bg-access }
+    run: []
+    expect: { exit: 0, stdout: golden/tty_access.out }
+  - id: runtime/posix/tty-bg-deviation
+    status: !broken
+      reason: "ONE residual deviation from native, both targets: a background tcsetattr should SIGTTOU-stop the process but the engine blocks SIGTTOU around tcsetattr/tcsetpgrp (fs.c tty_ctl_block, a deliberate shell-handoff workaround) so it silently succeeds -- tcset_sigttou=0 vs native 1. The former x86_64-only SIGTTIN-blocked read deviation is GONE (blk_eio=1 on both). Golden is native; activate per-fix"
+      evidence: "tests/runtime/posix/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: tty_deviation.c, output: tty-bg-deviation, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-tty-bg-deviation }
+    run: []
+    expect: { exit: 0, stdout: golden/tty_deviation.out }
+  - id: runtime/posix/getrusage-who
+    status: active
+    compat: { class: compatibility }
+    build: { source: getrusage_who.c, output: getrusage-who, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-getrusage-who }
+    run: []
+    expect: { exit: 0, stdout: golden/getrusage_who.out }
+  - id: runtime/posix/fcntl-setfl-mask
+    status: active
+    compat: { class: compatibility }
+    build: { source: setfl_mask.c, output: fcntl-setfl-mask, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/posix-fcntl-setfl-mask }
+    run: []
+    expect: { exit: 0, stdout: golden/setfl_mask.out }

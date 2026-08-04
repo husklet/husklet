@@ -67,8 +67,7 @@ mod test {
     use std::sync::{Arc, Mutex};
 
     use hl_descriptor::{
-        DescriptorFlags, DescriptorTable, ObjectError, OpenFileDescription, PreparedSpliceRead,
-        StatusFlags,
+        DescriptorFlags, DescriptorTable, ObjectError, OpenFileDescription, PreparedSpliceRead, StatusFlags,
     };
     use hl_linux::{GuestAccess, GuestArchitecture, GuestFault};
 

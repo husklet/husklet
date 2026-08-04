@@ -23,7 +23,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     containers
         .networks()
         .create(
-            NetworkSpec::bridge("beta-dev", Subnet::new("10.92.0.0".parse()?, 24)?)
+            NetworkSpec::none("beta-dev")
                 .label("tier", "prod")
                 .label("stage", "red"),
         )

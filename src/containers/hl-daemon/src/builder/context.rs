@@ -35,12 +35,10 @@ impl<'a> Context<'a> {
         if relative == Path::new(".") {
             return self.root.canonicalize().map_err(Into::into);
         }
-        if relative.components().any(|part| {
-            !matches!(
-                part,
-                std::path::Component::Normal(_) | std::path::Component::CurDir
-            )
-        }) {
+        if relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_) | std::path::Component::CurDir))
+        {
             return Err(BuildError::Copy(value.into()));
         }
         let path = self.root.join(relative).canonicalize()?;
@@ -165,10 +163,7 @@ impl IgnoreRules {
                         .strip_prefix('\\')
                         .filter(|pattern| pattern.starts_with('#') || pattern.starts_with('!'));
                     let (include, pattern) = literal.map_or_else(
-                        || {
-                            line.strip_prefix('!')
-                                .map_or((false, line), |pattern| (true, pattern))
-                        },
+                        || line.strip_prefix('!').map_or((false, line), |pattern| (true, pattern)),
                         |literal| (false, literal),
                     );
                     let pattern = pattern.trim_start_matches('/').trim_end_matches('/');
@@ -205,10 +200,7 @@ impl<'a> Pattern<'a> {
         if self.value.is_empty() {
             return false;
         }
-        let path = value
-            .split('/')
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
+        let path = value.split('/').filter(|part| !part.is_empty()).collect::<Vec<_>>();
         if !self.value.contains('/') {
             return path.iter().any(|part| self.matches_segment(part));
         }
@@ -278,61 +270,28 @@ impl<'a> Pattern<'a> {
             Some(b'*') => {
                 Self::matches_segment_at(value, pattern, value_index, pattern_index + 1, memo)
                     || (value_index < value.len()
-                        && Self::matches_segment_at(
-                            value,
-                            pattern,
-                            value_index + 1,
-                            pattern_index,
-                            memo,
-                        ))
+                        && Self::matches_segment_at(value, pattern, value_index + 1, pattern_index, memo))
             }
             Some(b'?') => {
                 value_index < value.len()
-                    && Self::matches_segment_at(
-                        value,
-                        pattern,
-                        value_index + 1,
-                        pattern_index + 1,
-                        memo,
-                    )
+                    && Self::matches_segment_at(value, pattern, value_index + 1, pattern_index + 1, memo)
             }
             Some(b'\\') => {
                 value_index < value.len()
                     && pattern.get(pattern_index + 1) == value.get(value_index)
-                    && Self::matches_segment_at(
-                        value,
-                        pattern,
-                        value_index + 1,
-                        pattern_index + 2,
-                        memo,
-                    )
+                    && Self::matches_segment_at(value, pattern, value_index + 1, pattern_index + 2, memo)
             }
             Some(b'[') => pattern[pattern_index + 1..]
                 .iter()
                 .position(|byte| *byte == b']')
                 .is_some_and(|end| {
                     value_index < value.len()
-                        && Self::matches_class(
-                            value[value_index],
-                            &pattern[pattern_index + 1..pattern_index + 1 + end],
-                        )
-                        && Self::matches_segment_at(
-                            value,
-                            pattern,
-                            value_index + 1,
-                            pattern_index + end + 2,
-                            memo,
-                        )
+                        && Self::matches_class(value[value_index], &pattern[pattern_index + 1..pattern_index + 1 + end])
+                        && Self::matches_segment_at(value, pattern, value_index + 1, pattern_index + end + 2, memo)
                 }),
             Some(byte) => {
                 value.get(value_index) == Some(byte)
-                    && Self::matches_segment_at(
-                        value,
-                        pattern,
-                        value_index + 1,
-                        pattern_index + 1,
-                        memo,
-                    )
+                    && Self::matches_segment_at(value, pattern, value_index + 1, pattern_index + 1, memo)
             }
         };
         memo[slot] = Some(result);

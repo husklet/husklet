@@ -36,10 +36,7 @@ impl<'a> Field<'a> {
             "1" | "t" | "T" | "true" | "TRUE" | "True" => Ok(true),
             value => Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
-                format!(
-                    "invalid boolean value {value:?} for image option {:?}",
-                    self.name
-                ),
+                format!("invalid boolean value {value:?} for image option {:?}", self.name),
             )),
         }
     }

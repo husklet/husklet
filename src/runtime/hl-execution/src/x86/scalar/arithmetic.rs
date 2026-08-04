@@ -44,13 +44,13 @@ impl Arithmetic {
             let bits = Self::lane_at(source, format, shift);
             let result =
                 environment.round_to_integral(Value::from_bits(Self::soft_format(format), bits), control & 8 == 0);
-            let value = if Self::infinity(bits, format) { bits } else { result.value.bits() };
-            staged.vectors[usize::from(destination)] = Self::merge_at(
-                staged.vectors[usize::from(destination)],
-                value,
-                format,
-                shift,
-            );
+            let value = if Self::infinity(bits, format) {
+                bits
+            } else {
+                result.value.bits()
+            };
+            staged.vectors[usize::from(destination)] =
+                Self::merge_at(staged.vectors[usize::from(destination)], value, format, shift);
             let exceptions = Self::exceptions(result.flags) & !(1 << 1);
             staged.mxcsr |= exceptions;
         }
@@ -421,8 +421,7 @@ impl Arithmetic {
             let mut exceptions = Self::exceptions(result.flags);
             if cpu.mxcsr & (1 << 6) != 0 {
                 exceptions &= !(1 << 1);
-            } else if Self::denormal(b, format)
-                || operation != FloatArithmetic::SquareRoot && Self::denormal(a, format)
+            } else if Self::denormal(b, format) || operation != FloatArithmetic::SquareRoot && Self::denormal(a, format)
             {
                 exceptions |= 1 << 1;
             }

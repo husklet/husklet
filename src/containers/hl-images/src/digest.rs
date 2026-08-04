@@ -65,21 +65,14 @@ impl fmt::Display for Digest {
 }
 
 impl serde::Serialize for Digest {
-    fn serialize<S: serde::Serializer>(
-        &self,
-        serializer: S,
-    ) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
     }
 }
 impl<'de> serde::Deserialize<'de> for Digest {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         use serde::de::Error as _;
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(D::Error::custom)
+        String::deserialize(deserializer)?.parse().map_err(D::Error::custom)
     }
 }
 

@@ -175,7 +175,10 @@ impl ScalarInterpreter {
                 for (reservation, value) in reservations.into_iter().flatten().zip(values).take(usize::from(count)) {
                     if memory.commit_write(reservation, value).is_err() {
                         return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                            instruction, address, AccessKind::Write, u64::from(length),
+                            instruction,
+                            address,
+                            AccessKind::Write,
+                            u64::from(length),
                         ));
                     }
                 }

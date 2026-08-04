@@ -9,9 +9,7 @@ async fn prune_removes_inactive_containers_through_shared_headless_ownership() {
         .await
         .unwrap();
     let second = containers
-        .create(
-            ContainerSpec::from_directory(root.path(), Process::new("/bin/true")).name("second"),
-        )
+        .create(ContainerSpec::from_directory(root.path(), Process::new("/bin/true")).name("second"))
         .await
         .unwrap();
     let daemon = Daemon::new(containers);
@@ -28,24 +26,13 @@ async fn prune_removes_inactive_containers_through_shared_headless_ownership() {
     wait_for_socket(&socket).await;
 
     let client = Client::unix(&socket).unwrap();
-    let mut deleted = client
-        .containers()
-        .prune()
-        .await
-        .unwrap()
-        .containers_deleted;
+    let mut deleted = client.containers().prune().await.unwrap().containers_deleted;
     deleted.sort();
     let mut expected = vec![first.id.to_string(), second.id.to_string()];
     expected.sort();
     assert_eq!(deleted, expected);
     assert_eq!(client.containers().list(true).await.unwrap(), Vec::new());
-    assert!(daemon
-        .headless()
-        .containers()
-        .list()
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(daemon.headless().containers().list().await.unwrap().is_empty());
 
     stop.send(()).unwrap();
     task.await.unwrap().unwrap();
@@ -114,12 +101,14 @@ async fn filtered_prune_selects_containers_and_system_resources() {
         .unwrap();
     assert_eq!(filtered.containers_deleted, [system_remove.id.to_string()]);
     assert!(daemon.headless().containers().inspect("keep").await.is_ok());
-    assert!(daemon
-        .headless()
-        .containers()
-        .inspect(system_remove.id.as_str())
-        .await
-        .is_err());
+    assert!(
+        daemon
+            .headless()
+            .containers()
+            .inspect(system_remove.id.as_str())
+            .await
+            .is_err()
+    );
 
     let unsupported = raw_http(
         &socket,

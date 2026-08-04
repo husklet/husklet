@@ -1,4 +1,4 @@
-use super::{support::archive_context, Client, Error};
+use super::{Client, Error, support::archive_context};
 
 pub(super) async fn run_mounts(client: &Client) -> Result<(), Error> {
     let first = archive_context(
@@ -77,11 +77,7 @@ pub(super) async fn automatic_platform(client: &Client) -> Result<(), Error> {
     )?;
     client
         .images()
-        .build(
-            std::io::Cursor::new(context),
-            "workflow/platform:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context), "workflow/platform:test", None)
         .await?;
     let image = client.images().inspect("workflow/platform:test").await?;
     let environment = image

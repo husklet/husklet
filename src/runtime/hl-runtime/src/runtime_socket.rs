@@ -108,7 +108,9 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
     }
 
     pub(crate) fn write_with(&self, input: &[u8], nonblocking: bool) -> Result<usize, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.send(input); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.send(input);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.write_with(input, nonblocking),
             RuntimeSocketKind::Unix { pair, endpoint } => {
@@ -148,7 +150,9 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         input: &[u8],
         cancellation: &dyn hl_descriptor::OperationCancellation,
     ) -> Result<usize, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.send(input); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.send(input);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.write_with_cancellation(input, cancellation),
             RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint]
@@ -261,7 +265,11 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
             id,
             snapshot: Mutex::new(snapshot),
             registry: Mutex::new(None),
-            catalog: Mutex::new(Arc::new(CatalogLifetime { catalog, id, remaining: AtomicUsize::new(1) })),
+            catalog: Mutex::new(Arc::new(CatalogLifetime {
+                catalog,
+                id,
+                remaining: AtomicUsize::new(1),
+            })),
             closed: AtomicBool::new(false),
             options: Mutex::new(BTreeMap::new()),
             netlink: Some(socket),
@@ -269,7 +277,9 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         })
     }
 
-    pub(crate) fn netlink_socket(&self) -> Option<&Arc<crate::network::netlink::RouteSocket>> { self.netlink.as_ref() }
+    pub(crate) fn netlink_socket(&self) -> Option<&Arc<crate::network::netlink::RouteSocket>> {
+        self.netlink.as_ref()
+    }
 
     pub(crate) fn bind_unix(
         &self,
@@ -451,7 +461,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         ObjectKind::Socket
     }
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.receive(output, false).map(|(count, _)| count); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.receive(output, false).map(|(count, _)| count);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.read(output),
             RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint].description.read(output),
@@ -462,12 +474,12 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         }
     }
     fn probe_read(&self, maximum: usize) -> Result<Option<usize>, ObjectError> {
-        if let Some(netlink) = &self.netlink { return Ok(netlink.ready().then_some(maximum)); }
+        if let Some(netlink) = &self.netlink {
+            return Ok(netlink.ready().then_some(maximum));
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.probe_read(maximum),
-            RuntimeSocketKind::Unix { pair, endpoint } => {
-                pair.endpoints[*endpoint].description.probe_read(maximum)
-            }
+            RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint].description.probe_read(maximum),
             RuntimeSocketKind::UnixStandalone { .. } => {
                 let (pair, endpoint) = self.standalone_connection().ok_or(ObjectError::NotSupported)?;
                 pair.endpoints[endpoint].description.probe_read(maximum)
@@ -479,7 +491,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         output: &mut [u8],
         cancellation: &dyn hl_descriptor::OperationCancellation,
     ) -> Result<usize, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.receive(output, false).map(|(count, _)| count); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.receive(output, false).map(|(count, _)| count);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.read_with_cancellation(output, cancellation),
             RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint]
@@ -494,7 +508,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         }
     }
     fn write(&self, input: &[u8]) -> Result<usize, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.send(input); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.send(input);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.write(input),
             RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint].description.write(input),
@@ -509,7 +525,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         input: &[u8],
         cancellation: &dyn hl_descriptor::OperationCancellation,
     ) -> Result<usize, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.send(input); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.send(input);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.write_with_cancellation(input, cancellation),
             RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint]
@@ -528,7 +546,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         output: &mut [IoSliceMut<'_>],
         context: hl_descriptor::OperationContext<'_>,
     ) -> Result<usize, ObjectError> {
-        let capacity = output.iter().try_fold(0_usize, |total, part| total.checked_add(part.len()))
+        let capacity = output
+            .iter()
+            .try_fold(0_usize, |total, part| total.checked_add(part.len()))
             .ok_or(ObjectError::ResourceLimit)?;
         let mut buffer = vec![0_u8; capacity];
         let count = self.read_context(&mut buffer, context)?;
@@ -548,7 +568,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         input: &[IoSlice<'_>],
         context: hl_descriptor::OperationContext<'_>,
     ) -> Result<usize, ObjectError> {
-        let length = input.iter().try_fold(0_usize, |total, part| total.checked_add(part.len()))
+        let length = input
+            .iter()
+            .try_fold(0_usize, |total, part| total.checked_add(part.len()))
             .ok_or(ObjectError::ResourceLimit)?;
         let mut buffer = Vec::with_capacity(length);
         for part in input {
@@ -558,8 +580,10 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
     }
     fn set_status_flags(&self, flags: StatusFlags) -> Result<(), ObjectError> {
         if self.netlink.is_some() {
-            self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).nonblocking =
-                flags.bits() & StatusFlags::NONBLOCKING != 0;
+            self.snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .nonblocking = flags.bits() & StatusFlags::NONBLOCKING != 0;
             return Ok(());
         }
         match &self.kind {
@@ -602,7 +626,9 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         &self,
         observer: Arc<dyn ReadinessObserver>,
     ) -> Result<Box<dyn ReadinessSubscription>, ObjectError> {
-        if let Some(netlink) = &self.netlink { return netlink.observe(observer); }
+        if let Some(netlink) = &self.netlink {
+            return netlink.observe(observer);
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.subscribe_readiness(observer),
             RuntimeSocketKind::Unix { pair, endpoint } => {
@@ -615,7 +641,10 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         }
     }
     fn retire(&self) {
-        if self.netlink.is_some() { self.unregister(); return; }
+        if self.netlink.is_some() {
+            self.unregister();
+            return;
+        }
         match &self.kind {
             RuntimeSocketKind::Host { description, .. } => description.retire(),
             RuntimeSocketKind::Unix { pair, endpoint } => pair.endpoints[*endpoint].description.retire(),

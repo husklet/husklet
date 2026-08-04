@@ -169,9 +169,7 @@ impl Ownerships {
     }
 
     pub(crate) fn record(&mut self, path: &Path, ownership: Ownership) -> Result<()> {
-        self.entries
-            .0
-            .insert(String::from(Key::try_from(path)?), ownership);
+        self.entries.0.insert(String::from(Key::try_from(path)?), ownership);
         Ok(())
     }
 
@@ -251,15 +249,13 @@ impl Ownerships {
         let Some(path) = self.path.as_ref() else {
             return Ok(());
         };
-        let parent = path.parent().ok_or_else(|| {
-            Error::InvalidMetadata("snapshot ownership sidecar has no parent".into())
-        })?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::InvalidMetadata("snapshot ownership sidecar has no parent".into()))?;
         fs::create_dir_all(parent)?;
         let temporary = parent.join(format!(
             ".{}.{}.tmp",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("ownership"),
+            path.file_name().and_then(|name| name.to_str()).unwrap_or("ownership"),
             uuid::Uuid::new_v4().simple()
         ));
         let result = (|| -> Result<()> {
@@ -283,8 +279,7 @@ impl Ownerships {
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Ok(());
         }
-        let mut children =
-            fs::read_dir(root.join(relative))?.collect::<std::io::Result<Vec<_>>>()?;
+        let mut children = fs::read_dir(root.join(relative))?.collect::<std::io::Result<Vec<_>>>()?;
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             self.record_tree(root, &relative.join(child.file_name()), ownership)?;

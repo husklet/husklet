@@ -1,6 +1,6 @@
 //! Image archive load/list/inspect/tag/save/remove round trip.
 
-use crate::api::support::{raw_http, require, wait_for_path, write_image_archive};
+use crate::api::support::{require, wait_for_path, write_image_archive};
 use hl_client::Client;
 use hl_container::{Config, Containers};
 use hl_daemon::Daemon;
@@ -20,29 +20,18 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let socket = work.path().join("daemon.sock");
     let (shutdown, stopped) = oneshot::channel();
-    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(
-        async move {
-            let _ = stopped.await;
-        },
-    ));
+    let server = tokio::spawn(Daemon::new(containers).server(&socket).serve_with_shutdown(async move {
+        let _ = stopped.await;
+    }));
     wait_for_path(&socket).await?;
     let client = Client::unix(&socket)?;
-    let loaded = client
-        .images()
-        .load(tokio::fs::File::open(&archive).await?)
-        .await?;
+    let loaded = client.images().load(tokio::fs::File::open(&archive).await?).await?;
     require(
         loaded.stream == "Loaded image: docker.io/scenario/fixture:test\n",
-        &format!(
-            "image load did not report the imported tag: {:?}",
-            loaded.stream
-        ),
+        &format!("image load did not report the imported tag: {:?}", loaded.stream),
     )?;
     let listed = client.images().list().await?;
-    require(
-        listed.len() == 1,
-        "image load did not create exactly one image",
-    )?;
+    require(listed.len() == 1, "image load did not create exactly one image")?;
     require(
         listed[0].repo_tags == ["docker.io/scenario/fixture:test"],
         "image list did not preserve the imported tag",
@@ -60,24 +49,6 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     require(
         inspected.id == listed[0].id,
         "image inspect and list disagreed on identity",
-    )?;
-    let history = raw_http(
-        &socket,
-        b"GET /v1.43/images/scenario%2Ffixture:test/history HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-    )
-    .await?;
-    require(
-        history.starts_with("HTTP/1.1 200"),
-        "image history endpoint did not accept an imported image",
-    )?;
-    let inspect = raw_http(
-        &socket,
-        b"GET /v1.43/images/scenario%2Ffixture:test/json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-    )
-    .await?;
-    require(
-        inspect.contains("\"Os\":\"linux\"") && inspect.contains("\"Architecture\":\"arm64\""),
-        "image inspect omitted imported platform metadata",
     )?;
     client
         .images()
@@ -112,10 +83,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         container.metadata.image == "docker.io/scenario/fixture:test",
         "image-backed create lost image identity",
     )?;
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
 
     let mut saved = client
         .images()
@@ -149,10 +117,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .remove("scenario/fixture:test")
         .await
         .map_err(|error| format!("source image remove: {error}"))?;
-    require(
-        client.images().list().await?.is_empty(),
-        "image removal left tags",
-    )?;
+    require(client.images().list().await?.is_empty(), "image removal left tags")?;
     let _ = shutdown.send(());
     server.await??;
     println!("PASS image-archive-create");

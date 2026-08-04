@@ -21,51 +21,32 @@ async fn volume_crud_is_shared_with_headless_ownership_and_protects_references()
     let client = Client::unix(&socket).unwrap();
     let request = VolumeCreate {
         name: "shared-data".into(),
-        labels: [("purpose".into(), "compatibility".into())]
-            .into_iter()
-            .collect(),
+        labels: [("purpose".into(), "compatibility".into())].into_iter().collect(),
         ..VolumeCreate::default()
     };
     let volume = client.volumes().create(&request).await.unwrap();
     assert_eq!(volume.name, "shared-data");
-    assert_eq!(volume.usage_data, None);
     assert_eq!(
         client.volumes().create(&request).await.unwrap().mountpoint,
         volume.mountpoint
     );
-    std::fs::write(
-        std::path::Path::new(&volume.mountpoint).join("value"),
-        b"durable",
-    )
-    .unwrap();
-    assert_eq!(
-        client.volumes().inspect("shared-data").await.unwrap(),
-        volume
-    );
+    std::fs::write(std::path::Path::new(&volume.mountpoint).join("value"), b"durable").unwrap();
+    assert_eq!(client.volumes().inspect("shared-data").await.unwrap(), volume);
 
     containers
         .create(
             ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
                 .name("volume-owner")
-                .mount(Mount::volume(
-                    &volume.name,
-                    "/data",
-                    hl_container::Access::ReadWrite,
-                )),
+                .mount(Mount::volume(&volume.name, "/data", hl_container::Access::ReadWrite)),
         )
         .await
         .unwrap();
     let usage = client.system().disk_usage().await.unwrap();
     assert_eq!(usage.volumes.len(), 1);
     assert_eq!(usage.volumes[0].name, "shared-data");
-    let usage_data = usage.volumes[0].usage_data.as_ref().unwrap();
-    assert_eq!(usage_data.size, 7);
-    assert_eq!(usage_data.ref_count, 1);
-    let error = client
-        .volumes()
-        .remove("shared-data", true)
-        .await
-        .unwrap_err();
+    assert_eq!(usage.volumes[0].usage_data.size, 7);
+    assert_eq!(usage.volumes[0].usage_data.ref_count, 1);
+    let error = client.volumes().remove("shared-data", true).await.unwrap_err();
     assert!(matches!(
         error,
         hl_client::Error::Docker {
@@ -77,11 +58,7 @@ async fn volume_crud_is_shared_with_headless_ownership_and_protects_references()
     client.volumes().remove("shared-data", false).await.unwrap();
     assert!(!std::path::Path::new(&volume.mountpoint).exists());
 
-    let anonymous = client
-        .volumes()
-        .create(&VolumeCreate::default())
-        .await
-        .unwrap();
+    let anonymous = client.volumes().create(&VolumeCreate::default()).await.unwrap();
     assert!(!anonymous.name.is_empty());
     assert_eq!(client.volumes().list().await.unwrap().volumes.len(), 1);
     assert_eq!(
@@ -117,23 +94,13 @@ async fn verify_granted_volume(client: &Client, root: &TempDir) {
         })
         .await
         .unwrap();
-    assert_eq!(
-        (granted.driver.as_str(), granted.scope.as_str()),
-        ("local", "local")
-    );
+    assert_eq!((granted.driver.as_str(), granted.scope.as_str()), ("local", "local"));
     assert_eq!(granted.options, options);
     assert_eq!(
         granted.mountpoint,
         std::fs::canonicalize(&device).unwrap().to_string_lossy()
     );
-    assert_eq!(
-        client.volumes().inspect("granted-volume").await.unwrap(),
-        granted
-    );
-    client
-        .volumes()
-        .remove("granted-volume", false)
-        .await
-        .unwrap();
+    assert_eq!(client.volumes().inspect("granted-volume").await.unwrap(), granted);
+    client.volumes().remove("granted-volume", false).await.unwrap();
     assert_eq!(std::fs::read(device.join("value")).unwrap(), b"host-owned");
 }

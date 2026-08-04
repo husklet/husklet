@@ -21,11 +21,7 @@ impl Platform {
     pub fn linux_amd64() -> Self {
         Self::new("linux", "amd64", None)
     }
-    pub fn new(
-        os: impl Into<String>,
-        architecture: impl Into<String>,
-        variant: Option<String>,
-    ) -> Self {
+    pub fn new(os: impl Into<String>, architecture: impl Into<String>, variant: Option<String>) -> Self {
         Self {
             os: os.into(),
             architecture: architecture.into(),
@@ -42,11 +38,7 @@ impl std::str::FromStr for Platform {
         let os = parts.next().unwrap_or_default();
         let architecture = parts.next().unwrap_or_default();
         let variant = parts.next();
-        if os != "linux"
-            || architecture.is_empty()
-            || variant.is_some_and(str::is_empty)
-            || parts.next().is_some()
-        {
+        if os != "linux" || architecture.is_empty() || variant.is_some_and(str::is_empty) || parts.next().is_some() {
             return Err(PlatformError {
                 value: value.to_owned(),
             });
@@ -76,10 +68,7 @@ mod tests {
 
     #[test]
     fn parses_supported_linux_platforms() {
-        assert_eq!(
-            "linux/arm64".parse::<Platform>().unwrap(),
-            Platform::linux_arm64()
-        );
+        assert_eq!("linux/arm64".parse::<Platform>().unwrap(), Platform::linux_arm64());
         assert_eq!(
             "linux/arm/v7".parse::<Platform>().unwrap(),
             Platform::new("linux", "arm", Some("v7".into()))

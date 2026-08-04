@@ -25,21 +25,15 @@ impl fmt::Display for Timestamp {
             Ok(duration) => i128::try_from(duration.as_nanos()).unwrap_or(i128::MAX),
             Err(error) => -i128::try_from(error.duration().as_nanos()).unwrap_or(i128::MAX),
         };
-        let seconds = i64::try_from(nanoseconds.div_euclid(1_000_000_000)).unwrap_or_else(|_| {
-            if nanoseconds.is_negative() {
-                i64::MIN
-            } else {
-                i64::MAX
-            }
-        });
+        let seconds = i64::try_from(nanoseconds.div_euclid(1_000_000_000))
+            .unwrap_or_else(|_| if nanoseconds.is_negative() { i64::MIN } else { i64::MAX });
         let fraction = nanoseconds.rem_euclid(1_000_000_000);
         let days = seconds.div_euclid(86_400);
         let day_seconds = seconds.rem_euclid(86_400);
         let shifted = days + 719_468;
         let era = shifted.div_euclid(146_097);
         let day_of_era = shifted - era * 146_097;
-        let year_of_era =
-            (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
         let mut year = year_of_era + era * 400;
         let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
         let month_prime = (5 * day_of_year + 2) / 153;
@@ -67,18 +61,15 @@ mod tests {
             "1970-01-01T00:00:00.000000000Z"
         );
         assert_eq!(
-            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
-                .to_string(),
+            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)).to_string(),
             "2023-11-14T22:13:20.000000000Z"
         );
         assert_eq!(
-            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_709_164_800))
-                .to_string(),
+            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_709_164_800)).to_string(),
             "2024-02-29T00:00:00.000000000Z"
         );
         assert_eq!(
-            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_709_210_096))
-                .to_string(),
+            Timestamp::from(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_709_210_096)).to_string(),
             "2024-02-29T12:34:56.000000000Z"
         );
     }

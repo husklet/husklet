@@ -1,12 +1,8 @@
 //! PTY, devpts, termios, window-size, shell, and job-control compatibility.
 
 use super::contract;
-use crate::report::{
-    Attempt, BatchMetadata, BatchReport, ScenarioKey, ScenarioOutcome, Status, Store,
-};
-use hl_container::{
-    Console, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox, Size,
-};
+use crate::report::{Attempt, BatchMetadata, BatchReport, ScenarioKey, ScenarioOutcome, Status, Store};
+use hl_container::{Console, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox, Size};
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -22,10 +18,7 @@ pub(crate) fn group() -> contract::Group {
     )
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "PTY executor plus reporting lifecycle"
-)]
+#[allow(clippy::too_many_lines, reason = "PTY executor plus reporting lifecycle")]
 pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
     let selected = std::env::var("HL_SCENARIO_CASE").ok();
     let cases = group()
@@ -34,19 +27,11 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
         .filter(|case| selected.as_deref().is_none_or(|id| case.id == id))
         .collect::<Vec<_>>();
     if cases.is_empty() {
-        return Err(format!(
-            "terminal scenario {:?} is not registered",
-            selected.unwrap_or_default()
-        )
-        .into());
+        return Err(format!("terminal scenario {:?} is not registered", selected.unwrap_or_default()).into());
     }
     let store = Store::from_env()?;
     let archive = std::env::var("HL_ENGINE_ARCHIVE_SHA256").unwrap_or_else(|_| "unknown".into());
-    let mut recorded = store
-        .as_ref()
-        .map(Store::resume)
-        .transpose()?
-        .unwrap_or_default();
+    let mut recorded = store.as_ref().map(Store::resume).transpose()?.unwrap_or_default();
     let mut failures = Vec::new();
     for case in &cases {
         let key = ScenarioKey {
@@ -62,9 +47,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
             println!("RESUME {}", case.id);
             continue;
         }
-        let started = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let timer = Instant::now();
         if let Some(store) = &store {
             store.begin(&Attempt {
@@ -78,10 +61,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
             let error = result.as_ref().err().map(ToString::to_string);
             let status = if result.is_ok() {
                 Status::Pass
-            } else if error
-                .as_deref()
-                .is_some_and(|value| value.contains("timed out"))
-            {
+            } else if error.as_deref().is_some_and(|value| value.contains("timed out")) {
                 Status::Timeout
             } else {
                 Status::RuntimeFail
@@ -93,11 +73,7 @@ pub(crate) async fn run(containers: &Containers) -> Result<(), Error> {
                 resolved_digest: None,
                 step: serde_json::to_value(&case.step)?,
                 timeout_seconds: case.timeout_seconds,
-                checks: case
-                    .checks
-                    .iter()
-                    .map(|value| format!("{value:?}"))
-                    .collect(),
+                checks: case.checks.iter().map(|value| format!("{value:?}")).collect(),
                 started_at: started.as_millis().to_string(),
                 duration_ms: timer.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                 status,
@@ -163,9 +139,7 @@ async fn execute(case: &contract::Scenario, containers: &Containers) -> Result<(
             return Err(format!("host step is not supported by terminal runner: {command}").into());
         }
         contract::Step::Api(operation) => {
-            return Err(
-                format!("API step is not supported by terminal runner: {operation}").into(),
-            );
+            return Err(format!("API step is not supported by terminal runner: {operation}").into());
         }
     };
     for (key, value) in &fixture.runtime().environment {
@@ -178,9 +152,7 @@ async fn execute(case: &contract::Scenario, containers: &Containers) -> Result<(
         process = process.working_dir(&fixture.runtime().working_directory);
     }
     if case.terminal {
-        if !fixture.runtime().environment.contains_key("TERM")
-            && !case.environment.contains_key("TERM")
-        {
+        if !fixture.runtime().environment.contains_key("TERM") && !case.environment.contains_key("TERM") {
             process = process.env("TERM", "xterm");
         }
         process = process.console(Console {
@@ -199,12 +171,9 @@ async fn execute(case: &contract::Scenario, containers: &Containers) -> Result<(
         )
         .await?;
     containers.start(&name).await?;
-    let status = tokio::time::timeout(
-        Duration::from_secs(case.timeout_seconds),
-        containers.wait(&name),
-    )
-    .await
-    .map_err(|_| format!("timed out after {} seconds", case.timeout_seconds))??;
+    let status = tokio::time::timeout(Duration::from_secs(case.timeout_seconds), containers.wait(&name))
+        .await
+        .map_err(|_| format!("timed out after {} seconds", case.timeout_seconds))??;
     let logs = containers.logs(&name).await?;
     let output = format!(
         "{}{}",
@@ -228,10 +197,6 @@ async fn execute(case: &contract::Scenario, containers: &Containers) -> Result<(
     if status == ExitStatus::Code(expected_exit) && checks {
         Ok(())
     } else {
-        Err(format!(
-            "status={status:?} checks={:?} output={output:?}",
-            case.checks
-        )
-        .into())
+        Err(format!("status={status:?} checks={:?} output={output:?}", case.checks).into())
     }
 }

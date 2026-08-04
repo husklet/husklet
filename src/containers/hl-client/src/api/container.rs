@@ -1,12 +1,12 @@
 use http::Method;
 
+use crate::Result;
 use crate::model::{
-    Change, Container, ContainerCreation, ContainerLogs, ContainerPrune, CreateContainer,
-    InspectContainer, List, LogOptions, Stats, Top, Update, UpdateResult, Wait,
+    Change, Container, ContainerCreation, ContainerLogs, ContainerPrune, CreateContainer, InspectContainer, List,
+    LogOptions, Stats, Top, Update, UpdateResult, Wait,
 };
 use crate::transport::Transport;
 use crate::uri::Component;
-use crate::Result;
 
 use super::{LogStream, Session, Size};
 
@@ -22,6 +22,23 @@ pub enum WaitCondition {
     NotRunning,
     NextExit,
     Removed,
+}
+
+/// Docker attach history, live-stream, and standard-stream selection.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AttachOptions {
+    /// Replay output written before the attachment was opened.
+    pub logs: bool,
+    /// Continue with live streams after the attachment boundary.
+    pub stream: bool,
+    /// Forward client input to the container process.
+    pub stdin: bool,
+    /// Return process standard output.
+    pub stdout: bool,
+    /// Return process standard error.
+    pub stderr: bool,
+    /// Override Docker's detach key sequence.
+    pub detach_keys: Option<String>,
 }
 
 impl WaitCondition {
@@ -43,18 +60,12 @@ impl<'a> Containers<'a> {
     ///
     /// # Errors
     /// Returns transport, protocol, decoding, validation, image, or daemon lifecycle failures.
-    pub async fn create(
-        &self,
-        request: &CreateContainer,
-        name: Option<&str>,
-    ) -> Result<ContainerCreation> {
+    pub async fn create(&self, request: &CreateContainer, name: Option<&str>) -> Result<ContainerCreation> {
         let path = name.map_or_else(
             || "/containers/create".to_owned(),
             |value| format!("/containers/create?name={}", Component::opaque(value)),
         );
-        self.transport
-            .json(Method::POST, &path, Some(request))
-            .await
+        self.transport.json(Method::POST, &path, Some(request)).await
     }
 
     /// List containers, optionally including stopped containers.
@@ -63,8 +74,8 @@ impl<'a> Containers<'a> {
     /// Returns transport, protocol, decoding, or daemon failures.
     pub async fn list(&self, selection: impl Into<List>) -> Result<Vec<Container>> {
         let selection = selection.into();
-        let filters = serde_json::to_string(selection.values())
-            .map_err(|error| crate::Error::Protocol(error.to_string()))?;
+        let filters =
+            serde_json::to_string(selection.values()).map_err(|error| crate::Error::Protocol(error.to_string()))?;
         self.transport
             .get_json(&format!(
                 "/containers/json?all={}&filters={}",
@@ -90,8 +101,7 @@ impl<'a> Containers<'a> {
         &self,
         filters: &std::collections::BTreeMap<String, Vec<String>>,
     ) -> Result<ContainerPrune> {
-        let filters = serde_json::to_string(filters)
-            .map_err(|error| crate::Error::Protocol(error.to_string()))?;
+        let filters = serde_json::to_string(filters).map_err(|error| crate::Error::Protocol(error.to_string()))?;
         self.transport
             .json::<(), ContainerPrune>(
                 Method::POST,
@@ -114,10 +124,7 @@ impl<'a> Containers<'a> {
     /// Returns transport, protocol, decoding, not-found, storage, or daemon failures.
     pub async fn inspect_with_size(&self, id: &str, size: bool) -> Result<InspectContainer> {
         self.transport
-            .get_json(&format!(
-                "/containers/{}/json?size={size}",
-                Component::opaque(id)
-            ))
+            .get_json(&format!("/containers/{}/json?size={size}", Component::opaque(id)))
             .await
     }
 
@@ -257,11 +264,7 @@ impl<'a> Containers<'a> {
             .transport
             .stream(
                 Method::GET,
-                &format!(
-                    "/containers/{}/logs?{}",
-                    Component::opaque(id),
-                    query.join("&")
-                ),
+                &format!("/containers/{}/logs?{}", Component::opaque(id), query.join("&")),
             )
             .await?;
         Ok(stream)
@@ -273,18 +276,29 @@ impl<'a> Containers<'a> {
     ///
     /// # Errors
     /// Returns transport, upgrade, state, or multiplex framing failures.
-    pub async fn attach(
-        &self,
-        id: &str,
-        stdin: bool,
-        stdout: bool,
-        stderr: bool,
-    ) -> Result<Session> {
-        let path = format!(
-            "/containers/{}/attach?stream=true&stdin={stdin}&stdout={stdout}&stderr={stderr}",
-            Component::opaque(id)
-        );
-        let stream = self.transport.upgrade(Method::POST, &path).await?;
+    pub async fn attach(&self, id: &str, stdin: bool, stdout: bool, stderr: bool) -> Result<Session> {
+        self.attach_with(
+            id,
+            &AttachOptions {
+                stream: true,
+                stdin,
+                stdout,
+                stderr,
+                ..AttachOptions::default()
+            },
+        )
+        .await
+    }
+
+    /// Attach to selected initial-process history and/or live streams.
+    ///
+    /// # Errors
+    /// Returns transport, upgrade, state, or multiplex framing failures.
+    pub async fn attach_with(&self, id: &str, options: &AttachOptions) -> Result<Session> {
+        let stream = self
+            .transport
+            .upgrade(Method::POST, &self.attach_path(id, options))
+            .await?;
         Ok(Session::pipes(stream, self.transport.response_limit()))
     }
 
@@ -293,12 +307,46 @@ impl<'a> Containers<'a> {
     /// # Errors
     /// Returns transport, upgrade, or container-state failures.
     pub async fn attach_terminal(&self, id: &str, stdin: bool) -> Result<Session> {
-        let path = format!(
-            "/containers/{}/attach?stream=true&stdin={stdin}&stdout=true&stderr=true",
-            Component::opaque(id)
-        );
-        let stream = self.transport.upgrade(Method::POST, &path).await?;
+        self.attach_terminal_with(
+            id,
+            &AttachOptions {
+                stream: true,
+                stdin,
+                stdout: true,
+                stderr: true,
+                ..AttachOptions::default()
+            },
+        )
+        .await
+    }
+
+    /// Attach to selected controlling-terminal history and/or live output.
+    ///
+    /// # Errors
+    /// Returns transport, upgrade, or container-state failures.
+    pub async fn attach_terminal_with(&self, id: &str, options: &AttachOptions) -> Result<Session> {
+        let stream = self
+            .transport
+            .upgrade(Method::POST, &self.attach_path(id, options))
+            .await?;
         Ok(Session::terminal(stream, self.transport.response_limit()))
+    }
+
+    fn attach_path(&self, id: &str, options: &AttachOptions) -> String {
+        let mut path = format!(
+            "/containers/{}/attach?logs={}&stream={}&stdin={}&stdout={}&stderr={}",
+            Component::opaque(id),
+            options.logs,
+            options.stream,
+            options.stdin,
+            options.stdout,
+            options.stderr,
+        );
+        if let Some(keys) = &options.detach_keys {
+            path.push_str("&detachKeys=");
+            path.push_str(&Component::opaque(keys).to_string());
+        }
+        path
     }
 
     /// Read metadata for a path in the container filesystem.
@@ -310,10 +358,7 @@ impl<'a> Containers<'a> {
     /// Returns transport, state, runtime, or daemon failures.
     pub async fn start(&self, id: &str) -> Result<()> {
         self.transport
-            .empty(
-                Method::POST,
-                &format!("/containers/{}/start", Component::opaque(id)),
-            )
+            .empty(Method::POST, &format!("/containers/{}/start", Component::opaque(id)))
             .await
     }
 
@@ -325,11 +370,7 @@ impl<'a> Containers<'a> {
         self.transport
             .empty(
                 Method::POST,
-                &format!(
-                    "/containers/{}/resize?{}",
-                    Component::opaque(id),
-                    size.query()
-                ),
+                &format!("/containers/{}/resize?{}", Component::opaque(id), size.query()),
             )
             .await
     }
@@ -402,10 +443,7 @@ impl<'a> Containers<'a> {
     /// Returns transport, state, process-control, or daemon failures.
     pub async fn pause(&self, id: &str) -> Result<()> {
         self.transport
-            .empty(
-                Method::POST,
-                &format!("/containers/{}/pause", Component::opaque(id)),
-            )
+            .empty(Method::POST, &format!("/containers/{}/pause", Component::opaque(id)))
             .await
     }
 
@@ -415,10 +453,7 @@ impl<'a> Containers<'a> {
     /// Returns transport, state, process-control, or daemon failures.
     pub async fn unpause(&self, id: &str) -> Result<()> {
         self.transport
-            .empty(
-                Method::POST,
-                &format!("/containers/{}/unpause", Component::opaque(id)),
-            )
+            .empty(Method::POST, &format!("/containers/{}/unpause", Component::opaque(id)))
             .await
     }
 
@@ -473,10 +508,7 @@ impl<'a> Containers<'a> {
         self.transport
             .empty(
                 Method::DELETE,
-                &format!(
-                    "/containers/{}?force={force}&v={volumes}",
-                    Component::opaque(id)
-                ),
+                &format!("/containers/{}?force={force}&v={volumes}", Component::opaque(id)),
             )
             .await
     }

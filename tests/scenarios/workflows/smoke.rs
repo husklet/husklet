@@ -2,8 +2,8 @@
 
 use hl_container::{ContainerSpec, Containers, ExitStatus, Guest, Isolation, Process, Sandbox};
 use hl_images::{
-    remote::{Auth, Registry},
     Images, Platform, Reference,
+    remote::{Auth, Registry},
 };
 use tempfile::TempDir;
 
@@ -33,25 +33,20 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
         let outcome = async {
             containers
                 .create(
-                    ContainerSpec::from_directory(
-                        view.path(),
-                        Process::new("/bin/echo").args([case.marker]),
-                    )
-                    .guest(Guest::for_platform(&case.platform)?)
-                    .name(&name)
-                    .isolation(Isolation {
-                        sandbox: Sandbox::Disabled,
-                        network_isolated: true,
-                        ..Isolation::default()
-                    }),
+                    ContainerSpec::from_directory(view.path(), Process::new("/bin/echo").args([case.marker]))
+                        .guest(Guest::for_platform(&case.platform)?)
+                        .name(&name)
+                        .isolation(Isolation {
+                            sandbox: Sandbox::Disabled,
+                            network_isolated: true,
+                            ..Isolation::default()
+                        }),
                 )
                 .await?;
             containers.start(&name).await?;
             let status = containers.wait(&name).await?;
             let logs = containers.logs(&name).await?;
-            if status != ExitStatus::Code(0)
-                || logs.stdout != format!("{}\n", case.marker).as_bytes()
-            {
+            if status != ExitStatus::Code(0) || logs.stdout != format!("{}\n", case.marker).as_bytes() {
                 return Err::<(), Error>(
                     format!(
                         "{}/{}: status={status:?} stdout={:?} stderr={:?}",
@@ -68,10 +63,7 @@ pub(super) async fn run(containers: &Containers) -> Result<(), Error> {
         .await;
         let cleanup = cleanup(containers, &name, &images, &root).await;
         combine(outcome, cleanup)?;
-        println!(
-            "PASS smoke-realimage {}/{}",
-            case.platform.architecture, case.image
-        );
+        println!("PASS smoke-realimage {}/{}", case.platform.architecture, case.image);
     }
     if !containers.list().await?.is_empty() {
         return Err("smoke workflow leaked container records".into());
@@ -94,11 +86,7 @@ async fn cleanup(
     root: &hl_images::rootfs::Reference,
 ) -> Result<(), Error> {
     let remove = if containers.inspect(name).await.is_ok() {
-        containers
-            .remove_force(name)
-            .await
-            .map(|_| ())
-            .map_err(Error::from)
+        containers.remove_force(name).await.map(|_| ()).map_err(Error::from)
     } else {
         Ok(())
     };

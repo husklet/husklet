@@ -57,8 +57,8 @@ impl Prune {
         let Some(raw) = raw.filter(|value| !value.is_empty()) else {
             return Ok(Self(hl_container::Prune::default()));
         };
-        let filters: BTreeMap<String, Vec<String>> = serde_json::from_str(raw)
-            .map_err(|error| format!("invalid container prune filters: {error}"))?;
+        let filters: BTreeMap<String, Vec<String>> =
+            serde_json::from_str(raw).map_err(|error| format!("invalid container prune filters: {error}"))?;
         let unsupported = filters
             .keys()
             .filter(|key| !matches!(key.as_str(), "until" | "label" | "label!"))
@@ -157,21 +157,14 @@ impl List {
     }
 
     fn select(mut self, key: &str, value: impl Into<String>) -> Self {
-        self.filters
-            .entry(key.to_owned())
-            .or_default()
-            .push(value.into());
+        self.filters.entry(key.to_owned()).or_default().push(value.into());
         self
     }
 }
 
 impl From<bool> for List {
     fn from(all: bool) -> Self {
-        if all {
-            Self::default().all()
-        } else {
-            Self::default()
-        }
+        if all { Self::default().all() } else { Self::default() }
     }
 }
 
@@ -185,8 +178,7 @@ impl List {
         let Some(filters) = filters.filter(|value| !value.is_empty()) else {
             return Ok(list);
         };
-        list.filters = serde_json::from_str(filters)
-            .map_err(|error| format!("invalid container filters: {error}"))?;
+        list.filters = serde_json::from_str(filters).map_err(|error| format!("invalid container filters: {error}"))?;
         let unsupported = list
             .filters
             .keys()
@@ -210,10 +202,7 @@ impl List {
         if unsupported.is_empty() {
             Ok(list)
         } else {
-            Err(format!(
-                "unsupported container filters: {}",
-                unsupported.join(", ")
-            ))
+            Err(format!("unsupported container filters: {}", unsupported.join(", ")))
         }
     }
 
@@ -235,10 +224,7 @@ impl List {
         }
     }
 
-    fn reference<'a>(
-        containers: &'a [hl_container::Container],
-        value: &str,
-    ) -> Option<&'a hl_container::Container> {
+    fn reference<'a>(containers: &'a [hl_container::Container], value: &str) -> Option<&'a hl_container::Container> {
         containers.iter().find(|container| {
             container.id.as_str().starts_with(value)
                 || container
@@ -253,17 +239,9 @@ impl List {
         (container.created_at_ms, container.id.clone())
     }
 
-    fn matches_non_temporal(
-        container: &hl_container::Container,
-        key: &str,
-        value: &str,
-    ) -> bool {
+    fn matches_non_temporal(container: &hl_container::Container, key: &str, value: &str) -> bool {
         match key {
-            "name" => container
-                .spec
-                .name
-                .as_deref()
-                .is_some_and(|name| name.contains(value)),
+            "name" => container.spec.name.as_deref().is_some_and(|name| name.contains(value)),
             "id" => container.id.as_str().starts_with(value),
             "status" => {
                 use hl_container::ContainerState;
@@ -277,11 +255,11 @@ impl List {
                 };
                 status == value
             }
-            "ancestor" => container.spec.image.as_ref().is_some_and(|image| {
-                value
-                    .parse::<hl_images::Reference>()
-                    .is_ok_and(|value| &value == image)
-            }),
+            "ancestor" => container
+                .spec
+                .image
+                .as_ref()
+                .is_some_and(|image| value.parse::<hl_images::Reference>().is_ok_and(|value| &value == image)),
             "label" => Self::matches_label(container, value),
             "exited" => matches!(
                 &container.state,
@@ -311,13 +289,7 @@ impl List {
     fn matches_label(container: &hl_container::Container, value: &str) -> bool {
         value.split_once('=').map_or_else(
             || container.spec.labels.contains_key(value),
-            |(name, value)| {
-                container
-                    .spec
-                    .labels
-                    .get(name)
-                    .is_some_and(|current| current == value)
-            },
+            |(name, value)| container.spec.labels.get(name).is_some_and(|current| current == value),
         )
     }
 }
@@ -384,10 +356,7 @@ mod tests {
 
     #[test]
     fn until_accepts_unix_seconds_and_rfc3339_timestamps() {
-        assert_eq!(
-            "12.3456".parse::<PruneCutoff>().unwrap().milliseconds(),
-            12_345
-        );
+        assert_eq!("12.3456".parse::<PruneCutoff>().unwrap().milliseconds(), 12_345);
         assert_eq!(
             "1970-01-01T00:00:12.345Z"
                 .parse::<PruneCutoff>()
@@ -424,9 +393,11 @@ mod tests {
 
     #[test]
     fn parser_rejects_unknown_filters_instead_of_ignoring_them() {
-        assert!(List::parse(false, Some(r#"{"unsupported":["value"]}"#))
-            .unwrap_err()
-            .contains("unsupported"));
+        assert!(
+            List::parse(false, Some(r#"{"unsupported":["value"]}"#))
+                .unwrap_err()
+                .contains("unsupported")
+        );
     }
 
     #[test]

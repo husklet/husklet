@@ -1,22 +1,14 @@
-use super::{append, Client, Error};
+use super::{Client, Error, append};
 
 pub(super) async fn cache(client: &Client) -> Result<(), Error> {
     let context = cache_context("default")?;
     let first = client
         .images()
-        .build(
-            std::io::Cursor::new(context.clone()),
-            "workflow/cache-one:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context.clone()), "workflow/cache-one:test", None)
         .await?;
     let second = client
         .images()
-        .build(
-            std::io::Cursor::new(context.clone()),
-            "workflow/cache-two:test",
-            None,
-        )
+        .build(std::io::Cursor::new(context.clone()), "workflow/cache-two:test", None)
         .await?;
     if first != second {
         return Err("identical build did not reuse its content cache".into());
@@ -49,11 +41,7 @@ pub(super) async fn cache(client: &Client) -> Result<(), Error> {
         async move {
             right
                 .images()
-                .build(
-                    std::io::Cursor::new(concurrent),
-                    "workflow/cache-right:test",
-                    None,
-                )
+                .build(std::io::Cursor::new(concurrent), "workflow/cache-right:test", None)
                 .await
         }
     );

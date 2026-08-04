@@ -67,9 +67,7 @@ impl Decoder {
             2 if matches!(decoded.opcode, 0x01..=0x0b | 0x1c..=0x1e) => VectorDecode::ssse3(&decoded)?,
             2 if decoded.opcode == 0x17 => VectorDecode::test(&decoded)?,
             2 if matches!(decoded.opcode, 0xdb..=0xdf) => crate::x86::vector::Aes::decode(&decoded, map)?,
-            2 if matches!(decoded.opcode, 0xc8..=0xcd) => {
-                crate::x86::vector::ShaInstructions::decode(&decoded, map)?
-            }
+            2 if matches!(decoded.opcode, 0xc8..=0xcd) => crate::x86::vector::ShaInstructions::decode(&decoded, map)?,
             2 if matches!(decoded.opcode, 0x10 | 0x14 | 0x15) => VectorDecode::blend(&decoded, true)?,
             2 if matches!(decoded.opcode, 0x20..=0x25 | 0x28 | 0x30..=0x35 | 0x38..=0x40) => {
                 VectorDecode::sse41(&decoded)?

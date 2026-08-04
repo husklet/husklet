@@ -56,10 +56,7 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     drop(containers.executions().start(&execution.id).await?);
     let exec_pid = read_pid(&rootfs.join("tmp/exec-domain.pid")).await?;
-    require(
-        alive(exec_pid).await?,
-        "exec descendant exited with its leader",
-    )?;
+    require(alive(exec_pid).await?, "exec descendant exited with its leader")?;
     containers.remove_force("exec-domain").await?;
     wait_dead(exec_pid, "exec descendant").await
 }

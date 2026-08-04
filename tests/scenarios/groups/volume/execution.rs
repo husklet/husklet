@@ -1,6 +1,6 @@
 use hl_client::{
-    model::{CreateContainer, HostConfig},
     Client,
+    model::{CreateContainer, HostConfig},
 };
 
 use super::{Error, IMAGE};
@@ -17,16 +17,8 @@ pub(super) fn request(command: &str, binds: Vec<String>) -> CreateContainer {
     }
 }
 
-pub(super) async fn execute(
-    client: &Client,
-    name: &str,
-    command: &str,
-    binds: Vec<String>,
-) -> Result<Vec<u8>, Error> {
-    let created = client
-        .containers()
-        .create(&request(command, binds), Some(name))
-        .await?;
+pub(super) async fn execute(client: &Client, name: &str, command: &str, binds: Vec<String>) -> Result<Vec<u8>, Error> {
+    let created = client.containers().create(&request(command, binds), Some(name)).await?;
     client.containers().start(&created.id).await?;
     let status = match client.containers().wait(&created.id).await {
         Ok(status) => status,
@@ -36,10 +28,7 @@ pub(super) async fn execute(
         }
     };
     let logs = client.containers().logs(&created.id, true, true).await?;
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     if status.status_code != 0 {
         return Err(format!(
             "{name} exited {}: {}",

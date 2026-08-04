@@ -48,30 +48,49 @@ async fn exercise(socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let volumes = listed.1["Volumes"]
         .as_array()
         .ok_or("volume list omitted its Volumes array")?;
-    require(volumes.len() == 1, "volume list did not contain exactly the created volume")?;
+    require(
+        volumes.len() == 1,
+        "volume list did not contain exactly the created volume",
+    )?;
     assert_volume(&volumes[0])?;
     require(listed.1["Warnings"] == json!([]), "volume list Warnings was not empty")?;
 
     let inspected = exchange(socket, "GET", "/v1.43/volumes/raw-contract", None).await?;
-    require(inspected.0.starts_with("HTTP/1.1 200"), "volume inspect was not HTTP 200")?;
+    require(
+        inspected.0.starts_with("HTTP/1.1 200"),
+        "volume inspect was not HTTP 200",
+    )?;
     assert_volume(&inspected.1)?;
     require(inspected.1 == created.1, "volume inspect diverged from create")
 }
 
 fn assert_volume(volume: &Value) -> Result<(), Box<dyn std::error::Error>> {
     let object = volume.as_object().ok_or("volume response was not an object")?;
-    let keys = object.keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
+    let keys = object
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
     require(
-        keys
-            == ["CreatedAt", "Driver", "Labels", "Mountpoint", "Name", "Options", "Scope"]
-                .into_iter()
-                .collect(),
+        keys == [
+            "CreatedAt",
+            "Driver",
+            "Labels",
+            "Mountpoint",
+            "Name",
+            "Options",
+            "Scope",
+        ]
+        .into_iter()
+        .collect(),
         "volume response did not use the canonical ordinary Docker shape",
     )?;
     require(volume["Name"] == "raw-contract", "volume response changed Name")?;
     require(volume["Driver"] == "local", "volume response changed Driver")?;
     require(volume["Scope"] == "local", "volume response changed Scope")?;
-    require(volume["Labels"] == json!({"purpose": "public-wire"}), "volume response changed Labels")?;
+    require(
+        volume["Labels"] == json!({"purpose": "public-wire"}),
+        "volume response changed Labels",
+    )?;
     require(volume["Options"] == json!({}), "ordinary volume Options was not empty")?;
     require(
         volume["CreatedAt"].as_str().is_some_and(|value| !value.is_empty()),
@@ -87,7 +106,10 @@ fn assert_volume(volume: &Value) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn remove(socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let response = exchange(socket, "DELETE", "/v1.43/volumes/raw-contract", None).await?;
-    require(response.0.starts_with("HTTP/1.1 204"), "volume cleanup was not HTTP 204")
+    require(
+        response.0.starts_with("HTTP/1.1 204"),
+        "volume cleanup was not HTTP 204",
+    )
 }
 
 async fn exchange(
@@ -104,7 +126,13 @@ async fn exchange(
     let mut request = request.into_bytes();
     request.extend_from_slice(&body);
     let response = raw_http(socket, &request).await?;
-    let (head, body) = response.split_once("\r\n\r\n").ok_or("volume response omitted its body")?;
-    let value = if body.is_empty() { Value::Null } else { serde_json::from_str(body)? };
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or("volume response omitted its body")?;
+    let value = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(body)?
+    };
     Ok((head.to_owned(), value))
 }

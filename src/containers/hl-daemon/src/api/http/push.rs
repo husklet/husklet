@@ -5,8 +5,8 @@ use axum::{
     response::Response,
 };
 use hl_images::{
-    remote::{Auth, Registry},
     Reference,
+    remote::{Auth, Registry},
 };
 use serde::Deserialize;
 
@@ -44,25 +44,17 @@ pub(super) async fn post(
             let auth = Credentials::from_headers(&headers)?;
             let _ = sender
                 .send(Ok(PushProgress {
-                    status: Some(format!(
-                        "The push refers to repository [{}]",
-                        target.repository()
-                    )),
+                    status: Some(format!("The push refers to repository [{}]", target.repository())),
                     id: Some(image.target.digest().to_string()),
                     ..PushProgress::default()
                 }
                 .bytes()))
                 .await;
-            Registry::new(auth)
-                .push(&image, &target, images.content())
-                .await?;
+            Registry::new(auth).push(&image, &target, images.content()).await?;
             Ok::<_, hl_images::Error>((target, image, size))
         }
         .await;
-        let progress = result.map_or_else(
-            |error| PushProgress::from_error(&error),
-            PushProgress::from_push,
-        );
+        let progress = result.map_or_else(|error| PushProgress::from_error(&error), PushProgress::from_push);
         let _ = sender.send(Ok(progress.bytes())).await;
     });
     Response::builder()
@@ -103,12 +95,12 @@ impl Credentials {
         let Some(value) = headers.get("x-registry-auth") else {
             return Ok(Auth::Anonymous);
         };
-        let value = value.to_str().map_err(|_| {
-            hl_images::Error::InvalidMetadata("invalid X-Registry-Auth header".into())
-        })?;
-        Self::decode(value).and_then(Self::auth).map_err(|error| {
-            hl_images::Error::InvalidMetadata(format!("invalid X-Registry-Auth header: {error}"))
-        })
+        let value = value
+            .to_str()
+            .map_err(|_| hl_images::Error::InvalidMetadata("invalid X-Registry-Auth header".into()))?;
+        Self::decode(value)
+            .and_then(Self::auth)
+            .map_err(|error| hl_images::Error::InvalidMetadata(format!("invalid X-Registry-Auth header: {error}")))
     }
 }
 

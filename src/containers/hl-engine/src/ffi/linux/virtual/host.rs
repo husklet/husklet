@@ -10,11 +10,16 @@ pub(super) enum MapSource {
 
 pub(super) trait GuestVm: Debug + Send + Sync {
     fn reserve(&self, length: usize) -> Result<usize, ()>;
-    fn map(&self, address: usize, length: usize, protection: i32, shared: bool, source: MapSource)
-        -> Result<(), ()>;
+    fn map(&self, address: usize, length: usize, protection: i32, shared: bool, source: MapSource) -> Result<(), ()>;
     fn protect(&self, address: usize, length: usize, protection: i32) -> Result<(), ()>;
-    fn remap(&self, source: usize, old_length: usize, destination: usize, new_length: usize, keep: bool)
-        -> Result<(), ()>;
+    fn remap(
+        &self,
+        source: usize,
+        old_length: usize,
+        destination: usize,
+        new_length: usize,
+        keep: bool,
+    ) -> Result<(), ()>;
     fn release(&self, address: usize, length: usize);
 }
 
@@ -38,14 +43,7 @@ impl GuestVm for LinuxGuestVm {
         (address != abi::MAP_FAILED).then_some(address as usize).ok_or(())
     }
 
-    fn map(
-        &self,
-        address: usize,
-        length: usize,
-        protection: i32,
-        shared: bool,
-        source: MapSource,
-    ) -> Result<(), ()> {
+    fn map(&self, address: usize, length: usize, protection: i32, shared: bool, source: MapSource) -> Result<(), ()> {
         let (descriptor, offset, anonymous) = match source {
             MapSource::Anonymous => (-1, 0, abi::MAP_ANONYMOUS),
             MapSource::File { descriptor, offset } => (descriptor, offset, 0),
@@ -63,7 +61,9 @@ impl GuestVm for LinuxGuestVm {
                 offset,
             )
         };
-        (mapped != abi::MAP_FAILED && mapped as usize == address).then_some(()).ok_or(())
+        (mapped != abi::MAP_FAILED && mapped as usize == address)
+            .then_some(())
+            .ok_or(())
     }
 
     fn protect(&self, address: usize, length: usize, protection: i32) -> Result<(), ()> {
@@ -92,7 +92,9 @@ impl GuestVm for LinuxGuestVm {
                 destination as *mut core::ffi::c_void,
             )
         };
-        (moved != abi::MAP_FAILED && moved as usize == destination).then_some(()).ok_or(())
+        (moved != abi::MAP_FAILED && moved as usize == destination)
+            .then_some(())
+            .ok_or(())
     }
 
     fn release(&self, address: usize, length: usize) {

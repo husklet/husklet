@@ -12,11 +12,7 @@ async fn start_restart_and_exec_resolve_managed_volume_names_at_launch() {
         .await
         .unwrap();
     containers
-        .create(spec("volume-owner").mount(Mount::volume(
-            "runtime-data",
-            "/data",
-            Access::ReadWrite,
-        )))
+        .create(spec("volume-owner").mount(Mount::volume("runtime-data", "/data", Access::ReadWrite)))
         .await
         .unwrap();
 
@@ -25,10 +21,7 @@ async fn start_restart_and_exec_resolve_managed_volume_names_at_launch() {
     containers.start("volume-owner").await.unwrap();
     let execution = containers
         .executions()
-        .create(
-            "volume-owner",
-            ExecSpec::new(Process::new("/bin/read-data")),
-        )
+        .create("volume-owner", ExecSpec::new(Process::new("/bin/read-data")))
         .await
         .unwrap();
     let mut session = containers.executions().start(&execution.id).await.unwrap();
@@ -44,9 +37,11 @@ async fn start_restart_and_exec_resolve_managed_volume_names_at_launch() {
             Access::ReadWrite,
         )));
         for target in ["/etc/hosts", "/etc/resolv.conf", "/etc/hostname"] {
-            assert!(mounts.iter().any(|mount| {
-                mount.1 == std::path::Path::new(target) && mount.2 == Access::ReadWrite
-            }));
+            assert!(
+                mounts
+                    .iter()
+                    .any(|mount| { mount.1 == std::path::Path::new(target) && mount.2 == Access::ReadWrite })
+            );
         }
     }
 }

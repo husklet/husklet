@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use crate::{storage, Error, Result};
+use crate::{Error, Result, storage};
 use storage::Persistence as _;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -97,10 +97,7 @@ impl Leases {
         })
     }
 
-    fn update<T>(
-        &self,
-        operation: impl FnOnce(&mut BTreeMap<String, Lease>) -> Result<T>,
-    ) -> Result<T> {
+    fn update<T>(&self, operation: impl FnOnce(&mut BTreeMap<String, Lease>) -> Result<T>) -> Result<T> {
         let _writer = self
             .writers
             .lock()

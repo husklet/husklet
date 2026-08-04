@@ -1,4 +1,4 @@
-use super::{append, Client, CreateContainer, Error};
+use super::{Client, CreateContainer, Error, append};
 
 pub(super) async fn metadata(client: &Client) -> Result<(), Error> {
     client
@@ -38,10 +38,7 @@ pub(super) async fn metadata(client: &Client) -> Result<(), Error> {
             None,
         )
         .await?;
-    let child = client
-        .images()
-        .inspect("workflow/metadata-child:test")
-        .await?;
+    let child = client.images().inspect("workflow/metadata-child:test").await?;
     if !child.config.onbuild.is_empty() {
         return Err("consumed ONBUILD triggers leaked into child metadata".into());
     }
@@ -84,20 +81,10 @@ pub(super) async fn metadata(client: &Client) -> Result<(), Error> {
             Some("metadata-signal-override"),
         )
         .await?;
-    if client
-        .containers()
-        .inspect(&explicit.id)
-        .await?
-        .config
-        .stop_signal
-        != "SIGTERM"
-    {
+    if client.containers().inspect(&explicit.id).await?.config.stop_signal != "SIGTERM" {
         return Err("explicit stop signal did not override the image default".into());
     }
-    client
-        .containers()
-        .remove(&explicit.id, false, true)
-        .await?;
+    client.containers().remove(&explicit.id, false, true).await?;
     Ok(())
 }
 

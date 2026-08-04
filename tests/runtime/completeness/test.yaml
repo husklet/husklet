@@ -702,7 +702,7 @@ cases:
     expect: { exit: 0, stdout: golden/x86_64/sse42.out }
   - id: runtime/completeness/getresuid
     targets: [arm64, amd64]
-    build: { source: syscall/getresuid.c, output: getresuid, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getresuid.c, inputs: [compat.h], output: getresuid, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getresuid }
     run: []
     status: active
@@ -711,7 +711,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getresuid.out }
   - id: runtime/completeness/getresuid-null
     targets: [arm64, amd64]
-    build: { source: syscall/getresuid_null.c, output: getresuid-null, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getresuid_null.c, inputs: [compat.h], output: getresuid-null, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getresuid-null }
     run: []
     status: active
@@ -720,7 +720,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getresuid-null.out }
   - id: runtime/completeness/setfsuid
     targets: [arm64, amd64]
-    build: { source: syscall/setfsuid.c, output: setfsuid, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/setfsuid.c, inputs: [compat.h], output: setfsuid, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/setfsuid }
     run: []
     status: active
@@ -729,7 +729,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/setfsuid.out }
   - id: runtime/completeness/getgroups
     targets: [arm64, amd64]
-    build: { source: syscall/getgroups.c, output: getgroups, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getgroups.c, inputs: [compat.h], output: getgroups, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getgroups }
     run: []
     status: active
@@ -738,7 +738,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getgroups.out }
   - id: runtime/completeness/openat2
     targets: [arm64, amd64]
-    build: { source: syscall/openat2.c, output: openat2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/openat2.c, inputs: [compat.h], output: openat2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/openat2 }
     run: []
     status: active
@@ -747,7 +747,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/openat2.out }
   - id: runtime/completeness/statx
     targets: [arm64, amd64]
-    build: { source: syscall/statx.c, output: statx, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/statx.c, inputs: [compat.h], output: statx, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/statx }
     run: []
     status: active
@@ -756,7 +756,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/statx.out }
   - id: runtime/completeness/faccessat2
     targets: [arm64, amd64]
-    build: { source: syscall/faccessat2.c, output: faccessat2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/faccessat2.c, inputs: [compat.h], output: faccessat2, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/faccessat2 }
     run: []
     status: active
@@ -765,7 +765,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/faccessat2.out }
   - id: runtime/completeness/readlinkat
     targets: [arm64, amd64]
-    build: { source: syscall/readlinkat.c, output: readlinkat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/readlinkat.c, inputs: [compat.h], output: readlinkat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/readlinkat }
     run: []
     status: active
@@ -774,7 +774,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/readlinkat.out }
   - id: runtime/completeness/fchmodat
     targets: [arm64, amd64]
-    build: { source: syscall/fchmodat.c, output: fchmodat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/fchmodat.c, inputs: [compat.h], output: fchmodat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/fchmodat }
     run: []
     status: active
@@ -783,7 +783,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/fchmodat.out }
   - id: runtime/completeness/utimensat
     targets: [arm64, amd64]
-    build: { source: syscall/utimensat.c, output: utimensat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/utimensat.c, inputs: [compat.h], output: utimensat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/utimensat }
     run: []
     status: active
@@ -792,7 +792,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/utimensat.out }
   - id: runtime/completeness/copy_file_range
     targets: [arm64, amd64]
-    build: { source: syscall/copy_range.c, output: copy_file_range, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/copy_range.c, inputs: [compat.h], output: copy_file_range, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/copy_file_range }
     run: []
     status: active
@@ -801,7 +801,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/copy_range.out }
   - id: runtime/completeness/fallocate
     targets: [arm64, amd64]
-    build: { source: syscall/fallocate.c, output: fallocate, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/fallocate.c, inputs: [compat.h], output: fallocate, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/fallocate }
     run: []
     status: active
@@ -810,7 +810,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/fallocate.out }
   - id: runtime/completeness/name_to_handle_at
     targets: [arm64, amd64]
-    build: { source: syscall/file_handle.c, output: name_to_handle_at, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/file_handle.c, inputs: [compat.h], output: name_to_handle_at, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/name_to_handle_at }
     run: []
     status: active
@@ -819,7 +819,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/file_handle.out }
   - id: runtime/completeness/truncate
     targets: [arm64, amd64]
-    build: { source: syscall/truncate.c, output: truncate, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/truncate.c, inputs: [compat.h], output: truncate, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/truncate }
     run: []
     status: active
@@ -828,7 +828,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/truncate.out }
   - id: runtime/completeness/fsops
     targets: [arm64, amd64]
-    build: { source: syscall/fsops.c, output: fsops, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/fsops.c, inputs: [compat.h], output: fsops, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/fsops }
     run: []
     status: active
@@ -837,7 +837,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/fsops.out }
   - id: runtime/completeness/s3db-durability-default
     targets: [arm64, amd64]
-    build: { source: syscall/durability.c, output: s3db-durability-default, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/durability.c, inputs: [compat.h], output: s3db-durability-default, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/s3db-durability-default }
     run: []
     status: active
@@ -846,7 +846,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/s3db-durability-default.out }
   - id: runtime/completeness/fstatfs
     targets: [arm64, amd64]
-    build: { source: syscall/fstatfs.c, output: fstatfs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/fstatfs.c, inputs: [compat.h], output: fstatfs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/fstatfs }
     run: []
     status: active
@@ -855,7 +855,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/fstatfs.out }
   - id: runtime/completeness/sync-family
     targets: [arm64, amd64]
-    build: { source: syscall/sync_family.c, output: sync-family, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/sync_family.c, inputs: [compat.h], output: sync-family, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/sync-family }
     run: []
     status: active
@@ -864,7 +864,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/sync-family.out }
   - id: runtime/completeness/ioctl-fio
     targets: [arm64, amd64]
-    build: { source: syscall/ioctl_fio.c, output: ioctl-fio, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/ioctl_fio.c, inputs: [compat.h], output: ioctl-fio, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/ioctl-fio }
     run: []
     status: active
@@ -873,7 +873,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/ioctl-fio.out }
   - id: runtime/completeness/flock
     targets: [arm64, amd64]
-    build: { source: syscall/flock.c, output: flock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/flock.c, inputs: [compat.h], output: flock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/flock }
     run: []
     status: active
@@ -882,7 +882,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/flock.out }
   - id: runtime/completeness/fadvise
     targets: [arm64, amd64]
-    build: { source: syscall/fadvise.c, output: fadvise, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/fadvise.c, inputs: [compat.h], output: fadvise, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/fadvise }
     run: []
     status: active
@@ -891,7 +891,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/fadvise.out }
   - id: runtime/completeness/mremap
     targets: [arm64, amd64]
-    build: { source: syscall/mremap.c, output: mremap, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/mremap.c, inputs: [compat.h], output: mremap, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/mremap }
     run: []
     status: active
@@ -900,7 +900,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/mremap.out }
   - id: runtime/completeness/mlock
     targets: [arm64, amd64]
-    build: { source: syscall/mlock.c, output: mlock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/mlock.c, inputs: [compat.h], output: mlock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/mlock }
     run: []
     status: active
@@ -909,7 +909,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/mlock.out }
   - id: runtime/completeness/madvise
     targets: [arm64, amd64]
-    build: { source: syscall/madvise2.c, output: madvise, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/madvise2.c, inputs: [compat.h], output: madvise, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/madvise }
     run: []
     status: active
@@ -918,7 +918,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/madvise.out }
   - id: runtime/completeness/mincore
     targets: [arm64, amd64]
-    build: { source: syscall/mincore.c, output: mincore, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/mincore.c, inputs: [compat.h], output: mincore, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/mincore }
     run: []
     status: active
@@ -927,7 +927,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/mincore.out }
   - id: runtime/completeness/membarrier
     targets: [arm64, amd64]
-    build: { source: syscall/membarrier.c, output: membarrier, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/membarrier.c, inputs: [compat.h], output: membarrier, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/membarrier }
     run: []
     status: active
@@ -936,7 +936,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/membarrier.out }
   - id: runtime/completeness/process-vm
     targets: [arm64, amd64]
-    build: { source: syscall/process_vm.c, output: process-vm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/process_vm.c, inputs: [compat.h], output: process-vm, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/process-vm }
     run: []
     status: !broken
@@ -947,7 +947,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/process-vm.out }
   - id: runtime/completeness/getrandom-flags
     targets: [arm64, amd64]
-    build: { source: syscall/getrandom_flags.c, output: getrandom-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getrandom_flags.c, inputs: [compat.h], output: getrandom-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getrandom-flags }
     run: []
     status: active
@@ -956,7 +956,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getrandom-flags.out }
   - id: runtime/completeness/getentropy
     targets: [arm64, amd64]
-    build: { source: syscall/getentropy.c, output: getentropy, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getentropy.c, inputs: [compat.h], output: getentropy, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getentropy }
     run: []
     status: active
@@ -965,7 +965,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getentropy.out }
   - id: runtime/completeness/auxval
     targets: [arm64, amd64]
-    build: { source: syscall/auxval.c, output: auxval, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/auxval.c, inputs: [compat.h], output: auxval, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/auxval }
     run: []
     status: active
@@ -985,7 +985,7 @@ cases:
     expect: { exit: 0, stdout: golden/aarch64/cpu_features.out }
   - id: runtime/completeness/pagesize
     targets: [arm64, amd64]
-    build: { source: syscall/pagesize.c, output: pagesize, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pagesize.c, inputs: [compat.h], output: pagesize, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pagesize }
     run: []
     status: active
@@ -994,7 +994,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pagesize.out }
   - id: runtime/completeness/sysconf-nproc
     targets: [arm64, amd64]
-    build: { source: syscall/sysconf_nproc.c, output: sysconf-nproc, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/sysconf_nproc.c, inputs: [compat.h], output: sysconf-nproc, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/sysconf-nproc }
     run: []
     status: active
@@ -1003,7 +1003,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/sysconf-nproc.out }
   - id: runtime/completeness/close-range
     targets: [arm64, amd64]
-    build: { source: syscall/close_range.c, output: close-range, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/close_range.c, inputs: [compat.h], output: close-range, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/close-range }
     run: []
     status: active
@@ -1012,7 +1012,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/close-range.out }
   - id: runtime/completeness/close-range-flags
     targets: [arm64, amd64]
-    build: { source: syscall/close_flags.c, output: close-range-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/close_flags.c, inputs: [compat.h], output: close-range-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/close-range-flags }
     run: []
     status: active
@@ -1021,7 +1021,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/close_flags.out }
   - id: runtime/completeness/passcred-badfd
     targets: [arm64, amd64]
-    build: { source: syscall/passcred_badfd.c, output: passcred-badfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/passcred_badfd.c, inputs: [compat.h], output: passcred-badfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/passcred-badfd }
     run: []
     status: active
@@ -1030,7 +1030,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/passcred-badfd.out }
   - id: runtime/completeness/seccomp-filter
     targets: [arm64]
-    build: { source: syscall/seccomp_filter.c, output: seccomp-filter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/seccomp_filter.c, inputs: [compat.h], output: seccomp-filter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/seccomp-filter }
     run: []
     status: !broken
@@ -1041,7 +1041,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/seccomp_filter.out }
   - id: runtime/completeness/clone3
     targets: [arm64, amd64]
-    build: { source: syscall/clone3.c, output: clone3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/clone3.c, inputs: [compat.h], output: clone3, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/clone3 }
     run: []
     status: !broken
@@ -1052,7 +1052,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/clone3.out }
   - id: runtime/completeness/getrusage
     targets: [arm64, amd64]
-    build: { source: syscall/getrusage.c, output: getrusage, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getrusage.c, inputs: [compat.h], output: getrusage, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getrusage }
     run: []
     status: active
@@ -1061,7 +1061,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getrusage.out }
   - id: runtime/completeness/prlimit64
     targets: [arm64, amd64]
-    build: { source: syscall/prlimit64.c, output: prlimit64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/prlimit64.c, inputs: [compat.h], output: prlimit64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/prlimit64 }
     run: []
     status: active
@@ -1070,7 +1070,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/prlimit64.out }
   - id: runtime/completeness/priority
     targets: [arm64, amd64]
-    build: { source: syscall/priority.c, output: priority, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/priority.c, inputs: [compat.h], output: priority, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/priority }
     run: []
     status: active
@@ -1079,7 +1079,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/priority.out }
   - id: runtime/completeness/getcpu
     targets: [arm64, amd64]
-    build: { source: syscall/getcpu.c, output: getcpu, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getcpu.c, inputs: [compat.h], output: getcpu, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getcpu }
     run: []
     status: active
@@ -1088,7 +1088,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getcpu.out }
   - id: runtime/completeness/sched-affinity
     targets: [arm64, amd64]
-    build: { source: syscall/sched_affinity.c, output: sched-affinity, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/sched_affinity.c, inputs: [compat.h], output: sched-affinity, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/sched-affinity }
     run: []
     status: active
@@ -1097,7 +1097,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/sched-affinity.out }
   - id: runtime/completeness/sched-attr
     targets: [arm64, amd64]
-    build: { source: syscall/sched_attr.c, output: sched-attr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/sched_attr.c, inputs: [compat.h], output: sched-attr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/sched-attr }
     run: []
     status: active
@@ -1106,7 +1106,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/sched-attr.out }
   - id: runtime/completeness/capget
     targets: [arm64, amd64]
-    build: { source: syscall/capget.c, output: capget, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/capget.c, inputs: [compat.h], output: capget, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/capget }
     run: []
     status: active
@@ -1115,7 +1115,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/capget.out }
   - id: runtime/completeness/set-tid-address
     targets: [arm64, amd64]
-    build: { source: syscall/tid_address.c, output: set-tid-address, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/tid_address.c, inputs: [compat.h], output: set-tid-address, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/set-tid-address }
     run: []
     status: active
@@ -1124,7 +1124,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/tid_address.out }
   - id: runtime/completeness/unshare-setns
     targets: [arm64, amd64]
-    build: { source: syscall/unshare_setns.c, output: unshare-setns, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/unshare_setns.c, inputs: [compat.h], output: unshare-setns, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/unshare-setns }
     run: []
     status: active
@@ -1133,7 +1133,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/unshare-setns.out }
   - id: runtime/completeness/exec-newline-env
     targets: [arm64, amd64]
-    build: { source: syscall/newline_env.c, output: exec-newline-env, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/newline_env.c, inputs: [compat.h], output: exec-newline-env, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/exec-newline-env }
     run: []
     status: active
@@ -1142,7 +1142,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/newline_env.out }
   - id: runtime/completeness/exec-null-env
     targets: [arm64, amd64]
-    build: { source: syscall/null_env.c, output: exec-null-env, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/null_env.c, inputs: [compat.h], output: exec-null-env, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/exec-null-env }
     run: []
     status: active
@@ -1151,7 +1151,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/null_env.out }
   - id: runtime/completeness/pf-status-meta
     targets: [arm64, amd64]
-    build: { source: syscall/status_meta.c, output: pf-status-meta, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/status_meta.c, inputs: [compat.h], output: pf-status-meta, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-status-meta }
     run: []
     status: active
@@ -1160,7 +1160,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/status_meta.out }
   - id: runtime/completeness/pf-proc-files
     targets: [arm64, amd64]
-    build: { source: syscall/proc_files.c, output: pf-proc-files, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/proc_files.c, inputs: [compat.h], output: pf-proc-files, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-proc-files }
     run: []
     status: active
@@ -1169,7 +1169,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/proc_files.out }
   - id: runtime/completeness/pf-procstat-forks
     targets: [arm64, amd64]
-    build: { source: syscall/fork_stats.c, output: pf-procstat-forks, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/fork_stats.c, inputs: [compat.h], output: pf-procstat-forks, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-procstat-forks }
     run: []
     status: active
@@ -1178,7 +1178,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/fork_stats.out }
   - id: runtime/completeness/pf-cgroup-files
     targets: [arm64, amd64]
-    build: { source: syscall/cgroup_files.c, output: pf-cgroup-files, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/cgroup_files.c, inputs: [compat.h], output: pf-cgroup-files, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-cgroup-files }
     run: []
     status: active
@@ -1187,7 +1187,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/cgroup_files.out }
   - id: runtime/completeness/pf-taskdir
     targets: [arm64, amd64]
-    build: { source: syscall/pf_taskdir.c, output: pf-taskdir, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_taskdir.c, inputs: [compat.h], output: pf-taskdir, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-taskdir }
     run: []
     status: active
@@ -1196,7 +1196,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-taskdir.out }
   - id: runtime/completeness/pf-selfdir
     targets: [arm64, amd64]
-    build: { source: syscall/pf_selfdir.c, output: pf-selfdir, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_selfdir.c, inputs: [compat.h], output: pf-selfdir, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-selfdir }
     run: []
     status: active
@@ -1205,7 +1205,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-selfdir.out }
   - id: runtime/completeness/pf-dirs
     targets: [arm64, amd64]
-    build: { source: syscall/pf_dirs.c, output: pf-dirs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_dirs.c, inputs: [compat.h], output: pf-dirs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-dirs }
     run: []
     status: active
@@ -1214,7 +1214,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-dirs.out }
   - id: runtime/completeness/pf-argv
     targets: [arm64, amd64]
-    build: { source: syscall/pf_argv.c, output: pf-argv, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_argv.c, inputs: [compat.h], output: pf-argv, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-argv }
     run: []
     status: active
@@ -1223,7 +1223,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-argv.out }
   - id: runtime/completeness/pf-devseed
     targets: [arm64, amd64]
-    build: { source: syscall/pf_devseed.c, output: pf-devseed, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_devseed.c, inputs: [compat.h], output: pf-devseed, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-devseed }
     run: []
     status: active
@@ -1232,7 +1232,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-devseed.out }
   - id: runtime/completeness/pf-fdclose
     targets: [arm64, amd64]
-    build: { source: syscall/pf_fdclose.c, output: pf-fdclose, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_fdclose.c, inputs: [compat.h], output: pf-fdclose, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-fdclose }
     run: []
     status: active
@@ -1241,7 +1241,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-fdclose.out }
   - id: runtime/completeness/pf-tty
     targets: [arm64, amd64]
-    build: { source: syscall/pf_tty.c, output: pf-tty, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_tty.c, inputs: [compat.h], output: pf-tty, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-tty }
     run: []
     status: active
@@ -1250,7 +1250,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-tty.out }
   - id: runtime/completeness/pf-environ
     targets: [arm64, amd64]
-    build: { source: syscall/pf_environ.c, output: pf-environ, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_environ.c, inputs: [compat.h], output: pf-environ, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-environ }
     run: []
     status: active
@@ -1259,7 +1259,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-environ.out }
   - id: runtime/completeness/pf-fdinfo
     targets: [arm64, amd64]
-    build: { source: syscall/pf_fdinfo.c, output: pf-fdinfo, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_fdinfo.c, inputs: [compat.h], output: pf-fdinfo, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-fdinfo }
     run: []
     status: active
@@ -1268,7 +1268,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-fdinfo.out }
   - id: runtime/completeness/pf-statfs
     targets: [arm64, amd64]
-    build: { source: syscall/pf_statfs.c, output: pf-statfs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_statfs.c, inputs: [compat.h], output: pf-statfs, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-statfs }
     run: []
     status: active
@@ -1277,7 +1277,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-statfs.out }
   - id: runtime/completeness/pf-smaps
     targets: [arm64, amd64]
-    build: { source: syscall/pf_smaps.c, output: pf-smaps, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pf_smaps.c, inputs: [compat.h], output: pf-smaps, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-smaps }
     run: []
     status: active
@@ -1286,7 +1286,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pf-smaps.out }
   - id: runtime/completeness/pf-maps-relro
     targets: [arm64, amd64]
-    build: { source: syscall/maps_relro.c, output: pf-maps-relro, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/maps_relro.c, inputs: [compat.h], output: pf-maps-relro, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-maps-relro }
     run: []
     status: active
@@ -1295,7 +1295,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/maps_relro.out }
   - id: runtime/completeness/pf-net-unix
     targets: [arm64, amd64]
-    build: { source: syscall/net_unix.c, output: pf-net-unix, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/net_unix.c, inputs: [compat.h], output: pf-net-unix, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pf-net-unix }
     run: []
     status: active
@@ -1304,7 +1304,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/net_unix.out }
   - id: runtime/completeness/rt-sigtimedwait
     targets: [arm64, amd64]
-    build: { source: syscall/rt_sigtimedwait.c, output: rt-sigtimedwait, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/rt_sigtimedwait.c, inputs: [compat.h], output: rt-sigtimedwait, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/rt-sigtimedwait }
     run: []
     status: active
@@ -1313,7 +1313,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/rt-sigtimedwait.out }
   - id: runtime/completeness/sigaltstack
     targets: [arm64, amd64]
-    build: { source: syscall/sigaltstack.c, output: sigaltstack, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/sigaltstack.c, inputs: [compat.h], output: sigaltstack, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/sigaltstack }
     run: []
     status: active
@@ -1322,7 +1322,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/sigaltstack.out }
   - id: runtime/completeness/rt-sigpending
     targets: [arm64, amd64]
-    build: { source: syscall/rt_sigpending.c, output: rt-sigpending, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/rt_sigpending.c, inputs: [compat.h], output: rt-sigpending, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/rt-sigpending }
     run: []
     status: active
@@ -1331,7 +1331,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/rt-sigpending.out }
   - id: runtime/completeness/pidfd-signal
     targets: [arm64, amd64]
-    build: { source: syscall/pidfd_signal.c, output: pidfd-signal, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pidfd_signal.c, inputs: [compat.h], output: pidfd-signal, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pidfd-signal }
     run: []
     status: active
@@ -1340,7 +1340,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pidfd-signal.out }
   - id: runtime/completeness/pidfd-flags
     targets: [arm64, amd64]
-    build: { source: syscall/pidfd_flags.c, output: pidfd-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pidfd_flags.c, inputs: [compat.h], output: pidfd-flags, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pidfd-flags }
     run: []
     status: active
@@ -1349,7 +1349,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pidfd-flags.out }
   - id: runtime/completeness/pidfd-cap
     targets: [arm64, amd64]
-    build: { source: syscall/pidfd_cap.c, output: pidfd-cap, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pidfd_cap.c, inputs: [compat.h], output: pidfd-cap, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pidfd-cap }
     run: []
     status: active
@@ -1358,7 +1358,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pidfd-cap.out }
   - id: runtime/completeness/clock-getres
     targets: [arm64, amd64]
-    build: { source: syscall/clock_getres.c, output: clock-getres, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/clock_getres.c, inputs: [compat.h], output: clock-getres, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/clock-getres }
     run: []
     status: active
@@ -1367,7 +1367,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/clock-getres.out }
   - id: runtime/completeness/clock-variants
     targets: [arm64, amd64]
-    build: { source: syscall/clock_variants.c, output: clock-variants, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/clock_variants.c, inputs: [compat.h], output: clock-variants, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/clock-variants }
     run: []
     status: active
@@ -1376,7 +1376,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/clock-variants.out }
   - id: runtime/completeness/timer-create
     targets: [arm64, amd64]
-    build: { source: syscall/timer_create.c, output: timer-create, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/timer_create.c, inputs: [compat.h], output: timer-create, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/timer-create }
     run: []
     status: active
@@ -1385,7 +1385,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/timer-create.out }
   - id: runtime/completeness/itimer
     targets: [arm64, amd64]
-    build: { source: syscall/itimer.c, output: itimer, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/itimer.c, inputs: [compat.h], output: itimer, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/itimer }
     run: []
     status: active
@@ -1394,7 +1394,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/itimer.out }
   - id: runtime/completeness/adjtimex
     targets: [arm64, amd64]
-    build: { source: syscall/adjtimex.c, output: adjtimex, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/adjtimex.c, inputs: [compat.h], output: adjtimex, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/adjtimex }
     run: []
     status: active
@@ -1403,7 +1403,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/adjtimex.out }
   - id: runtime/completeness/io-uring-setup
     targets: [arm64, amd64]
-    build: { source: syscall/uring_setup.c, output: io-uring-setup, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/uring_setup.c, inputs: [compat.h], output: io-uring-setup, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/io-uring-setup }
     run: []
     status: active
@@ -1412,7 +1412,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/uring_setup.out }
   - id: runtime/completeness/io-uring-enter
     targets: [arm64, amd64]
-    build: { source: syscall/uring_enter.c, output: io-uring-enter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/uring_enter.c, inputs: [compat.h], output: io-uring-enter, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/io-uring-enter }
     run: []
     status: !broken
@@ -1423,7 +1423,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/uring_enter.out }
   - id: runtime/completeness/landlock
     targets: [arm64, amd64]
-    build: { source: syscall/landlock.c, output: landlock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/landlock.c, inputs: [compat.h], output: landlock, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/landlock }
     run: []
     status: active
@@ -1432,7 +1432,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/landlock.out }
   - id: runtime/completeness/mempolicy
     targets: [arm64, amd64]
-    build: { source: syscall/mempolicy.c, output: mempolicy, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/mempolicy.c, inputs: [compat.h], output: mempolicy, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/mempolicy }
     run: []
     status: active
@@ -1441,7 +1441,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/mempolicy.out }
   - id: runtime/completeness/memfd-secret
     targets: [arm64, amd64]
-    build: { source: syscall/memfd_secret.c, output: memfd-secret, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/memfd_secret.c, inputs: [compat.h], output: memfd-secret, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/memfd-secret }
     run: []
     status: active
@@ -1450,7 +1450,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/memfd_secret.out }
   - id: runtime/completeness/pidfd-getfd
     targets: [arm64, amd64]
-    build: { source: syscall/pidfd_getfd.c, output: pidfd-getfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/pidfd_getfd.c, inputs: [compat.h], output: pidfd-getfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/pidfd-getfd }
     run: []
     status: active
@@ -1459,7 +1459,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/pidfd_getfd.out }
   - id: runtime/completeness/robust-list
     targets: [arm64, amd64]
-    build: { source: syscall/robust_list.c, output: robust-list, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/robust_list.c, inputs: [compat.h], output: robust-list, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/robust-list }
     run: []
     status: active
@@ -1468,7 +1468,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/robust_list.out }
   - id: runtime/completeness/kcmp
     targets: [arm64, amd64]
-    build: { source: syscall/kcmp.c, output: kcmp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/kcmp.c, inputs: [compat.h], output: kcmp, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/kcmp }
     run: []
     status: active
@@ -1477,7 +1477,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/kcmp.out }
   - id: runtime/completeness/getdents64
     targets: [arm64, amd64]
-    build: { source: syscall/getdents64.c, output: getdents64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/getdents64.c, inputs: [compat.h], output: getdents64, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/getdents64 }
     run: []
     status: !unsupported
@@ -1488,7 +1488,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/getdents64.out }
   - id: runtime/completeness/statx-attr
     targets: [arm64, amd64]
-    build: { source: syscall/statx_attr.c, output: statx-attr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/statx_attr.c, inputs: [compat.h], output: statx-attr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/statx-attr }
     run: []
     status: active
@@ -1497,7 +1497,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/statx_attr.out }
   - id: runtime/completeness/sched-getattr
     targets: [arm64, amd64]
-    build: { source: syscall/sched_getattr.c, output: sched-getattr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/sched_getattr.c, inputs: [compat.h], output: sched-getattr, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/sched-getattr }
     run: []
     status: active
@@ -1506,7 +1506,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/sched_getattr.out }
   - id: runtime/completeness/futex-waitv
     targets: [arm64, amd64]
-    build: { source: syscall/futex_waitv.c, output: futex-waitv, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/futex_waitv.c, inputs: [compat.h], output: futex-waitv, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/futex-waitv }
     run: []
     status: active
@@ -1515,7 +1515,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/futex_waitv.out }
   - id: runtime/completeness/inotify
     targets: [arm64, amd64]
-    build: { source: syscall/inotify.c, output: inotify, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/inotify.c, inputs: [compat.h], output: inotify, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/inotify }
     run: []
     status: active
@@ -1524,7 +1524,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/inotify.out }
   - id: runtime/completeness/timerfd
     targets: [arm64, amd64]
-    build: { source: syscall/timerfd.c, output: timerfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/timerfd.c, inputs: [compat.h], output: timerfd, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/timerfd }
     run: []
     status: active
@@ -1533,7 +1533,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/timerfd.out }
   - id: runtime/completeness/rseq
     targets: [arm64, amd64]
-    build: { source: syscall/rseq.c, output: rseq, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/rseq.c, inputs: [compat.h], output: rseq, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/rseq }
     run: []
     status: active
@@ -1542,7 +1542,7 @@ cases:
     expect: { exit: 0, stdout: golden/shared/rseq.out }
   - id: runtime/completeness/cachestat
     targets: [arm64, amd64]
-    build: { source: syscall/cachestat.c, output: cachestat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
+    build: { source: syscall/cachestat.c, inputs: [compat.h], output: cachestat, flags: [-static, -O2, -std=gnu11, -Itests/runtime/completeness] }
     artifact: { destination: /opt/husklet/completeness/cachestat }
     run: []
     status: active

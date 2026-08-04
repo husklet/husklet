@@ -7,9 +7,7 @@ async fn file_records_survive_reopen_and_are_removed_atomically() {
     let repository = Arc::new(Disk::open(config.root.clone()).await.unwrap());
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(40);
-    let first = test_containers(repository, Arc::new(runtime))
-        .await
-        .unwrap();
+    let first = test_containers(repository, Arc::new(runtime)).await.unwrap();
     let created = first
         .create(spec("durable").restart(RestartPolicy::UnlessStopped))
         .await

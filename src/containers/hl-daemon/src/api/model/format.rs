@@ -71,27 +71,17 @@ impl Ports<'_> {
     }
 
     pub(super) fn summaries(&self) -> Vec<crate::api::PortSummary> {
-        let published = self
-            .0
-            .publish
-            .iter()
-            .map(|publication| crate::api::PortSummary {
-                ip: Some(publication.host_ip.to_string()),
-                private_port: publication.port.guest,
-                public_port: Some(publication.host),
-                protocol: "tcp".into(),
-            });
+        let published = self.0.publish.iter().map(|publication| crate::api::PortSummary {
+            ip: Some(publication.host_ip.to_string()),
+            private_port: publication.port.guest,
+            public_port: Some(publication.host),
+            protocol: "tcp".into(),
+        });
         let unbound = self
             .0
             .ports
             .iter()
-            .filter(|port| {
-                !self
-                    .0
-                    .publish
-                    .iter()
-                    .any(|publication| publication.port == **port)
-            })
+            .filter(|port| !self.0.publish.iter().any(|publication| publication.port == **port))
             .map(|port| crate::api::PortSummary {
                 ip: None,
                 private_port: port.guest,
@@ -138,14 +128,9 @@ mod tests {
 
     #[test]
     fn docker_port_projection_preserves_keys_bindings_and_unbound_ports() {
-        let mut spec = hl_container::ContainerSpec::from_directory(
-            "/rootfs",
-            hl_container::Process::new("/bin/true"),
-        );
+        let mut spec = hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/true"));
         spec.ports.insert(hl_container::Port::tcp(443).unwrap());
-        spec = spec.publish(
-            hl_container::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8_080, 80).unwrap(),
-        );
+        spec = spec.publish(hl_container::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8_080, 80).unwrap());
 
         let ports = Ports::from(&spec);
         assert_eq!(
@@ -188,28 +173,16 @@ mod tests {
 
     #[test]
     fn docker_signal_and_image_names_preserve_wire_text_and_rootfs_fallback() {
-        assert_eq!(
-            Signal::from(hl_container::Signal::Terminate).to_string(),
-            "SIGTERM"
-        );
-        assert_eq!(
-            Signal::from(hl_container::Signal::User2).to_string(),
-            "SIGUSR2"
-        );
+        assert_eq!(Signal::from(hl_container::Signal::Terminate).to_string(), "SIGTERM");
+        assert_eq!(Signal::from(hl_container::Signal::User2).to_string(), "SIGUSR2");
 
         let spec = hl_container::ContainerSpec::from_directory(
             "/var/lib/husklet/rootfs",
             hl_container::Process::new("/bin/true"),
         );
-        assert_eq!(
-            ImageName::from(&spec).to_string(),
-            "/var/lib/husklet/rootfs"
-        );
+        assert_eq!(ImageName::from(&spec).to_string(), "/var/lib/husklet/rootfs");
 
         let tagged = spec.image("registry.test/team/tool:7".parse().unwrap());
-        assert_eq!(
-            ImageName::from(&tagged).to_string(),
-            "registry.test/team/tool:7"
-        );
+        assert_eq!(ImageName::from(&tagged).to_string(), "registry.test/team/tool:7");
     }
 }

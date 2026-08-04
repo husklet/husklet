@@ -99,9 +99,9 @@ impl DirectoryImage {
     fn path(&self, name: &str) -> Result<PathBuf, CheckpointError> {
         let path = Path::new(name);
         if path.is_absolute()
-            || path.components().any(
-                |component| !matches!(component, Component::Normal(value) if !value.is_empty()),
-            )
+            || path
+                .components()
+                .any(|component| !matches!(component, Component::Normal(value) if !value.is_empty()))
         {
             return Err(CheckpointError::new(format!(
                 "invalid checkpoint object name: {name:?}"
@@ -114,9 +114,7 @@ impl DirectoryImage {
         for entry in std::fs::read_dir(directory)
             .map_err(|error| CheckpointError::new(format!("list checkpoint objects: {error}")))?
         {
-            let entry = entry.map_err(|error| {
-                CheckpointError::new(format!("read checkpoint object: {error}"))
-            })?;
+            let entry = entry.map_err(|error| CheckpointError::new(format!("read checkpoint object: {error}")))?;
             if entry
                 .file_type()
                 .map_err(|error| CheckpointError::new(error.to_string()))?

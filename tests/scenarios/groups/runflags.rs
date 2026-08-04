@@ -5,8 +5,7 @@ mod docker;
 
 use crate::report::ScenarioBatch;
 use hl_container::{
-    Console, ContainerSpec, Containers, ExitStatus, Isolation, Mount, Process, Resources,
-    RestartPolicy, Sandbox, Size,
+    Console, ContainerSpec, Containers, ExitStatus, Isolation, Mount, Process, Resources, RestartPolicy, Sandbox, Size,
 };
 use std::{path::Path, time::Duration};
 
@@ -63,11 +62,7 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path, work: &Path) -> 
         };
         let result = if matches!(
             id,
-            "runflags/publish-p"
-                | "runflags/rm"
-                | "runflags/user-name"
-                | "runflags/network-bridge"
-                | "runflags/env-e"
+            "runflags/publish-p" | "runflags/rm" | "runflags/user-name" | "runflags/network-bridge" | "runflags/env-e"
         ) {
             docker::run(id, containers, rootfs, work).await
         } else {
@@ -105,15 +100,43 @@ impl Case<'_> {
     async fn run(&self, id: &str) -> Result<(), Error> {
         match id {
             "runflags/detached-d" => self.detached().await,
-            "runflags/env-e" => self.command("rf-env", Process::new("/bin/printenv").args(["FOO"]).env("FOO", "barbaz"), b"barbaz\n").await,
+            "runflags/env-e" => {
+                self.command(
+                    "rf-env",
+                    Process::new("/bin/printenv").args(["FOO"]).env("FOO", "barbaz"),
+                    b"barbaz\n",
+                )
+                .await
+            }
             "runflags/publish-p" => Err("automatic host-port assignment is not modeled by the headless API".into()),
             "runflags/publish-p-explicit" => self.publish().await,
             "runflags/bind-mount-v" => self.bind().await,
-            "runflags/workdir-w" => self.command("rf-work", Process::new("/bin/pwd").working_dir("/var/spool"), b"/var/spool\n").await,
+            "runflags/workdir-w" => {
+                self.command(
+                    "rf-work",
+                    Process::new("/bin/pwd").working_dir("/var/spool"),
+                    b"/var/spool\n",
+                )
+                .await
+            }
             "runflags/rm" => Err("automatic removal after exit is not modeled".into()),
             "runflags/name" => self.name().await,
-            "runflags/entrypoint" => self.command("rf-entry", Process::new("/bin/echo").args(["ENTRYOVERRIDE"]), b"ENTRYOVERRIDE\n").await,
-            "runflags/user-uidgid" => self.command("rf-user", Process::new("/usr/bin/id").user(1000, 1000), b"uid=1000 gid=1000 groups=1000\n").await,
+            "runflags/entrypoint" => {
+                self.command(
+                    "rf-entry",
+                    Process::new("/bin/echo").args(["ENTRYOVERRIDE"]),
+                    b"ENTRYOVERRIDE\n",
+                )
+                .await
+            }
+            "runflags/user-uidgid" => {
+                self.command(
+                    "rf-user",
+                    Process::new("/usr/bin/id").user(1000, 1000),
+                    b"uid=1000 gid=1000 groups=1000\n",
+                )
+                .await
+            }
             "runflags/user-name" => Err("named-user resolution is not exposed by the headless specification".into()),
             "runflags/network-none" => self.net_none().await,
             "runflags/network-bridge" => self.net_bridge().await,
@@ -121,9 +144,42 @@ impl Case<'_> {
             "runflags/exit-code" => self.exit().await,
             "runflags/stdin-i" => self.stdin().await,
             "runflags/tty-t" => self.tty().await,
-            "runflags/memory-accepted" => self.resource("rf-memory", Resources { memory_bytes: 64 * 1024 * 1024, ..Resources::default() }, "echo MEMFLAG_OK", b"MEMFLAG_OK\n").await,
-            "runflags/memory-cgroup-honored" => self.resource("rf-memory-file", Resources { memory_bytes: 64 * 1024 * 1024, ..Resources::default() }, "cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes", b"67108864\n").await,
-            "runflags/cpus-accepted" => self.resource("rf-cpu", Resources { cpu_count: 1, ..Resources::default() }, "echo CPUFLAG_OK", b"CPUFLAG_OK\n").await,
+            "runflags/memory-accepted" => {
+                self.resource(
+                    "rf-memory",
+                    Resources {
+                        memory_bytes: 64 * 1024 * 1024,
+                        ..Resources::default()
+                    },
+                    "echo MEMFLAG_OK",
+                    b"MEMFLAG_OK\n",
+                )
+                .await
+            }
+            "runflags/memory-cgroup-honored" => {
+                self.resource(
+                    "rf-memory-file",
+                    Resources {
+                        memory_bytes: 64 * 1024 * 1024,
+                        ..Resources::default()
+                    },
+                    "cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes",
+                    b"67108864\n",
+                )
+                .await
+            }
+            "runflags/cpus-accepted" => {
+                self.resource(
+                    "rf-cpu",
+                    Resources {
+                        cpu_count: 1,
+                        ..Resources::default()
+                    },
+                    "echo CPUFLAG_OK",
+                    b"CPUFLAG_OK\n",
+                )
+                .await
+            }
             _ => unreachable!(),
         }
     }
@@ -143,10 +199,7 @@ impl Case<'_> {
         let logs = self.containers.logs(name).await?;
         require(
             status == ExitStatus::Code(0) && logs.stdout == stdout,
-            format!(
-                "status={status:?} stdout={:?}",
-                String::from_utf8_lossy(&logs.stdout)
-            ),
+            format!("status={status:?} stdout={:?}", String::from_utf8_lossy(&logs.stdout)),
         )
     }
     async fn detached(&self) -> Result<(), Error> {
@@ -155,11 +208,7 @@ impl Case<'_> {
             .await?;
         self.containers.start("rf-detached").await?;
         require(
-            self.containers
-                .inspect("rf-detached")
-                .await?
-                .state
-                .is_active(),
+            self.containers.inspect("rf-detached").await?.state.is_active(),
             "not running",
         )
     }
@@ -171,10 +220,7 @@ impl Case<'_> {
         let spec = self
             .spec(
                 "rf-publish",
-                Process::new("/bin/sh").args([
-                    "-c",
-                    "while true; do echo EXPLICITOK | nc -l -p 9000 -w 2; done",
-                ]),
+                Process::new("/bin/sh").args(["-c", "while true; do echo EXPLICITOK | nc -l -p 9000 -w 2; done"]),
             )
             .isolation(Isolation {
                 sandbox: Sandbox::Disabled,
@@ -185,8 +231,7 @@ impl Case<'_> {
         self.containers.create(spec).await?;
         self.containers.start("rf-publish").await?;
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let mut stream =
-            tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, host)).await?;
+        let mut stream = tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, host)).await?;
         let mut bytes = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut bytes).await?;
         require(bytes == b"EXPLICITOK\n", "published payload mismatch")
@@ -205,8 +250,7 @@ impl Case<'_> {
         self.containers.start("rf-bind").await?;
         self.containers.wait("rf-bind").await?;
         require(
-            self.containers.logs("rf-bind").await?.stdout == b"SEED\n"
-                && std::fs::read(mount.join("g"))? == b"WROTE\n",
+            self.containers.logs("rf-bind").await?.stdout == b"SEED\n" && std::fs::read(mount.join("g"))? == b"WROTE\n",
             "bind visibility mismatch",
         )
     }
@@ -215,13 +259,7 @@ impl Case<'_> {
             .create(self.spec("rf-named", Process::new("/bin/sleep").args(["30"])))
             .await?;
         require(
-            self.containers
-                .inspect("rf-named")
-                .await?
-                .spec
-                .name
-                .as_deref()
-                == Some("rf-named"),
+            self.containers.inspect("rf-named").await?.spec.name.as_deref() == Some("rf-named"),
             "name missing",
         )
     }
@@ -239,10 +277,7 @@ impl Case<'_> {
     async fn net_bridge(&self) -> Result<(), Error> {
         self.command(
             "rf-bridge",
-            Process::new("/bin/sh").args([
-                "-c",
-                "/sbin/ip -o link show eth0 >/dev/null 2>&1 && echo HAS_ETH0",
-            ]),
+            Process::new("/bin/sh").args(["-c", "/sbin/ip -o link show eth0 >/dev/null 2>&1 && echo HAS_ETH0"]),
             b"HAS_ETH0\n",
         )
         .await
@@ -280,9 +315,7 @@ impl Case<'_> {
             stdin: true,
             terminal: None,
         });
-        self.containers
-            .create(self.spec("rf-stdin", process))
-            .await?;
+        self.containers.create(self.spec("rf-stdin", process)).await?;
         let session = self.containers.attach("rf-stdin").await?;
         self.containers.start("rf-stdin").await?;
         session.write(b"HELLOSTDIN\n".to_vec()).await?;
@@ -302,13 +335,7 @@ impl Case<'_> {
             });
         self.command("rf-tty", process, b"IS_TTY\r\n").await
     }
-    async fn resource(
-        &self,
-        name: &str,
-        resources: Resources,
-        command: &str,
-        output: &[u8],
-    ) -> Result<(), Error> {
+    async fn resource(&self, name: &str, resources: Resources, command: &str, output: &[u8]) -> Result<(), Error> {
         let spec = self
             .spec(name, Process::new("/bin/sh").args(["-c", command]))
             .resources(resources);
@@ -318,17 +345,10 @@ impl Case<'_> {
         let logs = self.containers.logs(name).await?;
         require(
             status == ExitStatus::Code(0) && logs.stdout == output,
-            format!(
-                "status={status:?} stdout={:?}",
-                String::from_utf8_lossy(&logs.stdout)
-            ),
+            format!("status={status:?} stdout={:?}", String::from_utf8_lossy(&logs.stdout)),
         )
     }
 }
 fn require(condition: bool, message: impl Into<String>) -> Result<(), Error> {
-    if condition {
-        Ok(())
-    } else {
-        Err(message.into().into())
-    }
+    if condition { Ok(()) } else { Err(message.into().into()) }
 }

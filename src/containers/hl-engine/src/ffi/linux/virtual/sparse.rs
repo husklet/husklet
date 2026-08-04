@@ -32,20 +32,10 @@ impl Backing {
         }
         let first = offset / page * page;
         let displacement = offset - first;
-        let needed = displacement
-            .checked_add(length)
-            .ok_or(MemoryError::InvalidRange)?;
-        let mapped = needed
-            .checked_add(page - 1)
-            .ok_or(MemoryError::InvalidRange)?
-            / page
-            * page;
+        let needed = displacement.checked_add(length).ok_or(MemoryError::InvalidRange)?;
+        let mapped = needed.checked_add(page - 1).ok_or(MemoryError::InvalidRange)? / page * page;
         Ok((
-            Self::map(
-                mapped,
-                Some(file.try_clone().map_err(|_| MemoryError::Host)?),
-                first,
-            )?,
+            Self::map(mapped, Some(file.try_clone().map_err(|_| MemoryError::Host)?), first)?,
             displacement,
         ))
     }
@@ -58,7 +48,9 @@ impl Backing {
         }
         let (flags, descriptor) = file
             .as_ref()
-            .map_or((abi::MAP_PRIVATE | abi::MAP_ANONYMOUS, -1), |file| (abi::MAP_SHARED, file.as_raw_fd()));
+            .map_or((abi::MAP_PRIVATE | abi::MAP_ANONYMOUS, -1), |file| {
+                (abi::MAP_SHARED, file.as_raw_fd())
+            });
         // SAFETY: the host chooses an unrelated interval, retains no pointer,
         // and Backing owns the complete result until its final Arc is dropped.
         let address = unsafe { abi::mmap(std::ptr::null_mut(), length, 1 | 2, flags, descriptor, offset) };
@@ -306,7 +298,13 @@ impl SparseMappings {
         for (start, view) in affected {
             views.remove(&start);
             if start < guest {
-                views.insert(start, View { length: guest - start, ..view.clone() });
+                views.insert(
+                    start,
+                    View {
+                        length: guest - start,
+                        ..view.clone()
+                    },
+                );
             }
             let old_end = view.end()?;
             if old_end > end {

@@ -202,3 +202,11 @@ longjmp_deep.c	differential-hunt/abi/longjmp_deep.c	aarch64,x86_64	0	golden/long
 complexf.c	differential-hunt/abi/complexf.c	aarch64,x86_64	0	golden/complexf.out	sha256:cfdc828dfd126105949a029ff6814daf085d0ffb1e0251ac4dc1e5ba741fef1b;bytes:265	portable-c
 ucontext_swap	abi	ucontext_swap.c	differential-hunt/abi/ucontext_swap.c	aarch64,x86_64	-static -O2 -std=gnu11 -pthread	-	-	0	expected/ucontext_swap.out	linux-libc,abi,ucontext	excluded-macos	excluded-macos: macOS Mach-O engine SIGILL on the first activation of a makecontext() context via swapcontext (initial jump onto the synthesized coroutine stack+PC in the Mach exception + MAP_JIT path); getcontext/setcontext/makecontext-build all pass there. Linux engine and native pass, so the Linux lane now runs and enforces this.
 ```
+
+The shared ABI follow-up inspected `../engine/src/core/target/{aarch64,x86_64}.c`
+and the translator guest ABI headers for anonymous mapping and Linux `struct
+stat` layout. Static assertions deliberately differ by ISA while guest-visible
+offsets remain Linux offsets. The exact atomic probe was not duplicated because
+`atomic_builtins.c` already owns the same bytes and contract. Rust ownership is
+the generated CPU schema, `hl-execution`, and `hl-memory`; no host address is
+exposed as a guest ABI value.

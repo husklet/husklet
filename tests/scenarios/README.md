@@ -7,11 +7,11 @@ without a Rust registry or category wrapper.
 Run the quick suite with:
 
 ```text
-nix develop --command cargo run -p testing --bin testing -- scenarios --class quick
+nix develop --command cargo run -p testing -- scenarios --class quick
 ```
 
 List one scenario without materializing images:
 
 ```text
-nix develop --command cargo run -p testing --bin testing -- scenarios languages --list
+nix develop --command cargo run -p testing -- scenarios languages --list
 ```

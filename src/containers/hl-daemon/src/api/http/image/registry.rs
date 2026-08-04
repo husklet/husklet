@@ -1,8 +1,7 @@
 use super::{
-    ApiError, ApiResult, AsyncWriteExt, BTreeMap, Body, CommitOptions, Deserialize, Distribution,
-    DockerError, DockerState, Fields, HeaderMap, ImageCommit, ImageLoad, IntoResponse, Json, Path,
+    ApiError, ApiResult, AsyncWriteExt, BTreeMap, Body, CommitOptions, Deserialize, Distribution, DockerError,
+    DockerState, Fields, HeaderMap, ImageCommit, ImageLoad, IntoResponse, Json, MAX_IMAGE_ARCHIVE_BYTES, Path,
     Platform, PullProgress, Query, Reference, Response, Search, Seek, SeekFrom, State, StatusCode,
-    MAX_IMAGE_ARCHIVE_BYTES,
 };
 
 #[hl_design::adapter]
@@ -22,9 +21,7 @@ pub(in super::super) struct SearchQuery {
 }
 
 #[hl_design::adapter]
-pub(in super::super) async fn search(
-    Query(query): Query<SearchQuery>,
-) -> ApiResult<Json<Vec<Search>>> {
+pub(in super::super) async fn search(Query(query): Query<SearchQuery>) -> ApiResult<Json<Vec<Search>>> {
     Fields::from(&query.unsupported).reject("image search")?;
     if query.term.is_empty() {
         return Err(ApiError::new(StatusCode::BAD_REQUEST, "term is required"));
@@ -40,10 +37,7 @@ pub(in super::super) async fn distribution(
 ) -> ApiResult<Json<Distribution>> {
     let image = state.find_image(&name).await.map_err(|error| {
         if error.status == StatusCode::NOT_FOUND {
-            ApiError::new(
-                StatusCode::NOT_FOUND,
-                format!("No such distribution: {name}"),
-            )
+            ApiError::new(StatusCode::NOT_FOUND, format!("No such distribution: {name}"))
         } else {
             error
         }
@@ -72,19 +66,15 @@ pub(in super::super) async fn pull(
     body: Body,
 ) -> ApiResult<Response> {
     Fields::from(&query.unsupported).reject("image create")?;
-    if query
-        .from_src
-        .as_deref()
-        .is_some_and(|value| !value.is_empty())
-    {
+    if query.from_src.as_deref().is_some_and(|value| !value.is_empty()) {
         return state.import(query, body).await;
     }
     let auth = headers
         .get("x-registry-auth")
         .map(|value| {
-            let value = value.to_str().map_err(|_| {
-                ApiError::new(StatusCode::BAD_REQUEST, "invalid X-Registry-Auth header")
-            })?;
+            let value = value
+                .to_str()
+                .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "invalid X-Registry-Auth header"))?;
             crate::api::Credentials::decode(value)
                 .and_then(crate::api::Credentials::auth)
                 .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))
@@ -117,9 +107,7 @@ pub(in super::super) async fn pull(
     let images = state.containers.images().map_err(ApiError::container)?;
     let source: std::sync::Arc<dyn hl_images::remote::Source> = match auth {
         hl_images::remote::Auth::Anonymous => state.source.clone(),
-        auth if reference.registry().starts_with("127.0.0.1:")
-            || reference.registry().starts_with("localhost:") =>
-        {
+        auth if reference.registry().starts_with("127.0.0.1:") || reference.registry().starts_with("localhost:") => {
             std::sync::Arc::new(hl_images::remote::Registry::insecure(auth))
         }
         auth => std::sync::Arc::new(hl_images::remote::Registry::new(auth)),
@@ -138,8 +126,9 @@ pub(in super::super) async fn pull(
             .await;
         let progress = match images.pull(source.as_ref(), reference, &platform).await {
             Ok(image) => {
-                let id = match images.image_id(&image, &platform) {
-                    Ok(id) => id.to_string(),
+                let id = images.image_id(&image, &platform).map(|id| id.to_string());
+                let id = match id {
+                    Ok(id) => id,
                     Err(error) => {
                         let message = error.to_string();
                         let _ = sender
@@ -173,10 +162,9 @@ pub(in super::super) async fn pull(
     });
     Ok((
         [(axum::http::header::CONTENT_TYPE, "application/json")],
-        Body::from_stream(futures_util::stream::unfold(
-            receiver,
-            |mut receiver| async move { receiver.recv().await.map(|item| (item, receiver)) },
-        )),
+        Body::from_stream(futures_util::stream::unfold(receiver, |mut receiver| async move {
+            receiver.recv().await.map(|item| (item, receiver))
+        })),
     )
         .into_response())
 }
@@ -197,8 +185,7 @@ impl DockerState {
         let mut layer = tokio::fs::File::from_std(tempfile::tempfile().map_err(ApiError::io)?);
         let mut received = 0_u64;
         while let Some(chunk) = futures_util::StreamExt::next(&mut stream).await {
-            let chunk =
-                chunk.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+            let chunk = chunk.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
             received = received.saturating_add(chunk.len() as u64);
             if received > MAX_IMAGE_ARCHIVE_BYTES {
                 return Err(ApiError::new(

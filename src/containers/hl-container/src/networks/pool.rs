@@ -46,10 +46,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     fn bridge(address: Ipv4Addr, prefix: u8) -> Network {
-        Network::from_spec(
-            NetworkSpec::bridge("test", Subnet::new(address, prefix).unwrap()),
-            0,
-        )
+        Network::from_spec(NetworkSpec::bridge("test", Subnet::new(address, prefix).unwrap()), 0)
     }
 
     #[test]
@@ -83,8 +80,7 @@ mod tests {
     fn rejects_an_explicit_overlapping_subnet() {
         let occupied = [bridge(Ipv4Addr::new(172, 18, 0, 0), 16)];
         assert!(matches!(
-            Pool::from(occupied.as_slice())
-                .validate(Subnet::new(Ipv4Addr::new(172, 18, 2, 0), 24).unwrap()),
+            Pool::from(occupied.as_slice()).validate(Subnet::new(Ipv4Addr::new(172, 18, 2, 0), 24).unwrap()),
             Err(Error::InvalidNetwork(_))
         ));
     }

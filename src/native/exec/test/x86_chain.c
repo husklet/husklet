@@ -10,6 +10,18 @@
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "x86_chain:%d: %s\n", __LINE__, #value); return 1; } } while (0)
 
 #if defined(__aarch64__)
+enum { X86_DISPATCH_RETURN_WORDS = 12 };
+
+static uint32_t *direct_exit_site(const hl_native_code *code) {
+    return (uint32_t *)((uint8_t *)code->entry + code->code_size) -
+           (X86_DISPATCH_RETURN_WORDS + 1);
+}
+
+static uint32_t *conditional_exit_site(const hl_native_code *code, unsigned edge) {
+    return (uint32_t *)((uint8_t *)code->entry + code->code_size) -
+           (X86_DISPATCH_RETURN_WORDS + 2u - edge);
+}
+
 static hl_native_status executable_begin(void *opaque) {
     test_memory *memory = opaque;
     memory->begin_calls++;
@@ -62,18 +74,19 @@ static int chain_contract(void) {
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 4 && state.budget == 0);
     CHECK(hl_native_translation_lookup(executor, &first_key, &first) == HL_NATIVE_HIT);
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_HIT);
-    uint32_t *first_tail = (uint32_t *)((uint8_t *)first.entry + first.code_size - 8u);
-    uint32_t *second_tail = (uint32_t *)((uint8_t *)second.entry + second.code_size - 8u);
-    CHECK(*first_tail != UINT32_C(0xd65f03c0) && *second_tail != UINT32_C(0xd65f03c0));
+    uint32_t *first_tail = direct_exit_site(&first);
+    uint32_t *second_tail = direct_exit_site(&second);
+    CHECK((*first_tail == UINT32_C(0x14000001)) !=
+          (*second_tail == UINT32_C(0x14000001)));
 
     state = (hl_native_x86_64_cpu){.program = 0x7000, .budget = 4, .interrupt = 1};
-    hl_native_x86_64_enter(&state, first.body);
+    hl_native_x86_64_enter(&state, first.entry);
     CHECK(state.program == 0x7000 && state.scratch[0] == 0 && state.executed == 0);
 
     invalidate.first = 0x7010;
     invalidate.last = 0x7012;
     CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
-    CHECK(*first_tail == UINT32_C(0xd65f03c0));
+    CHECK(*first_tail == UINT32_C(0x14000001));
     CHECK(hl_native_translation_lookup(executor, &first_key, &first) == HL_NATIVE_HIT);
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_MISS);
 
@@ -81,15 +94,15 @@ static int chain_contract(void) {
     state = (hl_native_x86_64_cpu){.program = 0x7010};
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 1 && state.budget == 0);
-    CHECK(*first_tail != UINT32_C(0xd65f03c0));
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_HIT);
-    second_tail = (uint32_t *)((uint8_t *)second.entry + second.code_size - 8u);
-    CHECK(*second_tail != UINT32_C(0xd65f03c0));
+    second_tail = direct_exit_site(&second);
+    CHECK((*first_tail == UINT32_C(0x14000001)) !=
+          (*second_tail == UINT32_C(0x14000001)));
 
     invalidate.first = 0x7000;
     invalidate.last = 0x7002;
     CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
-    CHECK(*second_tail == UINT32_C(0xd65f03c0));
+    CHECK(*second_tail == UINT32_C(0x14000001));
     CHECK(hl_native_translation_lookup(executor, &first_key, &first) == HL_NATIVE_MISS);
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_HIT);
 
@@ -125,10 +138,10 @@ static int chain_contract(void) {
         CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
         CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && state.executed == 2);
         CHECK(hl_native_translation_lookup(executor, &choose_key, &choose_code) == HL_NATIVE_HIT);
-        uint32_t *fallthrough_tail = (uint32_t *)((uint8_t *)choose_code.entry + choose_code.code_size - 12u);
-        uint32_t *taken_tail = (uint32_t *)((uint8_t *)choose_code.entry + choose_code.code_size - 8u);
-        CHECK(*fallthrough_tail != UINT32_C(0xd65f03c0));
-        CHECK(*taken_tail != UINT32_C(0xd65f03c0));
+        uint32_t *fallthrough_tail = conditional_exit_site(&choose_code, 0);
+        uint32_t *taken_tail = conditional_exit_site(&choose_code, 1);
+        CHECK(*fallthrough_tail != UINT32_C(0x14000002));
+        CHECK(*taken_tail != UINT32_C(0x14000001));
 
         request.budget = 4;
         state = (hl_native_x86_64_cpu){.program = 0x8000, .registers = {0}};
@@ -140,7 +153,7 @@ static int chain_contract(void) {
         CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && state.executed == 4 &&
               (state.flags & HL_X86_RFLAGS_ZF) == 0);
         state = (hl_native_x86_64_cpu){.program = 0x8000, .budget = 4, .interrupt = 1};
-        hl_native_x86_64_enter(&state, choose_code.body);
+        hl_native_x86_64_enter(&state, choose_code.entry);
         CHECK(state.program == 0x8000 && state.scratch[0] == 0);
 
         invalidate.kind = HL_NATIVE_INVALIDATE;
@@ -148,8 +161,8 @@ static int chain_contract(void) {
         invalidate.first = 0x8005;
         invalidate.last = 0x8007;
         CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
-        CHECK(*fallthrough_tail == UINT32_C(0xd65f03c0));
-        CHECK(*taken_tail != UINT32_C(0xd65f03c0));
+        CHECK(*fallthrough_tail == UINT32_C(0x14000002));
+        CHECK(*taken_tail != UINT32_C(0x14000001));
     }
     {
         static const uint8_t caller[] = {0xe8, 0x0b, 0, 0, 0};
@@ -185,8 +198,8 @@ static int chain_contract(void) {
         CHECK(executor->ibtc[return_slot].target == 0x9005 &&
               executor->ibtc[return_slot].body != NULL && state.indirect_site == 0);
         CHECK(hl_native_translation_lookup(executor, &caller_key, &caller_code) == HL_NATIVE_HIT);
-        uint32_t *caller_tail = (uint32_t *)((uint8_t *)caller_code.entry + caller_code.code_size - 8u);
-        CHECK(*caller_tail != UINT32_C(0xd65f03c0));
+        uint32_t *caller_tail = direct_exit_site(&caller_code);
+        CHECK(*caller_tail != UINT32_C(0x14000001));
 
         stack = 0;
         request.budget = 4;
@@ -227,7 +240,7 @@ static int chain_contract(void) {
         stack_view.permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE;
         state = (hl_native_x86_64_cpu){.program = 0x9000, .registers = {[4] = 0xa008},
                                        .budget = 4, .interrupt = 1};
-        hl_native_x86_64_enter(&state, caller_code.body);
+        hl_native_x86_64_enter(&state, caller_code.entry);
         CHECK(state.program == 0x9000 && state.registers[4] == 0xa008 && stack == 0x9005);
 
         stack_view.permissions = HL_NATIVE_ACCESS_READ;
@@ -246,9 +259,10 @@ static int chain_contract(void) {
         CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
         CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
         CHECK(before.mapping_epoch == 7 && before.cache_generation == after.cache_generation &&
-              after.live_blocks + 1 == before.live_blocks && after.invalidations == before.invalidations + 1);
-        CHECK(executor->ibtc[return_slot].target == 0 && executor->ibtc[return_slot].body == NULL);
-        CHECK(*caller_tail == UINT32_C(0xd65f03c0));
+              after.live_blocks + 2 == before.live_blocks && after.invalidations == before.invalidations + 2);
+        CHECK(executor->ibtc[return_slot].target == 0x9005 &&
+              executor->ibtc[return_slot].body != NULL);
+        CHECK(*caller_tail == UINT32_C(0x14000001));
         CHECK(hl_native_translation_lookup(executor, &caller_key, &caller_code) == HL_NATIVE_HIT);
         invalidate.first = 0x9000;
         invalidate.last = 0x9005;
@@ -315,7 +329,7 @@ static int chain_contract(void) {
     invalidate.first = 0;
     invalidate.last = 0;
     CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
-    CHECK(*second_tail == UINT32_C(0xd65f03c0));
+    CHECK(*second_tail == UINT32_C(0x14000001));
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_EPOCH);
     hl_native_destroy(executor);
     CHECK(host.release_calls == 1);

@@ -1,6 +1,6 @@
 use super::{
-    fs, Container, ContainerId, Deserialize, Disk, Error, Exec, ExecId, File, Network, OpenOptions,
-    Path, PathBuf, Require, Result, Serialize, Volume, Write, VERSION,
+    Container, ContainerId, Deserialize, Disk, Error, Exec, ExecId, File, Network, OpenOptions, Path, PathBuf, Require,
+    Result, Serialize, VERSION, Volume, Write, fs,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -94,16 +94,11 @@ impl Disk {
             (false, Require::Present) => return Err(Error::NetworkNotFound(network.name.clone())),
             _ => {}
         }
-        let temporary = self.networks.join(format!(
-            ".{}.{}.tmp",
-            network.name,
-            uuid::Uuid::new_v4().simple()
-        ));
+        let temporary = self
+            .networks
+            .join(format!(".{}.{}.tmp", network.name, uuid::Uuid::new_v4().simple()));
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)?;
+            let mut file = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
             serde_json::to_writer(
                 &mut file,
                 &NetworkRecord {
@@ -186,16 +181,11 @@ impl Disk {
         if path.exists() {
             return Err(Error::VolumeConflict(volume.name.clone()));
         }
-        let temporary = self.volumes.join(format!(
-            ".{}.{}.tmp",
-            volume.name,
-            uuid::Uuid::new_v4().simple()
-        ));
+        let temporary = self
+            .volumes
+            .join(format!(".{}.{}.tmp", volume.name, uuid::Uuid::new_v4().simple()));
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)?;
+            let mut file = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
             serde_json::to_writer(
                 &mut file,
                 &VolumeRecord {
@@ -249,24 +239,16 @@ impl Disk {
         let path = self.path(&container.id);
         match (path.exists(), require) {
             (true, Require::Absent) => {
-                return Err(Error::Corrupt(format!(
-                    "duplicate container {}",
-                    container.id
-                )));
+                return Err(Error::Corrupt(format!("duplicate container {}", container.id)));
             }
             (false, Require::Present) => return Err(Error::NotFound(container.id.to_string())),
             _ => {}
         }
-        let temporary = self.directory.join(format!(
-            ".{}.{}.tmp",
-            container.id,
-            uuid::Uuid::new_v4().simple()
-        ));
+        let temporary = self
+            .directory
+            .join(format!(".{}.{}.tmp", container.id, uuid::Uuid::new_v4().simple()));
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)?;
+            let mut file = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
             serde_json::to_writer(
                 &mut file,
                 &ContainerRecord {
@@ -354,16 +336,11 @@ impl Disk {
             (false, Require::Present) => return Err(Error::NotFound(exec.id.to_string())),
             _ => {}
         }
-        let temporary = self.execs.join(format!(
-            ".{}.{}.tmp",
-            exec.id,
-            uuid::Uuid::new_v4().simple()
-        ));
+        let temporary = self
+            .execs
+            .join(format!(".{}.{}.tmp", exec.id, uuid::Uuid::new_v4().simple()));
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temporary)?;
+            let mut file = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
             serde_json::to_writer(
                 &mut file,
                 &ExecRecord {

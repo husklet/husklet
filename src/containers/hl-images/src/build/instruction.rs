@@ -39,7 +39,7 @@ impl<'a> InstructionParser<'a> {
                             _ => {
                                 return Err(Error::MalformedOci(
                                     "Dockerfile escape directive must be ` or backslash".into(),
-                                ))
+                                ));
                             }
                         };
                     }
@@ -54,9 +54,10 @@ impl<'a> InstructionParser<'a> {
                 continue;
             }
             line.push_str(raw.trim_start());
-            let (name, value) = line.trim().split_once(char::is_whitespace).ok_or_else(|| {
-                Error::MalformedOci("Dockerfile instruction requires a value".into())
-            })?;
+            let (name, value) = line
+                .trim()
+                .split_once(char::is_whitespace)
+                .ok_or_else(|| Error::MalformedOci("Dockerfile instruction requires a value".into()))?;
             output.push(Instruction {
                 name: name.to_ascii_uppercase(),
                 value: value.trim().into(),
@@ -65,9 +66,7 @@ impl<'a> InstructionParser<'a> {
             continued = false;
         }
         if continued || !line.is_empty() {
-            return Err(Error::MalformedOci(
-                "Dockerfile ends in a continuation".into(),
-            ));
+            return Err(Error::MalformedOci("Dockerfile ends in a continuation".into()));
         }
         Ok(output)
     }
@@ -83,8 +82,7 @@ impl<'a> Words<'a> {
     }
 
     pub(super) fn parse(&self) -> Vec<String> {
-        self.tokenize(false)
-            .expect("permissive word parsing cannot fail")
+        self.tokenize(false).expect("permissive word parsing cannot fail")
     }
 
     pub(super) fn strict(&self) -> Result<Vec<String>> {
@@ -156,9 +154,7 @@ impl<'a> Assignments<'a> {
                 .collect();
         }
         if values.len() < 2 {
-            return Err(Error::MalformedOci(
-                "entry requires a name and value".into(),
-            ));
+            return Err(Error::MalformedOci("entry requires a name and value".into()));
         }
         Ok(vec![(values[0].clone(), values[1..].join(" "))])
     }

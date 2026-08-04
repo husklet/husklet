@@ -4,8 +4,8 @@
 mod container;
 
 use hl_client::{
-    model::{CreateContainer, Credentials, NetworkCreate, VolumeCreate},
     Client,
+    model::{CreateContainer, Credentials, NetworkCreate, VolumeCreate},
 };
 use hl_container::Containers;
 use hl_daemon::Daemon;
@@ -45,22 +45,13 @@ async fn exercise(client: &Client, archive: &std::path::Path, full: bool) -> Res
     client.ping().await?;
     pass("ping");
     let version = client.version().await?;
-    require(
-        !version.version.is_empty() && version.os == "linux",
-        "version",
-    )?;
+    require(!version.version.is_empty() && version.os == "linux", "version")?;
     let info = client.system().info().await?;
-    require(
-        info.os_type == "linux" && !info.server_version.is_empty(),
-        "info",
-    )?;
+    require(info.os_type == "linux" && !info.server_version.is_empty(), "info")?;
     let usage = client.system().disk_usage().await?;
     require(usage.containers.is_empty(), "system-df")?;
 
-    let loaded = client
-        .images()
-        .load(tokio::fs::File::open(archive).await?)
-        .await?;
+    let loaded = client.images().load(tokio::fs::File::open(archive).await?).await?;
     require(loaded.stream.contains(fixture::IMAGE), "image-import")?;
     let image = client.images().inspect(fixture::IMAGE).await?;
     require(
@@ -158,20 +149,12 @@ impl<'a> Resources<'a> {
             })
             .await?;
         require(
-            networks
-                .list()
-                .await?
-                .iter()
-                .any(|item| item.id == network.id),
+            networks.list().await?.iter().any(|item| item.id == network.id),
             "network-listed",
         )?;
         networks.remove(&network.id, false).await?;
         require(
-            !networks
-                .list()
-                .await?
-                .iter()
-                .any(|item| item.id == network.id),
+            !networks.list().await?.iter().any(|item| item.id == network.id),
             "network-removed",
         )
     }
@@ -209,11 +192,7 @@ async fn images(client: &Client) -> Result<(), Error> {
         .await?;
     require(!committed.id.is_empty(), "container-commit")?;
     require(
-        !client
-            .images()
-            .history("workflow/committed:test")
-            .await?
-            .is_empty(),
+        !client.images().history("workflow/committed:test").await?.is_empty(),
         "image-history",
     )?;
 
@@ -221,23 +200,14 @@ async fn images(client: &Client) -> Result<(), Error> {
     require(!exported.is_empty(), "container-export")?;
     let imported = client
         .images()
-        .import(
-            std::io::Cursor::new(exported),
-            "workflow/imported",
-            Some("test"),
-        )
+        .import(std::io::Cursor::new(exported), "workflow/imported", Some("test"))
         .await?;
     require(
         imported.stream.contains("workflow/imported:test"),
         "image-import-rootfs",
     )?;
     require(
-        !client
-            .images()
-            .inspect("workflow/imported:test")
-            .await?
-            .id
-            .is_empty(),
+        !client.images().inspect("workflow/imported:test").await?.id.is_empty(),
         "image-import-inspect",
     )?;
 
@@ -246,18 +216,10 @@ async fn images(client: &Client) -> Result<(), Error> {
     client.images().remove("workflow/committed:test").await?;
     client.images().load(std::io::Cursor::new(saved)).await?;
     require(
-        !client
-            .images()
-            .inspect("workflow/committed:test")
-            .await?
-            .id
-            .is_empty(),
+        !client.images().inspect("workflow/committed:test").await?.id.is_empty(),
         "image-load-roundtrip",
     )?;
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await?;
+    client.containers().remove(&created.id, false, false).await?;
     Ok(())
 }
 

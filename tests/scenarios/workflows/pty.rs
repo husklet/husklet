@@ -1,9 +1,7 @@
 //! Interactive terminal transcript workflow driven through the Rust session API.
 
 use crate::fixture::Fixture;
-use hl_container::{
-    Console, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox, Size,
-};
+use hl_container::{Console, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox, Size};
 use std::time::Duration;
 
 type Error = Box<dyn std::error::Error>;
@@ -63,8 +61,7 @@ async fn execute(containers: &Containers, case: &Case) -> Result<(), Error> {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         session.close().await;
-        let status =
-            tokio::time::timeout(Duration::from_secs(20), containers.wait(&name)).await??;
+        let status = tokio::time::timeout(Duration::from_secs(20), containers.wait(&name)).await??;
         let logs = containers.logs(&name).await?;
         let transcript = [logs.stdout, logs.stderr].concat();
         let text = String::from_utf8_lossy(&transcript);
@@ -85,11 +82,7 @@ async fn execute(containers: &Containers, case: &Case) -> Result<(), Error> {
     }
     .await;
     let remove = if containers.inspect(&name).await.is_ok() {
-        containers
-            .remove_force(&name)
-            .await
-            .map(|_| ())
-            .map_err(Error::from)
+        containers.remove_force(&name).await.map(|_| ()).map_err(Error::from)
     } else {
         Ok(())
     };

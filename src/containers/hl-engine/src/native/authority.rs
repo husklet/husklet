@@ -16,9 +16,9 @@ mod tree;
 #[cfg(unix)]
 use crate::engine::EngineError;
 #[cfg(unix)]
-pub use child::Child;
-#[cfg(unix)]
 use crate::session::{FrameKind, Limits, Secret, Session, connect};
+#[cfg(unix)]
+pub use child::Child;
 #[cfg(unix)]
 use std::collections::BTreeMap;
 #[cfg(unix)]

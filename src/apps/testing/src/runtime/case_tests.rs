@@ -136,7 +136,6 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
     let loaded_apps = apps.iter().map(|app| app.name.clone()).collect::<BTreeSet<_>>();
     assert_eq!(loaded_apps, manifest_apps);
 
-    let host = EngineHost::current();
     let mut declared = BTreeSet::new();
     let mut active = BTreeSet::new();
     let mut inactive = BTreeSet::new();
@@ -147,7 +146,7 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
                 target: *target,
             };
             assert!(declared.insert(key.clone()), "duplicate declared runtime work key");
-            if case.inactive(host).is_none() {
+            if case.inactive(EngineHost::current()).is_none() {
                 active.insert(key);
             } else {
                 inactive.insert(key);
@@ -157,7 +156,7 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
     assert!(active.is_disjoint(&inactive));
     assert_eq!(declared, active.union(&inactive).cloned().collect());
 
-    let planned = plan_for_host(apps, &options, host)
+    let planned = plan(apps, &options)
         .work
         .into_iter()
         .map(|work| work.key)

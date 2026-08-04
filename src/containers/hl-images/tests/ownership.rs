@@ -37,9 +37,7 @@ fn ownership_survives_commit_reopen_and_fork_by_entry_path() {
     assert_eq!(view.ownership().get("symlink"), Some(symlink));
     assert_eq!(view.ownership().get("hardlink"), Some(hardlink));
 
-    let child = reopened
-        .prepare(id("child-active"), Some(&parent_id))
-        .unwrap();
+    let child = reopened.prepare(id("child-active"), Some(&parent_id)).unwrap();
     assert_eq!(
         fs::metadata(child.path().join("file")).unwrap().ino(),
         fs::metadata(child.path().join("hardlink")).unwrap().ino()
@@ -66,15 +64,9 @@ fn abort_drop_and_remove_delete_their_sidecars() {
 
     let committed = snapshots.prepare(id("active"), None).unwrap();
     committed.commit(id("committed")).unwrap();
-    assert!(temp
-        .path()
-        .join("ownership/committed/committed.json")
-        .exists());
+    assert!(temp.path().join("ownership/committed/committed.json").exists());
     assert!(snapshots.remove(&id("committed")).unwrap());
-    assert!(!temp
-        .path()
-        .join("ownership/committed/committed.json")
-        .exists());
+    assert!(!temp.path().join("ownership/committed/committed.json").exists());
 }
 
 #[test]
@@ -124,9 +116,7 @@ fn fork_traverses_readonly_parent_and_restores_its_mode() {
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o0)).unwrap();
     parent.commit(id("parent")).unwrap();
 
-    let child = snapshots
-        .prepare(id("child-active"), Some(&id("parent")))
-        .unwrap();
+    let child = snapshots.prepare(id("child-active"), Some(&id("parent"))).unwrap();
     assert_eq!(
         fs::symlink_metadata(temp.path().join("committed/parent/var/log/faillock"))
             .unwrap()
@@ -143,11 +133,7 @@ fn fork_traverses_readonly_parent_and_restores_its_mode() {
             & 0o777,
         0
     );
-    fs::set_permissions(
-        child.path().join("var/log/faillock"),
-        fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
+    fs::set_permissions(child.path().join("var/log/faillock"), fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(
         fs::read(child.path().join("var/log/faillock/record")).unwrap(),
         b"locked"
@@ -181,9 +167,7 @@ fn layer_import_records_guest_ownership_for_each_entry_name() {
         symlink.set_gid(101);
         symlink.set_link_name("file").unwrap();
         symlink.set_cksum();
-        archive
-            .append_data(&mut symlink, "symlink", &[][..])
-            .unwrap();
+        archive.append_data(&mut symlink, "symlink", &[][..]).unwrap();
 
         let mut hardlink = tar::Header::new_gnu();
         hardlink.set_entry_type(tar::EntryType::Link);
@@ -192,9 +176,7 @@ fn layer_import_records_guest_ownership_for_each_entry_name() {
         hardlink.set_gid(102);
         hardlink.set_link_name("file").unwrap();
         hardlink.set_cksum();
-        archive
-            .append_data(&mut hardlink, "hardlink", &[][..])
-            .unwrap();
+        archive.append_data(&mut hardlink, "hardlink", &[][..]).unwrap();
         archive.finish().unwrap();
     }
 
@@ -207,26 +189,11 @@ fn layer_import_records_guest_ownership_for_each_entry_name() {
         .unwrap();
     let view = draft.commit(id("committed")).unwrap();
 
-    assert_eq!(
-        view.ownership().get("file"),
-        Some(Ownership {
-            uid: 1000,
-            gid: 100
-        })
-    );
-    assert_eq!(
-        view.ownership().get("symlink"),
-        Some(Ownership {
-            uid: 1001,
-            gid: 101
-        })
-    );
+    assert_eq!(view.ownership().get("file"), Some(Ownership { uid: 1000, gid: 100 }));
+    assert_eq!(view.ownership().get("symlink"), Some(Ownership { uid: 1001, gid: 101 }));
     assert_eq!(
         view.ownership().get("hardlink"),
-        Some(Ownership {
-            uid: 1002,
-            gid: 102
-        })
+        Some(Ownership { uid: 1002, gid: 102 })
     );
 
     let mut exported = Vec::new();
@@ -267,31 +234,16 @@ fn failed_unpack_publishes_no_snapshot_and_reopen_retries_cleanly() {
     let name: Reference = "example.test/broken:latest".parse().unwrap();
     let images = Images::open(temp.path()).unwrap();
     let image = images
-        .commit(
-            b"not a tar stream",
-            &runtime,
-            &Platform::linux_arm64(),
-            &name,
-        )
+        .commit(b"not a tar stream", &runtime, &Platform::linux_arm64(), &name)
         .unwrap();
 
-    let first = images
-        .unpack(&image, &Platform::linux_arm64())
-        .unwrap_err()
-        .to_string();
+    let first = images.unpack(&image, &Platform::linux_arm64()).unwrap_err().to_string();
     assert!(!first.contains("parent snapshot does not exist"));
     assert_eq!(
-        fs::read_dir(temp.path().join("snapshots/committed"))
-            .unwrap()
-            .count(),
+        fs::read_dir(temp.path().join("snapshots/committed")).unwrap().count(),
         0
     );
-    assert_eq!(
-        fs::read_dir(temp.path().join("snapshots/active"))
-            .unwrap()
-            .count(),
-        0
-    );
+    assert_eq!(fs::read_dir(temp.path().join("snapshots/active")).unwrap().count(), 0);
 
     let reopened = Images::open(temp.path()).unwrap();
     let cached = reopened.resolve(&name).unwrap().unwrap();
@@ -301,9 +253,7 @@ fn failed_unpack_publishes_no_snapshot_and_reopen_retries_cleanly() {
         .to_string();
     assert!(!second.contains("parent snapshot does not exist"));
     assert_eq!(
-        fs::read_dir(temp.path().join("snapshots/committed"))
-            .unwrap()
-            .count(),
+        fs::read_dir(temp.path().join("snapshots/committed")).unwrap().count(),
         0
     );
 }
@@ -320,9 +270,7 @@ fn failed_unpack_cleans_readonly_draft_before_same_cache_retry() {
         directory.set_uid(0);
         directory.set_gid(0);
         directory.set_cksum();
-        archive
-            .append_data(&mut directory, "locked", &[][..])
-            .unwrap();
+        archive.append_data(&mut directory, "locked", &[][..]).unwrap();
         let mut fifo = tar::Header::new_gnu();
         fifo.set_entry_type(tar::EntryType::Fifo);
         fifo.set_size(0);
@@ -330,9 +278,7 @@ fn failed_unpack_cleans_readonly_draft_before_same_cache_retry() {
         fifo.set_uid(0);
         fifo.set_gid(0);
         fifo.set_cksum();
-        archive
-            .append_data(&mut fifo, "forbidden", &[][..])
-            .unwrap();
+        archive.append_data(&mut fifo, "forbidden", &[][..]).unwrap();
         archive.finish().unwrap();
     }
     let temp = tempfile::tempdir().unwrap();
@@ -354,12 +300,7 @@ fn failed_unpack_cleans_readonly_draft_before_same_cache_retry() {
 
     for _ in 0..2 {
         assert!(images.unpack(&image, &Platform::linux_arm64()).is_err());
-        assert_eq!(
-            fs::read_dir(temp.path().join("snapshots/active"))
-                .unwrap()
-                .count(),
-            0
-        );
+        assert_eq!(fs::read_dir(temp.path().join("snapshots/active")).unwrap().count(), 0);
         assert_eq!(
             fs::read_dir(temp.path().join("snapshots/ownership/active"))
                 .unwrap()
@@ -389,12 +330,7 @@ fn reopening_preserves_drafts_owned_by_other_processes() {
 
     let snapshots = Snapshots::open(temp.path()).unwrap();
     assert_eq!(fs::read_dir(temp.path().join("active")).unwrap().count(), 1);
-    assert_eq!(
-        fs::read_dir(temp.path().join("ownership/active"))
-            .unwrap()
-            .count(),
-        1
-    );
+    assert_eq!(fs::read_dir(temp.path().join("ownership/active")).unwrap().count(), 1);
     snapshots
         .prepare(id("fresh"), None)
         .unwrap()

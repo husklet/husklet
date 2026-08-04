@@ -4,10 +4,7 @@ use crate::api::support::require;
 use hl_container::{Console, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use std::path::Path;
 
-pub(crate) async fn run(
-    containers: &Containers,
-    rootfs: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Box<dyn std::error::Error>> {
     containers
         .create(
             ContainerSpec::from_directory(
@@ -59,12 +56,12 @@ pub(crate) async fn run(
     require(
         first.sequence == 1
             && second.sequence == 2
-            && entries.iter().any(|entry| {
-                entry.stream == hl_container::Stream::Stdout && entry.bytes == logs.stdout
-            })
-            && entries.iter().any(|entry| {
-                entry.stream == hl_container::Stream::Stderr && entry.bytes == logs.stderr
-            })
+            && entries
+                .iter()
+                .any(|entry| entry.stream == hl_container::Stream::Stdout && entry.bytes == logs.stdout)
+            && entries
+                .iter()
+                .any(|entry| entry.stream == hl_container::Stream::Stderr && entry.bytes == logs.stderr)
             && session.next().await?.is_none(),
         "live session did not preserve the durable output journal",
     )?;

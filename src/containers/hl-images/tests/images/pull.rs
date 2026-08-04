@@ -1,12 +1,8 @@
 use super::support::{
-    descriptor, fixture, invalid_config_fixture, scratch_fixture, Broken, BrokenSource,
-    MemorySource,
+    Broken, BrokenSource, MemorySource, descriptor, fixture, invalid_config_fixture, scratch_fixture,
 };
 use bytes::Bytes;
-use hl_images::{
-    content::Store, Digest, Error, ImageStore, Images, LeaseStore, Platform, Reference,
-    RuntimeOverrides,
-};
+use hl_images::{Digest, Error, ImageStore, Images, LeaseStore, Platform, Reference, RuntimeOverrides, content::Store};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[tokio::test]
@@ -74,15 +70,7 @@ async fn pull_unpack_and_durable_rootfs_survive_restart() {
     let root_view = images.roots().open(&root).unwrap();
     std::fs::write(root_view.path().join("etc/release"), "private\n").unwrap();
     assert_eq!(
-        std::fs::read_to_string(
-            images
-                .roots()
-                .open(&sibling)
-                .unwrap()
-                .path()
-                .join("etc/release")
-        )
-        .unwrap(),
+        std::fs::read_to_string(images.roots().open(&sibling).unwrap().path().join("etc/release")).unwrap(),
         "husklet\n"
     );
     // Both writable roots and their shared immutable baseline are pinned.
@@ -137,14 +125,12 @@ async fn invalid_oci_config_pull_publishes_no_image() {
     let temp = tempfile::tempdir().unwrap();
     let images = Images::open(temp.path()).unwrap();
     let reference: Reference = "example.test/invalid-config:v1".parse().unwrap();
-    assert!(images
-        .pull(
-            &invalid_config_fixture(),
-            reference.clone(),
-            &Platform::linux_arm64(),
-        )
-        .await
-        .is_err());
+    assert!(
+        images
+            .pull(&invalid_config_fixture(), reference.clone(), &Platform::linux_arm64(),)
+            .await
+            .is_err()
+    );
     assert!(images.resolve(&reference).unwrap().is_none());
     assert!(images.leases().list().unwrap().is_empty());
 }
@@ -156,9 +142,7 @@ async fn unsupported_platform_and_partial_pull_do_not_create_image_records() {
     let reference: Reference = "example.test/app:v1".parse().unwrap();
     let images = Images::open(temp.path()).unwrap();
     assert!(matches!(
-        images
-            .pull(&source, reference.clone(), &Platform::linux_amd64())
-            .await,
+        images.pull(&source, reference.clone(), &Platform::linux_amd64()).await,
         Err(Error::UnsupportedPlatform { .. })
     ));
     assert!(images.metadata().get(&reference).unwrap().is_none());
@@ -174,10 +158,12 @@ async fn unsupported_platform_and_partial_pull_do_not_create_image_records() {
         root: source.root,
         blobs: Arc::new(missing),
     };
-    assert!(images
-        .pull(&partial, reference.clone(), &Platform::linux_arm64())
-        .await
-        .is_err());
+    assert!(
+        images
+            .pull(&partial, reference.clone(), &Platform::linux_arm64())
+            .await
+            .is_err()
+    );
     assert!(images.metadata().get(&reference).unwrap().is_none());
     assert!(images.gc().unwrap().content_removed > 0);
     assert!(images.leases().list().unwrap().is_empty());
@@ -197,9 +183,7 @@ async fn failed_replacement_pull_preserves_previous_image_and_rootfs() {
     let mut incomplete = (*replacement.blobs).clone();
     let missing = incomplete
         .keys()
-        .find(|digest| {
-            **digest != replacement.root.digest().to_string() && !source.blobs.contains_key(*digest)
-        })
+        .find(|digest| **digest != replacement.root.digest().to_string() && !source.blobs.contains_key(*digest))
         .unwrap()
         .clone();
     incomplete.remove(&missing);
@@ -207,24 +191,18 @@ async fn failed_replacement_pull_preserves_previous_image_and_rootfs() {
         root: replacement.root,
         blobs: Arc::new(incomplete),
     };
-    assert!(images
-        .pull(&broken, reference.clone(), &Platform::linux_arm64())
-        .await
-        .is_err());
+    assert!(
+        images
+            .pull(&broken, reference.clone(), &Platform::linux_arm64())
+            .await
+            .is_err()
+    );
     let retained = images.resolve(&reference).unwrap().unwrap();
     assert_eq!(retained.target, previous.target);
     let unpacked = images.unpack(&retained, &Platform::linux_arm64()).unwrap();
     let root = images.rootfs(&unpacked).unwrap();
     assert_eq!(
-        std::fs::read_to_string(
-            images
-                .roots()
-                .open(&root)
-                .unwrap()
-                .path()
-                .join("etc/release")
-        )
-        .unwrap(),
+        std::fs::read_to_string(images.roots().open(&root).unwrap().path().join("etc/release")).unwrap(),
         "husklet\n"
     );
 }

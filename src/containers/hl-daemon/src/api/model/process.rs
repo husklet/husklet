@@ -80,10 +80,7 @@ impl fmt::Display for EnvError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Assignment(value) => {
-                write!(
-                    formatter,
-                    "invalid environment entry {value:?}; expected NAME=VALUE"
-                )
+                write!(formatter, "invalid environment entry {value:?}; expected NAME=VALUE")
             }
             Self::Name => formatter.write_str("environment name must not be empty"),
         }
@@ -102,9 +99,7 @@ mod tests {
         assert_eq!(variable.name(), "PATH");
         assert_eq!(variable.value(), "/bin:/usr/bin");
         assert_eq!(
-            EnvVars::parse(["A=one", "B=two=three"])
-                .unwrap()
-                .into_inner(),
+            EnvVars::parse(["A=one", "B=two=three"]).unwrap().into_inner(),
             [("A".into(), "one".into()), ("B".into(), "two=three".into())]
                 .into_iter()
                 .collect()

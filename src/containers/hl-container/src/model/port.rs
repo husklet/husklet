@@ -59,9 +59,7 @@ impl Publication {
     #[must_use]
     pub fn conflicts(self, other: Self) -> bool {
         self.host == other.host
-            && (self.host_ip.is_unspecified()
-                || other.host_ip.is_unspecified()
-                || self.host_ip == other.host_ip)
+            && (self.host_ip.is_unspecified() || other.host_ip.is_unspecified() || self.host_ip == other.host_ip)
     }
 }
 

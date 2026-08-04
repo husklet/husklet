@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::os::fd::AsRawFd;
 
-use hl_network::AuthoritySocketKey;
 use crate::session::FrameKind;
+use hl_network::AuthoritySocketKey;
 
 use super::{Message, NetworkAuthority, Operation};
 use crate::engine::EngineError;

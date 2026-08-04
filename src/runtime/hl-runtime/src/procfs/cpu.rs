@@ -108,10 +108,7 @@ mod test {
             panic!("x86 policy returned another architecture");
         };
         let policy = hl_execution::GuestFeaturePolicy::interpreter();
-        for (leaf, register, bit, name) in [
-            (1, 2, 22, "movbe"),
-            (0x8000_0001, 2, 0, "lahf_lm"),
-        ] {
+        for (leaf, register, bit, name) in [(1, 2, 22, "movbe"), (0x8000_0001, 2, 0, "lahf_lm")] {
             let value = policy.cpuid(leaf, 0);
             let registers = [value.eax, value.ebx, value.ecx, value.edx];
             assert_eq!(flags.contains(&name), registers[register] & (1 << bit) != 0);

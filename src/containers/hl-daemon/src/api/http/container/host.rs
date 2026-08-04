@@ -50,9 +50,8 @@ impl HostSettings {
             .await
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
 
-        let mut mounts = Vec::with_capacity(
-            value.binds.len() + value.mounts.len() + value.tmpfs.len() + declared.len(),
-        );
+        let mut mounts =
+            Vec::with_capacity(value.binds.len() + value.mounts.len() + value.tmpfs.len() + declared.len());
         let mut anonymous = Vec::new();
         for bind in &value.binds {
             let (mount, owned) = LegacyBind::from(bind.as_str()).mount(containers).await?;
@@ -145,17 +144,12 @@ impl HostSettings {
     }
 
     fn resources(value: &HostConfig) -> ApiResult<Resources> {
-        let memory_bytes = u64::try_from(value.memory).map_err(|_| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "HostConfig.Memory must be nonnegative",
-            )
-        })?;
+        let memory_bytes = u64::try_from(value.memory)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "HostConfig.Memory must be nonnegative"))?;
         let process_count = match value.pids_limit.unwrap_or_default() {
             -1 | 0 => 0,
-            limit if limit > 0 => u32::try_from(limit).map_err(|_| {
-                ApiError::new(StatusCode::BAD_REQUEST, "HostConfig.PidsLimit exceeds u32")
-            })?,
+            limit if limit > 0 => u32::try_from(limit)
+                .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "HostConfig.PidsLimit exceeds u32"))?,
             _ => {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
@@ -163,22 +157,14 @@ impl HostSettings {
                 ));
             }
         };
-        let nano_cpus = u64::try_from(value.nano_cpus).map_err(|_| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "HostConfig.NanoCpus must be nonnegative",
-            )
-        })?;
+        let nano_cpus = u64::try_from(value.nano_cpus)
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "HostConfig.NanoCpus must be nonnegative"))?;
         let cpu_count = if nano_cpus == 0 {
             0
         } else {
             let count = nano_cpus.div_ceil(1_000_000_000);
-            u32::try_from(count).map_err(|_| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "HostConfig.NanoCpus exceeds u32 CPUs",
-                )
-            })?
+            u32::try_from(count)
+                .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "HostConfig.NanoCpus exceeds u32 CPUs"))?
         };
 
         Ok(Resources {
@@ -188,11 +174,7 @@ impl HostSettings {
         })
     }
 
-    fn isolation(
-        value: &HostConfig,
-        network_isolated: bool,
-        network_mode: hl_container::NetworkMode,
-    ) -> Isolation {
+    fn isolation(value: &HostConfig, network_isolated: bool, network_mode: hl_container::NetworkMode) -> Isolation {
         Isolation {
             sandbox: if network_mode == hl_container::NetworkMode::Host {
                 hl_container::Sandbox::Disabled
@@ -211,19 +193,13 @@ impl HostSettings {
         anonymous: &mut Vec<String>,
     ) -> ApiResult<()> {
         for (target, options) in declared {
-            if options
-                .as_object()
-                .is_none_or(|options| !options.is_empty())
-            {
+            if options.as_object().is_none_or(|options| !options.is_empty()) {
                 return Err(ApiError::new(
                     StatusCode::BAD_REQUEST,
                     format!("volume declaration for {target:?} must be an empty object"),
                 ));
             }
-            if mounts
-                .iter()
-                .any(|mount| mount.target == std::path::Path::new(&target))
-            {
+            if mounts.iter().any(|mount| mount.target == std::path::Path::new(&target)) {
                 continue;
             }
             let volume = containers

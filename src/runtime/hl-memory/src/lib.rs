@@ -37,14 +37,13 @@ pub use checkpoint::{
 pub use executable::ExecutableToken;
 pub use ledger::{MemoryLedger, MemoryLedgerSnapshot};
 pub use mapping::TransitionObserver as MappingTransitionObserver;
-pub use mapping::{BackingChange, BackingChangeFlags, BackingChangeHost};
 pub use mapping::{
-    ApertureLease, Batch as MappingBatch, Coordinator as MappingCoordinator, ExternalSpan, Host as MappingHost,
-    HostAperture, HostProjection, MemoryAccessHost,
-    DIRTY_RANGE_MAXIMUM, DirectAuthorityLease, LIVE_PROJECTION_MAXIMUM, Operation as MappingOperation,
-    ProjectionGeneration, ProjectionLease, ProjectionView,
-    WriteSpanTransaction, WriteTransaction,
+    ApertureLease, Batch as MappingBatch, Coordinator as MappingCoordinator, DIRTY_RANGE_MAXIMUM, DirectAuthorityLease,
+    ExternalSpan, Host as MappingHost, HostAperture, HostProjection, LIVE_PROJECTION_MAXIMUM, MemoryAccessHost,
+    Operation as MappingOperation, ProjectionGeneration, ProjectionLease, ProjectionView, WriteSpanTransaction,
+    WriteTransaction,
 };
+pub use mapping::{BackingChange, BackingChangeFlags, BackingChangeHost};
 pub use mapping::{ExitHost as ExitMappingHost, PreparedAddressExit, PreparedHostExit};
 pub use model::{
     AddressSpaceId, Backing, FileIdentity, FutexAccess, FutexIdentity, MapRequest, MemoryError, Placement, Protection,

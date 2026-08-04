@@ -12,7 +12,7 @@ use uuid::Uuid;
 use bytes::Bytes;
 use flate2::read::GzDecoder;
 
-use crate::{layer::Layer, Descriptor, DescriptorGraph, Digest, Error, Result};
+use crate::{Descriptor, DescriptorGraph, Digest, Error, Result, layer::Layer};
 
 pub(crate) struct AppliedLayer {
     pub(crate) diff_id: Digest,
@@ -75,10 +75,7 @@ impl FsStore {
     ///
     /// # Errors
     /// Returns an error when the store directories cannot be created.
-    pub fn open_with(
-        root: impl AsRef<Path>,
-        persistence: Arc<dyn crate::storage::Persistence>,
-    ) -> Result<Self> {
+    pub fn open_with(root: impl AsRef<Path>, persistence: Arc<dyn crate::storage::Persistence>) -> Result<Self> {
         let root = root.as_ref().to_owned();
         fs::create_dir_all(root.join("blobs/sha256"))?;
         fs::create_dir_all(root.join("ingest"))?;
@@ -119,9 +116,7 @@ impl FsStore {
 
     pub(crate) fn read_document(&self, descriptor: &Descriptor) -> Result<Bytes> {
         if descriptor.size() > 16 * 1024 * 1024 {
-            return Err(Error::MalformedOci(
-                "descriptor document exceeds 16 MiB".into(),
-            ));
+            return Err(Error::MalformedOci("descriptor document exceeds 16 MiB".into()));
         }
         let mut reader = self.reader(descriptor)?;
         let mut bytes = Vec::with_capacity(usize::try_from(descriptor.size()).unwrap_or(0));
@@ -185,9 +180,9 @@ impl<R: Read> Read for DigestReader<R> {
 impl Store for FsStore {
     fn contains(&self, digest: &Digest) -> Result<bool> {
         match fs::symlink_metadata(self.blob_path(digest)) {
-            Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::InvalidMetadata(
-                format!("content {digest} is a symlink"),
-            )),
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Err(Error::InvalidMetadata(format!("content {digest} is a symlink")))
+            }
             Ok(metadata) => Ok(metadata.is_file()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error.into()),
@@ -198,9 +193,7 @@ impl Store for FsStore {
         let digest: Digest = descriptor.digest().to_string().parse()?;
         let path = self.blob_path(&digest);
         if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-            return Err(Error::InvalidMetadata(format!(
-                "content {digest} is a symlink"
-            )));
+            return Err(Error::InvalidMetadata(format!("content {digest} is a symlink")));
         }
         let file = File::open(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -220,10 +213,7 @@ impl Store for FsStore {
     fn ingest(&self, reference: impl AsRef<str>) -> Result<Draft> {
         let name = Draft::name(reference.as_ref());
         let path = self.root.join("ingest").join(name);
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create_new(true).write(true).open(&path)?;
         Ok(Draft {
             store: self.clone(),
             path: Some(path),
@@ -364,8 +354,8 @@ impl Drop for Draft {
 mod tests {
     use super::{FsStore, Store};
     use crate::{
-        snapshot::{Id, Snapshots},
         Digest, Error,
+        snapshot::{Id, Snapshots},
     };
 
     #[test]

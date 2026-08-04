@@ -1406,7 +1406,10 @@ fn bad_usage_reaps() {
         runtime.handle(Fixture::operation("wait4"), [child.number() as u64, 32, 1, 1000, 0, 0],),
         LinuxResult::Error(hl_linux::Errno::EFAULT),
     );
-    assert_eq!(fixture.tasks.cpu_usage(fixture.process).unwrap().children_nanoseconds, 37);
+    assert_eq!(
+        fixture.tasks.cpu_usage(fixture.process).unwrap().children_nanoseconds,
+        37
+    );
     assert_eq!(
         runtime.handle(Fixture::operation("wait4"), [child.number() as u64, 32, 1, 0, 0, 0],),
         LinuxResult::Error(hl_linux::Errno::ECHILD),
@@ -1435,7 +1438,10 @@ fn nowait_survives_fault() {
         ),
         LinuxResult::Value(0),
     );
-    assert_eq!(u32::from_le_bytes(fixture.memory.get(48, 4).try_into().unwrap()), child.number());
+    assert_eq!(
+        u32::from_le_bytes(fixture.memory.get(48, 4).try_into().unwrap()),
+        child.number()
+    );
 }
 
 #[test]
@@ -1447,14 +1453,17 @@ fn waitid_usage_reaps() {
     fixture.tasks.exit_process(child, hl_task::ExitStatus::Code(5)).unwrap();
     let mut runtime = fixture.runtime(GuestArchitecture::Aarch64, fixture.thread);
     assert_eq!(
-        runtime.handle(
-            Fixture::operation("waitid"),
-            [1, child.number() as u64, 32, 4, 1000, 0],
-        ),
+        runtime.handle(Fixture::operation("waitid"), [1, child.number() as u64, 32, 4, 1000, 0],),
         LinuxResult::Error(hl_linux::Errno::EFAULT),
     );
-    assert_eq!(u32::from_le_bytes(fixture.memory.get(48, 4).try_into().unwrap()), child.number());
-    assert_eq!(fixture.tasks.cpu_usage(fixture.process).unwrap().children_nanoseconds, 41);
+    assert_eq!(
+        u32::from_le_bytes(fixture.memory.get(48, 4).try_into().unwrap()),
+        child.number()
+    );
+    assert_eq!(
+        fixture.tasks.cpu_usage(fixture.process).unwrap().children_nanoseconds,
+        41
+    );
     assert_eq!(
         runtime.handle(Fixture::operation("waitid"), [1, child.number() as u64, 32, 4, 0, 0]),
         LinuxResult::Error(hl_linux::Errno::ECHILD),

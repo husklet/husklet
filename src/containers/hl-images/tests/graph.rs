@@ -12,21 +12,12 @@ fn graph_walk_is_parent_first_and_suppresses_cycles_and_duplicates() {
     let manifest = descriptor(b"manifest");
     let layer = descriptor(b"layer");
     let edges = HashMap::from([
-        (
-            root.digest().to_string(),
-            vec![manifest.clone(), layer.clone()],
-        ),
-        (
-            manifest.digest().to_string(),
-            vec![layer.clone(), root.clone()],
-        ),
+        (root.digest().to_string(), vec![manifest.clone(), layer.clone()]),
+        (manifest.digest().to_string(), vec![layer.clone(), root.clone()]),
     ]);
     let walked = DescriptorGraph::from_edges(root.clone(), edges).unwrap();
     assert_eq!(
-        walked
-            .iter()
-            .map(|d| d.digest().to_string())
-            .collect::<Vec<_>>(),
+        walked.iter().map(|d| d.digest().to_string()).collect::<Vec<_>>(),
         vec![root, manifest, layer]
             .into_iter()
             .map(|d| d.digest().to_string())

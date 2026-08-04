@@ -9,21 +9,21 @@ cases:
   - id: runtime/bootstrap/exit
     status: active
     compat: { class: smoke }
-    build: { source: source/exit.c, output: exit, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    build: { source: source/exit.c, inputs: [source/abi.h], output: exit, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
     artifact: { destination: /opt/husklet/exit }
     run: []
     expect: { exit: 42, stdout: golden/empty.bin }
   - id: runtime/bootstrap/write
     status: active
     compat: { class: smoke }
-    build: { source: source/write.c, output: write, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    build: { source: source/write.c, inputs: [source/abi.h], output: write, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
     artifact: { destination: /opt/husklet/write }
     run: []
     expect: { exit: 0, stdout: golden/write.txt }
   - id: runtime/bootstrap/syscall
     status: active
     compat: { class: smoke }
-    build: { source: source/syscall.c, output: syscall, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    build: { source: source/syscall.c, inputs: [source/abi.h], output: syscall, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
     artifact: { destination: /opt/husklet/syscall }
     run: []
     expect: { exit: 0, stdout: golden/syscall.txt }

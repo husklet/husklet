@@ -1,1 +1,0 @@
-seccomp initial=1 nnp=1 install=1 mode=1 deny=1 allow=1 inherit=1 exec=1

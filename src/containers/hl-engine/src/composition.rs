@@ -171,7 +171,10 @@ impl Terminal {
         let (pair, notification) = {
             let bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
             let bridge = bridge.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
-            (Arc::clone(bridge.master.pair()), Arc::clone(&bridge.window_notification))
+            (
+                Arc::clone(bridge.master.pair()),
+                Arc::clone(&bridge.window_notification),
+            )
         };
         let changed = pair
             .set_window(hl_runtime::TerminalWindow {

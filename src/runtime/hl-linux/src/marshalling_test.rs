@@ -294,8 +294,5 @@ fn user_address_overflow_is_a_fault() {
             access: GuestAccess::Write,
         }))
     ));
-    assert!(matches!(
-        marshaller.c_string(u64::MAX, 2),
-        Err(MarshalError::Fault(_))
-    ));
+    assert!(matches!(marshaller.c_string(u64::MAX, 2), Err(MarshalError::Fault(_))));
 }

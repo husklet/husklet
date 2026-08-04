@@ -26,10 +26,7 @@ fn build_context_digest_includes_hardlink_topology() {
     let separate = tempfile::tempdir().unwrap();
     std::fs::write(separate.path().join("a"), "same").unwrap();
     std::fs::write(separate.path().join("b"), "same").unwrap();
-    assert_ne!(
-        context_digest(linked.path()),
-        context_digest(separate.path())
-    );
+    assert_ne!(context_digest(linked.path()), context_digest(separate.path()));
 }
 
 #[cfg(unix)]
@@ -59,10 +56,7 @@ fn copy_source_resolution_rejects_parent_and_symlink_escape() {
     let context = Context::new(root.path());
     assert!(context.source("../outside").is_err());
     assert!(context.source("escape").is_err());
-    assert_eq!(
-        context.source(".").unwrap(),
-        root.path().canonicalize().unwrap()
-    );
+    assert_eq!(context.source(".").unwrap(), root.path().canonicalize().unwrap());
 }
 
 #[test]
@@ -126,18 +120,10 @@ fn dockerignore_ordered_double_star_negation_and_cache_digest() {
     ] {
         assert!(!first.path().join(removed).exists(), "retained {removed}");
     }
-    for retained in [
-        "visible",
-        "important/deep/keep.log",
-        "vendor/keep/file",
-        "filea.tmp",
-    ] {
+    for retained in ["visible", "important/deep/keep.log", "vendor/keep/file", "filea.tmp"] {
         assert!(first.path().join(retained).exists(), "removed {retained}");
     }
-    assert_eq!(
-        first_context.digest().unwrap(),
-        second_context.digest().unwrap()
-    );
+    assert_eq!(first_context.digest().unwrap(), second_context.digest().unwrap());
 }
 
 #[test]

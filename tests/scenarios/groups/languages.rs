@@ -7,9 +7,7 @@ type Error = Box<dyn std::error::Error>;
 
 pub(crate) fn group() -> Group {
     let mut scenarios = Vec::new();
-    for manifest in [
-        include_str!("../fixtures/languages-compiled.yaml"),
-    ] {
+    for manifest in [include_str!("../fixtures/languages-compiled.yaml")] {
         scenarios
             .extend(crate::manifest::load(manifest).expect("the checked-in language manifest must satisfy the schema"));
     }

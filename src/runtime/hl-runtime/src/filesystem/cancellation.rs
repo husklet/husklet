@@ -81,8 +81,8 @@ mod test {
     use super::*;
     use crate::PipeCancellationPort;
     use hl_task::{
-        PendingTarget, ProcessCredentials, ProcessLimits, RegistryConfig, SignalAction, SignalDisposition,
-        SignalInfo, SignalMask, SignalNumber,
+        PendingTarget, ProcessCredentials, ProcessLimits, RegistryConfig, SignalAction, SignalDisposition, SignalInfo,
+        SignalMask, SignalNumber,
     };
 
     fn fixture() -> (Arc<TaskRegistry>, hl_task::ProcessId, ThreadId) {
@@ -109,8 +109,8 @@ mod test {
         tasks
             .enqueue_signal(PendingTarget::Process(process), SignalInfo::bare(restart))
             .unwrap();
-        let cancellation = RuntimePipeCancellation::new(Arc::new(Interruption::new()))
-            .with_signals(Arc::clone(&tasks), thread);
+        let cancellation =
+            RuntimePipeCancellation::new(Arc::new(Interruption::new())).with_signals(Arc::clone(&tasks), thread);
         assert_eq!(
             cancellation.interrupted_result(),
             LinuxResult::Restart(RestartKind::NoInterrupt)

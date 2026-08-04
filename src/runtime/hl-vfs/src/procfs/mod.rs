@@ -80,6 +80,22 @@ impl Identity {
     }
 }
 
+#[cfg(test)]
+mod identity_test {
+    use super::Identity;
+
+    #[test]
+    fn wire_contract() {
+        let raw = [0xff; 16];
+        let first = Identity::new(raw).into_bytes();
+        let second = Identity::new(raw).into_bytes();
+
+        assert_eq!(first, b"ffffffff-ffff-4fff-bfff-ffffffffffff\n");
+        assert_eq!(second, first);
+        assert_eq!(first.len(), 37);
+    }
+}
+
 impl Procfs {
     #[must_use]
     pub fn new(source: Arc<dyn Source>) -> Self {

@@ -48,15 +48,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             return self.interrupted_read(result);
         }
         let nonblocking = lease.status().bits() & hl_descriptor::StatusFlags::NONBLOCKING != 0;
-        if let Some(result) = AtomicReadCopyout::execute_transactional(
-            &lease,
-            &marshaller,
-            address,
-            length,
-            None,
-            nonblocking,
-            context,
-        ) {
+        if let Some(result) =
+            AtomicReadCopyout::execute_transactional(&lease, &marshaller, address, length, None, nonblocking, context)
+        {
             return self.interrupted_read(result);
         }
         let available = match marshaller.probe(address, length, GuestAccess::Write) {

@@ -116,10 +116,26 @@ impl Mmx {
             0x64 => O::Greater(1),
             0x65 => O::Greater(2),
             0x66 => O::Greater(4),
-            0xda => O::Extrema { lane: 1, signed: false, minimum: true },
-            0xde => O::Extrema { lane: 1, signed: false, minimum: false },
-            0xea => O::Extrema { lane: 2, signed: true, minimum: true },
-            0xee => O::Extrema { lane: 2, signed: true, minimum: false },
+            0xda => O::Extrema {
+                lane: 1,
+                signed: false,
+                minimum: true,
+            },
+            0xde => O::Extrema {
+                lane: 1,
+                signed: false,
+                minimum: false,
+            },
+            0xea => O::Extrema {
+                lane: 2,
+                signed: true,
+                minimum: true,
+            },
+            0xee => O::Extrema {
+                lane: 2,
+                signed: true,
+                minimum: false,
+            },
             0xe0 => O::Average(1),
             0xe3 => O::Average(2),
             0x60 => O::Unpack { lane: 1, high: false },
@@ -403,11 +419,7 @@ impl Mmx {
                 };
                 staged.write_mmx(register, value);
             }
-            ScalarInstruction::MmxVector {
-                mmx,
-                vector,
-                to_vector,
-            } => {
+            ScalarInstruction::MmxVector { mmx, vector, to_vector } => {
                 if to_vector {
                     staged.vectors[usize::from(vector)] = u128::from(cpu.read_mmx(mmx));
                 } else {
@@ -530,7 +542,11 @@ mod tests {
             Mmx::packed(
                 0x01ff_7f80_1020_3040,
                 0x0201_8080_2010_3050,
-                MmxOperation::Extrema { lane: 1, signed: false, minimum: true },
+                MmxOperation::Extrema {
+                    lane: 1,
+                    signed: false,
+                    minimum: true
+                },
             ),
             0x0101_7f80_1010_3040
         );
@@ -538,7 +554,11 @@ mod tests {
             Mmx::packed(
                 0x7fff_8000_0001_ffff,
                 0x7000_9000_ffff_0001,
-                MmxOperation::Extrema { lane: 2, signed: true, minimum: false },
+                MmxOperation::Extrema {
+                    lane: 2,
+                    signed: true,
+                    minimum: false
+                },
             ),
             0x7fff_9000_0001_0001
         );

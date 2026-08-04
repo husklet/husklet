@@ -20,6 +20,8 @@ struct Cli {
 enum Command {
     /// Run self-contained runtime compatibility cases.
     Runtime(runtime::Options),
+    #[command(hide = true)]
+    RuntimeWorker(runtime::WorkerOptions),
     /// Check or update runtime output using the configured oracle.
     Oracle(runtime::OracleOptions),
     /// Run application scenarios.
@@ -64,6 +66,7 @@ async fn main() {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match Cli::parse().command {
         Command::Runtime(options) => runtime::run(options).await,
+        Command::RuntimeWorker(options) => runtime::worker(options).await,
         Command::Oracle(options) => runtime::oracle(options),
         Command::Scenarios(options) => scenario::run(options).await,
         Command::ScenarioInventory => scenario::inventory(),

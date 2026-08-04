@@ -62,13 +62,7 @@ impl PortBindings {
         let mut used = BTreeSet::new();
         for container in containers.list().await.map_err(|error| error.to_string())? {
             if container.state.is_active() {
-                used.extend(
-                    container
-                        .spec
-                        .publish
-                        .iter()
-                        .map(|port| (port.host_ip, port.host)),
-                );
+                used.extend(container.spec.publish.iter().map(|port| (port.host_ip, port.host)));
             }
         }
         self.resolve(exposed, used)
@@ -94,9 +88,10 @@ impl PortBindings {
                 let host_ip = if binding.host_ip.is_empty() {
                     std::net::Ipv4Addr::UNSPECIFIED
                 } else {
-                    binding.host_ip.parse::<std::net::Ipv4Addr>().map_err(|_| {
-                        format!("HostIp {:?} is not an IPv4 address", binding.host_ip)
-                    })?
+                    binding
+                        .host_ip
+                        .parse::<std::net::Ipv4Addr>()
+                        .map_err(|_| format!("HostIp {:?} is not an IPv4 address", binding.host_ip))?
                 };
                 let host = if binding.host_port.is_empty() || binding.host_port == "0" {
                     (49152..=65535)
@@ -112,28 +107,20 @@ impl PortBindings {
                     return Err("HostPort must be nonzero or empty for automatic allocation".into());
                 }
                 if Self::conflicts(&used, host_ip, host) {
-                    return Err(format!(
-                        "host TCP address {host_ip}:{host} is already allocated"
-                    ));
+                    return Err(format!("host TCP address {host_ip}:{host} is already allocated"));
                 }
                 used.insert((host_ip, host));
                 publish.push(
-                    hl_container::Publication::tcp(host_ip, host, port.guest)
-                        .map_err(|error| error.to_string())?,
+                    hl_container::Publication::tcp(host_ip, host, port.guest).map_err(|error| error.to_string())?,
                 );
             }
         }
         Ok((ports, publish))
     }
 
-    fn conflicts(
-        used: &BTreeSet<(std::net::Ipv4Addr, u16)>,
-        address: std::net::Ipv4Addr,
-        port: u16,
-    ) -> bool {
+    fn conflicts(used: &BTreeSet<(std::net::Ipv4Addr, u16)>, address: std::net::Ipv4Addr, port: u16) -> bool {
         used.iter().any(|(bound, candidate)| {
-            *candidate == port
-                && (bound.is_unspecified() || address.is_unspecified() || *bound == address)
+            *candidate == port && (bound.is_unspecified() || address.is_unspecified() || *bound == address)
         })
     }
 
@@ -193,19 +180,21 @@ mod tests {
 
     #[test]
     fn collisions_and_protocols_fail_honestly() {
-        assert!(bindings(&[("80/tcp", "", "5000")])
-            .resolve(
-                &ExposedPorts::default(),
-                [(std::net::Ipv4Addr::UNSPECIFIED, 5000)]
-                    .into_iter()
-                    .collect(),
-            )
-            .unwrap_err()
-            .contains("already allocated"));
-        assert!(bindings(&[("53/udp", "", "5001")])
-            .resolve(&ExposedPorts::default(), BTreeSet::new())
-            .unwrap_err()
-            .contains("only tcp"));
+        assert!(
+            bindings(&[("80/tcp", "", "5000")])
+                .resolve(
+                    &ExposedPorts::default(),
+                    [(std::net::Ipv4Addr::UNSPECIFIED, 5000)].into_iter().collect(),
+                )
+                .unwrap_err()
+                .contains("already allocated")
+        );
+        assert!(
+            bindings(&[("53/udp", "", "5001")])
+                .resolve(&ExposedPorts::default(), BTreeSet::new())
+                .unwrap_err()
+                .contains("only tcp")
+        );
     }
 
     #[test]
@@ -216,20 +205,26 @@ mod tests {
         assert_eq!(loopback[0].host_ip, std::net::Ipv4Addr::LOCALHOST);
 
         let other = "127.0.0.2".parse().unwrap();
-        assert!(bindings(&[("80/tcp", "127.0.0.1", "5002")])
-            .resolve(&ExposedPorts::default(), [(other, 5002)].into())
-            .is_ok());
-        assert!(bindings(&[("80/tcp", "127.0.0.1", "5002")])
-            .resolve(
-                &ExposedPorts::default(),
-                [(std::net::Ipv4Addr::UNSPECIFIED, 5002)].into(),
-            )
-            .unwrap_err()
-            .contains("already allocated"));
-        assert!(bindings(&[("80/tcp", "", "5002")])
-            .resolve(&ExposedPorts::default(), [(other, 5002)].into())
-            .unwrap_err()
-            .contains("already allocated"));
+        assert!(
+            bindings(&[("80/tcp", "127.0.0.1", "5002")])
+                .resolve(&ExposedPorts::default(), [(other, 5002)].into())
+                .is_ok()
+        );
+        assert!(
+            bindings(&[("80/tcp", "127.0.0.1", "5002")])
+                .resolve(
+                    &ExposedPorts::default(),
+                    [(std::net::Ipv4Addr::UNSPECIFIED, 5002)].into(),
+                )
+                .unwrap_err()
+                .contains("already allocated")
+        );
+        assert!(
+            bindings(&[("80/tcp", "", "5002")])
+                .resolve(&ExposedPorts::default(), [(other, 5002)].into())
+                .unwrap_err()
+                .contains("already allocated")
+        );
     }
 
     #[test]

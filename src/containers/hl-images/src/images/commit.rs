@@ -66,11 +66,8 @@ impl Images {
                 target: manifest,
             };
             self.metadata.put(image.clone())?;
-            self.metadata.enrich(
-                &image.target,
-                metadata.created_at_ms(),
-                metadata.labels.clone(),
-            )?;
+            self.metadata
+                .enrich(&image.target, metadata.created_at_ms(), metadata.labels.clone())?;
             Ok(image)
         })();
         let released = self.leases.delete(lease.id());
@@ -82,25 +79,19 @@ impl Images {
 
     fn selected_manifest(&self, target: &Descriptor, platform: &Platform) -> Result<Descriptor> {
         if target.is_index() {
-            serde_json::from_slice::<IndexDocument>(&self.content.read_document(target)?)?
-                .select_platform(platform)
+            serde_json::from_slice::<IndexDocument>(&self.content.read_document(target)?)?.select_platform(platform)
         } else if target.is_manifest() {
             Ok(target.clone())
         } else {
-            Err(Error::MalformedOci(
-                "parent target is not an image manifest".into(),
-            ))
+            Err(Error::MalformedOci("parent target is not an image manifest".into()))
         }
     }
 
     fn store_child_bytes(&self, lease: &str, descriptor: &Descriptor, bytes: &[u8]) -> Result<()> {
-        let mut ingest = self
-            .content
-            .ingest(format!("child-{}", descriptor.digest()))?;
+        let mut ingest = self.content.ingest(format!("child-{}", descriptor.digest()))?;
         ingest.write(bytes)?;
         ingest.commit(descriptor)?;
-        self.leases
-            .add(lease, format!("content:{}", descriptor.digest()))
+        self.leases.add(lease, format!("content:{}", descriptor.digest()))
     }
     /// Import an uncompressed rootfs tar stream as a named single-layer image.
     ///
@@ -209,19 +200,12 @@ impl Images {
             archive.finish()?;
         }
         outer.seek(SeekFrom::Start(0))?;
-        let image = crate::format::docker::Archive::load(
-            outer,
-            self,
-            crate::format::docker::Limits::default(),
-        )?
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::MalformedOci("import produced no image".into()))?;
-        self.metadata.enrich(
-            &image.target,
-            metadata.created_at_ms(),
-            metadata.labels.clone(),
-        )?;
+        let image = crate::format::docker::Archive::load(outer, self, crate::format::docker::Limits::default())?
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::MalformedOci("import produced no image".into()))?;
+        self.metadata
+            .enrich(&image.target, metadata.created_at_ms(), metadata.labels.clone())?;
         Ok(image)
     }
 

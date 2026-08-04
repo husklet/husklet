@@ -1,4 +1,4 @@
-use super::{now_ms, ContainerId, ExitStatus, Process};
+use super::{ContainerId, ExitStatus, Process, now_ms};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 

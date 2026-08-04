@@ -27,21 +27,21 @@ cases:
   - id: runtime/signalfd/edges
     status: active
     compat: { class: compatibility }
-    build: { source: fd_main.c, output: fd_edges, flags: [-static, -O2, -std=gnu11] }
+    build: { source: fd_main.c, inputs: [epoll.c, fork.c], output: fd_edges, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/runtime-signals/fd_edges }
     run: [edges]
     expect: { exit: 0, stdout: golden/fd_edges.txt }
   - id: runtime/signalfd/epoll
     status: active
     compat: { class: compatibility }
-    build: { source: fd_main.c, output: fd_epoll, flags: [-static, -O2, -std=gnu11] }
+    build: { source: fd_main.c, inputs: [epoll.c, fork.c], output: fd_epoll, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/runtime-signals/fd_epoll }
     run: [epoll]
     expect: { exit: 0, stdout: golden/fd_epoll.txt }
   - id: runtime/signalfd/fork
     status: active
     compat: { class: compatibility }
-    build: { source: fd_main.c, output: fd_fork, flags: [-static, -O2, -std=gnu11] }
+    build: { source: fd_main.c, inputs: [epoll.c, fork.c], output: fd_fork, flags: [-static, -O2, -std=gnu11] }
     artifact: { destination: /opt/husklet/runtime-signals/fd_fork }
     run: [fork]
     expect: { exit: 0, stdout: golden/fd_fork.txt }

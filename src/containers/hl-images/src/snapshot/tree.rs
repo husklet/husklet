@@ -75,9 +75,7 @@ impl Tree<'_> {
     fn copy(&self, target: &Path, links: &mut BTreeMap<(u64, u64), PathBuf>) -> Result<()> {
         let source = self.0;
         if !source.is_dir() {
-            return Err(Error::InvalidMetadata(
-                "parent snapshot does not exist".into(),
-            ));
+            return Err(Error::InvalidMetadata("parent snapshot does not exist".into()));
         }
         let original = fs::symlink_metadata(source)?.permissions();
         let mut accessible = original.clone();
@@ -109,22 +107,17 @@ impl Tree<'_> {
             }
             Ok(())
         })();
-        let restored =
-            fs::set_permissions(source, original).map_err(|error| Error::LayerFilesystem {
-                operation: "restore snapshot directory permissions",
-                path: source.to_owned(),
-                source: error,
-            });
+        let restored = fs::set_permissions(source, original).map_err(|error| Error::LayerFilesystem {
+            operation: "restore snapshot directory permissions",
+            path: source.to_owned(),
+            source: error,
+        });
         copied?;
         restored?;
         Ok(())
     }
 
-    fn copy_file(
-        source: &Path,
-        destination: &Path,
-        links: &mut BTreeMap<(u64, u64), PathBuf>,
-    ) -> Result<()> {
+    fn copy_file(source: &Path, destination: &Path, links: &mut BTreeMap<(u64, u64), PathBuf>) -> Result<()> {
         let original = fs::metadata(source)?.permissions();
         let mut readable = original.clone();
         #[cfg(unix)]
@@ -177,14 +170,11 @@ impl Tree<'_> {
 
 impl Entry {
     fn copy(&self, target: &Path, links: &mut BTreeMap<(u64, u64), PathBuf>) -> Result<()> {
-        let meta = self
-            .0
-            .file_type()
-            .map_err(|source| Error::LayerFilesystem {
-                operation: "inspect snapshot entry",
-                path: self.0.path(),
-                source,
-            })?;
+        let meta = self.0.file_type().map_err(|source| Error::LayerFilesystem {
+            operation: "inspect snapshot entry",
+            path: self.0.path(),
+            source,
+        })?;
         let destination = target.join(self.0.file_name());
         if meta.is_dir() {
             return self.copy_tree(&destination, links);
@@ -201,11 +191,7 @@ impl Entry {
         )))
     }
 
-    fn copy_tree(
-        &self,
-        destination: &Path,
-        links: &mut BTreeMap<(u64, u64), PathBuf>,
-    ) -> Result<()> {
+    fn copy_tree(&self, destination: &Path, links: &mut BTreeMap<(u64, u64), PathBuf>) -> Result<()> {
         fs::create_dir(destination).map_err(|source| Error::LayerFilesystem {
             operation: "create snapshot directory",
             path: self.0.path(),
@@ -235,21 +221,17 @@ impl Entry {
             path: self.0.path(),
             source,
         })?;
-        std::os::unix::fs::symlink(target, destination).map_err(|source| {
-            Error::LayerFilesystem {
-                operation: "copy snapshot symbolic link",
-                path: self.0.path(),
-                source,
-            }
+        std::os::unix::fs::symlink(target, destination).map_err(|source| Error::LayerFilesystem {
+            operation: "copy snapshot symbolic link",
+            path: self.0.path(),
+            source,
         })?;
         Ok(())
     }
 
     #[cfg(not(unix))]
     fn copy_link(&self, _destination: &Path) -> Result<()> {
-        Err(Error::InvalidMetadata(
-            "symlink snapshots unsupported".into(),
-        ))
+        Err(Error::InvalidMetadata("symlink snapshots unsupported".into()))
     }
 }
 
@@ -267,20 +249,14 @@ mod tests {
 
         Tree::from(source.path()).copy_to(target.path()).unwrap();
 
-        assert_eq!(
-            fs::read(target.path().join("nested/value")).unwrap(),
-            b"snapshot"
-        );
-        assert_eq!(
-            fs::read(source.path().join("nested/value")).unwrap(),
-            b"snapshot"
-        );
+        assert_eq!(fs::read(target.path().join("nested/value")).unwrap(), b"snapshot");
+        assert_eq!(fs::read(source.path().join("nested/value")).unwrap(), b"snapshot");
     }
 
     #[cfg(unix)]
     #[test]
     fn preserves_hard_links_and_symbolic_links() {
-        use std::os::unix::fs::{symlink, MetadataExt as _};
+        use std::os::unix::fs::{MetadataExt as _, symlink};
 
         let source = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();

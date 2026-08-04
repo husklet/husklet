@@ -413,44 +413,44 @@ impl ExtendedMemory {
                         let ieee = operation == 6;
                         let spread = left.abs().log2().floor() - right.abs().log2().floor();
                         let (result, quotient, partial) =
-                        if left.is_finite() && right.is_finite() && left != 0.0 && right != 0.0 && spread >= 64.0 {
-                            let scaled = right * 8.0;
-                            (if scaled.is_infinite() { left } else { left % scaled }, 0_i64, true)
-                        } else {
-                            let left_magnitude = left.abs();
-                            let right_magnitude = right.abs();
-                            let scaled = right_magnitude * 8.0;
-                            let reduced = if scaled > left_magnitude {
-                                left_magnitude
+                            if left.is_finite() && right.is_finite() && left != 0.0 && right != 0.0 && spread >= 64.0 {
+                                let scaled = right * 8.0;
+                                (if scaled.is_infinite() { left } else { left % scaled }, 0_i64, true)
                             } else {
-                                left_magnitude % scaled
-                            };
-                            let mut quotient = ((reduced / right_magnitude) as i64).min(7);
-                            let truncated = left % right;
-                            let result = if ieee {
-                                let half = right_magnitude * 0.5;
-                                if truncated.abs() > half || truncated.abs() == half && quotient & 1 != 0 {
-                                    quotient += 1;
-                                    truncated - right_magnitude.copysign(left)
+                                let left_magnitude = left.abs();
+                                let right_magnitude = right.abs();
+                                let scaled = right_magnitude * 8.0;
+                                let reduced = if scaled > left_magnitude {
+                                    left_magnitude
+                                } else {
+                                    left_magnitude % scaled
+                                };
+                                let mut quotient = ((reduced / right_magnitude) as i64).min(7);
+                                let truncated = left % right;
+                                let result = if ieee {
+                                    let half = right_magnitude * 0.5;
+                                    if truncated.abs() > half || truncated.abs() == half && quotient & 1 != 0 {
+                                        quotient += 1;
+                                        truncated - right_magnitude.copysign(left)
+                                    } else {
+                                        truncated
+                                    }
                                 } else {
                                     truncated
-                                }
-                            } else {
-                                truncated
+                                };
+                                (result, quotient & 7, false)
                             };
-                            (result, quotient & 7, false)
-                        };
-                    let (value, class) = Conversion::expand(result.to_bits(), FloatWidth::Double);
-                    staged.x87_values[top] = value;
-                    staged.x87_classes[top] = class;
-                    staged.x87_status &= !((1 << 14) | (1 << 10) | (1 << 9) | (1 << 8));
-                    if partial {
-                        staged.x87_status |= 1 << 10;
-                    } else {
-                        staged.x87_status |= (((quotient >> 1) & 1) as u16) << 14;
-                        staged.x87_status |= ((quotient & 1) as u16) << 9;
-                        staged.x87_status |= (((quotient >> 2) & 1) as u16) << 8;
-                    }
+                        let (value, class) = Conversion::expand(result.to_bits(), FloatWidth::Double);
+                        staged.x87_values[top] = value;
+                        staged.x87_classes[top] = class;
+                        staged.x87_status &= !((1 << 14) | (1 << 10) | (1 << 9) | (1 << 8));
+                        if partial {
+                            staged.x87_status |= 1 << 10;
+                        } else {
+                            staged.x87_status |= (((quotient >> 1) & 1) as u16) << 14;
+                            staged.x87_status |= ((quotient & 1) as u16) << 9;
+                            staged.x87_status |= (((quotient >> 2) & 1) as u16) << 8;
+                        }
                     }
                 }
             }
@@ -508,10 +508,8 @@ impl ExtendedMemory {
                     )
                     .trunc();
                     let result = Self::scale(left, scale);
-                    let (value, class) = Self::computed(
-                        result.to_bits(),
-                        &[staged.x87_classes[top], staged.x87_classes[other]],
-                    );
+                    let (value, class) =
+                        Self::computed(result.to_bits(), &[staged.x87_classes[top], staged.x87_classes[other]]);
                     staged.x87_values[top] = value;
                     staged.x87_classes[top] = class;
                 }
@@ -879,8 +877,7 @@ impl ExtendedMemory {
                 _ => return ExecutionExit::UndefinedInstruction { instruction },
             };
             let result_bits = soft.value.bits();
-            let mut soft_flags =
-                crate::x86::scalar::arithmetic::Arithmetic::exceptions(soft.flags) as u16;
+            let mut soft_flags = crate::x86::scalar::arithmetic::Arithmetic::exceptions(soft.flags) as u16;
             let (result_bits, precision) = Self::precision(result_bits, cpu.x87_control);
             soft_flags |= precision;
             let result = f64::from_bits(result_bits);
@@ -888,18 +885,14 @@ impl ExtendedMemory {
                 && result.is_nan()
                 && left_class != ExtendedClass::QuietNan
                 && right_class != ExtendedClass::QuietNan
-                || operation == 1
-                    && ((left == 0.0 && right.is_infinite()) || (right == 0.0 && left.is_infinite()))
+                || operation == 1 && ((left == 0.0 && right.is_infinite()) || (right == 0.0 && left.is_infinite()))
                 || matches!(operation, 6 | 7)
                     && ((left == 0.0 && right == 0.0) || (left.is_infinite() && right.is_infinite()))
                 || left_class == ExtendedClass::SignalingNan
                 || right_class == ExtendedClass::SignalingNan;
             let divisor = if operation == 6 { right } else { left };
             let dividend = if operation == 6 { left } else { right };
-            let divide_zero = matches!(operation, 6 | 7)
-                && divisor == 0.0
-                && dividend != 0.0
-                && dividend.is_finite();
+            let divide_zero = matches!(operation, 6 | 7) && divisor == 0.0 && dividend != 0.0 && dividend.is_finite();
             let inexact = matches!(operation, 6 | 7)
                 && !invalid
                 && !divide_zero

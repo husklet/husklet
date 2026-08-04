@@ -1,8 +1,8 @@
 use hl_isa::GuestArchitecture;
 
 use crate::{
-    Action, BpfInstruction, BpfProgram, Data, Decision, KillScope, Mode, Policy, PolicyError, SeccompBaseline,
-    SeccompStatus, SECCOMP_MAXIMUM_INSTRUCTIONS, VmError,
+    Action, BpfInstruction, BpfProgram, Data, Decision, KillScope, Mode, Policy, PolicyError,
+    SECCOMP_MAXIMUM_INSTRUCTIONS, SeccompBaseline, SeccompStatus, VmError,
 };
 
 #[test]

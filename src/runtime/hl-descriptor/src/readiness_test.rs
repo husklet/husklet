@@ -126,9 +126,10 @@ fn notify_ofd_lifecycle() {
     let alias = table.duplicate(number, 0, DescriptorFlags::default()).unwrap();
     let child = table.fork();
     let calls = Arc::new(AtomicUsize::new(0));
-    table.pin(number).unwrap().set_notify_subscription(Some(Box::new(CountingSubscription(
-        Arc::clone(&calls),
-    ))));
+    table
+        .pin(number)
+        .unwrap()
+        .set_notify_subscription(Some(Box::new(CountingSubscription(Arc::clone(&calls)))));
     table.close(number).unwrap();
     table.close(alias).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 0);

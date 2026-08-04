@@ -247,7 +247,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if limit == u64::MAX || count == 0 {
             return Ok(count);
         }
-        let metadata = lease.metadata().map_err(|error| LinuxResult::Error(FileErrno::object(error)))?;
+        let metadata = lease
+            .metadata()
+            .map_err(|error| LinuxResult::Error(FileErrno::object(error)))?;
         if metadata.kind != 8 {
             return Ok(count);
         }
@@ -597,8 +599,7 @@ impl<M: GuestMemory> DescriptorIoSyscalls for RuntimeFilesystemSyscalls<M> {
         let Ok(lease) = self.descriptors.pin(arguments[0] as i32) else {
             return false;
         };
-        if Self::access_rejects(&lease, reading)
-            || lease.status().bits() & hl_descriptor::StatusFlags::NONBLOCKING != 0
+        if Self::access_rejects(&lease, reading) || lease.status().bits() & hl_descriptor::StatusFlags::NONBLOCKING != 0
         {
             return false;
         }
@@ -612,8 +613,7 @@ impl<M: GuestMemory> DescriptorIoSyscalls for RuntimeFilesystemSyscalls<M> {
         };
         let ready = lease.readiness(hl_descriptor::Readiness::from_bits(interest));
         if reading {
-            !ready.contains(hl_descriptor::Readiness::READ)
-                && !ready.contains(hl_descriptor::Readiness::HANGUP)
+            !ready.contains(hl_descriptor::Readiness::READ) && !ready.contains(hl_descriptor::Readiness::HANGUP)
         } else {
             length > hl_ipc::PIPE_BUF
                 || (!ready.contains(hl_descriptor::Readiness::WRITE)
@@ -628,10 +628,7 @@ impl<M: GuestMemory> DescriptorIoSyscalls for RuntimeFilesystemSyscalls<M> {
 impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
     fn may_block(&self, operation: SyscallOperation, arguments: [u64; 6]) -> bool {
         match operation.name {
-            "creat" => self.open_may_block(
-                [(-100_i64) as u64, arguments[0], 0x241, arguments[1], 0, 0],
-                false,
-            ),
+            "creat" => self.open_may_block([(-100_i64) as u64, arguments[0], 0x241, arguments[1], 0, 0], false),
             "openat" => self.open_may_block(arguments, false),
             "openat2" => self.open_may_block(arguments, true),
             _ => false,
@@ -644,10 +641,7 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
             "chdir" => self.chdir(arguments[0]),
             "fchdir" => self.fchdir(arguments[0] as i32),
             "chroot" => self.chroot(arguments[0]),
-            "creat" => self.openat(
-                [(-100_i64) as u64, arguments[0], 0x241, arguments[1], 0, 0],
-                false,
-            ),
+            "creat" => self.openat([(-100_i64) as u64, arguments[0], 0x241, arguments[1], 0, 0], false),
             "openat" => self.openat(arguments, false),
             "openat2" => self.openat(arguments, true),
             "newfstatat" => self.path_stat(arguments, false),
@@ -688,8 +682,8 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
             "readlinkat" => self.path_readlink(arguments),
             "readlink" => self.legacy_readlink(arguments),
             "chmod" | "mkdir" | "mkdirat" | "mknodat" | "unlink" | "unlinkat" | "rmdir" | "symlink" | "symlinkat"
-            | "link" | "linkat" | "rename" | "renameat" | "renameat2" | "fchmod" | "fchmodat" | "fchmodat2" | "fchown"
-            | "fchownat" | "chown" | "utime" | "utimes" | "futimesat" | "utimensat" => {
+            | "link" | "linkat" | "rename" | "renameat" | "renameat2" | "fchmod" | "fchmodat" | "fchmodat2"
+            | "fchown" | "fchownat" | "chown" | "utime" | "utimes" | "futimesat" | "utimensat" => {
                 self.path_mutation(operation.name, arguments)
             }
             "setxattr" | "lsetxattr" | "fsetxattr" | "getxattr" | "lgetxattr" | "fgetxattr" | "listxattr"

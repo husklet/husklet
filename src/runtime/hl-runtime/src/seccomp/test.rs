@@ -249,7 +249,10 @@ fn disabled_baseline_reports_disabled_without_changing_policy() {
             filters: 0,
         },
     );
-    assert_eq!(control.evaluate(threads[0], Fixture::data()).unwrap(), SeccompDecision::Continue);
+    assert_eq!(
+        control.evaluate(threads[0], Fixture::data()).unwrap(),
+        SeccompDecision::Continue
+    );
     control.enable_strict(threads[0]).unwrap();
     assert_eq!(PrctlPort::mode(&syscalls), LinuxResult::Value(1));
     assert_eq!(

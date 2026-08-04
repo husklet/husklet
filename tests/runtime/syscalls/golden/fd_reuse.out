@@ -1,0 +1,1 @@
+fdreuse inotify=1 timerfd=1 eventfd=1 memfd=1
