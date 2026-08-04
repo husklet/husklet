@@ -745,9 +745,6 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
         if (cpu->interrupt != 0)
             return leave_exit(&execution, output, HL_NATIVE_EXIT_INTERRUPT, cpu->program);
-        if (loop_active && cpu->program == pc) {
-            return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
-        }
         if (loop_active) {
             continue;
         }

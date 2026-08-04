@@ -1,0 +1,127 @@
+#include "support.h"
+#include "../src/executor.h"
+#include "../src/translation.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
+
+#define CHECK(value)                                                                                                   \
+    do {                                                                                                               \
+        if (!(value)) {                                                                                                \
+            fprintf(stderr, "x86_continue:%d: %s\n", __LINE__, #value);                                             \
+            return 1;                                                                                                  \
+        }                                                                                                              \
+    } while (0)
+
+#if defined(__aarch64__)
+static hl_native_status executable_begin(void *opaque) {
+    test_memory *memory = opaque;
+    memory->begin_calls++;
+    return mprotect(memory->writable, (size_t)memory->capacity, PROT_READ | PROT_WRITE) == 0
+        ? HL_NATIVE_OK : HL_NATIVE_PLATFORM;
+}
+
+static hl_native_status executable_end(void *opaque) {
+    test_memory *memory = opaque;
+    memory->end_calls++;
+    __builtin___clear_cache((char *)memory->writable, (char *)memory->writable + memory->capacity);
+    return mprotect(memory->writable, (size_t)memory->capacity, PROT_READ | PROT_EXEC) == 0
+        ? HL_NATIVE_OK : HL_NATIVE_PLATFORM;
+}
+
+static int run_loop(hl_native_executor *executor, const uint8_t *bytes, size_t size,
+                    uint64_t pc, uint64_t budget, uint64_t iterations,
+                    uint64_t interrupt, const hl_native_projection *projection,
+                    hl_native_x86_64_cpu *state,
+                    hl_native_exit *output) {
+    hl_native_source_span span = {pc, bytes, size, 7, 16};
+    hl_native_source source = {&span, 1, 7, 16};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_X86_64, .state.x86_64 = state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .budget = budget,
+        .source = &source, .projection = projection};
+    static const float one[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+
+    memset(state, 0, sizeof *state);
+    state->program = pc;
+    state->registers[0] = iterations;
+    state->interrupt = interrupt;
+    if (projection != NULL) state->registers[3] = projection->views[0].guest_first;
+    memcpy(&state->vectors[0], one, sizeof one);
+    memcpy(&state->vectors[2], one, sizeof one);
+    return hl_native_run(executor, &cpu, &request, output) == HL_NATIVE_OK ? 0 : 1;
+}
+
+static int continuation_contract(void) {
+    static const uint8_t register_loop[] = {
+        0x0f, 0x58, 0xc1,       /* addps xmm0,xmm1 */
+        0x83, 0xe8, 0x01,       /* sub eax,1 */
+        0x75, 0xf8,             /* jne register_loop */
+        0xcc,                   /* typed fallback after finite completion */
+    };
+    static const uint8_t memory_loop[] = {
+        0x0f, 0x58, 0x03,       /* addps xmm0,[rbx] */
+        0x83, 0xe8, 0x01,       /* sub eax,1 */
+        0x75, 0xf8,             /* jne memory_loop */
+        0xcc,
+    };
+    static const float one[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    test_memory host = {0};
+    hl_native_memory memory = test_services(&host);
+    hl_native_executor *executor = NULL;
+    hl_native_x86_64_cpu state;
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    hl_native_projection_view view = {
+        0x9000, 0x9010, (uint64_t)(uintptr_t)one, 7, HL_NATIVE_ACCESS_READ, 0,
+    };
+    hl_native_projection projection = {&view, 1, 7, 0};
+
+    memory.write_begin = executable_begin;
+    memory.write_end = executable_end;
+    hl_native_config config = test_config(&memory, 0);
+    CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+
+    CHECK(run_loop(executor, register_loop, sizeof register_loop, 0x8000,
+                   1000, 300, 0, NULL, &state, &output) == 0);
+    CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == 0x8008 &&
+          state.registers[0] == 0 && state.executed == 900 && state.budget == 100);
+
+    CHECK(run_loop(executor, register_loop, sizeof register_loop, 0x8000,
+                   768, 300, 0, NULL, &state, &output) == 0);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.program == 0x8000 &&
+          state.registers[0] == 44 && state.executed == 768 && state.budget == 0);
+
+    CHECK(run_loop(executor, memory_loop, sizeof memory_loop, 0x8100,
+                   1000, 300, 0, &projection, &state, &output) == 0);
+    CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == 0x8108 &&
+          state.registers[0] == 0 && state.executed == 900 && state.budget == 100);
+
+    CHECK(run_loop(executor, register_loop, sizeof register_loop, 0x8000,
+                   10, 3, 1, NULL, &state, &output) == 0);
+    CHECK(output.kind == HL_NATIVE_EXIT_INTERRUPT && state.program == 0x8000 &&
+          state.registers[0] == 3 && state.executed == 0 && state.budget == 10);
+
+    {
+        hl_native_change invalidate = {.abi = HL_NATIVE_ABI, .size = sizeof(invalidate),
+            .kind = HL_NATIVE_INVALIDATE, .mapping_epoch = 7, .first = 0x8000, .last = 0x8008};
+        hl_native_translation_key key = {0x8000, 7, 16, 0x8000, 0x8008, 0, 0};
+        hl_native_code code;
+        CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_HIT);
+        CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
+        CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_MISS);
+    }
+
+    hl_native_destroy(executor);
+    return 0;
+}
+#endif
+
+int main(void) {
+#if defined(__aarch64__)
+    return continuation_contract();
+#else
+    return 0;
+#endif
+}
