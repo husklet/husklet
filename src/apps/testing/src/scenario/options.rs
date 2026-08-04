@@ -11,7 +11,7 @@ pub(crate) struct Options {
     #[arg(long = "case")]
     pub(super) case: Option<String>,
     /// Run only one guest ISA.
-    #[arg(long = "isa", value_enum)]
+    #[arg(long = "isa", visible_alias = "target", value_enum)]
     target: Option<Target>,
     /// Run only quick or long cases.
     #[arg(long, value_enum)]

@@ -24,6 +24,14 @@ enum Command {
     Oracle(runtime::OracleOptions),
     /// Run application scenarios.
     Scenarios(scenario::Options),
+    /// Report the complete YAML scenario inventory without executing it.
+    ScenarioInventory,
+    /// Audit YAML case identity, image, target, and action provenance.
+    ScenarioProvenance(scenario::ProvenanceOptions),
+    /// List retained workflow names while their orchestration is migrated.
+    ScenarioWorkflows,
+    /// Verify that every selected scenario image exists in the exact offline cache.
+    ScenarioCachePreflight(scenario::CachePreflightOptions),
     /// Run repository benchmark definitions.
     Bench(bench::Options),
     /// Run or report a direct provider benchmark.
@@ -58,6 +66,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::Runtime(options) => runtime::run(options).await,
         Command::Oracle(options) => runtime::oracle(options),
         Command::Scenarios(options) => scenario::run(options).await,
+        Command::ScenarioInventory => scenario::inventory(),
+        Command::ScenarioProvenance(options) => scenario::provenance(options),
+        Command::ScenarioWorkflows => {
+            scenario::workflows();
+            Ok(())
+        }
+        Command::ScenarioCachePreflight(options) => scenario::cache_preflight(options),
         Command::Bench(options) => bench::run(options).await,
         Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
             .execute(command)
@@ -74,7 +89,18 @@ mod cli_tests {
     #[test]
     fn help_exposes_all_typed_commands() {
         let help = Cli::command().render_long_help().to_string();
-        for command in ["runtime", "oracle", "scenarios", "bench", "benchmark", "nested"] {
+        for command in [
+            "runtime",
+            "oracle",
+            "scenarios",
+            "scenario-inventory",
+            "scenario-provenance",
+            "scenario-workflows",
+            "scenario-cache-preflight",
+            "bench",
+            "benchmark",
+            "nested",
+        ] {
             assert!(help.contains(command), "missing {command} from help");
         }
     }
@@ -82,6 +108,16 @@ mod cli_tests {
     #[test]
     fn runtime_selection_parses() {
         assert!(Cli::try_parse_from(["testing", "runtime", "core", "--isa", "arm64"]).is_ok());
+    }
+
+    #[test]
+    fn scenario_ci_replacements_are_typed() {
+        assert!(Cli::try_parse_from(["testing", "scenario-inventory"]).is_ok());
+        assert!(Cli::try_parse_from(["testing", "scenario-provenance", "--details"]).is_ok());
+        assert!(Cli::try_parse_from(["testing", "scenario-workflows"]).is_ok());
+        assert!(Cli::try_parse_from(["testing", "scenario-cache-preflight", "arm64"]).is_ok());
+        assert!(Cli::try_parse_from(["testing", "scenario-cache-preflight", "x86"]).is_err());
+        assert!(Cli::try_parse_from(["testing", "scenarios", "--target", "amd64", "--list"]).is_ok());
     }
 
     #[test]
@@ -117,8 +153,17 @@ mod cli_tests {
         );
         assert!(
             Cli::try_parse_from([
-                "testing", "benchmark", "run", "--provider", "native", "--arch", "amd64", "--binary",
-                "/guest", "--phase", "compute"
+                "testing",
+                "benchmark",
+                "run",
+                "--provider",
+                "native",
+                "--arch",
+                "amd64",
+                "--binary",
+                "/guest",
+                "--phase",
+                "compute"
             ])
             .is_err()
         );
@@ -129,15 +174,33 @@ mod cli_tests {
         for isa in ["arm64", "amd64", "aarch64", "x86_64"] {
             assert!(
                 Cli::try_parse_from([
-                    "testing", "benchmark", "run", "--provider", "native", "--arch", isa, "--binary", "/guest"
+                    "testing",
+                    "benchmark",
+                    "run",
+                    "--provider",
+                    "native",
+                    "--arch",
+                    isa,
+                    "--binary",
+                    "/guest"
                 ])
                 .is_ok(),
                 "{isa}"
             );
         }
-        assert!(Cli::try_parse_from([
-            "testing", "benchmark", "run", "--provider", "native", "--arch", "x86", "--binary", "/guest"
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "testing",
+                "benchmark",
+                "run",
+                "--provider",
+                "native",
+                "--arch",
+                "x86",
+                "--binary",
+                "/guest"
+            ])
+            .is_err()
+        );
     }
 }

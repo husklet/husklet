@@ -4,11 +4,13 @@ mod isolation;
 mod ledger;
 mod options;
 mod process;
+mod report;
 mod scheduler;
 
 use crate::suite::{self, Error};
 use definition::Scenario;
 pub(crate) use options::Options;
+pub(crate) use report::{CachePreflightOptions, ProvenanceOptions};
 use std::path::{Path, PathBuf};
 
 pub async fn run(options: Options) -> Result<(), Error> {
@@ -37,16 +39,41 @@ pub async fn run(options: Options) -> Result<(), Error> {
 }
 
 fn scenarios(options: &Options) -> Result<Vec<Scenario>, Error> {
+    let result = load_scenarios(options.scenario.as_deref())?;
+    let result = options.select_cases(result)?;
+    if result.is_empty() {
+        let root = workspace()?.join("tests/scenarios");
+        return Err(format!("no scenarios matched under {}", root.display()).into());
+    }
+    Ok(result)
+}
+
+fn load_scenarios(selected: Option<&str>) -> Result<Vec<Scenario>, Error> {
     let root = workspace()?.join("tests/scenarios");
     let mut result = Vec::new();
-    for manifest in suite::manifests(&root, options.scenario.as_deref())? {
+    for manifest in suite::manifests(&root, selected)? {
         result.push(Scenario::load(&manifest.directory, &manifest.definition)?);
     }
-    let result = options.select_cases(result)?;
     if result.is_empty() {
         return Err(format!("no scenarios matched under {}", root.display()).into());
     }
     Ok(result)
+}
+
+pub(crate) fn inventory() -> Result<(), Error> {
+    report::inventory(load_scenarios(None)?)
+}
+
+pub(crate) fn provenance(options: ProvenanceOptions) -> Result<(), Error> {
+    report::provenance(load_scenarios(None)?, options)
+}
+
+pub(crate) fn workflows() {
+    report::workflows();
+}
+
+pub(crate) fn cache_preflight(options: CachePreflightOptions) -> Result<(), Error> {
+    report::cache_preflight(load_scenarios(None)?, options)
 }
 
 fn workspace() -> Result<PathBuf, Error> {
