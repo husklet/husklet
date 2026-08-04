@@ -20,6 +20,8 @@ struct Params {
     dst_extent: vec2<u32>,
     row_pitch: u32,
     mirror_bits: u32,
+    tile_origin_y: u32,
+    tile_height: u32,
 };
 
 @group(0) @binding(0) var<storage, read> source: array<u32>;
@@ -52,7 +54,8 @@ fn fs_main(in: Out) {
     );
     if ((params.mirror_bits & 1u) != 0u) { src.x = params.src_extent.x - 1u - src.x; }
     if ((params.mirror_bits & 2u) != 0u) { src.y = params.src_extent.y - 1u - src.y; }
-    let byte_index = src.y * params.row_pitch + src.x;
+    if (src.y < params.tile_origin_y || src.y >= params.tile_origin_y + params.tile_height) { discard; }
+    let byte_index = (src.y - params.tile_origin_y) * params.row_pitch + src.x;
     let value = (source[byte_index / 4u] >> (8u * (byte_index & 3u))) & 255u;
     if (value != in.reference) { discard; }
 }
@@ -157,21 +160,18 @@ fn row_pitch(width: u32) -> Result<u32> {
         .ok_or(GpuError::OutOfBounds)
 }
 
-fn staging_size(width: u32, height: u32, limits: &wgpu::Limits) -> Result<u64> {
-    let size = u64::from(row_pitch(width)?)
-        .checked_mul(u64::from(height))
-        .ok_or(GpuError::OutOfBounds)?;
-    if size > limits.max_buffer_size || size > u64::from(limits.max_storage_buffer_binding_size) {
-        // The exact maximum height for this width is
-        // `min(max_buffer_size, max_storage_buffer_binding_size) / row_pitch(width)`.
-        // Do not tile this operation naively: Vulkan permits source/destination aliasing, and rendering
-        // one tile could overwrite source texels needed by a later tile. Preserving those semantics needs
-        // either one complete immutable snapshot (this path) or an alias-aware multi-buffer tiler.
-        return Err(GpuError::Unsupported(
-            "wgpu: stencil blit source exceeds storage-buffer limits",
-        ));
-    }
-    Ok(size)
+fn tile_rows(width: u32, height: u32, limits: &wgpu::Limits) -> Result<u32> {
+    let pitch = u64::from(row_pitch(width)?);
+    let bytes = limits
+        .max_buffer_size
+        .min(u64::from(limits.max_storage_buffer_binding_size));
+    let rows = (bytes / pitch).min(u64::from(height));
+    u32::try_from(rows)
+        .ok()
+        .filter(|rows| *rows != 0)
+        .ok_or(GpuError::Unsupported(
+            "wgpu: stencil blit row exceeds storage-buffer limits",
+        ))
 }
 
 #[cfg(test)]
@@ -268,57 +268,15 @@ impl WgpuExecutor {
 
         let pitch = row_pitch(region.src_extent.width)?;
         let device = &self.gpu.device;
-        let staging_size = staging_size(
-            region.src_extent.width,
-            region.src_extent.height,
-            &device.limits(),
-        )?;
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hl-stencil-blit-source"),
-            size: staging_size,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-        let words = [
-            region.dst_origin.x,
-            region.dst_origin.y,
-            region.src_extent.width,
-            region.src_extent.height,
-            region.dst_extent.width,
-            region.dst_extent.height,
-            pitch,
-            u32::from(region.mirror.x) | (u32::from(region.mirror.y) << 1),
-        ];
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hl-stencil-blit-params"),
-            size: std::mem::size_of_val(&words) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        // SAFETY: `words` is contiguous initialized POD and the byte view cannot outlive it.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
-        self.gpu.queue.write_buffer(&uniform, 0, bytes);
-
         if self.stencil_blit.is_none() {
             self.stencil_blit = Some(StencilBlitCache::new(device));
         }
         let cache = self.stencil_blit.as_ref().expect("initialized above");
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("hl-stencil-blit-bg"),
-            layout: &cache.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: staging.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: uniform.as_entire_binding(),
-                },
-            ],
-        });
+        let rows_per_tile = tile_rows(
+            region.src_extent.width,
+            region.src_extent.height,
+            &device.limits(),
+        )?;
         let dst_view = destination
             .texture
             .create_view(&wgpu::TextureViewDescriptor {
@@ -334,32 +292,57 @@ impl WgpuExecutor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("hl-stencil-blit"),
         });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &source.texture,
-                mip_level: src_sub.mip,
-                origin: wgpu::Origin3d {
-                    x: region.src_origin.x,
-                    y: region.src_origin.y,
-                    z: source_layer,
+        let tile_count = region.src_extent.height.div_ceil(rows_per_tile);
+        let mut tiles = Vec::with_capacity(tile_count as usize);
+        for tile in 0..tile_count {
+            let tile_origin_y = tile.checked_mul(rows_per_tile).ok_or(GpuError::OutOfBounds)?;
+            let tile_height = rows_per_tile.min(region.src_extent.height - tile_origin_y);
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hl-stencil-blit-source"),
+                size: u64::from(pitch) * u64::from(tile_height),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let words = [
+                region.dst_origin.x, region.dst_origin.y,
+                region.src_extent.width, region.src_extent.height,
+                region.dst_extent.width, region.dst_extent.height, pitch,
+                u32::from(region.mirror.x) | (u32::from(region.mirror.y) << 1),
+                tile_origin_y, tile_height,
+            ];
+            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("hl-stencil-blit-params"),
+                size: std::mem::size_of_val(&words) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            // SAFETY: `words` is contiguous initialized POD and the byte view cannot outlive it.
+            let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
+            self.gpu.queue.write_buffer(&uniform, 0, bytes);
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hl-stencil-blit-bg"), layout: &cache.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: staging.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: uniform.as_entire_binding() },
+                ],
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &source.texture, mip_level: src_sub.mip,
+                    origin: wgpu::Origin3d { x: region.src_origin.x, y: region.src_origin.y + tile_origin_y, z: source_layer },
+                    aspect: wgpu::TextureAspect::StencilOnly,
                 },
-                aspect: wgpu::TextureAspect::StencilOnly,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(pitch),
-                    rows_per_image: Some(region.src_extent.height),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(pitch), rows_per_image: Some(tile_height) },
                 },
-            },
-            wgpu::Extent3d {
-                width: region.src_extent.width,
-                height: region.src_extent.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        {
+                wgpu::Extent3d { width: region.src_extent.width, height: tile_height, depth_or_array_layers: 1 },
+            );
+            tiles.push((staging, uniform, bind_group));
+        }
+        // Every source tile is snapshotted before the first destination write. This ordering is
+        // load-bearing when source and destination alias.
+        for (_, _, bind_group) in &tiles {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("hl-stencil-blit-pass"),
                 color_attachments: &[],
@@ -375,7 +358,7 @@ impl WgpuExecutor {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&cache.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, bind_group, &[]);
             pass.set_viewport(
                 region.dst_origin.x as f32,
                 region.dst_origin.y as f32,
@@ -456,27 +439,44 @@ mod tests {
     }
 
     #[test]
-    fn staging_size_respects_buffer_and_storage_binding_limits() {
+    fn tiling_respects_buffer_and_storage_binding_limits() {
         let limits = wgpu::Limits {
             max_buffer_size: 4096,
             max_storage_buffer_binding_size: 2048,
             ..wgpu::Limits::default()
         };
-        assert_eq!(staging_size(257, 4, &limits), Ok(2048));
-        assert!(matches!(
-            staging_size(257, 5, &limits),
-            Err(GpuError::Unsupported(_))
-        ));
+        assert_eq!(tile_rows(257, 4, &limits), Ok(4));
+        assert_eq!(tile_rows(257, 5, &limits), Ok(4));
 
         let limits = wgpu::Limits {
             max_buffer_size: 1024,
             max_storage_buffer_binding_size: 4096,
             ..wgpu::Limits::default()
         };
-        assert!(matches!(
-            staging_size(257, 3, &limits),
-            Err(GpuError::Unsupported(_))
-        ));
+        assert_eq!(tile_rows(257, 3, &limits), Ok(2));
+        let limits = wgpu::Limits {
+            max_buffer_size: 255,
+            max_storage_buffer_binding_size: 4096,
+            ..wgpu::Limits::default()
+        };
+        assert!(matches!(tile_rows(257, 3, &limits), Err(GpuError::Unsupported(_))));
+    }
+
+    #[test]
+    fn tiled_rows_cover_mirrored_source_coordinates_once() {
+        for mirrored in [false, true] {
+            for dst in 0..11 {
+                let source = source_coordinate(dst, 7, 11, mirrored);
+                let owners = (0..3)
+                    .filter(|tile| {
+                        let begin = tile * 3;
+                        let end = (begin + 3).min(7);
+                        source >= begin && source < end
+                    })
+                    .count();
+                assert_eq!(owners, 1, "each scaled source row belongs to exactly one tile");
+            }
+        }
     }
 
     fn copy_aspect_in(
@@ -487,13 +487,15 @@ mod tests {
         aspect: wgpu::TextureAspect,
         width: u32,
         height: u32,
+        bytes_per_texel: u32,
         bytes: &[u8],
     ) {
-        let pitch = row_pitch(width).unwrap();
+        let row_bytes = width * bytes_per_texel;
+        let pitch = row_pitch(row_bytes).unwrap();
         let mut padded = vec![0; (pitch * height) as usize];
         for y in 0..height as usize {
-            padded[y * pitch as usize..y * pitch as usize + width as usize]
-                .copy_from_slice(&bytes[y * width as usize..(y + 1) * width as usize]);
+            padded[y * pitch as usize..y * pitch as usize + row_bytes as usize]
+                .copy_from_slice(&bytes[y * row_bytes as usize..(y + 1) * row_bytes as usize]);
         }
         let buffer = exec.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-stencil-test-upload"),
@@ -523,15 +525,18 @@ mod tests {
         exec.gpu.queue.submit(Some(encoder.finish()));
     }
 
-    fn copy_stencil_out(
+    fn copy_aspect_out(
         exec: &WgpuExecutor,
         texture: &wgpu::Texture,
         mip: u32,
         layer: u32,
         width: u32,
         height: u32,
+        aspect: wgpu::TextureAspect,
+        bytes_per_texel: u32,
     ) -> Vec<u8> {
-        let pitch = row_pitch(width).unwrap();
+        let row_bytes = width * bytes_per_texel;
+        let pitch = row_pitch(row_bytes).unwrap();
         let buffer = exec.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-stencil-test-readback"),
             size: u64::from(pitch * height),
@@ -544,7 +549,7 @@ mod tests {
                 texture,
                 mip_level: mip,
                 origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
-                aspect: wgpu::TextureAspect::StencilOnly,
+                aspect,
             },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
@@ -563,9 +568,9 @@ mod tests {
         exec.gpu.device.poll(wgpu::Maintain::Wait);
         rx.recv().unwrap().unwrap();
         let mapped = slice.get_mapped_range();
-        let mut tight = Vec::with_capacity((width * height) as usize);
+        let mut tight = Vec::with_capacity((row_bytes * height) as usize);
         for y in 0..height as usize {
-            tight.extend_from_slice(&mapped[y * pitch as usize..y * pitch as usize + width as usize]);
+            tight.extend_from_slice(&mapped[y * pitch as usize..y * pitch as usize + row_bytes as usize]);
         }
         tight
     }
@@ -601,8 +606,10 @@ mod tests {
         let src = texture::WgpuTexture::get(&session.resources, 1).unwrap();
         let dst = texture::WgpuTexture::get(&session.resources, 2).unwrap();
         let source = (0..64).map(|i| (i + 1) as u8).collect::<Vec<_>>();
-        copy_aspect_in(&exec, &src.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, &source);
-        copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, &[77; 64]);
+        copy_aspect_in(&exec, &src.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, 1, &source);
+        copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, 1, &[77; 64]);
+        let depth = (0..64).flat_map(|i| ((i as f32 + 1.0) / 65.0).to_le_bytes()).collect::<Vec<_>>();
+        copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::DepthOnly, 8, 8, 4, &depth);
 
         exec.blit_stencil_nearest(
             &session.resources,
@@ -619,7 +626,9 @@ mod tests {
             },
         )
         .unwrap();
-        let got = copy_stencil_out(&exec, &dst.texture, 1, 1, 8, 8);
+        let got = copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::StencilOnly, 1);
+        assert_eq!(copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::DepthOnly, 4), depth,
+            "stencil-only render passes must preserve every destination depth texel");
         let mut want = vec![77; 64];
         for y in 0..4 {
             for x in 0..4 {
@@ -646,7 +655,7 @@ mod tests {
             },
         )
         .unwrap();
-        let overlapped = copy_stencil_out(&exec, &dst.texture, 1, 1, 8, 8);
+        let overlapped = copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::StencilOnly, 1);
         for y in 0..4 {
             for x in 0..4 {
                 assert_eq!(overlapped[((y + 3) * 8 + x + 3) as usize], want[((y + 2) * 8 + x + 1) as usize]);
