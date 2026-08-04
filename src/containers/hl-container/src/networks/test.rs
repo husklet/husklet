@@ -4,6 +4,105 @@ use async_trait::async_trait;
 use std::net::Ipv4Addr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+struct NetworkRecords(Vec<Network>);
+
+#[async_trait]
+impl NetworkStore for NetworkRecords {
+    async fn list(&self) -> Result<Vec<Network>> {
+        Ok(self.0.clone())
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<Network>> {
+        Ok(self.0.iter().find(|network| network.name == name).cloned())
+    }
+
+    async fn insert(&self, _: &Network) -> Result<()> {
+        unreachable!("resolver tests do not mutate records")
+    }
+
+    async fn replace(&self, _: &Network) -> Result<()> {
+        unreachable!("resolver tests do not mutate records")
+    }
+
+    async fn remove(&self, _: &str) -> Result<()> {
+        unreachable!("resolver tests do not mutate records")
+    }
+}
+
+fn identified_network(name: &str, id: &str) -> Network {
+    let mut network = Network::from_spec(NetworkSpec::none(name), 0);
+    network.id = id.parse().unwrap();
+    network
+}
+
+fn resolver(records: Vec<Network>) -> Networks {
+    let containers = Arc::new(Memory::default());
+    let root = std::env::temp_dir().join(format!("hl-network-resolver-{}", uuid::Uuid::new_v4()));
+    Networks::new(
+        Arc::new(NetworkRecords(records)),
+        containers,
+        Arc::new(Mutex::new(())),
+        root,
+    )
+}
+
+#[tokio::test]
+async fn resolution_precedence_matches_moby() {
+    let exact_id = "11111111111111111111111111111111";
+    let exact = identified_network("exact", exact_id);
+    let name_collision = identified_network(exact_id, "22222222222222222222222222222222");
+    let result = resolver(vec![name_collision, exact.clone()])
+        .inspect(exact_id)
+        .await
+        .unwrap();
+    assert_eq!(result.id, exact.id);
+
+    let named = identified_network("3333", "44444444444444444444444444444444");
+    let prefix_a = identified_network("prefix-a", "33330000000000000000000000000000");
+    let prefix_b = identified_network("prefix-b", "33331111111111111111111111111111");
+    let result = resolver(vec![prefix_a, prefix_b, named.clone()])
+        .inspect("3333")
+        .await
+        .unwrap();
+    assert_eq!(result.id, named.id);
+}
+
+#[tokio::test]
+async fn ambiguous_name_and_prefix_are_invalid() {
+    let duplicate_a = identified_network("duplicate", "55550000000000000000000000000000");
+    let duplicate_b = identified_network("duplicate", "66660000000000000000000000000000");
+    assert!(matches!(
+        resolver(vec![duplicate_a, duplicate_b]).inspect("duplicate").await,
+        Err(Error::InvalidNetwork(message)) if message.contains("ambiguous")
+    ));
+
+    let prefix_a = identified_network("prefix-a", "77770000000000000000000000000000");
+    let prefix_b = identified_network("prefix-b", "77771111111111111111111111111111");
+    assert!(matches!(
+        resolver(vec![prefix_a, prefix_b]).inspect("7777").await,
+        Err(Error::InvalidNetwork(message)) if message.contains("ambiguous")
+    ));
+}
+
+#[tokio::test]
+async fn list_orders_by_name_then_id() {
+    let later = identified_network("same", "99999999999999999999999999999999");
+    let first = identified_network("alpha", "88888888888888888888888888888888");
+    let earlier = identified_network("same", "88888888888888888888888888888889");
+    let listed = resolver(vec![later, first.clone(), earlier.clone()])
+        .list()
+        .await
+        .unwrap();
+    assert_eq!(
+        listed.into_iter().map(|network| network.id).collect::<Vec<_>>(),
+        vec![
+            first.id,
+            earlier.id,
+            "99999999999999999999999999999999".parse().unwrap()
+        ]
+    );
+}
+
 fn bridge(address: Ipv4Addr, prefix: u8) -> Network {
     Network::from_spec(
         NetworkSpec::bridge("test", crate::Subnet::new(address, prefix).unwrap()),
