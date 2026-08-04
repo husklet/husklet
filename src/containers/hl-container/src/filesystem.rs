@@ -6,7 +6,7 @@ pub use inventory::{Change, ChangeKind, Changes};
 pub use path::Path;
 
 use self::overlay::{Overlay, Resolution};
-use crate::{model::ResolvedMount, Access, Error, Result};
+use crate::{Access, Error, Result, model::ResolvedMount};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
@@ -120,9 +120,10 @@ impl Filesystem {
     pub fn archive(&self, path: impl AsRef<FsPath>, writer: impl Write) -> Result<()> {
         let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "filesystem.archive");
         let guest = Path::guest(path.as_ref())?;
-        let mounted = self.mounts.iter().any(|mount| {
-            guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target)
-        });
+        let mounted = self
+            .mounts
+            .iter()
+            .any(|mount| guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target));
         if !mounted {
             if let Some(overlay) = &self.overlay {
                 let relative = guest.as_path().strip_prefix("/").unwrap_or(guest.as_path());
@@ -131,10 +132,7 @@ impl Filesystem {
         }
         let resolved = self.resolve(path.as_ref(), false)?;
         fs::symlink_metadata(&resolved.path)?;
-        let name = resolved
-            .path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("."));
+        let name = resolved.path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("."));
         let mut archive = tar::Builder::new(writer);
         archive.follow_symlinks(false);
         if resolved.path == fs::canonicalize(&self.root)? {
@@ -142,11 +140,7 @@ impl Filesystem {
                 let entry = entry?;
                 let path = entry.path();
                 let name = entry.file_name();
-                if path.is_dir() {
-                    archive.append_dir_all(&name, &path)?;
-                } else {
-                    archive.append_path_with_name(&path, &name)?;
-                }
+                Self::append_archive_entry(&mut archive, &name, &path)?;
             }
         } else if resolved.path.is_dir() {
             archive.append_dir_all(name, &resolved.path)?;
@@ -157,16 +151,24 @@ impl Filesystem {
         Ok(())
     }
 
+    fn append_archive_entry(
+        archive: &mut tar::Builder<impl Write>,
+        name: &std::ffi::OsStr,
+        path: &FsPath,
+    ) -> Result<()> {
+        if path.is_dir() {
+            archive.append_dir_all(name, path)?;
+        } else {
+            archive.append_path_with_name(path, name)?;
+        }
+        Ok(())
+    }
+
     /// Extracts a tar archive into an existing container directory.
     ///
     /// # Errors
     /// Returns an error for read-only mounts, unsafe/special entries, exceeded limits, or I/O failures.
-    pub fn extract(
-        &self,
-        path: impl AsRef<FsPath>,
-        reader: impl Read,
-        limits: Limits,
-    ) -> Result<()> {
+    pub fn extract(&self, path: impl AsRef<FsPath>, reader: impl Read, limits: Limits) -> Result<()> {
         self.extract_owned(path, reader, limits, false)
     }
 
@@ -188,23 +190,16 @@ impl Filesystem {
         }
         let root = fs::canonicalize(&destination.path)?;
         if !root.is_dir() {
-            return Err(Error::InvalidSpec(
-                "archive destination must be a directory".into(),
-            ));
+            return Err(Error::InvalidSpec("archive destination must be a directory".into()));
         }
         let raw_limit = limits
             .bytes
             .saturating_add(limits.entries.saturating_mul(1024))
             .saturating_add(1024);
         let mut staged = tempfile::tempfile()?;
-        let received = std::io::copy(
-            &mut reader.by_ref().take(raw_limit.saturating_add(1)),
-            &mut staged,
-        )?;
+        let received = std::io::copy(&mut reader.by_ref().take(raw_limit.saturating_add(1)), &mut staged)?;
         if received > raw_limit {
-            return Err(Error::InvalidSpec(
-                "archive input exceeds extraction limit".into(),
-            ));
+            return Err(Error::InvalidSpec("archive input exceeds extraction limit".into()));
         }
         hl_log::hl_debug!(
             hl_log::tag::CONTAINER,
@@ -240,9 +235,7 @@ impl Filesystem {
                 Some(hl_images::snapshot::Ownership { uid: 0, gid: 0 })
             };
             Self::extract_entry(&root, &mut entry)?;
-            if let (Some(base), Some(ownership), Some(owner)) =
-                (&destination_relative, ownership.as_ref(), owner)
-            {
+            if let (Some(base), Some(ownership), Some(owner)) = (&destination_relative, ownership.as_ref(), owner) {
                 ownership
                     .lock()
                     .map_err(|_| Error::Corrupt("rootfs ownership lock is poisoned".into()))?
@@ -287,18 +280,14 @@ impl Filesystem {
             #[cfg(unix)]
             std::os::unix::fs::symlink(target, &output)?;
             #[cfg(not(unix))]
-            return Err(Error::InvalidSpec(
-                "symlink archives are unsupported".into(),
-            ));
+            return Err(Error::InvalidSpec("symlink archives are unsupported".into()));
         } else if kind.is_hard_link() {
             let target = entry
                 .link_name()?
                 .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
             let canonical = fs::canonicalize(Path::entry(&target)?.output(root))?;
             if !canonical.starts_with(root) || !canonical.is_file() {
-                return Err(Error::InvalidSpec(
-                    "archive hard-link target is unsafe".into(),
-                ));
+                return Err(Error::InvalidSpec("archive hard-link target is unsafe".into()));
             }
             path.replace(root)?;
             if let Some(parent) = output.parent() {
@@ -306,9 +295,7 @@ impl Filesystem {
             }
             fs::hard_link(canonical, &output)?;
         } else {
-            return Err(Error::InvalidSpec(
-                "special archive entries are unsupported".into(),
-            ));
+            return Err(Error::InvalidSpec("special archive entries are unsupported".into()));
         }
         #[cfg(unix)]
         if !kind.is_symlink() {
@@ -328,27 +315,28 @@ impl Filesystem {
             entries = entries.saturating_add(1);
             bytes = bytes.saturating_add(entry.size());
             if entries > limits.entries || bytes > limits.bytes {
-                return Err(Error::InvalidSpec(
-                    "archive extraction limit exceeded".into(),
-                ));
+                return Err(Error::InvalidSpec("archive extraction limit exceeded".into()));
             }
-            let path = Path::entry(&entry.path()?)?;
-            let kind = entry.header().entry_type();
-            if kind.is_symlink() {
-                let target = entry
-                    .link_name()?
-                    .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;
-                path.validate_link(&target)?;
-            } else if kind.is_hard_link() {
-                let target = entry
-                    .link_name()?
-                    .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
-                Path::entry(&target)?;
-            } else if !kind.is_dir() && !kind.is_file() {
-                return Err(Error::InvalidSpec(
-                    "special archive entries are unsupported".into(),
-                ));
-            }
+            Self::validate_archive_entry(&entry)?;
+        }
+        Ok(())
+    }
+
+    fn validate_archive_entry<R: Read>(entry: &tar::Entry<'_, R>) -> Result<()> {
+        let path = Path::entry(&entry.path()?)?;
+        let kind = entry.header().entry_type();
+        if kind.is_symlink() {
+            let target = entry
+                .link_name()?
+                .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;
+            path.validate_link(&target)?;
+        } else if kind.is_hard_link() {
+            let target = entry
+                .link_name()?
+                .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
+            Path::entry(&target)?;
+        } else if !kind.is_dir() && !kind.is_file() {
+            return Err(Error::InvalidSpec("special archive entries are unsupported".into()));
         }
         Ok(())
     }
@@ -358,9 +346,7 @@ impl Filesystem {
         let selected = self
             .mounts
             .iter()
-            .filter(|mount| {
-                guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target)
-            })
+            .filter(|mount| guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target))
             .max_by_key(|mount| mount.target.components().count());
         if selected.is_none() {
             if let Some(overlay) = &self.overlay {
@@ -379,10 +365,7 @@ impl Filesystem {
             |mount| {
                 (
                     mount.source.as_path(),
-                    guest
-                        .as_path()
-                        .strip_prefix(&mount.target)
-                        .unwrap_or(FsPath::new("")),
+                    guest.as_path().strip_prefix(&mount.target).unwrap_or(FsPath::new("")),
                     mount.access,
                 )
             },
@@ -396,13 +379,11 @@ impl Filesystem {
         };
         let canonical = fs::canonicalize(Path::nearest(parent)?)?;
         if !canonical.starts_with(&base) {
-            return Err(Error::InvalidSpec(
-                "container path escapes its filesystem root".into(),
-            ));
+            return Err(Error::InvalidSpec("container path escapes its filesystem root".into()));
         }
         Ok(Resolution { path, access })
     }
 }
 
 #[cfg(test)]
-mod tests;
+mod test;
