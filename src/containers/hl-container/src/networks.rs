@@ -222,14 +222,23 @@ impl Networks {
             }
             committed.push(network.clone());
         }
-        for member in self.containers.list().await? {
-            if member.id != container.id
-                && member.state.is_active()
-                && planned
-                    .iter()
-                    .any(|(network, _)| network.endpoints.contains_key(&member.id))
-            {
-                let configs = self.runtime(&member.id).await?;
+        let members = self
+            .containers
+            .list()
+            .await?
+            .into_iter()
+            .filter(|member| {
+                member.id != container.id
+                    && member.state.is_active()
+                    && planned
+                        .iter()
+                        .any(|(network, _)| network.endpoints.contains_key(&member.id))
+            })
+            .collect::<Vec<_>>();
+        if !members.is_empty() {
+            let inventory = self.storage.list().await?;
+            for member in members {
+                let configs = Self::runtime_from(&inventory, &member.id);
                 self.identity.refresh(&member, &configs)?;
             }
         }
@@ -363,14 +372,14 @@ impl Networks {
         self.storage.replace(&bridge).await
     }
 
-    async fn runtime(&self, id: &ContainerId) -> Result<Vec<crate::service::NetworkConfig>> {
+    fn runtime_from(networks: &[Network], id: &ContainerId) -> Vec<crate::service::NetworkConfig> {
         let mut configs = Vec::new();
-        for network in self.storage.list().await? {
+        for network in networks {
             if network.endpoints.contains_key(id) {
-                configs.push(crate::service::NetworkConfig::from_network(&network, id));
+                configs.push(crate::service::NetworkConfig::from_network(network, id));
             }
         }
-        Ok(configs)
+        configs
     }
 
     pub(crate) async fn disconnect_container_locked(&self, id: &ContainerId) -> Result<()> {
