@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use hl_container::VolumeSpec;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -22,10 +22,7 @@ pub(super) async fn list(
     let service = state.containers.volumes();
     let mut volumes = Vec::new();
     for volume in service.list().await.map_err(ApiError::container)? {
-        let references = service
-            .references(&volume.name)
-            .await
-            .map_err(ApiError::container)?;
+        let references = service.references(&volume.name).await.map_err(ApiError::container)?;
         if filters.matches(&volume, references) {
             volumes.push(Volume::from(volume));
         }
@@ -77,17 +74,13 @@ pub(super) async fn create(
     let mut attributes = volume.labels.clone();
     attributes.insert("name".into(), volume.name.clone());
     attributes.insert("driver".into(), "local".into());
-    state
-        .events
-        .object("volume", "create", &volume.name, attributes);
+    state.events.object("volume", "create", &volume.name, attributes);
     Ok((StatusCode::CREATED, Json(Volume::from(volume))))
 }
 
 impl VolumeCreate {
     fn validate(&self) -> ApiResult<()> {
-        let Some(name) =
-            crate::api::CompatibilityFields::from(&self.unsupported).first_meaningful()
-        else {
+        let Some(name) = crate::api::CompatibilityFields::from(&self.unsupported).first_meaningful() else {
             return Ok(());
         };
         Err(ApiError::new(
@@ -123,12 +116,9 @@ impl LocalOptions {
                 "only local volume type=none is implemented",
             ));
         }
-        let modes = options.get("o").ok_or_else(|| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "local bind volume requires option o=bind",
-            )
-        })?;
+        let modes = options
+            .get("o")
+            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "local bind volume requires option o=bind"))?;
         let mut bind = false;
         let mut read_only = false;
         let mut access = None;
@@ -144,19 +134,19 @@ impl LocalOptions {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
                         "local volume option o contains an empty mode",
-                    ))
+                    ));
                 }
                 "bind" | "ro" | "rw" => {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
                         format!("duplicate local volume mode {mode:?}"),
-                    ))
+                    ));
                 }
                 _ => {
                     return Err(ApiError::new(
                         StatusCode::NOT_IMPLEMENTED,
                         format!("local volume mode {mode:?} is not implemented"),
-                    ))
+                    ));
                 }
             }
         }
@@ -166,15 +156,12 @@ impl LocalOptions {
                 "local volume option o must include bind",
             ));
         }
-        let device = options
-            .get("device")
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "local bind volume requires an absolute device directory",
-                )
-            })?;
+        let device = options.get("device").filter(|value| !value.is_empty()).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "local bind volume requires an absolute device directory",
+            )
+        })?;
         if !std::path::Path::new(device).is_absolute() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
@@ -189,10 +176,7 @@ impl LocalOptions {
 }
 
 #[hl_design::adapter]
-pub(super) async fn inspect(
-    State(state): State<DockerState>,
-    Path(name): Path<String>,
-) -> ApiResult<Json<Volume>> {
+pub(super) async fn inspect(State(state): State<DockerState>, Path(name): Path<String>) -> ApiResult<Json<Volume>> {
     state
         .containers
         .volumes()
@@ -222,9 +206,7 @@ pub(super) async fn remove(
     let mut attributes = volume.labels;
     attributes.insert("name".into(), volume.name.clone());
     attributes.insert("driver".into(), "local".into());
-    state
-        .events
-        .object("volume", "destroy", volume.name, attributes);
+    state.events.object("volume", "destroy", volume.name, attributes);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -239,20 +221,14 @@ pub(super) async fn prune(
     let mut removed = Vec::new();
     let mut space_reclaimed = 0_u64;
     for volume in service.list().await.map_err(ApiError::container)? {
-        let references = service
-            .references(&volume.name)
-            .await
-            .map_err(ApiError::container)?;
+        let references = service.references(&volume.name).await.map_err(ApiError::container)?;
         if references != 0
             || (!all && volume.kind != hl_container::VolumeKind::Anonymous)
             || !filters.matches(&volume, references)
         {
             continue;
         }
-        let size = service
-            .size(&volume.name)
-            .await
-            .map_err(ApiError::container)?;
+        let size = service.size(&volume.name).await.map_err(ApiError::container)?;
         match service.remove(&volume.name).await {
             Ok(volume) => {
                 space_reclaimed = space_reclaimed.saturating_add(size);
@@ -260,9 +236,7 @@ pub(super) async fn prune(
                 attributes.insert("name".into(), volume.name.clone());
                 attributes.insert("driver".into(), "local".into());
                 attributes.insert("reclaimed".into(), "true".into());
-                state
-                    .events
-                    .object("volume", "destroy", &volume.name, attributes);
+                state.events.object("volume", "destroy", &volume.name, attributes);
                 removed.push(volume.name);
             }
             Err(hl_container::Error::VolumeInUse(_)) => {}
@@ -283,8 +257,8 @@ impl Filters {
         let Some(raw) = raw.filter(|value| !value.is_empty()) else {
             return Ok(Self::default());
         };
-        let values: BTreeMap<String, serde_json::Value> = serde_json::from_str(&raw)
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+        let values: BTreeMap<String, serde_json::Value> =
+            serde_json::from_str(&raw).map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         let mut filters = BTreeMap::new();
         for (name, values) in values {
             if !allowed.contains(&name.as_str()) {
@@ -297,9 +271,10 @@ impl Filters {
                 serde_json::Value::Array(values) => values
                     .into_iter()
                     .map(|value| {
-                        value.as_str().map(str::to_owned).ok_or_else(|| {
-                            ApiError::new(StatusCode::BAD_REQUEST, "filter values must be strings")
-                        })
+                        value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "filter values must be strings"))
                     })
                     .collect::<ApiResult<Vec<_>>>()?,
                 serde_json::Value::Object(values) => values
@@ -310,7 +285,7 @@ impl Filters {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
                         "filter values must be arrays or objects",
-                    ))
+                    ));
                 }
             };
             filters.insert(name, values);
@@ -319,11 +294,9 @@ impl Filters {
     }
 
     fn enabled(&self, name: &str) -> bool {
-        self.0.get(name).is_some_and(|values| {
-            values
-                .iter()
-                .any(|value| matches!(value.as_str(), "1" | "true"))
-        })
+        self.0
+            .get(name)
+            .is_some_and(|values| values.iter().any(|value| matches!(value.as_str(), "1" | "true")))
     }
 
     fn matches(&self, volume: &hl_container::Volume, references: usize) -> bool {
@@ -334,20 +307,22 @@ impl Filters {
                 "0" | "false" => references != 0,
                 _ => false,
             })
-            && self.matches_values("label", |value| Self::label(&volume.labels, value))
-            && self.matches_all("label!", |value| !Self::label(&volume.labels, value))
+            && self.matches_all("label", |value| Self::label(&volume.labels, value))
+            && self.matches_excluded_labels(&volume.labels)
     }
 
     fn matches_values(&self, name: &str, predicate: impl Fn(&String) -> bool) -> bool {
-        self.0
-            .get(name)
-            .is_none_or(|values| values.iter().any(predicate))
+        self.0.get(name).is_none_or(|values| values.iter().any(predicate))
     }
 
     fn matches_all(&self, name: &str, predicate: impl Fn(&String) -> bool) -> bool {
+        self.0.get(name).is_none_or(|values| values.iter().all(predicate))
+    }
+
+    fn matches_excluded_labels(&self, labels: &BTreeMap<String, String>) -> bool {
         self.0
-            .get(name)
-            .is_none_or(|values| values.iter().all(predicate))
+            .get("label!")
+            .is_none_or(|values| !values.iter().all(|value| Self::label(labels, value)))
     }
 
     fn label(labels: &BTreeMap<String, String>, filter: &str) -> bool {
@@ -360,9 +335,90 @@ impl Filters {
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalOptions, VolumeCreate};
+    use super::{Filters, LocalOptions, VolumeCreate};
     use axum::http::StatusCode;
+    use hl_container::{Volume, VolumeKind, VolumeSource};
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    fn volume(labels: BTreeMap<String, String>) -> Volume {
+        Volume {
+            name: "cache".into(),
+            path: PathBuf::from("/var/lib/docker/volumes/cache/_data"),
+            created_at_ms: 0,
+            labels,
+            options: BTreeMap::new(),
+            source: VolumeSource::Managed,
+            kind: VolumeKind::Named,
+        }
+    }
+
+    #[test]
+    fn volume_list_requires_every_label_filter_to_match() {
+        let filters = Filters::parse(
+            Some(r#"{"label":["environment=production","tier=cache"]}"#.into()),
+            &["dangling", "driver", "label", "name"],
+        )
+        .unwrap();
+
+        assert!(!filters.matches(
+            &volume(BTreeMap::from([("environment".into(), "production".into())])),
+            0,
+        ));
+        assert!(filters.matches(
+            &volume(BTreeMap::from([
+                ("environment".into(), "production".into()),
+                ("tier".into(), "cache".into()),
+            ])),
+            0,
+        ));
+    }
+
+    #[test]
+    fn volume_label_filters_preserve_key_value_and_exclusion_semantics() {
+        let required = Filters::parse(
+            Some(r#"{"label":{"owner":true,"empty=":true,"ignored":false}}"#.into()),
+            &["label"],
+        )
+        .unwrap();
+        assert!(required.matches(
+            &volume(BTreeMap::from([
+                ("owner".into(), "team-a".into()),
+                ("empty".into(), String::new()),
+            ])),
+            0,
+        ));
+        assert!(!required.matches(&volume(BTreeMap::from([("owner".into(), "team-a".into())])), 0,));
+
+        let excluded = Filters::parse(
+            Some(r#"{"label!":["owner=team-a","tier=cache"]}"#.into()),
+            &["all", "label", "label!"],
+        )
+        .unwrap();
+        assert!(excluded.matches(&volume(BTreeMap::from([("owner".into(), "team-a".into())])), 0,));
+        assert!(!excluded.matches(
+            &volume(BTreeMap::from([
+                ("owner".into(), "team-a".into()),
+                ("tier".into(), "cache".into()),
+            ])),
+            0,
+        ));
+    }
+
+    #[test]
+    fn non_label_volume_filters_keep_their_existing_matching_rules() {
+        let filters = Filters::parse(
+            Some(r#"{"dangling":["true"],"driver":["local"],"name":["ach"]}"#.into()),
+            &["dangling", "driver", "label", "name"],
+        )
+        .unwrap();
+        let cache = volume(BTreeMap::new());
+        assert!(filters.matches(&cache, 0));
+        assert!(!filters.matches(&cache, 1));
+
+        let remote = Filters::parse(Some(r#"{"driver":["remote"]}"#.into()), &["driver"]).unwrap();
+        assert!(!remote.matches(&cache, 0));
+    }
 
     #[test]
     fn local_options_accept_only_explicit_bind_directory_contract() {
