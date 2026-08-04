@@ -1,6 +1,35 @@
 use super::*;
 
 impl Images {
+    /// Return the immutable OCI image identifier for the selected platform.
+    ///
+    /// Docker and OCI define this identity as the digest of the image configuration,
+    /// not the digest of the manifest (or multi-platform index) that names it.
+    ///
+    /// # Errors
+    /// Returns an error for missing, malformed, or platform-incompatible image content.
+    pub fn image_id(&self, image: &Image, platform: &Platform) -> Result<Digest> {
+        self.image_id_target(&image.target, platform)
+    }
+
+    /// Return the selected platform configuration digest for a durable graph target.
+    ///
+    /// # Errors
+    /// Returns an error for missing, malformed, or platform-incompatible image content.
+    pub fn image_id_target(&self, target: &Descriptor, platform: &Platform) -> Result<Digest> {
+        self.mirror_target(target)?;
+        let root = self.content.read_document(target)?;
+        let manifest = if target.is_index() {
+            serde_json::from_slice::<IndexDocument>(&root)?.select_platform(platform)?
+        } else {
+            target.clone()
+        };
+        let document: ManifestDocument = serde_json::from_slice(&self.content.read_document(&manifest)?)
+            .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        document.validate()?;
+        document.config.digest().to_string().parse()
+    }
+
     /// Read the selected platform's runtime metadata for an image.
     ///
     /// # Errors

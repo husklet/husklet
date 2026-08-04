@@ -63,6 +63,36 @@ async fn retag_moves_one_name_between_graphs_atomically() {
 }
 
 #[tokio::test]
+async fn immutable_image_id_is_selected_config_digest_across_retag_and_reopen() {
+    let temp = tempfile::tempdir().unwrap();
+    let images = Images::open(temp.path()).unwrap();
+    let (source, manifest) = fixture(None);
+    let platform = Platform::linux_arm64();
+    let image = images
+        .pull(&source, "example.test/identity:v1".parse().unwrap(), &platform)
+        .await
+        .unwrap();
+    let manifest_bytes = source.blobs.get(&manifest.digest().to_string()).unwrap();
+    let document: serde_json::Value = serde_json::from_slice(manifest_bytes).unwrap();
+    let expected: Digest = document["config"]["digest"].as_str().unwrap().parse().unwrap();
+
+    assert_eq!(images.image_id(&image, &platform).unwrap(), expected);
+    assert_ne!(
+        images.image_id(&image, &platform).unwrap().to_string(),
+        image.target.digest().to_string()
+    );
+
+    let alias: Reference = "example.test/identity:stable".parse().unwrap();
+    let tagged = images.tag(&image, alias.clone()).unwrap();
+    assert_eq!(images.image_id(&tagged, &platform).unwrap(), expected);
+    drop(images);
+
+    let reopened = Images::open(temp.path()).unwrap();
+    let resolved = reopened.resolve(&alias).unwrap().unwrap();
+    assert_eq!(reopened.image_id(&resolved, &platform).unwrap(), expected);
+}
+
+#[tokio::test]
 async fn forced_removal_untags_every_alias_but_preserves_other_targets() {
     let temp = tempfile::tempdir().unwrap();
     let (source, _) = fixture(None);
