@@ -82,6 +82,7 @@ impl Service {
         };
         container.generation = container.generation.saturating_add(1);
         container.checkpoint = None;
+        container.runtime_diagnostic = None;
         container.restart.started(explicit);
         if !explicit {
             container.restart.automatic();

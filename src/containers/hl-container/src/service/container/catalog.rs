@@ -19,6 +19,7 @@ impl Service {
             restart: crate::Restart::default(),
             health: None,
             checkpoint: None,
+            runtime_diagnostic: None,
         };
         self.containers.insert(&container).await?;
         let mut exits = self.exits.lock().await;

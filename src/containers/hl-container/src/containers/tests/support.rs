@@ -40,6 +40,7 @@ pub(super) fn stored_container(id: &str, name: &str) -> Container {
         restart: crate::Restart::default(),
         health: None,
         checkpoint: None,
+        runtime_diagnostic: None,
     }
 }
 

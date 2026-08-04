@@ -1,6 +1,40 @@
 use super::*;
 
 #[tokio::test]
+async fn runtime_wait_diagnostic_is_durable_and_shared_by_all_waiters() {
+    let repository = Arc::new(Memory::default());
+    let runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.fail_wait.store(true, Ordering::SeqCst);
+    let containers = test_containers(repository.clone(), Arc::new(runtime)).await.unwrap();
+    containers.create(spec("runtime-diagnostic")).await.unwrap();
+    containers.start("runtime-diagnostic").await.unwrap();
+    let left = {
+        let containers = containers.clone();
+        tokio::spawn(async move { containers.wait("runtime-diagnostic").await })
+    };
+    let right = {
+        let containers = containers.clone();
+        tokio::spawn(async move { containers.wait("runtime-diagnostic").await })
+    };
+
+    for result in [left.await.unwrap(), right.await.unwrap()] {
+        assert!(matches!(result, Err(Error::Runtime(message)) if message == "runtime failed: injected wait failure"));
+    }
+    drop(containers);
+
+    let recovered = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
+        .await
+        .unwrap();
+    assert!(matches!(
+        recovered.wait("runtime-diagnostic").await,
+        Err(Error::Runtime(message)) if message == "runtime failed: injected wait failure"
+    ));
+
+    recovered.start("runtime-diagnostic").await.unwrap();
+    assert_eq!(recovered.wait("runtime-diagnostic").await.unwrap(), ExitStatus::Code(0));
+}
+
+#[tokio::test]
 async fn lifecycle_events_follow_committed_automatic_restart_order_once() {
     let containers = test_containers(
         Arc::new(Memory::default()),

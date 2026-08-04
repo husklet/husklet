@@ -14,6 +14,7 @@ mod update;
 mod volume;
 
 pub(crate) use container::now_ms;
+pub(crate) use container::RuntimeDiagnostic;
 pub use container::{Checkpoint, Container, ContainerId, ContainerState, ExitStatus};
 pub use exec::{Exec, ExecId, ExecSpec, ExecState, Streams};
 pub(crate) use health::OUTPUT_LIMIT;

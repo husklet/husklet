@@ -76,6 +76,21 @@ pub enum ExitStatus {
     Fault { status: i32, detail: u64 },
 }
 
+/// Durable diagnostic produced when the runtime cannot determine a process exit status.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub(crate) struct RuntimeDiagnostic(String);
+
+impl RuntimeDiagnostic {
+    pub(crate) fn new(message: String) -> Self {
+        Self(message)
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Persisted lifecycle state.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -127,6 +142,9 @@ pub struct Container {
     pub restart: Restart,
     pub health: Option<Health>,
     pub checkpoint: Option<Checkpoint>,
+    /// Present only when the terminal runtime wait failed instead of returning an exit status.
+    #[serde(default)]
+    pub(crate) runtime_diagnostic: Option<RuntimeDiagnostic>,
 }
 
 impl Container {
@@ -212,6 +230,7 @@ mod tests {
             restart: Restart::default(),
             health: None,
             checkpoint: None,
+            runtime_diagnostic: None,
         };
         assert!(container.uses_volume("named"));
         assert!(container.uses_volume("private"));

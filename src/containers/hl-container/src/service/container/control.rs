@@ -49,6 +49,9 @@ impl Service {
             {
                 return Err(Error::Corrupt(format!("failed to persist exit state: {message}")));
             }
+            if let Some(diagnostic) = &container.runtime_diagnostic {
+                return Err(Error::Runtime(diagnostic.message().to_owned()));
+            }
             if let ContainerState::Exited { result, .. } = container.state {
                 if condition == WaitCondition::NotRunning {
                     return Ok(Some(result));

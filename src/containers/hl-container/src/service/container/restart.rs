@@ -110,9 +110,16 @@ impl Service {
             unreachable!("active state checked above")
         };
         self.stop_executions(&id).await;
-        let result = result.unwrap_or(ExitStatus::Fault { status: -1, detail: 0 });
+        let (result, diagnostic) = match result {
+            Ok(result) => (result, None),
+            Err(error) => (
+                ExitStatus::Fault { status: -1, detail: 0 },
+                Some(crate::model::RuntimeDiagnostic::new(error.to_string())),
+            ),
+        };
         let finished_at_ms = now_ms();
         container.restart.completed_between(started_at_ms, finished_at_ms);
+        container.runtime_diagnostic = diagnostic;
         let restart = container.spec.restart.allows(result, &container.restart);
         if restart {
             let delay = container.spec.restart.delay(&container.restart);

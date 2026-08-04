@@ -81,6 +81,7 @@ async fn startup_finishes_interrupted_automatic_removal_and_preserves_exit_resul
             restart: crate::Restart::default(),
             health: None,
             checkpoint: None,
+            runtime_diagnostic: None,
         })
         .await
         .unwrap();
@@ -113,6 +114,7 @@ async fn daemon_loss_reclaims_an_active_automatic_removal_container() {
             restart: crate::Restart::default(),
             health: None,
             checkpoint: None,
+            runtime_diagnostic: None,
         })
         .await
         .unwrap();
@@ -146,6 +148,7 @@ async fn startup_reconciles_unowned_running_records() {
         restart: crate::Restart::default(),
         health: None,
         checkpoint: None,
+        runtime_diagnostic: None,
     };
     repository.insert(&record).await.unwrap();
     let containers = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
@@ -176,6 +179,7 @@ async fn daemon_loss_does_not_apply_on_failure_policy() {
         restart: crate::Restart::default(),
         health: None,
         checkpoint: None,
+        runtime_diagnostic: None,
     };
     repository.insert(&record).await.unwrap();
 
@@ -206,6 +210,7 @@ async fn daemon_loss_restarts_always_policy() {
             restart: crate::Restart::default(),
             health: None,
             checkpoint: None,
+            runtime_diagnostic: None,
         })
         .await
         .unwrap();
@@ -275,6 +280,7 @@ async fn startup_resumes_durable_restart_backoff() {
             restart: crate::Restart::default(),
             health: None,
             checkpoint: None,
+            runtime_diagnostic: None,
         })
         .await
         .unwrap();

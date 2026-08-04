@@ -189,6 +189,7 @@ fn container(name: &str, state: crate::ContainerState) -> Container {
         restart: crate::Restart::default(),
         health: None,
         checkpoint: None,
+        runtime_diagnostic: None,
     }
 }
 
