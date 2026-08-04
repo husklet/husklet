@@ -173,23 +173,6 @@ impl Volumes {
         Ok(counts)
     }
 
-    /// Measure regular-file bytes currently owned by this volume.
-    ///
-    /// Symbolic links are measured as links and never followed.
-    ///
-    /// # Errors
-    /// Returns validation, lookup, task, or filesystem failures.
-    pub async fn size(&self, name: &str) -> Result<u64> {
-        let volume = self.inspect(name).await?;
-        if matches!(volume.source, VolumeSource::Bind { .. }) {
-            return Ok(0);
-        }
-        let path = volume.path;
-        Ok(tokio::task::spawn_blocking(move || Directory::from(path).size())
-            .await
-            .map_err(|error| Error::Io(std::io::Error::other(error)))??)
-    }
-
     /// Remove a volume and every entry in its managed data directory.
     ///
     /// # Errors

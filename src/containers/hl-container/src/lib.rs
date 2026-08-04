@@ -15,6 +15,7 @@ mod model;
 mod networks;
 mod service;
 mod storage;
+mod volume_size;
 mod volumes;
 
 pub use checkpoint::{CheckpointError, CheckpointImage, CheckpointImages};

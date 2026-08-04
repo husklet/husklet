@@ -84,12 +84,18 @@ pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<Dis
         .reference_counts(&listed_volumes)
         .await
         .map_err(ApiError::container)?;
+    let mut sizes = volume_service
+        .sizes(&listed_volumes)
+        .await
+        .map_err(ApiError::container)?;
     let mut volumes = Vec::new();
     for volume in listed_volumes {
-        let size = volume_service
-            .size(&volume.name)
-            .await
-            .map_err(ApiError::container)?;
+        let size = sizes.remove(&volume.name).ok_or_else(|| {
+            ApiError::container(hl_container::Error::Corrupt(format!(
+                "volume size result omitted {:?}",
+                volume.name
+            )))
+        })?;
         let references = reference_counts.get(&volume.name).copied().unwrap_or_default();
         volumes.push(VolumeUsage {
             name: volume.name,
