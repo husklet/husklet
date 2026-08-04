@@ -1,4 +1,4 @@
-use crate::api::support::{raw_http, wait_for_path};
+use crate::support::{raw_http, wait_for_path};
 use crate::report::ScenarioBatch;
 use hl_client::Client;
 use hl_container::{

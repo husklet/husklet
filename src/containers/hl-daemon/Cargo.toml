@@ -20,6 +20,11 @@ path = "../../../tests/scenarios/main.rs"
 harness = false
 required-features = ["runtime"]
 
+[[test]]
+name = "daemon-api"
+path = "tests/daemon_api.rs"
+required-features = ["runtime"]
+
 [features]
 default = ["runtime"]
 runtime = [

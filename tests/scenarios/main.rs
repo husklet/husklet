@@ -1,10 +1,10 @@
 //! Daemon integration and Linux guest compatibility runner.
 
-mod api;
 mod groups;
 mod harness;
 mod provenance;
 mod registry;
+mod support;
 #[path = "workflows/mod.rs"]
 mod workflows;
 
@@ -115,20 +115,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "terminal" => scenario::terminal().await?,
         "toolchains" => scenario::toolchains().await?,
         "utilities" => scenario::utilities().await?,
-        "descendant-cleanup" => api::test_descendant_cleanup::run().await?,
         "volume-contracts" => volume::run().await?,
         "web" => scenario::web().await?,
         "weird" => scenario::weird().await?,
-        "headless-lifecycle" => api::test_headless_lifecycle::run().await?,
-        "persistence-restart" => api::test_persistence_restart::run().await?,
-        "concurrent-clients" => api::test_concurrent_clients::run().await?,
-        "removal-wait-race" => api::test_removal_wait_race::run().await?,
-        "http-errors" => api::test_http_errors::run().await?,
-        "malformed-image-archive" => api::test_malformed_image_archive::run().await?,
-        "image-archive-create" => api::test_image_archive::run().await?,
-        "container-copy" => api::test_container_copy::run().await?,
-        "server-restart-persistence" => api::test_server_restart_persistence::run().await?,
-        "server-process" => api::test_server_process::run().await?,
         other => return Err(format!("unknown scenario {other:?}").into()),
     }
     Ok(())
