@@ -5,7 +5,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-int main(void) {
+int signalfd_fork(void) {
     sigset_t mask;
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);

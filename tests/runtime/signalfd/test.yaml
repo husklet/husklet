@@ -1,0 +1,36 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact:
+  destination: /opt/husklet/runtime-signalfd
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
+build:
+  source: main.c
+  output: runtime-signalfd
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags: [-static, -O2, -std=gnu11]
+cases:
+  - id: runtime/signalfd/edges
+    status: { broken: { reason: "shared testing runner does not currently compile", evidence: "tests/runtime/signalfd/EVIDENCE.md" } }
+    targets: [arm64, amd64]
+    compat: { class: compatibility }
+    run: [edges]
+    expect: { exit: 0, stdout: golden/edges.txt }
+  - id: runtime/signalfd/epoll
+    status: { broken: { reason: "shared testing runner does not currently compile", evidence: "tests/runtime/signalfd/EVIDENCE.md" } }
+    targets: [arm64, amd64]
+    compat: { class: compatibility }
+    run: [epoll]
+    expect: { exit: 0, stdout: golden/epoll.txt }
+  - id: runtime/signalfd/fork
+    status: { broken: { reason: "shared testing runner does not currently compile", evidence: "tests/runtime/signalfd/EVIDENCE.md" } }
+    targets: [arm64, amd64]
+    compat: { class: compatibility }
+    run: [fork]
+    expect: { exit: 0, stdout: golden/fork.txt }
