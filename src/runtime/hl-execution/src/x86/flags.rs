@@ -330,8 +330,11 @@ impl Arithmetic {
             Shift::Right => value >> (bits - 1) & 1 != 0,
             Shift::ArithmeticRight => false,
         };
-        let defined =
-            Flag::Carry.mask() | Flag::Parity.mask() | Flag::Zero.mask() | Flag::Sign.mask() | Flag::Overflow.mask();
+        let defined = Flag::Carry.mask()
+            | Flag::Parity.mask()
+            | Flag::Zero.mask()
+            | Flag::Sign.mask()
+            | if masked == 1 { Flag::Overflow.mask() } else { 0 };
         let values = Self::common(width, result)
             | if carry { Flag::Carry.mask() } else { 0 }
             | if overflow { Flag::Overflow.mask() } else { 0 };
@@ -447,19 +450,40 @@ mod test {
     }
 
     #[test]
-    fn oversized_shifts_materialize_c_flags() {
+    fn multi_bit_shifts_preserve_undefined_overflow() {
+        type Shift = fn(IntegerWidth, u64, u8) -> Arithmetic;
         let original = FlagState::from_bits(Flag::Carry.mask() | Flag::Overflow.mask());
-        let shifted = original.apply(Arithmetic::shift_left(IntegerWidth::Byte, 0x80, 31).flags);
-        assert!(!shifted.contains(Flag::Carry));
-        assert!(!shifted.contains(Flag::Overflow));
+        for width in [IntegerWidth::Byte, IntegerWidth::Word, IntegerWidth::Dword, IntegerWidth::Qword] {
+            for operation in [
+                Arithmetic::shift_left,
+                Arithmetic::shift_right,
+                Arithmetic::shift_arithmetic_right,
+            ] as [Shift; 3]
+            {
+                let update = operation(width, 0x8000_0000_0000_0080, 2).flags;
+                assert_eq!(update.defined() & Flag::Overflow.mask(), 0);
+                assert_ne!(update.undefined() & Flag::Overflow.mask(), 0);
+                assert!(original.apply(update).contains(Flag::Overflow));
+                assert!(!FlagState::default().apply(update).contains(Flag::Overflow));
+            }
+        }
+    }
 
-        let shifted = FlagState::default().apply(Arithmetic::shift_right(IntegerWidth::Byte, 0x80, 31).flags);
-        assert!(!shifted.contains(Flag::Carry));
-        assert!(shifted.contains(Flag::Overflow));
-
-        let shifted = original.apply(Arithmetic::shift_arithmetic_right(IntegerWidth::Byte, 0x80, 31).flags);
-        assert!(shifted.contains(Flag::Carry));
-        assert!(!shifted.contains(Flag::Overflow));
+    #[test]
+    fn one_bit_shifts_define_overflow() {
+        type Shift = fn(IntegerWidth, u64, u8) -> Arithmetic;
+        for width in [IntegerWidth::Byte, IntegerWidth::Word, IntegerWidth::Dword, IntegerWidth::Qword] {
+            for operation in [
+                Arithmetic::shift_left,
+                Arithmetic::shift_right,
+                Arithmetic::shift_arithmetic_right,
+            ] as [Shift; 3]
+            {
+                let update = operation(width, width.mask(), 1).flags;
+                assert_ne!(update.defined() & Flag::Overflow.mask(), 0);
+                assert_eq!(update.undefined() & Flag::Overflow.mask(), 0);
+            }
+        }
     }
 
     #[test]
