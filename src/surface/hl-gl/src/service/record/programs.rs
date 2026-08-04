@@ -35,6 +35,65 @@ mod buffer_snapshot_tests {
     }
 
     #[test]
+    fn draw_snapshot_keeps_array_and_3d_bindings_independent() {
+        let mut context = GlContext::new();
+        let tex_2d = context.textures.gen();
+        let cube = context.textures.gen();
+        let array = context.textures.gen();
+        let volume = context.textures.gen();
+        crate::service::record::bind_texture(&mut context, GL_TEXTURE_2D, tex_2d);
+        crate::service::record::bind_texture(&mut context, GL_TEXTURE_CUBE_MAP, cube);
+        crate::service::record::bind_texture(&mut context, GL_TEXTURE_2D_ARRAY, array);
+        crate::service::record::bind_texture(&mut context, GL_TEXTURE_3D, volume);
+
+        let draw = context.snapshot(false);
+        assert_eq!(draw.tex_units[0], tex_2d);
+        assert_eq!(draw.cube_tex_units[0], u64::from(cube));
+        assert_eq!(draw.array_tex_units[0], u64::from(array));
+        assert_eq!(draw.tex_3d_units[0], u64::from(volume));
+        assert_eq!(draw.tex_generations[0], context.textures.get(tex_2d).unwrap().gen);
+        assert_eq!(draw.cube_tex_generations[0], context.textures.get(cube).unwrap().gen);
+        assert_eq!(draw.array_tex_generations[0], context.textures.get(array).unwrap().gen);
+        assert_eq!(draw.tex_3d_generations[0], context.textures.get(volume).unwrap().gen);
+    }
+
+    #[test]
+    fn draw_snapshot_preserves_each_default_texture_object() {
+        let context = GlContext::new();
+        let draw = context.snapshot(false);
+        assert_eq!(draw.cube_tex_units[0], crate::model::context::DEFAULT_TEXTURE_CUBE);
+        assert_eq!(
+            draw.array_tex_units[0],
+            crate::model::context::DEFAULT_TEXTURE_2D_ARRAY
+        );
+        assert_eq!(draw.tex_3d_units[0], crate::model::context::DEFAULT_TEXTURE_3D);
+        assert_eq!(
+            draw.cube_tex_generations[0],
+            context
+                .textures
+                .get_internal(crate::model::context::DEFAULT_TEXTURE_CUBE)
+                .unwrap()
+                .gen
+        );
+        assert_eq!(
+            draw.array_tex_generations[0],
+            context
+                .textures
+                .get_internal(crate::model::context::DEFAULT_TEXTURE_2D_ARRAY)
+                .unwrap()
+                .gen
+        );
+        assert_eq!(
+            draw.tex_3d_generations[0],
+            context
+                .textures
+                .get_internal(crate::model::context::DEFAULT_TEXTURE_3D)
+                .unwrap()
+                .gen
+        );
+    }
+
+    #[test]
     fn repeated_draw_snapshots_share_unchanged_buffer_storage() {
         let (mut context, _) = context_with_buffer();
 
@@ -987,6 +1046,8 @@ impl GlContext {
             current_attr_kinds: ctx.local.current_attr_kind,
             tex_units: ctx.local.tex_unit,
             cube_tex_units: ctx.local.cube_tex_unit.map(u64::from),
+            array_tex_units: ctx.local.array_tex_unit.map(u64::from),
+            tex_3d_units: ctx.local.tex_3d_unit.map(u64::from),
             samp_objs,
             viewport: ctx.local.pipeline.viewport,
             scissor_enabled: ctx.local.pipeline.scissor_enabled,
@@ -1042,6 +1103,16 @@ impl GlContext {
                 *name = crate::model::context::DEFAULT_TEXTURE_CUBE;
             }
         }
+        for name in &mut d.array_tex_units {
+            if *name == 0 {
+                *name = crate::model::context::DEFAULT_TEXTURE_2D_ARRAY;
+            }
+        }
+        for name in &mut d.tex_3d_units {
+            if *name == 0 {
+                *name = crate::model::context::DEFAULT_TEXTURE_3D;
+            }
+        }
         d.target = if ctx.local.bound_fbo == 0 {
             None
         } else {
@@ -1084,6 +1155,14 @@ impl GlContext {
                 d.cube_tex_generations[unit] = texture.gen;
                 d.cube_tex_swizzles[unit] = texture.sampled_swizzle();
             }
+            if let Some(texture) = ctx.textures.get_internal(d.array_tex_units[unit]) {
+                d.array_tex_generations[unit] = texture.gen;
+                d.array_tex_swizzles[unit] = texture.sampled_swizzle();
+            }
+            if let Some(texture) = ctx.textures.get_internal(d.tex_3d_units[unit]) {
+                d.tex_3d_generations[unit] = texture.gen;
+                d.tex_3d_swizzles[unit] = texture.sampled_swizzle();
+            }
         }
         if let Some(p) = ctx.programs.program(ctx.local.cur_prog) {
             d.samp_units.clone_from(&p.samp_units);
@@ -1101,7 +1180,12 @@ impl GlContext {
             .filter(|unit| (0..d.tex_units.len() as i32).contains(unit))
             .flat_map(|unit| {
                 let unit = unit as usize;
-                [u64::from(d.tex_units[unit]), d.cube_tex_units[unit]]
+                [
+                    u64::from(d.tex_units[unit]),
+                    d.cube_tex_units[unit],
+                    d.array_tex_units[unit],
+                    d.tex_3d_units[unit],
+                ]
             })
             .filter(|name| *name != 0)
             .filter_map(|name| ctx.texture_snapshot_internal(name))
