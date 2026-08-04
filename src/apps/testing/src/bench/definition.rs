@@ -4,7 +4,6 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Component, Path, PathBuf},
-    process::Command,
 };
 
 #[derive(Deserialize)]
@@ -81,6 +80,10 @@ pub struct BenchmarkCase {
 }
 
 impl Benchmark {
+    pub fn source_path(&self) -> PathBuf {
+        self.directory.join(&self.build.source)
+    }
+
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
         let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         safe_relative(&document.build.source)?;
@@ -134,7 +137,7 @@ impl Benchmark {
         })
     }
 
-    pub fn build(&self, case: &BenchmarkCase, target: Target) -> Result<PathBuf, Error> {
+    pub async fn build(&self, case: &BenchmarkCase, target: Target) -> Result<PathBuf, Error> {
         let output = crate::runtime::workspace()?
             .join("target/testing/bench")
             .join(&self.name)
@@ -142,13 +145,15 @@ impl Benchmark {
             .join(&case.id);
         fs::create_dir_all(output.parent().ok_or("benchmark output has no parent")?)?;
         let compiler = self.build.compiler.for_target(target);
-        let status = Command::new(compiler)
+        let status = tokio::process::Command::new(compiler)
             .args(&self.build.flags)
             .args(&case.build_flags)
-            .arg(self.directory.join(&self.build.source))
+            .arg(self.source_path())
             .arg("-o")
             .arg(&output)
-            .status()?;
+            .kill_on_drop(true)
+            .status()
+            .await?;
         if !status.success() {
             return Err(format!("{compiler} failed building {}/{} with {status}", self.name, case.id).into());
         }

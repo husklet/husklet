@@ -8,6 +8,7 @@ use std::{
     collections::BTreeMap,
     fs,
     os::unix::fs::PermissionsExt,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -38,45 +39,118 @@ pub struct Provenance {
 }
 
 const CAPTURE_LIMIT: usize = 1024 * 1024;
+const DIAGNOSTIC_CAPTURE: usize = 4096;
+const DIAGNOSTIC_OUTPUT: usize = 16 * 1024;
+const SETUP_ALLOWANCE: Duration = Duration::from_secs(120);
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn run(benchmark: &Benchmark, target: Target) -> std::result::Result<Vec<Result>, Error> {
-    let image = TestImage::materialize(&benchmark.image, &target.platform()).await?;
-    let state = tempfile::tempdir()?;
-    let containers = hl_container::Containers::builder(Config::new(state.path()))
-        .build()
-        .await?;
-    let mut results = Vec::new();
-    for case in &benchmark.cases {
-        let artifact = benchmark.build(case, target)?;
-        let guest_program = format!("/opt/husklet/bench-{}", case.id);
-        let destination = image.path().join(guest_program.trim_start_matches('/'));
-        fs::create_dir_all(destination.parent().ok_or("benchmark destination has no parent")?)?;
-        fs::copy(artifact, &destination)?;
-        fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))?;
-        results.push(
-            match run_case(&containers, benchmark, case, target, image.path(), &guest_program).await {
-                Ok((cold, samples, phases)) => Result::Passed(Passed {
-                    id: format!("{}/{}", benchmark.name, case.id),
-                    cold,
-                    samples,
-                    phases,
-                    provenance: Provenance {
-                        image: benchmark.image.clone(),
-                        execution: format!("{:?}", benchmark.execution),
-                        target: target.name(),
-                        warmups: case.warmups,
-                    },
-                }),
-                Err(error) => Result::Failed(Failed {
-                    id: format!("{}/{}", benchmark.name, case.id),
-                    target: target.name(),
-                    reason: error.to_string(),
-                }),
+pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target) -> Result {
+    let case = &benchmark.cases[case_index];
+    match execute(Arc::clone(&benchmark), case_index, target).await {
+        Ok((cold, samples, phases)) => Result::Passed(Passed {
+            id: format!("{}/{}", benchmark.name, case.id),
+            cold,
+            samples,
+            phases,
+            provenance: Provenance {
+                image: benchmark.image.clone(),
+                execution: format!("{:?}", benchmark.execution),
+                target: target.name(),
+                warmups: case.warmups,
             },
-        );
+        }),
+        Err(error) => Result::Failed(Failed {
+            id: format!("{}/{}", benchmark.name, case.id),
+            target: target.name(),
+            reason: error.to_string(),
+        }),
     }
-    image.release()?;
-    Ok(results)
+}
+
+async fn execute(
+    benchmark: Arc<Benchmark>,
+    case_index: usize,
+    target: Target,
+) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
+    let case = &benchmark.cases[case_index];
+    let deadline = tokio::time::Instant::now() + row_timeout(case)?;
+    let image = tokio::time::timeout_at(deadline, TestImage::materialize(&benchmark.image, &target.platform()))
+        .await
+        .map_err(|_| "benchmark image materialization exceeded the total row deadline")??;
+    let outcome = execute_with_image(Arc::clone(&benchmark), case_index, target, image.path(), deadline)
+        .await
+        .map_err(|error| error.to_string());
+    let release = tokio::time::timeout(
+        CLEANUP_TIMEOUT,
+        tokio::task::spawn_blocking(move || image.release().map_err(|error| error.to_string())),
+    )
+    .await
+    .map_err(|_| "benchmark image cleanup timed out")??;
+    match outcome {
+        Ok(result) => {
+            release?;
+            Ok(result)
+        }
+        Err(error) => {
+            let _ = release;
+            Err(error.into())
+        }
+    }
+}
+
+async fn execute_with_image(
+    benchmark: Arc<Benchmark>,
+    case_index: usize,
+    target: Target,
+    image: &std::path::Path,
+    deadline: tokio::time::Instant,
+) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
+    let state = isolated_state()?;
+    let containers = tokio::time::timeout_at(
+        deadline,
+        hl_container::Containers::builder(Config::new(state.path())).build(),
+    )
+    .await
+    .map_err(|_| "benchmark container setup exceeded the total row deadline")??;
+    let case = &benchmark.cases[case_index];
+    let artifact = tokio::time::timeout_at(deadline, benchmark.build(case, target))
+        .await
+        .map_err(|_| "benchmark build exceeded the total row deadline")??;
+    let guest_program = format!("/opt/husklet/bench-{}", case.id);
+    let staging_image = image.to_path_buf();
+    let staging_program = guest_program.clone();
+    tokio::time::timeout_at(
+        deadline,
+        tokio::task::spawn_blocking(move || {
+            stage(&artifact, &staging_image, &staging_program).map_err(|error| error.to_string())
+        }),
+    )
+    .await
+    .map_err(|_| "benchmark staging exceeded the total row deadline")???;
+    run_case(&containers, &benchmark, case, target, image, &guest_program, deadline).await
+}
+
+fn isolated_state() -> std::result::Result<tempfile::TempDir, Error> {
+    Ok(tempfile::tempdir()?)
+}
+
+fn stage(artifact: &std::path::Path, image: &std::path::Path, program: &str) -> std::result::Result<(), Error> {
+    let destination = image.join(program.trim_start_matches('/'));
+    fs::create_dir_all(destination.parent().ok_or("benchmark destination has no parent")?)?;
+    fs::copy(artifact, &destination)?;
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+fn row_timeout(case: &BenchmarkCase) -> std::result::Result<Duration, Error> {
+    let invocations = 1_u32
+        .checked_add(case.warmups)
+        .and_then(|value| value.checked_add(case.samples))
+        .ok_or("benchmark invocation count overflow")?;
+    Duration::from_secs(case.timeout)
+        .checked_mul(invocations)
+        .and_then(|value| value.checked_add(SETUP_ALLOWANCE))
+        .ok_or_else(|| "benchmark row timeout overflow".into())
 }
 
 async fn run_case(
@@ -86,6 +160,7 @@ async fn run_case(
     target: Target,
     image: &std::path::Path,
     program: &str,
+    deadline: tokio::time::Instant,
 ) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
     let expected_stdout = fs::read(&case.stdout_contains)?;
     let total = 1_u32
@@ -95,16 +170,22 @@ async fn run_case(
     let mut measurements = Measurements::new(case.samples);
     for repetition in 0..total {
         let invocation = Invocation::new(containers, benchmark, case, target, image, program, repetition)?;
-        let outcome = invocation.execute(&expected_stdout).await;
-        let cleanup = containers.remove_force(&invocation.name).await;
+        let outcome = tokio::time::timeout_at(deadline, invocation.execute(&expected_stdout))
+            .await
+            .map_err(|_| "benchmark exceeded the total row deadline".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()));
+        let cleanup = tokio::time::timeout(CLEANUP_TIMEOUT, containers.remove_force(&invocation.name))
+            .await
+            .map_err(|_| "benchmark container cleanup timed out".to_owned())
+            .and_then(|result| result.map_err(|error| error.to_string()));
         match outcome {
             Ok((elapsed, invocation_phases)) => {
-                cleanup?;
+                cleanup.map_err(|error| -> Error { error.into() })?;
                 measurements.record(repetition, case.warmups, elapsed, invocation_phases)?;
             }
             Err(error) => {
                 let _ = cleanup;
-                return Err(error);
+                return Err(error.into());
             }
         }
     }
@@ -157,20 +238,15 @@ impl<'a> Invocation<'a> {
         let started = Instant::now();
         self.containers.create(self.spec.clone()).await?;
         self.containers.start(&self.name).await?;
-        let status = tokio::time::timeout(Duration::from_secs(self.case.timeout), self.containers.wait(&self.name))
-            .await
-            .map_err(|_| format!("timed out after {} seconds", self.case.timeout))??;
+        let status = self.wait().await?;
         let elapsed = started.elapsed().as_millis();
         let logs = self.containers.logs(&self.name).await?;
-        let captured = logs.stdout.len().saturating_add(logs.stderr.len());
-        if captured > CAPTURE_LIMIT {
-            return Err(format!("output exceeded {CAPTURE_LIMIT} bytes").into());
-        }
+        bounded(&logs)?;
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
         }
         if expected_stdout.is_empty() && !logs.stdout.is_empty() {
-            return Err(format!("expected empty stdout; stdout={:?}", logs.stdout).into());
+            return Err(format!("expected empty stdout; stdout={}", output_excerpt(&logs.stdout)).into());
         }
         if !expected_stdout.is_empty()
             && !logs
@@ -179,16 +255,65 @@ impl<'a> Invocation<'a> {
                 .any(|window| window == expected_stdout)
         {
             return Err(format!(
-                "stdout missing marker from {}; stdout={:?}",
+                "stdout missing marker from {}; stdout={}",
                 self.case.stdout_contains.display(),
-                logs.stdout
+                output_excerpt(&logs.stdout)
             )
             .into());
         }
         if !logs.stderr.is_empty() {
-            return Err(format!("unexpected stderr: {:?}", logs.stderr).into());
+            return Err(format!("unexpected stderr: {}", output_excerpt(&logs.stderr)).into());
         }
         Ok((elapsed, parse_phases(&logs.stdout)?))
+    }
+}
+
+fn output_excerpt(bytes: &[u8]) -> String {
+    let shown = bytes.len().min(DIAGNOSTIC_CAPTURE);
+    let suffix = bytes
+        .len()
+        .checked_sub(shown)
+        .filter(|omitted| *omitted > 0)
+        .map_or_else(String::new, |omitted| format!(" ... [{omitted} bytes omitted]"));
+    let mut output = format!("{:?}{suffix}", &bytes[..shown]);
+    if output.len() > DIAGNOSTIC_OUTPUT {
+        const TRUNCATED: &str = " ... [excerpt truncated]";
+        output.truncate(DIAGNOSTIC_OUTPUT - TRUNCATED.len());
+        output.push_str(TRUNCATED);
+    }
+    output
+}
+
+impl Invocation<'_> {
+    async fn wait(&self) -> std::result::Result<ExitStatus, Error> {
+        let waiting = self.containers.wait(&self.name);
+        tokio::pin!(waiting);
+        let timeout = Duration::from_secs(self.case.timeout);
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            tokio::select! {
+                status = &mut waiting => return Ok(status?),
+                () = tokio::time::sleep_until(deadline) => {
+                    return Err(format!("timed out after {} seconds", self.case.timeout).into());
+                }
+                () = tokio::time::sleep(Duration::from_millis(10)) => {
+                    bounded(&self.containers.logs(&self.name).await?)?;
+                }
+            }
+        }
+    }
+}
+
+fn bounded(logs: &hl_container::Logs) -> std::result::Result<(), Error> {
+    let captured = logs
+        .stdout
+        .len()
+        .checked_add(logs.stderr.len())
+        .ok_or("captured output size overflow")?;
+    if captured > CAPTURE_LIMIT {
+        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
+    } else {
+        Ok(())
     }
 }
 
@@ -280,12 +405,40 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 
 #[cfg(test)]
 mod tests {
-    use super::parse_phases;
+    use super::{CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, isolated_state, output_excerpt, parse_phases};
 
     #[test]
     fn retained_phase_protocol_is_accepted() {
         let phases = parse_phases(b"noise\nPHASE compute us=42 ok=7\n").unwrap();
         assert_eq!(phases, vec![("compute".to_owned(), 42, 7)]);
         assert!(parse_phases(b"PHASE compute ms=42 ok=7\n").is_err());
+    }
+
+    #[test]
+    fn combined_capture_is_bounded() {
+        let within = hl_container::Logs {
+            stdout: vec![0; CAPTURE_LIMIT - 1],
+            stderr: vec![0],
+        };
+        assert!(bounded(&within).is_ok());
+        let over = hl_container::Logs {
+            stdout: vec![0; CAPTURE_LIMIT],
+            stderr: vec![0],
+        };
+        assert!(bounded(&over).is_err());
+    }
+
+    #[test]
+    fn every_case_receives_independent_state() {
+        let first = isolated_state().unwrap();
+        let second = isolated_state().unwrap();
+        assert_ne!(first.path(), second.path());
+    }
+
+    #[test]
+    fn failure_diagnostic_does_not_repeat_the_full_capture() {
+        let excerpt = output_excerpt(&vec![0xff; CAPTURE_LIMIT]);
+        assert!(excerpt.len() <= DIAGNOSTIC_OUTPUT);
+        assert!(excerpt.contains("truncated"));
     }
 }
