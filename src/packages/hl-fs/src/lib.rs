@@ -30,11 +30,7 @@ impl File {
         };
         let parent = self.0.parent().unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(parent)?;
-        let name = self
-            .0
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("file");
+        let name = self.0.file_name().and_then(|name| name.to_str()).unwrap_or("file");
         for _ in 0..128 {
             let id = REPLACEMENT_FILE_ID.fetch_add(1, Ordering::Relaxed);
             let temporary = parent.join(format!(".{name}.replace-{}-{id}", std::process::id()));
@@ -311,10 +307,7 @@ mod tests {
 
         File::from(&target).replace(b"new").unwrap();
 
-        assert_eq!(
-            std::fs::metadata(target).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert_eq!(std::fs::metadata(target).unwrap().permissions().mode() & 0o777, 0o600);
     }
 
     #[tokio::test]
