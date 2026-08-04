@@ -5,7 +5,10 @@
 #include "projection.h"
 #include "stub.h"
 
+#include <stddef.h>
+
 #define CPU 28
+#define OFFSET_DELTA ((int)offsetof(hl_native_aarch64_cpu, memory_delta))
 
 static int stolen(unsigned reg) {
     return reg == 16 || reg == 17 || reg == 18 || reg == 28 || reg == 30;
@@ -33,8 +36,7 @@ static void add_immediate(hl_a64_assembler *assembler, int destination, int sour
 
 static int valid(uint32_t word, uint64_t pc, hl_a64_memory *memory) {
     if (!hl_a64_memory_decode(word, pc, memory) || memory->kind != HL_A64_MEMORY_PAIR ||
-        (memory->vector && ((word >> 30) & 3u) == 3u) ||
-        (memory->writeback && memory->base != 31)) return 0;
+        (memory->vector && ((word >> 30) & 3u) == 3u)) return 0;
     return 1;
 }
 
@@ -89,7 +91,24 @@ int hl_a64_pair_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc, hl
         if (first_stolen) hl_a64_str(assembler, 17, CPU, memory.target * 8);
         if (second_stolen) hl_a64_str(assembler, (int)second_native, CPU, memory.target2 * 8);
     }
-    if (memory.writeback) add_immediate(assembler, 31, 31, writeback);
+    if (memory.writeback) {
+        /* Reconstruct writeback from the successful access address.  This
+         * preserves the original base when a load also targets that register,
+         * and the guard's miss path bypasses publication entirely.  Store
+         * journaling already leaves x16 as the guest access address; loads
+         * still carry the projected host address here. */
+        if (memory.read) {
+            hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
+            hl_a64_emit32(assembler, UINT32_C(0xcb110210)); /* sub x16,x16,x17 */
+        }
+        if (memory.postindex) add_immediate(assembler, 16, 16, writeback);
+        if (memory.base == 31)
+            hl_a64_mov_sp_from(assembler, 16);
+        else if (stolen(memory.base))
+            hl_a64_str(assembler, 16, CPU, memory.base * 8);
+        else
+            hl_a64_movr(assembler, memory.base, 16);
+    }
     return hl_a64_assembler_ok(assembler);
 }
 
