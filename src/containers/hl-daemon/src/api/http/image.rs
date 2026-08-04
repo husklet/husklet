@@ -79,7 +79,14 @@ impl DockerState {
         };
         match (result, resumed) {
             (Ok(image), Ok(())) => {
-                let id = image.target.digest().to_string();
+                let images = self.containers.images().map_err(ApiError::container)?;
+                let platform = self.platform.clone();
+                let selected = image.clone();
+                let id = tokio::task::spawn_blocking(move || images.image_id(&selected, &platform))
+                    .await
+                    .map_err(ApiError::task)?
+                    .map_err(ApiError::image)?
+                    .to_string();
                 self.events.image("commit", &id, image.name.to_string());
                 Ok(ImageCommit { id })
             }
@@ -114,6 +121,7 @@ impl DockerState {
                 include_shared_size,
                 |target| images.size_target(target),
                 |unique| images.usage_targets(unique),
+                |target| images.image_id_target(target, &platform).map(|id| id.to_string()),
                 |target| images.details_target(target, &platform).map(|details| details.labels),
             )
         })
@@ -124,7 +132,25 @@ impl DockerState {
 
     pub(super) async fn find_image(&self, name: &str) -> ApiResult<hl_images::Image> {
         let records = self.image_records().await?;
-        if let Some(image) = records.iter().find(|image| image.target.digest().to_string() == name) {
+        let images = self.containers.images().map_err(ApiError::container)?;
+        let platform = self.platform.clone();
+        let candidates = records.clone();
+        let wanted = name.to_owned();
+        let selected = tokio::task::spawn_blocking(move || {
+            candidates
+                .into_iter()
+                .map(|image| images.image_id(&image, &platform).map(|id| (image, id)))
+                .find_map(|result| match result {
+                    Ok((image, id)) if id.to_string() == wanted => Some(Ok(image)),
+                    Ok(_) => None,
+                    Err(error) => Some(Err(error)),
+                })
+                .transpose()
+        })
+        .await
+        .map_err(ApiError::task)?
+        .map_err(ApiError::image)?;
+        if let Some(image) = selected {
             return Ok(image.clone());
         }
         let reference: Reference = name
@@ -138,16 +164,18 @@ impl DockerState {
     }
 }
 
-fn build_image_summaries<Size, Usage, Labels>(
+fn build_image_summaries<Size, Usage, Identity, Labels>(
     inventory: Vec<hl_images::Graph>,
     include_shared_size: bool,
     mut size: Size,
     usage: Usage,
+    mut identity: Identity,
     mut labels: Labels,
 ) -> hl_images::Result<Vec<ImageSummary>>
 where
     Size: FnMut(&hl_images::Descriptor) -> hl_images::Result<u64>,
     Usage: FnOnce(&[hl_images::Descriptor]) -> hl_images::Result<BTreeMap<String, hl_images::ImageUsage>>,
+    Identity: FnMut(&hl_images::Descriptor) -> hl_images::Result<String>,
     Labels: FnMut(&hl_images::Descriptor) -> hl_images::Result<BTreeMap<String, String>>,
 {
     let mut grouped = BTreeMap::<String, (hl_images::Descriptor, Vec<String>)>::new();
@@ -164,7 +192,7 @@ where
             .filter(|name| !name.repository().starts_with("hl-build-cache/"))
             .map(|name| name.to_string())
             .collect::<Vec<_>>();
-        let id = graph.target.digest().to_string();
+        let id = identity(&graph.target)?;
         match grouped.entry(id) {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 entry.insert((graph.target, tags));
@@ -180,8 +208,9 @@ where
             repo_tags.sort();
             let (size_bytes, shared_size) = match &usage {
                 Some(usage) => {
-                    let usage = usage.get(&id).copied().ok_or_else(|| {
-                        hl_images::Error::InvalidMetadata(format!("image usage is missing target {id}"))
+                    let target_id = target.digest().to_string();
+                    let usage = usage.get(&target_id).copied().ok_or_else(|| {
+                        hl_images::Error::InvalidMetadata(format!("image usage is missing target {target_id}"))
                     })?;
                     (usage.size, i64::try_from(usage.shared).unwrap_or(i64::MAX))
                 }

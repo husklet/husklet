@@ -55,6 +55,7 @@ fn summaries_without_shared_size_visit_each_target_once() {
             Ok(101)
         },
         |_| panic!("shared descriptor accounting must be skipped"),
+        |target| Ok(target.digest().to_string()),
         |_| {
             details.set(details.get() + 1);
             Ok(BTreeMap::from([("tier".into(), "test".into())]))
@@ -114,6 +115,7 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
                 })
                 .collect())
         },
+        |target| Ok(target.digest().to_string()),
         |_| {
             details.set(details.get() + 1);
             Ok(BTreeMap::new())
@@ -140,6 +142,7 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
         false,
         |_| Err(hl_images::Error::InvalidMetadata("unreadable target".into())),
         |_| panic!("shared usage must remain skipped"),
+        |target| Ok(target.digest().to_string()),
         |_| panic!("details must not run after a size failure"),
     )
     .unwrap_err();
@@ -177,6 +180,7 @@ fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
         false,
         |_| Ok(101),
         |_| panic!("shared descriptor accounting must be skipped"),
+        |target| Ok(target.digest().to_string()),
         |target| {
             Ok(BTreeMap::from([(
                 "kind".into(),

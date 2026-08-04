@@ -9,12 +9,16 @@ pub(in super::super) async fn inspect(
     Path(name): Path<String>,
 ) -> ApiResult<Json<InspectImage>> {
     let selected = state.find_image(&name).await?;
-    let id = selected.target.digest().to_string();
     let size = i64::try_from(selected.target.size()).unwrap_or(i64::MAX);
     let images = state.containers.images().map_err(ApiError::container)?;
     let image = selected.clone();
     let platform = state.platform.clone();
-    let details = tokio::task::spawn_blocking(move || images.details(&image, &platform))
+    let (id, details) = tokio::task::spawn_blocking(move || {
+        Ok::<_, hl_images::Error>((
+            images.image_id(&image, &platform)?.to_string(),
+            images.details(&image, &platform)?,
+        ))
+    })
         .await
         .map_err(ApiError::task)?
         .map_err(ApiError::image)?;
@@ -73,12 +77,16 @@ pub(in super::super) async fn history(
     let images = state.containers.images().map_err(ApiError::container)?;
     let image = selected.clone();
     let platform = state.platform.clone();
-    let details = tokio::task::spawn_blocking(move || images.details(&image, &platform))
+    let (id, details) = tokio::task::spawn_blocking(move || {
+        Ok::<_, hl_images::Error>((
+            images.image_id(&image, &platform)?.to_string(),
+            images.details(&image, &platform)?,
+        ))
+    })
         .await
         .map_err(ApiError::task)?
         .map_err(ApiError::image)?;
     let size = i64::try_from(selected.target.size()).unwrap_or(i64::MAX);
-    let id = selected.target.digest().to_string();
     let tags = state
         .image_records()
         .await?
@@ -134,9 +142,13 @@ pub(in super::super) async fn tag(
     let target: Reference = value
         .parse()
         .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid image reference: {error}")))?;
-    let source_id = source.target.digest().to_string();
     let images = state.containers.images().map_err(ApiError::container)?;
-    tokio::task::spawn_blocking(move || images.tag(&source, target))
+    let platform = state.platform.clone();
+    let source_id = tokio::task::spawn_blocking(move || {
+        let id = images.image_id(&source, &platform)?.to_string();
+        images.tag(&source, target)?;
+        Ok::<_, hl_images::Error>(id)
+    })
         .await
         .map_err(ApiError::task)?
         .map_err(ApiError::image)?;
@@ -189,6 +201,14 @@ pub(in super::super) async fn remove(
     // Removal currently untags without pruning parent layers, which exactly honors noprune=true.
     let image = state.find_image(&name).await?;
     let images = state.containers.images().map_err(ApiError::container)?;
+    let identity_images = images.clone();
+    let identity_image = image.clone();
+    let platform = state.platform.clone();
+    let image_id = tokio::task::spawn_blocking(move || identity_images.image_id(&identity_image, &platform))
+        .await
+        .map_err(ApiError::task)?
+        .map_err(ApiError::image)?
+        .to_string();
     let aliases = state
         .image_records()
         .await?
@@ -196,15 +216,15 @@ pub(in super::super) async fn remove(
         .filter(|candidate| candidate.target.digest() == image.target.digest())
         .map(|candidate| candidate.name.to_string())
         .collect::<std::collections::BTreeSet<_>>();
-    let digest = image.target.digest().to_string();
+    let target_digest = image.target.digest().to_string();
     let containers = state.containers.list().await.map_err(ApiError::container)?;
     let references = containers.iter().filter_map(|container| {
         container.spec.image.as_ref().and_then(|reference| {
             let reference = reference.to_string();
-            (reference == digest || aliases.contains(&reference)).then(|| container.state.is_active())
+            (reference == image_id || aliases.contains(&reference)).then(|| container.state.is_active())
         })
     });
-    if removal_conflicts(force, name == digest, aliases.len(), references) {
+    if removal_conflicts(force, name == image_id, aliases.len(), references) {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             format!("conflict: image {name} is being used by a container"),
@@ -225,13 +245,10 @@ pub(in super::super) async fn remove(
         return Err(ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {name}")));
     }
     for image in &removed {
-        state
-            .events
-            .image("untag", image.target.digest().to_string(), image.name.to_string());
+        state.events.image("untag", &image_id, image.name.to_string());
     }
-    let digest = removed[0].target.digest().to_string();
     let images = state.containers.images().map_err(ApiError::container)?;
-    let digest_for_lookup = digest.clone();
+    let digest_for_lookup = target_digest.clone();
     let retained = tokio::task::spawn_blocking(move || {
         images.list().map(|images| {
             images
@@ -244,14 +261,12 @@ pub(in super::super) async fn remove(
     .map_err(ApiError::image)?;
     if !retained {
         let images = state.containers.images().map_err(ApiError::container)?;
-        let selected = std::collections::BTreeSet::from([digest.clone()]);
+        let selected = std::collections::BTreeSet::from([target_digest]);
         tokio::task::spawn_blocking(move || images.prune_graphs(&selected))
             .await
             .map_err(ApiError::task)?
             .map_err(ApiError::image)?;
-        state
-            .events
-            .image("delete", digest.clone(), removed[0].name.to_string());
+        state.events.image("delete", &image_id, removed[0].name.to_string());
     }
     let mut response = removed
         .into_iter()
@@ -263,7 +278,7 @@ pub(in super::super) async fn remove(
     if !retained {
         response.push(ImageDelete {
             untagged: None,
-            deleted: Some(digest),
+            deleted: Some(image_id),
         });
     }
     Ok(Json(response))

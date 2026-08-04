@@ -200,6 +200,8 @@ pub(super) async fn create(
         None => None,
     };
     let events = state.events.clone();
+    let images = state.containers.images().map_err(ApiError::container)?;
+    let platform = state.platform.clone();
     let image = Builder::new(state.containers, state.platform, state.source)
         .network(query.network()?)
         .build(
@@ -215,12 +217,13 @@ pub(super) async fn create(
         )
         .await
         .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
-    events.image(
-        "build",
-        image.target.digest().to_string(),
-        image.name.to_string(),
-    );
-    let id = image.target.digest().to_string();
+    let selected = image.clone();
+    let id = tokio::task::spawn_blocking(move || images.image_id(&selected, &platform))
+        .await
+        .map_err(ApiError::task)?
+        .map_err(ApiError::image)?
+        .to_string();
+    events.image("build", &id, image.name.to_string());
     let body = query.output().success(&id);
     Ok((
         StatusCode::OK,

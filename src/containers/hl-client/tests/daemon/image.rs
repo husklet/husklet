@@ -5,10 +5,23 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
     let socket = root.path().join("run/docker.sock");
-    let daemon = TestDaemon::start(containers, &socket).await;
+    let daemon = TestDaemon::start(containers.clone(), &socket).await;
 
     let archive_path = root.path().join("image.tar");
-    tokio::fs::write(&archive_path, docker_archive())
+    let archive = docker_archive();
+    let expected_id = {
+        let mut tar = tar::Archive::new(&archive[..]);
+        let mut config = Vec::new();
+        tar.entries()
+            .unwrap()
+            .find(|entry| entry.as_ref().unwrap().path().unwrap() == std::path::Path::new("config.json"))
+            .unwrap()
+            .unwrap()
+            .read_to_end(&mut config)
+            .unwrap();
+        Digest::sha256(&config).to_string()
+    };
+    tokio::fs::write(&archive_path, &archive)
         .await
         .unwrap();
     let client = &daemon.client;
@@ -39,6 +52,7 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
         .await
         .unwrap();
     assert_eq!(inspected.id, listed[0].id);
+    assert_eq!(inspected.id, expected_id);
     assert_eq!(inspected.os, "linux");
     assert_eq!(inspected.architecture, "arm64");
     assert_eq!(inspected.created, "2026-07-15T12:34:56Z");
@@ -47,7 +61,7 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
         .distribution("scenario/fixture:v1")
         .await
         .unwrap();
-    assert_eq!(distribution.descriptor.digest().to_string(), inspected.id);
+    assert_ne!(distribution.descriptor.digest().to_string(), inspected.id);
     assert_eq!(distribution.platforms, [Platform::linux_arm64()]);
     let history = client
         .images()
@@ -60,7 +74,27 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
     assert_eq!(history[0].created_by, "/bin/sh -c #(nop) ADD fixture");
     assert_eq!(history[0].comment, "integration fixture");
     assert_eq!(history[0].tags, ["docker.io/scenario/fixture:v1"]);
+    client
+        .images()
+        .tag("scenario/fixture:v1", "scenario/stable", Some("v1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client.images().inspect("scenario/stable:v1").await.unwrap().id,
+        expected_id
+    );
     daemon.stop().await;
+
+    let reopened = TestDaemon::start(containers, &socket).await;
+    assert_eq!(
+        reopened.client.images().inspect("scenario/stable:v1").await.unwrap().id,
+        expected_id
+    );
+    let listed = reopened.client.images().list().await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, expected_id);
+    assert_eq!(listed[0].repo_tags.len(), 2);
+    reopened.stop().await;
 }
 
 #[tokio::test]

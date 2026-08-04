@@ -138,14 +138,25 @@ pub(in super::super) async fn pull(
             .await;
         let progress = match images.pull(source.as_ref(), reference, &platform).await {
             Ok(image) => {
-                events.image(
-                    "pull",
-                    image.target.digest().to_string(),
-                    image.name.to_string(),
-                );
+                let id = match images.image_id(&image, &platform) {
+                    Ok(id) => id.to_string(),
+                    Err(error) => {
+                        let message = error.to_string();
+                        let _ = sender
+                            .send(Ok(PullProgress {
+                                error: Some(message.clone()),
+                                error_detail: Some(DockerError { message }),
+                                ..PullProgress::default()
+                            }
+                            .bytes()))
+                            .await;
+                        return;
+                    }
+                };
+                events.image("pull", &id, image.name.to_string());
                 PullProgress {
                     status: Some(format!("Status: downloaded newer image for {}", image.name)),
-                    id: Some(image.target.digest().to_string()),
+                    id: Some(id),
                     ..PullProgress::default()
                 }
             }
