@@ -27,3 +27,25 @@ cases:
     artifact: { destination: /opt/husklet/syscall }
     run: []
     expect: { exit: 0, stdout: golden/syscall.txt }
+  - id: runtime/legacy-exit/status-42
+    status: active
+    compat: { class: smoke }
+    build:
+      source: source/exit.c
+      inputs: [source/abi.h]
+      output: legacy_exit
+      flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
+    artifact: { destination: /opt/husklet/legacy_exit }
+    run: [status-42]
+    expect: { exit: 42, stdout: golden/empty.bin }
+  - id: runtime/legacy-write/stdout
+    status: active
+    compat: { class: smoke }
+    build:
+      source: source/write.c
+      inputs: [source/abi.h]
+      output: legacy_write
+      flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"]
+    artifact: { destination: /opt/husklet/legacy_write }
+    run: [stdout]
+    expect: { exit: 0, stdout: golden/write.txt }

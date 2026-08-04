@@ -7,10 +7,10 @@ tree on 2026-08-04. The retained `../engine` tree was read only.
 ## Current inventory
 
 The runtime runner discovers only direct children of `tests/runtime` containing
-`test.yaml`. There are currently 36 such category manifests containing 1,605
-case definitions: 1,426 active, 119 explicitly broken, and 60 explicitly
+`test.yaml`. There are currently 36 such category manifests containing 1,608
+case definitions: 1,429 active, 119 explicitly broken, and 60 explicitly
 unsupported. Every manifest loaded successfully through `testing runtime` and
-all 1,605 declared stdout paths exist inside the category that names them.
+all 1,608 declared stdout paths exist inside the category that names them.
 
 This does not yet make `tests/runtime/legacy` removable. Three other direct
 children are not ordinary runtime categories:
@@ -53,17 +53,11 @@ dynamic loader set, or post-run host-file assertions used by
 
 ## Undeclared category inputs and rows
 
-The manifest loader has a typed `build.inputs` field, but no runtime manifest
-currently uses it. The following category-local files affect compilation and
-must be declared so fingerprinting and deletion ownership include them:
-
-- `bootstrap/source/abi.h`, `legacy-exit/abi.h`, `legacy-write/abi.h`, and
-  `syscall/abi.h`;
-- `completeness/compat.h`;
-- `memory/source/{dbt,memrss}.h`;
-- `network/socket_util.h`;
-- `procfs/pf.h`;
-- `signals/{epoll,fork}.c`, included directly by `signals/fd_main.c`.
+The manifest loader has a typed `build.inputs` field. Runtime categories now
+declare their category-local headers and included sources, including the ABI,
+compatibility, DBT, memory-RSS, socket, procfs, epoll, and fork inputs. Their
+content is therefore part of each build fingerprint and remains owned by the
+category that consumes it.
 
 `process/source/fork_probe.c` is a second executable used by the retained
 forkserver integration shape, not a header. The current one-source build schema

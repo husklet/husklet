@@ -45,3 +45,20 @@ handle), but the Linux-visible code and bytes do not.
 
 These seeds establish launch plumbing only; they do not claim broad descriptor,
 process, signal, fork, exec, or partial-I/O domain completeness.
+
+## Consolidated freestanding variants
+
+The category also owns the retained `runtime/legacy-exit/status-42` and
+`runtime/legacy-write/stdout` identities. Their former folders duplicated
+`source/exit.c`, `source/write.c`, `source/abi.h`, and the same expected bytes.
+The manifest keeps their original non-PIE compiler and linker flags as distinct
+builds, so consolidating ownership does not weaken their ET_EXEC launch and
+low-address syscall-pointer coverage.
+
+For the exit variant, `../engine/src/linux_abi/number.c` maps x86-64 syscall 60
+to canonical exit 93 while AArch64 issues 93 directly; `svc_proc` records the
+thread exit and code. For the write variant, `service_local` applies non-PIE
+argument rebasing before `svc_io` validates stdout and the guest range,
+preserves partial and error results, and raises SIGPIPE on EPIPE. The fixture
+requires the complete `compat-write\n` byte count before exiting zero. Neither
+variant retains a guest pointer or introduces an additional lifetime owner.

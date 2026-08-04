@@ -36,8 +36,8 @@ independent binary and preserves the guest-visible contracts on both ISAs:
 
 | Former case | Replacement | Preserved contract |
 |---|---|---|
-| `runtime/core/exit` | `runtime/legacy-exit/status-42` and `runtime/bootstrap/exit` | empty stdout and exit 42 |
-| `runtime/core/write` | `runtime/legacy-write/stdout` and `runtime/bootstrap/write` | exact bounded stdout write and exit zero |
+| `runtime/core/exit` | `runtime/bootstrap/exit` and the bootstrap-owned `runtime/legacy-exit/status-42` variant | empty stdout and exit 42 |
+| `runtime/core/write` | `runtime/bootstrap/write` and the bootstrap-owned `runtime/legacy-write/stdout` variant | exact bounded stdout write and exit zero |
 | `runtime/core/getpid` | `runtime/syscall/getpid-write` and `runtime/bootstrap/syscall` | positive guest PID, exact stdout write, and exit zero |
 
 The replacement sources deliberately are not byte-identical to the retired
