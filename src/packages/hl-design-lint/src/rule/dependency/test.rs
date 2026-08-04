@@ -604,6 +604,21 @@ fn accepts_dependency_edges() {
 }
 
 #[test]
+fn accepts_testing_process_mechanism() {
+    let root = fixture("testing-process");
+    package(&root, "packages", "hl-process", "");
+    package(
+        &root,
+        "apps",
+        "testing",
+        "[dependencies]\nhl-process = { path = \"../../packages/hl-process\" }\n",
+    );
+
+    assert!(findings(&root).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn checks_role_edges() {
     let root = fixture("roles");
     let directory = root.join("src/runtime/runtime");

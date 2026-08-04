@@ -365,6 +365,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("testing", "hl-images")
             | ("testing", "hl-log")
             | ("testing", "hl-network")
+            | ("testing", "hl-process")
             | ("testing", "hl-provider")
             | ("testing", "hl-runtime")
         // Runtime foundations and domains.
