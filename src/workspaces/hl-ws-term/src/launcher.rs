@@ -58,23 +58,14 @@ mod tests {
         pty.write(b"echo hello-$HL_WORKSPACE; exit\n").unwrap();
 
         let mut vt = Vt::new(40, 10);
-        let fd = pty.master_fd().unwrap();
         let mut buf = [0u8; 4096];
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut exited = false;
         loop {
-            let mut pfd = libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let pr = unsafe { libc::poll(&mut pfd, 1, 20) };
-            if pr > 0 && pfd.revents & libc::POLLIN != 0 {
-                let n = pty.read(&mut buf).unwrap_or(0);
-                if n > 0 {
-                    vt.advance_bytes(&buf[..n]);
-                    continue;
-                }
+            let n = pty.read(&mut buf).unwrap_or(0);
+            if n > 0 {
+                vt.advance_bytes(&buf[..n]);
+                continue;
             }
             if exited || Instant::now() > deadline {
                 break;
@@ -82,6 +73,7 @@ mod tests {
             if pty.try_wait().is_some() {
                 exited = true;
             }
+            std::thread::sleep(Duration::from_millis(20));
         }
         let screen: String = (0..10).map(|r| vt.grid().row_text(r)).collect::<Vec<_>>().join("\n");
         assert!(
