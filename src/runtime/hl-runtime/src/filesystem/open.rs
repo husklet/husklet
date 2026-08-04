@@ -28,7 +28,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             return false;
         };
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
-            && super::proc::descriptor(plan.operand.path.as_bytes()).is_some()
+            && super::proc::DescriptorLink::resolve(plan.operand.path.as_bytes()).is_some()
         {
             return false;
         }
@@ -50,7 +50,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             return false;
         };
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
-            && super::proc::descriptor_at(base.path().as_str().as_bytes(), plan.operand.path.as_bytes()).is_some()
+            && super::proc::DescriptorLink::resolve_at(base.path().as_str().as_bytes(), plan.operand.path.as_bytes()).is_some()
         {
             return false;
         }
@@ -88,7 +88,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Err(error) => return LinuxResult::Error(FileErrno::marshal(error)),
         };
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
-            && let Some(source) = super::proc::descriptor(plan.operand.path.as_bytes())
+            && let Some(source) = super::proc::DescriptorLink::resolve(plan.operand.path.as_bytes())
         {
             let flags = DescriptorFlags::from_bits(if plan.close_on_exec {
                 DescriptorFlags::CLOSE_ON_EXEC
@@ -121,10 +121,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Err(error) => return LinuxResult::Error(error.errno()),
         };
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
-            && let Some(source) = super::proc::descriptor_at(
-                base.path().as_str().as_bytes(),
-                plan.operand.path.as_bytes(),
-            )
+            && let Some(source) =
+                super::proc::DescriptorLink::resolve_at(base.path().as_str().as_bytes(), plan.operand.path.as_bytes())
         {
             let flags = DescriptorFlags::from_bits(if plan.close_on_exec {
                 DescriptorFlags::CLOSE_ON_EXEC

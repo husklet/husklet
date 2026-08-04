@@ -120,10 +120,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         }
         let base = self.path_base(host, operand)?;
         if !operand.nofollow
-            && let Some(descriptor) = super::proc::descriptor_at(
-                base.path().as_str().as_bytes(),
-                operand.path.as_bytes(),
-            )
+            && let Some(descriptor) =
+                super::proc::DescriptorLink::resolve_at(base.path().as_str().as_bytes(), operand.path.as_bytes())
         {
             let lease = self.descriptors.pin(descriptor).map_err(|error| match error {
                 hl_descriptor::DescriptorError::BadDescriptor => Errno::ENOENT,
@@ -154,7 +152,10 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             if snapshot.deleted {
                 return Err(Errno::ENOENT);
             }
-            let rooted = self.fs_context.rooted(&snapshot.path).map_err(|_| Errno::ENAMETOOLONG)?;
+            let rooted = self
+                .fs_context
+                .rooted(&snapshot.path)
+                .map_err(|_| Errno::ENAMETOOLONG)?;
             return host
                 .working_base(rooted)
                 .map(|base| {
