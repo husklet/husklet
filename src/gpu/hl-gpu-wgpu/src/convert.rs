@@ -211,6 +211,17 @@ impl Format {
     }
 
     pub fn copy_layout(self, width: u32, height: u32) -> Result<(u32, u32)> {
+        // Unlike packed depth/stencil, Depth32Float has one copyable aspect whose texels are exactly
+        // one IEEE-754 f32 each. Keep this backend-specific: the shared colour-layout rule correctly
+        // refuses depth formats, while wgpu legally accepts buffer↔texture copies of the D32 depth
+        // aspect. Depth24PlusStencil8 remains refused because neither its `All` aspect nor its depth
+        // plane has a portable packed buffer representation.
+        if self.0 == TextureFormat::Depth32Float {
+            return width
+                .checked_mul(core::mem::size_of::<f32>() as u32)
+                .map(|bytes_per_row| (bytes_per_row, height))
+                .ok_or(GpuError::OutOfBounds);
+        }
         self.0
             .copy_layout(width, height)
             .ok_or(GpuError::Unsupported("wgpu: texture copy layout"))
@@ -312,6 +323,33 @@ mod clear_texel_tests {
                 .is_err(),
             "a format with no plain-colour texel is still refused"
         );
+    }
+}
+
+#[cfg(test)]
+mod depth_copy_layout_tests {
+    use super::Format;
+    use hl_gpu::protocol::model::enums::TextureFormat;
+    use hl_gpu::GpuError;
+
+    #[test]
+    fn d32_has_the_legal_single_aspect_copy_layout() {
+        assert_eq!(
+            Format::from(TextureFormat::Depth32Float).copy_layout(7, 3),
+            Ok((28, 3))
+        );
+        assert!(matches!(
+            Format::from(TextureFormat::Depth32Float).copy_layout(u32::MAX, 1),
+            Err(GpuError::OutOfBounds)
+        ));
+    }
+
+    #[test]
+    fn packed_depth_stencil_still_has_no_buffer_copy_layout() {
+        assert!(matches!(
+            Format::from(TextureFormat::Depth24PlusStencil8).copy_layout(7, 3),
+            Err(GpuError::Unsupported("wgpu: texture copy layout"))
+        ));
     }
 }
 
