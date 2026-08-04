@@ -45,6 +45,7 @@ fn summaries_without_shared_size_visit_each_target_once() {
     let details = std::cell::Cell::new(0);
     let summaries = build_image_summaries(
         vec![record("example:first"), record("example:second")],
+        Vec::new(),
         false,
         |_| {
             sizes.set(sizes.get() + 1);
@@ -61,7 +62,10 @@ fn summaries_without_shared_size_visit_each_target_once() {
     assert_eq!(sizes.get(), 1);
     assert_eq!(details.get(), 1);
     assert_eq!(summaries.len(), 1);
-    assert_eq!(summaries[0].repo_tags, ["example:first", "example:second"]);
+    assert_eq!(
+        summaries[0].repo_tags,
+        ["docker.io/library/example:first", "docker.io/library/example:second"]
+    );
     assert_eq!(summaries[0].size, 101);
     assert_eq!(summaries[0].shared_size, -1);
     assert_eq!(summaries[0].labels.get("tier").map(String::as_str), Some("test"));
@@ -88,6 +92,7 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
             record("first:tag", '1'),
             record("second:tag", '2'),
         ],
+        Vec::new(),
         true,
         |_| panic!("individual size walks must be skipped"),
         |unique| {
@@ -95,9 +100,9 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
             assert_eq!(unique.len(), 2);
             Ok(unique
                 .iter()
-                .map(|image| {
+                .map(|target| {
                     (
-                        image.target.digest().to_string(),
+                        target.digest().to_string(),
                         hl_images::ImageUsage { size: 200, shared: 75 },
                     )
                 })
@@ -114,7 +119,10 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
     assert_eq!(details.get(), 2);
     assert_eq!(summaries.len(), 2);
     assert!(summaries.windows(2).all(|pair| pair[0].id < pair[1].id));
-    assert_eq!(summaries[1].repo_tags, ["second:alias", "second:tag"]);
+    assert_eq!(
+        summaries[1].repo_tags,
+        ["docker.io/library/second:alias", "docker.io/library/second:tag"]
+    );
     assert!(
         summaries
             .iter()
@@ -123,6 +131,7 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
 
     let error = build_image_summaries(
         vec![record("broken:tag", '3')],
+        Vec::new(),
         false,
         |_| Err(hl_images::Error::InvalidMetadata("unreadable target".into())),
         |_| panic!("shared usage must remain skipped"),
@@ -130,6 +139,92 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
     )
     .unwrap_err();
     assert!(matches!(error, hl_images::Error::InvalidMetadata(message) if message == "unreadable target"));
+}
+
+#[test]
+fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
+    let descriptor = |digit: char| {
+        serde_json::from_value::<hl_images::Descriptor>(serde_json::json!({
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "digest": format!("sha256:{}", digit.to_string().repeat(64)),
+            "size": 23
+        }))
+        .unwrap()
+    };
+    let tagged = serde_json::from_value::<hl_images::Image>(serde_json::json!({
+        "name": "example:tagged",
+        "target": descriptor('1')
+    }))
+    .unwrap();
+    let graph = |digit: char, build_cache: bool| hl_images::Graph {
+        target: descriptor(digit),
+        names: Default::default(),
+        created_at_ms: None,
+        labels: None,
+        build_cache,
+        metadata_known: false,
+    };
+
+    let summaries = build_image_summaries(
+        vec![tagged],
+        vec![graph('1', false), graph('2', false), graph('3', true)],
+        false,
+        |_| Ok(101),
+        |_| panic!("shared descriptor accounting must be skipped"),
+        |target| {
+            Ok(BTreeMap::from([(
+                "kind".into(),
+                if target.digest().to_string().ends_with('1') {
+                    "tagged".into()
+                } else {
+                    "dangling".into()
+                },
+            )]))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(summaries.len(), 2);
+    assert_eq!(summaries[0].repo_tags, ["docker.io/library/example:tagged"]);
+    assert!(summaries[1].repo_tags.is_empty());
+    assert!(summaries.iter().all(|summary| summary.shared_size == -1));
+
+    let selection = |value: &str| {
+        ListQuery {
+            filters: Some(format!(r#"{{"dangling":["{value}"]}}"#)),
+            ..ListQuery::default()
+        }
+        .selection()
+        .unwrap()
+        .0
+    };
+    let dangling = selection("true");
+    let tagged = selection("false");
+    assert_eq!(summaries.iter().filter(|summary| dangling.matches(summary)).count(), 1);
+    assert_eq!(summaries.iter().filter(|summary| tagged.matches(summary)).count(), 1);
+
+    let filtered = |filters: &str| {
+        ListQuery {
+            filters: Some(filters.into()),
+            ..ListQuery::default()
+        }
+        .selection()
+        .unwrap()
+        .0
+    };
+    let reference = filtered(r#"{"reference":["*example:tagged"]}"#);
+    let label = filtered(r#"{"label":["kind=dangling"]}"#);
+    assert_eq!(summaries.iter().filter(|summary| reference.matches(summary)).count(), 1);
+    assert_eq!(summaries.iter().filter(|summary| label.matches(summary)).count(), 1);
+
+    for all in [Some("false".into()), Some("true".into())] {
+        let query = ListQuery {
+            all,
+            ..ListQuery::default()
+        };
+        let (selection, _) = query.selection().unwrap();
+        assert_eq!(summaries.iter().filter(|summary| selection.matches(summary)).count(), 2);
+    }
 }
 
 #[test]

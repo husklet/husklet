@@ -53,7 +53,7 @@ impl ImageSelection {
         Ok(Self { values })
     }
 
-    fn matches(&self, image: &ImageSummary) -> bool {
+    pub(super) fn matches(&self, image: &ImageSummary) -> bool {
         self.values.iter().all(|(name, values)| {
             values.is_empty()
                 || values.iter().any(|value| match name.as_str() {
