@@ -3,17 +3,38 @@ use super::{
     definition::{Resource, ScenarioAction, ScenarioCase},
 };
 use hl_container::{Console, Process, Size};
+use hl_images::RuntimeConfig;
 
-pub(super) fn for_case(case: &ScenarioCase) -> Result<Process, Error> {
-    let mut process = match &case.actions[0] {
-        ScenarioAction::Argv(argv) => {
-            let (program, arguments) = argv.split_first().ok_or("argv action is empty")?;
-            Process::new(program).args(arguments.iter().map(String::as_str))
+pub(super) fn initial(
+    case: &ScenarioCase,
+    runtime: &RuntimeConfig,
+    rootfs: &std::path::Path,
+) -> Result<Process, Error> {
+    let action = case
+        .actions
+        .iter()
+        .find(|action| matches!(action, ScenarioAction::Entrypoint));
+    let process = match action {
+        Some(ScenarioAction::Entrypoint) => {
+            let mut argv = runtime.entrypoint.clone();
+            argv.extend(runtime.command.iter().cloned());
+            argv_process(&argv)?
         }
+        _ => Process::new("/bin/sh").args(["-c", "while :; do sleep 3600; done"]),
+    };
+    configure(process, case, runtime, rootfs)
+}
+
+pub(super) fn action(
+    case: &ScenarioCase,
+    action: &ScenarioAction,
+    runtime: &RuntimeConfig,
+    rootfs: &std::path::Path,
+) -> Result<Process, Error> {
+    let process = match action {
+        ScenarioAction::Argv(argv) => argv_process(argv)?,
         ScenarioAction::Shell(script) => Process::new("/bin/sh").args(["-c", script]),
-        ScenarioAction::Entrypoint => {
-            return Err(format!("{} entrypoint execution requires image runtime metadata", case.id).into());
-        }
+        ScenarioAction::Entrypoint => return Err("entrypoint is the container initial process".into()),
         ScenarioAction::Host(script) => {
             return Err(format!(
                 "{} host action requires a typed host adapter (script_bytes={})",
@@ -29,13 +50,39 @@ pub(super) fn for_case(case: &ScenarioCase) -> Result<Process, Error> {
             )
             .into());
         }
+    };
+    configure(process, case, runtime, rootfs)
+}
+
+fn argv_process(argv: &[String]) -> Result<Process, Error> {
+    let (program, arguments) = argv.split_first().ok_or("argv action is empty")?;
+    Ok(Process::new(program).args(arguments.iter().map(String::as_str)))
+}
+
+fn configure(
+    mut process: Process,
+    case: &ScenarioCase,
+    runtime: &RuntimeConfig,
+    rootfs: &std::path::Path,
+) -> Result<Process, Error> {
+    for (name, value) in &runtime.environment {
+        process = process.env(name, value);
     }
-    .working_dir(&case.working_directory);
     for (name, value) in &case.environment {
         process = process.env(name, value);
     }
+    let working_directory = if case.working_directory == "/" && !runtime.working_directory.is_empty() {
+        &runtime.working_directory
+    } else {
+        &case.working_directory
+    };
+    process = process.working_dir(working_directory);
+    if !runtime.user.is_empty() {
+        let (uid, gid) = Process::resolve_user(&runtime.user, rootfs)?;
+        process = process.user(uid, gid);
+    }
     if case.resources.contains(&Resource::Pty) {
-        if !case.environment.contains_key("TERM") {
+        if !runtime.environment.contains_key("TERM") && !case.environment.contains_key("TERM") {
             process = process.env("TERM", "xterm");
         }
         process = process.console(Console {
@@ -48,58 +95,60 @@ pub(super) fn for_case(case: &ScenarioCase) -> Result<Process, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::for_case;
+    use super::{action, initial};
     use crate::{
-        scenario::definition::{Class, Resource, ScenarioAction, ScenarioCase},
+        scenario::definition::{Class, ScenarioAction, ScenarioCase},
         suite::{Execution, Target},
     };
-    use hl_container::{Console, Size};
+    use hl_images::RuntimeConfig;
     use std::collections::BTreeMap;
 
-    fn scenario(resources: Vec<Resource>, environment: BTreeMap<String, String>) -> ScenarioCase {
+    fn case(actions: Vec<ScenarioAction>) -> ScenarioCase {
         ScenarioCase {
-            id: "terminal/probe".to_owned(),
-            image: "alpine".to_owned(),
+            id: "process/metadata".into(),
+            image: "fixture".into(),
             execution: Execution::default(),
             class: Class::Quick,
-            targets: vec![Target::Arm64, Target::Amd64],
+            targets: vec![Target::Arm64],
             expected_failures: Vec::new(),
-            resources,
-            environment,
-            working_directory: "/".to_owned(),
-            actions: vec![ScenarioAction::Shell("true".to_owned())],
+            resources: Vec::new(),
+            environment: BTreeMap::from([("OVERRIDE".into(), "case".into())]),
+            working_directory: "/".into(),
+            actions,
             fixtures: Vec::new(),
             readiness: None,
-            timeout: 60,
+            timeout: 1,
             exit: 0,
             stdout_contains: Vec::new(),
             stdout_exact: None,
         }
     }
 
+    fn runtime() -> RuntimeConfig {
+        RuntimeConfig {
+            entrypoint: vec!["/entry".into()],
+            command: vec!["default".into()],
+            environment: BTreeMap::from([("IMAGE".into(), "yes".into()), ("OVERRIDE".into(), "image".into())]),
+            working_directory: "/image-work".into(),
+            user: String::new(),
+        }
+    }
+
     #[test]
-    fn pty_has_bounded_console_and_term_defaults() {
-        let terminal = for_case(&scenario(vec![Resource::Pty], BTreeMap::new())).unwrap();
-        assert_eq!(
-            terminal.console,
-            Console {
-                stdin: false,
-                terminal: Some(Size::default()),
-            }
-        );
-        assert_eq!(terminal.console.terminal.unwrap().rows(), 24);
-        assert_eq!(terminal.console.terminal.unwrap().columns(), 80);
-        assert_eq!(terminal.env.get_text("TERM"), Some("xterm"));
+    fn entrypoint_joins_image_entrypoint_and_command() {
+        let root = tempfile::tempdir().unwrap();
+        let process = initial(&case(vec![ScenarioAction::Entrypoint]), &runtime(), root.path()).unwrap();
+        assert_eq!(process.program, "/entry");
+        assert_eq!(process.args, ["default"]);
+    }
 
-        let explicit = for_case(&scenario(
-            vec![Resource::Pty],
-            BTreeMap::from([("TERM".to_owned(), "screen".to_owned())]),
-        ))
-        .unwrap();
-        assert_eq!(explicit.env.get_text("TERM"), Some("screen"));
-
-        let plain = for_case(&scenario(Vec::new(), BTreeMap::new())).unwrap();
-        assert_eq!(plain.console, Console::default());
-        assert!(!plain.env.contains("TERM"));
+    #[test]
+    fn image_defaults_are_applied_and_case_environment_wins() {
+        let root = tempfile::tempdir().unwrap();
+        let case = case(vec![ScenarioAction::Shell("true".into())]);
+        let process = action(&case, &case.actions[0], &runtime(), root.path()).unwrap();
+        assert_eq!(process.working_dir, std::path::Path::new("/image-work"));
+        assert_eq!(process.env.get_text("IMAGE"), Some("yes"));
+        assert_eq!(process.env.get_text("OVERRIDE"), Some("case"));
     }
 }

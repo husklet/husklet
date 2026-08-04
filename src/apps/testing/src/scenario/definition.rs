@@ -326,13 +326,16 @@ fn load_case(
             .map(|action| validate_action(&case.id, action))
             .collect::<Result<Vec<_>, Error>>()?
     };
-    if actions
+    let entrypoints = actions
         .iter()
         .filter(|action| matches!(action, ScenarioAction::Entrypoint))
-        .count()
-        > 1
-    {
-        return Err(format!("{} defines entrypoint more than once", case.id).into());
+        .count();
+    if entrypoints > 1 || (entrypoints == 1 && (actions.len() != 1 || case.readiness.is_some())) {
+        return Err(format!(
+            "{} entrypoint must be its only action and cannot use readiness",
+            case.id
+        )
+        .into());
     }
     let fixtures = case
         .fixtures

@@ -1,6 +1,6 @@
 use super::{Error, workspace};
 use hl_images::{
-    Image, Images, Platform, Reference,
+    Image, Images, Platform, Reference, RuntimeConfig,
     remote::{Auth, Registry},
     rootfs::{Reference as RootReference, View},
 };
@@ -10,6 +10,7 @@ pub struct TestImage {
     images: Images,
     reference: RootReference,
     view: View,
+    runtime: RuntimeConfig,
 }
 
 impl TestImage {
@@ -32,17 +33,23 @@ impl TestImage {
 
     fn from_image(images: Images, image: &Image, platform: &Platform) -> Result<Self, Error> {
         let unpacked = images.unpack(image, platform)?;
+        let runtime = unpacked.runtime().clone();
         let reference = images.rootfs(&unpacked)?;
         let view = images.roots().open(&reference)?;
         Ok(Self {
             images,
             reference,
             view,
+            runtime,
         })
     }
 
     pub fn path(&self) -> &Path {
         self.view.path()
+    }
+
+    pub fn runtime(&self) -> &RuntimeConfig {
+        &self.runtime
     }
 
     pub fn release(self) -> Result<(), Error> {
