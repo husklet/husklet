@@ -36,14 +36,47 @@ impl Id {
     }
 
     pub(crate) fn chain(parent: Option<&Self>, diff: &Digest) -> Result<Self> {
-        let chain = parent.map_or_else(
-            || diff.to_string(),
-            |parent| format!("{} {diff}", parent.as_str()),
-        );
-        Self::new(format!(
-            "chain-{}",
-            Digest::sha256(chain.as_bytes()).encoded()
-        ))
+        let chain = match parent {
+            None => diff.clone(),
+            Some(parent) => {
+                let encoded = parent.as_str().strip_prefix("chain-").ok_or_else(|| {
+                    Error::InvalidMetadata(format!(
+                        "snapshot {} is not a layer chain",
+                        parent.as_str()
+                    ))
+                })?;
+                let parent: Digest = format!("sha256:{encoded}").parse()?;
+                Digest::sha256(format!("{parent} {diff}").as_bytes())
+            }
+        };
+        Self::new(format!("chain-{}", chain.encoded()))
+    }
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::Id;
+    use crate::Digest;
+
+    #[test]
+    fn layer_chain_matches_oci_identity_chain_id() {
+        let first_diff = Digest::sha256(b"first layer tar");
+        let second_diff = Digest::sha256(b"second layer tar");
+
+        let first = Id::chain(None, &first_diff).unwrap();
+        assert_eq!(first.as_str(), format!("chain-{}", first_diff.encoded()));
+
+        let second = Id::chain(Some(&first), &second_diff).unwrap();
+        let expected = Digest::sha256(format!("{first_diff} {second_diff}").as_bytes());
+        assert_eq!(second.as_str(), format!("chain-{}", expected.encoded()));
+    }
+
+    #[test]
+    fn layer_chain_rejects_non_chain_parent() {
+        let parent = Id::new("container-root").unwrap();
+        let diff = Digest::sha256(b"layer tar");
+
+        assert!(Id::chain(Some(&parent), &diff).is_err());
     }
 }
 
