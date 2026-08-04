@@ -1,0 +1,130 @@
+# Runtime corpus migration audit
+
+This audit records the ownership boundary between the self-contained runtime
+categories and the retired centralized corpus. It was made from the working
+tree on 2026-08-04. The retained `../engine` tree was read only.
+
+## Current inventory
+
+The runtime runner discovers only direct children of `tests/runtime` containing
+`test.yaml`. There are currently 36 such category manifests containing 1,605
+case definitions: 1,426 active, 119 explicitly broken, and 60 explicitly
+unsupported. Every manifest loaded successfully through `testing runtime` and
+all 1,605 declared stdout paths exist inside the category that names them.
+
+This does not yet make `tests/runtime/legacy` removable. Three other direct
+children are not ordinary runtime categories:
+
+| Directory | Current owner | Remaining work |
+|---|---|---|
+| `legacy` | retired Python/CMake/TSV corpus, reports, generated-artifact manifests | remove its active Rust and flake consumers before deleting it |
+| `nested` | `testing nested` and `chains.yaml` | move to a top-level nested suite or deliberately extend the common category schema; it is not discovered by `testing runtime` |
+| `terminal` | oracle audit only | add a manifest-backed process/PTY contract or move the audit beside the package tests that own the behavior |
+
+The working tree removes 839 of 1,386 tracked legacy files and has copied the
+large C corpus into category folders. The remaining physical legacy tree still
+contains 551 files, 507 of them historical reports. Generated-artifact
+manifests remain, but the binaries and dynamic-loader files they describe do
+not exist. A manifest is provenance, not an executable fixture.
+
+## Active legacy consumers
+
+These consumers must be removed or migrated before the current legacy
+deletions can be accepted. Checked-in prebuilt binaries must not be restored or
+relocated.
+
+| Consumer | Missing input | Category coverage | Decision |
+|---|---|---|---|
+| `src/containers/hl-engine/src/runtime/machine_test.rs::network_checkpoint_role` | `legacy/prebuilt/aarch64/exit` | `runtime/bootstrap/exit` proves exit execution, but not capture of a live assembly with network/provider/event/IPC roles | migrate the checkpoint composition contract into a repository YAML case or replace only the executable setup with a build-owned fixture; do not claim the bootstrap case is equivalent |
+| `src/containers/hl-engine/src/ffi/linux/execution/test.rs::environment_stack` | absent `legacy/prebuilt/{aarch64,x86_64}/environment` | `runtime/environment/initial-stack` covers ordered UTF-8 `EMPTY=` and `TZ=UTC`; the Rust test additionally injects non-UTF-8 `TZ=UTC\xff` | gap: the YAML environment model is UTF-8 and cannot express the old byte contract |
+| `src/containers/hl-engine/src/ffi/linux/execution/test.rs::bootstrap_instructions_execute` | deleted `exit` and `write` prebuilts | `runtime/bootstrap/{exit,write}` is an exact source and exit/stdout mapping for both ISAs | remove the detached package integration test after the manifest rows are part of the required gate |
+| `src/containers/hl-engine/src/ffi/linux/execution/test.rs::clone_teardown` | absent `legacy/prebuilt/{aarch64,x86_64}/clone` | `runtime/clone/robust-clear-tid` covers clone, `CLONE_CHILD_CLEARTID`, futex wake, and robust owner-death teardown on both ISAs | compare the unavailable binary's provenance before declaring exact equivalence; no prebuilt manifest row exists for it |
+| `src/apps/testing/src/bin/compat_worker.rs` | missing `legacy/artifacts/runtime` loader and libc files | no self-contained category owns dynamic-rootfs resources | gap: make image/rootfs resources an explicit category input or image dependency rather than a runner-global legacy path |
+| `src/apps/testing/tests/projection_linux.rs` | missing `legacy/artifacts/full/...` guests and missing dynamic loaders | `runtime/process/{uname-boundary,nonpie-dladdr}` overlaps guest behavior, but does not cover `ProcessAuthority` projected-root mechanics | migrate projected read, directory, write, uname, and dynamic-loader cases as explicit repository process categories before deleting these tests |
+| `src/apps/testing/tests/{inventory,compat}.rs` | entire centralized legacy inventory | the 36 YAML categories are the intended replacement | delete only after a mechanical case/ISA/disposition comparison reports no lost row |
+| `flake.nix` | `legacy/{corpus,fixture_schema,priority}.py` and their tests | no current YAML-native equivalent is called by the flake | replace with the typed manifest validation and full case-ID/ISA/disposition inventory gate before removing the Python tools |
+
+The projected-root source files remain centralized at
+`legacy/projected_{read,directory,write}.c`. They cannot be moved safely yet:
+the current runtime schema stages one executable into a container image but
+does not describe the host-side projected tree, writable projection, symlinks,
+dynamic loader set, or post-run host-file assertions used by
+`projection_linux.rs`.
+
+## Undeclared category inputs and rows
+
+The manifest loader has a typed `build.inputs` field, but no runtime manifest
+currently uses it. The following category-local files affect compilation and
+must be declared so fingerprinting and deletion ownership include them:
+
+- `bootstrap/source/abi.h`, `legacy-exit/abi.h`, `legacy-write/abi.h`, and
+  `syscall/abi.h`;
+- `completeness/compat.h`;
+- `memory/source/{dbt,memrss}.h`;
+- `network/socket_util.h`;
+- `procfs/pf.h`;
+- `signals/{epoll,fork}.c`, included directly by `signals/fd_main.c`.
+
+`process/source/fork_probe.c` is a second executable used by the retained
+forkserver integration shape, not a header. The current one-source build schema
+cannot compile and stage that auxiliary program for a case, so it remains an
+honest schema gap rather than an undeclared `inputs` entry.
+
+The following source/golden pairs are deliberately present but not registered
+as cases: `completeness/x86_64/lddqu`,
+`syscalls/{epoll_finraw,pidfd_raw}`, and their goldens. The category oracle
+documents must either justify preserving each as evidence or the manifests
+must give each a typed disposition. Image-specific goldens under
+`isolation/golden/images` and `procfs/golden/images` are also not referenced by
+the runtime manifests and should move with the image scenarios that consume
+them or be deleted after a source-backed parity check.
+
+## Retained C oracle audit
+
+The following retained implementation was studied directly:
+
+- `../engine/cmake/Phase3Compat.cmake`: `hl_guest_binary`,
+  `hl_guest_suite`, and `hl_compat_suite` registrations;
+- `../engine/tools/matrix_runner.c`: `load_manifest`, `isa_servable`,
+  `engine_format_of`, case supervision, result comparison, and resource-leak
+  checks;
+- `../engine/tools/compat_runner.c`: `run_one` and `main`;
+- `../engine/tools/process.c`: `make_pipe`, `child_exec`, `read_output`, and
+  `hl_process_run`;
+- `../engine/tools/nested_engine_gate.c`: `main` and its chain validation;
+- the source and expected-output trees under `../engine/tests/compat` and
+  `../engine/tests/soak` that correspond to the migrated category names.
+
+The C build graph owns one output per source and ISA, with explicit linkage,
+flags, libraries, architecture exclusions, and special auxiliary fixtures.
+The matrix runner owns case identity and disposition, rejects a suite when an
+ISA engine is absent, determines host-specific exclusions from the engine
+object format, launches each case in a separate process, compares ordinary
+exit and exact stdout, and checks child/descriptor/thread cleanup. It preserves
+`EINTR` handling around reads and waits. Category-level resource locks protect
+network namespaces, System V keys, process groups, and shared scratch state;
+soak is deliberately serial. The simple compatibility runner applies a
+five-second deadline, kills and reaps timed-out children, and continues through
+all requested executables.
+
+The Rust YAML runner maps source, flags, targets, disposition, environment,
+timeout, exact stdout, and exit status into each category. Its worker-process
+boundary and bounded captures strengthen isolation. Remaining parity gaps are
+the auxiliary/multi-program fixture model, explicit category resource locks,
+projected-root setup and postconditions, non-UTF-8 argv/environment bytes,
+dynamic-rootfs resources, and a mechanical full inventory comparison. Until
+those are closed, successful YAML parsing proves manifest integrity but not
+complete retirement of the C corpus or the legacy harness.
+
+## Acceptance order
+
+1. Declare every category-local header/included source with `build.inputs` and
+   make the fingerprint gate prove that changing one invalidates its rows.
+2. Add typed multi-artifact and projected-root setup where the retained C lane
+   requires auxiliary executables or filesystem state.
+3. Migrate the active consumers above and remove their detached package tests
+   only after exact YAML equivalents pass on both ISAs.
+4. Compare every retained C manifest row to a YAML case with matching ISA,
+   flags/linkage, disposition, exit, stdout, environment, and special setup.
+5. Replace the flake's Python legacy checks with the typed inventory gate, then
+   delete `tests/runtime/legacy` as one final boundary.
