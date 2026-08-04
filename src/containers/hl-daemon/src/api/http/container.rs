@@ -44,7 +44,7 @@ use list::NetworkPlan;
 use logs::Flag;
 use mount::{LegacyBind, Target};
 
-pub(super) use archive::{archive, export, extract, stat};
+pub(super) use archive::{archive, extract, stat};
 pub(super) use attach::attach;
 pub(super) use control::{checkpoint, pause, rename, resize, restart, start, stop, unpause};
 pub(super) use create::create;
@@ -53,6 +53,17 @@ pub(super) use kill::kill;
 pub(super) use lifecycle::{remove, wait};
 pub(super) use list::{PruneQuery, list, prune};
 pub(super) use logs::logs;
+
+#[hl_design::adapter]
+pub(super) async fn export(state: State<DockerState>, id: Path<String>) -> ApiResult<Response> {
+    let mut response = archive::export(state, id).await?;
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/octet-stream"),
+    );
+    response.headers_mut().remove("X-Docker-Container-Path-Stat");
+    Ok(response)
+}
 
 #[cfg(test)]
 use archive::ArchiveQuery;
