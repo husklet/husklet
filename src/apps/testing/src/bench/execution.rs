@@ -3,7 +3,7 @@ use super::{
     definition::{Benchmark, BenchmarkCase},
 };
 use crate::{runtime::image::TestImage, suite::Target};
-use hl_container::{Config, ContainerSpec, ExitStatus, Isolation, Process, Sandbox};
+use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
 use std::{
     collections::BTreeMap,
     fs,
@@ -239,8 +239,9 @@ impl<'a> Invocation<'a> {
     async fn execute(&self, expected_stdout: &[u8]) -> std::result::Result<(u128, Vec<(String, u128, u64)>), Error> {
         let started = Instant::now();
         self.containers.create(self.spec.clone()).await?;
+        let mut output = self.containers.attach(&self.name).await?;
         self.containers.start(&self.name).await?;
-        let status = self.wait().await?;
+        let status = self.wait(&mut output).await?;
         let elapsed = started.elapsed().as_millis();
         let logs = self.containers.logs(&self.name).await?;
         bounded(&logs)?;
@@ -287,22 +288,59 @@ fn output_excerpt(bytes: &[u8]) -> String {
 }
 
 impl Invocation<'_> {
-    async fn wait(&self) -> std::result::Result<ExitStatus, Error> {
-        let waiting = self.containers.wait(&self.name);
-        tokio::pin!(waiting);
+    async fn wait(&self, output: &mut Session) -> std::result::Result<ExitStatus, Error> {
         let timeout = Duration::from_secs(self.case.timeout);
         let deadline = tokio::time::Instant::now() + timeout;
+        let waiting = self.containers.wait(&self.name);
+        tokio::pin!(waiting);
+        let mut captured = 0;
         loop {
             tokio::select! {
-                status = &mut waiting => return Ok(status?),
-                () = tokio::time::sleep_until(deadline) => {
-                    return Err(format!("timed out after {} seconds", self.case.timeout).into());
+                entry = output.next() => match entry? {
+                    Some(entry) => captured = capture_size(captured, &entry)?,
+                    None => return tokio::time::timeout_at(deadline, waiting)
+                        .await
+                        .map_err(|_| timeout_error(self.case.timeout))?
+                        .map_err(Into::into),
+                },
+                status = &mut waiting => {
+                    let status = status?;
+                    capture_until(output, captured, deadline, self.case.timeout).await?;
+                    return Ok(status);
                 }
-                () = tokio::time::sleep(Duration::from_millis(10)) => {
-                    bounded(&self.containers.logs(&self.name).await?)?;
-                }
+                () = tokio::time::sleep_until(deadline) => return Err(timeout_error(self.case.timeout)),
             }
         }
+    }
+}
+
+async fn capture_until(
+    output: &mut Session,
+    mut captured: usize,
+    deadline: tokio::time::Instant,
+    timeout: u64,
+) -> std::result::Result<(), Error> {
+    loop {
+        let entry = tokio::time::timeout_at(deadline, output.next())
+            .await
+            .map_err(|_| timeout_error(timeout))??;
+        let Some(entry) = entry else { return Ok(()) };
+        captured = capture_size(captured, &entry)?;
+    }
+}
+
+fn timeout_error(seconds: u64) -> Error {
+    format!("timed out after {seconds} seconds").into()
+}
+
+fn capture_size(captured: usize, entry: &Entry) -> std::result::Result<usize, Error> {
+    let captured = captured
+        .checked_add(entry.bytes.len())
+        .ok_or("captured output size overflow")?;
+    if captured > CAPTURE_LIMIT {
+        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
+    } else {
+        Ok(captured)
     }
 }
 
@@ -407,7 +445,19 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 
 #[cfg(test)]
 mod tests {
-    use super::{CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, isolated_state, output_excerpt, parse_phases};
+    use super::{
+        CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, capture_size, isolated_state, output_excerpt, parse_phases,
+    };
+    use hl_container::{Entry, Stream};
+
+    fn entry(bytes: usize) -> Entry {
+        Entry {
+            sequence: 1,
+            timestamp_ms: 1,
+            stream: Stream::Stdout,
+            bytes: vec![0; bytes],
+        }
+    }
 
     #[test]
     fn retained_phase_protocol_is_accepted() {
@@ -428,6 +478,14 @@ mod tests {
             stderr: vec![0],
         };
         assert!(bounded(&over).is_err());
+    }
+
+    #[test]
+    fn incremental_capture_preserves_the_combined_limit() {
+        let captured = capture_size(0, &entry(CAPTURE_LIMIT - 1)).unwrap();
+        assert_eq!(capture_size(captured, &entry(1)).unwrap(), CAPTURE_LIMIT);
+        assert!(capture_size(CAPTURE_LIMIT, &entry(1)).is_err());
+        assert!(capture_size(usize::MAX, &entry(1)).is_err());
     }
 
     #[test]
