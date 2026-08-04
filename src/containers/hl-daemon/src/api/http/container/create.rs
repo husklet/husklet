@@ -6,23 +6,15 @@ pub(in super::super) struct CreateQuery {
 }
 
 impl DockerState {
-    async fn unpack(
-        &self,
-        value: &str,
-    ) -> ApiResult<(hl_images::UnpackedImage, hl_images::Metadata)> {
-        let reference: Reference = value.parse().map_err(|error| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("invalid image reference: {error}"),
-            )
-        })?;
+    async fn unpack(&self, value: &str) -> ApiResult<(hl_images::UnpackedImage, hl_images::Metadata)> {
+        let reference: Reference = value
+            .parse()
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid image reference: {error}")))?;
         let images = self.containers.images().map_err(ApiError::container)?;
         let image = images
             .resolve(&reference)
             .map_err(ApiError::image)?
-            .ok_or_else(|| {
-                ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {value}"))
-            })?;
+            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {value}")))?;
         let platform = self.platform.clone();
         tokio::task::spawn_blocking(move || {
             let unpacked = images.unpack(&image, &platform)?;
@@ -41,17 +33,14 @@ pub(in super::super) async fn create(
     Json(mut request): Json<CreateContainer>,
 ) -> ApiResult<(StatusCode, Json<ContainerCreation>)> {
     request.validate_unsupported()?;
+    let stop_timeout_seconds = request
+        .stop_timeout_seconds()
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
     let (unpacked, metadata) = state.unpack(&request.image).await?;
     request.merge(metadata)?;
-    let network = NetworkPlan::from_request(
-        request.host_config.as_ref(),
-        request.networking_config.as_ref(),
-    )?;
+    let network = NetworkPlan::from_request(request.host_config.as_ref(), request.networking_config.as_ref())?;
     let published_ports_discarded = network.mode() == hl_container::NetworkMode::Host
-        && request
-            .host_config
-            .as_ref()
-            .is_some_and(HostConfig::publishes_ports);
+        && request.host_config.as_ref().is_some_and(HostConfig::publishes_ports);
     let healthcheck = request
         .healthcheck
         .map(crate::api::Healthcheck::policy)
@@ -85,12 +74,7 @@ pub(in super::super) async fn create(
         .as_deref()
         .map(str::parse::<DockerSignal>)
         .transpose()
-        .map_err(|value| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("invalid stop signal {value:?}"),
-            )
-        })?
+        .map_err(|value| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid stop signal {value:?}")))?
         .map(Signal::from);
     let console = Console {
         stdin: request.console.open,
@@ -109,6 +93,9 @@ pub(in super::super) async fn create(
             }
             if let Some(signal) = stop_signal {
                 spec = spec.stop_signal(signal);
+            }
+            if let Some(seconds) = stop_timeout_seconds {
+                spec = spec.stop_timeout_seconds(seconds);
             }
             spec.process = spec.process.console(console);
             if let Some(healthcheck) = healthcheck {
@@ -168,12 +155,8 @@ impl CreateContainer {
     }
 
     fn merge(&mut self, metadata: hl_images::Metadata) -> ApiResult<()> {
-        self.volumes.extend(
-            metadata
-                .volumes
-                .into_iter()
-                .map(|path| (path, serde_json::json!({}))),
-        );
+        self.volumes
+            .extend(metadata.volumes.into_iter().map(|path| (path, serde_json::json!({}))));
         self.exposed_ports.0.extend(
             metadata
                 .exposed_ports

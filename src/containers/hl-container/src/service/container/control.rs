@@ -1,14 +1,9 @@
 use super::{
-    now_ms, Arc, ContainerState, Duration, Error, ExitStatus, JournalId, Notify, Result, Service,
-    Signal, WaitCondition,
+    Arc, ContainerState, Duration, Error, ExitStatus, JournalId, Notify, Result, Service, Signal, WaitCondition, now_ms,
 };
 
 impl Service {
-    pub(crate) async fn wait(
-        &self,
-        reference: &str,
-        condition: WaitCondition,
-    ) -> Result<Option<ExitStatus>> {
+    pub(crate) async fn wait(&self, reference: &str, condition: WaitCondition) -> Result<Option<ExitStatus>> {
         let mut exit = None;
         loop {
             let container = match self.resolve(reference).await {
@@ -32,18 +27,14 @@ impl Service {
                 .get(&JournalId::container(container.id.clone()))
                 .cloned()
             {
-                return Err(Error::Corrupt(format!(
-                    "failed to persist exit state: {message}"
-                )));
+                return Err(Error::Corrupt(format!("failed to persist exit state: {message}")));
             }
             if let ContainerState::Exited { result, .. } = container.state {
                 if condition == WaitCondition::NotRunning {
                     return Ok(Some(result));
                 }
                 exit = Some(result);
-            } else if matches!(container.state, ContainerState::Created)
-                && condition == WaitCondition::NotRunning
-            {
+            } else if matches!(container.state, ContainerState::Created) && condition == WaitCondition::NotRunning {
                 return Err(Error::InvalidState {
                     id: container.id,
                     actual: ContainerState::Created,
@@ -52,19 +43,14 @@ impl Service {
             }
             let notify = {
                 let mut waiters = self.waiters.lock().await;
-                Arc::clone(
-                    waiters
-                        .entry(container.id)
-                        .or_insert_with(|| Arc::new(Notify::new())),
-                )
+                Arc::clone(waiters.entry(container.id).or_insert_with(|| Arc::new(Notify::new())))
             };
             let notified = notify.notified();
             tokio::pin!(notified);
             let changed = match self.resolve(reference).await {
                 Err(Error::NotFound(_)) => condition == WaitCondition::Removed,
                 Ok(current) => {
-                    condition == WaitCondition::NotRunning
-                        && matches!(current.state, ContainerState::Exited { .. })
+                    condition == WaitCondition::NotRunning && matches!(current.state, ContainerState::Exited { .. })
                 }
                 Err(error) => return Err(error),
             };
@@ -75,19 +61,27 @@ impl Service {
     }
 
     pub(crate) async fn signal(&self, reference: &str, signal: Signal) -> Result<()> {
+        let _guard = self.operations.lock().await;
+        let container = self.resolve(reference).await?;
+        if !container.state.is_active() {
+            return Err(Error::InvalidState {
+                id: container.id,
+                actual: container.state,
+                expected: "running or paused",
+            });
+        }
+        self.live(&container).await?.signal(signal).await
+    }
+
+    pub(super) async fn stop_signal(&self, reference: &str, signal: Signal) -> Result<()> {
         let guard = self.operations.lock().await;
         let mut container = self.resolve(reference).await?;
         if let ContainerState::Restarting {
-            result,
-            finished_at_ms,
-            ..
+            result, finished_at_ms, ..
         } = container.state
         {
             container.restart.manual();
-            container.state = ContainerState::Exited {
-                result,
-                finished_at_ms,
-            };
+            container.state = ContainerState::Exited { result, finished_at_ms };
             self.containers.replace(&container).await?;
             if let Some(cancel) = self.restarts.lock().await.remove(&container.id) {
                 let _ = cancel.send(true);
@@ -210,11 +204,7 @@ impl Service {
         Ok(())
     }
 
-    pub(crate) async fn checkpoint(
-        self: &Arc<Self>,
-        reference: &str,
-        timeout: Duration,
-    ) -> Result<crate::Checkpoint> {
+    pub(crate) async fn checkpoint(self: &Arc<Self>, reference: &str, timeout: Duration) -> Result<crate::Checkpoint> {
         let _guard = self.operations.lock().await;
         let mut container = self.resolve(reference).await?;
         if !matches!(container.state, ContainerState::Running { .. }) {
@@ -240,12 +230,7 @@ impl Service {
         if let Some(run) = self.live.lock().await.remove(&container.id) {
             let _ = run.health.send(true);
         }
-        if let Some(io) = self
-            .io
-            .lock()
-            .await
-            .remove(&JournalId::container(container.id.clone()))
-        {
+        if let Some(io) = self.io.lock().await.remove(&JournalId::container(container.id.clone())) {
             io.finish();
         }
         if let Some(notify) = self.waiters.lock().await.get(&container.id) {
@@ -254,22 +239,16 @@ impl Service {
         Ok(checkpoint)
     }
 
-    pub(crate) async fn stop(
-        self: &Arc<Self>,
-        reference: &str,
-        timeout: Duration,
-    ) -> Result<ExitStatus> {
+    pub(crate) async fn stop(self: &Arc<Self>, reference: &str, timeout: Duration) -> Result<ExitStatus> {
         if self.resolve(reference).await?.state.is_paused() {
             self.unpause(reference).await?;
         }
         let signal = self.resolve(reference).await?.spec.stop_signal;
-        self.signal(reference, signal).await?;
-        if let Ok(result) =
-            tokio::time::timeout(timeout, self.wait(reference, WaitCondition::NotRunning)).await
-        {
+        self.stop_signal(reference, signal).await?;
+        if let Ok(result) = tokio::time::timeout(timeout, self.wait(reference, WaitCondition::NotRunning)).await {
             result?.ok_or_else(|| Error::NotFound(reference.into()))
         } else {
-            if let Err(error) = self.signal(reference, Signal::Kill).await {
+            if let Err(error) = self.stop_signal(reference, Signal::Kill).await {
                 if !matches!(&error, Error::InvalidState { .. }) {
                     return Err(error);
                 }

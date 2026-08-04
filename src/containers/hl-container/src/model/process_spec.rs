@@ -32,6 +32,9 @@ pub struct ContainerSpec {
     pub removal: crate::RemovalPolicy,
     /// Signal delivered by a graceful stop before its timeout expires.
     pub stop_signal: crate::Signal,
+    /// Default grace period used when a stop request does not override it.
+    #[serde(default = "default_stop_timeout_seconds")]
+    pub stop_timeout_seconds: u64,
     /// Declared process ports, including ports that are not host-published.
     pub ports: BTreeSet<crate::Port>,
     /// Durable host-to-container publications, re-applied on every process generation.
@@ -60,6 +63,7 @@ impl ContainerSpec {
             restart: RestartPolicy::default(),
             removal: crate::RemovalPolicy::default(),
             stop_signal: crate::Signal::default(),
+            stop_timeout_seconds: default_stop_timeout_seconds(),
             ports: BTreeSet::new(),
             publish: Vec::new(),
         }
@@ -89,6 +93,7 @@ impl ContainerSpec {
             restart: RestartPolicy::default(),
             removal: crate::RemovalPolicy::default(),
             stop_signal: crate::Signal::default(),
+            stop_timeout_seconds: default_stop_timeout_seconds(),
             ports: BTreeSet::new(),
             publish: Vec::new(),
         }
@@ -181,6 +186,12 @@ impl ContainerSpec {
     #[must_use]
     pub const fn stop_signal(mut self, value: crate::Signal) -> Self {
         self.stop_signal = value;
+        self
+    }
+
+    #[must_use]
+    pub const fn stop_timeout_seconds(mut self, value: u64) -> Self {
+        self.stop_timeout_seconds = value;
         self
     }
 
@@ -319,6 +330,10 @@ impl ContainerSpec {
     }
 }
 
+const fn default_stop_timeout_seconds() -> u64 {
+    10
+}
+
 #[cfg(test)]
 mod tests {
     use super::ContainerSpec;
@@ -329,6 +344,19 @@ mod tests {
         assert!(Size::new(0, 80).is_err());
         assert!(Size::new(24, 0).is_err());
         assert_eq!(Size::new(24, 80).unwrap(), Size::default());
+    }
+
+    #[test]
+    fn stop_timeout_defaults_and_round_trips_durably() {
+        let spec = ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"));
+        assert_eq!(spec.stop_timeout_seconds, 10);
+        let mut stored = serde_json::to_value(spec.stop_timeout_seconds(23)).unwrap();
+        assert_eq!(stored["stop_timeout_seconds"], 23);
+        let restored: ContainerSpec = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(restored.stop_timeout_seconds, 23);
+        stored.as_object_mut().unwrap().remove("stop_timeout_seconds");
+        let legacy: ContainerSpec = serde_json::from_value(stored).unwrap();
+        assert_eq!(legacy.stop_timeout_seconds, 10);
     }
 
     #[test]

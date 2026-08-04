@@ -29,10 +29,7 @@ async fn policy_update_cancels_a_durable_pending_restart() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        containers.wait("cancel-policy").await.unwrap(),
-        ExitStatus::Code(23)
-    );
+    assert_eq!(containers.wait("cancel-policy").await.unwrap(), ExitStatus::Code(23));
     let container = containers.inspect("cancel-policy").await.unwrap();
     assert!(matches!(container.state, ContainerState::Exited { .. }));
     assert_eq!(container.generation, 1);
@@ -59,14 +56,8 @@ async fn automatic_removal_preserves_wait_result_and_reclaims_owned_volume() {
         .await
         .unwrap();
     containers.start("ephemeral").await.unwrap();
-    assert_eq!(
-        containers.wait("ephemeral").await.unwrap(),
-        ExitStatus::Code(17)
-    );
-    assert!(matches!(
-        containers.inspect("ephemeral").await,
-        Err(Error::NotFound(_))
-    ));
+    assert_eq!(containers.wait("ephemeral").await.unwrap(), ExitStatus::Code(17));
+    assert!(matches!(containers.inspect("ephemeral").await, Err(Error::NotFound(_))));
     assert!(matches!(
         containers.volumes().inspect(&volume.name).await,
         Err(Error::VolumeNotFound(_))
@@ -104,6 +95,74 @@ async fn startup_reconciles_unowned_running_records() {
 }
 
 #[tokio::test]
+async fn daemon_loss_does_not_apply_on_failure_policy() {
+    let repository = Arc::new(Memory::default());
+    let mut record = Container {
+        id: crate::ContainerId::new(),
+        spec: spec("daemon-loss").restart(RestartPolicy::OnFailure { maximum: None }),
+        state: ContainerState::Running {
+            process_id: 99,
+            started_at_ms: 1,
+        },
+        created_at_ms: 1,
+        generation: 1,
+        restart: crate::Restart::default(),
+        health: None,
+        checkpoint: None,
+    };
+    repository.insert(&record).await.unwrap();
+
+    let runtime = Arc::new(FakeRuntime::new(ExitStatus::Code(0)));
+    let runtime_service: Arc<dyn Runtime> = runtime.clone();
+    let containers = test_containers(repository, runtime_service).await.unwrap();
+    record = containers.inspect("daemon-loss").await.unwrap();
+
+    assert!(matches!(record.state, ContainerState::Exited { .. }));
+    assert_eq!(record.generation, 1);
+    assert!(runtime.mounts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn daemon_loss_restarts_always_policy() {
+    let repository = Arc::new(Memory::default());
+    let id = crate::ContainerId::new();
+    repository
+        .insert(&Container {
+            id: id.clone(),
+            spec: spec("daemon-always").restart(RestartPolicy::Always),
+            state: ContainerState::Running {
+                process_id: 99,
+                started_at_ms: 1,
+            },
+            created_at_ms: 1,
+            generation: 1,
+            restart: crate::Restart::default(),
+            health: None,
+            checkpoint: None,
+        })
+        .await
+        .unwrap();
+
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_secs(1);
+    let containers = test_containers(repository, Arc::new(runtime)).await.unwrap();
+    let recovered = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let container = containers.inspect("daemon-always").await.unwrap();
+            if container.generation == 2 {
+                break container;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(recovered.generation, 2);
+    assert!(matches!(recovered.state, ContainerState::Running { .. }));
+    containers.stop("daemon-always", Duration::ZERO).await.unwrap();
+}
+
+#[tokio::test]
 async fn startup_preserves_an_exec_that_has_a_committed_checkpoint() {
     let repository = Arc::new(Memory::default());
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
@@ -119,10 +178,7 @@ async fn startup_preserves_an_exec_that_has_a_committed_checkpoint() {
         .await
         .unwrap();
     let _session = containers.executions().start(&exec.id).await.unwrap();
-    containers
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap();
+    containers.checkpoint_all(Duration::from_secs(1)).await.unwrap();
     drop(containers);
 
     let reopened = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
@@ -158,10 +214,7 @@ async fn startup_resumes_durable_restart_backoff() {
     let containers = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
         .await
         .unwrap();
-    assert_eq!(
-        containers.wait("recovering").await.unwrap(),
-        ExitStatus::Code(0)
-    );
+    assert_eq!(containers.wait("recovering").await.unwrap(), ExitStatus::Code(0));
     let recovered = containers.inspect("recovering").await.unwrap();
     assert_eq!(recovered.id, id);
     assert_eq!(recovered.generation, 2);

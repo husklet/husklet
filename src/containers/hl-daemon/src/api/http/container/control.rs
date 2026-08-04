@@ -14,20 +14,8 @@ pub(in super::super) async fn attach(
     request: Request,
 ) -> ApiResult<Response> {
     let stdin = bool::from(query.stdin.as_deref().unwrap_or_default().parse::<Flag>()?);
-    let stdout = bool::from(
-        query
-            .stdout
-            .as_deref()
-            .unwrap_or_default()
-            .parse::<Flag>()?,
-    );
-    let stderr = bool::from(
-        query
-            .stderr
-            .as_deref()
-            .unwrap_or_default()
-            .parse::<Flag>()?,
-    );
+    let stdout = bool::from(query.stdout.as_deref().unwrap_or_default().parse::<Flag>()?);
+    let stderr = bool::from(query.stderr.as_deref().unwrap_or_default().parse::<Flag>()?);
     if !stdin && !stdout && !stderr {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -35,45 +23,22 @@ pub(in super::super) async fn attach(
         ));
     }
 
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     let terminal = container.spec.process.console.terminal.is_some();
-    let session = state
-        .containers
-        .attach(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let session = state.containers.attach(&id).await.map_err(ApiError::container)?;
     Ok(Connection::new(
         hyper::upgrade::on(request),
         session,
-        Streams {
-            stdin,
-            stdout,
-            stderr,
-        },
+        Streams { stdin, stdout, stderr },
         terminal,
     )
     .spawn())
 }
 
 #[hl_design::adapter]
-pub(in super::super) async fn start(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-) -> ApiResult<StatusCode> {
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
-    state
-        .containers
-        .start(&id)
-        .await
-        .map_err(ApiError::container)?;
+pub(in super::super) async fn start(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
+    state.containers.start(&id).await.map_err(ApiError::container)?;
     state.events.volumes("mount", &container);
     Ok(StatusCode::NO_CONTENT)
 }
@@ -97,25 +62,32 @@ pub(in super::super) struct TimeoutQuery {
     seconds: Option<u64>,
 }
 
+impl TimeoutQuery {
+    fn duration(&self, configured_seconds: u64) -> ApiResult<std::time::Duration> {
+        const MAXIMUM_SECONDS: u64 = 86_400;
+        let seconds = self.seconds.unwrap_or(configured_seconds);
+        if seconds > MAXIMUM_SECONDS {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                format!("stop timeout must not exceed {MAXIMUM_SECONDS} seconds"),
+            ));
+        }
+        Ok(std::time::Duration::from_secs(seconds))
+    }
+}
+
 pub(in super::super) async fn stop(
     State(state): State<DockerState>,
     Path(id): Path<String>,
     Query(query): Query<TimeoutQuery>,
 ) -> ApiResult<StatusCode> {
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     if !container.state.is_active() {
         return Ok(StatusCode::NO_CONTENT);
     }
     match state
         .containers
-        .stop(
-            &id,
-            std::time::Duration::from_secs(query.seconds.unwrap_or(10)),
-        )
+        .stop(&id, query.duration(container.spec.stop_timeout_seconds)?)
         .await
     {
         Ok(_) | Err(ContainerError::InvalidState { .. }) => Ok(StatusCode::NO_CONTENT),
@@ -128,29 +100,18 @@ pub(in super::super) async fn restart(
     Path(id): Path<String>,
     Query(query): Query<TimeoutQuery>,
 ) -> ApiResult<StatusCode> {
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     if container.state.is_active() {
         match state
             .containers
-            .stop(
-                &id,
-                std::time::Duration::from_secs(query.seconds.unwrap_or(10)),
-            )
+            .stop(&id, query.duration(container.spec.stop_timeout_seconds)?)
             .await
         {
             Ok(_) | Err(ContainerError::InvalidState { .. }) => {}
             Err(error) => return Err(ApiError::container(error)),
         }
     }
-    state
-        .containers
-        .start(&id)
-        .await
-        .map_err(ApiError::container)?;
+    state.containers.start(&id).await.map_err(ApiError::container)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -206,10 +167,7 @@ pub(in super::super) async fn rename(
 }
 
 #[hl_design::adapter]
-pub(in super::super) async fn pause(
-    State(state): State<DockerState>,
-    Path(id): Path<String>,
-) -> ApiResult<StatusCode> {
+pub(in super::super) async fn pause(State(state): State<DockerState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     state
         .containers
         .pause(&id)
@@ -285,5 +243,18 @@ impl FromStr for DockerSignal {
 impl From<DockerSignal> for Signal {
     fn from(value: DockerSignal) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod stop_timeout_tests {
+    use super::TimeoutQuery;
+
+    #[test]
+    fn query_timeout_overrides_durable_default() {
+        assert_eq!(TimeoutQuery { seconds: None }.duration(23).unwrap().as_secs(), 23);
+        assert_eq!(TimeoutQuery { seconds: Some(0) }.duration(23).unwrap().as_secs(), 0);
+        assert_eq!(TimeoutQuery { seconds: Some(7) }.duration(23).unwrap().as_secs(), 7);
+        assert!(TimeoutQuery { seconds: Some(86_401) }.duration(23).is_err());
     }
 }

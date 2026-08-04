@@ -1,10 +1,10 @@
+use super::ContainerMetadata;
 #[cfg(feature = "runtime")]
 use super::format::{ImageName, PortKey, Ports, Signal};
 #[cfg(feature = "runtime")]
 use super::lifecycle::State as LifecycleState;
 #[cfg(feature = "runtime")]
 use super::timestamp::Timestamp;
-use super::ContainerMetadata;
 #[cfg(feature = "runtime")]
 use hl_container::{ContainerState as RuntimeState, ExitStatus};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,7 @@ pub struct ContainerConfig {
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
     pub stop_signal: String,
+    pub stop_timeout: i64,
 }
 
 /// Docker inspection view of persisted host-side container settings.
@@ -84,12 +85,8 @@ impl From<(&hl_container::Network, &hl_container::Endpoint)> for EndpointSetting
         Self {
             network_id: network.id.to_string(),
             endpoint_id: String::new(),
-            gateway: network
-                .gateway
-                .map_or_else(String::new, |value| value.to_string()),
-            ip_address: endpoint
-                .address
-                .map_or_else(String::new, |value| value.to_string()),
+            gateway: network.gateway.map_or_else(String::new, |value| value.to_string()),
+            ip_address: endpoint.address.map_or_else(String::new, |value| value.to_string()),
             ip_prefix_len: network.subnet.map_or(0, |subnet| subnet.prefix),
         }
     }
@@ -207,15 +204,12 @@ impl From<hl_container::Container> for InspectContainer {
                     .collect(),
                 labels: value.spec.labels.clone(),
                 stop_signal: Signal::from(value.spec.stop_signal).to_string(),
+                stop_timeout: i64::try_from(value.spec.stop_timeout_seconds).unwrap_or(i64::MAX),
             },
             host_config: InspectHostConfig {
                 network_mode: match value.spec.network_mode {
                     hl_container::NetworkMode::Host => "host",
-                    hl_container::NetworkMode::Automatic
-                        if value.spec.isolation.network_isolated =>
-                    {
-                        "none"
-                    }
+                    hl_container::NetworkMode::Automatic if value.spec.isolation.network_isolated => "none",
                     hl_container::NetworkMode::Automatic => "default",
                 }
                 .into(),
@@ -296,9 +290,7 @@ impl From<&RuntimeState> for Lifecycle {
                 finished: 0,
             },
             RuntimeState::Restarting {
-                result,
-                finished_at_ms,
-                ..
+                result, finished_at_ms, ..
             } => Self {
                 status,
                 activity: Activity {
@@ -311,10 +303,7 @@ impl From<&RuntimeState> for Lifecycle {
                 started: 0,
                 finished: *finished_at_ms,
             },
-            RuntimeState::Exited {
-                result,
-                finished_at_ms,
-            } => Self {
+            RuntimeState::Exited { result, finished_at_ms } => Self {
                 status,
                 activity: inactive(),
                 pid: 0,
@@ -396,8 +385,7 @@ mod tests {
 
     #[test]
     fn health_uses_docker_status_streak_and_bounded_log_shape() {
-        let check =
-            hl_container::Healthcheck::new(hl_container::Check::Shell("true".into())).retries(1);
+        let check = hl_container::Healthcheck::new(hl_container::Check::Shell("true".into())).retries(1);
         let mut health = hl_container::Health::starting();
         health.record(
             hl_container::Probe::new(0, 1_000, hl_container::ExitStatus::Code(9), "not ready"),
@@ -420,11 +408,8 @@ mod tests {
             id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .parse()
                 .unwrap(),
-            spec: hl_container::ContainerSpec::from_directory(
-                "/rootfs",
-                hl_container::Process::new("/bin/server"),
-            )
-            .name("web"),
+            spec: hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
+                .name("web"),
             state: hl_container::ContainerState::Running {
                 process_id: 7,
                 started_at_ms: 1_000,
@@ -450,6 +435,7 @@ mod tests {
         ] {
             assert!(inspect.get(key).is_some(), "missing {key}: {inspect}");
         }
+        assert_eq!(inspect["Config"]["StopTimeout"], 10);
         for key in [
             "Status",
             "Running",
@@ -463,10 +449,7 @@ mod tests {
             "FinishedAt",
             "Error",
         ] {
-            assert!(
-                inspect["State"].get(key).is_some(),
-                "missing State.{key}: {inspect}"
-            );
+            assert!(inspect["State"].get(key).is_some(), "missing State.{key}: {inspect}");
         }
     }
 }

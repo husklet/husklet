@@ -24,6 +24,8 @@ pub struct CreateContainer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_signal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_timeout: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<Healthcheck>,
     #[serde(default)]
     pub volumes: BTreeMap<String, serde_json::Value>,
@@ -183,6 +185,45 @@ pub struct ContainerCreation {
     pub id: String,
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+#[cfg(feature = "runtime")]
+impl CreateContainer {
+    pub(crate) fn stop_timeout_seconds(&self) -> Result<Option<u64>, String> {
+        const MAXIMUM_SECONDS: u64 = 86_400;
+        let Some(value) = self.stop_timeout else {
+            return Ok(None);
+        };
+        let value = u64::try_from(value).map_err(|_| "StopTimeout must be nonnegative".to_owned())?;
+        if value > MAXIMUM_SECONDS {
+            return Err(format!("StopTimeout must not exceed {MAXIMUM_SECONDS} seconds"));
+        }
+        Ok(Some(value))
+    }
+}
+
+#[cfg(all(test, feature = "runtime"))]
+mod stop_timeout_tests {
+    use super::CreateContainer;
+
+    #[test]
+    fn stop_timeout_is_optional_nonnegative_and_bounded() {
+        assert_eq!(CreateContainer::default().stop_timeout_seconds().unwrap(), None);
+        for (seconds, expected) in [(0, 0), (10, 10), (86_400, 86_400)] {
+            let request = CreateContainer {
+                stop_timeout: Some(seconds),
+                ..CreateContainer::default()
+            };
+            assert_eq!(request.stop_timeout_seconds().unwrap(), Some(expected));
+        }
+        for seconds in [-1, 86_401] {
+            let request = CreateContainer {
+                stop_timeout: Some(seconds),
+                ..CreateContainer::default()
+            };
+            assert!(request.stop_timeout_seconds().is_err());
+        }
+    }
 }
 
 #[cfg(feature = "runtime")]

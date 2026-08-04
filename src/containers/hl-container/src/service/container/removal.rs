@@ -1,6 +1,4 @@
-use super::{
-    Container, Error, ExitStatus, JournalId, Result, Rootfs, Service, Signal, WaitCondition,
-};
+use super::{Container, Error, ExitStatus, JournalId, Result, Rootfs, Service, Signal, WaitCondition};
 
 impl Service {
     #[allow(clippy::too_many_lines)]
@@ -14,7 +12,7 @@ impl Service {
         if force {
             let container = self.resolve(reference).await?;
             if container.state.is_active() {
-                if let Err(error) = self.signal(reference, Signal::Kill).await {
+                if let Err(error) = self.stop_signal(reference, Signal::Kill).await {
                     if !matches!(&error, Error::InvalidState { .. }) {
                         return Err(error);
                     }
@@ -45,29 +43,18 @@ impl Service {
                 expected: "exited before parent removal",
             });
         }
-        self.networks
-            .disconnect_container_locked(&container.id)
-            .await?;
+        self.networks.disconnect_container_locked(&container.id).await?;
         self.identity.remove(&container)?;
         self.containers.remove(&container.id).await?;
         self.emit(crate::LifecycleAction::Destroy, &container);
-        for name in container
-            .spec
-            .mounts
-            .iter()
-            .filter_map(|mount| match &mount.source {
-                crate::MountSource::Tmpfs(name) => Some(name.as_str()),
-                crate::MountSource::Anonymous(name) if volumes => Some(name.as_str()),
-                crate::MountSource::Anonymous(_)
-                | crate::MountSource::Bind(_)
-                | crate::MountSource::Volume(_) => None,
-            })
-        {
+        for name in container.spec.mounts.iter().filter_map(|mount| match &mount.source {
+            crate::MountSource::Tmpfs(name) => Some(name.as_str()),
+            crate::MountSource::Anonymous(name) if volumes => Some(name.as_str()),
+            crate::MountSource::Anonymous(_) | crate::MountSource::Bind(_) | crate::MountSource::Volume(_) => None,
+        }) {
             self.volumes.remove_locked(name).await?;
         }
-        self.logs
-            .remove(&JournalId::container(container.id.clone()))
-            .await?;
+        self.logs.remove(&JournalId::container(container.id.clone())).await?;
         for exec in &execs {
             let journal = JournalId::exec(exec.id.clone());
             self.logs.remove(&journal).await?;
@@ -77,9 +64,7 @@ impl Service {
         self.execs.remove_parent(&container.id).await?;
         if let Rootfs::Image(reference) = &container.spec.rootfs {
             let manager = self.rootfs.clone().ok_or_else(|| {
-                Error::Corrupt(
-                    "container has an image rootfs but no rootfs manager is configured".into(),
-                )
+                Error::Corrupt("container has an image rootfs but no rootfs manager is configured".into())
             })?;
             let reference = reference.clone();
             tokio::task::spawn_blocking(move || manager.release(&reference))
@@ -100,12 +85,7 @@ impl Service {
             .lock()
             .await
             .remove(&JournalId::container(container.id.clone()));
-        if let Some(io) = self
-            .io
-            .lock()
-            .await
-            .remove(&JournalId::container(container.id.clone()))
-        {
+        if let Some(io) = self.io.lock().await.remove(&JournalId::container(container.id.clone())) {
             io.finish();
         }
         Ok(container)

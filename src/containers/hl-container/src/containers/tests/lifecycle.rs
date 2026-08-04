@@ -15,10 +15,7 @@ async fn lifecycle_events_follow_committed_automatic_restart_order_once() {
         .await
         .unwrap();
     containers.start("event-restart").await.unwrap();
-    assert_eq!(
-        containers.wait("event-restart").await.unwrap(),
-        ExitStatus::Code(7)
-    );
+    assert_eq!(containers.wait("event-restart").await.unwrap(), ExitStatus::Code(7));
     assert_eq!(
         *events.0.lock().unwrap(),
         [
@@ -42,10 +39,7 @@ async fn lifecycle_has_single_owner_and_supports_many_waiters() {
     let created = containers.create(spec("job")).await.unwrap();
     containers.start("job").await.unwrap();
     let running = containers.inspect("job").await.unwrap();
-    assert!(matches!(
-        running.state,
-        ContainerState::Running { process_id: 40, .. }
-    ));
+    assert!(matches!(running.state, ContainerState::Running { process_id: 40, .. }));
     assert!(matches!(
         containers.remove("job").await,
         Err(Error::InvalidState { .. })
@@ -87,19 +81,13 @@ async fn process_exit_does_not_wait_for_inherited_log_writers() {
     containers.start("inherited-logs").await.unwrap();
 
     assert_eq!(
-        tokio::time::timeout(
-            Duration::from_millis(200),
-            containers.wait("inherited-logs")
-        )
-        .await
-        .expect("process exit must not depend on log-pipe EOF")
-        .unwrap(),
+        tokio::time::timeout(Duration::from_millis(200), containers.wait("inherited-logs"))
+            .await
+            .expect("process exit must not depend on log-pipe EOF")
+            .unwrap(),
         ExitStatus::Code(0)
     );
-    assert_eq!(
-        containers.logs("inherited-logs").await.unwrap().stdout,
-        b"fake-out\n"
-    );
+    assert_eq!(containers.logs("inherited-logs").await.unwrap().stdout, b"fake-out\n");
 }
 
 #[tokio::test]
@@ -112,10 +100,7 @@ async fn on_failure_restarts_exactly_to_limit_and_wait_spans_backoff() {
         .unwrap();
     let started = std::time::Instant::now();
     containers.start("retrying").await.unwrap();
-    assert_eq!(
-        containers.wait("retrying").await.unwrap(),
-        ExitStatus::Code(7)
-    );
+    assert_eq!(containers.wait("retrying").await.unwrap(), ExitStatus::Code(7));
     assert!(started.elapsed() >= Duration::from_millis(300));
     let container = containers.inspect("retrying").await.unwrap();
     assert_eq!(container.generation, 3);
@@ -142,14 +127,8 @@ async fn manual_signal_during_backoff_cancels_restart_and_wakes_waiters() {
         }
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    containers
-        .signal("cancel-restart", Signal::Kill)
-        .await
-        .unwrap();
-    assert_eq!(
-        containers.wait("cancel-restart").await.unwrap(),
-        ExitStatus::Code(1)
-    );
+    containers.stop("cancel-restart", Duration::ZERO).await.unwrap();
+    assert_eq!(containers.wait("cancel-restart").await.unwrap(), ExitStatus::Code(1));
     tokio::time::sleep(Duration::from_millis(125)).await;
     let container = containers.inspect("cancel-restart").await.unwrap();
     assert!(container.restart.manually_stopped);
@@ -158,28 +137,23 @@ async fn manual_signal_during_backoff_cancels_restart_and_wakes_waiters() {
 }
 
 #[tokio::test]
-async fn manual_signal_while_running_suppresses_automatic_restart() {
+async fn raw_signal_while_running_does_not_suppress_automatic_restart() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(1));
     runtime.delay = Duration::from_millis(40);
     let runtime = Arc::new(runtime);
     let containers = service(Arc::clone(&runtime)).await;
     containers
-        .create(spec("manual-stop").restart(RestartPolicy::Always))
+        .create(spec("raw-signal").restart(RestartPolicy::OnFailure { maximum: Some(1) }))
         .await
         .unwrap();
-    containers.start("manual-stop").await.unwrap();
-    containers
-        .signal("manual-stop", Signal::Terminate)
-        .await
-        .unwrap();
-    assert_eq!(
-        containers.wait("manual-stop").await.unwrap(),
-        ExitStatus::Code(1)
-    );
-    tokio::time::sleep(Duration::from_millis(125)).await;
-    let container = containers.inspect("manual-stop").await.unwrap();
-    assert!(container.restart.manually_stopped);
-    assert_eq!(runtime.mounts.lock().unwrap().len(), 1);
+    containers.start("raw-signal").await.unwrap();
+    containers.signal("raw-signal", Signal::User1).await.unwrap();
+    assert_eq!(containers.wait("raw-signal").await.unwrap(), ExitStatus::Code(1));
+    let container = containers.inspect("raw-signal").await.unwrap();
+    assert!(!container.restart.manually_stopped);
+    assert_eq!(container.generation, 2);
+    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::User1]);
+    assert_eq!(runtime.mounts.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -192,12 +166,7 @@ async fn pause_and_unpause_are_persisted_runtime_transitions() {
     containers.start("pausable").await.unwrap();
 
     containers.pause("pausable").await.unwrap();
-    assert!(containers
-        .inspect("pausable")
-        .await
-        .unwrap()
-        .state
-        .is_paused());
+    assert!(containers.inspect("pausable").await.unwrap().state.is_paused());
     containers.unpause("pausable").await.unwrap();
     assert!(matches!(
         containers.inspect("pausable").await.unwrap().state,
@@ -251,19 +220,13 @@ async fn checkpoint_all_captures_running_and_paused_containers_for_later_restore
     containers.start("paused").await.unwrap();
     containers.pause("paused").await.unwrap();
 
-    containers
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap();
+    containers.checkpoint_all(Duration::from_secs(1)).await.unwrap();
 
     for name in ["running", "paused"] {
         let container = containers.inspect(name).await.unwrap();
         assert!(matches!(container.state, ContainerState::Exited { .. }));
         assert_eq!(
-            container
-                .checkpoint
-                .as_ref()
-                .map(|value| value.namespace.as_str()),
+            container.checkpoint.as_ref().map(|value| value.namespace.as_str()),
             Some(container.id.as_str())
         );
     }
@@ -282,10 +245,7 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
         .executions()
         .create(
             "workspace",
-            ExecSpec::new(
-                Process::new("/bin/sh")
-                    .console(Console::default().terminal(Size::new(24, 80).unwrap())),
-            ),
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
         )
         .await
         .unwrap();
@@ -314,12 +274,7 @@ async fn execution_checkpoint_restores_without_capturing_the_container_init() {
     containers.start("workspace").await.unwrap();
     let _restored = containers.executions().start(&exec.id).await.unwrap();
     assert!(matches!(
-        containers
-            .executions()
-            .inspect(&exec.id)
-            .await
-            .unwrap()
-            .state,
+        containers.executions().inspect(&exec.id).await.unwrap().state,
         ExecState::Running { .. }
     ));
     assert_eq!(
@@ -341,19 +296,13 @@ async fn checkpoint_rejection_preserves_every_running_process() {
         .executions()
         .create(
             "workspace",
-            ExecSpec::new(
-                Process::new("/bin/sh")
-                    .console(Console::default().terminal(Size::new(24, 80).unwrap())),
-            ),
+            ExecSpec::new(Process::new("/bin/sh").console(Console::default().terminal(Size::new(24, 80).unwrap()))),
         )
         .await
         .unwrap();
     let _session = containers.executions().start(&exec.id).await.unwrap();
 
-    let error = containers
-        .checkpoint_all(Duration::from_secs(1))
-        .await
-        .unwrap_err();
+    let error = containers.checkpoint_all(Duration::from_secs(1)).await.unwrap_err();
 
     assert!(error.to_string().contains("not checkpointable"));
     let container = containers.inspect("workspace").await.unwrap();
@@ -371,14 +320,8 @@ async fn failed_launch_does_not_publish_running_state() {
     runtime.fail.store(true, Ordering::SeqCst);
     let containers = service(runtime).await;
     containers.create(spec("bad")).await.unwrap();
-    assert!(matches!(
-        containers.start("bad").await,
-        Err(Error::Runtime(_))
-    ));
-    assert_eq!(
-        containers.inspect("bad").await.unwrap().state,
-        ContainerState::Created
-    );
+    assert!(matches!(containers.start("bad").await, Err(Error::Runtime(_))));
+    assert_eq!(containers.inspect("bad").await.unwrap().state, ContainerState::Created);
 }
 
 #[tokio::test]
@@ -387,13 +330,7 @@ async fn rename_wait_removed_stop_and_force_remove_follow_owned_lifecycle() {
     let containers = service(Arc::clone(&runtime)).await;
     containers.create(spec("old")).await.unwrap();
     assert_eq!(
-        containers
-            .rename("old", "new")
-            .await
-            .unwrap()
-            .spec
-            .name
-            .as_deref(),
+        containers.rename("old", "new").await.unwrap().spec.name.as_deref(),
         Some("new")
     );
     containers.create(spec("occupied")).await.unwrap();
@@ -405,10 +342,7 @@ async fn rename_wait_removed_stop_and_force_remove_follow_owned_lifecycle() {
     containers.start("new").await.unwrap();
     let exit = containers.stop("new", Duration::ZERO).await.unwrap();
     assert_eq!(exit, ExitStatus::Code(0));
-    assert_eq!(
-        *runtime.signals.lock().unwrap(),
-        vec![Signal::Terminate, Signal::Kill]
-    );
+    assert_eq!(*runtime.signals.lock().unwrap(), vec![Signal::Terminate, Signal::Kill]);
 
     let removed = {
         let containers = containers.clone();
@@ -420,10 +354,7 @@ async fn rename_wait_removed_stop_and_force_remove_follow_owned_lifecycle() {
 
     containers.start("occupied").await.unwrap();
     containers.remove_force("occupied").await.unwrap();
-    assert!(matches!(
-        containers.inspect("occupied").await,
-        Err(Error::NotFound(_))
-    ));
+    assert!(matches!(containers.inspect("occupied").await, Err(Error::NotFound(_))));
 }
 
 #[tokio::test]
@@ -450,8 +381,5 @@ async fn shutdown_stops_every_active_container_and_preserves_inactive_records() 
         containers.inspect("inactive").await.unwrap().state,
         ContainerState::Created
     );
-    assert_eq!(
-        *runtime.signals.lock().unwrap(),
-        [Signal::Terminate, Signal::Kill]
-    );
+    assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Terminate, Signal::Kill]);
 }
