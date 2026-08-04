@@ -14,6 +14,11 @@ use flate2::read::GzDecoder;
 
 use crate::{layer::Layer, Descriptor, DescriptorGraph, Digest, Error, Result};
 
+pub(crate) struct AppliedLayer {
+    pub(crate) diff_id: Digest,
+    pub(crate) diff_size: crate::layer::DiffSize,
+}
+
 #[derive(Clone, Debug)]
 pub struct Info {
     pub digest: Digest,
@@ -141,7 +146,7 @@ impl FsStore {
         root: &Path,
         ownerships: &mut crate::snapshot::Ownerships,
         names: &mut crate::snapshot::Names,
-    ) -> Result<Digest> {
+    ) -> Result<AppliedLayer> {
         let media = descriptor.media_type().to_string();
         let content = self.reader(descriptor)?;
         let decoded: Box<dyn Read> = if media.ends_with("+gzip") || media.ends_with(".gzip") {
@@ -155,9 +160,12 @@ impl FsStore {
             inner: decoded,
             hash: Sha256::new(),
         };
-        Layer::new(&mut reader).apply_with_metadata(root, ownerships, names)?;
+        let report = Layer::new(&mut reader).apply_with_metadata(root, ownerships, names)?;
         std::io::copy(&mut reader, &mut std::io::sink())?;
-        Ok(Digest::from(<[u8; 32]>::from(reader.hash.finalize())))
+        Ok(AppliedLayer {
+            diff_id: Digest::from(<[u8; 32]>::from(reader.hash.finalize())),
+            diff_size: report.diff_size,
+        })
     }
 }
 

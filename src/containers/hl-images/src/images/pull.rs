@@ -218,20 +218,23 @@ impl Images {
             for (layer, (expected, _)) in document.layers[first..].iter().zip(&chain[first..]) {
                 let path = active.path().to_owned();
                 let (ownerships, names) = active.metadata_mut();
-                let actual = match self.content.apply_layer(layer, &path, ownerships, names) {
+                let applied = match self.content.apply_layer(layer, &path, ownerships, names) {
                     Ok(actual) => actual,
                     Err(error) => {
                         let _ = active.abort();
                         return Err(error);
                     }
                 };
-                if actual != *expected {
+                if applied.diff_id != *expected {
                     let _ = active.abort();
                     return Err(Error::DiffIdMismatch {
                         expected: expected.to_string(),
-                        actual: actual.to_string(),
+                        actual: applied.diff_id.to_string(),
                     });
                 }
+                // The typed value reaches the snapshot publication boundary here.
+                // Durable layer accounting will commit it with the snapshot bundle.
+                let _diff_size = applied.diff_size;
             }
             active.commit(snapshot.clone())?;
         }

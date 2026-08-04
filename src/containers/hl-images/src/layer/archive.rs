@@ -10,10 +10,30 @@ use crate::{
     Error, Result,
 };
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DiffSize(u64);
+
+impl DiffSize {
+    #[must_use]
+    pub fn bytes(self) -> u64 {
+        self.0
+    }
+
+    fn add(&mut self, bytes: u64) -> Result<()> {
+        self.0 = self
+            .0
+            .checked_add(bytes)
+            .ok_or_else(|| Error::MalformedOci("layer diff size overflow".into()))?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Report {
     pub entries: u64,
     pub whiteouts: u64,
+    /// Sum of tar header content sizes, matching Moby `UnpackLayer`/graphdriver `ApplyDiff`.
+    pub diff_size: DiffSize,
 }
 
 struct Directory {
@@ -178,6 +198,11 @@ impl<R: Read> Layer<R> {
         let mut backlog = Backlog::default();
         for item in archive.entries()? {
             let mut entry = item?;
+            // Moby accounts every header before interpreting its kind. Directories,
+            // symlinks, hardlinks, and whiteouts conventionally contribute zero;
+            // sparse regular files contribute their logical header size. Tar block,
+            // PAX, compression, and other container overhead is excluded.
+            report.diff_size.add(entry.header().size()?)?;
             let raw = entry.path()?;
             if entry.header().entry_type().is_dir()
                 && raw
@@ -442,5 +467,18 @@ impl Ownership {
                 ))
             })?,
         })
+    }
+}
+
+#[cfg(test)]
+mod diff_size_tests {
+    use super::DiffSize;
+
+    #[test]
+    fn rejects_overflow_instead_of_wrapping_layer_accounting() {
+        let mut size = DiffSize(u64::MAX);
+
+        assert!(size.add(1).is_err());
+        assert_eq!(size.bytes(), u64::MAX);
     }
 }

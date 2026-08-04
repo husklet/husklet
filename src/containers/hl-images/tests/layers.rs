@@ -110,6 +110,64 @@ fn archive_with_replaced_directory() -> Vec<u8> {
     bytes
 }
 
+fn archive_with_node_kinds() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut tar = tar::Builder::new(&mut bytes);
+        let mut directory = tar::Header::new_gnu();
+        directory.set_entry_type(tar::EntryType::Directory);
+        directory.set_size(0);
+        directory.set_mode(0o755);
+        directory.set_cksum();
+        tar.append_data(&mut directory, "tree", &[][..]).unwrap();
+
+        let mut file = tar::Header::new_gnu();
+        file.set_size(7);
+        file.set_mode(0o644);
+        file.set_cksum();
+        tar.append_data(&mut file, "tree/file", &b"content"[..]).unwrap();
+
+        let mut symlink = tar::Header::new_gnu();
+        symlink.set_entry_type(tar::EntryType::Symlink);
+        symlink.set_size(0);
+        symlink.set_mode(0o777);
+        symlink.set_link_name("file").unwrap();
+        symlink.set_cksum();
+        tar.append_data(&mut symlink, "tree/symlink", &[][..]).unwrap();
+
+        let mut hardlink = tar::Header::new_gnu();
+        hardlink.set_entry_type(tar::EntryType::Link);
+        hardlink.set_size(0);
+        hardlink.set_mode(0o644);
+        hardlink.set_link_name("tree/file").unwrap();
+        hardlink.set_cksum();
+        tar.append_data(&mut hardlink, "tree/hardlink", &[][..]).unwrap();
+        tar.finish().unwrap();
+    }
+    bytes
+}
+
+#[test]
+fn diff_size_matches_moby_header_content_accounting() {
+    let temp = tempfile::tempdir().unwrap();
+    let bytes = archive_with_node_kinds();
+    let report = Layer::new(Cursor::new(bytes.clone())).apply(temp.path()).unwrap();
+
+    assert_eq!(report.diff_size.bytes(), 7);
+    assert!(bytes.len() > report.diff_size.bytes() as usize);
+}
+
+#[test]
+fn diff_size_counts_regular_payloads_and_excludes_whiteout_headers() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("old"), b"old").unwrap();
+    let report = Layer::new(Cursor::new(archive(&[(".wh.old", b""), ("new", b"payload")])))
+        .apply(temp.path())
+        .unwrap();
+
+    assert_eq!(report.diff_size.bytes(), 7);
+}
+
 #[test]
 fn root_directory_markers_are_ignored() {
     let temp = tempfile::tempdir().unwrap();
