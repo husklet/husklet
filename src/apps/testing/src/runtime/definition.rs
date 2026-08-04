@@ -277,12 +277,15 @@ impl App {
         Ok(output)
     }
 
-    pub fn oracle(&self, target: Target, update: bool) -> Result<(), Error> {
+    pub fn oracle(&self, target: Target, update: bool, selected: Option<&str>) -> Result<(), Error> {
         let commands = self
             .oracle
             .as_ref()
             .ok_or_else(|| format!("{} defines no oracle", self.name))?;
-        for case in self.cases_for(target) {
+        for case in self
+            .cases_for(target)
+            .filter(|case| selected.is_none_or(|id| case.id == id))
+        {
             if let Some((kind, reason, evidence)) = case.status.inactive() {
                 println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
                 continue;

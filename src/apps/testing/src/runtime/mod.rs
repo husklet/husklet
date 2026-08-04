@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod case_tests;
 pub(crate) mod definition;
 mod execution;
 pub(crate) mod image;
@@ -12,10 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub async fn run(options: Options) -> Result<(), Error> {
-    let mut work = plan(apps(&options)?, &options);
-    if work.is_empty() {
-        return Err("no active runtime cases support the selected target(s)".into());
-    }
+    let apps = apps(&options)?;
+    validate_case_ids(&apps)?;
+    let mut work = require_work(plan(apps, &options), options.case.as_deref())?;
     let stamp = fingerprint(&work).await?;
     let keys = work.iter().map(|item| item.key.clone()).collect();
     let report = workspace()?.join(&options.results);
@@ -175,15 +176,29 @@ fn summarize_results(
     }
 }
 
-fn plan(apps: Vec<App>, options: &Options) -> Vec<Work> {
+struct Planned {
+    work: Vec<Work>,
+    matched_case: bool,
+}
+
+fn plan(apps: Vec<App>, options: &Options) -> Planned {
     let mut work = Vec::new();
+    let mut matched_case = options.case.is_none();
     for app in apps {
         let app = Arc::new(app);
+        if let Some(selected) = options.case.as_deref()
+            && app.cases.iter().any(|case| case.id == selected)
+        {
+            matched_case = true;
+        }
         for target in options.targets() {
             if !app.supports(target) {
                 continue;
             }
             for (case_index, case) in app.cases.iter().enumerate() {
+                if options.case.as_deref().is_some_and(|selected| case.id != selected) {
+                    continue;
+                }
                 if !case.targets.contains(&target) {
                     continue;
                 }
@@ -204,7 +219,23 @@ fn plan(apps: Vec<App>, options: &Options) -> Vec<Work> {
         }
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
-    work
+    Planned { work, matched_case }
+}
+
+fn require_work(planned: Planned, selected: Option<&str>) -> Result<Vec<Work>, Error> {
+    if !planned.matched_case {
+        let selected = selected.ok_or("case selection match state is inconsistent")?;
+        return Err(format!("no runtime case exactly matched --case {selected}").into());
+    }
+    if planned.work.is_empty() {
+        return Err(selected
+            .map_or_else(
+                || "no active runtime cases support the selected target(s)".to_owned(),
+                |id| format!("runtime case {id} matched but has no active work for the selected target(s)"),
+            )
+            .into());
+    }
+    Ok(planned.work)
 }
 
 fn display_attempt(id: &str, attempt: Option<u16>) -> String {
@@ -257,17 +288,31 @@ async fn fingerprint(work: &[Work]) -> Result<String, Error> {
 
 pub fn oracle(options: OracleOptions) -> Result<(), Error> {
     let _check_requested = options.check;
+    let apps = apps(&options.selection)?;
+    validate_case_ids(&apps)?;
+    if let Some(selected) = options.selection.case.as_deref()
+        && !apps.iter().any(|app| app.cases.iter().any(|case| case.id == selected))
+    {
+        return Err(format!("no runtime case exactly matched --case {selected}").into());
+    }
     let mut eligible = false;
-    for app in apps(&options.selection)? {
+    for app in apps {
         for target in options.selection.targets() {
             if !app.supports(target) {
                 continue;
             }
-            if app.cases_for(target).next().is_none() {
+            let mut cases = app.cases_for(target);
+            if !cases.any(|case| {
+                options
+                    .selection
+                    .case
+                    .as_deref()
+                    .is_none_or(|selected| case.id == selected)
+            }) {
                 continue;
             }
             eligible = true;
-            app.oracle(target, options.update)?;
+            app.oracle(target, options.update, options.selection.case.as_deref())?;
         }
     }
     if eligible {
@@ -275,6 +320,16 @@ pub fn oracle(options: OracleOptions) -> Result<(), Error> {
     } else {
         Err("no oracle cases support the selected target(s)".into())
     }
+}
+
+fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
+    let mut ids = std::collections::BTreeSet::new();
+    for case in apps.iter().flat_map(|app| &app.cases) {
+        if !ids.insert(&case.id) {
+            return Err(format!("runtime case ID is duplicated: {}", case.id).into());
+        }
+    }
+    Ok(())
 }
 
 fn apps(options: &Options) -> Result<Vec<App>, Error> {
@@ -315,6 +370,9 @@ pub(super) fn workspace() -> Result<PathBuf, Error> {
 pub(crate) struct Options {
     /// Run only the named runtime application.
     app: Option<String>,
+    /// Run only the case whose complete ID exactly matches this value.
+    #[arg(long, value_name = "FULL_ID")]
+    case: Option<String>,
     /// Run only one guest ISA.
     #[arg(long = "isa", value_enum)]
     target: Option<Target>,
