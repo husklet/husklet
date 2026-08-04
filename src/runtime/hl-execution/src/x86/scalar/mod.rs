@@ -67,7 +67,9 @@ impl Decoder {
             2 if matches!(decoded.opcode, 0x01..=0x0b | 0x1c..=0x1e) => VectorDecode::ssse3(&decoded)?,
             2 if decoded.opcode == 0x17 => VectorDecode::test(&decoded)?,
             2 if matches!(decoded.opcode, 0xdb..=0xdf) => crate::x86::vector::Aes::decode(&decoded, map)?,
-            2 if matches!(decoded.opcode, 0xc8..=0xcd) => crate::x86::vector::Sha::decode(&decoded, map)?,
+            2 if matches!(decoded.opcode, 0xc8..=0xcd) => {
+                crate::x86::vector::ShaInstructions::decode(&decoded, map)?
+            }
             2 if matches!(decoded.opcode, 0x10 | 0x14 | 0x15) => VectorDecode::blend(&decoded, true)?,
             2 if matches!(decoded.opcode, 0x20..=0x25 | 0x28 | 0x30..=0x35 | 0x38..=0x40) => {
                 VectorDecode::sse41(&decoded)?
@@ -95,7 +97,7 @@ impl Decoder {
             3 if decoded.opcode == 0x44 => VectorDecode::carryless_multiply(&decoded)?,
             3 if matches!(decoded.opcode, 0x60..=0x63) => string::PackedString::decode(&decoded)?,
             3 if decoded.opcode == 0xdf => crate::x86::vector::Aes::decode(&decoded, map)?,
-            3 if decoded.opcode == 0xcc => crate::x86::vector::Sha::decode(&decoded, map)?,
+            3 if decoded.opcode == 0xcc => crate::x86::vector::ShaInstructions::decode(&decoded, map)?,
             _ => return Err(Error::Unsupported),
         };
         prefix::PrefixValidator::validate(&decoded, instruction)?;
@@ -340,9 +342,7 @@ impl Decoder {
             0x31 => Ok(ScalarInstruction::TimestampCounter { auxiliary: false }),
             0x01 if decoded.modrm == Some(0xf9) => Ok(ScalarInstruction::TimestampCounter { auxiliary: true }),
             0x0d | 0x18..=0x1f => Ok(ScalarInstruction::Nop),
-            0xae if decoded.raw_mod == Some(3) && matches!(decoded.raw_reg, Some(5..=7)) => {
-                Ok(ScalarInstruction::Nop)
-            }
+            0xae if decoded.raw_mod == Some(3) && matches!(decoded.raw_reg, Some(5..=7)) => Ok(ScalarInstruction::Nop),
             0xae if matches!(decoded.raw_reg, Some(0..=3)) => crate::x86::fxsave::Fxsave::decode(decoded),
             0x12 | 0x16 if decoded.prefixes.rep || decoded.prefixes.repne => {
                 crate::x86::vector::HalfDecode::duplicate(decoded)
@@ -483,11 +483,10 @@ impl Decoder {
                     aligned: true,
                 })
             }
-            0xd7
-                if decoded.raw_mod == Some(3)
-                    && !decoded.prefixes.operand_16
-                    && !decoded.prefixes.rep
-                    && !decoded.prefixes.repne =>
+            0xd7 if decoded.raw_mod == Some(3)
+                && !decoded.prefixes.operand_16
+                && !decoded.prefixes.rep
+                && !decoded.prefixes.repne =>
             {
                 Ok(ScalarInstruction::MmxMask {
                     destination: ScalarRegister::General(decoded.register.ok_or(Error::Invalid)?),

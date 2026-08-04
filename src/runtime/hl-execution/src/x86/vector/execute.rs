@@ -41,7 +41,7 @@ impl Executor {
                 let source = VectorLane::read(cpu, memory, source, next, instruction)?;
                 let state = cpu.vectors[usize::from(destination)];
                 staged.vectors[usize::from(destination)] =
-                    super::Sha::execute(state, source, cpu.vectors[0], operation);
+                    super::ShaInstructions::execute(state, source, cpu.vectors[0], operation);
             }
             ScalarInstruction::VectorTest { left, right } => {
                 let right = VectorLane::read(cpu, memory, right, next, instruction)?;

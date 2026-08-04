@@ -62,7 +62,8 @@ pub use memory::{
     MremapPlan, MsyncPlan, RangePlan as MemoryRangePlan, UnlockAllPlan,
 };
 pub use mqueue::{
-    MqAbi, MqAttributes, MqError as MqMarshalError, MqEvent, MqNotify, MqStagedAttributes, MqStagedReceive, MqTimespec,
+    MqAbi, MqAttributes, MqError as MqMarshalError, MqEvent, MqNotify, MqReceiveDestination, MqStagedAttributes,
+    MqTimespec,
 };
 pub use network::{
     Abi as NetworkAbi, Error as NetworkMarshalError, GuestMessageHeader, GuestNetworkAddress, GuestSocketOption,
@@ -80,8 +81,8 @@ pub use seccomp::{
     SECCOMP_MAXIMUM_INSTRUCTIONS, VmError, VmError as SeccompVmError,
 };
 pub use seccomp::{
-    Baseline as SeccompBaseline, Decision, Decision as SeccompDecision, FilterInstallFlags, FilterInstallPlan, KillScope,
-    KillScope as SeccompKillScope, Mode, Mode as SeccompMode, Policy, Policy as SeccompPolicy, PolicyError,
+    Baseline as SeccompBaseline, Decision, Decision as SeccompDecision, FilterInstallFlags, FilterInstallPlan,
+    KillScope, KillScope as SeccompKillScope, Mode, Mode as SeccompMode, Policy, Policy as SeccompPolicy, PolicyError,
     PolicyError as SeccompPolicyError, PolicyImage as SeccompPolicyImage, Status as SeccompStatus, TrapPlan,
     TrapPlan as SeccompTrapPlan,
 };

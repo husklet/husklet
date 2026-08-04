@@ -20,4 +20,4 @@ pub use lane::Lane;
 pub(crate) use mask::Mask;
 pub use memory::{Memory, Transfer};
 pub(crate) use pack::Pack;
-pub(crate) use sha::Sha;
+pub(crate) use sha::ShaInstructions;

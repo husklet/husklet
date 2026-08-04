@@ -1,9 +1,9 @@
 use crate::x86::X86ShaOperation;
 use crate::{DecodedInstruction, ScalarInstruction, ScalarIrError, VectorSource};
 
-pub(crate) struct Sha;
+pub(crate) struct ShaInstructions;
 
-impl Sha {
+impl ShaInstructions {
     pub(crate) fn decode(decoded: &DecodedInstruction, map: u8) -> Result<ScalarInstruction, ScalarIrError> {
         if decoded.prefixes.operand_16 || decoded.prefixes.rep || decoded.prefixes.repne {
             return Err(ScalarIrError::Invalid);

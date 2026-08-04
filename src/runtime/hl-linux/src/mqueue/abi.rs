@@ -183,12 +183,17 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
     /// # Errors
     ///
     /// Returns a fault unless the payload and optional priority are writable.
-    pub fn stage_receive(&self, payload: u64, length: usize, priority: u64) -> Result<StagedReceive<'a, M>, Error> {
+    pub fn stage_receive(
+        &self,
+        payload: u64,
+        length: usize,
+        priority: u64,
+    ) -> Result<ReceiveDestination<'a, M>, Error> {
         self.probe(payload, length)?;
         if priority != 0 {
             self.probe(priority, 4)?;
         }
-        Ok(StagedReceive {
+        Ok(ReceiveDestination {
             memory: self.memory,
             payload,
             length,
@@ -238,14 +243,14 @@ impl<M: GuestMemory> StagedAttributes<'_, M> {
     }
 }
 
-pub struct StagedReceive<'a, M> {
+pub struct ReceiveDestination<'a, M> {
     memory: &'a M,
     payload: u64,
     length: usize,
     priority: Option<u64>,
 }
 
-impl<M: GuestMemory> StagedReceive<'_, M> {
+impl<M: GuestMemory> ReceiveDestination<'_, M> {
     /// # Errors
     ///
     /// Returns invalid for a mismatched payload and fault if mappings changed.
