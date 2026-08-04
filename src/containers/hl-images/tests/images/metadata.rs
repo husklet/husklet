@@ -1,6 +1,6 @@
-use super::support::fixture;
-use hl_images::{content::Store, Digest, Images, Platform, Reference};
-use std::collections::BTreeSet;
+use super::support::{FaultPersistence, fixture, scratch_fixture};
+use hl_images::{Digest, Images, Platform, Reference, content::Store};
+use std::{collections::BTreeSet, sync::Arc};
 
 #[tokio::test]
 async fn local_tag_is_metadata_only_and_content_remains_shared() {
@@ -22,6 +22,44 @@ async fn local_tag_is_metadata_only_and_content_remains_shared() {
     images.remove(&alias).unwrap();
     assert!(images.resolve(&alias).unwrap().is_none());
     assert!(images.resolve(&image.name).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn retag_moves_one_name_between_graphs_atomically() {
+    let temp = tempfile::tempdir().unwrap();
+    let images = Images::open(temp.path()).unwrap();
+    let (source, _) = fixture(None);
+    let first = images
+        .pull(
+            &source,
+            "example.test/source:v1".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+    let second = images
+        .pull(
+            &scratch_fixture(),
+            "example.test/moved:v1".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+
+    images.tag(&first, second.name.clone()).unwrap();
+
+    assert_eq!(images.resolve(&second.name).unwrap().unwrap().target, first.target);
+    let graphs = images.graphs().unwrap();
+    let old = graphs
+        .iter()
+        .find(|graph| graph.target.digest() == second.target.digest())
+        .unwrap();
+    assert!(!old.names.contains(&second.name.to_string()));
+    let new = graphs
+        .iter()
+        .find(|graph| graph.target.digest() == first.target.digest())
+        .unwrap();
+    assert!(new.names.contains(&second.name.to_string()));
 }
 
 #[tokio::test]
@@ -61,6 +99,29 @@ async fn forced_removal_untags_every_alias_but_preserves_other_targets() {
 }
 
 #[tokio::test]
+async fn forced_removal_publishes_all_alias_changes_or_none() {
+    let temp = tempfile::tempdir().unwrap();
+    let persistence = Arc::new(FaultPersistence::default());
+    let images = Images::open_with(temp.path(), persistence.clone()).unwrap();
+    let (source, _) = fixture(None);
+    let image = images
+        .pull(
+            &source,
+            "example.test/atomic:v1".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+    let alias: Reference = "example.test/atomic:stable".parse().unwrap();
+    images.tag(&image, alias.clone()).unwrap();
+
+    persistence.fail_metadata_in(1);
+    assert!(images.force_remove(&image).is_err());
+    assert!(images.resolve(&image.name).unwrap().is_some());
+    assert!(images.resolve(&alias).unwrap().is_some());
+}
+
+#[tokio::test]
 async fn graph_catalog_survives_untagging_and_targeted_gc_is_exact() {
     let temp = tempfile::tempdir().unwrap();
     let (source, _) = fixture(None);
@@ -73,13 +134,9 @@ async fn graph_catalog_survives_untagging_and_targeted_gc_is_exact() {
         )
         .await
         .unwrap();
-    let descriptors =
-        hl_images::DescriptorGraph::walk(image.target.clone(), images.content()).unwrap();
+    let descriptors = hl_images::DescriptorGraph::walk(image.target.clone(), images.content()).unwrap();
     let expected_count = descriptors.len() as u64;
-    let expected = descriptors
-        .into_iter()
-        .map(|descriptor| descriptor.size())
-        .sum::<u64>();
+    let expected = descriptors.into_iter().map(|descriptor| descriptor.size()).sum::<u64>();
     let digest = image.target.digest().to_string();
     let graph = images
         .metadata()
@@ -101,9 +158,7 @@ async fn graph_catalog_survives_untagging_and_targeted_gc_is_exact() {
         .find(|graph| graph.target.digest().to_string() == digest)
         .unwrap();
     assert!(graph.names.is_empty());
-    let report = reopened
-        .prune_graphs(&[digest].into_iter().collect())
-        .unwrap();
+    let report = reopened.prune_graphs(&[digest].into_iter().collect()).unwrap();
     assert_eq!(report.content_bytes_removed, expected);
     assert_eq!(report.content_removed, expected_count);
     assert!(

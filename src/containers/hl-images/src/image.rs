@@ -101,6 +101,24 @@ impl Catalog {
         }
     }
 
+    fn remove_target(&mut self, digest: &str) -> Vec<Image> {
+        let names = self
+            .graphs
+            .get(digest)
+            .map(|graph| graph.names.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut removed = Vec::with_capacity(names.len());
+        for name in names {
+            if let Some(image) = self.images.remove(&name) {
+                removed.push(image);
+            }
+        }
+        if let Some(graph) = self.graphs.get_mut(digest) {
+            graph.names.clear();
+        }
+        removed
+    }
+
     fn stage_prune(
         &mut self,
         generation: u64,
@@ -279,6 +297,14 @@ impl FsImageStore {
     pub fn put_all(&self, images: impl IntoIterator<Item = Image>) -> Result<Vec<Option<Image>>> {
         let images: Vec<Image> = images.into_iter().collect();
         self.update(|state| images.into_iter().map(|image| state.put(image)).collect())
+    }
+
+    /// Atomically remove every name attached to one immutable image target.
+    ///
+    /// # Errors
+    /// Returns an error without publishing any removals when durable replacement fails.
+    pub fn remove_target(&self, digest: &str) -> Result<Vec<Image>> {
+        self.update(|state| state.remove_target(digest))
     }
 
     /// Snapshot the durable descriptor-graph catalog.

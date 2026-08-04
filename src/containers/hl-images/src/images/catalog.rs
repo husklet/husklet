@@ -13,10 +13,7 @@ impl Images {
     ///
     /// # Errors
     /// Returns an error when any durable store cannot be created or decoded.
-    pub fn open_with(
-        root: impl AsRef<Path>,
-        persistence: Arc<dyn crate::storage::Persistence>,
-    ) -> Result<Self> {
+    pub fn open_with(root: impl AsRef<Path>, persistence: Arc<dyn crate::storage::Persistence>) -> Result<Self> {
         let root = root.as_ref();
         std::fs::create_dir_all(root)?;
         Ok(Self {
@@ -126,10 +123,7 @@ impl Images {
                 continue;
             }
             let mut bytes = Vec::with_capacity(usize::try_from(descriptor.size()).unwrap_or(0));
-            source
-                .content
-                .reader(&descriptor)?
-                .read_to_end(&mut bytes)?;
+            source.content.reader(&descriptor)?.read_to_end(&mut bytes)?;
             let mut draft = self.content.ingest(format!("workspace-{digest}"))?;
             draft.write(&bytes)?;
             draft.commit(&descriptor)?;
@@ -200,9 +194,9 @@ impl Images {
                         .checked_add(bytes)
                         .ok_or_else(|| Error::MalformedOci("image size overflow".into()))?;
                     if references.get(&digest).is_some_and(|count| *count > 1) {
-                        shared = shared.checked_add(bytes).ok_or_else(|| {
-                            Error::MalformedOci("shared image size overflow".into())
-                        })?;
+                        shared = shared
+                            .checked_add(bytes)
+                            .ok_or_else(|| Error::MalformedOci("shared image size overflow".into()))?;
                     }
                 }
                 Ok((target, ImageUsage { size, shared }))
@@ -240,20 +234,6 @@ impl Images {
     /// # Errors
     /// Returns an error when a catalog update cannot be committed.
     pub fn force_remove(&self, image: &Image) -> Result<Vec<Image>> {
-        let digest = image.target.digest();
-        let aliases = self
-            .metadata
-            .list()?
-            .into_iter()
-            .filter(|candidate| candidate.target.digest() == digest)
-            .map(|candidate| candidate.name)
-            .collect::<Vec<_>>();
-        let mut removed = Vec::with_capacity(aliases.len());
-        for alias in aliases {
-            if let Some(image) = self.metadata.remove(&alias)? {
-                removed.push(image);
-            }
-        }
-        Ok(removed)
+        self.metadata.remove_target(&image.target.digest().to_string())
     }
 }
