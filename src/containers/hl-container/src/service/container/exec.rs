@@ -165,9 +165,14 @@ impl Service {
             if exec.checkpoint.is_some() {
                 return;
             }
+            let process_id = match exec.state {
+                ExecState::Running { process_id, .. } => Some(process_id),
+                ExecState::Created | ExecState::Exited { .. } => None,
+            };
             exec.state = ExecState::Exited {
                 result,
                 finished_at_ms: now_ms(),
+                process_id,
             };
             if let Err(error) = self.execs.replace(&exec).await {
                 hl_log::hl_error!(

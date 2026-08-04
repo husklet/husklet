@@ -135,24 +135,7 @@ pub(super) async fn inspect(
         .inspect(&exec_id)
         .await
         .map_err(ApiError::container)?;
-    let (running, exit_code, pid) = match exec.state {
-        ExecState::Created => (false, 0, 0),
-        ExecState::Running { process_id, .. } => (
-            true,
-            0,
-            i64::try_from(process_id).map_err(|_| {
-                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64")
-            })?,
-        ),
-        ExecState::Exited { result, .. } => {
-            let code = match result {
-                ExitStatus::Code(code) => code,
-                ExitStatus::Signal(signal) => 128 + signal,
-                ExitStatus::Fault { status, .. } => status,
-            };
-            (false, i64::from(code), 0)
-        }
-    };
+    let (running, exit_code, pid) = inspection_state(exec.state)?;
     let process = exec.spec.process;
     Ok(Json(ExecInspect {
         id: exec.id.to_string(),
@@ -175,6 +158,31 @@ pub(super) async fn inspect(
             user: exec.spec.user,
         },
     }))
+}
+
+fn inspection_state(state: ExecState) -> ApiResult<(bool, i64, i64)> {
+    Ok(match state {
+        ExecState::Created => (false, 0, 0),
+        ExecState::Running { process_id, .. } => (
+            true,
+            0,
+            i64::try_from(process_id)
+                .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64"))?,
+        ),
+        ExecState::Exited { result, process_id, .. } => {
+            let code = match result {
+                ExitStatus::Code(code) => code,
+                ExitStatus::Signal(signal) => 128 + signal,
+                ExitStatus::Fault { status, .. } => status,
+            };
+            let pid = process_id
+                .map(i64::try_from)
+                .transpose()
+                .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "exec PID exceeds i64"))?
+                .unwrap_or_default();
+            (false, i64::from(code), pid)
+        }
+    })
 }
 
 #[hl_design::adapter]
@@ -272,4 +280,48 @@ pub(super) async fn signal(
         .await
         .map_err(ApiError::container)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inspection_state;
+    use hl_container::{ExecState, ExitStatus};
+
+    #[test]
+    fn inspect_retains_the_terminal_process_identity_after_exit() {
+        assert_eq!(
+            inspection_state(ExecState::Exited {
+                result: ExitStatus::Code(7),
+                finished_at_ms: 20,
+                process_id: Some(42),
+            })
+            .unwrap(),
+            (false, 7, 42)
+        );
+    }
+
+    #[test]
+    fn inspect_maps_legacy_unknown_exited_pid_to_zero() {
+        assert_eq!(
+            inspection_state(ExecState::Exited {
+                result: ExitStatus::Code(0),
+                finished_at_ms: 20,
+                process_id: None,
+            })
+            .unwrap(),
+            (false, 0, 0)
+        );
+    }
+
+    #[test]
+    fn inspect_rejects_exited_pid_outside_docker_integer_range() {
+        let error = inspection_state(ExecState::Exited {
+            result: ExitStatus::Code(0),
+            finished_at_ms: 20,
+            process_id: Some(u64::MAX),
+        })
+        .unwrap_err();
+
+        assert_eq!(error.status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

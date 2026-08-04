@@ -348,6 +348,7 @@ async fn executions_are_single_use_and_keep_independent_output() {
         finished.state,
         ExecState::Exited {
             result: ExitStatus::Code(19),
+            process_id: Some(41),
             ..
         }
     ));

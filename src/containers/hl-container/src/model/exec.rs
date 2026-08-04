@@ -124,6 +124,8 @@ pub enum ExecState {
     Exited {
         result: ExitStatus,
         finished_at_ms: u64,
+        #[serde(default)]
+        process_id: Option<u64>,
     },
 }
 
@@ -161,6 +163,17 @@ impl Exec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_exited_state_defaults_to_an_unknown_process_id() {
+        let state: ExecState = serde_json::from_value(serde_json::json!({
+            "status": "exited",
+            "result": { "kind": "code", "value": 0 },
+            "finished_at_ms": 120
+        }))
+        .unwrap();
+        assert!(matches!(state, ExecState::Exited { process_id: None, .. }));
+    }
 
     /// `docker exec -u root` must work, so a named user resolves against the container's own
     /// account databases exactly as container create does.

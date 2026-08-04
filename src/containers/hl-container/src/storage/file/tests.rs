@@ -61,6 +61,7 @@ async fn exec_inspect_and_state_survive_reopen() {
     exec.state = ExecState::Exited {
         result: ExitStatus::Code(0),
         finished_at_ms: 120,
+        process_id: Some(73),
     };
     disk.replace(&exec).await.unwrap();
     drop(disk);

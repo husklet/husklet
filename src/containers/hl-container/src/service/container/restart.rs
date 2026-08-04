@@ -41,10 +41,7 @@ impl Service {
         }
         for mut exec in self.execs.list().await? {
             if exec.state.is_active() && exec.checkpoint.is_none() {
-                exec.state = ExecState::Exited {
-                    result: ExitStatus::Fault { status: -1, detail: 0 },
-                    finished_at_ms: now_ms(),
-                };
+                interrupt_exec(&mut exec);
                 self.execs.replace(&exec).await?;
             }
         }
@@ -232,5 +229,42 @@ impl Service {
                 }
             }
         })
+    }
+}
+
+fn interrupt_exec(exec: &mut crate::Exec) {
+    let process_id = match exec.state {
+        ExecState::Running { process_id, .. } => Some(process_id),
+        ExecState::Created | ExecState::Exited { .. } => None,
+    };
+    exec.state = ExecState::Exited {
+        result: ExitStatus::Fault { status: -1, detail: 0 },
+        finished_at_ms: now_ms(),
+        process_id,
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconciliation_retains_the_running_exec_process_id() {
+        let mut exec = crate::Exec::new(ContainerId::new(), crate::ExecSpec::new(crate::Process::new("fake")));
+        exec.state = ExecState::Running {
+            process_id: 73,
+            started_at_ms: 100,
+        };
+
+        interrupt_exec(&mut exec);
+
+        assert!(matches!(
+            exec.state,
+            ExecState::Exited {
+                result: ExitStatus::Fault { status: -1, detail: 0 },
+                process_id: Some(73),
+                ..
+            }
+        ));
     }
 }
