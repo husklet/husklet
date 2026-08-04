@@ -357,18 +357,6 @@ core/abi	strings	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_stat
 core/abi	strtod	aarch64	pass	0	linux-libc,fp	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/abi	timefmt	aarch64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/abi	varargs	aarch64	pass	0	linux-libc,varargs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	ccmp-chain	aarch64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	getaffinity-tid	aarch64	fail	0	linux-libc,regression	stdout:e=953d0451ae3793d3,a=b5f8e1e4920b95a8,d=20,eb=31,ab=30,el=46,al=46	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	go-cgo-sigurg	aarch64	fail	132	linux-libc,regression	exit:e=0,a=132;stdout:e=b6d6b3d492b59378,a=cbf29ce484222325,d=0,eb=4f,ab=--,el=25,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/regress	ldapr-nonpie	aarch64	fail	132	linux-libc,regression	exit:e=0,a=132;stdout:e=8f689d2901af3562,a=cbf29ce484222325,d=0,eb=6c,ab=--,el=73,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/regress	ldrsw-literal	aarch64	fail	132	linux-libc,regression	exit:e=0,a=132;stdout:e=c05ae37ceeff4697,a=cbf29ce484222325,d=0,eb=6c,ab=--,el=168,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/regress	lseek-read	aarch64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	nonpie-guest-ptrs	aarch64	fail	0	linux-libc,regression	stdout:e=fe7652ff13058f21,a=42c488ac8bbae57b,d=155,eb=6f,ab=42,el=377,al=381	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	offset-track	aarch64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	pairatomics-nonpie	aarch64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	sha512-kat	aarch64	fail	132	linux-libc,regression	exit:e=0,a=132;stdout:e=320c653441b49de0,a=cbf29ce484222325,d=0,eb=33,ab=--,el=828,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/regress	stackoverflow	aarch64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	stackoverflow-catch	aarch64	pass	42	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 42, detail: 0, fault: None }
 core/syscall	abstract	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/syscall	clock	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/syscall	clockabstime	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
@@ -1447,17 +1435,6 @@ core/abi	strtod	x86_64	pass	0	linux-libc,fp	-	EngineExit { kind: Code, guest_sta
 core/abi	timefmt	x86_64	pass	0	linux-libc,time	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/abi	varargs	x86_64	pass	0	linux-libc,varargs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/abi	x87m80	x86_64	pass	0	x87,m80	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	ccmp-chain	x86_64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	getaffinity-tid	x86_64	fail	0	linux-libc,regression	stdout:e=953d0451ae3793d3,a=b5f8e1e4920b95a8,d=20,eb=31,ab=30,el=46,al=46	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	lseek-read	x86_64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	nonpie-guest-ptrs	x86_64	fail	0	linux-libc,regression	stdout:e=fe7652ff13058f21,a=42c488ac8bbae57b,d=155,eb=6f,ab=42,el=377,al=381	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	nonpie-v8blob	x86_64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	nonpie-vec	x86_64	fail	132	linux-libc,regression	exit:e=0,a=132;stdout:e=bf1819454c6670b7,a=cbf29ce484222325,d=0,eb=6e,ab=--,el=74,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/regress	offset-track	x86_64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	repcmps-nonpie	x86_64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	sha512-kat	x86_64	fail	-	linux-libc,regression	engine:timeout	timeout
-core/regress	stackoverflow	x86_64	pass	0	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/regress	stackoverflow-catch	x86_64	pass	42	linux-libc,regression	-	EngineExit { kind: Code, guest_status: 42, detail: 0, fault: None }
 core/syscall	abstract	x86_64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/syscall	clock	x86_64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 core/syscall	clockefault	x86_64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
