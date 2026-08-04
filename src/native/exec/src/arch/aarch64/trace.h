@@ -22,6 +22,28 @@ typedef struct hl_a64_trace_result {
     hl_native_provenance provenance[HL_A64_SOURCE_MAX_WORDS];
 } hl_a64_trace_result;
 
+typedef enum hl_a64_density_family {
+    HL_A64_DENSITY_PAIR_READ,
+    HL_A64_DENSITY_PAIR_WRITE,
+    HL_A64_DENSITY_SCALAR_MEMORY,
+    HL_A64_DENSITY_CONTROL,
+    HL_A64_DENSITY_OTHER,
+    HL_A64_DENSITY_FAMILY_COUNT,
+} hl_a64_density_family;
+
+typedef struct hl_a64_density_count {
+    uint64_t guest_instructions;
+    uint64_t hot_words;
+    uint64_t cold_words;
+} hl_a64_density_count;
+
+typedef struct hl_a64_trace_density {
+    hl_a64_density_count families[HL_A64_DENSITY_FAMILY_COUNT];
+    uint64_t overhead_words;
+    uint64_t total_words;
+    uint64_t saturated;
+} hl_a64_trace_density;
+
 typedef struct hl_a64_loop_range {
     int64_t minimum;
     int64_t maximum;
@@ -94,6 +116,8 @@ int hl_a64_trace_certificate_check(const hl_native_aarch64_cpu *, uint64_t, int6
                                    uint32_t, uint64_t, uint64_t, uint64_t, uint64_t *);
 
 int hl_a64_trace_build(const hl_a64_source *, uint64_t, size_t, void *, size_t, hl_a64_trace_result *);
+int hl_a64_trace_build_density(const hl_a64_source *, uint64_t, size_t, void *, size_t,
+                               hl_a64_trace_result *, hl_a64_trace_density *);
 /* expected_authority is authenticated independently of translated bytes and
  * is part of the published translation identity. Zero always fails closed. */
 int hl_a64_trace_build_direct(const hl_a64_source *, uint64_t, size_t, void *, size_t,

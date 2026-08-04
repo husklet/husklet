@@ -33,6 +33,31 @@
 
 #include <string.h>
 
+static void density_add(uint64_t *value, uint64_t add, hl_a64_trace_density *density) {
+    if (UINT64_MAX - *value < add) {
+        *value = UINT64_MAX;
+        density->saturated = 1;
+    } else {
+        *value += add;
+    }
+}
+
+static void density_record(hl_a64_trace_density *density, hl_a64_density_family family,
+                           size_t words, int instruction) {
+    if (density == NULL) return;
+    if (instruction) density_add(&density->families[family].guest_instructions, 1, density);
+    density_add(&density->families[family].hot_words, words, density);
+}
+
+static hl_a64_density_family density_family(uint32_t word, uint64_t pc,
+                                            const hl_a64_memory_sites *sites) {
+    hl_a64_memory memory;
+    if (sites->count == 0) return HL_A64_DENSITY_OTHER;
+    if (hl_a64_memory_decode(word, pc, &memory) && memory.kind == HL_A64_MEMORY_PAIR)
+        return memory.read ? HL_A64_DENSITY_PAIR_READ : HL_A64_DENSITY_PAIR_WRITE;
+    return HL_A64_DENSITY_SCALAR_MEMORY;
+}
+
 static int append_unknown(hl_a64_trace_result *output, size_t first, size_t last, uint64_t guest) {
     if (last <= first || output->provenance_count >= HL_NATIVE_PROVENANCE_MAX) return 0;
     output->provenance[output->provenance_count++] = (hl_native_provenance){
@@ -467,10 +492,13 @@ int hl_a64_trace_certificate_check(const hl_native_aarch64_cpu *cpu, uint64_t ba
 
 static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
                        size_t capacity, hl_a64_trace_result *output, void *ibtc,
-                       const hl_native_direct_authority *authority, uint64_t expected_authority) {
+                       const hl_native_direct_authority *authority, uint64_t expected_authority,
+                       hl_a64_trace_density *density_output) {
     hl_a64_fetch_result fetched;
     hl_a64_assembler assembler;
     hl_a64_guard guards[HL_A64_SOURCE_MAX_WORDS] = {0};
+    hl_a64_density_family guard_families[HL_A64_SOURCE_MAX_WORDS] = {0};
+    hl_a64_trace_density density = {0};
     hl_a64_budget_guard budget_guard;
     size_t guard_count = 0;
     if (output == NULL || expected_authority == 0) return 0;
@@ -499,6 +527,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             output->terminal = HL_NATIVE_EXIT_SYSCALL;
             hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_SYSCALL, instruction);
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
+            density_record(&density, HL_A64_DENSITY_CONTROL,
+                           (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
             break;
         }
         uint32_t *direct_patch = NULL;
@@ -513,6 +543,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             output->source_last = instruction + 4;
             output->terminal = HL_NATIVE_EXIT_BRANCH;
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
+            density_record(&density, HL_A64_DENSITY_CONTROL,
+                           (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
             if (direct_patch != NULL) {
                 output->relocations[0] = (hl_native_relocation){
                     .code_offset = (uint64_t)((uint8_t *)direct_patch - (uint8_t *)buffer),
@@ -549,6 +581,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             output->terminal = HL_NATIVE_EXIT_FALLBACK;
             hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_FALLBACK, instruction);
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
+            density_record(&density, HL_A64_DENSITY_OTHER,
+                           (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
             break;
         }
         if (!hl_a64_assembler_ok(&assembler)) {
@@ -556,7 +590,13 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             memset(output, 0, sizeof(*output));
             return 0;
         }
-        if (guards[guard_count].below != NULL) guard_count++;
+        hl_a64_density_family family = density_family(fetched.words[index], instruction, &memory_sites);
+        density_record(&density, family,
+                       (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
+        if (guards[guard_count].below != NULL) {
+            guard_families[guard_count] = family;
+            guard_count++;
+        }
         if (memory_sites.count != 0) {
             if (!append_memory(output, &memory_sites, instruction)) return 0;
         } else if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) {
@@ -579,6 +619,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         size_t begin = hl_a64_assembler_size(&assembler);
         hl_a64_guard_finish(&assembler, &guards[index]);
         if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), guards[index].pc)) return 0;
+        density_add(&density.families[guard_families[index]].cold_words,
+                    (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), &density);
     }
     if (!hl_a64_assembler_ok(&assembler)) {
         memset(buffer, 0, capacity);
@@ -586,13 +628,30 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         return 0;
     }
     output->code_size = hl_a64_assembler_size(&assembler);
+    density.total_words = output->code_size / sizeof(uint32_t);
+    uint64_t attributed = 0;
+    for (size_t family = 0; family < HL_A64_DENSITY_FAMILY_COUNT; family++) {
+        density_add(&attributed, density.families[family].hot_words, &density);
+        density_add(&attributed, density.families[family].cold_words, &density);
+    }
+    density.overhead_words = attributed <= density.total_words ? density.total_words - attributed : 0;
+    if (density_output != NULL) *density_output = density;
     return 1;
 }
 
 int hl_a64_trace_build(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
                        size_t capacity, hl_a64_trace_result *output) {
     return trace_build(source, pc, count, buffer, capacity, output, NULL, NULL,
-                       source == NULL ? 0 : source->mapping_incarnation);
+                       source == NULL ? 0 : source->mapping_incarnation, NULL);
+}
+
+int hl_a64_trace_build_density(const hl_a64_source *source, uint64_t pc, size_t count,
+                               void *buffer, size_t capacity, hl_a64_trace_result *output,
+                               hl_a64_trace_density *density) {
+    if (density == NULL) return 0;
+    memset(density, 0, sizeof(*density));
+    return trace_build(source, pc, count, buffer, capacity, output, NULL, NULL,
+                       source == NULL ? 0 : source->mapping_incarnation, density);
 }
 
 int hl_a64_trace_build_direct(const hl_a64_source *source, uint64_t pc, size_t count, void *buffer,
@@ -600,7 +659,7 @@ int hl_a64_trace_build_direct(const hl_a64_source *source, uint64_t pc, size_t c
                               uint64_t expected_authority,
                               hl_a64_trace_result *output) {
     return trace_build(source, pc, count, buffer, capacity, output, NULL, authority,
-                       expected_authority);
+                       expected_authority, NULL);
 }
 
 hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const hl_a64_source *source, uint64_t pc,
@@ -649,7 +708,7 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
     }
     *hit = 0;
     if (!trace_build(source, pc, count, buffer, capacity, &trace, executor->ibtc, authority,
-                     expected_authority))
+                     expected_authority, NULL))
         return HL_NATIVE_STATE;
     key.source_last = trace.source_last;
     if (trace.provenance_count == 0) return HL_NATIVE_STATE;

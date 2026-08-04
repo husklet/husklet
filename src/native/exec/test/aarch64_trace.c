@@ -486,6 +486,51 @@ static int guard_modes(void) {
     return 0;
 }
 
+static int static_density_accounting(void) {
+    const uint32_t words[] = {
+        UINT32_C(0xad428420), /* ldp q0,q1,[x1,#80] */
+        UINT32_C(0xad008460), /* stp q0,q1,[x3,#16] */
+        UINT32_C(0xf9400044), /* ldr x4,[x2] */
+        UINT32_C(0x91000484), /* add x4,x4,#1 */
+        UINT32_C(0xd4000001), /* svc #0 */
+    };
+    const hl_a64_source_span span = {0x4800, (const uint8_t *)words, sizeof(words), 7, 11};
+    const hl_a64_source source = {&span, 1, 7, 11};
+    uint8_t plain[HL_A64_TRACE_MAX_BYTES] = {0};
+    uint8_t accounted[HL_A64_TRACE_MAX_BYTES] = {0};
+    hl_a64_trace_result plain_result, accounted_result, failed_result;
+    hl_a64_trace_density density, failed_density;
+    CHECK(hl_a64_trace_build(&source, 0x4800, 5, plain, sizeof(plain), &plain_result));
+    CHECK(hl_a64_trace_build_density(&source, 0x4800, 5, accounted, sizeof(accounted),
+                                     &accounted_result, &density));
+    CHECK(plain_result.code_size == accounted_result.code_size);
+    CHECK(memcmp(plain, accounted, plain_result.code_size) == 0);
+    CHECK(density.families[HL_A64_DENSITY_PAIR_READ].guest_instructions == 1);
+    CHECK(density.families[HL_A64_DENSITY_PAIR_WRITE].guest_instructions == 1);
+    CHECK(density.families[HL_A64_DENSITY_SCALAR_MEMORY].guest_instructions == 1);
+    CHECK(density.families[HL_A64_DENSITY_CONTROL].guest_instructions == 1);
+    CHECK(density.families[HL_A64_DENSITY_OTHER].guest_instructions == 1);
+    uint64_t instructions = 0, words_total = density.overhead_words;
+    for (size_t family = 0; family < HL_A64_DENSITY_FAMILY_COUNT; family++) {
+        instructions += density.families[family].guest_instructions;
+        words_total += density.families[family].hot_words + density.families[family].cold_words;
+    }
+    CHECK(instructions == accounted_result.instruction_count);
+    CHECK(words_total == density.total_words);
+    CHECK(density.total_words * sizeof(uint32_t) == accounted_result.code_size);
+    CHECK(density.families[HL_A64_DENSITY_PAIR_READ].cold_words != 0);
+    CHECK(density.families[HL_A64_DENSITY_PAIR_WRITE].cold_words != 0);
+    CHECK(density.families[HL_A64_DENSITY_SCALAR_MEMORY].cold_words != 0);
+    CHECK(density.saturated == 0);
+
+    memset(&failed_density, 0xa5, sizeof(failed_density));
+    memset(&failed_result, 0xa5, sizeof(failed_result));
+    CHECK(!hl_a64_trace_build_density(&source, 0x4800, 5, accounted, 1,
+                                      &failed_result, &failed_density));
+    CHECK(memcmp(&failed_density, &(hl_a64_trace_density){0}, sizeof(failed_density)) == 0);
+    return 0;
+}
+
 int main(void) {
     if (effect_analysis() != 0) return 1;
     if (loop_preflight() != 0) return 1;
@@ -493,6 +538,7 @@ int main(void) {
     if (loop_planning() != 0) return 1;
     if (certificate_authentication() != 0) return 1;
     if (guard_modes() != 0) return 1;
+    if (static_density_accounting() != 0) return 1;
 #if !defined(__aarch64__)
     return 0;
 #else
