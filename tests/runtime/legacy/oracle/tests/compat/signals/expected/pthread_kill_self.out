@@ -1,1 +1,0 @@
-pthread_kill_self probe0=1 sent=1 on_self=1
