@@ -524,6 +524,8 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->a64_dirty_overflow = atomic_load_explicit(&executor->a64_dirty_overflow, memory_order_relaxed);
         output->a64_dirty_committed = atomic_load_explicit(&executor->a64_dirty_committed, memory_order_relaxed);
         output->a64_dirty_merged = atomic_load_explicit(&executor->a64_dirty_merged, memory_order_relaxed);
+        output->x86_cold_builds = atomic_load_explicit(&executor->x86_cold_builds, memory_order_relaxed);
+        output->x86_cold_quota_exits = atomic_load_explicit(&executor->x86_cold_quota_exits, memory_order_relaxed);
     }
     return HL_NATIVE_OK;
 }

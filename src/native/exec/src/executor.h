@@ -37,6 +37,7 @@ struct hl_native_executor {
     _Atomic uint64_t a64_guard_fast, a64_guard_full, a64_guard_fallback;
     _Atomic uint64_t a64_dirty_reserved, a64_dirty_overflow, a64_dirty_committed;
     _Atomic uint64_t a64_dirty_merged;
+    _Atomic uint64_t x86_cold_builds, x86_cold_quota_exits;
 };
 
 typedef struct hl_native_execution {

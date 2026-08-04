@@ -23,6 +23,7 @@
 #define X86_ENTRY_WORDS 7u
 #define X86_RUN_VIEW_COUNT 4u
 #define X86_REP_CHUNK_BYTES (UINT64_C(1) << 20)
+#define X86_COLD_BUILD_QUOTA 64u
 
 enum x86_fatal_code {
     X86_FATAL_EMPTY_BLOCK = 1,
@@ -569,6 +570,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
     uint64_t memory_mode = 0;
     uint64_t authority_generation = 0;
     uint64_t authority_identity = 0;
+    uint32_t cold_builds = 0;
     const hl_native_direct_token *direct_token = NULL;
     cpu->loop_remaining = 0;
     cpu->loop_completed = 0;
@@ -675,9 +677,19 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             if (size != 0 && hl_native_translation_lookup(executor, &lookup, &code) == HL_NATIVE_HIT) {
                 supported = 1;
             } else if (size != 0) {
+                if (cold_builds == X86_COLD_BUILD_QUOTA) {
+                    if (executor->diagnostics)
+                        atomic_fetch_add_explicit(&executor->x86_cold_quota_exits, 1, memory_order_relaxed);
+                    if ((status = hl_native_execution_enter(executor, &execution)) != HL_NATIVE_OK) return status;
+                    return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
+                }
+                cold_builds++;
                 status = emit_block(executor, active_source, pc, bytes, size,
                                     memory_mode, memory_mode != 0 ? authority_identity : authority_generation,
                                     &supported);
+                if (executor->diagnostics) {
+                    atomic_fetch_add_explicit(&executor->x86_cold_builds, 1, memory_order_relaxed);
+                }
             }
             if (size != 0 && status != HL_NATIVE_OK) return status;
             if (size == 0 || !supported) {

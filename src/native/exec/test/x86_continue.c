@@ -160,12 +160,59 @@ static int projected_return_progress(void) {
     hl_native_destroy(executor);
     return 0;
 }
+
+static int cold_dynamic_chain_is_bounded(void) {
+    enum { BLOCKS = 66, STRIDE = 16 };
+    uint8_t bytes[BLOCKS * STRIDE];
+    const uint64_t first = 0xb000;
+    test_memory host = {0};
+    hl_native_memory memory = test_services(&host);
+    hl_native_executor *executor = NULL;
+    hl_native_x86_64_cpu state = {0};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    hl_native_diagnostics diagnostic = {.abi = HL_NATIVE_ABI, .size = sizeof(diagnostic)};
+    hl_native_source_span span = {first, bytes, sizeof bytes, 9, 21};
+    hl_native_source source = {&span, 1, 9, 21};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_X86_64, .state.x86_64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_X86_64, .mapping_epoch = 9, .budget = 4096,
+        .source = &source};
+
+    memset(bytes, 0xcc, sizeof bytes);
+    for (size_t index = 0; index + 1 < BLOCKS; ++index) {
+        uint64_t target = first + (index + 1) * STRIDE;
+        uint8_t *block = &bytes[index * STRIDE];
+        block[0] = 0x48; block[1] = 0xb8; /* movabs target,rax */
+        memcpy(&block[2], &target, sizeof target);
+        block[10] = 0xff; block[11] = 0xe0; /* jmp rax */
+    }
+    memory.write_begin = executable_begin;
+    memory.write_end = executable_end;
+    hl_native_config config = test_config(&memory, HL_NATIVE_DIAGNOSTICS);
+    CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    state.program = first;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.program == first + 64 * STRIDE);
+    CHECK(state.executed == 128 && state.budget == 4096 - 128);
+    CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK);
+    CHECK(diagnostic.x86_cold_builds == 64 && diagnostic.x86_cold_quota_exits == 1);
+
+    request.budget = state.budget;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == first + 65 * STRIDE);
+    CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK);
+    CHECK(diagnostic.x86_cold_builds == 66 && diagnostic.x86_cold_quota_exits == 1);
+    hl_native_destroy(executor);
+    return 0;
+}
 #endif
 
 int main(void) {
 #if defined(__aarch64__)
     if (continuation_contract() != 0) return 1;
-    return projected_return_progress();
+    if (projected_return_progress() != 0) return 1;
+    return cold_dynamic_chain_is_bounded();
 #else
     return 0;
 #endif

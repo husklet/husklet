@@ -94,6 +94,8 @@ typedef struct hl_native_diagnostics {
     uint64_t a64_dirty_overflow;
     uint64_t a64_dirty_committed;
     uint64_t a64_dirty_merged;
+    uint64_t x86_cold_builds;
+    uint64_t x86_cold_quota_exits;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -335,7 +337,7 @@ _Static_assert(sizeof(hl_native_memory) == 64, "native memory ABI drifted");
 _Static_assert(sizeof(hl_native_config) == 40, "native config ABI drifted");
 _Static_assert(offsetof(hl_native_diagnostics, x86_public_exits) == 192,
                "native diagnostics legacy prefix drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 272, "native diagnostics ABI drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 288, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");
