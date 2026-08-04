@@ -82,7 +82,11 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
     let identities = (bridge.id.clone(), none.id.clone());
     containers
         .networks()
-        .create(hl_container::NetworkSpec::bridge_auto("internal").internal(true))
+        .create(
+            hl_container::NetworkSpec::bridge_auto("internal")
+                .internal(true)
+                .attachable(true),
+        )
         .await?;
 
     drop(containers);
@@ -98,6 +102,10 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
     require(
         containers.networks().inspect("internal").await?.internal,
         "internal state did not survive restart",
+    )?;
+    require(
+        containers.networks().inspect("internal").await?.attachable,
+        "attachable state did not survive restart",
     )?;
 
     let socket = work.path().join("daemon.sock");
@@ -147,6 +155,10 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
             bridge["IPAM"]["Config"][0]["Gateway"] == "172.17.0.1",
             "Docker list exposed the wrong built-in bridge gateway",
         )?;
+        require(
+            bridge["Attachable"] == false,
+            "Docker list marked the built-in bridge attachable",
+        )?;
         let none = listed_body
             .as_array()
             .and_then(|networks| networks.iter().find(|network| network["Name"] == "none"))
@@ -159,6 +171,24 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
         require(
             internal["Internal"] == true,
             "Docker list lost persisted internal state",
+        )?;
+        require(
+            internal["Attachable"] == true,
+            "Docker list lost persisted attachable state",
+        )?;
+
+        let inspected = exchange(
+            &socket,
+            b"GET /v1.43/networks/internal HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await?;
+        require(
+            inspected.starts_with("HTTP/1.1 200"),
+            "attachable network inspect was not HTTP 200",
+        )?;
+        require(
+            body(&inspected)?["Attachable"] == true,
+            "Docker inspect lost persisted attachable state",
         )?;
 
         let duplicate_null = exchange(

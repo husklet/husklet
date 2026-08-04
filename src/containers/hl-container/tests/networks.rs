@@ -344,7 +344,7 @@ async fn automatic_bridge_subnets_are_atomic_deterministic_and_idempotent() {
 }
 
 #[tokio::test]
-async fn null_driver_is_singleton_and_internal_state_survives_reopen() {
+async fn null_driver_is_singleton_and_network_policy_survives_reopen() {
     let root = tempfile::tempdir().unwrap();
     let config = Config::new(root.path());
     let containers = Containers::builder(config.clone()).build().await.unwrap();
@@ -358,15 +358,22 @@ async fn null_driver_is_singleton_and_internal_state_survives_reopen() {
     ));
     let internal = containers
         .networks()
-        .create(NetworkSpec::bridge_auto("internal").internal(true))
+        .create(
+            NetworkSpec::bridge_auto("internal")
+                .internal(true)
+                .attachable(true),
+        )
         .await
         .unwrap();
     assert!(internal.internal);
+    assert!(internal.attachable);
 
     drop(containers);
     let reopened = Containers::builder(config).build().await.unwrap();
     assert!(reopened.networks().inspect("internal").await.unwrap().internal);
+    assert!(reopened.networks().inspect("internal").await.unwrap().attachable);
     assert!(!reopened.networks().inspect("none").await.unwrap().internal);
+    assert!(!reopened.networks().inspect("none").await.unwrap().attachable);
 }
 
 #[tokio::test]

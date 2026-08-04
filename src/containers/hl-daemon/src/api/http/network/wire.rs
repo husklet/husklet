@@ -55,12 +55,16 @@ impl NetworkCreate {
                         "none networks cannot configure IPAM",
                     ));
                 }
-                NetworkSpec::none(self.name).internal(self.internal)
+                NetworkSpec::none(self.name)
+                    .internal(self.internal)
+                    .attachable(self.attachable)
             }
             "bridge" => {
                 let pool = match self.ipam.config.as_slice() {
                     [] => {
-                        let mut value = NetworkSpec::bridge_auto(self.name).internal(self.internal);
+                        let mut value = NetworkSpec::bridge_auto(self.name)
+                            .internal(self.internal)
+                            .attachable(self.attachable);
                         value.labels = self.labels;
                         return Ok(value);
                     }
@@ -84,7 +88,9 @@ impl NetworkCreate {
                     ));
                 }
                 let subnet = pool.subnet()?;
-                let mut value = NetworkSpec::bridge(self.name, subnet).internal(self.internal);
+                let mut value = NetworkSpec::bridge(self.name, subnet)
+                    .internal(self.internal)
+                    .attachable(self.attachable);
                 if !pool.gateway.is_empty() {
                     value = value.gateway(pool.gateway.parse().map_err(|_| {
                         ApiError::new(StatusCode::BAD_REQUEST, "invalid IPv4 gateway")
@@ -214,7 +220,7 @@ impl From<hl_container::Network> for Network {
                 ..Ipam::default()
             },
             internal: value.internal,
-            attachable: false,
+            attachable: value.attachable,
             ingress: false,
             config_from: ConfigFrom::default(),
             config_only: false,
@@ -287,12 +293,20 @@ mod tests {
         let request: NetworkCreate = serde_json::from_value(serde_json::json!({
             "Name": "airgap",
             "Driver": "null",
-            "Internal": true
+            "Internal": true,
+            "Attachable": true
         }))
         .unwrap();
         let spec = request.spec().unwrap();
         assert_eq!(spec.driver, hl_container::NetworkDriver::None);
         assert!(spec.internal);
+        assert!(spec.attachable);
+
+        let defaults: NetworkCreate = serde_json::from_value(serde_json::json!({
+            "Name": "frontend"
+        }))
+        .unwrap();
+        assert!(!defaults.spec().unwrap().attachable);
 
         let request: NetworkCreate = serde_json::from_value(serde_json::json!({
             "Name": "airgap",

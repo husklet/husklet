@@ -89,6 +89,7 @@ pub struct NetworkSpec {
     pub name: String,
     pub driver: NetworkDriver,
     pub internal: bool,
+    pub attachable: bool,
     pub subnet: Option<Subnet>,
     pub gateway: Option<Ipv4Addr>,
     pub labels: BTreeMap<String, String>,
@@ -101,6 +102,7 @@ impl NetworkSpec {
             name: name.into(),
             driver: NetworkDriver::None,
             internal: false,
+            attachable: false,
             subnet: None,
             gateway: None,
             labels: BTreeMap::new(),
@@ -113,6 +115,7 @@ impl NetworkSpec {
             name: name.into(),
             driver: NetworkDriver::Bridge,
             internal: false,
+            attachable: false,
             subnet: Some(subnet),
             gateway: None,
             labels: BTreeMap::new(),
@@ -127,6 +130,7 @@ impl NetworkSpec {
             name: name.into(),
             driver: NetworkDriver::Bridge,
             internal: false,
+            attachable: false,
             subnet: None,
             gateway: None,
             labels: BTreeMap::new(),
@@ -143,6 +147,13 @@ impl NetworkSpec {
     #[must_use]
     pub fn internal(mut self, value: bool) -> Self {
         self.internal = value;
+        self
+    }
+
+    /// Marks the network as manually attachable through the Docker API.
+    #[must_use]
+    pub fn attachable(mut self, value: bool) -> Self {
+        self.attachable = value;
         self
     }
 
@@ -279,6 +290,8 @@ pub struct Network {
     pub driver: NetworkDriver,
     #[serde(default)]
     pub internal: bool,
+    #[serde(default)]
+    pub attachable: bool,
     pub subnet: Option<Subnet>,
     pub gateway: Option<Ipv4Addr>,
     pub labels: BTreeMap<String, String>,
@@ -302,6 +315,7 @@ impl Network {
             name: spec.name,
             driver: spec.driver,
             internal: spec.internal,
+            attachable: spec.attachable,
             subnet: spec.subnet,
             gateway,
             labels: spec.labels,
@@ -313,6 +327,7 @@ impl Network {
     pub(crate) fn compatible(&self, spec: &NetworkSpec) -> bool {
         self.driver == spec.driver
             && self.internal == spec.internal
+            && self.attachable == spec.attachable
             && (spec.subnet.is_none() || self.subnet == spec.subnet)
             && self.labels == spec.labels
             && (spec.gateway.is_none() || self.gateway == spec.gateway)
@@ -366,6 +381,7 @@ impl Network {
             name: self.name.clone(),
             driver: self.driver,
             internal: self.internal,
+            attachable: self.attachable,
             subnet: self.subnet,
             gateway: self.gateway,
             labels: self.labels.clone(),
@@ -437,14 +453,18 @@ mod tests {
     }
 
     #[test]
-    fn legacy_networks_decode_as_external() {
+    fn legacy_networks_decode_policy_flags_as_false() {
         let network = Network::from_spec(
-            NetworkSpec::bridge_auto("legacy").internal(true),
+            NetworkSpec::bridge_auto("legacy")
+                .internal(true)
+                .attachable(true),
             1,
         );
         let mut value = serde_json::to_value(network).unwrap();
         value.as_object_mut().unwrap().remove("internal");
+        value.as_object_mut().unwrap().remove("attachable");
         let decoded: Network = serde_json::from_value(value).unwrap();
         assert!(!decoded.internal);
+        assert!(!decoded.attachable);
     }
 }
