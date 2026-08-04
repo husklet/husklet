@@ -77,6 +77,11 @@ static void effective_address(hl_a64_assembler *assembler, uint32_t word, const 
 
 static int valid(uint32_t word, uint64_t pc, hl_a64_memory *memory) {
     if (!hl_a64_memory_decode(word, pc, memory)) return 0;
+    if (!memory->vector && ((word & UINT32_C(0x3b200c00)) == UINT32_C(0x38200400) ||
+                            (word & UINT32_C(0x3b200c00)) == UINT32_C(0x38200c00)))
+        return 0; /* LDRAA/LDRAB require pointer-authentication semantics. */
+    if (memory->kind == HL_A64_MEMORY_REGISTER && (((word >> 13) & 3u) < 2u))
+        return 0; /* Only UXTW/LSL/SXTW/SXTX are allocated for this family. */
     if (memory->kind == HL_A64_MEMORY_PREFETCH) return 1;
     if ((memory->kind != HL_A64_MEMORY_LITERAL && memory->kind != HL_A64_MEMORY_UNSIGNED &&
          memory->kind != HL_A64_MEMORY_UNSCALED && memory->kind != HL_A64_MEMORY_REGISTER) ||

@@ -78,6 +78,7 @@ int main(void) {
     CHECK(cpu.dirty_view_first == first && cpu.dirty_view_last == last);
     CHECK(cpu.flags == UINT64_C(0xa0000000));
 
+    *(uint64_t *)(void *)(memory + 112) = UINT64_C(0x1121121121121121);
     *(uint64_t *)(void *)(memory + 120) = UINT64_C(0x1201201201201201);
     *(uint64_t *)(void *)(memory + 136) = UINT64_C(0x1361361361361361);
     *(uint64_t *)(void *)(memory + 144) = UINT64_C(0x1441441441441441);
@@ -85,7 +86,7 @@ int main(void) {
     const uint64_t indexes[] = {1, 2, UINT32_MAX, UINT64_MAX - 1};
     const uint64_t expected[] = {
         UINT64_C(0x1361361361361361), UINT64_C(0x1441441441441441),
-        UINT64_C(0x1201201201201201), UINT64_C(0x1201201201201201),
+        UINT64_C(0x1201201201201201), UINT64_C(0x1121121121121121),
     };
     for (size_t index = 0; index < 4; index++) {
         cpu.registers[6] = indexes[index];
