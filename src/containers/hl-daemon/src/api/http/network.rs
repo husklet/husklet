@@ -15,6 +15,15 @@ use crate::api::{
     Network, NetworkConnect, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune,
 };
 
+fn endpoint_error(error: hl_container::Error) -> ApiError {
+    match error {
+        hl_container::Error::AlreadyConnected { .. } | hl_container::Error::NotConnected { .. } => {
+            ApiError::new(StatusCode::FORBIDDEN, error.to_string())
+        }
+        error => ApiError::container(error),
+    }
+}
+
 #[derive(Default, Deserialize)]
 pub(super) struct ListQuery {
     pub(super) filters: Option<String>,
@@ -153,7 +162,7 @@ pub(super) async fn connect(
         .networks()
         .connect(&id, &request.container, spec)
         .await
-        .map_err(ApiError::container)?;
+        .map_err(endpoint_error)?;
     let network = state
         .containers
         .networks()
@@ -208,7 +217,43 @@ pub(super) async fn disconnect(
             Ok(StatusCode::OK)
         }
         Err(hl_container::Error::NotConnected { .. }) if request.force => Ok(StatusCode::OK),
-        Err(error) => Err(ApiError::container(error)),
+        Err(error) => Err(endpoint_error(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use hl_container::Error;
+
+    use super::endpoint_error;
+
+    #[test]
+    fn endpoint_state_conflicts_use_docker_forbidden_status() {
+        let container = "00000000000000000000000000000000".parse().unwrap();
+        let connected = endpoint_error(Error::AlreadyConnected {
+            container: container.clone(),
+            network: "frontend".into(),
+        });
+        assert_eq!(connected.status, StatusCode::FORBIDDEN);
+
+        let disconnected = endpoint_error(Error::NotConnected {
+            container,
+            network: "frontend".into(),
+        });
+        assert_eq!(disconnected.status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn endpoint_lookup_and_validation_keep_shared_mapping() {
+        assert_eq!(
+            endpoint_error(Error::NetworkNotFound("missing".into())).status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            endpoint_error(Error::InvalidNetwork("bad endpoint".into())).status,
+            StatusCode::BAD_REQUEST
+        );
     }
 }
 
