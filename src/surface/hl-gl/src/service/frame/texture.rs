@@ -211,14 +211,31 @@ mod tests {
 
     #[test]
     fn every_array_and_3d_sampler_variant_uses_the_correct_ir_dimension() {
-        for name in ["sampler2DArray", "isampler2DArray", "usampler2DArray"] {
-            assert_eq!(SamplerTextureKind::from_glsl(Some(name)), SamplerTextureKind::Array);
-            assert_eq!(SamplerTextureKind::from_glsl(Some(name)).texture_dim(), TextureDim::D2);
+        for name in [
+            "sampler2DArray",
+            "sampler2DArrayShadow",
+            "isampler2DArray",
+            "usampler2DArray",
+        ] {
+            assert_eq!(
+                SamplerTextureKind::from_glsl(Some(name)),
+                SamplerTextureKind::Array
+            );
+            assert_eq!(
+                SamplerTextureKind::from_glsl(Some(name)).texture_dim(),
+                TextureDim::D2
+            );
         }
         for name in ["sampler3D", "isampler3D", "usampler3D"] {
             assert_eq!(SamplerTextureKind::from_glsl(Some(name)), SamplerTextureKind::D3);
             assert_eq!(SamplerTextureKind::from_glsl(Some(name)).texture_dim(), TextureDim::D3);
         }
+        assert_eq!(
+            SamplerTextureKind::from_glsl(Some("samplerCubeShadow")),
+            SamplerTextureKind::Cube
+        );
+        assert_eq!(SamplerTextureKind::Array.placeholder_layers(), 2);
+        assert_eq!(SamplerTextureKind::D2.placeholder_layers(), 1);
     }
 }
 
@@ -257,8 +274,15 @@ enum SamplerTextureKind {
 impl SamplerTextureKind {
     fn from_glsl(name: Option<&str>) -> Self {
         match name {
-            Some("samplerCube" | "isamplerCube" | "usamplerCube") => Self::Cube,
-            Some("sampler2DArray" | "isampler2DArray" | "usampler2DArray") => Self::Array,
+            Some("samplerCube" | "samplerCubeShadow" | "isamplerCube" | "usamplerCube") => {
+                Self::Cube
+            }
+            Some(
+                "sampler2DArray"
+                | "sampler2DArrayShadow"
+                | "isampler2DArray"
+                | "usampler2DArray",
+            ) => Self::Array,
             Some("sampler3D" | "isampler3D" | "usampler3D") => Self::D3,
             _ => Self::D2,
         }
@@ -295,6 +319,15 @@ impl SamplerTextureKind {
                 draw.tex_3d_generations[unit],
                 draw.tex_3d_swizzles[unit],
             ),
+        }
+    }
+
+    fn placeholder_layers(self) -> u32 {
+        match self {
+            Self::Cube => 6,
+            // The executor derives a D2Array view from D2 plus multiple layers.
+            Self::Array => 2,
+            Self::D2 | Self::D3 => 1,
         }
     }
 }
@@ -461,8 +494,9 @@ pub(super) fn lower_textures(
                     // samples as — (0, 0, 0, 1) — and this placeholder is what an app hits after deleting a
                     // bound texture. A transparent (0,0,0,0) texel turned that geometry invisible instead of
                     // black, which is a much harder thing to notice than a black quad.
+                    let placeholder_layers = sampler_kind.placeholder_layers();
                     let (tex_ir, samp_ir, create_texture, create_sampler) =
-                        ctx.default_placeholder(texture_dim)?;
+                        ctx.default_placeholder(texture_dim, placeholder_layers)?;
                     let stage_ir = if create_texture {
                         let stage_ir = ctx.alloc_buffer_ir()?;
                         cmds.push(Cmd::CreateTexture(
@@ -470,11 +504,7 @@ pub(super) fn lower_textures(
                             TextureDesc {
                                 width: 1,
                                 height: 1,
-                                depth: if texture_dim == TextureDim::Cube {
-                                    6
-                                } else {
-                                    1
-                                },
+                                depth: placeholder_layers,
                                 mip_levels: 1,
                                 sample_count: 1,
                                 dim: texture_dim,
@@ -529,17 +559,19 @@ pub(super) fn lower_textures(
                         // Reusing the same staging buffer is sufficient, but every destination layer
                         // needs an explicit copy; initializing only +X leaves the other five faces
                         // undefined and makes empty/incomplete cubes transparent or nondeterministic.
-                        layer_stages: if texture_dim == TextureDim::Cube && stage_ir != 0 {
-                            (1..6).map(|layer| (stage_ir, layer)).collect()
+                        layer_stages: if stage_ir != 0 {
+                            match sampler_kind {
+                                SamplerTextureKind::Cube => {
+                                    (1..6).map(|layer| (stage_ir, layer)).collect()
+                                }
+                                SamplerTextureKind::Array => vec![(stage_ir, 1)],
+                                SamplerTextureKind::D2 | SamplerTextureKind::D3 => Vec::new(),
+                            }
                         } else {
                             Vec::new()
                         },
                         bytes_per_texel: 4,
-                        layers: if texture_dim == TextureDim::Cube {
-                            6
-                        } else {
-                            1
-                        },
+                        layers: placeholder_layers,
                     });
                     continue;
                 }

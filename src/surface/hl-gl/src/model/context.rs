@@ -96,7 +96,7 @@ pub struct GlContext {
     /// every used binding of the layout (the executor's used-binding filter then trims to the sampled set).
     /// Each view dimension needs a distinct native texture, while the dimension-independent sampler is
     /// created once and reused across every placeholder, draw, and frame.
-    default_placeholder_tex: [u32; 3],
+    default_placeholder_tex: [u32; 4],
     default_placeholder_samp: u32,
 
     /// Per-FBO offscreen render-target IR ids, keyed by color-attachment `(GL name, generation)` →

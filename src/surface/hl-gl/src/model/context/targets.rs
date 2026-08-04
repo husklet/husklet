@@ -204,8 +204,10 @@ impl GlContext {
     pub fn default_placeholder(
         &mut self,
         dim: TextureDim,
+        layers: u32,
     ) -> hl_gpu::Result<(u32, u32, bool, bool)> {
         let index = match dim {
+            TextureDim::D2 if layers > 1 => 3,
             TextureDim::D2 => 0,
             TextureDim::D3 => 1,
             TextureDim::Cube => 2,
