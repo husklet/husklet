@@ -6,6 +6,14 @@ targets, expected failures, environments, timeouts, exit status, and output.
 The 24 embedded source heredocs are category-owned fixtures under `source/`;
 the commands retain their original compile and execution steps.
 
+The legacy checker searched stdout and stderr as one combined byte stream,
+whereas the repository runner's `stdout_contains` oracle checks stdout alone.
+`weird/io-uring` and `weird/userfaultfd` emit their expected unsupported-host
+diagnostic through `perror`, so those two execution commands redirect stderr to
+stdout. The compiled programs, arguments, exit behavior, and expected bytes are
+unchanged; the redirection is the explicit bridge for the old combined-output
+contract.
+
 The legacy scheduler held one outer `ProcessHeavy` permit for the category while
 its inner case runner still admitted cases in parallel. The repository runner
 accounts for resources per case. All 24 source-fixture cases invoke a guest

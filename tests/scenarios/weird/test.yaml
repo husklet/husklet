@@ -156,7 +156,7 @@ cases:
     destination: /m.c
   actions:
   - shell:
-      script: cc /m.c -O2 -o /m && /m
+      script: cc /m.c -O2 -o /m && /m 2>&1
   expect:
     exit: 1
     stdout_contains: golden/io_uring.txt
@@ -510,7 +510,7 @@ cases:
     destination: /m.c
   actions:
   - shell:
-      script: cc /m.c -O2 -o /m && /m
+      script: cc /m.c -O2 -o /m && /m 2>&1
   expect:
     exit: 1
     stdout_contains: golden/userfaultfd.txt
