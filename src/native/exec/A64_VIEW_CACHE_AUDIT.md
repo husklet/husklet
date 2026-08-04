@@ -190,3 +190,71 @@ hit, prove forged count five cannot reach matching slot one, and pin the
 deferred two-word location structurally. Instrumentation remains typed and
 per-executor through `operand_cache_hits`/`operand_callbacks`; no global or
 always-on hot-path counter was added.
+
+## Slot-zero exact A/B measurement
+
+The exact comparison used parent `3a982426e1a9c4c75319844b903703ac8250af1c`,
+candidate `817818b5a71cb3c1faf008dc3176f50afb87849a`, and retained C
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. Each Rust tree was built alone
+with `CARGO_BUILD_JOBS=18 cargo build --locked --release -p testing --bin
+testing`. The resulting `testing` SHA-256 values were respectively
+`9ab6d567e4886c8d414cec4f9f7b1bbe83f3f8f5adec8d823992fbb2d3062334` and
+`f28f37528bd21269916b95fd36791c429b62107c1b6c1e3258920061f0ceec65`.
+The combined guest source hash was
+`ec97f6f5c598f6fc229231dbf4751fb298ebaf1ae04c530d8aecbc7a1ec926af` in
+both repositories. The retained C engine and guest hashes were
+`9c2701b36a46050909b12498eb0b47673f301bcb35d57e552d343b029cf3a67a`
+and `07756eb451ec3c063a6ffed129db76b8702d5a37be8ba9cbf79eb77944d052ee`.
+
+The Linux AArch64 host had 18 logical CPUs. Runs were pinned to CPU 17 with
+the `performance` governor; CPU 0 reported 2 GHz. At start, load was
+2.86/4.80/5.45, available RAM was 15 GiB, swap was 3.7/28 GiB used, `/Users`
+had 108 GiB free, and `/tmp` had 12 GiB free. During the run `/tmp` remained
+above 7.3 GiB; final load was 1.15/3.73/4.94 and no zombies were observed.
+
+Each row used one warmup followed by one measured repetition of the memory
+phase at divisor 20, alternating parent then candidate, with:
+
+```text
+taskset -c 17 env \
+  HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1' \
+  target/release/testing bench combined --isa arm64 --jobs 1 --results <path>
+```
+
+The temporary one-repetition manifest hash was
+`ac605af602c70db30b844507e5f51609bf6b174d295bbe71bbef14520219adcb`;
+the checked-in manifest and golden files were restored after measurement.
+Both binaries reported `Execution { native: true, diagnostics: true }`, output
+checksum `36526`, and the same nonzero diagnostics on every measured row:
+
+```text
+hl-native: runs=900 builds=229 hits=4898 fallbacks=16 sites=7 services=22
+hl-native-detail: fills=16 site_collisions=0 shared_collisions=0 branch=140 syscall=0 fallback=3626 yield=884 completed=58122035 operand_callbacks=2780 operand_cache_hits=833 x86_public_exits=0 x86_public_syscalls=0 x86_syscall_vector_dirty=0
+```
+
+| Pair | Parent guest/wall | Candidate guest/wall |
+|---:|---:|---:|
+| 1 | 174287 us / 205 ms | 225443 us / 262 ms |
+| 2 | 203011 us / 235 ms | 177993 us / 208 ms |
+| 3 | 179819 us / 210 ms | 230632 us / 266 ms |
+| 4 | 178573 us / 208 ms | 179696 us / 208 ms |
+| 5 | 183240 us / 214 ms | 239317 us / 276 ms |
+
+Parent guest time was min/median/max 174287/179819/203011 us with 6.10% CV;
+candidate was 177993/225443/239317 us with 13.97% CV. Parent wall time was
+205/210/235 ms with 5.58% CV; candidate was 208/262/276 ms with 13.63% CV.
+Paired guest deltas were +51156, -25018, +50813, +1123, and +56077 us.
+
+The pinned retained C engine was run directly on CPU 17 after one warmup:
+
+```text
+hl-engine-linux-aarch64 combined-bench-aarch64 --divisor 20 --phase memory
+```
+
+Its five guest samples were 6734, 6889, 6678, 6647, and 6805 us, all with
+checksum `36526`; min/median/max were 6647/6734/6889 us and CV was 1.45%.
+
+No performance claim is accepted. The Rust ranges overlap, one candidate pair
+was faster, another was effectively equal, and candidate variance was high.
+The median direction suggests a possible regression, not a demonstrated
+improvement, and requires a lower-noise repetition before acceptance.
