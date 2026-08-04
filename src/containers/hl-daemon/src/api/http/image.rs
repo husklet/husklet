@@ -105,62 +105,21 @@ impl DockerState {
     }
 
     async fn image_summaries_with_shared_size(&self, include_shared_size: bool) -> ApiResult<Vec<ImageSummary>> {
-        let mut grouped: BTreeMap<String, (i64, Vec<String>)> = BTreeMap::new();
         let records = self.image_records().await?;
         let images = self.containers.images().map_err(ApiError::container)?;
         let platform = self.platform.clone();
-        let records = tokio::task::spawn_blocking(move || {
-            let usage = images.usage(&records)?;
-            records
-                .into_iter()
-                .map(|image| {
-                    let id = image.target.digest().to_string();
-                    let usage = usage.get(&id).copied().ok_or_else(|| {
-                        hl_images::Error::InvalidMetadata(format!("image usage is missing target {id}"))
-                    })?;
-                    let labels = images.details(&image, &platform)?.labels;
-                    Ok::<_, hl_images::Error>((image, usage, labels))
-                })
-                .collect::<Result<Vec<_>, _>>()
+        tokio::task::spawn_blocking(move || {
+            build_image_summaries(
+                records,
+                include_shared_size,
+                |image| images.size(image),
+                |unique| images.usage(unique),
+                |image| images.details(image, &platform).map(|details| details.labels),
+            )
         })
         .await
         .map_err(ApiError::task)?
-        .map_err(ApiError::image)?;
-        let mut labels_by_id = BTreeMap::new();
-        let mut shared_by_id = BTreeMap::new();
-        for (image, usage, labels) in records {
-            let id = image.target.digest().to_string();
-            labels_by_id.insert(id.clone(), labels);
-            let size = i64::try_from(usage.size).unwrap_or(i64::MAX);
-            shared_by_id.insert(id.clone(), i64::try_from(usage.shared).unwrap_or(i64::MAX));
-            grouped
-                .entry(id)
-                .and_modify(|(_, tags)| tags.push(image.name.to_string()))
-                .or_insert_with(|| (size, vec![image.name.to_string()]));
-        }
-        Ok(grouped
-            .into_iter()
-            .map(|(id, (size, mut repo_tags))| {
-                repo_tags.sort();
-                let labels = labels_by_id.remove(&id).unwrap_or_default();
-                let shared_size = if include_shared_size {
-                    shared_by_id.remove(&id).unwrap_or_default()
-                } else {
-                    -1
-                };
-                ImageSummary {
-                    id,
-                    repo_tags,
-                    repo_digests: Vec::new(),
-                    created: 0,
-                    size,
-                    shared_size,
-                    virtual_size: size,
-                    labels,
-                    containers: -1,
-                }
-            })
-            .collect())
+        .map_err(ApiError::image)
     }
 
     pub(super) async fn find_image(&self, name: &str) -> ApiResult<hl_images::Image> {
@@ -177,6 +136,60 @@ impl DockerState {
             .find(|image| image.name.to_string() == canonical)
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {name}")))
     }
+}
+
+fn build_image_summaries<Size, Usage, Labels>(
+    records: Vec<hl_images::Image>,
+    include_shared_size: bool,
+    mut size: Size,
+    usage: Usage,
+    mut labels: Labels,
+) -> hl_images::Result<Vec<ImageSummary>>
+where
+    Size: FnMut(&hl_images::Image) -> hl_images::Result<u64>,
+    Usage: FnOnce(&[hl_images::Image]) -> hl_images::Result<BTreeMap<String, hl_images::ImageUsage>>,
+    Labels: FnMut(&hl_images::Image) -> hl_images::Result<BTreeMap<String, String>>,
+{
+    let mut grouped = BTreeMap::<String, (hl_images::Image, Vec<String>)>::new();
+    for image in records {
+        let id = image.target.digest().to_string();
+        grouped
+            .entry(id)
+            .and_modify(|(_, tags)| tags.push(image.name.to_string()))
+            .or_insert_with(|| {
+                let tag = image.name.to_string();
+                (image, vec![tag])
+            });
+    }
+    let unique = grouped.values().map(|(image, _)| image.clone()).collect::<Vec<_>>();
+    let usage = include_shared_size.then(|| usage(&unique)).transpose()?;
+    grouped
+        .into_iter()
+        .map(|(id, (image, mut repo_tags))| {
+            repo_tags.sort();
+            let (size_bytes, shared_size) = match &usage {
+                Some(usage) => {
+                    let usage = usage.get(&id).copied().ok_or_else(|| {
+                        hl_images::Error::InvalidMetadata(format!("image usage is missing target {id}"))
+                    })?;
+                    (usage.size, i64::try_from(usage.shared).unwrap_or(i64::MAX))
+                }
+                None => (size(&image)?, -1),
+            };
+            let size = i64::try_from(size_bytes).unwrap_or(i64::MAX);
+            Ok(ImageSummary {
+                id,
+                repo_tags,
+                repo_digests: Vec::new(),
+                created: 0,
+                size,
+                shared_size,
+                virtual_size: size,
+                labels: labels(&image)?,
+                containers: -1,
+            })
+        })
+        .collect()
 }
 
 mod archive;

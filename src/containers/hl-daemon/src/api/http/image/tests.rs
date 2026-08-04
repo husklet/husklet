@@ -1,4 +1,4 @@
-use super::{Fields, ImageSelection, ListQuery, Prune, RemoveQuery, removal_conflicts};
+use super::{Fields, ImageSelection, ListQuery, Prune, RemoveQuery, build_image_summaries, removal_conflicts};
 use axum::http::StatusCode;
 use std::collections::BTreeMap;
 
@@ -25,6 +25,111 @@ fn image_queries_reject_meaningful_unknown_options_before_work() {
         ..RemoveQuery::default()
     };
     assert!(remove.validate().unwrap());
+}
+
+#[test]
+fn summaries_without_shared_size_visit_each_target_once() {
+    let digest = format!("sha256:{}", "1".repeat(64));
+    let record = |name: &str| {
+        serde_json::from_value::<hl_images::Image>(serde_json::json!({
+            "name": name,
+            "target": {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": digest,
+                "size": 23
+            }
+        }))
+        .unwrap()
+    };
+    let sizes = std::cell::Cell::new(0);
+    let details = std::cell::Cell::new(0);
+    let summaries = build_image_summaries(
+        vec![record("example:first"), record("example:second")],
+        false,
+        |_| {
+            sizes.set(sizes.get() + 1);
+            Ok(101)
+        },
+        |_| panic!("shared descriptor accounting must be skipped"),
+        |_| {
+            details.set(details.get() + 1);
+            Ok(BTreeMap::from([("tier".into(), "test".into())]))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(sizes.get(), 1);
+    assert_eq!(details.get(), 1);
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].repo_tags, ["example:first", "example:second"]);
+    assert_eq!(summaries[0].size, 101);
+    assert_eq!(summaries[0].shared_size, -1);
+    assert_eq!(summaries[0].labels.get("tier").map(String::as_str), Some("test"));
+}
+
+#[test]
+fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
+    let record = |name: &str, digit: char| {
+        serde_json::from_value::<hl_images::Image>(serde_json::json!({
+            "name": name,
+            "target": {
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": format!("sha256:{}", digit.to_string().repeat(64)),
+                "size": 23
+            }
+        }))
+        .unwrap()
+    };
+    let usage_calls = std::cell::Cell::new(0);
+    let details = std::cell::Cell::new(0);
+    let summaries = build_image_summaries(
+        vec![
+            record("second:alias", '2'),
+            record("first:tag", '1'),
+            record("second:tag", '2'),
+        ],
+        true,
+        |_| panic!("individual size walks must be skipped"),
+        |unique| {
+            usage_calls.set(usage_calls.get() + 1);
+            assert_eq!(unique.len(), 2);
+            Ok(unique
+                .iter()
+                .map(|image| {
+                    (
+                        image.target.digest().to_string(),
+                        hl_images::ImageUsage { size: 200, shared: 75 },
+                    )
+                })
+                .collect())
+        },
+        |_| {
+            details.set(details.get() + 1);
+            Ok(BTreeMap::new())
+        },
+    )
+    .unwrap();
+
+    assert_eq!(usage_calls.get(), 1);
+    assert_eq!(details.get(), 2);
+    assert_eq!(summaries.len(), 2);
+    assert!(summaries.windows(2).all(|pair| pair[0].id < pair[1].id));
+    assert_eq!(summaries[1].repo_tags, ["second:alias", "second:tag"]);
+    assert!(
+        summaries
+            .iter()
+            .all(|summary| summary.size == 200 && summary.shared_size == 75)
+    );
+
+    let error = build_image_summaries(
+        vec![record("broken:tag", '3')],
+        false,
+        |_| Err(hl_images::Error::InvalidMetadata("unreadable target".into())),
+        |_| panic!("shared usage must remain skipped"),
+        |_| panic!("details must not run after a size failure"),
+    )
+    .unwrap_err();
+    assert!(matches!(error, hl_images::Error::InvalidMetadata(message) if message == "unreadable target"));
 }
 
 #[test]

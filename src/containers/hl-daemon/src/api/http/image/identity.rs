@@ -161,7 +161,7 @@ impl RemoveQuery {
     }
 }
 
-fn removal_conflicts(
+pub(super) fn removal_conflicts(
     force: bool,
     selected_by_id: bool,
     alias_count: usize,
