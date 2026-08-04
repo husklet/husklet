@@ -1,5 +1,108 @@
 # Native memory performance
 
+## 2026-08-04 projected-guard diagnostic benchmark
+
+This measurement used commit `6e7d7b365acf96dc3297d64f88cbe84eef0e0ce1`,
+whose tree was identical to the isolated verification commit `dae0f6645`. The
+release `testing` executable had SHA-256
+`09b60dc41a9bbe12d4cc87280d17331dc03f6b7b745ad977e27cd8530885961c`.
+The combined benchmark inputs were:
+
+| Input | SHA-256 |
+|---|---|
+| `tests/bench/combined/main.c` | `ec97f6f5c598f6fc229231dbf4751fb298ebaf1ae04c530d8aecbc7a1ec926af` |
+| checked-in `test.yaml` | `7785ed330f229be8208cb244235795d57bfaa48ede6dfd14deb4a53dc8ee1312` |
+| checked-in golden output | `5a792b8c5753e677ba5935c420473e4bbf3cb9d1b541e69ffa1ecd43dddb8ab3` |
+| compiled guest artifact | `a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9` |
+
+The runner was pinned to CPU 17 with `taskset`, used `HL_BENCH_JOBS=1`,
+selected the AArch64 target and Alpine 3.20 image, and obtained native execution
+and diagnostics through the typed manifest value
+`Execution { native: true, diagnostics: true }`. Each row comprised one cold
+invocation, one discarded warm-up, and five measured invocations. The TSV
+format retains aggregate minimum, median, percentiles, and maximum rather than
+the five individual wall-time samples.
+
+The checked-in golden file contains the bytes `PHASE ` followed by a newline.
+That sequence cannot occur in valid output such as `PHASE compute...`, so the
+original full run stopped after its valid cold invocation. The recorded full
+run temporarily used the same marker without its newline. That temporary
+manifest had SHA-256
+`4e36e4382a7d0fb42c6bb6cada84091643330f0beabd817d7424f4c50a1f3e79`,
+the marker had SHA-256
+`2da68fe0147872049a3dd60f4015b7fe1fb00bbe74750509e998ebc81416a181`,
+and the resulting TSV had SHA-256
+`a9aee8d12a9dbcee4f5d06d2a64f5db9f3988e1517d64e083f6010b79d39bdc0`.
+The fixture was restored after measurement. A separate temporary memory-only
+manifest had SHA-256
+`caf0a97d01f92a8635959df55250fa857916762fd2f461d09e19138016da1b90`;
+its TSV had SHA-256
+`040c104d132bc2c23debef9b32deb821871bd5db4098382fd0e09853c9250d99`.
+
+The full instrumented Rust row reported wall times of 110,175 ms cold, 111,183
+ms minimum, 112,082 ms median, and 112,293 ms at p90, p99, and maximum. Phase
+medians were:
+
+| Phase | Median (us) | Phase | Median (us) |
+|---|---:|---|---:|
+| atomics | 1,636,349 | branch | 28,713 |
+| calls | 3,955,585 | compute | 21,327 |
+| compute cold | 6,775 | crypto | 58,388,347 |
+| file | 157,897 | float SIMD | 13,850,480 |
+| integer division | 50,755 | malloc | 9,575,034 |
+| memory | 184,855 | mmap | 185,256 |
+| pipe | 519,994 | signal | 2,899,250 |
+| string | 8,796,632 | syscall | 234,584 |
+| TLB | 417,312 | | |
+
+Every one of the seven invocations, including cold and warm-up, produced the
+same diagnostics: 139,490 runs, 6,144 builds, 154,787 block-cache hits, 1,149
+fallbacks, 207 sites, 541,573 services, 352 fills, 5,105 branches, 135,001
+syscalls, 4,670 typed fallback exits, 3,340 yields, and 220,489,167 completed
+guest instructions. It recorded 2,841 operand callbacks and 891 operand-cache
+hits. Of 29,062,284 guard outcomes, none used the fast path, 29,057,714 used
+the full path, and 4,570 fell back. Stores reserved 14,550,655 dirty entries,
+overflowed 175 times, committed 14,550,655 entries, and merged 14,544,592 of
+them. No slim exit occurred.
+
+The memory-only row reported 264 ms cold, 186 ms minimum, 225 ms median, and
+236 ms at p90, p99, and maximum. Its memory phase was 151,936 us minimum,
+182,602 us median, and 185,539 us at p90, p99, and maximum. All seven
+invocations again agreed: 900 runs, 229 builds, 4,898 block-cache hits, 16
+fallbacks, 7 sites, 22 services, 16 fills, 140 branches, zero syscalls, 3,626
+typed fallback exits, 884 yields, 58,122,035 completed guest instructions,
+2,780 operand callbacks, and 833 operand-cache hits. It recorded zero fast
+guards, 29,021,179 full guards, 3,626 guard fallbacks, 14,536,779 dirty
+reservations and commits, 3 overflows, 14,534,044 merges, and zero slim exits.
+
+The retained-C control used source at
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`; its benchmark source was
+byte-identical to the Rust fixture. The available retained engine artifact
+`build/unit-audit/linux-production/hl-engine-linux-aarch64` had SHA-256
+`9c2701b36a46050909b12498eb0b47673f301bcb35d57e552d343b029cf3a67a`,
+and `perf/combined-bench-aarch64` had SHA-256
+`07756eb451ec3c063a6ffed129db76b8702d5a37be8ba9cbf79eb77944d052ee`.
+Because Ninja was unavailable, their binding to that retained source revision
+could not be rebuilt or verified. The C results are therefore a
+non-authoritative, artifact-bound control, not exact-source evidence.
+
+The C memory phase samples were 7,352, 6,535, 6,531, 6,711, and 6,544 us,
+with a 6,544 us median; the Rust standalone memory-phase median was 27.90
+times larger. C full wall samples were 0.389, 0.369, 0.374, 0.363, and 0.363
+seconds, with a 0.369-second median; the Rust full median was 303.745 times
+larger. Selected C phase medians and Rust/C ratios were memory 6,582 us and
+28.085x, crypto 35,750 us and 1,633.24x, floating point 6,825 us and
+2,029.37x, malloc 14,913 us and 642.06x, string 10,410 us and 845.02x, and
+calls 6,762 us and 584.97x.
+
+This experiment makes no optimization or speed claim. Its diagnostic emission
+adds counter instructions directly to the hot guard and dirty-journal paths,
+so the timings characterize the instrumented cost decomposition rather than a
+production baseline. The evidence establishes that this instrumented revision
+never selected its projected fast guard, executed about 29 million full guards,
+and merged almost every committed dirty range; it does not by itself establish
+the improvement obtainable from any proposed replacement.
+
 ## 2026-08-03 AArch64 memory profile
 
 The pinned `combined-bench --phase memory --divisor 20` comparison remains
