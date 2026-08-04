@@ -95,10 +95,9 @@ impl Workspace {
     }
     /// The on-disk directory holding this workspace's persistent state (honors a configured `storage`).
     pub fn storage_dir(&self, base: &Path) -> PathBuf {
-        self.storage.clone().unwrap_or_else(|| {
-            base.join("workspaces")
-                .join(Self::storage_component(&self.name))
-        })
+        self.storage
+            .clone()
+            .unwrap_or_else(|| base.join("workspaces").join(Self::storage_component(&self.name)))
     }
     /// The default shell command to run in the workspace.
     pub fn default_shell() -> Vec<String> {

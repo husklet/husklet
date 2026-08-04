@@ -21,10 +21,7 @@ impl Key {
             return Err(Error::InvalidKey(value));
         }
         if value.split('/').any(|component| {
-            component.is_empty()
-                || component == "."
-                || component == ".."
-                || component.as_bytes().contains(&0)
+            component.is_empty() || component == "." || component == ".." || component.as_bytes().contains(&0)
         }) {
             return Err(Error::InvalidKey(value));
         }
@@ -121,10 +118,8 @@ impl<S: Storage> Storage for Namespace<S> {
     type Error = S::Error;
 
     fn put(&self, key: &Key, bytes: &[u8]) -> Result<(), Self::Error> {
-        self.storage.put(
-            &self.prefix.join(key.as_str()).expect("validated keys join"),
-            bytes,
-        )
+        self.storage
+            .put(&self.prefix.join(key.as_str()).expect("validated keys join"), bytes)
     }
 
     fn get(&self, key: &Key) -> Result<Vec<u8>, Self::Error> {
@@ -134,10 +129,7 @@ impl<S: Storage> Storage for Namespace<S> {
 
     fn list(&self, prefix: Option<&Key>) -> Result<Vec<Key>, Self::Error> {
         let absolute = match prefix {
-            Some(prefix) => self
-                .prefix
-                .join(prefix.as_str())
-                .expect("validated keys join"),
+            Some(prefix) => self.prefix.join(prefix.as_str()).expect("validated keys join"),
             None => self.prefix.clone(),
         };
         let base = format!("{}/", self.prefix.as_str());
@@ -224,17 +216,14 @@ impl Storage for Directory {
 
     fn put(&self, key: &Key, bytes: &[u8]) -> Result<(), Self::Error> {
         let path = self.path_for(key)?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| Error::InvalidKey(key.to_string()))?;
+        let parent = path.parent().ok_or_else(|| Error::InvalidKey(key.to_string()))?;
         std::fs::create_dir_all(parent)?;
         let replacement = path.with_extension(format!(
             "replace-{}-{}",
             std::process::id(),
             REPLACEMENT.fetch_add(1, Ordering::Relaxed)
         ));
-        let result =
-            std::fs::write(&replacement, bytes).and_then(|()| std::fs::rename(&replacement, &path));
+        let result = std::fs::write(&replacement, bytes).and_then(|()| std::fs::rename(&replacement, &path));
         if result.is_err() {
             let _ = std::fs::remove_file(&replacement);
         }
@@ -294,25 +283,14 @@ mod tests {
     fn namespace_confines_and_relativizes_keys() {
         let temporary = TestDirectory::new("namespace");
         let directory = Directory::open(&temporary.path).unwrap();
-        let checkpoint =
-            Namespace::new(directory.clone(), Key::parse("checkpoint/current").unwrap());
-        checkpoint
-            .put(&Key::parse("proc.7/pages").unwrap(), b"pages")
-            .unwrap();
+        let checkpoint = Namespace::new(directory.clone(), Key::parse("checkpoint/current").unwrap());
+        checkpoint.put(&Key::parse("proc.7/pages").unwrap(), b"pages").unwrap();
         directory
             .put(&Key::parse("settings/workspace").unwrap(), b"settings")
             .unwrap();
 
-        assert_eq!(
-            checkpoint
-                .get(&Key::parse("proc.7/pages").unwrap())
-                .unwrap(),
-            b"pages"
-        );
-        assert_eq!(
-            checkpoint.list(None).unwrap(),
-            [Key::parse("proc.7/pages").unwrap()]
-        );
+        assert_eq!(checkpoint.get(&Key::parse("proc.7/pages").unwrap()).unwrap(), b"pages");
+        assert_eq!(checkpoint.list(None).unwrap(), [Key::parse("proc.7/pages").unwrap()]);
         assert_eq!(
             std::fs::read(temporary.path.join("checkpoint/current/proc.7/pages")).unwrap(),
             b"pages"
@@ -334,9 +312,7 @@ mod tests {
         let directory = Directory::open(&temporary.path).unwrap();
         std::os::unix::fs::symlink(&outside.path, temporary.path.join("escape")).unwrap();
 
-        assert!(directory
-            .put(&Key::parse("escape/value").unwrap(), b"bad")
-            .is_err());
+        assert!(directory.put(&Key::parse("escape/value").unwrap(), b"bad").is_err());
         assert!(!outside.path.join("value").exists());
     }
 }
