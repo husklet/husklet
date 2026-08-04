@@ -30,16 +30,10 @@ pub struct Choice {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum FieldKind {
-    Text {
-        placeholder: String,
-        secret: bool,
-    },
+    Text { placeholder: String, secret: bool },
     Toggle,
     Choices(Vec<Choice>),
-    Number {
-        minimum: Option<i64>,
-        maximum: Option<i64>,
-    },
+    Number { minimum: Option<i64>, maximum: Option<i64> },
 }
 
 #[derive(Clone, PartialEq, Debug)]

@@ -1,6 +1,4 @@
-use hl_gui::{
-    Element, Event, EventId, Events, Field, FieldId, FieldKind, ListItem, Settings, Value, View,
-};
+use hl_gui::{Element, Event, EventId, Events, Field, FieldId, FieldKind, ListItem, Settings, Value, View};
 
 #[derive(Default)]
 struct Recorded(Vec<Event>);
@@ -52,10 +50,7 @@ fn application_composes_navigation_rows_without_gui_policy() {
 
     let view = View::new(
         "Workspaces",
-        [Element::section(
-            "Configured",
-            [Element::list([item.clone()])],
-        )],
+        [Element::section("Configured", [Element::list([item.clone()])])],
     );
     assert_eq!(
         view.content,

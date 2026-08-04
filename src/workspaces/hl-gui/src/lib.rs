@@ -7,9 +7,7 @@ mod component;
 mod settings;
 mod size;
 
-pub use component::{
-    Action, Component, Dialog, Element, Event, EventId, Events, ListItem, Role, View,
-};
+pub use component::{Action, Component, Dialog, Element, Event, EventId, Events, ListItem, Role, View};
 pub use settings::{Choice, Field, FieldId, FieldKind, Settings, Value};
 pub use size::ByteSize;
 
