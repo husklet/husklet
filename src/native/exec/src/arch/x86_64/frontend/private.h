@@ -97,6 +97,11 @@ void hl_x86_emit_dirty(uint32_t *words, uint32_t *cursor);
 void hl_x86_emit_store(uint32_t *words, uint32_t *cursor, const instruction *item);
 uint32_t hl_x86_xchg_words(const instruction *item);
 void hl_x86_emit_xchg(uint32_t *words, uint32_t *cursor, const instruction *item);
+int hl_x86_decode_xadd(const hl_x86_a64_request *request, decode *block, instruction *item,
+                       uint8_t opcode, uint8_t rex, uint8_t operand_16, uint8_t address_32,
+                       uint8_t lock, size_t start, size_t *cursor);
+uint32_t hl_x86_xadd_words(const instruction *item);
+void hl_x86_emit_xadd(uint32_t *words, uint32_t *cursor, const instruction *item);
 uint32_t hl_x86_cmpxchg_words(const instruction *item);
 void hl_x86_emit_cmpxchg(uint32_t *words, uint32_t *cursor, const instruction *item);
 uint32_t hl_x86_vector_words(const instruction *item);

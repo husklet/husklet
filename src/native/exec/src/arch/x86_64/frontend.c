@@ -97,7 +97,10 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             break;
         }
         if (semantic_prefix == 0xf0u && opcode != 0xf6u && opcode != 0xf7u &&
-            opcode != 0x86u && opcode != 0x87u) {
+            opcode != 0x86u && opcode != 0x87u &&
+            !(opcode == 0x0fu && cursor < request->guest_size &&
+              (request->guest_bytes[cursor] == 0xb0u || request->guest_bytes[cursor] == 0xb1u ||
+               request->guest_bytes[cursor] == 0xc0u || request->guest_bytes[cursor] == 0xc1u))) {
             cursor = start;
             block->status = HL_X86_A64_UNSUPPORTED;
             block->exit = HL_X86_A64_INTERPRETER;
@@ -117,7 +120,9 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                   ((request->guest_bytes[cursor + 1u] >> 3) & 7u) == 1u))))) &&
             !(semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0x51u || request->guest_bytes[cursor] == 0x58u ||
-               request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5eu))) {
+               request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5eu)) &&
+            !((semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) && opcode == 0x0fu &&
+              cursor < request->guest_size && request->guest_bytes[cursor] == 0xc3u)) {
             cursor = start;
             block->status = HL_X86_A64_UNSUPPORTED;
             block->exit = HL_X86_A64_INTERPRETER;
@@ -554,6 +559,12 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->destination = (uint8_t)(raw - 4u);
                 item->destination_high = 1u;
             }
+        } else if ((semantic_prefix == 0u || semantic_prefix == 0xf0u) && opcode == 0x0fu &&
+                   cursor < request->guest_size && cursor - start < 15u &&
+                   (request->guest_bytes[cursor] == 0xc0u || request->guest_bytes[cursor] == 0xc1u)) {
+            uint8_t extension = request->guest_bytes[cursor++];
+            if (!hl_x86_decode_xadd(request, block, item, extension, rex, operand_16,
+                                    address_32, semantic_prefix == 0xf0u, start, &cursor)) break;
         } else if ((semantic_prefix == 0u || semantic_prefix == 0xf0u) &&
                    (request->flags & HL_X86_A64_LSE) != 0u && opcode == 0x0fu &&
                    cursor < request->guest_size && cursor - start < 15u &&
@@ -604,6 +615,12 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         } else if ((opcode == 0x86u || opcode == 0x87u) && semantic_prefix == 0xf0u) {
             cursor = start; block->status = HL_X86_A64_UNSUPPORTED;
             block->exit = HL_X86_A64_INTERPRETER; break;
+        } else if ((semantic_prefix == 0u || semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) &&
+                   opcode == 0x0fu && cursor < request->guest_size &&
+                   request->guest_bytes[cursor] == 0xc3u) {
+            ++cursor;
+            if (!hl_x86_decode_store(request, block, item, 0x89u, rex, operand_16,
+                                     address_32, start, &cursor)) break;
         } else if ((opcode == 0x88u || opcode == 0x89u) && cursor < request->guest_size &&
                    (request->guest_bytes[cursor] >> 6) != 3u) {
             if (!hl_x86_decode_store(request, block, item, opcode, rex, operand_16,
@@ -1053,6 +1070,11 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (block.instructions[index].operation == OP_XCHG) {
             words += hl_x86_xchg_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << block.instructions[index].destination;
+        } else if (block.instructions[index].operation == OP_XADD) {
+            words += hl_x86_xadd_words(&block.instructions[index]);
+            dirty |= UINT32_C(1) << block.instructions[index].source;
+            if (block.instructions[index].memory_operand == 0u)
+                dirty |= UINT32_C(1) << block.instructions[index].destination;
         } else if (block.instructions[index].operation == OP_CMPXCHG) {
             words += hl_x86_cmpxchg_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << 0;
@@ -1229,6 +1251,10 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (item->operation == OP_XCHG) {
             hl_x86_emit_xchg(request->host_words, &words, item);
             dirty |= UINT32_C(1) << item->destination;
+        } else if (item->operation == OP_XADD) {
+            hl_x86_emit_xadd(request->host_words, &words, item);
+            dirty |= UINT32_C(1) << item->source;
+            if (item->memory_operand == 0u) dirty |= UINT32_C(1) << item->destination;
         } else if (item->operation == OP_CMPXCHG) {
             hl_x86_emit_cmpxchg(request->host_words, &words, item);
             dirty |= UINT32_C(1) << 0;

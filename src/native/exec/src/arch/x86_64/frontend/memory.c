@@ -355,6 +355,175 @@ void hl_x86_emit_xchg(uint32_t *words, uint32_t *cursor, const instruction *item
     branch(done, &words[*cursor], 14u);
 }
 
+int hl_x86_decode_xadd(const hl_x86_a64_request *request, decode *block, instruction *item,
+                       uint8_t opcode, uint8_t rex, uint8_t operand_16, uint8_t address_32,
+                       uint8_t lock, size_t start, size_t *cursor) {
+    uint8_t modrm, raw;
+    if (*cursor >= request->guest_size || *cursor - start >= 15u) {
+        *cursor = start; block->status = HL_X86_A64_TRUNCATED;
+        block->exit = HL_X86_A64_INTERPRETER; return 0;
+    }
+    modrm = request->guest_bytes[*cursor]; raw = (modrm >> 3) & 7u;
+    item->operation = OP_XADD;
+    item->source = (uint8_t)(raw | ((rex & 4u) << 1));
+    item->width = opcode == 0xc0u ? 1u : (rex & 8u) ? 8u : operand_16 ? 2u : 4u;
+    item->condition = lock;
+    if (opcode == 0xc0u && rex == 0u && raw >= 4u) {
+        item->source = (uint8_t)(raw - 4u); item->source_high = 8u;
+    }
+    if ((modrm >> 6) == 3u) {
+        uint8_t rm = modrm & 7u;
+        if (lock) {
+            *cursor = start; block->status = HL_X86_A64_UNSUPPORTED;
+            block->exit = HL_X86_A64_INTERPRETER; return 0;
+        }
+        ++*cursor; item->destination = (uint8_t)(rm | ((rex & 1u) << 3));
+        if (opcode == 0xc0u && rex == 0u && rm >= 4u) {
+            item->destination = (uint8_t)(rm - 4u); item->destination_high = 1u;
+        }
+        return 1;
+    }
+    if ((request->flags & HL_X86_A64_LSE) == 0u) {
+        *cursor = start; block->status = HL_X86_A64_UNSUPPORTED;
+        block->exit = HL_X86_A64_INTERPRETER; return 0;
+    }
+    if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, cursor)) return 0;
+    item->operation = OP_XADD; item->memory_operand = 1u; item->memory_write = 1u;
+    item->source = (uint8_t)(raw | ((rex & 4u) << 1));
+    if (opcode == 0xc0u && rex == 0u && raw >= 4u) {
+        item->source = (uint8_t)(raw - 4u); item->source_high = 8u;
+    }
+    item->width = opcode == 0xc0u ? 1u : (rex & 8u) ? 8u : operand_16 ? 2u : 4u;
+    item->condition = lock;
+    return 1;
+}
+
+void hl_x86_emit_xadd(uint32_t *words, uint32_t *cursor, const instruction *item) {
+    instruction add = *item;
+    if (!item->memory_operand) {
+        words[(*cursor)++] = item->width == 1u ?
+            (item->destination_high ? UINT32_C(0xd3483c00) : UINT32_C(0xd3401c00)) |
+            item->destination << 5 | 19u :
+            (item->width == 8u ? UINT32_C(0xaa0003f3) : UINT32_C(0x2a0003f3)) |
+            item->destination << 16;
+        words[(*cursor)++] = item->width == 1u ?
+            (item->source_high ? UINT32_C(0xd3483c00) : UINT32_C(0xd3401c00)) |
+            item->source << 5 | 21u :
+            (item->width == 8u ? UINT32_C(0xaa0003f5) : UINT32_C(0x2a0003f5)) |
+            item->source << 16;
+        words[(*cursor)++] = UINT32_C(0xaa1303f9); /* preserve pre-image in x25 */
+        add.destination = 19u; add.source = 21u; add.destination_high = 0u; add.source_high = 0u;
+        add.memory_operand = 0u; add.memory_write = 0u; add.alu_kind = 0u; add.flags_only = 1u;
+        hl_x86_emit_alu(words, cursor, &add); /* result remains in x18 */
+        if (item->width == 1u)
+            words[(*cursor)++] = (item->source_high ? UINT32_C(0xb3781c00) : UINT32_C(0xb3401c00)) |
+                                 25u << 5 | item->source;
+        else if (item->width == 2u)
+            words[(*cursor)++] = UINT32_C(0xb3403c00) | 25u << 5 | item->source;
+        else
+            words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |
+                                 25u << 16 | item->source;
+        if (item->width == 1u)
+            words[(*cursor)++] = (item->destination_high ? UINT32_C(0xb3781c00) : UINT32_C(0xb3401c00)) |
+                                 18u << 5 | item->destination;
+        else if (item->width == 2u)
+            words[(*cursor)++] = UINT32_C(0xb3403c00) | 18u << 5 | item->destination;
+        else
+            words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |
+                                 18u << 16 | item->destination;
+        return;
+    }
+    {
+        uint32_t *below, *overflow, *above, *readable, *writable, *unaligned, *done;
+        unsigned source = item->source;
+        hl_x86_emit_address(words, cursor, item); --*cursor;
+        if (item->source_high) {
+            words[(*cursor)++] = UINT32_C(0x53083c00) | source << 5 | 21u;
+            source = 21u;
+        } else
+            words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003f5) : UINT32_C(0x2a0003f5)) |
+                                 source << 16;
+        words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
+        words[(*cursor)++] = UINT32_C(0xeb11021f); below = &words[(*cursor)++];
+        words[(*cursor)++] = UINT32_C(0xb1000000) | (uint32_t)item->width << 10 | 16u << 5 | 18u;
+        overflow = &words[(*cursor)++];
+        words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_last));
+        words[(*cursor)++] = UINT32_C(0xeb11025f); above = &words[(*cursor)++];
+        words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_permissions));
+        readable = &words[(*cursor)++]; writable = &words[(*cursor)++];
+        if (item->width != 1u) {
+            emit_constant(words, cursor, 19u, item->width - 1u);
+            words[(*cursor)++] = UINT32_C(0xea00001f) | 19u << 16 | 16u << 5;
+            unaligned = &words[(*cursor)++];
+        } else unaligned = NULL;
+        words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_delta));
+        words[(*cursor)++] = UINT32_C(0x8b110211);
+        words[(*cursor)++] = UINT32_C(0xaa1103f8); /* preserve admitted host EA across flag lowering */
+        {
+            uint32_t size = item->width == 8u ? UINT32_C(0xc0000000) :
+                            item->width == 4u ? UINT32_C(0x80000000) :
+                            item->width == 2u ? UINT32_C(0x40000000) : 0u;
+            words[(*cursor)++] = UINT32_C(0x38e00000) | size | source << 16 | 17u << 5 | 19u;
+        }
+        add.destination = 19u; add.source = 21u; add.destination_high = 0u; add.source_high = 0u;
+        add.memory_operand = 0u; add.memory_write = 0u; add.alu_kind = 0u; add.flags_only = 1u;
+        hl_x86_emit_alu(words, cursor, &add);
+        if (item->width == 1u)
+            words[(*cursor)++] = (item->source_high ? UINT32_C(0xb3781c00) : UINT32_C(0xb3401c00)) |
+                                 19u << 5 | item->source;
+        else if (item->width == 2u)
+            words[(*cursor)++] = UINT32_C(0xb3403c00) | 19u << 5 | item->source;
+        else
+            words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |
+                                 19u << 16 | item->source;
+        words[(*cursor)++] = UINT32_C(0xd2800031);
+        words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, memory_written));
+        words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_delta));
+        words[(*cursor)++] = UINT32_C(0xcb110310) | 24u << 5;
+        words[(*cursor)++] = UINT32_C(0x91000012) | (uint32_t)item->width << 10 | 16u << 5;
+        hl_x86_emit_dirty(words, cursor);
+        words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_permissions));
+        words[(*cursor)++] = load_word(18, offsetof(hl_native_x86_64_cpu, executable_written));
+        words[(*cursor)++] = UINT32_C(0xaa120231);
+        words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, executable_written));
+        done = &words[(*cursor)++];
+        {
+            uint32_t *fault = &words[*cursor];
+            branch(below, fault, 3u); branch(overflow, fault, 2u); branch(above, fault, 8u);
+            test(readable, fault, 0u); test(writable, fault, 1u);
+            words[(*cursor)++] = store_word(16, offsetof(hl_native_x86_64_cpu, fault_address));
+            words[(*cursor)++] = UINT32_C(0xd2800071);
+            words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, fault_access));
+            emit_constant(words, cursor, 17u, item->width);
+            words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, fault_size));
+            emit_constant(words, cursor, 17u, item->pc);
+            words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, program));
+            words[(*cursor)++] = UINT32_C(0xd2800071);
+            words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, reason));
+            if (item->live_chain) { hl_x86_finish_chain(words, cursor); hl_x86_spill_all(words, cursor); }
+            words[(*cursor)++] = UINT32_C(0xd65f03c0);
+        }
+        {
+            uint32_t *fallback = &words[*cursor];
+            if (unaligned) branch(unaligned, fallback, 1u);
+            emit_constant(words, cursor, 17u, item->pc);
+            words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, program));
+            emit_constant(words, cursor, 17u, HL_NATIVE_EXIT_FALLBACK);
+            words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, reason));
+            if (item->live_chain) { hl_x86_finish_chain(words, cursor); hl_x86_spill_all(words, cursor); }
+            words[(*cursor)++] = UINT32_C(0xd65f03c0);
+        }
+        branch(done, &words[*cursor], 14u);
+        return;
+    }
+}
+
+uint32_t hl_x86_xadd_words(const instruction *item) {
+    uint32_t scratch[512], cursor = 0;
+    hl_x86_emit_xadd(scratch, &cursor, item);
+    return cursor;
+}
+
 uint32_t hl_x86_cmpxchg_words(const instruction *item) {
     uint32_t scratch[256], cursor = 0;
     hl_x86_emit_cmpxchg(scratch, &cursor, item);

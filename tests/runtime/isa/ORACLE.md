@@ -26,6 +26,12 @@ The read-only retained engine was audited at these implementation entry points:
 - `../engine/src/translator/guest/x86_64/cmpxchg.c`: `hl_x86_cmpxchg16`. The 16-byte operation is guarded
   by a bounded hashed atomic-lock table; memory comparison/update is indivisible and flags and observed
   accumulator values are published before unlock.
+- `../engine/src/translator/guest/x86_64/translate.c`: the `0F C0/C1` XADD dispatch and its `emit_ea`,
+  `emit_memory_guard`, `e_lse(LSE_LDADD)`, `do_alu`, `byte_val`, and `byte_wb` call graph; and
+  `../engine/src/translator/guest/x86_64/interp.c`: the `0F C0/C1` interpreter dispatch,
+  `interp_locked_rmw`, `interp_rm_read`, `interp_reg_write`, `interp_rm_write`, and `interp_alu_add`.
+  The register pre-image is captured before either destination changes, the source register is written
+  before the sum so aliases retain the sum, and memory admission precedes the indivisible update.
 - `../engine/src/translator/guest/x86_64/x87state.c`, `x87math.c`, and `lower/x87_stack.c`: x87 TOP,
   emptiness tags, exceptions, indefinite values, save/restore, and materialization ownership.
 - `../engine/src/translator/guest/x86_64/legacy.c`, `rep_runtime.c`, and `translit/translit.c`: legacy
@@ -53,6 +59,8 @@ same guest-address contract.
 | Exclusive reservation generations, invalidation, ordering | `hl-memory/src/atomic_access.rs`, `reservation.rs` | implemented |
 | Per-task AArch64 reservation lifetime and fork/reset clearing | `hl-execution/src/aarch64/state.rs`, `hl-engine/src/ffi/linux/execution/fork.rs` | implemented |
 | x86 compare-exchange decode/lowering | `hl-execution/src/x86`, `native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
+| x86 XADD widths, byte-register identity, ADD flags, dual destinations | `native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
+| x86 XADD memory R/W admission, aligned LDADDAL, split-lock fallback, dirty/executable publication | `native/exec/src/arch/x86_64/frontend/memory.c` | implemented |
 | x87 control/status/value/class state | `hl-execution/src/x86`, Linux signal-frame adapter | implemented |
 | Native AArch64 provenance for exclusive/LSE/CASP | `native/exec/test/aarch64_provenance.c` | divergent: fallback-only until monitor state is ported |
 | Exact ET_EXEC guest-address identity with internal host placement | loader/memory/native execution composition | acceptance coverage retained by the non-PIE cases |

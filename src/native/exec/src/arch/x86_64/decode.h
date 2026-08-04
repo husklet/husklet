@@ -30,6 +30,7 @@ enum operation {
     OP_SET,
     OP_STORE,
     OP_XCHG,
+    OP_XADD,
     OP_CMPXCHG,
     OP_CONTROL,
     OP_CALL,
