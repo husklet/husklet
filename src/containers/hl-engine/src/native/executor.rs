@@ -4133,6 +4133,73 @@ mod test {
 
     #[cfg(target_arch = "aarch64")]
     #[test]
+    fn x86_large_rep_resumes_by_element_budget() {
+        const COUNT: usize = (1 << 20) + 17;
+        const BUDGET: u64 = 65_536;
+        const FIRST: u64 = 0x20_0000;
+        let executor = Executor::create().unwrap();
+        let mut storage = vec![0_u8; COUNT * 2];
+        for (index, byte) in storage[..COUNT].iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let view = ProjectionView {
+            guest_first: FIRST,
+            guest_last: FIRST + storage.len() as u64,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 31,
+            permissions: 3,
+            reserved: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 31,
+            active: 0,
+        };
+        let bytes = [0xf3, 0xa4, 0x0f, 0x05];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
+        let mut cpu = X86CpuState {
+            rip: 0x5000,
+            ..X86CpuState::default()
+        };
+        cpu.registers[1] = COUNT as u64;
+        cpu.registers[6] = FIRST;
+        cpu.registers[7] = FIRST + COUNT as u64;
+        let mut resolve = |_: u64, _: &mut [u8]| None;
+
+        for turn in 1..=COUNT as u64 / BUDGET {
+            let outcome = executor
+                .run_x86(&mut cpu, &source, 31, 1, BUDGET, false, Some(&projection), &mut resolve)
+                .unwrap()
+                .0;
+            assert_eq!(
+                (outcome.exit, outcome.executed, outcome.remaining),
+                (Exit::Yield, BUDGET, 0)
+            );
+            assert_eq!(cpu.rip, 0x5000);
+            assert_eq!(cpu.registers[1], COUNT as u64 - turn * BUDGET);
+            assert_eq!(cpu.registers[6], FIRST + turn * BUDGET);
+            assert_eq!(cpu.registers[7], FIRST + COUNT as u64 + turn * BUDGET);
+        }
+
+        let outcome = executor
+            .run_x86(&mut cpu, &source, 31, 1, BUDGET, false, Some(&projection), &mut resolve)
+            .unwrap()
+            .0;
+        assert_eq!(outcome.exit, Exit::Syscall);
+        assert_eq!(outcome.executed, 18);
+        assert_eq!(
+            (cpu.registers[1], cpu.registers[6], cpu.registers[7]),
+            (0, FIRST + COUNT as u64, FIRST + (COUNT * 2) as u64)
+        );
+        assert_eq!(&storage[..COUNT], &storage[COUNT..]);
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
     fn x86_register_memory_alu_is_guarded() {
         let bytes = [0x4c, 0x01, 0x23, 0x48, 0x03, 0x03, 0x48, 0x3b, 0x0b, 0x0f, 0x05];
         let source = [BorrowedSource {

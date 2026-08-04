@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::{ArenaMemory, GuestExecutor, threads, waiter};
 const SLICE_BUDGET: u64 = 4096;
-const AARCH64_SOLO_BUDGET: u64 = 65_536;
+const NATIVE_SOLO_BUDGET: u64 = 65_536;
 const INLINE_SERVICE_LIMIT: u64 = 64;
 const QUANTUM_TURNS: u64 = 4096;
 const NATIVE_SITE_LIMIT: usize = 65_536;
@@ -642,11 +642,7 @@ impl GuestExecutor {
         // ownership, and parked peers; the fixed bound restores the ordinary
         // signal, CPU-timer, cancellation, accounting, and scheduling boundary.
         loop {
-            let native_budget = if threads.is_only_runnable(run.thread) {
-                AARCH64_SOLO_BUDGET
-            } else {
-                SLICE_BUDGET
-            };
+            let native_budget = Self::native_budget(threads.is_only_runnable(run.thread));
             let result = Self::execute_turn(isa, run, native, native_budget);
             run = result.run;
             if matches!(result.action, TurnAction::Dispatch) && Self::observes_cpu_accounting(isa, &run.machine) {
@@ -744,6 +740,14 @@ impl GuestExecutor {
             }
         }
         TurnResult { run, action }
+    }
+
+    const fn native_budget(only_runnable: bool) -> u64 {
+        if only_runnable {
+            NATIVE_SOLO_BUDGET
+        } else {
+            SLICE_BUDGET
+        }
     }
 
     /// Applies a completed guest turn on the coordinator. Workers never
@@ -1085,7 +1089,7 @@ impl GuestExecutor {
         run: &threads::ThreadRun,
         memory: &mut super::operand::SliceMemory<'_>,
         pool: &mut NativePool,
-        aarch64_budget: u64,
+        native_budget: u64,
     ) -> Option<StepOutcome> {
         let mut x86 = false;
         let detected = run.machine.handle_syscall(1, |snapshot| {
@@ -1096,7 +1100,7 @@ impl GuestExecutor {
             return Some(detected);
         }
         if x86 {
-            return Self::native_x86(run, memory, pool);
+            return Self::native_x86(run, memory, pool, native_budget);
         }
         let mut coordinates = None;
         let observed = run.machine.handle_syscall(1, |snapshot| {
@@ -1222,7 +1226,7 @@ impl GuestExecutor {
             };
             let original = cpu.clone();
             let Ok((result, stats)) =
-                executor.run_lease(cpu, &source, projection, token, &run.interrupt, aarch64_budget, &mut resolve)
+                executor.run_lease(cpu, &source, projection, token, &run.interrupt, native_budget, &mut resolve)
             else {
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
@@ -1285,6 +1289,7 @@ impl GuestExecutor {
         run: &threads::ThreadRun,
         memory: &mut super::operand::SliceMemory<'_>,
         pool: &mut NativePool,
+        native_budget: u64,
     ) -> Option<StepOutcome> {
         let mut coordinates = None;
         let observed = run.machine.handle_syscall(1, |snapshot| {
@@ -1400,7 +1405,7 @@ impl GuestExecutor {
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
             };
             let Ok((result, stats)) =
-                executor.run_x86_lease(cpu, &source, projection, token, SLICE_BUDGET, false, &mut resolve)
+                executor.run_x86_lease(cpu, &source, projection, token, native_budget, false, &mut resolve)
             else {
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
@@ -1644,6 +1649,12 @@ mod tests {
             NativePool::new(GuestIsa::X86_64, &enabled, None).enabled,
             cfg!(target_arch = "aarch64")
         );
+    }
+
+    #[test]
+    fn native_budget_preserves_shared_fairness() {
+        assert_eq!(GuestExecutor::native_budget(false), SLICE_BUDGET);
+        assert_eq!(GuestExecutor::native_budget(true), NATIVE_SOLO_BUDGET);
     }
 
     #[test]
