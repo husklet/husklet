@@ -156,7 +156,12 @@ impl hl_runtime::TerminalSignalSink for DetachedSignals {
 pub(super) struct TerminalOpen {
     object: Arc<hl_runtime::TerminalDescription>,
     bindings: Arc<hl_runtime::TerminalBindings>,
-    acquisition: Option<(Arc<hl_runtime::TerminalCatalog>, u32, hl_runtime::TerminalId)>,
+    acquisition: Option<(
+        Arc<hl_runtime::TerminalCatalog>,
+        hl_task::SessionId,
+        hl_runtime::TerminalId,
+        Option<(Arc<hl_task::TaskRegistry>, hl_task::ProcessId)>,
+    )>,
 }
 
 impl TerminalOpen {
@@ -167,13 +172,18 @@ impl TerminalOpen {
         catalog: &Arc<hl_runtime::TerminalCatalog>,
         bindings: &Arc<hl_runtime::TerminalBindings>,
         signals: &Arc<dyn hl_runtime::TerminalSignalSink>,
-        session: Option<(u32, bool)>,
+        session: Option<(hl_task::SessionId, bool, bool)>,
+        task: Option<(Arc<hl_task::TaskRegistry>, hl_task::ProcessId)>,
         no_controlling_terminal: bool,
     ) -> Result<Option<Box<Self>>, RuntimePathError> {
         let (pair, endpoint, acquisition) = if path == b"/dev/tty" {
-            let (session, _) = session.ok_or(RuntimePathError::NoDevice)?;
+            let (session, _, true) = session.ok_or(RuntimePathError::NoDevice)? else {
+                return Err(RuntimePathError::NoDevice);
+            };
             (
-                catalog.controlling(session).map_err(|_| RuntimePathError::NoDevice)?,
+                catalog
+                    .controlling(session.number())
+                    .map_err(|_| RuntimePathError::NoDevice)?,
                 hl_runtime::TerminalEndpoint::Slave,
                 None,
             )
@@ -186,8 +196,8 @@ impl TerminalOpen {
         } else if let Some(index) = Self::devpts_index(path) {
             let pair = catalog.current(index).map_err(|_| RuntimePathError::NotFound)?;
             let acquisition = session
-                .filter(|(_, leader)| *leader && !no_controlling_terminal)
-                .map(|(session, _)| (Arc::clone(catalog), session, pair.id()));
+                .filter(|(_, leader, _)| *leader && !no_controlling_terminal)
+                .map(|(session, _, _)| (Arc::clone(catalog), session, pair.id(), task));
             (pair, hl_runtime::TerminalEndpoint::Slave, acquisition)
         } else {
             return Ok(None);
@@ -275,8 +285,13 @@ impl PreparedPathOpen for TerminalOpen {
     }
 
     fn commit(&mut self) -> Result<(), RuntimePathError> {
-        if let Some((catalog, session, pair)) = self.acquisition.take() {
-            let _ = catalog.acquire(session, pair);
+        if let Some((catalog, session, pair, task)) = self.acquisition.take()
+            && let Ok(created) = catalog.acquire_changed(session.number(), pair)
+            && let Some((tasks, process)) = task
+            && tasks.attach_terminal(process, session).is_err()
+            && created
+        {
+            let _ = catalog.detach(session.number(), pair);
         }
         Ok(())
     }
@@ -297,8 +312,93 @@ mod tests {
         let signals: Arc<dyn hl_runtime::TerminalSignalSink> = Arc::new(DetachedSignals);
         let intent = OpenIntent::from_bits(OpenIntent::READ | OpenIntent::DIRECTORY);
         assert!(matches!(
-            TerminalOpen::prepare(b"/dev/pts", intent, false, &catalog, &bindings, &signals, None, false),
+            TerminalOpen::prepare(b"/dev/pts", intent, false, &catalog, &bindings, &signals, None, None, false),
             Ok(None),
         ));
+    }
+
+    #[test]
+    fn slave_open_reacquires_terminal_after_process_detach() {
+        let catalog = Arc::new(hl_runtime::TerminalCatalog::default());
+        let pair = catalog.allocate().unwrap();
+        let bindings = Arc::new(hl_runtime::TerminalBindings::default());
+        let signals: Arc<dyn hl_runtime::TerminalSignalSink> = Arc::new(DetachedSignals);
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        let credentials = hl_task::ProcessCredentials::new(1000, 1000, &[], 8).unwrap();
+        let (process, _) = tasks.create_init(credentials, hl_task::ProcessLimits::empty()).unwrap();
+        let session = tasks.session_id(process).unwrap();
+        tasks
+            .prepare_terminal_transition(process, hl_task::TerminalTransition::Detach)
+            .unwrap()
+            .commit();
+        assert_eq!(tasks.terminal_session(process).unwrap(), None);
+        assert!(matches!(
+            TerminalOpen::prepare(
+                b"/dev/tty",
+                OpenIntent::from_bits(OpenIntent::READ),
+                false,
+                &catalog,
+                &bindings,
+                &signals,
+                Some((session, true, false)),
+                Some((Arc::clone(&tasks), process)),
+                false,
+            ),
+            Err(RuntimePathError::NoDevice),
+        ));
+
+        let mut opened = TerminalOpen::prepare(
+            b"/dev/pts/0",
+            OpenIntent::from_bits(OpenIntent::READ | OpenIntent::WRITE),
+            false,
+            &catalog,
+            &bindings,
+            &signals,
+            Some((session, true, false)),
+            Some((Arc::clone(&tasks), process)),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        opened.commit().unwrap();
+
+        assert_eq!(tasks.terminal_session(process).unwrap(), Some(session));
+        assert_eq!(catalog.controlling(session.number()).unwrap().id(), pair.id());
+    }
+
+    #[test]
+    fn failed_task_attachment_compensates_new_catalog_binding() {
+        let catalog = Arc::new(hl_runtime::TerminalCatalog::default());
+        catalog.allocate().unwrap();
+        let bindings = Arc::new(hl_runtime::TerminalBindings::default());
+        let signals: Arc<dyn hl_runtime::TerminalSignalSink> = Arc::new(DetachedSignals);
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        let credentials = hl_task::ProcessCredentials::new(1000, 1000, &[], 8).unwrap();
+        let (leader, leader_thread) = tasks
+            .create_init(credentials, hl_task::ProcessLimits::empty())
+            .unwrap();
+        let session = tasks.session_id(leader).unwrap();
+        let child_plan = tasks.begin_fork_process(leader_thread).unwrap();
+        let child = child_plan.process();
+        tasks.commit_fork_process(child_plan).unwrap();
+        tasks.create_session(child).unwrap();
+        let mut opened = TerminalOpen::prepare(
+            b"/dev/pts/0",
+            OpenIntent::from_bits(OpenIntent::READ | OpenIntent::WRITE),
+            false,
+            &catalog,
+            &bindings,
+            &signals,
+            Some((session, true, false)),
+            Some((Arc::clone(&tasks), child)),
+            false,
+        )
+        .unwrap()
+        .unwrap();
+
+        opened.commit().unwrap();
+
+        assert!(catalog.controlling(session.number()).is_err());
+        assert_eq!(tasks.terminal_session(child).unwrap(), None);
     }
 }

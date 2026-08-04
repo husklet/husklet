@@ -49,6 +49,7 @@ impl ProcessWire {
             leader: IdentityWire::thread(value.leader),
             session: IdentityWire::session(value.session),
             group: IdentityWire::group(value.process_group),
+            terminal_detached: value.terminal_detached,
             child_class: match value.child_class {
                 ChildClass::Standard => 1,
                 ChildClass::Clone => 2,
@@ -99,6 +100,7 @@ impl ProcessWire {
             leader: IdentityWire::thread_from(self.leader)?,
             session: IdentityWire::session_from(self.session)?,
             process_group: IdentityWire::group_from(self.group)?,
+            terminal_detached: self.terminal_detached,
             child_class: match self.child_class {
                 1 => ChildClass::Standard,
                 2 => ChildClass::Clone,
@@ -219,7 +221,7 @@ impl CredentialsWire {
             secure_bits: value.secure_bits,
             keep_capabilities: value.keep_capabilities,
             no_new_privileges: value.no_new_privileges,
-            setid: [value.setid_permitted, value.setid_effective],
+            setid: value.setid_authority().into(),
         }
     }
     pub(super) fn into_value(self) -> Result<ProcessCredentials, ()> {
@@ -248,8 +250,7 @@ impl CredentialsWire {
         value.secure_bits = self.secure_bits;
         value.keep_capabilities = self.keep_capabilities;
         value.no_new_privileges = self.no_new_privileges;
-        value.setid_permitted = self.setid[0];
-        value.setid_effective = self.setid[1];
+        value.restore_setid_authority(hl_task::SetIdAuthority::try_from(self.setid).map_err(|_| ())?);
         Ok(value)
     }
 }

@@ -127,13 +127,14 @@ impl NativePath {
         Arc::clone(&self.terminals)
     }
 
-    fn terminal_session(&self) -> Option<(u32, bool)> {
+    fn terminal_session(&self) -> Option<(hl_task::SessionId, bool, bool)> {
         let process = self.process?;
         let tasks = self.tasks.as_ref()?;
         let session = tasks.session_id(process).ok()?;
+        let attached = tasks.terminal_session(process).ok()?.is_some();
         let snapshot = tasks.snapshot();
         let leader = snapshot.sessions.iter().find(|entry| entry.id == session)?.leader == process;
-        Some((session.number(), leader))
+        Some((session, leader, attached))
     }
 
     fn synthetic_plan(base: &DirectoryBaseLease, plan: &OpenAbiPlan) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
@@ -512,6 +513,10 @@ impl RuntimePathHost for NativePath {
                 &self.terminal_bindings,
                 &self.terminal_signals,
                 self.terminal_session(),
+                self.tasks
+                    .as_ref()
+                    .zip(self.process)
+                    .map(|(tasks, process)| (Arc::clone(tasks), process)),
                 plan.no_controlling_terminal,
             )?
         {

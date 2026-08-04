@@ -12,11 +12,7 @@ pub(super) enum TerminalAccess {
 }
 
 impl<M: hl_linux::GuestMemory> RuntimeFilesystemSyscalls<M> {
-    pub(super) fn terminal_access(
-        &self,
-        lease: &OperationLease,
-        access: TerminalAccess,
-    ) -> Option<LinuxResult> {
+    pub(super) fn terminal_access(&self, lease: &OperationLease, access: TerminalAccess) -> Option<LinuxResult> {
         let bindings = self.terminals.as_ref()?;
         let terminal = bindings.get(lease.description_identity())?;
         if terminal.endpoint != hl_terminal::Endpoint::Slave {
@@ -31,6 +27,9 @@ impl<M: hl_linux::GuestMemory> RuntimeFilesystemSyscalls<M> {
         }
         let snapshot = tasks.snapshot();
         let process_state = snapshot.processes.iter().find(|candidate| candidate.id == process)?;
+        if process_state.terminal_detached {
+            return None;
+        }
         let controlling = terminal.controlling_session()?;
         if process_state.session.number() != controlling {
             return None;

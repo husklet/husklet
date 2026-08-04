@@ -13,8 +13,8 @@ mod affinity;
 mod cancellation;
 mod checkpoint;
 mod exec;
-mod job;
 mod interrupt;
+mod job;
 mod mutation;
 mod namespace;
 mod reparent;
@@ -52,6 +52,11 @@ struct Process {
     leader: ThreadId,
     session: SessionId,
     process_group: ProcessGroupId,
+    /// `true` after this process alone has disassociated from its session's
+    /// controlling terminal. The terminal-to-session binding is owned by the
+    /// terminal catalog; this is Linux's per-process `signal_struct::tty`
+    /// association.
+    terminal_detached: bool,
     child_class: ChildClass,
     execed: bool,
     arguments: Vec<Vec<u8>>,
@@ -231,6 +236,7 @@ impl TaskRegistry {
                 leader: thread,
                 session,
                 process_group,
+                terminal_detached: false,
                 child_class: ChildClass::Standard,
                 execed: false,
                 arguments: Vec::new(),
@@ -382,6 +388,7 @@ impl TaskRegistry {
         let personality = parent_state.personality;
         let session = parent_state.session;
         let process_group = parent_state.process_group;
+        let terminal_detached = parent_state.terminal_detached;
         let thread_signals = Self::thread(&state, source)?.signals.fork_copy();
         let thread_name = Self::thread(&state, source)?.name;
         let thread_affinity = Self::thread(&state, source)?.affinity;
@@ -419,6 +426,7 @@ impl TaskRegistry {
                 leader: thread,
                 session,
                 process_group,
+                terminal_detached,
                 child_class: ChildClass::Standard,
                 execed: false,
                 arguments,
@@ -483,7 +491,10 @@ impl TaskRegistry {
         Self::process_group_mut(&mut state, group)?.members.insert(plan.process);
         let orphaned = Self::refresh_orphaned_groups(&mut state)?;
         if let Some(sink) = &sink {
-            self.interrupts.lock().unwrap_or_else(|error| error.into_inner()).insert(plan.thread, Arc::downgrade(sink));
+            self.interrupts
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(plan.thread, Arc::downgrade(sink));
             sink.set_interrupted(interrupted.expect("interrupt state computed for sink"));
         }
         drop(state);

@@ -1,4 +1,4 @@
-use crate::{ProcessGroupId, ProcessId, SessionId, ThreadId};
+use crate::{ProcessGroupId, ProcessId, SessionId, SignalNumber, ThreadId};
 use std::sync::{Arc, Mutex, Weak};
 
 /// Execution-owned flag polled by translated or native guest execution.
@@ -132,6 +132,40 @@ pub trait TerminalControl {
 pub struct ForegroundGroupEvent {
     pub session: SessionId,
     pub group: ProcessGroupId,
+}
+
+/// Guest-visible effects produced by a controlling-terminal transition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalTransitionEffects {
+    pub session: SessionId,
+    pub foreground: Option<ProcessGroupId>,
+    pub signals: [Option<SignalNumber>; 2],
+    pub session_wide: bool,
+}
+
+/// Validated terminal transition whose signals remain unpublished until the
+/// cross-domain terminal mutation succeeds.
+#[must_use = "prepared terminal transition must be committed after the terminal mutation"]
+pub struct PreparedTerminalTransition<'registry> {
+    pub(crate) registry: &'registry crate::TaskRegistry,
+    pub(crate) members: Vec<ProcessId>,
+    pub(crate) caller: ProcessId,
+    pub(crate) effects: TerminalTransitionEffects,
+}
+
+impl PreparedTerminalTransition<'_> {
+    #[must_use]
+    pub const fn effects(&self) -> TerminalTransitionEffects {
+        self.effects
+    }
+}
+
+/// A transition whose process-group validation and signal ordering are owned by
+/// the task registry rather than by a terminal or host adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalTransition {
+    Detach,
+    SessionLeaderExit,
 }
 
 impl ForegroundGroupEvent {

@@ -45,6 +45,7 @@ impl TaskRegistry {
                     leader: process.leader,
                     session: process.session,
                     process_group: process.process_group,
+                    terminal_detached: process.terminal_detached,
                     child_class: process.child_class,
                     execed: process.execed,
                     arguments: process.arguments.clone(),

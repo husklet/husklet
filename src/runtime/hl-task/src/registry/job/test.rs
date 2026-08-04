@@ -99,6 +99,9 @@ fn setsid_creates_new() {
     let group = registry.process_group_id(child).unwrap();
     assert_ne!(session, old_session);
     assert_eq!(session.number(), group.number());
+    assert_eq!(registry.terminal_session(child).unwrap(), None);
+    registry.attach_terminal(child, session).unwrap();
+    assert_eq!(registry.terminal_session(child).unwrap(), Some(session));
     assert_eq!(registry.create_session(child), Err(TaskError::SessionLeader));
     registry.exit_process(child, ExitStatus::Code(0)).unwrap();
     registry.reap(init, child).unwrap();
@@ -228,6 +231,135 @@ fn foreground_group_is() {
     assert_eq!(
         registry.set_foreground_group(init, detached_group),
         Err(TaskError::InvalidProcessGroup)
+    );
+}
+
+#[test]
+fn terminal_transitions_validate_and_signal_the_same_session_foreground_group() {
+    let (registry, _, source) = Fixture::registry();
+    let (leader, leader_thread) = Fixture::fork(&registry, source);
+    let session = registry.create_session(leader).unwrap();
+    registry.attach_terminal(leader, session).unwrap();
+    let (worker, worker_thread) = Fixture::fork(&registry, leader_thread);
+    let worker_group = registry.set_process_group(leader, worker, None).unwrap();
+    registry.set_foreground_group(leader, worker_group).unwrap();
+    for signal in [1, 18, 28] {
+        registry
+            .set_action(
+                worker,
+                SignalNumber::new(signal).unwrap(),
+                SignalAction {
+                    disposition: SignalDisposition::Handler(0x4000),
+                    ..SignalAction::DEFAULT
+                },
+            )
+            .unwrap();
+    }
+
+    assert_eq!(registry.pending_signal_mask(worker_thread).unwrap().bits(), 0);
+    let window = registry
+        .terminal_window_changed(session.number(), worker_group)
+        .unwrap();
+    assert_eq!(window.session, session);
+    assert_eq!(window.foreground, Some(worker_group));
+    assert_eq!(window.signals, [SignalNumber::new(28).ok(), None]);
+    assert!(!window.session_wide);
+    assert_eq!(registry.pending_signal_mask(worker_thread).unwrap().bits(), 1 << 27);
+
+    let detach = registry
+        .prepare_terminal_transition(leader, crate::TerminalTransition::Detach)
+        .unwrap();
+    let detach = detach.commit();
+    assert_eq!(
+        detach.signals,
+        [SignalNumber::new(1).ok(), Some(SignalNumber::CONTINUE)]
+    );
+    assert!(detach.session_wide);
+    let pending = registry.pending_signal_mask(worker_thread).unwrap().bits();
+    assert_ne!(pending & 1, 0);
+    assert_ne!(pending & (1 << 17), 0);
+
+    assert!(matches!(
+        registry.prepare_terminal_transition(worker, crate::TerminalTransition::SessionLeaderExit),
+        Err(TaskError::InvalidSession)
+    ));
+}
+
+#[test]
+fn session_leader_exit_publishes_hangup_without_continue() {
+    let (registry, _, source) = Fixture::registry();
+    let (leader, leader_thread) = Fixture::fork(&registry, source);
+    let session = registry.create_session(leader).unwrap();
+    registry.attach_terminal(leader, session).unwrap();
+    let (worker, worker_thread) = Fixture::fork(&registry, leader_thread);
+    let worker_group = registry.set_process_group(leader, worker, None).unwrap();
+    registry.set_foreground_group(leader, worker_group).unwrap();
+    registry
+        .set_action(
+            worker,
+            SignalNumber::new(1).unwrap(),
+            SignalAction {
+                disposition: SignalDisposition::Handler(0x4000),
+                ..SignalAction::DEFAULT
+            },
+        )
+        .unwrap();
+
+    let effects = registry
+        .prepare_terminal_transition(leader, crate::TerminalTransition::SessionLeaderExit)
+        .unwrap();
+    let effects = effects.commit();
+    assert_eq!(effects.signals, [SignalNumber::new(1).ok(), None]);
+    assert_eq!(registry.pending_signal_mask(worker_thread).unwrap().bits(), 1);
+}
+
+#[test]
+fn nonleader_detach_clears_only_the_callers_terminal_association() {
+    let (registry, leader, source) = Fixture::registry();
+    let (worker, worker_thread) = Fixture::fork(&registry, source);
+    let (peer, _) = Fixture::fork(&registry, worker_thread);
+    let session = registry.session_id(leader).unwrap();
+
+    let prepared = registry
+        .prepare_terminal_transition(worker, crate::TerminalTransition::Detach)
+        .unwrap();
+    assert_eq!(prepared.effects().session, session);
+    assert!(!prepared.effects().session_wide);
+    prepared.commit();
+
+    assert_eq!(registry.terminal_session(worker).unwrap(), None);
+    assert_eq!(registry.terminal_session(leader).unwrap(), Some(session));
+    assert_eq!(registry.terminal_session(peer).unwrap(), Some(session));
+    let detached_child = Fixture::fork(&registry, worker_thread).0;
+    assert_eq!(registry.terminal_session(detached_child).unwrap(), None);
+    let restored = crate::TaskRegistry::restore(&registry.snapshot()).unwrap();
+    assert_eq!(restored.terminal_session(worker).unwrap(), None);
+    assert_eq!(restored.terminal_session(peer).unwrap(), Some(session));
+    assert!(registry
+        .prepare_terminal_transition(worker, crate::TerminalTransition::Detach)
+        .is_err());
+}
+
+#[test]
+fn window_signal_rejects_other_session_and_stale_group_identity() {
+    let (registry, leader, source) = Fixture::registry();
+    let (worker, worker_thread) = Fixture::fork(&registry, source);
+    let foreground = registry.set_process_group(leader, worker, None).unwrap();
+    registry.set_foreground_group(leader, foreground).unwrap();
+    let other_plan = registry.begin_fork_process(worker_thread).unwrap();
+    let other = other_plan.process();
+    registry.commit_fork_process(other_plan).unwrap();
+    let other_session = registry.create_session(other).unwrap();
+
+    assert_eq!(
+        registry.terminal_window_changed(other_session.number(), foreground),
+        Err(TaskError::InvalidProcessGroup),
+    );
+    let (slot, generation) = foreground.wire_parts();
+    let stale = crate::ProcessGroupId::from_wire(slot, generation.saturating_add(1)).unwrap();
+    assert_eq!(
+        registry.terminal_window_changed(registry.session_id(leader).unwrap().number(), stale),
+        Err(TaskError::InvalidProcessGroup),
     );
 }
 
@@ -515,7 +647,9 @@ fn orphan_usage() {
     let selection = registry
         .prepare_wait_child(init, ChildSelector::Process(child), ChildWaitOptions::default())
         .unwrap();
-    let PreparedChildWait::Selection(selection) = selection else { panic!("missing orphan") };
+    let PreparedChildWait::Selection(selection) = selection else {
+        panic!("missing orphan")
+    };
     selection.commit().unwrap();
     assert_eq!(registry.cpu_usage(init).unwrap().children_nanoseconds, 7);
 }
@@ -536,7 +670,10 @@ fn concurrent_usage() {
             let reaped = Arc::clone(&reaped);
             thread::spawn(move || {
                 barrier.wait();
-                let options = ChildWaitOptions { no_hang: true, ..ChildWaitOptions::default() };
+                let options = ChildWaitOptions {
+                    no_hang: true,
+                    ..ChildWaitOptions::default()
+                };
                 if let Ok(PreparedChildWait::Selection(selection)) =
                     registry.prepare_wait_child(parent, ChildSelector::Any, options)
                 {

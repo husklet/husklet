@@ -17,7 +17,7 @@ use crate::{
     ProcessGroupId, ProcessId, ProcessLifecycle, ProcessLimits, RegistrySnapshot, SessionId, SignalAction,
     SignalThreadSnapshot, TaskError, ThreadId, ThreadLifecycle,
 };
-pub const TASK_CHECKPOINT_VERSION: u32 = 16;
+pub const TASK_CHECKPOINT_VERSION: u32 = 17;
 impl TaskRegistry {
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
@@ -71,6 +71,7 @@ impl TaskRegistry {
                 leader: saved.leader,
                 session: saved.session,
                 process_group: saved.process_group,
+                terminal_detached: saved.terminal_detached,
                 child_class: saved.child_class,
                 execed: saved.execed,
                 arguments: saved.arguments.clone(),

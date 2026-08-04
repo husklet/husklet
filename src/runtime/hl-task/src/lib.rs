@@ -29,16 +29,17 @@ pub use model::{
     CancellationEvent, CapabilitySets, ChildClass, ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector,
     ChildWaitOptions, ChildWaitResult, CloneThreadPlan, CpuUsage, ExitStatus, ForkProcessPlan, PreparedChildWait,
     PreparedWaitSelection, ProcessCredentials, ProcessGroupSnapshot, ProcessLifecycle, ProcessSnapshot, RegistryConfig,
-    RegistrySnapshot, SessionSnapshot, SignalPendingEvent, TaskError, ThreadLifecycle, ThreadSnapshot, WaitEvent,
-    WaitSelector,
+    RegistrySnapshot, SessionSnapshot, SetIdAuthority, SignalPendingEvent, TaskError, ThreadLifecycle, ThreadSnapshot,
+    WaitEvent, WaitSelector,
 };
 pub use namespace::{
     IdMap, IdRange, MAX_ID_RANGES, MapError, NamespaceId, NamespaceKind, NamespaceSet, SetgroupsState,
     UTS_NAME_MAXIMUM, UserNamespace, UtsIdentity,
 };
 pub use port::{
-    CancellationSink, ForegroundGroupEvent, InterruptSink, ProcessControlAction, SignalActivityEvent,
-    SignalActivityKind, SignalActivitySubscription, SignalActivityWake, SignalPendingSink, TerminalControl,
+    CancellationSink, ForegroundGroupEvent, InterruptSink, PreparedTerminalTransition, ProcessControlAction,
+    SignalActivityEvent, SignalActivityKind, SignalActivitySubscription, SignalActivityWake, SignalPendingSink,
+    TerminalControl, TerminalTransition, TerminalTransitionEffects,
 };
 pub use registry::{
     PreparedTaskExec, ProcessCheckpointReference, TASK_CHECKPOINT_VERSION, TaskExternalCheckpoint, TaskExternalRestore,
@@ -48,9 +49,9 @@ pub use resource::{Limit, ProcessLimits, Resource};
 pub use robust_list::{ROBUST_LIST_HEAD_SIZE, RobustExitCleanup, RobustListRegistration};
 pub use schedule::SchedulingProfile;
 pub use signal::{
-    AlternateStack, DeliveryAction, PendingTarget, PreparedForcedDelivery, PreparedSignalWait, SignalAction,
-    SignalDisposition, SignalExecPlan, SignalForkPlan, SignalInfo, SignalMask, SignalNumber, SignalProcessSnapshot,
-    SIGNAL_FRAME_MAXIMUM, SignalFrameScope, SignalQueueError, SignalThreadSnapshot,
+    AlternateStack, DeliveryAction, PendingTarget, PreparedForcedDelivery, PreparedSignalWait, SIGNAL_FRAME_MAXIMUM,
+    SignalAction, SignalDisposition, SignalExecPlan, SignalForkPlan, SignalFrameScope, SignalInfo, SignalMask,
+    SignalNumber, SignalProcessSnapshot, SignalQueueError, SignalThreadSnapshot,
 };
 pub use trace::{
     TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission, TraceResume, TraceSnapshot, TraceStop, TraceWait,

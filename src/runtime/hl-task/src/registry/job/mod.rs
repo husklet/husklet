@@ -8,8 +8,9 @@ mod test;
 use super::{ProcessGroup, Session, State, TaskRegistry};
 use crate::{
     ChildClass, ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector, ChildWaitOptions, ChildWaitResult,
-    ExitStatus, ForegroundGroupEvent, ProcessGroupId, ProcessId, ProcessLifecycle, SessionId, SignalDisposition,
-    SignalInfo, SignalNumber, TaskError,
+    ExitStatus, ForegroundGroupEvent, PendingTarget, PreparedTerminalTransition, ProcessGroupId, ProcessId,
+    ProcessLifecycle, SessionId, SignalDisposition, SignalInfo, SignalNumber, TaskError, TerminalTransition,
+    TerminalTransitionEffects,
 };
 
 impl TaskRegistry {
@@ -35,6 +36,26 @@ impl TaskRegistry {
 
     pub fn session_id(&self, process: ProcessId) -> Result<SessionId, TaskError> {
         Ok(Self::process(&self.lock(), process)?.session)
+    }
+
+    /// Returns the process's controlling-terminal session association. A
+    /// nonleader can disassociate without changing the session's terminal.
+    pub fn terminal_session(&self, process: ProcessId) -> Result<Option<SessionId>, TaskError> {
+        let state = self.lock();
+        let process = Self::process(&state, process)?;
+        Ok((!process.terminal_detached).then_some(process.session))
+    }
+
+    /// Records successful controlling-terminal acquisition for this process.
+    pub fn attach_terminal(&self, process: ProcessId, session: SessionId) -> Result<(), TaskError> {
+        let mut state = self.lock();
+        Self::ensure_process_unreserved(&state, process)?;
+        let process = Self::process_mut(&mut state, process)?;
+        if process.session != session {
+            return Err(TaskError::InvalidSession);
+        }
+        process.terminal_detached = false;
+        Ok(())
     }
 
     pub fn process_group_id(&self, process: ProcessId) -> Result<ProcessGroupId, TaskError> {
@@ -77,6 +98,8 @@ impl TaskRegistry {
         let process_state = Self::process_mut(&mut state, process)?;
         process_state.session = session;
         process_state.process_group = group;
+        // setsid always starts a session without a controlling terminal.
+        process_state.terminal_detached = true;
         let orphaned = Self::refresh_orphaned_groups(&mut state)?;
         drop(state);
         self.publish_orphaned(orphaned);
@@ -175,6 +198,77 @@ impl TaskRegistry {
         }
         Self::session_mut(&mut state, session)?.foreground_group = Some(group);
         Ok(ForegroundGroupEvent::new(session, group))
+    }
+
+    /// Validates one controlling-terminal transition and captures the
+    /// generation-qualified foreground recipients without publishing signals.
+    pub fn prepare_terminal_transition(
+        &self,
+        caller: ProcessId,
+        transition: TerminalTransition,
+    ) -> Result<PreparedTerminalTransition<'_>, TaskError> {
+        let state = self.lock();
+        Self::ensure_process_unreserved(&state, caller)?;
+        let session = Self::process(&state, caller)?.session;
+        let session_state = Self::session(&state, session)?;
+        if transition == TerminalTransition::SessionLeaderExit && session_state.leader != caller {
+            return Err(TaskError::InvalidSession);
+        }
+        if Self::process(&state, caller)?.terminal_detached {
+            return Err(TaskError::InvalidSession);
+        }
+        let session_wide = session_state.leader == caller;
+        let foreground = session_state.foreground_group;
+        let members: Vec<ProcessId> = foreground
+            .map(|group| Self::process_group(&state, group).map(|group| group.members.iter().copied().collect()))
+            .transpose()?
+            .unwrap_or_default();
+        let signals = match transition {
+            TerminalTransition::Detach if session_wide => {
+                [SignalNumber::new(1).ok(), Some(SignalNumber::CONTINUE)]
+            }
+            TerminalTransition::SessionLeaderExit => [SignalNumber::new(1).ok(), None],
+            TerminalTransition::Detach => [None, None],
+        };
+        Ok(PreparedTerminalTransition {
+            registry: self,
+            members,
+            caller,
+            effects: TerminalTransitionEffects {
+                session,
+                foreground,
+                signals,
+                session_wide,
+            },
+        })
+    }
+
+    /// Publishes SIGWINCH to the generation-qualified foreground group stored
+    /// by the tty, independent of which process issued TIOCSWINSZ.
+    pub fn terminal_window_changed(
+        &self,
+        session_number: u32,
+        foreground: ProcessGroupId,
+    ) -> Result<TerminalTransitionEffects, TaskError> {
+        let state = self.lock();
+        let group = Self::process_group(&state, foreground)?;
+        let session = group.session;
+        if session.number() != session_number {
+            return Err(TaskError::InvalidProcessGroup);
+        }
+        Self::session(&state, session)?;
+        let members = group.members.iter().copied().collect::<Vec<_>>();
+        drop(state);
+        let signal = SignalNumber::new(28).map_err(|_| TaskError::InvalidLifecycle)?;
+        for process in &members {
+            let _ = self.enqueue_signal(PendingTarget::Process(*process), SignalInfo::bare(signal));
+        }
+        Ok(TerminalTransitionEffects {
+            session,
+            foreground: Some(foreground),
+            signals: [Some(signal), None],
+            session_wide: false,
+        })
     }
 
     pub fn wait_child(
@@ -381,7 +475,10 @@ impl TaskRegistry {
         const SA_NOCLDSTOP: u64 = 1;
         let signal = SignalNumber::new(17).map_err(|_| TaskError::InvalidLifecycle)?;
         let action = Self::process(state, parent)?.signals.actions[16];
-        if matches!(action.disposition, SignalDisposition::Default | SignalDisposition::Ignore) {
+        if matches!(
+            action.disposition,
+            SignalDisposition::Default | SignalDisposition::Ignore
+        ) {
             return Ok(());
         }
         if action.flags & SA_NOCLDSTOP != 0 && matches!(kind, ChildEventKind::Stopped(_) | ChildEventKind::Continued) {
@@ -390,8 +487,14 @@ impl TaskRegistry {
         let child_state = Self::process(state, child)?;
         let (code, status) = match kind {
             ChildEventKind::Exited(ExitStatus::Code(status)) => (1, u64::from(status)),
-            ChildEventKind::Exited(ExitStatus::Signal { signal, dumped_core: false }) => (2, u64::from(signal)),
-            ChildEventKind::Exited(ExitStatus::Signal { signal, dumped_core: true }) => (3, u64::from(signal)),
+            ChildEventKind::Exited(ExitStatus::Signal {
+                signal,
+                dumped_core: false,
+            }) => (2, u64::from(signal)),
+            ChildEventKind::Exited(ExitStatus::Signal {
+                signal,
+                dumped_core: true,
+            }) => (3, u64::from(signal)),
             ChildEventKind::Stopped(signal) => (5, u64::from(signal.get())),
             ChildEventKind::Continued => (6, 18),
         };
@@ -403,7 +506,10 @@ impl TaskRegistry {
             value: status,
             ..SignalInfo::bare(signal)
         };
-        let _ = Self::process_mut(state, parent)?.signals.pending.enqueue(info, max_pending);
+        let _ = Self::process_mut(state, parent)?
+            .signals
+            .pending
+            .enqueue(info, max_pending);
         Ok(())
     }
 
@@ -487,5 +593,49 @@ impl TaskRegistry {
             ChildEventKind::Stopped(_) => options.report_stopped,
             ChildEventKind::Continued => options.report_continued,
         }
+    }
+}
+
+impl PreparedTerminalTransition<'_> {
+    /// Replaces the task-session foreground snapshot with the tty's own
+    /// generation-qualified foreground identity.
+    pub fn target_foreground(mut self, foreground: Option<ProcessGroupId>) -> Self {
+        let state = self.registry.lock();
+        let target = foreground.and_then(|identity| {
+            let group = TaskRegistry::process_group(&state, identity).ok()?;
+            (group.session == self.effects.session).then_some((identity, group))
+        });
+        self.members = target
+            .map(|(_, group)| group.members.iter().copied().collect())
+            .unwrap_or_default();
+        self.effects.foreground = target.map(|(identity, _)| identity);
+        self
+    }
+
+    /// Publishes captured signals in Linux order after the terminal mutation.
+    pub fn commit(self) -> TerminalTransitionEffects {
+        let mut state = self.registry.lock();
+        if self.effects.session_wide {
+            for entry in &mut state.processes {
+                if let Some(process) = &mut entry.value
+                    && process.session == self.effects.session
+                {
+                    process.terminal_detached = true;
+                }
+            }
+        } else if let Ok(process) = TaskRegistry::process_mut(&mut state, self.caller)
+            && process.session == self.effects.session
+        {
+            process.terminal_detached = true;
+        }
+        drop(state);
+        for signal in self.effects.signals.into_iter().flatten() {
+            for process in &self.members {
+                let _ = self
+                    .registry
+                    .enqueue_signal(PendingTarget::Process(*process), SignalInfo::bare(signal));
+            }
+        }
+        self.effects
     }
 }

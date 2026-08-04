@@ -325,13 +325,18 @@ impl Pair {
         self.lock().window
     }
 
-    pub fn set_window(&self, window: Window) -> Result<(), ReadError> {
+    /// Replaces the window and reports whether the guest-visible dimensions
+    /// changed. Linux emits SIGWINCH only for an actual change.
+    pub fn set_window(&self, window: Window) -> Result<bool, ReadError> {
         let mut state = self.lock();
         if state.retired {
             return Err(ReadError::Retired);
         }
+        if state.window == window {
+            return Ok(false);
+        }
         state.window = window;
-        Ok(())
+        Ok(true)
     }
 
     pub fn flush(&self, input: bool, output: bool) -> Result<(), ReadError> {
@@ -493,24 +498,35 @@ pub struct Catalog {
 
 impl Catalog {
     pub fn acquire(&self, session: u32, pair: PairId) -> Result<(), CatalogError> {
+        self.acquire_changed(session, pair).map(|_| ())
+    }
+
+    /// Acquires a controlling terminal and reports whether this call created
+    /// the session binding, so a cross-domain caller can compensate safely.
+    pub fn acquire_changed(&self, session: u32, pair: PairId) -> Result<bool, CatalogError> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if !state.pairs.get(&pair.index).is_some_and(|current| current.id() == pair) {
             return Err(CatalogError::Stale);
         }
         if state.controlling.get(&session).copied() == Some(pair) {
-            return Ok(());
+            return Ok(false);
         }
         if state.controlling.contains_key(&session) || state.controlling.values().any(|owner| *owner == pair) {
             return Err(CatalogError::WrongEndpoint);
         }
         state.controlling.insert(session, pair);
-        Ok(())
+        Ok(true)
     }
 
     pub fn controlling(&self, session: u32) -> Result<Arc<Pair>, CatalogError> {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let id = *state.controlling.get(&session).ok_or(CatalogError::NotFound)?;
-        state.pairs.get(&id.index).filter(|pair| pair.id() == id).cloned().ok_or(CatalogError::Stale)
+        state
+            .pairs
+            .get(&id.index)
+            .filter(|pair| pair.id() == id)
+            .cloned()
+            .ok_or(CatalogError::Stale)
     }
 
     pub fn detach(&self, session: u32, pair: PairId) -> Result<(), CatalogError> {
@@ -526,8 +542,12 @@ impl Catalog {
     }
 
     pub fn controlling_session(&self, pair: PairId) -> Option<u32> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).controlling
-            .iter().find_map(|(session, owner)| (*owner == pair).then_some(*session))
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .controlling
+            .iter()
+            .find_map(|(session, owner)| (*owner == pair).then_some(*session))
     }
 
     pub fn allocate(&self) -> Result<Arc<Pair>, CatalogError> {
@@ -706,7 +726,8 @@ mod test {
             pixel_width: 640,
             pixel_height: 480,
         };
-        pair.set_window(window).unwrap();
+        assert!(pair.set_window(window).unwrap());
+        assert!(!pair.set_window(window).unwrap());
         assert_eq!(pair.window(), window);
         let mut settings = pair.settings();
         settings.local = Local::from_bits(0);

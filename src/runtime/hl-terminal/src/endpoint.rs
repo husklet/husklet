@@ -244,11 +244,26 @@ pub struct Handle {
 
 impl Handle {
     pub fn acquire_controlling(&self, session: u32) -> Result<(), CatalogError> {
-        self.catalog.upgrade().ok_or(CatalogError::NotFound)?.acquire(session, self.pair.id())
+        self.catalog
+            .upgrade()
+            .ok_or(CatalogError::NotFound)?
+            .acquire(session, self.pair.id())
+    }
+
+    /// Acquires this pair and reports whether the catalog created the binding.
+    /// Cross-domain callers use the bit to compensate only their own mutation.
+    pub fn acquire_controlling_changed(&self, session: u32) -> Result<bool, CatalogError> {
+        self.catalog
+            .upgrade()
+            .ok_or(CatalogError::NotFound)?
+            .acquire_changed(session, self.pair.id())
     }
 
     pub fn detach_controlling(&self, session: u32) -> Result<(), CatalogError> {
-        self.catalog.upgrade().ok_or(CatalogError::NotFound)?.detach(session, self.pair.id())
+        self.catalog
+            .upgrade()
+            .ok_or(CatalogError::NotFound)?
+            .detach(session, self.pair.id())
     }
 
     #[must_use]

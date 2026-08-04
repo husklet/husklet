@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use hl_checkpoint::{Section, SectionKind};
 use hl_task::{
-    ProcessCheckpointReference, ProcessCredentials, ProcessLimits, RegistryConfig, TaskError, TaskExternalCheckpoint,
-    SignalFrameScope, SignalMask, TaskExternalRestore, TaskRegistry, TaskRegistryImage, TaskResourceKey,
+    ProcessCheckpointReference, ProcessCredentials, ProcessLimits, RegistryConfig, SignalFrameScope, SignalMask,
+    TaskError, TaskExternalCheckpoint, TaskExternalRestore, TaskRegistry, TaskRegistryImage, TaskResourceKey,
     ThreadCheckpointReference,
 };
 
@@ -180,7 +180,7 @@ fn portable_corruption_rejected() {
     let digest = bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
     });
-    assert_eq!(digest, 0xae8a_682d_63f0_a48c);
+    assert_eq!(digest, 0x72de_3ec1_91ba_e090);
     assert_eq!(codec.encode(&image).unwrap(), bytes);
     assert_eq!(codec.decode(&bytes).unwrap(), image);
     assert_eq!(bytes.first(), Some(&b'{'));
@@ -197,8 +197,11 @@ fn portable_corruption_rejected() {
     assert!(codec.encode(&stale).is_err());
 
     let mut corrupt = bytes;
-    let marker = br#""wire":6"#;
-    let offset = corrupt.windows(marker.len()).position(|window| window == marker).unwrap();
+    let marker = br#""wire":7"#;
+    let offset = corrupt
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .unwrap();
     corrupt[offset + marker.len() - 1] = b'5';
     assert!(codec.decode(&corrupt).is_err());
 }

@@ -43,11 +43,16 @@ const SIOCGIFHWADDR: u32 = 0x8927;
 const SIOCGIFINDEX: u32 = 0x8933;
 
 impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
-    fn terminal_session(&self) -> Option<(u32, bool)> {
+    fn terminal_process(&self) -> Option<(hl_task::SessionId, bool, bool)> {
         let (tasks, process) = self.terminal_tasks.as_ref()?;
         let session = tasks.session_id(*process).ok()?;
-        let leader = tasks.snapshot().sessions.iter().any(|entry| entry.id == session && entry.leader == *process);
-        Some((session.number(), leader))
+        let attached = tasks.terminal_session(*process).ok()?.is_some();
+        let leader = tasks
+            .snapshot()
+            .sessions
+            .iter()
+            .any(|entry| entry.id == session && entry.leader == *process);
+        Some((session, leader, attached))
     }
 
     pub(super) fn ioctl(&self, descriptor: i32, request: u32, argument: u64) -> LinuxResult {
@@ -214,7 +219,11 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let capacity = i32::from_le_bytes(header[..4].try_into().unwrap()).max(0) as usize;
         let pointer = u64::from_le_bytes(header[8..16].try_into().unwrap());
         let available = interfaces.len() * 40;
-        let copied = if pointer == 0 { available } else { capacity.min(available) / 40 * 40 };
+        let copied = if pointer == 0 {
+            available
+        } else {
+            capacity.min(available) / 40 * 40
+        };
         if pointer != 0 {
             let mut records = vec![0; copied];
             for (slot, interface) in interfaces.iter().take(copied / 40).enumerate() {
@@ -289,8 +298,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 }
             }
             TIOCSPGRP => self.terminal_foreground(&terminal, argument),
-            TIOCGPGRP => match self.terminal_session() {
-                Some((session, _)) if terminal.controlling_session() == Some(session) => {
+            TIOCGPGRP => match self.terminal_process() {
+                Some((session, _, true)) if terminal.controlling_session() == Some(session.number()) => {
                     match terminal.pair.foreground() {
                         Some(group) => self.ioctl_write_int(argument, group.number as i32),
                         None => LinuxResult::Error(Errno::ENOTTY),
@@ -298,27 +307,52 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 }
                 _ => LinuxResult::Error(Errno::ENOTTY),
             },
-            TIOCSCTTY => match self.terminal_session() {
-                Some((session, true)) => match terminal.acquire_controlling(session) {
-                    Ok(()) => LinuxResult::Value(0),
-                    Err(hl_terminal::CatalogError::WrongEndpoint)
-                        if terminal.controlling_session() == Some(session) =>
-                    {
-                        LinuxResult::Value(0)
-                    }
+            TIOCSCTTY => match self.terminal_process() {
+                Some((session, true, _)) => match terminal.acquire_controlling_changed(session.number()) {
+                    Ok(created) => match &self.terminal_tasks {
+                        Some((tasks, process)) if tasks.attach_terminal(*process, session).is_ok() => {
+                            LinuxResult::Value(0)
+                        }
+                        _ => {
+                            if created {
+                                let _ = terminal.detach_controlling(session.number());
+                            }
+                            LinuxResult::Error(Errno::EPERM)
+                        }
+                    },
                     Err(_) => LinuxResult::Error(Errno::EPERM),
                 },
                 _ => LinuxResult::Error(Errno::EPERM),
             },
-            TIOCNOTTY => match self.terminal_session() {
-                Some((session, _)) if terminal.controlling_session() == Some(session) => {
-                    match terminal.detach_controlling(session) {
-                        Ok(()) => LinuxResult::Value(0),
-                        Err(_) => LinuxResult::Error(Errno::ENOTTY),
-                    }
+            TIOCNOTTY => {
+                if terminal.endpoint != hl_terminal::Endpoint::Slave {
+                    return Some(LinuxResult::Error(Errno::ENOTTY));
                 }
-                _ => LinuxResult::Error(Errno::ENOTTY),
-            },
+                let Some((tasks, process)) = &self.terminal_tasks else {
+                    return Some(LinuxResult::Error(Errno::ENOTTY));
+                };
+                let prepared = match tasks.prepare_terminal_transition(*process, hl_task::TerminalTransition::Detach) {
+                    Ok(prepared) => prepared,
+                    Err(_) => return Some(LinuxResult::Error(Errno::ENOTTY)),
+                };
+                let effects = prepared.effects();
+                if terminal.controlling_session() != Some(effects.session.number()) {
+                    return Some(LinuxResult::Error(Errno::ENOTTY));
+                }
+                let foreground = terminal.pair.foreground().and_then(|group| {
+                    group
+                        .number
+                        .checked_sub(1)
+                        .and_then(|slot| hl_task::ProcessGroupId::from_wire(slot, group.generation))
+                });
+                let prepared = prepared.target_foreground(foreground);
+                let detached = if effects.session_wide {
+                    terminal.detach_controlling(effects.session.number())
+                } else {
+                    Ok(())
+                };
+                finish_terminal_detach(Some(prepared), detached)
+            }
             TIOCGSID => match terminal.controlling_session() {
                 Some(session) => self.ioctl_write_int(argument, session as i32),
                 None => LinuxResult::Error(Errno::ENOTTY),
@@ -346,7 +380,18 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                     pixel_width: half(4),
                     pixel_height: half(6),
                 }) {
-                    Ok(()) => LinuxResult::Value(0),
+                    Ok(changed) => {
+                        if changed
+                            && let Some((tasks, _)) = &self.terminal_tasks
+                            && let (Some(session), Some(group)) =
+                                (terminal.controlling_session(), terminal.pair.foreground())
+                            && let Some(slot) = group.number.checked_sub(1)
+                            && let Some(group) = hl_task::ProcessGroupId::from_wire(slot, group.generation)
+                        {
+                            let _ = tasks.terminal_window_changed(session, group);
+                        }
+                        LinuxResult::Value(0)
+                    }
                     Err(_) => LinuxResult::Error(Errno::EIO),
                 }
             }
@@ -388,10 +433,10 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if group <= 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let Some((session, _)) = self.terminal_session() else {
+        let Some((session, _, true)) = self.terminal_process() else {
             return LinuxResult::Error(Errno::ENOTTY);
         };
-        if terminal.controlling_session() != Some(session) {
+        if terminal.controlling_session() != Some(session.number()) {
             return LinuxResult::Error(Errno::ENOTTY);
         }
         let Some((tasks, process)) = &self.terminal_tasks else {
@@ -479,5 +524,20 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         } else {
             LinuxResult::Error(Errno::EFAULT)
         }
+    }
+}
+
+pub(super) fn finish_terminal_detach(
+    prepared: Option<hl_task::PreparedTerminalTransition<'_>>,
+    detached: Result<(), hl_terminal::CatalogError>,
+) -> LinuxResult {
+    match detached {
+        Ok(()) => {
+            if let Some(prepared) = prepared {
+                prepared.commit();
+            }
+            LinuxResult::Value(0)
+        }
+        Err(_) => LinuxResult::Error(Errno::ENOTTY),
     }
 }

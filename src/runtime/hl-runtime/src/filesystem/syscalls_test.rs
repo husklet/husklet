@@ -160,10 +160,7 @@ fn fcntl_seals_reject_plain_descriptions_as_invalid() {
 
 #[test]
 fn fcntl_getfl_projects_largefile_by_guest_abi() {
-    for (architecture, largefile) in [
-        (GuestArchitecture::Aarch64, 0),
-        (GuestArchitecture::X86_64, 0x8000),
-    ] {
+    for (architecture, largefile) in [(GuestArchitecture::Aarch64, 0), (GuestArchitecture::X86_64, 0x8000)] {
         let table = Arc::new(DescriptorTable::new(1).unwrap());
         let descriptor = table
             .commit(
@@ -420,7 +417,10 @@ fn registered_pipe_adapter(
 fn scalar_pipe_write_rolls_back_on_atomic_source_fault() {
     let (runtime, reader, descriptor) = pipe_write_adapter(PIPE_BUF - 1);
 
-    assert_eq!(runtime.write(descriptor, 8, PIPE_BUF as u64), LinuxResult::Error(Errno::EFAULT));
+    assert_eq!(
+        runtime.write(descriptor, 8, PIPE_BUF as u64),
+        LinuxResult::Error(Errno::EFAULT)
+    );
     assert_eq!(reader.read(&mut [0_u8; 1]), Err(ObjectError::WouldBlock));
 }
 
@@ -451,7 +451,10 @@ fn atomic_pipe_vector_rolls_back_source_fault() {
         write_iovec(&mut bytes, 24, (PAYLOAD + 8) as u64, 32);
         let (runtime, reader, descriptor) = registered_pipe_adapter(bytes, architecture);
 
-        assert_eq!(runtime.vector_io(descriptor, 8, 2, false), LinuxResult::Error(Errno::EFAULT));
+        assert_eq!(
+            runtime.vector_io(descriptor, 8, 2, false),
+            LinuxResult::Error(Errno::EFAULT)
+        );
         assert_eq!(reader.read(&mut [0_u8; 1]), Err(ObjectError::WouldBlock));
     }
 }
@@ -463,7 +466,10 @@ fn atomic_pipe_vector_rejects_source_overflow() {
         write_iovec(&mut bytes, 8, u64::MAX - 3, 8);
         let (runtime, reader, descriptor) = registered_pipe_adapter(bytes, architecture);
 
-        assert_eq!(runtime.vector_io(descriptor, 8, 1, false), LinuxResult::Error(Errno::EFAULT));
+        assert_eq!(
+            runtime.vector_io(descriptor, 8, 1, false),
+            LinuxResult::Error(Errno::EFAULT)
+        );
         assert_eq!(reader.read(&mut [0_u8; 1]), Err(ObjectError::WouldBlock));
     }
 }
@@ -477,7 +483,10 @@ fn atomic_pipe_vector_keeps_large_partial_progress() {
         write_iovec(&mut bytes, 24, (PAYLOAD + PIPE_BUF) as u64, 1);
         let (runtime, reader, descriptor) = registered_pipe_adapter(bytes, architecture);
 
-        assert_eq!(runtime.vector_io(descriptor, 8, 2, false), LinuxResult::Value(PIPE_BUF as u64));
+        assert_eq!(
+            runtime.vector_io(descriptor, 8, 2, false),
+            LinuxResult::Value(PIPE_BUF as u64)
+        );
         let mut output = vec![0; PIPE_BUF];
         assert_eq!(reader.read(&mut output), Ok(PIPE_BUF));
         assert!(output.iter().all(|byte| *byte == 0xa5));
@@ -727,11 +736,7 @@ fn x86_vector_v2_uses_sixth_argument_for_rwf_flags() {
         family: hl_linux::SyscallFamily::DescriptorIo,
     };
     assert_eq!(
-        DescriptorIoSyscalls::handle(
-            &mut adapter,
-            operation,
-            [descriptor as u64, 0, 1, 7, 0, 0x10],
-        ),
+        DescriptorIoSyscalls::handle(&mut adapter, operation, [descriptor as u64, 0, 1, 7, 0, 0x10],),
         LinuxResult::Value(3),
     );
     assert_eq!(
@@ -1002,7 +1007,10 @@ fn vectors_bad_fd() {
 fn vectors_accept_empty_after_descriptor_validation() {
     let (adapter, descriptor) = vector_adapter(0);
     assert_eq!(adapter.vector_io(descriptor, u64::MAX, 0, false), LinuxResult::Value(0));
-    assert_eq!(adapter.vector_io(1, u64::MAX, 0, false), LinuxResult::Error(Errno::EBADF));
+    assert_eq!(
+        adapter.vector_io(1, u64::MAX, 0, false),
+        LinuxResult::Error(Errno::EBADF)
+    );
 }
 
 #[test]
@@ -1077,7 +1085,10 @@ fn overflowing_vector_range_fails_before_terminal() {
         )
         .with_vector_terminal(terminal.clone());
 
-        assert_eq!(adapter.vector_io(descriptor, 0, 2, false), LinuxResult::Error(Errno::EFAULT));
+        assert_eq!(
+            adapter.vector_io(descriptor, 0, 2, false),
+            LinuxResult::Error(Errno::EFAULT)
+        );
         assert!(terminal.0.lock().unwrap().is_empty());
     }
 }
@@ -1260,7 +1271,10 @@ fn pipe2_exact_copyout() {
         assert_eq!(&*adapter.memory.bytes.lock().unwrap(), &[0, 0, 0, 0, 1, 0, 0, 0]);
         for descriptor in [0, 1] {
             assert!(descriptors.flags(descriptor).unwrap().closes_on_exec());
-            assert_ne!(descriptors.pin(descriptor).unwrap().status().bits() & StatusFlags::DIRECT, 0);
+            assert_ne!(
+                descriptors.pin(descriptor).unwrap().status().bits() & StatusFlags::DIRECT,
+                0
+            );
         }
         assert_eq!(adapter.read(0, 0, 1), LinuxResult::Error(Errno::EAGAIN));
         assert_eq!(adapter.write(1, 0, 1), LinuxResult::Value(1));
@@ -1322,7 +1336,7 @@ fn pipe_blocking_classification_tracks_live_readiness() {
 fn fragmented_pipe_capacity_stays_on_waiter_lane() {
     let descriptors = Arc::new(DescriptorTable::new(2).unwrap());
     let adapter = RuntimeFilesystemSyscalls::new(
-        descriptors,
+        Arc::clone(&descriptors),
         Memory {
             bytes: Mutex::new(vec![0x5a; hl_ipc::DEFAULT_PIPE_CAPACITY]),
             fail_write: false,
@@ -1451,6 +1465,257 @@ fn ioctl_error_precedence() {
     );
     assert_eq!(adapter.ioctl(descriptor, 0x5421, 0), LinuxResult::Error(Errno::EFAULT));
     assert_eq!(adapter.ioctl(descriptor, 0x541b, 0), LinuxResult::Error(Errno::EFAULT));
+}
+
+#[derive(Debug)]
+struct NoopTerminalSignal;
+
+impl hl_terminal::SignalSink for NoopTerminalSignal {
+    fn publish(
+        &self,
+        _actor: Option<hl_descriptor::OperationActor>,
+        _terminal: hl_terminal::PairId,
+        _foreground: Option<hl_terminal::ForegroundGroup>,
+        _signal: hl_terminal::Signal,
+    ) {
+    }
+}
+
+fn terminal_ioctl_fixture() -> (
+    RuntimeFilesystemSyscalls<Memory>,
+    Arc<hl_task::TaskRegistry>,
+    hl_task::ProcessId,
+    hl_task::ProcessId,
+    hl_task::ThreadId,
+    Arc<hl_terminal::Catalog>,
+    Arc<hl_terminal::Pair>,
+    Arc<DescriptorTable>,
+    Arc<hl_terminal::Bindings>,
+    i32,
+) {
+    let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+    let credentials = hl_task::ProcessCredentials::new(1000, 1000, &[], 8).unwrap();
+    let (_, init_thread) = tasks.create_init(credentials, hl_task::ProcessLimits::empty()).unwrap();
+    let leader_plan = tasks.begin_fork_process(init_thread).unwrap();
+    let leader = leader_plan.process();
+    let leader_thread = leader_plan.thread();
+    tasks.commit_fork_process(leader_plan).unwrap();
+    let session = tasks.create_session(leader).unwrap();
+    tasks.attach_terminal(leader, session).unwrap();
+    let worker_plan = tasks.begin_fork_process(leader_thread).unwrap();
+    let worker = worker_plan.process();
+    let worker_thread = worker_plan.thread();
+    tasks.commit_fork_process(worker_plan).unwrap();
+    let foreground = tasks.set_process_group(leader, worker, None).unwrap();
+    tasks.set_foreground_group(leader, foreground).unwrap();
+    for signal in [1, 18, 28] {
+        tasks
+            .set_action(
+                worker,
+                hl_task::SignalNumber::new(signal).unwrap(),
+                hl_task::SignalAction {
+                    disposition: hl_task::SignalDisposition::Handler(0x4000),
+                    ..hl_task::SignalAction::DEFAULT
+                },
+            )
+            .unwrap();
+    }
+
+    let catalog = Arc::new(hl_terminal::Catalog::default());
+    let pair = catalog.allocate().unwrap();
+    let bindings = Arc::new(hl_terminal::Bindings::default());
+    let description = Arc::new(hl_terminal::Description::new(
+        Arc::clone(&pair),
+        hl_terminal::Endpoint::Slave,
+        Arc::downgrade(&catalog),
+        Arc::new(NoopTerminalSignal),
+    ));
+    let descriptors = Arc::new(DescriptorTable::new(4).unwrap());
+    let descriptor = descriptors
+        .commit(
+            descriptors.reserve(0).unwrap(),
+            description.clone(),
+            StatusFlags::default(),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    let identity = descriptors.pin(descriptor).unwrap().description_identity();
+    description.bind(identity, &bindings);
+    catalog.acquire(session.number(), pair.id()).unwrap();
+    let (_, generation) = foreground.wire_parts();
+    pair.set_foreground(hl_terminal::ForegroundGroup {
+        number: foreground.number(),
+        generation,
+    })
+    .unwrap();
+    let adapter = RuntimeFilesystemSyscalls::new(
+        Arc::clone(&descriptors),
+        Memory {
+            bytes: Mutex::new(vec![0; 16]),
+            fail_write: false,
+        },
+        GuestArchitecture::X86_64,
+    )
+    .with_terminals(Arc::clone(&bindings))
+    .with_terminal_tasks(Arc::clone(&tasks), leader);
+    (
+        adapter,
+        tasks,
+        leader,
+        worker,
+        worker_thread,
+        catalog,
+        pair,
+        descriptors,
+        bindings,
+        descriptor,
+    )
+}
+
+#[test]
+fn tiocnotty_raced_detach_failure_does_not_publish_prepared_signals() {
+    let (_adapter, tasks, leader, _worker, worker_thread, _catalog, _pair, _descriptors, _bindings, _descriptor) =
+        terminal_ioctl_fixture();
+    let prepared = tasks
+        .prepare_terminal_transition(leader, hl_task::TerminalTransition::Detach)
+        .unwrap();
+    assert_eq!(
+        crate::filesystem::ioctl::finish_terminal_detach(Some(prepared), Err(hl_terminal::CatalogError::NotFound),),
+        LinuxResult::Error(Errno::ENOTTY)
+    );
+    assert_eq!(tasks.pending_signal_mask(worker_thread).unwrap().bits(), 0);
+    assert!(tasks.terminal_session(leader).unwrap().is_some());
+}
+
+#[test]
+fn tiocnotty_and_tiocswinsz_publish_only_after_terminal_mutation() {
+    let (adapter, tasks, leader, _worker, worker_thread, catalog, pair, _descriptors, _bindings, descriptor) =
+        terminal_ioctl_fixture();
+    adapter.memory.bytes.lock().unwrap()[..8].copy_from_slice(&[24, 0, 80, 0, 1, 0, 2, 0]);
+
+    assert_eq!(adapter.ioctl(descriptor, 0x5414, 0), LinuxResult::Value(0));
+    assert_eq!(pair.window().rows, 24);
+    assert_eq!(pair.window().columns, 80);
+    assert_ne!(tasks.pending_signal_mask(worker_thread).unwrap().bits() & (1 << 27), 0);
+
+    assert_eq!(adapter.ioctl(descriptor, 0x5422, 0), LinuxResult::Value(0));
+    assert!(catalog.controlling(tasks.session_id(leader).unwrap().number()).is_err());
+    let pending = tasks.pending_signal_mask(worker_thread).unwrap().bits();
+    assert_ne!(pending & 1, 0);
+    assert_ne!(pending & (1 << 17), 0);
+}
+
+#[test]
+fn tiocnotty_nonleader_preserves_session_terminal_binding() {
+    let (adapter, tasks, leader, worker, worker_thread, catalog, pair, _descriptors, _bindings, descriptor) =
+        terminal_ioctl_fixture();
+    let session = tasks.session_id(leader).unwrap();
+    let adapter = adapter.with_terminal_tasks(Arc::clone(&tasks), worker);
+    let foreground = pair.foreground().unwrap();
+    pair.set_foreground(hl_terminal::ForegroundGroup {
+        number: foreground.number,
+        generation: foreground.generation.saturating_add(1),
+    })
+    .unwrap();
+
+    assert_eq!(adapter.ioctl(descriptor, 0x5422, 0), LinuxResult::Value(0));
+    assert!(catalog.controlling(session.number()).is_ok());
+    assert_eq!(tasks.terminal_session(worker).unwrap(), None);
+    assert_eq!(tasks.terminal_session(leader).unwrap(), Some(session));
+    assert_eq!(tasks.pending_signal_mask(worker_thread).unwrap().bits(), 0);
+}
+
+#[test]
+fn tiocnotty_leader_detaches_when_tty_foreground_is_stale() {
+    let (adapter, tasks, leader, _worker, worker_thread, catalog, pair, _descriptors, _bindings, descriptor) =
+        terminal_ioctl_fixture();
+    let session = tasks.session_id(leader).unwrap();
+    let foreground = pair.foreground().unwrap();
+    pair.set_foreground(hl_terminal::ForegroundGroup {
+        number: foreground.number,
+        generation: foreground.generation.saturating_add(1),
+    })
+    .unwrap();
+
+    assert_eq!(adapter.ioctl(descriptor, 0x5422, 0), LinuxResult::Value(0));
+    assert!(catalog.controlling(session.number()).is_err());
+    assert_eq!(tasks.pending_signal_mask(worker_thread).unwrap().bits(), 0);
+}
+
+#[test]
+fn tiocsctty_attach_failure_rolls_back_new_catalog_binding() {
+    let (adapter, tasks, leader, _worker, _worker_thread, catalog, pair, _descriptors, _bindings, descriptor) =
+        terminal_ioctl_fixture();
+    let session = tasks.session_id(leader).unwrap();
+    catalog.detach(session.number(), pair.id()).unwrap();
+    let leader_thread = tasks
+        .snapshot()
+        .processes
+        .iter()
+        .find(|process| process.id == leader)
+        .unwrap()
+        .leader;
+    let _exec = tasks.prepare_exec(leader, leader_thread).unwrap();
+
+    assert_eq!(adapter.ioctl(descriptor, 0x540e, 0), LinuxResult::Error(Errno::EPERM));
+    assert!(catalog.controlling(session.number()).is_err());
+}
+
+#[test]
+fn master_window_change_targets_tty_foreground_not_callers_session() {
+    let (adapter, tasks, leader, worker, worker_thread, catalog, pair, descriptors, bindings, _descriptor) =
+        terminal_ioctl_fixture();
+    let master = Arc::new(hl_terminal::Description::new(
+        Arc::clone(&pair),
+        hl_terminal::Endpoint::Master,
+        Arc::downgrade(&catalog),
+        Arc::new(NoopTerminalSignal),
+    ));
+    let descriptor = descriptors
+        .commit(
+            descriptors.reserve(1).unwrap(),
+            master.clone(),
+            StatusFlags::default(),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    master.bind(descriptors.pin(descriptor).unwrap().description_identity(), &bindings);
+
+    assert_eq!(adapter.ioctl(descriptor, 0x5422, 0), LinuxResult::Error(Errno::ENOTTY));
+    // The default zero-sized window is unchanged and must not emit SIGWINCH.
+    assert_eq!(adapter.ioctl(descriptor, 0x5414, 0), LinuxResult::Value(0));
+    assert_eq!(tasks.pending_signal_mask(worker_thread).unwrap().bits(), 0);
+
+    // Diverge the task session's foreground from the tty to prove the tty's
+    // generation-qualified identity is authoritative.
+    let peer_plan = tasks.begin_fork_process(worker_thread).unwrap();
+    let peer = peer_plan.process();
+    let peer_thread = peer_plan.thread();
+    tasks.commit_fork_process(peer_plan).unwrap();
+    let peer_group = tasks.set_process_group(worker, peer, None).unwrap();
+    tasks.set_foreground_group(leader, peer_group).unwrap();
+    tasks
+        .set_action(
+            peer,
+            hl_task::SignalNumber::new(28).unwrap(),
+            hl_task::SignalAction {
+                disposition: hl_task::SignalDisposition::Handler(0x5000),
+                ..hl_task::SignalAction::DEFAULT
+            },
+        )
+        .unwrap();
+
+    let other_plan = tasks.begin_fork_process(peer_thread).unwrap();
+    let other = other_plan.process();
+    tasks.commit_fork_process(other_plan).unwrap();
+    tasks.create_session(other).unwrap();
+    let adapter = adapter.with_terminal_tasks(Arc::clone(&tasks), other);
+    adapter.memory.bytes.lock().unwrap()[..8].copy_from_slice(&[40, 0, 120, 0, 0, 0, 0, 0]);
+
+    assert_eq!(adapter.ioctl(descriptor, 0x5414, 0), LinuxResult::Value(0));
+    assert_eq!(pair.window().rows, 40);
+    assert_ne!(tasks.pending_signal_mask(worker_thread).unwrap().bits() & (1 << 27), 0);
+    assert_eq!(tasks.pending_signal_mask(peer_thread).unwrap().bits(), 0);
 }
 
 #[test]

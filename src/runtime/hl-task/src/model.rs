@@ -42,9 +42,9 @@ pub struct ProcessCredentials {
     pub keep_capabilities: bool,
     pub no_new_privileges: bool,
     /// Set-id authority is distinct from the guest-visible capability persona.
-    pub setid_permitted: bool,
+    setid_permitted: bool,
     /// Effective SETUID/SETGID authority, re-raised only from `setid_permitted`.
-    pub setid_effective: bool,
+    setid_effective: bool,
     groups: Vec<u32>,
 }
 
@@ -54,6 +54,37 @@ pub struct CapabilitySets {
     pub permitted: u64,
     pub inheritable: u64,
     pub ambient: u64,
+}
+
+/// Set-id authority retained across credential transitions and checkpoints.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SetIdAuthority {
+    None,
+    Permitted,
+    Effective,
+}
+
+impl TryFrom<[bool; 2]> for SetIdAuthority {
+    type Error = TaskError;
+
+    fn try_from([permitted, effective]: [bool; 2]) -> Result<Self, Self::Error> {
+        match (permitted, effective) {
+            (false, false) => Ok(Self::None),
+            (true, false) => Ok(Self::Permitted),
+            (true, true) => Ok(Self::Effective),
+            (false, true) => Err(TaskError::InvalidSnapshot),
+        }
+    }
+}
+
+impl From<SetIdAuthority> for [bool; 2] {
+    fn from(authority: SetIdAuthority) -> Self {
+        match authority {
+            SetIdAuthority::None => [false, false],
+            SetIdAuthority::Permitted => [true, false],
+            SetIdAuthority::Effective => [true, true],
+        }
+    }
 }
 
 impl CapabilitySets {
@@ -121,6 +152,22 @@ impl ProcessCredentials {
         self.setid_effective
     }
 
+    /// Returns the permitted and effective set-id authority for checkpointing.
+    #[must_use]
+    pub const fn setid_authority(&self) -> SetIdAuthority {
+        match (self.setid_permitted, self.setid_effective) {
+            (false, false) => SetIdAuthority::None,
+            (true, false) => SetIdAuthority::Permitted,
+            (true, true) => SetIdAuthority::Effective,
+            (false, true) => unreachable!(),
+        }
+    }
+
+    /// Restores checkpointed set-id authority.
+    pub fn restore_setid_authority(&mut self, authority: SetIdAuthority) {
+        [self.setid_permitted, self.setid_effective] = authority.into();
+    }
+
     pub fn refresh_setid(&mut self) {
         if self.effective_user == 0 {
             self.setid_permitted = true;
@@ -174,8 +221,7 @@ mod credential_test {
         credentials.effective_user = 501;
         credentials.saved_user = 501;
         credentials.refresh_setid();
-        assert!(credentials.setid_permitted);
-        assert!(!credentials.setid_effective);
+        assert_eq!(credentials.setid_authority(), SetIdAuthority::Permitted);
         credentials.raise_setid();
         assert!(credentials.may_setid());
     }
@@ -187,9 +233,16 @@ mod credential_test {
         credentials.effective_user = 501;
         credentials.saved_user = 501;
         credentials.refresh_setid();
-        assert!(!credentials.setid_permitted);
+        assert_eq!(credentials.setid_authority(), SetIdAuthority::None);
         credentials.raise_setid();
         assert!(!credentials.may_setid());
+    }
+
+    #[test]
+    fn restore_rejects_impossible_authority() {
+        let credentials = ProcessCredentials::new(501, 20, &[], 8).unwrap();
+        assert_eq!(SetIdAuthority::try_from([false, true]), Err(TaskError::InvalidSnapshot));
+        assert_eq!(credentials.setid_authority(), SetIdAuthority::None);
     }
 }
 
@@ -450,6 +503,7 @@ pub struct ProcessSnapshot {
     pub leader: ThreadId,
     pub session: SessionId,
     pub process_group: ProcessGroupId,
+    pub terminal_detached: bool,
     pub child_class: ChildClass,
     pub execed: bool,
     pub arguments: Vec<Vec<u8>>,

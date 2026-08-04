@@ -2,7 +2,7 @@ use hl_task::*;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 pub(in crate::checkpoint) const TASK_BYTES_MAXIMUM: usize = 4 * 1024 * 1024;
-const WIRE_VERSION: u32 = 6;
+const WIRE_VERSION: u32 = 7;
 struct BoundedBytes(Vec<u8>);
 impl BoundedBytes {
     fn new() -> Self {
@@ -84,6 +84,7 @@ struct ProcessWire {
     leader: IdWire,
     session: IdWire,
     group: IdWire,
+    terminal_detached: bool,
     child_class: u8,
     execed: bool,
     arguments: Vec<Vec<u8>>,
