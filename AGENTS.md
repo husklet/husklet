@@ -69,7 +69,7 @@ image with a terminal, filesystem, networking, VPN, and container services.
 
 Preserve exact Linux behavior across AArch64 and x86-64 guests and Linux, macOS,
 and Windows hosts. The product composes replaceable engine, container, workspace,
-terminal, and GUI capabilities; reusable crates contain no Husklet product policy.
+and terminal capabilities; reusable crates contain no Husklet product policy.
 
 Ordinary CLI and terminal applications must run without application-specific engine
 workarounds. The final compatibility/performance gate includes container workflows,
@@ -346,53 +346,6 @@ cross a C boundary.
 
 Every hot-path migration compares against a pinned C baseline. Nested engine
 benchmarks measure compounding overhead.
-
-## Module shape
-
-A crate starts with `lib.rs` and files named for owned entities. Add role
-directories only when cohesive children exist:
-
-```text
-src/
-  model/      entities and invariant-bearing values
-  port/       consumer-owned capability traits
-  service/    multi-entity domain operations
-  snapshot/   bounded public checkpoint values
-  adapter/    concrete platform or integration mechanisms
-```
-
-These roles are optional, not ceremonial. Production code stays at or below 500
-lines; `#[cfg(test)]` items and test-only files do not consume that budget. Prefer
-inline unit tests. If a companion file is necessary, use singular `_test.rs`, never
-`_tests.rs`.
-
-Rust filenames contain at most two semantic words. When three or more sibling
-files share a first snake-case word, promote that word into a one-word noun module:
-
-```text
-launcher/
-  mod.rs
-  plan.rs
-  plan_test.rs
-  wire.rs
-  wire_test.rs
-```
-
-Declarations inside a noun module do not repeat the module noun. Struct, enum,
-trait, free-function, inherent-method, and trait-method names contain at most three
-semantic words; acronym runs count as one word. These naming rules apply equally
-to production and test code. Methods implementing an external trait retain the
-trait's imposed spelling; they are not locally owned declarations. Longer owned
-names are evidence that ownership or the module boundary needs reconsideration.
-Split by cohesive ownership, never numbered fragments or `include!`.
-
-Do not use several `#[path = "noun/child.rs"]` declarations to inject independent
-child directories into one flat parent namespace. Declare each noun through its
-natural `noun.rs` or `noun/mod.rs` boundary, keep its implementation private, and
-re-export only its deliberate public contract. Explicit paths are reserved for
-narrow test or target-conditioned platform wiring. Likewise, three or more sibling
-files must not repeat an implementation-role suffix such as `_registry`, `_port`,
-or `_adapter`; organize them by the nouns that own their state and behavior.
 
 ## Application boundaries
 
