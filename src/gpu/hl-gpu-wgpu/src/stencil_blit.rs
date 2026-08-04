@@ -610,6 +610,9 @@ mod tests {
         copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, 1, &[77; 64]);
         let depth = (0..64).flat_map(|i| ((i as f32 + 1.0) / 65.0).to_le_bytes()).collect::<Vec<_>>();
         copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::DepthOnly, 8, 8, 4, &depth);
+        let depth_before = copy_aspect_out(
+            &exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::DepthOnly, 4,
+        );
 
         exec.blit_stencil_nearest(
             &session.resources,
@@ -627,7 +630,7 @@ mod tests {
         )
         .unwrap();
         let got = copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::StencilOnly, 1);
-        assert_eq!(copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::DepthOnly, 4), depth,
+        assert_eq!(copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::DepthOnly, 4), depth_before,
             "stencil-only render passes must preserve every destination depth texel");
         let mut want = vec![77; 64];
         for y in 0..4 {
