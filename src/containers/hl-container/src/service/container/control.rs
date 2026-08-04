@@ -189,6 +189,7 @@ impl Service {
         if let Some(run) = self.live.lock().await.get(&container.id) {
             let _ = run.health.send(true);
         }
+        self.emit(crate::LifecycleAction::Pause, &container);
         Ok(())
     }
 
@@ -232,6 +233,7 @@ impl Service {
                 .run(),
             );
         }
+        self.emit(crate::LifecycleAction::Unpause, &container);
         Ok(())
     }
 

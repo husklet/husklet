@@ -36,9 +36,7 @@ impl Events {
         if let Some(image) = &container.spec.image {
             attributes.insert("image".into(), image.to_string());
         }
-        let duration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let id = container.id.to_string();
         self.publish(Event {
             kind: "container".into(),
@@ -63,9 +61,7 @@ impl Events {
         id: impl Into<String>,
         attributes: std::collections::BTreeMap<String, String>,
     ) {
-        let duration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
+        let duration = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
         let id = id.into();
         self.publish(Event {
             kind: kind.into(),
@@ -95,8 +91,7 @@ impl Events {
     pub(crate) fn volumes(&self, action: &str, container: &hl_container::Container) {
         for mount in &container.spec.mounts {
             let name = match &mount.source {
-                hl_container::MountSource::Volume(name)
-                | hl_container::MountSource::Anonymous(name) => name,
+                hl_container::MountSource::Volume(name) | hl_container::MountSource::Anonymous(name) => name,
                 hl_container::MountSource::Bind(_) | hl_container::MountSource::Tmpfs(_) => {
                     continue;
                 }
@@ -127,11 +122,7 @@ impl Events {
 
     pub(crate) fn subscribe(&self, query: EventQuery) -> Subscription {
         let history = self.inner.history.lock().unwrap();
-        let replay = history
-            .iter()
-            .filter(|event| query.matches(event))
-            .cloned()
-            .collect();
+        let replay = history.iter().filter(|event| query.matches(event)).cloned().collect();
         let receiver = self.inner.sender.subscribe();
         drop(history);
         Subscription {
@@ -147,6 +138,8 @@ impl hl_container::LifecycleEvents for Events {
         let action = match event.action {
             hl_container::LifecycleAction::Create => "create",
             hl_container::LifecycleAction::Start => "start",
+            hl_container::LifecycleAction::Pause => "pause",
+            hl_container::LifecycleAction::Unpause => "unpause",
             hl_container::LifecycleAction::Die => "die",
             hl_container::LifecycleAction::Restart => "restart",
             hl_container::LifecycleAction::Destroy => "destroy",
@@ -200,9 +193,7 @@ impl Subscription {
 
 impl EventQuery {
     fn matches(&self, event: &Event) -> bool {
-        if self.since.is_some_and(|since| event.time < since)
-            || self.until.is_some_and(|until| event.time > until)
-        {
+        if self.since.is_some_and(|since| event.time < since) || self.until.is_some_and(|until| event.time > until) {
             return false;
         }
         self.filters.matches(event)
@@ -228,10 +219,7 @@ impl EventFilter {
                 || values.iter().any(|value| match key.as_str() {
                     "type" => value == &event.kind,
                     "event" | "action" => value == &event.action,
-                    "container" => {
-                        value == &event.actor.id
-                            || event.actor.attributes.get("name") == Some(value)
-                    }
+                    "container" => value == &event.actor.id || event.actor.attributes.get("name") == Some(value),
                     "image" => {
                         value == &event.actor.id
                             || event.actor.attributes.get("name") == Some(value)
@@ -240,8 +228,7 @@ impl EventFilter {
                     }
                     "network" | "volume" => {
                         key == &event.kind
-                            && (value == &event.actor.id
-                                || event.actor.attributes.get("name") == Some(value))
+                            && (value == &event.actor.id || event.actor.attributes.get("name") == Some(value))
                     }
                     "label" => event.actor.attributes.label(value),
                     _ => false,
@@ -289,8 +276,7 @@ mod tests {
         let events = Events::new();
         events.publish(event("one", "create", 10));
         events.publish(event("two", "create", 11));
-        let query = EventQuery::default()
-            .filters(EventFilter::default().container("one").label("tier=api"));
+        let query = EventQuery::default().filters(EventFilter::default().container("one").label("tier=api"));
         let mut subscription = events.subscribe(query);
         assert_eq!(subscription.next().await.unwrap().actor.id, "one");
 
@@ -314,11 +300,7 @@ mod tests {
     fn replay_history_is_bounded() {
         let events = Events::new();
         for index in 0..=HISTORY {
-            events.publish(event(
-                &index.to_string(),
-                "create",
-                i64::try_from(index).unwrap(),
-            ));
+            events.publish(event(&index.to_string(), "create", i64::try_from(index).unwrap()));
         }
         let subscription = events.subscribe(EventQuery::default());
         assert_eq!(subscription.replay.len(), HISTORY);
@@ -330,18 +312,10 @@ mod tests {
         let mut value = event("sha256:abc", "tag", 1);
         value.kind = "image".into();
         value.from = Some("alpine:latest".into());
-        value
-            .actor
-            .attributes
-            .insert("name".into(), "frontend".into());
-        value
-            .actor
-            .attributes
-            .insert("image".into(), "alpine:latest".into());
+        value.actor.attributes.insert("name".into(), "frontend".into());
+        value.actor.attributes.insert("image".into(), "alpine:latest".into());
 
-        assert!(EventFilter::default()
-            .image("alpine:latest")
-            .matches(&value));
+        assert!(EventFilter::default().image("alpine:latest").matches(&value));
         assert!(!EventFilter::default().image("debian").matches(&value));
 
         value.kind = "network".into();
@@ -361,35 +335,73 @@ mod tests {
     #[test]
     fn action_filter_matches_health_status_action() {
         let value = event("container-one", "health_status: healthy", 1);
-        assert!(EventFilter::default()
-            .action("health_status: healthy")
-            .matches(&value));
-        assert!(!EventFilter::default()
-            .action("health_status: unhealthy")
-            .matches(&value));
+        assert!(EventFilter::default().action("health_status: healthy").matches(&value));
+        assert!(
+            !EventFilter::default()
+                .action("health_status: unhealthy")
+                .matches(&value)
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_identity() {
+        let events = Events::new();
+        let id = "00000000000040008000000000000001";
+        let mut container = hl_container::Container {
+            id: id.parse().unwrap(),
+            spec: hl_container::ContainerSpec::from_directory(".", hl_container::Process::new("/bin/true"))
+                .name("workload"),
+            state: hl_container::ContainerState::Created,
+            created_at_ms: 1,
+            generation: 0,
+            restart: hl_container::Restart::default(),
+            health: None,
+            checkpoint: None,
+        };
+        let mut subscription = events.subscribe(EventQuery::default());
+
+        events.container("pause", &container);
+        container.state = hl_container::ContainerState::Paused {
+            process_id: 42,
+            started_at_ms: 1,
+            paused_at_ms: 2,
+        };
+        events.container("unpause", &container);
+
+        for action in ["pause", "unpause"] {
+            let event = subscription.next().await.unwrap();
+            assert_eq!(event.action, action);
+            assert_eq!(event.status.as_deref(), Some(action));
+            assert_eq!(event.actor.id, id);
+            assert_eq!(event.id.as_deref(), Some(id));
+            assert_eq!(event.actor.attributes.get("name").map(String::as_str), Some("workload"));
+        }
     }
 
     #[test]
     fn label_and_object_scope_filters_are_conjunctive() {
         let mut value = event("network-id", "connect", 1);
         value.kind = "network".into();
-        value
-            .actor
-            .attributes
-            .insert("name".into(), "frontend".into());
+        value.actor.attributes.insert("name".into(), "frontend".into());
 
-        assert!(EventFilter::default()
-            .network("frontend")
-            .label("tier=api")
-            .matches(&value));
-        assert!(!EventFilter::default()
-            .volume("frontend")
-            .label("tier=api")
-            .matches(&value));
-        assert!(!EventFilter::default()
-            .network("frontend")
-            .label("tier=worker")
-            .matches(&value));
+        assert!(
+            EventFilter::default()
+                .network("frontend")
+                .label("tier=api")
+                .matches(&value)
+        );
+        assert!(
+            !EventFilter::default()
+                .volume("frontend")
+                .label("tier=api")
+                .matches(&value)
+        );
+        assert!(
+            !EventFilter::default()
+                .network("frontend")
+                .label("tier=worker")
+                .matches(&value)
+        );
     }
 
     #[test]
@@ -399,10 +411,7 @@ mod tests {
 
         let subscription = events.subscribe(EventQuery::default());
         assert_eq!(subscription.replay.len(), 1);
-        assert_eq!(
-            subscription.replay.front().unwrap().actor.id,
-            "before-subscribe"
-        );
+        assert_eq!(subscription.replay.front().unwrap().actor.id, "before-subscribe");
     }
 
     #[test]

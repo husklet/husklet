@@ -162,17 +162,37 @@ async fn pause_and_unpause_are_persisted_runtime_transitions() {
     runtime.delay = Duration::from_secs(1);
     let runtime = Arc::new(runtime);
     let containers = service(Arc::clone(&runtime)).await;
+    let events = Arc::new(Recorded::default());
+    containers.observe(events.clone());
     containers.create(spec("pausable")).await.unwrap();
     containers.start("pausable").await.unwrap();
 
     containers.pause("pausable").await.unwrap();
     assert!(containers.inspect("pausable").await.unwrap().state.is_paused());
+    assert!(matches!(
+        containers.pause("pausable").await,
+        Err(Error::InvalidState { .. })
+    ));
+    assert_eq!(*runtime.suspensions.lock().unwrap(), vec![true]);
     containers.unpause("pausable").await.unwrap();
     assert!(matches!(
         containers.inspect("pausable").await.unwrap().state,
         ContainerState::Running { .. }
     ));
+    assert!(matches!(
+        containers.unpause("pausable").await,
+        Err(Error::InvalidState { .. })
+    ));
     assert_eq!(*runtime.suspensions.lock().unwrap(), vec![true, false]);
+    assert_eq!(
+        *events.0.lock().unwrap(),
+        [
+            LifecycleAction::Create,
+            LifecycleAction::Start,
+            LifecycleAction::Pause,
+            LifecycleAction::Unpause,
+        ]
+    );
 
     containers.remove_force("pausable").await.unwrap();
 }

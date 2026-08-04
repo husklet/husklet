@@ -6,6 +6,8 @@ use std::sync::Arc;
 pub enum LifecycleAction {
     Create,
     Start,
+    Pause,
+    Unpause,
     Die,
     Restart,
     Destroy,
