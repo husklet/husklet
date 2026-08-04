@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Docker health-check wire representation.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Healthcheck {
     #[serde(default)]
@@ -15,6 +15,8 @@ pub struct Healthcheck {
     pub retries: i64,
     #[serde(default)]
     pub start_period: i64,
+    #[serde(default)]
+    pub start_interval: i64,
 }
 
 #[cfg(feature = "runtime")]
@@ -31,9 +33,7 @@ impl Healthcheck {
             }
             "CMD-SHELL" if self.test.len() > 1 => Check::Shell(self.test[1..].join(" ")),
             _ => {
-                return Err(
-                    "Healthcheck.Test must be NONE, CMD, or CMD-SHELL with a command".into(),
-                );
+                return Err("Healthcheck.Test must be NONE, CMD, or CMD-SHELL with a command".into());
             }
         };
         let duration = |name: &str, value: i64, default| match value.cmp(&0) {
@@ -46,27 +46,18 @@ impl Healthcheck {
         let retries = match self.retries {
             value if value < 0 => return Err("Healthcheck.Retries must be nonnegative".into()),
             0 => 3,
-            value => {
-                u32::try_from(value).map_err(|_| "Healthcheck.Retries exceeds u32".to_owned())?
-            }
+            value => u32::try_from(value).map_err(|_| "Healthcheck.Retries exceeds u32".to_owned())?,
         };
         Ok(Some(
             Policy::new(command)
-                .interval(duration(
-                    "Interval",
-                    self.interval,
-                    std::time::Duration::from_secs(30),
-                )?)
-                .timeout(duration(
-                    "Timeout",
-                    self.timeout,
-                    std::time::Duration::from_secs(30),
-                )?)
+                .interval(duration("Interval", self.interval, std::time::Duration::from_secs(30))?)
+                .timeout(duration("Timeout", self.timeout, std::time::Duration::from_secs(30))?)
                 .retries(retries)
-                .start_period(duration(
-                    "StartPeriod",
-                    self.start_period,
-                    std::time::Duration::ZERO,
+                .start_period(duration("StartPeriod", self.start_period, std::time::Duration::ZERO)?),
+                .start_interval(duration(
+                    "StartInterval",
+                    self.start_interval,
+                    std::time::Duration::from_secs(5),
                 )?),
         ))
     }
@@ -90,20 +81,39 @@ impl RestartPolicy {
                 return Err("RestartPolicy.MaximumRetryCount must be nonnegative".into());
             }
             0 => None,
-            value => Some(
-                u32::try_from(value)
-                    .map_err(|_| "RestartPolicy.MaximumRetryCount exceeds u32".to_owned())?,
-            ),
+            value => Some(u32::try_from(value).map_err(|_| "RestartPolicy.MaximumRetryCount exceeds u32".to_owned())?),
         };
         match self.name.as_str() {
             "" | "no" if maximum.is_none() => Ok(hl_container::RestartPolicy::Never),
             "always" if maximum.is_none() => Ok(hl_container::RestartPolicy::Always),
             "unless-stopped" if maximum.is_none() => Ok(hl_container::RestartPolicy::UnlessStopped),
             "on-failure" => Ok(hl_container::RestartPolicy::OnFailure { maximum }),
-            "" | "no" | "always" | "unless-stopped" => {
-                Err("MaximumRetryCount is only valid for on-failure".into())
-            }
+            "" | "no" | "always" | "unless-stopped" => Err("MaximumRetryCount is only valid for on-failure".into()),
             name => Err(format!("unsupported restart policy {name:?}")),
+        }
+    }
+}
+
+#[cfg(feature = "runtime")]
+impl From<hl_container::RestartPolicy> for RestartPolicy {
+    fn from(value: hl_container::RestartPolicy) -> Self {
+        match value {
+            hl_container::RestartPolicy::Never => Self {
+                name: "no".into(),
+                maximum_retry_count: 0,
+            },
+            hl_container::RestartPolicy::Always => Self {
+                name: "always".into(),
+                maximum_retry_count: 0,
+            },
+            hl_container::RestartPolicy::UnlessStopped => Self {
+                name: "unless-stopped".into(),
+                maximum_retry_count: 0,
+            },
+            hl_container::RestartPolicy::OnFailure { maximum } => Self {
+                name: "on-failure".into(),
+                maximum_retry_count: maximum.map_or(0, i64::from),
+            },
         }
     }
 }
@@ -126,11 +136,7 @@ impl Update {
         if let Some(name) = CompatibilityFields::from(&self.unsupported).first_meaningful() {
             return Err(format!("unsupported container update field {name}"));
         }
-        let restart = self
-            .restart_policy
-            .as_ref()
-            .map(RestartPolicy::policy)
-            .transpose()?;
+        let restart = self.restart_policy.as_ref().map(RestartPolicy::policy).transpose()?;
         Ok(hl_container::Update {
             memory_bytes: self.memory_bytes()?,
             process_count: self.process_count()?,
@@ -218,9 +224,7 @@ mod tests {
         .policy()
         .unwrap()
         .unwrap();
-        assert!(
-            matches!(shell.command, hl_container::Check::Shell(ref value) if value == "test -f /ready")
-        );
+        assert!(matches!(shell.command, hl_container::Check::Shell(ref value) if value == "test -f /ready"));
         assert_eq!(shell.interval, std::time::Duration::from_secs(30));
         assert_eq!(shell.timeout, std::time::Duration::from_secs(30));
         assert_eq!(shell.retries, 3);
@@ -231,21 +235,23 @@ mod tests {
             timeout: 2_000_000_000,
             retries: 5,
             start_period: 1_000_000_000,
+            start_interval: 100_000_000,
         }
         .policy()
         .unwrap()
         .unwrap();
-        assert!(
-            matches!(command.command, hl_container::Check::Command(ref process)
-            if process.program == "/bin/check" && process.args == ["--quiet"])
-        );
+        assert!(matches!(command.command, hl_container::Check::Command(ref process)
+            if process.program == "/bin/check" && process.args == ["--quiet"]));
         assert_eq!(command.interval, std::time::Duration::from_millis(500));
-        assert!(Healthcheck {
-            test: vec!["CMD".into()],
-            ..Default::default()
-        }
-        .policy()
-        .is_err());
+        assert_eq!(command.start_interval, std::time::Duration::from_millis(100));
+        assert!(
+            Healthcheck {
+                test: vec!["CMD".into()],
+                ..Default::default()
+            }
+            .policy()
+            .is_err()
+        );
     }
 
     #[test]
@@ -268,28 +274,26 @@ mod tests {
             .unwrap(),
             hl_container::RestartPolicy::OnFailure { maximum: Some(4) }
         );
-        assert!(RestartPolicy {
-            name: "always".into(),
-            maximum_retry_count: 1,
-        }
-        .policy()
-        .is_err());
+        assert!(
+            RestartPolicy {
+                name: "always".into(),
+                maximum_retry_count: 1,
+            }
+            .policy()
+            .is_err()
+        );
     }
 
     #[test]
     fn update_accepts_only_harmless_unknown_defaults() {
         let mut update = Update::default();
-        update
-            .unsupported
-            .insert("CpuShares".into(), serde_json::json!(0));
+        update.unsupported.insert("CpuShares".into(), serde_json::json!(0));
         update
             .unsupported
             .insert("BlkioWeightDevice".into(), serde_json::json!([]));
         assert!(update.settings().is_ok());
 
-        update
-            .unsupported
-            .insert("CpuShares".into(), serde_json::json!(512));
+        update.unsupported.insert("CpuShares".into(), serde_json::json!(512));
         assert_eq!(
             update.settings().unwrap_err(),
             "unsupported container update field CpuShares"

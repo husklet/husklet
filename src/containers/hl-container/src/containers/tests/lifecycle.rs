@@ -358,6 +358,48 @@ async fn rename_wait_removed_stop_and_force_remove_follow_owned_lifecycle() {
 }
 
 #[tokio::test]
+async fn next_exit_observes_a_restart_policy_exit_without_waiting_for_final_stop() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(7));
+    runtime.delay = Duration::from_millis(20);
+    let containers = service(Arc::new(runtime)).await;
+    containers
+        .create(spec("next-restart").restart(RestartPolicy::OnFailure { maximum: Some(1) }))
+        .await
+        .unwrap();
+    containers.start("next-restart").await.unwrap();
+
+    assert_eq!(
+        containers
+            .wait_for("next-restart", WaitCondition::NextExit)
+            .await
+            .unwrap(),
+        Some(ExitStatus::Code(7))
+    );
+    assert_eq!(containers.wait("next-restart").await.unwrap(), ExitStatus::Code(7));
+    assert_eq!(containers.inspect("next-restart").await.unwrap().restart.count, 1);
+}
+
+#[tokio::test]
+async fn next_exit_on_an_exited_container_waits_for_a_later_generation() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(5));
+    runtime.delay = Duration::from_millis(20);
+    let containers = service(Arc::new(runtime)).await;
+    containers.create(spec("next-generation")).await.unwrap();
+    containers.start("next-generation").await.unwrap();
+    assert_eq!(containers.wait("next-generation").await.unwrap(), ExitStatus::Code(5));
+
+    let waiting = {
+        let containers = containers.clone();
+        tokio::spawn(async move { containers.wait_for("next-generation", WaitCondition::NextExit).await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    containers.start("next-generation").await.unwrap();
+
+    assert_eq!(waiting.await.unwrap().unwrap(), Some(ExitStatus::Code(5)));
+}
+
+#[tokio::test]
 async fn shutdown_stops_every_active_container_and_preserves_inactive_records() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);

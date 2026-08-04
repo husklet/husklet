@@ -11,7 +11,8 @@ pub(in super::super) async fn wait(
     Query(query): Query<WaitQuery>,
 ) -> ApiResult<Json<Wait>> {
     let condition = match query.condition.as_deref().unwrap_or("not-running") {
-        "not-running" | "next-exit" => hl_container::WaitCondition::NotRunning,
+        "not-running" => hl_container::WaitCondition::NotRunning,
+        "next-exit" => hl_container::WaitCondition::NextExit,
         "removed" => hl_container::WaitCondition::Removed,
         value => {
             return Err(ApiError::new(

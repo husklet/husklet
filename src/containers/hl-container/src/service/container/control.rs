@@ -5,6 +5,7 @@ use super::{
 impl Service {
     pub(crate) async fn wait(&self, reference: &str, condition: WaitCondition) -> Result<Option<ExitStatus>> {
         let mut exit = None;
+        let mut observed = None;
         loop {
             let container = match self.resolve(reference).await {
                 Ok(value) => value,
@@ -29,11 +30,33 @@ impl Service {
             {
                 return Err(Error::Corrupt(format!("failed to persist exit state: {message}")));
             }
+            let (initial_generation, initially_active) = *observed.get_or_insert_with(|| {
+                (
+                    container.generation,
+                    matches!(
+                        container.state,
+                        ContainerState::Running { .. } | ContainerState::Paused { .. }
+                    ),
+                )
+            });
             if let ContainerState::Exited { result, .. } = container.state {
                 if condition == WaitCondition::NotRunning {
                     return Ok(Some(result));
                 }
                 exit = Some(result);
+                if condition == WaitCondition::NextExit
+                    && (container.generation > initial_generation
+                        || initially_active && container.generation == initial_generation)
+                {
+                    return Ok(Some(result));
+                }
+            } else if let ContainerState::Restarting { result, .. } = container.state {
+                if condition == WaitCondition::NextExit
+                    && (container.generation > initial_generation
+                        || initially_active && container.generation == initial_generation)
+                {
+                    return Ok(Some(result));
+                }
             } else if matches!(container.state, ContainerState::Created) && condition == WaitCondition::NotRunning {
                 return Err(Error::InvalidState {
                     id: container.id,
@@ -51,6 +74,13 @@ impl Service {
                 Err(Error::NotFound(_)) => condition == WaitCondition::Removed,
                 Ok(current) => {
                     condition == WaitCondition::NotRunning && matches!(current.state, ContainerState::Exited { .. })
+                        || condition == WaitCondition::NextExit
+                            && (current.generation > initial_generation
+                                || initially_active && current.generation == initial_generation)
+                            && matches!(
+                                current.state,
+                                ContainerState::Exited { .. } | ContainerState::Restarting { .. }
+                            )
                 }
                 Err(error) => return Err(error),
             };

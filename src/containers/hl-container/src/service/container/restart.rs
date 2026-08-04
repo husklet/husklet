@@ -52,6 +52,9 @@ impl Service {
     }
 
     pub(crate) async fn recover(self: &Arc<Self>) -> Result<()> {
+        // Publish every durable restart before reclaiming exited automatic-removal
+        // containers. This preserves daemon-start ordering: unrelated restartable
+        // workloads are not delayed behind potentially slow filesystem cleanup.
         for container in self.containers.list().await? {
             let ContainerState::Restarting { ready_at_ms, .. } = container.state else {
                 continue;
@@ -69,7 +72,26 @@ impl Service {
                 }
             });
         }
-        Ok(())
+
+        let removals = self
+            .containers
+            .list()
+            .await?
+            .into_iter()
+            .filter_map(|container| {
+                let ContainerState::Exited { result, .. } = container.state else {
+                    return None;
+                };
+                (container.spec.removal == crate::RemovalPolicy::Automatic).then_some((container.id, result))
+            })
+            .collect::<Vec<_>>();
+        let mut failure = None;
+        for (id, result) in removals {
+            if let Err(error) = self.remove(&id.to_string(), false, true, Some(result)).await {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     pub(super) async fn finish(self: &Arc<Self>, id: ContainerId, generation: u64, result: Result<ExitStatus>) {
@@ -113,6 +135,9 @@ impl Service {
             return;
         }
         self.emit(crate::LifecycleAction::Die, &container);
+        if let Some(notify) = self.waiters.lock().await.get(&id) {
+            notify.notify_waiters();
+        }
         if restart {
             self.emit(crate::LifecycleAction::Restart, &container);
         }
@@ -152,8 +177,6 @@ impl Service {
                         .await
                         .insert(JournalId::container(id), error.to_string());
                 }
-            } else if let Some(notify) = self.waiters.lock().await.get(&id) {
-                notify.notify_waiters();
             }
         }
     }

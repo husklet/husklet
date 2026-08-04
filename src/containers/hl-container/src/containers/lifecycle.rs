@@ -51,15 +51,11 @@ impl Containers {
 
     /// Waits for an explicit lifecycle condition.
     ///
-    /// `Removed` returns `None`; `NotRunning` returns the process result.
+    /// `Removed` returns `None`; `NotRunning` and `NextExit` return the process result.
     ///
     /// # Errors
     /// Returns lookup, invalid-state, runtime, or persistence failures.
-    pub async fn wait_for(
-        &self,
-        reference: &str,
-        condition: WaitCondition,
-    ) -> Result<Option<ExitStatus>> {
+    pub async fn wait_for(&self, reference: &str, condition: WaitCondition) -> Result<Option<ExitStatus>> {
         self.service.wait(reference, condition).await
     }
 
@@ -108,11 +104,7 @@ impl Containers {
     ///
     /// # Errors
     /// Returns lookup, lifecycle, resource-compatibility, timeout, runtime, or persistence failures.
-    pub async fn checkpoint(
-        &self,
-        reference: &str,
-        timeout: std::time::Duration,
-    ) -> Result<crate::Checkpoint> {
+    pub async fn checkpoint(&self, reference: &str, timeout: std::time::Duration) -> Result<crate::Checkpoint> {
         let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "checkpoint");
         let checkpoint = self.service.checkpoint(reference, timeout).await?;
         hl_log::hl_info!(
@@ -181,22 +173,14 @@ impl Containers {
         let active = self.list().await?;
         for container in active {
             let result = match container.state {
-                crate::ContainerState::Running { .. } => self
-                    .checkpoint(container.id.as_str(), timeout)
-                    .await
-                    .map(|_| ()),
-                crate::ContainerState::Paused { .. } => {
-                    match self.unpause(container.id.as_str()).await {
-                        Ok(()) => self
-                            .checkpoint(container.id.as_str(), timeout)
-                            .await
-                            .map(|_| ()),
-                        Err(error) => Err(error),
-                    }
+                crate::ContainerState::Running { .. } => {
+                    self.checkpoint(container.id.as_str(), timeout).await.map(|_| ())
                 }
-                crate::ContainerState::Restarting { .. } => {
-                    self.signal(container.id.as_str(), Signal::Terminate).await
-                }
+                crate::ContainerState::Paused { .. } => match self.unpause(container.id.as_str()).await {
+                    Ok(()) => self.checkpoint(container.id.as_str(), timeout).await.map(|_| ()),
+                    Err(error) => Err(error),
+                },
+                crate::ContainerState::Restarting { .. } => self.signal(container.id.as_str(), Signal::Terminate).await,
                 crate::ContainerState::Created | crate::ContainerState::Exited { .. } => Ok(()),
             };
             let error = match result {

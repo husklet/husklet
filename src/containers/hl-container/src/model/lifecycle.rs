@@ -20,6 +20,8 @@ pub enum WaitCondition {
     /// Return when the process is no longer running (or was already exited).
     #[default]
     NotRunning,
+    /// Return after the next process generation exits, even if it will restart.
+    NextExit,
     /// Return only after the container metadata has been removed.
     Removed,
 }

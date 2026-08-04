@@ -65,6 +65,73 @@ async fn automatic_removal_preserves_wait_result_and_reclaims_owned_volume() {
 }
 
 #[tokio::test]
+async fn startup_finishes_interrupted_automatic_removal_and_preserves_exit_result() {
+    let repository = Arc::new(Memory::default());
+    let id = crate::ContainerId::new();
+    repository
+        .insert(&Container {
+            id: id.clone(),
+            spec: spec("interrupted-removal").removal(crate::RemovalPolicy::Automatic),
+            state: ContainerState::Exited {
+                result: ExitStatus::Code(19),
+                finished_at_ms: 2,
+            },
+            created_at_ms: 1,
+            generation: 1,
+            restart: crate::Restart::default(),
+            health: None,
+            checkpoint: None,
+        })
+        .await
+        .unwrap();
+
+    let containers = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        containers.inspect(&id.to_string()).await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(containers.wait(&id.to_string()).await.unwrap(), ExitStatus::Code(19));
+}
+
+#[tokio::test]
+async fn daemon_loss_reclaims_an_active_automatic_removal_container() {
+    let repository = Arc::new(Memory::default());
+    let id = crate::ContainerId::new();
+    repository
+        .insert(&Container {
+            id: id.clone(),
+            spec: spec("lost-ephemeral").removal(crate::RemovalPolicy::Automatic),
+            state: ContainerState::Running {
+                process_id: 99,
+                started_at_ms: 1,
+            },
+            created_at_ms: 1,
+            generation: 1,
+            restart: crate::Restart::default(),
+            health: None,
+            checkpoint: None,
+        })
+        .await
+        .unwrap();
+
+    let containers = test_containers(repository, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        containers.inspect("lost-ephemeral").await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(
+        containers.wait(&id.to_string()).await.unwrap(),
+        ExitStatus::Fault { status: -1, detail: 0 }
+    );
+}
+
+#[tokio::test]
 async fn startup_reconciles_unowned_running_records() {
     let repository = Arc::new(Memory::default());
     let mut record = Container {

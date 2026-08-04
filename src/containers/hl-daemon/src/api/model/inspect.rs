@@ -54,6 +54,8 @@ pub struct InspectHostConfig {
     pub network_mode: String,
     #[serde(default)]
     pub extra_hosts: Vec<String>,
+    pub auto_remove: bool,
+    pub restart_policy: crate::api::RestartPolicy,
 }
 
 /// Published bindings shown by Docker container inspection.
@@ -219,6 +221,8 @@ impl From<hl_container::Container> for InspectContainer {
                     .iter()
                     .map(|(name, address)| format!("{name}:{address}"))
                     .collect(),
+                auto_remove: value.spec.removal == hl_container::RemovalPolicy::Automatic,
+                restart_policy: value.spec.restart.into(),
             },
             network_settings: NetworkSettings {
                 ports: Ports::from(&value.spec).bindings(),
@@ -409,7 +413,8 @@ mod tests {
                 .parse()
                 .unwrap(),
             spec: hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
-                .name("web"),
+                .name("web")
+                .restart(hl_container::RestartPolicy::OnFailure { maximum: Some(3) }),
             state: hl_container::ContainerState::Running {
                 process_id: 7,
                 started_at_ms: 1_000,
@@ -436,6 +441,9 @@ mod tests {
             assert!(inspect.get(key).is_some(), "missing {key}: {inspect}");
         }
         assert_eq!(inspect["Config"]["StopTimeout"], 10);
+        assert_eq!(inspect["HostConfig"]["AutoRemove"], false);
+        assert_eq!(inspect["HostConfig"]["RestartPolicy"]["Name"], "on-failure");
+        assert_eq!(inspect["HostConfig"]["RestartPolicy"]["MaximumRetryCount"], 3);
         for key in [
             "Status",
             "Running",
