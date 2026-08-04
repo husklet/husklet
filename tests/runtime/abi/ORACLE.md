@@ -1,8 +1,131 @@
-# C ABI matrix contract:
-# compile each source for both Linux guest ISAs and run each binary through its corresponding engine;
-# require the listed exit status, byte-compare both engine outputs to the checked-in golden,
-# and require the two engine outputs to be byte-identical to each other.
-# format: destination<TAB>origin<TAB>architectures<TAB>exit<TAB>golden<TAB>golden_fingerprint<TAB>notes
+# ABI compatibility oracle
+
+The ABI cohorts preserve deterministic C programs and byte-exact goldens, but
+their implementation oracle is the retained read-only engine in `../engine`.
+The audit read these implementation owners and entry points, rather than only
+the fixtures and manifests:
+
+- `src/core/dispatch.c`: `run_guest` and the AArch64 and x86-64 `run_block`
+  entry trampolines;
+- `src/translator/cache.c`: `map_host`, `map_put`, `jit_hostpc_lookup`,
+  `jit_flush_to_fresh`, `stw_flush`, `smc_inplace_drop`, and `jit_after_fork`;
+- `src/translator/arena.c`: arena reservation, allocation, reset, and teardown;
+- `src/translator/guest/aarch64/translate.c`: `translate_block`, its generated
+  block-return path, and `smc_icflush`; `dispatch.h`, `abi.h`, `cpu.h`,
+  `signal.c`, and `stubs.c` for return-reason, CPU-layout, signal-context, and
+  helper-call contracts;
+- `src/translator/guest/x86_64/translate.c`: `translate_block` and `run_block`;
+  `decode.c`, `operand.c`, `flags.c`, `rep.c`, `x87state.c`, `signal.c`,
+  `cpuid.c`, `dispatch.h`, `abi.h`, and `cpu.h` for variable-length decode,
+  operands, flags, string partial progress, x87/SIMD state, signal frames, and
+  advertised CPU identity; and `cache.c` for persistent-cache admission;
+- `src/linux_abi/signal.c`: signal-frame construction, `sigreturn_frame`, and
+  guest-context restoration used by setjmp/ucontext and asynchronous delivery;
+- `tools/matrix_runner.c`: `suite_case_timeout_ms`, `case_timeout_ms`,
+  `stall_timeout_ms`, both platform launch paths, and `main`; and
+  `tools/remote_supervisor.c`: `terminate_group` and `main`, for bounded oracle
+  execution and descendant teardown.
+
+No retained file was edited during this study.
+
+## State, identity, locking, and teardown
+
+`run_guest` owns one live `struct cpu` association for the host thread. It joins
+the translated-thread and signal registries before entering blocks and leaves
+both before releasing the alternate signal stack, so an exited thread cannot
+remain a cache-flush or signal target. Guest PC and registers remain the public
+identity; RW/RX code addresses and cache generations are internal identities.
+The block map owns guest-PC-to-body publication, the instruction map owns
+host-PC-to-guest-PC fault reconstruction, and the W^X arena/code mapping owns
+storage. `map_put` publishes only completed translations. Invalidation removes
+or generations stale identities before retranslation.
+
+Single-threaded execution may reset a cache in place. Once guest threads exist,
+the dispatcher holds `g_jit_lock` across lookup, translation, publication, and
+generation selection. It does not hold that lock while a translated block runs.
+`stw_flush` parks registered peers at block-boundary safepoints, switches to a
+fresh cache, retires the old generation, and frees it only when no thread's
+published execution generation can enter it. `jit_after_fork` repairs inherited
+registries and mutex state in the single surviving child. Persistent-cache
+images are admitted only when their architecture, layout, guest-address, and
+code assumptions match. Final teardown unmaps retired mappings and arena
+storage only after execution and fault lookup can no longer reference them.
+
+## Ordering, partial results, signals, and errors
+
+Every translated block fully spills guest-visible state before returning a
+reason. The dispatcher handles that reason before asynchronous delivery, then
+calls `maybe_deliver_signal` at the next safe boundary. `rt_sigreturn` restores
+the saved context before draining newly unblocked pending signals; multiple
+unblocked signals therefore run back-to-back before ordinary guest progress.
+Signal handlers that escape through `siglongjmp` are detected by the stack
+unwind checks rather than requiring an executable-specific exception.
+
+Syscall instructions terminate the block. AArch64 `svc` advances the guest PC
+by four only according to the syscall-return contract; x86-64 preserves the
+architectural syscall clobbers and next RIP. Linux service owners, not the ABI
+translator, decide errno, `EINTR`, restart, blocking, and partial-I/O results.
+The dispatcher preserves the returned registers and does not retry a partial or
+interrupted operation itself. REP/string lowering records completed iterations
+and fault position so a signal, fault, or short operation cannot be reported as
+if the entire instruction completed. Decode, arithmetic, divide, memory, and
+explicit trap exits reconstruct exact guest PC/state before signal conversion.
+
+The matrix runner supplies a distinct deadline and bounded capture per launch.
+On POSIX its child/process-group teardown is TERM, bounded grace, KILL, and
+reap; the remote supervisor repeats group teardown on timeout or interruption.
+Windows uses the corresponding launch/job ownership path. A timeout, output
+overflow, signal termination, or nonzero exit remains a failure and cannot be
+hidden by a later case.
+
+## Architecture and host branches
+
+ABI-visible integer, floating-point, vector, stack, condition-code, TLS,
+setjmp/ucontext, and indirect-call behavior is architecture-specific at decode,
+lowering, register layout, and assembly entry. It is not application-specific.
+The retained AArch64 path advances the PC according to fixed-width instruction
+and syscall rules and performs explicit instruction-cache invalidation. The
+x86-64 path preserves variable-length decode, flags, x87/SIMD state, and
+guest-address identity even when translated storage moves internally.
+
+The retained host branches are mechanism branches: POSIX signals/ucontext and
+process groups, Windows VEH/CONTEXT and job/process ownership, and macOS W^X /
+`MAP_JIT` constraints. Guest branches are AArch64 fixed-width decode, AAPCS64
+aggregate/HFA/TLS and FP/SIMD rules versus x86-64 variable-width decode,
+SysV register/stack returns, RFLAGS, x87, SSE/AVX, CPUID, and TLS. The retained
+macOS `swapcontext` exclusion and generic QEMU CPUID difference remain typed
+evidence; neither permits vendor- or executable-name branching.
+
+## Capability mapping
+
+| Retained C capability | Rust owner | State |
+|---|---|---|
+| CPU layouts used by entry code, signal frames, integer/FP/vector state | generated schema in `src/schema/cpu` and native layouts in `src/native/cpu` | implemented; ABI assertions remain mandatory |
+| Block entry/return, full spill, return reasons, fault context | `src/native/exec` plus `hl-execution` runner | implemented; target gates cover both ISAs |
+| AArch64 decode, ALU, FP/SIMD, atomics/LSE, branches and fixed PC advance | `src/runtime/hl-execution/src/aarch64` | implemented for this cohort; corpus remains the broader completeness gate |
+| x86 decode, operands, RFLAGS, REP progress, x87/SSE/AVX, CPUID and IRETQ | `src/runtime/hl-execution/src/x86` | implemented for active rows; CPUID oracle mismatch remains typed broken evidence |
+| Guest memory loads/stores, unaligned access, atomics and executable-write invalidation | `hl-memory`, `hl-execution`, and the `hl-runtime` execution adapter | implemented for active rows; exact invalidation concurrency remains a full-corpus gate |
+| W^X cache mapping, publication, lookup, chaining, generations and retirement | `src/native/exec` code-cache boundary | implemented; clean-tree native and stress gates required for parity |
+| Syscall boundary and exact errno/partial/EINTR behavior | Linux personality in `hl-runtime` and domain owners | implemented for exercised calls; ABI fixtures alone do not prove every syscall domain |
+| Signals, signal frames, setjmp/longjmp and ucontext restoration | `hl-task`, Linux signal adapter, and native fault entry | setjmp/longjmp active; retained macOS `swapcontext` path remains an explicit gap |
+| TLS models and static/non-PIE guest addresses | loader, memory, task TLS, and execution address translation | implemented for active TLS rows; guest-visible addresses must never expose host storage |
+| Fork repair and cache/thread registry lifetime | task fork composition plus native fork-critical repair | implemented boundary; nested/fork stress gates remain required |
+| Oracle deadline, capture, cancellation, descendant cleanup | `src/apps/testing/src/runtime` runner and container lifecycle | bounded runner and cleanup implemented |
+
+Each ABI case is acceptance evidence for one exact contract; none licenses a
+runtime- or executable-name branch. Any new failure must map to a generic
+decode, register, flag, memory, signal/context, syscall, cache, or lifecycle
+invariant from this table.
+
+The migration preserves source bytes and golden fingerprints mechanically.
+Cases retain their original target set, compiler flags, exit status, and
+checked stdout. Host-specific exclusions remain explicit status evidence rather
+than being silently omitted.
+
+
+## Retained manifest rows
+
+```text
 alloca.c	hl-jit-darwin/testdata/guests/ext_abi/alloca.c	aarch64,x86_64	0	golden/alloca.out	sha256:764ad526fd0e367909bb8d6215affb879161e011a4a8e93d317c575d87ed206e;bytes:13	portable-c
 atomics.c	hl-jit-darwin/testdata/guests/ext_abi/atomics_st.c	aarch64,x86_64	0	golden/atomics.out	sha256:b582bdc4d38102feb16bd4956eab13c04ee2140ed7d021e191793f522469c47f;bytes:49	portable-c
 switch.c	hl-jit-darwin/testdata/guests/ext_abi/bigswitch.c	aarch64,x86_64	0	golden/switch.out	sha256:84589cca6b00453644270b17ae49592b6a37aca14a62d7de91b30cc210c43fff;bytes:12	portable-c
@@ -57,14 +180,14 @@ varfloat.c	hl-jit-darwin/testdata/guests/ext_abi/varargs_float.c	aarch64,x86_64	
 varmix.c	hl-jit-darwin/testdata/guests/ext_abi/varargs_mixed.c	aarch64,x86_64	0	golden/varmix.out	sha256:0047cd5d4b30ce85a64d091078ea29b0f740f8ef6f42b10dac107b5748462469;bytes:43	portable-c
 vla.c	hl-jit-darwin/testdata/guests/ext_abi/vla.c	aarch64,x86_64	0	golden/vla.out	sha256:ad9c9665686c63329e6a9a9fb2811d2ffd40b92cf30226697563256e0ff0a979;bytes:11	portable-c
 vtable.c	hl-jit-darwin/testdata/guests/ext_abi/vtable.c	aarch64,x86_64	0	golden/vtable.out	sha256:95b183d291856cc574c55a563ccf4bb04724418fc6943d7a1c1bc008704575bb;bytes:12	portable-c
-atomic-builtins	atomics	atomics_builtins.c	atomics_builtins.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/atomics_builtins.out	linux-libc	active	exact source; deterministic checked registration
-cpuid-features	cpu	cpuid_features.c	cpuid_features.c	x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/cpuid_features.out	linux-libc	active	exact source; deterministic checked registration
-lse-atomics	atomics	lse_atomics.c	lse_atomics.c	aarch64	-static-pie -O2 -pthread -lm -march=armv8.2-a+lse -mno-outline-atomics	-	-	0	expected/lse_atomics.out	linux-libc	active	exact source; LSE ISA build retained
-rflags-identity	cpu	rflags_id.c	rflags_id.c	x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/rflags_id.out	linux-libc	active	exact source; deterministic checked registration
-iretq-context	cpu	iretq_context.c	focused-production-regression	x86_64	-static-pie -O2 -std=gnu11	-	-	0	expected/iretq_context.out	linux-libc,iretq,rflags,stack	active	long-mode IRETQ restores the complete five-qword frame, arithmetic flags, ID, and DF before resuming at the restored RIP/RSP
-tls-basic	tls	tls.c	tls.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/tls.out	linux-libc	active	exact source; deterministic checked registration
-tls-models	tls	tlsmodels.c	tlsmodels.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/tlsmodels.out	linux-libc	active	exact source; deterministic checked registration
-tls-models-main	tls	tlsmodels_main.c	tlsmodels_main.c	aarch64,x86_64	-static -no-pie -O2 -pthread -lm	-	-	0	expected/tlsmodels_main.out	linux-libc	active	exact source; static non-PIE variant retained
+atomic_builtins	atomics	atomics_builtins.c	atomics_builtins.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/atomics_builtins.out	linux-libc	active	exact source; deterministic checked registration
+cpuid_features	cpu	cpuid_features.c	cpuid_features.c	x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/cpuid_features.out	linux-libc	active	exact source; deterministic checked registration
+lse_atomics	atomics	lse_atomics.c	lse_atomics.c	aarch64	-static-pie -O2 -pthread -lm -march=armv8.2-a+lse -mno-outline-atomics	-	-	0	expected/lse_atomics.out	linux-libc	active	exact source; LSE ISA build retained
+rflags_identity	cpu	rflags_id.c	rflags_id.c	x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/rflags_id.out	linux-libc	active	exact source; deterministic checked registration
+iretq_context	cpu	iretq_context.c	focused-production-regression	x86_64	-static-pie -O2 -std=gnu11	-	-	0	expected/iretq_context.out	linux-libc,iretq,rflags,stack	active	long-mode IRETQ restores the complete five-qword frame, arithmetic flags, ID, and DF before resuming at the restored RIP/RSP
+tls_basic	tls	tls.c	tls.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/tls.out	linux-libc	active	exact source; deterministic checked registration
+tls_models	tls	tlsmodels.c	tlsmodels.c	aarch64,x86_64	-static-pie -O2 -pthread -lm	-	-	0	expected/tlsmodels.out	linux-libc	active	exact source; deterministic checked registration
+tls_main	tls	tlsmodels_main.c	tlsmodels_main.c	aarch64,x86_64	-static -no-pie -O2 -pthread -lm	-	-	0	expected/tlsmodels_main.out	linux-libc	active	exact source; static non-PIE variant retained
 bitscan.c	differential-hunt/abi/bitscan.c	aarch64,x86_64	0	golden/bitscan.out	sha256:769c2fb99cfd678b550aa57be53cdcb72a8a6b9a76d5c08b075672a3db72f0ed;bytes:468	portable-c
 bitfield.c	differential-hunt/abi/bitfield.c	aarch64,x86_64	0	golden/bitfield.out	sha256:f3b0a393184e01b5d9b4a5d6a5ef24b775b45fc125b26a2731d49e7905b9a7ef;bytes:103	portable-c
 layout.c	differential-hunt/abi/layout.c	aarch64,x86_64	0	golden/layout.out	sha256:6245c1c084ee782f77ce50cb99fcb1be6ac1b1ce67632770f43bc70bfcd5b90a;bytes:232	portable-c
@@ -78,3 +201,4 @@ fenv_round.c	differential-hunt/abi/fenv_round.c	aarch64,x86_64	0	golden/fenv_rou
 longjmp_deep.c	differential-hunt/abi/longjmp_deep.c	aarch64,x86_64	0	golden/longjmp_deep.out	sha256:8b569b941cbdde918e4886bcae779aea3c88e2dbf53dc6e025c0738a22508939;bytes:132	portable-c
 complexf.c	differential-hunt/abi/complexf.c	aarch64,x86_64	0	golden/complexf.out	sha256:cfdc828dfd126105949a029ff6814daf085d0ffb1e0251ac4dc1e5ba741fef1b;bytes:265	portable-c
 ucontext_swap	abi	ucontext_swap.c	differential-hunt/abi/ucontext_swap.c	aarch64,x86_64	-static -O2 -std=gnu11 -pthread	-	-	0	expected/ucontext_swap.out	linux-libc,abi,ucontext	excluded-macos	excluded-macos: macOS Mach-O engine SIGILL on the first activation of a makecontext() context via swapcontext (initial jump onto the synthesized coroutine stack+PC in the Mach exception + MAP_JIT path); getcontext/setcontext/makecontext-build all pass there. Linux engine and native pass, so the Linux lane now runs and enforces this.
+```

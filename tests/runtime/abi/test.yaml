@@ -1,0 +1,618 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+build:
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags: []
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
+cases:
+  - id: runtime/abi-alloca
+    targets: [arm64, amd64]
+    build: { source: alloca.c, output: alloca, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/alloca }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/alloca.out }
+  - id: runtime/abi-atomics
+    targets: [arm64, amd64]
+    build: { source: atomics.c, output: atomics, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/atomics }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/atomics.out }
+  - id: runtime/abi-switch
+    targets: [arm64, amd64]
+    build: { source: switch.c, output: switch, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/switch }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/switch.out }
+  - id: runtime/abi-bool
+    targets: [arm64, amd64]
+    build: { source: bool.c, output: bool, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/bool }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bool.out }
+  - id: runtime/abi-bswap
+    targets: [arm64, amd64]
+    build: { source: bswap.c, output: bswap, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/bswap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bswap.out }
+  - id: runtime/abi-charmath
+    targets: [arm64, amd64]
+    build: { source: charmath.c, output: charmath, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/charmath }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/charmath.out }
+  - id: runtime/abi-clmul
+    targets: [arm64, amd64]
+    build: { source: clmul.c, output: clmul, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/clmul }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/clmul.out }
+  - id: runtime/abi-compare
+    targets: [arm64, amd64]
+    build: { source: compare.c, output: compare, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/compare }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/compare.out }
+  - id: runtime/abi-goto
+    targets: [arm64, amd64]
+    build: { source: goto.c, output: goto, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/goto }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/goto.out }
+  - id: runtime/abi-recursion
+    targets: [arm64, amd64]
+    build: { source: recursion.c, output: recursion, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/recursion }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/recursion.out }
+  - id: runtime/abi-divmod
+    targets: [arm64, amd64]
+    build: { source: divmod.c, output: divmod, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/divmod }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/divmod.out }
+  - id: runtime/abi-endian
+    targets: [arm64, amd64]
+    build: { source: endian.c, output: endian, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/endian }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/endian.out }
+  - id: runtime/abi-float32
+    targets: [arm64, amd64]
+    build: { source: float32.c, output: float32, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/float32 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/float32.out }
+  - id: runtime/abi-fnptr
+    targets: [arm64, amd64]
+    build: { source: fnptr.c, output: fnptr, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/fnptr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fnptr.out }
+  - id: runtime/abi-classify
+    targets: [arm64, amd64]
+    build: { source: classify.c, output: classify, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/classify }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/classify.out }
+  - id: runtime/abi-fpcmp
+    targets: [arm64, amd64]
+    build: { source: fpcmp.c, output: fpcmp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/fpcmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fpcmp.out }
+  - id: runtime/abi-fpconv
+    targets: [arm64, amd64]
+    build: { source: fpconv.c, output: fpconv, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/fpconv }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fpconv.out }
+  - id: runtime/abi-fma
+    targets: [arm64, amd64]
+    build: { source: fma.c, output: fma, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/fma }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fma.out }
+  - id: runtime/abi-minmax
+    targets: [arm64, amd64]
+    build: { source: minmax.c, output: minmax, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/minmax }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/minmax.out }
+  - id: runtime/abi-round
+    targets: [arm64, amd64]
+    build: { source: round.c, output: round, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/round }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/round.out }
+  - id: runtime/abi-special
+    targets: [arm64, amd64]
+    build: { source: special.c, output: special, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/special }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/special.out }
+  - id: runtime/abi-globals
+    targets: [arm64, amd64]
+    build: { source: globals.c, output: globals, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/globals }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/globals.out }
+  - id: runtime/abi-hash
+    targets: [arm64, amd64]
+    build: { source: hash.c, output: hash, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/hash }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/hash.out }
+  - id: runtime/abi-int128
+    targets: [arm64, amd64]
+    build: { source: int128.c, output: int128, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/int128 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/int128.out }
+  - id: runtime/abi-intwrap
+    targets: [arm64, amd64]
+    build: { source: intwrap.c, output: intwrap, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/intwrap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/intwrap.out }
+  - id: runtime/abi-longdouble
+    targets: [arm64, amd64]
+    build: { source: longdouble.c, output: longdouble, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/longdouble }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/longdouble.out }
+  - id: runtime/abi-manyargs
+    targets: [arm64, amd64]
+    build: { source: manyargs.c, output: manyargs, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/manyargs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/manyargs.out }
+  - id: runtime/abi-memops
+    targets: [arm64, amd64]
+    build: { source: memops.c, output: memops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/memops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/memops.out }
+  - id: runtime/abi-mixedargs
+    targets: [arm64, amd64]
+    build: { source: mixedargs.c, output: mixedargs, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/mixedargs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/mixedargs.out }
+  - id: runtime/abi-mul64
+    targets: [arm64, amd64]
+    build: { source: mul64.c, output: mul64, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/mul64 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/mul64.out }
+  - id: runtime/abi-loops
+    targets: [arm64, amd64]
+    build: { source: loops.c, output: loops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/loops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/loops.out }
+  - id: runtime/abi-overflow
+    targets: [arm64, amd64]
+    build: { source: overflow.c, output: overflow, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/overflow }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/overflow.out }
+  - id: runtime/abi-popcnt
+    targets: [arm64, amd64]
+    build: { source: popcnt.c, output: popcnt, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/popcnt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/popcnt.out }
+  - id: runtime/abi-printf
+    targets: [arm64, amd64]
+    build: { source: printf.c, output: printf, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/printf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/printf.out }
+  - id: runtime/abi-pointer
+    targets: [arm64, amd64]
+    build: { source: pointer.c, output: pointer, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/pointer }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/pointer.out }
+  - id: runtime/abi-qsort
+    targets: [arm64, amd64]
+    build: { source: qsort.c, output: qsort, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/qsort }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/qsort.out }
+  - id: runtime/abi-returns
+    targets: [arm64, amd64]
+    build: { source: returns.c, output: returns, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/returns }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/returns.out }
+  - id: runtime/abi-rotate
+    targets: [arm64, amd64]
+    build: { source: rotate.c, output: rotate, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/rotate }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/rotate.out }
+  - id: runtime/abi-setjmp
+    targets: [arm64, amd64]
+    build: { source: setjmp.c, output: setjmp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/setjmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/setjmp.out }
+  - id: runtime/abi-shifts
+    targets: [arm64, amd64]
+    build: { source: shifts.c, output: shifts, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/shifts }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/shifts.out }
+  - id: runtime/abi-signext
+    targets: [arm64, amd64]
+    build: { source: signext.c, output: signext, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/signext }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/signext.out }
+  - id: runtime/abi-simd
+    targets: [arm64, amd64]
+    build: { source: simd.c, output: simd, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/simd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/simd.out }
+  - id: runtime/abi-shuffle
+    targets: [arm64, amd64]
+    build: { source: shuffle.c, output: shuffle, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/shuffle }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/shuffle.out }
+  - id: runtime/abi-hfa
+    targets: [arm64, amd64]
+    build: { source: hfa.c, output: hfa, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/hfa }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/hfa.out }
+  - id: runtime/abi-large
+    targets: [arm64, amd64]
+    build: { source: large.c, output: large, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/large }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/large.out }
+  - id: runtime/abi-mixed
+    targets: [arm64, amd64]
+    build: { source: mixed.c, output: mixed, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/mixed }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/mixed.out }
+  - id: runtime/abi-structret
+    targets: [arm64, amd64]
+    build: { source: structret.c, output: structret, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/structret }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/structret.out }
+  - id: runtime/abi-small
+    targets: [arm64, amd64]
+    build: { source: small.c, output: small, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/small }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/small.out }
+  - id: runtime/abi-tailcall
+    targets: [arm64, amd64]
+    build: { source: tailcall.c, output: tailcall, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/tailcall }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/tailcall.out }
+  - id: runtime/abi-union
+    targets: [arm64, amd64]
+    build: { source: union.c, output: union, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/union }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/union.out }
+  - id: runtime/abi-varfloat
+    targets: [arm64, amd64]
+    build: { source: varfloat.c, output: varfloat, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/varfloat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/varfloat.out }
+  - id: runtime/abi-varmix
+    targets: [arm64, amd64]
+    build: { source: varmix.c, output: varmix, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/varmix }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/varmix.out }
+  - id: runtime/abi-vla
+    targets: [arm64, amd64]
+    build: { source: vla.c, output: vla, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/vla }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vla.out }
+  - id: runtime/abi-vtable
+    targets: [arm64, amd64]
+    build: { source: vtable.c, output: vtable, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/vtable }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vtable.out }
+  - id: runtime/abi-atomic-builtins
+    targets: [arm64, amd64]
+    build: { source: atomic_builtins.c, output: atomic_builtins, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/atomic_builtins }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/atomic_builtins.out }
+  - id: runtime/abi-cpuid-features
+    targets: [amd64]
+    build: { source: cpuid_features.c, output: cpuid_features, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/cpuid_features }
+    run: []
+    status: !broken
+      reason: QEMU CPU feature exposure is not pinned
+      evidence: The retained golden depends on a specific CPUID feature set, while generic qemu-x86_64 exposes different feature bits.
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/cpuid_features.out }
+  - id: runtime/abi-lse-atomics
+    targets: [arm64]
+    build: { source: lse_atomics.c, output: lse_atomics, flags: [-static-pie, -O2, -pthread, -lm, -march=armv8.2-a+lse, -mno-outline-atomics] }
+    artifact: { destination: /opt/husklet/abi/lse_atomics }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/lse_atomics.out }
+  - id: runtime/abi-rflags-identity
+    targets: [amd64]
+    build: { source: rflags_identity.c, output: rflags_identity, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/rflags_identity }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/rflags_identity.out }
+  - id: runtime/abi-iretq-context
+    targets: [amd64]
+    build: { source: iretq_context.c, output: iretq_context, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/abi/iretq_context }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/iretq_context.out }
+  - id: runtime/abi-tls-basic
+    targets: [arm64, amd64]
+    build: { source: tls_basic.c, output: tls_basic, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/tls_basic }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/tls_basic.out }
+  - id: runtime/abi-tls-models
+    targets: [arm64, amd64]
+    build: { source: tls_models.c, output: tls_models, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/tls_models }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/tls_models.out }
+  - id: runtime/abi-tls-models-main
+    targets: [arm64, amd64]
+    build: { source: tls_main.c, output: tls_main, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/tls_main }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/tls_main.out }
+  - id: runtime/abi-bitscan
+    targets: [arm64, amd64]
+    build: { source: bitscan.c, output: bitscan, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/bitscan }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bitscan.out }
+  - id: runtime/abi-bitfield
+    targets: [arm64, amd64]
+    build: { source: bitfield.c, output: bitfield, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/bitfield }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bitfield.out }
+  - id: runtime/abi-layout
+    targets: [arm64, amd64]
+    build: { source: layout.c, output: layout, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/layout }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/layout.out }
+  - id: runtime/abi-atomicops
+    targets: [arm64, amd64]
+    build: { source: atomicops.c, output: atomicops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/atomicops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/atomicops.out }
+  - id: runtime/abi-unaligned
+    targets: [arm64, amd64]
+    build: { source: unaligned.c, output: unaligned, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/unaligned }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/unaligned.out }
+  - id: runtime/abi-memmove_overlap
+    targets: [arm64, amd64]
+    build: { source: memmove_overlap.c, output: memmove_overlap, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/memmove_overlap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/memmove_overlap.out }
+  - id: runtime/abi-ackermann
+    targets: [arm64, amd64]
+    build: { source: ackermann.c, output: ackermann, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/ackermann }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/ackermann.out }
+  - id: runtime/abi-vacopy
+    targets: [arm64, amd64]
+    build: { source: vacopy.c, output: vacopy, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/vacopy }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vacopy.out }
+  - id: runtime/abi-int128div
+    targets: [arm64, amd64]
+    build: { source: int128div.c, output: int128div, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/int128div }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/int128div.out }
+  - id: runtime/abi-fenv_round
+    targets: [arm64, amd64]
+    build: { source: fenv_round.c, output: fenv_round, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/fenv_round }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fenv_round.out }
+  - id: runtime/abi-longjmp_deep
+    targets: [arm64, amd64]
+    build: { source: longjmp_deep.c, output: longjmp_deep, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/longjmp_deep }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/longjmp_deep.out }
+  - id: runtime/abi-complexf
+    targets: [arm64, amd64]
+    build: { source: complexf.c, output: complexf, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi/complexf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/complexf.out }
+  - id: runtime/abi-ucontext_swap
+    targets: [arm64, amd64]
+    build: { source: ucontext_swap.c, output: ucontext_swap, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/abi/ucontext_swap }
+    run: []
+    status: !broken
+      reason: macOS host exclusion retained
+      evidence: macOS Mach-O engine SIGILLs on first makecontext activation through swapcontext; Linux engine and native pass.
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/ucontext_swap.out }
