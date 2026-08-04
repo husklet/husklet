@@ -52,3 +52,60 @@ native frontend, and the retained implementation's fuller generated-NaN sign
 repair. The combined float benchmark is dominated by those packed/single
 families, so this focused lane is correctness and fallback-reduction evidence,
 not yet an end-to-end parity claim.
+
+## Packed and scalar-single SSE, 2026-08-04
+
+The exact AMD64 `combined` guest at
+`target/testing/bench/combined/amd64/combined` was disassembled at
+`phase_float_simd` (`0x89c0..0x8b73`). Its initialization uses `MOVSS`,
+`MOVD`, `SHUFPS`, `PSHUFD`, `MOVDQA`, `CVTDQ2PS`, `PADDD`, `MULPS`, and
+`ADDPS`. The repeated kernel uses `CVTSI2SS`, `MULSS`, `SHUFPS`, `MOVAPS`,
+`MULPS`, `ADDPS`, `COMISS`, `SUBSS`, and `CVTTSS2SI` in register and memory
+forms. The loop is therefore not one missing opcode: moves, permutation,
+integer-vector arithmetic, conversions, comparisons, and floating arithmetic
+are distinct ownership families.
+
+The retained implementation was read through
+`../engine/src/translator/guest/x86_64/translate.c`: `translate_one` owns the
+legacy `0F 58/59/5C/5E` prefix matrix, guarded memory access, packed
+result-NaN gate, scalar input-NaN gate, upper-lane merge, and the `R_SSE3B`
+precommit fallback; the `0F 10/11`, `0F 2A/2C`, `0F 2E/2F`, `0F 5B`, `0F
+70`, `0F C6`, and `0F FE` cases own the other benchmark families. `emit.c`
+owns comparison flag projection, `interp.c` owns x86-exact fallback under the
+host MXCSR, and `avx.c` records the same NaN-priority and generated-indefinite
+rules for non-destructive forms. These instructions allocate nothing and own
+no locks or teardown; the CPU record and dispatcher own FPCR/FPSR lifetime,
+while guarded memory owns fault-before-commit ordering.
+
+| Benchmark family | Retained C | Native frontend before | Result |
+|---|---|---|---|
+| packed/scalar ADD and SUB | `.4s`, `.2d`, scalar S/D; NaN gate before commit | scalar D only | packed S/D and scalar S added; scalar D retained |
+| packed/scalar MUL and DIV | same widths and exception rules | scalar D only | deliberately remains a fallback |
+| MOVSS and broadcast/shuffle | low-lane load/store plus upper-lane rules | missing | unchanged |
+| integer/FP conversion | packed lanes and scalar 32/64 widths | scalar truncating D-to-int only | unchanged |
+| COMISS/UCOMISS | exact CF/ZF/PF and signaling split | double only | unchanged |
+| PADDD | four wrapping 32-bit lanes | missing | unchanged |
+
+ADD/SUB computes into scratch, checks the result before architectural commit,
+and returns to the exact fallback when any scalar or packed lane is NaN.
+Finite packed results commit all 128 bits; scalar-single results replace only
+lane zero. Memory reads and permission checks precede either result path.
+Tests cover packed-single ADD/SUB, packed-double ADD and memory SUB,
+scalar-single SUB with upper lanes preserved, register and memory sources, and
+generated-NaN rollback.
+
+The wider four-operation experiment exposed a separate integration blocker:
+admitting packed ADD and MUL together made the product benchmark fail to
+finish, while each opcode alone and their direct semantic sequence completed.
+That is consistent with crossing the last fallback inside the native loop and
+exposing a continuation/self-loop defect; it is not evidence that either
+arithmetic instruction is wrong. This lane retains the coherent additive
+family and leaves MUL/DIV as the safe dispatcher boundary pending the separate
+repetition/continuation owner.
+
+With native execution and diagnostics proven, the three-repeat
+`--divisor 2000` median fell from 218,576 us to 185,194 us (15.3%) with the
+identical `1151364000` checksum. Public exits fell from 14 to 12 per
+invocation. This is focused dirty-tree evidence rather than a clean-commit
+parity claim. Warning-strict compilation and the complete `x86_translation`
+executable passed on AArch64.

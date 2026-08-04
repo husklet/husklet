@@ -646,6 +646,8 @@ static uint32_t vector_operation_words(const instruction *item) {
                                                       UINT64_C(0x41e0000000000000)) +
                constant_words(item->width == 8u ? UINT64_C(0x8000000000000000) :
                                                   UINT64_C(0x80000000));
+    case VECTOR_FLOAT_ARITHMETIC:
+        return 28u + constant_words(item->pc) + (item->live_chain != 0u ? 18u : 0u);
     case VECTOR_INSERT_WORD: return 1u;
     default: return 1u;
     }
@@ -693,6 +695,50 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[ordered] = UINT32_C(0x54000000) |
                          (((*cursor - ordered) & UINT32_C(0x7ffff)) << 5) | 7u; /* b.vc */
         words[(*cursor)++] = UINT32_C(0x6e080400) | 18u << 5 | destination; /* ins vd.d[0],v18.d[0] */
+    } else if (item->vector_kind == VECTOR_FLOAT_ARITHMETIC) {
+        uint32_t base;
+        uint32_t ordered;
+        if (item->condition != 0u) {
+            base = item->vector_subopcode == 0x58u ? UINT32_C(0x1e202800) :
+                   item->vector_subopcode == 0x59u ? UINT32_C(0x1e200800) :
+                   item->vector_subopcode == 0x5cu ? UINT32_C(0x1e203800) : UINT32_C(0x1e201800);
+            if (item->vector_lane == 8u) base |= UINT32_C(0x00400000);
+            words[(*cursor)++] = base | source << 16 | destination << 5 | 18u;
+            words[(*cursor)++] = (item->vector_lane == 8u ? UINT32_C(0x1e602000) :
+                                                             UINT32_C(0x1e202000)) |
+                                 18u << 16 | 18u << 5; /* fcmp result,result */
+            ordered = (*cursor)++;
+        } else {
+            base = item->vector_subopcode == 0x58u ? UINT32_C(0x4e20d400) :
+                   item->vector_subopcode == 0x59u ? UINT32_C(0x6e20dc00) :
+                   item->vector_subopcode == 0x5cu ? UINT32_C(0x4ea0d400) : UINT32_C(0x6e20fc00);
+            if (item->vector_lane == 8u) base |= UINT32_C(0x00400000);
+            words[(*cursor)++] = base | source << 16 | destination << 5 | 18u;
+            words[(*cursor)++] = (item->vector_lane == 8u ? UINT32_C(0x4e60e400) :
+                                                             UINT32_C(0x4e20e400)) |
+                                 18u << 16 | 18u << 5 | 19u; /* fcmeq result,result */
+            words[(*cursor)++] = UINT32_C(0x6e31a800) | 19u << 5 | 19u; /* uminv b19,v19.16b */
+            words[(*cursor)++] = UINT32_C(0x1e260000) | 19u << 5 | 16u; /* fmov w16,s19 */
+            ordered = (*cursor)++;
+        }
+        emit_constant(words, cursor, 16u, item->pc);
+        words[(*cursor)++] = store_word(16u, offsetof(hl_native_x86_64_cpu, program));
+        emit_constant(words, cursor, 16u, HL_NATIVE_EXIT_FALLBACK);
+        words[(*cursor)++] = store_word(16u, offsetof(hl_native_x86_64_cpu, reason));
+        if (item->live_chain != 0u) {
+            hl_x86_finish_chain(words, cursor);
+            hl_x86_spill_all(words, cursor);
+        }
+        words[(*cursor)++] = UINT32_C(0xd65f03c0);
+        words[ordered] = (item->condition != 0u ? UINT32_C(0x54000000) : UINT32_C(0x35000000)) |
+                         (((*cursor - ordered) & UINT32_C(0x7ffff)) << 5) |
+                         (item->condition != 0u ? 7u : 16u); /* b.vc / cbnz w16 */
+        if (item->condition != 0u)
+            words[(*cursor)++] = (item->vector_lane == 8u ? UINT32_C(0x6e080400) :
+                                                             UINT32_C(0x6e040400)) |
+                                 18u << 5 | destination;
+        else
+            words[(*cursor)++] = UINT32_C(0x4ea01c00) | 18u << 16 | 18u << 5 | destination;
     } else if (item->vector_kind == VECTOR_SCALAR_COMPARE_DOUBLE) {
         uint64_t clear = UINT64_C(1) | UINT64_C(1) << 2 | UINT64_C(1) << 4 |
                          UINT64_C(1) << 6 | UINT64_C(1) << 7 | UINT64_C(1) << 11;

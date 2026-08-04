@@ -176,6 +176,158 @@ static int scalar_double_differential(void) {
 #endif
 }
 
+static int floating_arithmetic(void) {
+    const uint8_t family[] = {
+        0x0f, 0x58, 0xc1,       /* addps xmm0,xmm1 */
+        0x0f, 0x5c, 0xc2,       /* subps xmm0,xmm2 */
+        0xf3, 0x0f, 0x5c, 0xc3, /* subss xmm0,xmm3 */
+        0x66, 0x0f, 0x58, 0xe5, /* addpd xmm4,xmm5 */
+    };
+    uint32_t host[256] = {0};
+    hl_x86_a64_provenance provenance[8] = {0};
+    hl_x86_a64_request request = request_for(family, sizeof family, host, provenance);
+    hl_x86_a64_result result;
+
+    request.flags |= HL_X86_A64_CHECKPOINTS;
+
+    CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+    CHECK(result.exit == HL_X86_A64_FALLTHROUGH && result.instruction_count == 4);
+    CHECK(provenance[0].guest_size == 3 && provenance[1].guest_size == 3);
+    CHECK(provenance[2].guest_size == 4 && provenance[3].guest_size == 4);
+    {
+        static const struct {
+            uint8_t bytes[4];
+            size_t size;
+        } unsupported[] = {
+            {{0x0f, 0x59, 0xc1, 0}, 3},       /* mulps */
+            {{0x66, 0x0f, 0x59, 0xc1}, 4},   /* mulpd */
+            {{0xf3, 0x0f, 0x59, 0xc1}, 4},   /* mulss */
+            {{0x0f, 0x5e, 0xc1, 0}, 3},      /* divps */
+            {{0x66, 0x0f, 0x5e, 0xc1}, 4},   /* divpd */
+            {{0xf3, 0x0f, 0x5e, 0xc1}, 4},   /* divss */
+        };
+        static const uint8_t scalar_double[] = {
+            0xf2, 0x0f, 0x59, 0xc1, /* mulsd */
+            0xf2, 0x0f, 0x5e, 0xc1, /* divsd */
+        };
+        uint32_t boundary_host[256] = {0};
+        hl_x86_a64_provenance boundary_provenance[8] = {0};
+        hl_x86_a64_result boundary_result;
+        unsigned index;
+
+        for (index = 0; index < sizeof unsupported / sizeof unsupported[0]; ++index) {
+            hl_x86_a64_request rejected = request_for(unsupported[index].bytes,
+                                                      unsupported[index].size,
+                                                      boundary_host, boundary_provenance);
+            CHECK(hl_x86_a64_emit(&rejected, &boundary_result) == HL_X86_A64_UNSUPPORTED);
+        }
+        request = request_for(scalar_double, sizeof scalar_double,
+                              boundary_host, boundary_provenance);
+        CHECK(hl_x86_a64_emit(&request, &boundary_result) == HL_X86_A64_OK);
+        CHECK(boundary_result.exit == HL_X86_A64_FALLTHROUGH && boundary_result.instruction_count == 2);
+    }
+#if defined(__aarch64__)
+    {
+        static const float initial[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        static const float addend[4] = {5.0f, 6.0f, 7.0f, 8.0f};
+        static const float factor[4] = {2.0f, 3.0f, 4.0f, 5.0f};
+        static const float scalar[4] = {1.0f, 99.0f, 99.0f, 99.0f};
+        static const float expected[4] = {3.0f, 5.0f, 6.0f, 7.0f};
+        static const double packed[4] = {1.0, 2.0, 3.0, 4.0};
+        static const double packed_expected[2] = {4.0, 6.0};
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        hl_native_x86_64_cpu cpu = {0};
+
+        CHECK(code != MAP_FAILED);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[0], initial, sizeof initial);
+        memcpy(&cpu.vectors[2], addend, sizeof addend);
+        memcpy(&cpu.vectors[4], factor, sizeof factor);
+        memcpy(&cpu.vectors[6], scalar, sizeof scalar);
+        memcpy(&cpu.vectors[8], packed, sizeof packed);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, sizeof expected) == 0);
+        CHECK(memcmp(&cpu.vectors[8], packed_expected, sizeof packed_expected) == 0);
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+    {
+        static const uint8_t generated_nan[] = {0x0f, 0x58, 0xc1}; /* addps xmm0,xmm1 */
+        static const uint32_t before[4] = {0x7f800000u, 1u, 2u, 3u};
+        static const uint32_t other[4] = {0xff800000u, 4u, 5u, 6u};
+        uint32_t nan_host[256] = {0};
+        hl_x86_a64_provenance nan_provenance[8] = {0};
+        hl_x86_a64_request nan_request = request_for(generated_nan, sizeof generated_nan,
+                                                     nan_host, nan_provenance);
+        hl_x86_a64_result nan_result;
+        hl_native_x86_64_cpu cpu = {0};
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+        CHECK(code != MAP_FAILED);
+        CHECK(hl_x86_a64_emit(&nan_request, &nan_result) == HL_X86_A64_OK);
+        memcpy(code, nan_host, nan_result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[nan_result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (nan_result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[0], before, sizeof before);
+        memcpy(&cpu.vectors[2], other, sizeof other);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(cpu.program == UINT64_C(0x400000) && cpu.reason == HL_NATIVE_EXIT_FALLBACK);
+        CHECK(memcmp(&cpu.vectors[0], before, sizeof before) == 0);
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+    {
+        static const uint8_t memory_subtract[] = {
+            0x0f, 0x5c, 0x03,             /* subps xmm0,[rbx] */
+            0x66, 0x0f, 0x5c, 0x4b, 0x10, /* subpd xmm1,[rbx+16] */
+        };
+        static const float initial[4] = {1.0f, 2.0f, 3.0f, 4.0f};
+        static const float factor[4] = {2.0f, 3.0f, 4.0f, 5.0f};
+        static const float expected[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+        static const double initial_double[2] = {10.0, 20.0};
+        static const double factor_double[2] = {3.0, 4.0};
+        static const double expected_double[2] = {7.0, 16.0};
+        _Alignas(16) uint8_t operands[32];
+        uint32_t memory_host[256] = {0};
+        hl_x86_a64_provenance memory_provenance[8] = {0};
+        hl_x86_a64_request memory_request = request_for(memory_subtract, sizeof memory_subtract,
+                                                        memory_host, memory_provenance);
+        hl_x86_a64_result memory_result;
+        hl_native_x86_64_cpu cpu = {0};
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+        CHECK(code != MAP_FAILED);
+        CHECK(hl_x86_a64_emit(&memory_request, &memory_result) == HL_X86_A64_OK);
+        memcpy(code, memory_host, memory_result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[memory_result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (memory_result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[0], initial, sizeof initial);
+        memcpy(&cpu.vectors[2], initial_double, sizeof initial_double);
+        memcpy(operands, factor, sizeof factor);
+        memcpy(operands + 16, factor_double, sizeof factor_double);
+        cpu.registers[3] = UINT64_C(0x2000);
+        cpu.memory_first = UINT64_C(0x2000);
+        cpu.memory_last = UINT64_C(0x2020);
+        cpu.memory_delta = (uint64_t)(uintptr_t)operands - UINT64_C(0x2000);
+        cpu.memory_permissions = 1u;
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, sizeof expected) == 0);
+        CHECK(memcmp(&cpu.vectors[2], expected_double, sizeof expected_double) == 0);
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int end_branch(void) {
     const uint8_t guest[] = {
         0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
@@ -3684,6 +3836,8 @@ int main(void) {
     status = scalar_double_family();
     if (status != 0) return status;
     status = scalar_double_differential();
+    if (status != 0) return status;
+    status = floating_arithmetic();
     if (status != 0) return status;
     status = end_branch();
     if (status != 0) return status;

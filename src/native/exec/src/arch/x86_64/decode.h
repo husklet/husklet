@@ -64,6 +64,7 @@ enum vector_operation {
     VECTOR_SCALAR_DIV_DOUBLE,
     VECTOR_SCALAR_COMPARE_DOUBLE,
     VECTOR_TRUNC_DOUBLE_SIGNED,
+    VECTOR_FLOAT_ARITHMETIC,
 };
 
 enum vector_immediate_form {

@@ -114,7 +114,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                opcode == 0xacu || opcode == 0xadu)) &&
             !(semantic_prefix == 0xf3u && opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0x6fu || request->guest_bytes[cursor] == 0x7eu ||
-               request->guest_bytes[cursor] == 0x7fu ||
+               request->guest_bytes[cursor] == 0x7fu || request->guest_bytes[cursor] == 0x58u ||
+               request->guest_bytes[cursor] == 0x5cu ||
                request->guest_bytes[cursor] == 0xbcu || request->guest_bytes[cursor] == 0xbdu ||
                (cursor + 1u < request->guest_size && request->guest_bytes[cursor] == 0x1eu &&
                 (request->guest_bytes[cursor + 1u] == 0xfau || request->guest_bytes[cursor + 1u] == 0xfbu ||
@@ -186,12 +187,41 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->has_immediate = 1u;
             item->immediate = (uint64_t)load_signed(&request->guest_bytes[cursor], immediate_size);
             cursor += immediate_size;
-        } else if (semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
-                   (request->guest_bytes[cursor] == 0x51u || request->guest_bytes[cursor] == 0x58u ||
-                    request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
-                    request->guest_bytes[cursor] == 0x5eu)) {
+        } else if (opcode == 0x0fu && cursor < request->guest_size &&
+                   (request->guest_bytes[cursor] == 0x58u || request->guest_bytes[cursor] == 0x59u ||
+                    request->guest_bytes[cursor] == 0x5cu || request->guest_bytes[cursor] == 0x5eu) &&
+                   (semantic_prefix == 0xf2u ||
+                    ((request->guest_bytes[cursor] == 0x58u || request->guest_bytes[cursor] == 0x5cu) &&
+                     (semantic_prefix == 0u || semantic_prefix == 0xf3u)))) {
             uint8_t extension = request->guest_bytes[cursor++];
             uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->condition = semantic_prefix == 0xf2u || semantic_prefix == 0xf3u;
+            item->vector_lane = semantic_prefix == 0xf2u ||
+                                (semantic_prefix == 0u && operand_16 != 0u) ? 8u : 4u;
+            item->width = item->condition != 0u ? item->vector_lane : 16u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = VECTOR_FLOAT_ARITHMETIC;
+            item->vector_subopcode = extension;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = item->condition != 0u ? item->vector_lane : 16u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+        } else if (semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
+                   request->guest_bytes[cursor] == 0x51u) {
+            uint8_t modrm;
+            ++cursor;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
                 cursor = start; block->status = HL_X86_A64_TRUNCATED;
                 block->exit = HL_X86_A64_INTERPRETER; break;
@@ -201,10 +231,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->width = 8u;
             item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
             item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
-            item->vector_kind = extension == 0x51u ? VECTOR_SCALAR_SQRT_DOUBLE :
-                                extension == 0x58u ? VECTOR_SCALAR_ADD_DOUBLE :
-                                extension == 0x59u ? VECTOR_SCALAR_MUL_DOUBLE :
-                                extension == 0x5cu ? VECTOR_SCALAR_SUB_DOUBLE : VECTOR_SCALAR_DIV_DOUBLE;
+            item->vector_kind = VECTOR_SCALAR_SQRT_DOUBLE;
             if ((modrm >> 6) == 3u) {
                 ++cursor;
             } else {
