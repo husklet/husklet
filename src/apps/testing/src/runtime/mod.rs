@@ -1,14 +1,14 @@
 pub(crate) mod definition;
 mod execution;
 pub(crate) mod image;
+pub(crate) mod scheduler;
 
-use definition::{App, Target};
+use crate::suite::{Error, Target};
+use clap::Args;
+use definition::App;
 use std::path::{Path, PathBuf};
 
-type Error = Box<dyn std::error::Error>;
-
-pub async fn run(arguments: &[String]) -> Result<(), Error> {
-    let options = Options::parse(arguments)?;
+pub async fn run(options: Options) -> Result<(), Error> {
     let apps = apps(&options)?;
     let mut failed = Vec::new();
     let mut passed = 0_usize;
@@ -36,16 +36,11 @@ pub async fn run(arguments: &[String]) -> Result<(), Error> {
     }
 }
 
-pub fn oracle(arguments: &[String]) -> Result<(), Error> {
-    let (update, filtered) = match arguments.first().map(String::as_str) {
-        Some("--update") => (true, &arguments[1..]),
-        Some("--check") => (false, &arguments[1..]),
-        _ => (false, arguments),
-    };
-    let options = Options::parse(filtered)?;
-    for app in apps(&options)? {
-        for target in options.targets() {
-            app.oracle(target, update)?;
+pub fn oracle(options: OracleOptions) -> Result<(), Error> {
+    let _check_requested = options.check;
+    for app in apps(&options.selection)? {
+        for target in options.selection.targets() {
+            app.oracle(target, options.update)?;
         }
     }
     Ok(())
@@ -85,33 +80,30 @@ pub(super) fn workspace() -> Result<PathBuf, Error> {
     Ok(path.to_path_buf())
 }
 
-struct Options {
+#[derive(Args)]
+pub(crate) struct Options {
+    /// Run only the named runtime application.
     app: Option<String>,
+    /// Run only one guest ISA.
+    #[arg(long = "isa", value_enum)]
     target: Option<Target>,
 }
 
 impl Options {
-    fn parse(arguments: &[String]) -> Result<Self, Error> {
-        let mut app = None;
-        let mut target = None;
-        let mut index = 0;
-        while index < arguments.len() {
-            match arguments[index].as_str() {
-                "--isa" => {
-                    index += 1;
-                    target = Some(Target::parse(arguments.get(index).ok_or("--isa requires a value")?)?);
-                }
-                value if value.starts_with('-') => return Err(format!("unknown option {value:?}").into()),
-                value if app.is_none() => app = Some(value.to_owned()),
-                value => return Err(format!("unexpected argument {value:?}").into()),
-            }
-            index += 1;
-        }
-        Ok(Self { app, target })
-    }
-
     fn targets(&self) -> Vec<Target> {
         self.target
             .map_or_else(|| vec![Target::Arm64, Target::Amd64], |value| vec![value])
     }
+}
+
+#[derive(Args)]
+pub(crate) struct OracleOptions {
+    /// Replace checked golden output with oracle output.
+    #[arg(long, conflicts_with = "check")]
+    update: bool,
+    /// Check oracle output against the golden (the default).
+    #[arg(long)]
+    check: bool,
+    #[command(flatten)]
+    selection: Options,
 }

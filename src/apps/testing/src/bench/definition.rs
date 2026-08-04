@@ -1,5 +1,4 @@
-use super::Error;
-use crate::runtime::definition::{Execution, Target};
+use crate::suite::{Commands, Error, Execution, Target};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -29,21 +28,16 @@ struct Build {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Commands {
-    arm64: String,
-    amd64: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Case {
     id: String,
     #[serde(default)]
     build_flags: Vec<String>,
     #[serde(default)]
     arguments: Vec<String>,
-    #[serde(default = "repetitions")]
-    repetitions: u32,
+    #[serde(default = "warmups")]
+    warmups: u32,
+    #[serde(default = "samples", alias = "repetitions")]
+    samples: u32,
     #[serde(default = "timeout")]
     timeout: u64,
     expect: Expect,
@@ -57,8 +51,11 @@ struct Expect {
     stdout_contains: PathBuf,
 }
 
-const fn repetitions() -> u32 {
-    3
+const fn warmups() -> u32 {
+    1
+}
+const fn samples() -> u32 {
+    5
 }
 const fn timeout() -> u64 {
     120
@@ -75,7 +72,8 @@ pub struct Benchmark {
 pub struct BenchmarkCase {
     pub id: String,
     pub arguments: Vec<String>,
-    pub repetitions: u32,
+    pub warmups: u32,
+    pub samples: u32,
     pub timeout: u64,
     pub exit: i32,
     pub stdout_contains: PathBuf,
@@ -103,7 +101,8 @@ impl Benchmark {
                 if !ids.insert(case.id.clone())
                     || case.id.is_empty()
                     || case.id.contains('/')
-                    || !(1..=100).contains(&case.repetitions)
+                    || case.warmups > 100
+                    || !(1..=100).contains(&case.samples)
                     || !(1..=3600).contains(&case.timeout)
                 {
                     return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
@@ -116,7 +115,8 @@ impl Benchmark {
                 Ok(BenchmarkCase {
                     id: case.id,
                     arguments: case.arguments,
-                    repetitions: case.repetitions,
+                    warmups: case.warmups,
+                    samples: case.samples,
                     timeout: case.timeout,
                     exit: case.expect.exit,
                     stdout_contains,
@@ -141,10 +141,7 @@ impl Benchmark {
             .join(target.name())
             .join(&case.id);
         fs::create_dir_all(output.parent().ok_or("benchmark output has no parent")?)?;
-        let compiler = match target {
-            Target::Arm64 => &self.build.compiler.arm64,
-            Target::Amd64 => &self.build.compiler.amd64,
-        };
+        let compiler = self.build.compiler.for_target(target);
         let status = Command::new(compiler)
             .args(&self.build.flags)
             .args(&case.build_flags)
@@ -164,5 +161,20 @@ fn safe_relative(path: &Path) -> Result<(), Error> {
         Err(format!("unsafe source path {}", path.display()).into())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Document;
+
+    #[test]
+    fn legacy_repetitions_maps_to_measured_samples() {
+        let document: Document = serde_yaml::from_str(
+            "image: alpine\nbuild:\n  source: main.c\n  compiler: { arm64: cc, amd64: cc }\n  flags: []\ncases:\n  - id: wall\n    repetitions: 7\n    expect: { stdout_contains: marker.txt }\n",
+        )
+        .unwrap();
+        assert_eq!(document.cases[0].warmups, 1);
+        assert_eq!(document.cases[0].samples, 7);
     }
 }

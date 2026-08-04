@@ -1,6 +1,0 @@
-env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution
-rust-engine,amd64,compute,942653,7097455804780747230,938079,945432,5,1006512,native-verified
-rust-engine,amd64,intdiv,166796,896961339111467556,165065,171138,5,198388,native-verified
-rust-engine,amd64,memory,46327241,36526,45951293,46744343,5,51420535,native-verified
-rust-engine,amd64,pipe,954969,75000,948075,967827,5,1073166,native-verified
-rust-engine,amd64,syscall,524571,1000000,522189,524900,5,586671,native-verified

@@ -1,2 +1,0 @@
-env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution
-rust-engine,amd64,memory,319142,36526,317690,324885,3,377581,native-verified

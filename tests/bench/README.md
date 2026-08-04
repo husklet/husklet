@@ -13,9 +13,10 @@ cargo run -p testing -- bench
 ```
 
 Select a folder and ISA with `testing bench combined --isa arm64`. Each successful
-line reports all process wall-time samples and their integer average. Guest output
-is validated by a stable marker because timing values are intentionally variable.
+line reports cold, percentile, phase, and provenance measurements. Guest output is
+validated by a stable marker because timing values are intentionally variable.
 
-The retained `prebuilt/` and `results/` trees are historical evidence consumed by
-the separate comparison tooling; the YAML-driven runner neither discovers nor
-writes them.
+The runner always compiles the folder-owned `main.c`; it never consumes a checked-in
+guest binary. Generated guests and ordinary run evidence stay below the ignored
+`target/testing/bench/` tree. Export benchmark output to a reviewed path only when
+the resulting evidence is intentionally being published.

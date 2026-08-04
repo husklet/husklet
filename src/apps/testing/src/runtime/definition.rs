@@ -1,78 +1,38 @@
-use super::{Error, workspace};
+use super::{scheduler, workspace};
+use crate::suite::{Commands, Error, Execution, Target};
 use serde::Deserialize;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
     process::Command,
 };
 
-#[derive(Clone, Copy)]
-pub enum Target {
-    Arm64,
-    Amd64,
-}
-
-impl Target {
-    pub fn parse(value: &str) -> Result<Self, Error> {
-        match value {
-            "arm64" => Ok(Self::Arm64),
-            "amd64" => Ok(Self::Amd64),
-            _ => Err(format!("unsupported ISA {value:?}").into()),
-        }
-    }
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Arm64 => "arm64",
-            Self::Amd64 => "amd64",
-        }
-    }
-    pub const fn guest(self) -> hl_container::Guest {
-        match self {
-            Self::Arm64 => hl_container::Guest::Aarch64,
-            Self::Amd64 => hl_container::Guest::X86_64,
-        }
-    }
-    pub fn platform(self) -> hl_images::Platform {
-        match self {
-            Self::Arm64 => hl_images::Platform::linux_arm64(),
-            Self::Amd64 => hl_images::Platform::linux_amd64(),
-        }
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Document {
+    targets: BTreeSet<Target>,
     image: String,
     #[serde(default)]
     execution: Execution,
     artifact: Artifact,
     build: Build,
-    oracle: Option<Commands>,
+    oracle: Option<Oracle>,
     cases: Vec<Case>,
 }
 
-#[derive(Clone, Copy, Default, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Execution {
-    #[serde(default)]
-    native: bool,
-    #[serde(default)]
-    diagnostics: bool,
+struct Oracle {
+    provider: OracleProvider,
+    commands: Commands,
 }
 
-impl Execution {
-    pub fn container(self) -> Result<hl_container::Execution, Error> {
-        if self.diagnostics && !self.native {
-            return Err("native diagnostics require native execution".into());
-        }
-        Ok(if self.native {
-            hl_container::Execution::native(self.diagnostics)
-        } else {
-            hl_container::Execution::default()
-        })
-    }
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum OracleProvider {
+    Native,
+    Qemu,
 }
 
 #[derive(Deserialize)]
@@ -92,19 +52,46 @@ struct Build {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Commands {
-    arm64: String,
-    amd64: String,
+struct RawCase {
+    id: String,
+    pub status: Status,
+    compat: Compat,
+    soak: Option<scheduler::Plan>,
+    run: Vec<String>,
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
+    #[serde(default = "timeout")]
+    timeout: u64,
+    expect: Expect,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum Status {
+    Active,
+    Broken(Evidence),
+    Unsupported(Evidence),
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawCase {
-    id: String,
-    run: Vec<String>,
-    #[serde(default = "timeout")]
-    timeout: u64,
-    expect: Expect,
+struct Evidence {
+    reason: String,
+    evidence: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Compat {
+    class: CompatClass,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum CompatClass {
+    Smoke,
+    Compatibility,
+    Soak,
 }
 
 type Case = RawCase;
@@ -123,9 +110,13 @@ const fn timeout() -> u64 {
 pub struct RuntimeCase {
     pub id: String,
     pub arguments: Vec<String>,
+    pub environment: BTreeMap<String, String>,
     pub timeout: u64,
     pub exit: i32,
     pub golden: PathBuf,
+    status: Status,
+    pub compat: CompatClass,
+    pub soak: Option<scheduler::Plan>,
 }
 
 pub struct App {
@@ -133,16 +124,17 @@ pub struct App {
     pub directory: PathBuf,
     pub image: String,
     pub execution: Execution,
+    pub targets: BTreeSet<Target>,
     pub destination: String,
     build: Build,
-    oracle: Option<Commands>,
+    oracle: Option<Oracle>,
     pub cases: Vec<RuntimeCase>,
 }
 
 impl App {
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
         let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
-        if document.image.trim().is_empty() || document.cases.is_empty() {
+        if document.image.trim().is_empty() || document.targets.is_empty() || document.cases.is_empty() {
             return Err(format!("{} has an invalid image or case list", definition.display()).into());
         }
         safe_relative(&document.build.source)?;
@@ -154,18 +146,36 @@ impl App {
             .map(|case| {
                 if !ids.insert(case.id.clone())
                     || !case.id.starts_with("runtime/")
-                    || case.run.is_empty()
                     || !(1..=3600).contains(&case.timeout)
+                    || case
+                        .environment
+                        .keys()
+                        .any(|name| name.is_empty() || name.contains('='))
+                    || case
+                        .environment
+                        .iter()
+                        .any(|(name, value)| name.contains('\0') || value.contains('\0'))
                 {
                     return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
+                }
+                case.status.validate()?;
+                if let Some(plan) = &case.soak {
+                    plan.validate()?;
+                }
+                if matches!(case.compat.class, CompatClass::Soak) != case.soak.is_some() {
+                    return Err(format!("{} has inconsistent soak metadata for {:?}", definition.display(), case.id).into());
                 }
                 safe_relative(&case.expect.stdout)?;
                 Ok(RuntimeCase {
                     id: case.id,
                     arguments: case.run,
+                    environment: case.environment,
                     timeout: case.timeout,
                     exit: case.expect.exit,
                     golden: directory.join(case.expect.stdout),
+                    status: case.status,
+                    compat: case.compat.class,
+                    soak: case.soak,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -178,6 +188,7 @@ impl App {
             directory: directory.to_path_buf(),
             image: document.image,
             execution: document.execution,
+            targets: document.targets,
             destination: document.artifact.destination,
             build: document.build,
             oracle: document.oracle,
@@ -212,10 +223,17 @@ impl App {
             .ok_or_else(|| format!("{} defines no oracle", self.name))?;
         let artifact = self.build(target)?;
         for case in &self.cases {
-            let output = Command::new(self.command(commands, target))
+            if let Some((kind, reason, evidence)) = case.status.inactive() {
+                println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
+                continue;
+            }
+            let mut command = Command::new(self.command(commands, target));
+            command
+                .env_clear()
+                .envs(&case.environment)
                 .arg(&artifact)
-                .args(&case.arguments)
-                .output()?;
+                .args(&case.arguments);
+            let output = command.output()?;
             let status = output.status.code().ok_or("oracle terminated without an exit code")?;
             if status != case.exit {
                 return Err(format!(
@@ -238,10 +256,27 @@ impl App {
         Ok(())
     }
 
-    fn command<'a>(&self, commands: &'a Commands, target: Target) -> &'a str {
-        match target {
-            Target::Arm64 => &commands.arm64,
-            Target::Amd64 => &commands.amd64,
+    fn command<'a>(&self, oracle: &'a Oracle, target: Target) -> &'a str {
+        let _provider = oracle.provider;
+        oracle.commands.for_target(target)
+    }
+}
+
+impl Status {
+    fn validate(&self) -> Result<(), Error> {
+        if let Self::Broken(evidence) | Self::Unsupported(evidence) = self
+            && (evidence.reason.trim().is_empty() || evidence.evidence.trim().is_empty())
+        {
+            return Err("non-active status requires non-empty reason and evidence".into());
+        }
+        Ok(())
+    }
+
+    pub fn inactive(&self) -> Option<(&'static str, &str, &str)> {
+        match self {
+            Self::Active => None,
+            Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
+            Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
         }
     }
 }

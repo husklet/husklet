@@ -2,16 +2,14 @@ mod definition;
 mod execution;
 
 use definition::Scenario;
-use runtime::definition::Target;
 use std::path::{Path, PathBuf};
 
-use crate::runtime;
+use crate::suite::{Error, Target};
+use clap::Args;
 
-type Error = Box<dyn std::error::Error>;
-
-pub async fn run(arguments: &[String]) -> Result<(), Error> {
-    let options = Options::parse(arguments)?;
+pub async fn run(options: Options) -> Result<(), Error> {
     let mut passed = 0_usize;
+    let mut expected_failures = 0_usize;
     let mut failed = Vec::new();
 
     for scenario in scenarios(&options)? {
@@ -26,12 +24,23 @@ pub async fn run(arguments: &[String]) -> Result<(), Error> {
                         println!("FAIL {id} {}: {error}", target.name());
                         failed.push(format!("{id} {}: {error}", target.name()));
                     }
+                    execution::CaseResult::ExpectedFailure(id, error) => {
+                        println!("XFAIL {id} {}: {error}", target.name());
+                        expected_failures += 1;
+                    }
+                    execution::CaseResult::UnexpectedPass(id) => {
+                        println!("XPASS {id} {}", target.name());
+                        failed.push(format!("{id} {}: unexpected pass", target.name()));
+                    }
                 }
             }
         }
     }
 
-    println!("scenarios: {passed} passed; {} failed", failed.len());
+    println!(
+        "scenarios: {passed} passed; {expected_failures} expected failures; {} failed",
+        failed.len()
+    );
     if failed.is_empty() {
         Ok(())
     } else {
@@ -74,33 +83,16 @@ fn workspace() -> Result<PathBuf, Error> {
     Ok(path.to_path_buf())
 }
 
-struct Options {
+#[derive(Args)]
+pub(crate) struct Options {
+    /// Run only the named scenario.
     scenario: Option<String>,
+    /// Run only one guest ISA.
+    #[arg(long = "isa", value_enum)]
     target: Option<Target>,
 }
 
 impl Options {
-    fn parse(arguments: &[String]) -> Result<Self, Error> {
-        let mut scenario = None;
-        let mut target = None;
-        let mut index = 0;
-        while index < arguments.len() {
-            match arguments[index].as_str() {
-                "--isa" => {
-                    index += 1;
-                    target = Some(Target::parse(arguments.get(index).ok_or("--isa requires a value")?)?);
-                }
-                value if value.starts_with('-') => {
-                    return Err(format!("unknown option {value:?}").into());
-                }
-                value if scenario.is_none() => scenario = Some(value.to_owned()),
-                value => return Err(format!("unexpected argument {value:?}").into()),
-            }
-            index += 1;
-        }
-        Ok(Self { scenario, target })
-    }
-
     fn targets(&self) -> Vec<Target> {
         self.target
             .map_or_else(|| vec![Target::Arm64, Target::Amd64], |value| vec![value])

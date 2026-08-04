@@ -1,6 +1,0 @@
-env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution
-c-engine,arm64,compute,2442,7097455804780747230,2398,2515,5,22866,c-engine
-c-engine,arm64,intdiv,15349,896961339111467556,14988,15997,5,42188,c-engine
-c-engine,arm64,memory,6564,36526,6472,6779,5,28005,c-engine
-c-engine,arm64,pipe,69421,75000,68441,69662,5,98519,c-engine
-c-engine,arm64,syscall,20991,754218500000,20713,21136,5,40617,c-engine

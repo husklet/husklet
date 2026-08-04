@@ -1,8 +1,5 @@
-use super::{
-    Error,
-    definition::{App, Target},
-    image::TestImage,
-};
+use super::{Error, definition::App, image::TestImage};
+use crate::suite::Target;
 use hl_container::{Config, ContainerSpec, ExitStatus, Isolation, Process, Sandbox};
 use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
 
@@ -28,7 +25,10 @@ pub async fn run(app: &App, target: Target) -> Result<Vec<CaseResult>, Error> {
     let mut results = Vec::new();
     for case in &app.cases {
         let name = format!("testing-{}-{}-{}", app.name, target.name(), case.id.replace('/', "-"));
-        let process = Process::new(&app.destination).args(case.arguments.iter().map(String::as_str));
+        let mut process = Process::new(&app.destination).args(case.arguments.iter().map(String::as_str));
+        for (name, value) in &case.environment {
+            process = process.env(name, value);
+        }
         let spec = ContainerSpec::from_directory(fixture.path(), process)
             .name(&name)
             .guest(target.guest())

@@ -1,17 +1,52 @@
 #![forbid(unsafe_code)]
 
 mod bench;
+mod benchmark;
+mod nested;
 mod runtime;
 mod scenario;
+mod suite;
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "testing", about = "Husklet repository test runner")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run self-contained runtime compatibility cases.
+    Runtime(runtime::Options),
+    /// Check or update runtime output using the configured oracle.
+    Oracle(runtime::OracleOptions),
+    /// Run application scenarios.
+    Scenarios(scenario::Options),
+    /// Run repository benchmark definitions.
+    Bench(bench::Options),
+    /// Run or report a direct provider benchmark.
+    Benchmark {
+        #[command(subcommand)]
+        command: benchmark::Command,
+    },
+    /// Run nested-engine chains.
+    Nested(nested::Options),
+}
 
 #[tokio::main]
 async fn main() {
-    hl_log::Config {
+    let defaults = hl_log::Config {
         logging: hl_log::tag::EXEC.into(),
         level: hl_log::Level::Error,
         profiling: hl_log::Tags::NONE,
+    };
+    let logging = hl_log::EnvironmentConfig::parse(defaults, std::env::vars());
+    for warning in logging.warnings() {
+        eprintln!("testing: {warning}");
     }
-    .apply();
+    logging.apply();
     if let Err(error) = run().await {
         eprintln!("testing: {error}");
         std::process::exit(1);
@@ -19,13 +54,60 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    match arguments.first().map(String::as_str) {
-        Some("runtime") => runtime::run(&arguments[1..]).await,
-        Some("oracle") => runtime::oracle(&arguments[1..]),
-        Some("scenarios") => scenario::run(&arguments[1..]).await,
-        Some("bench") => bench::run(&arguments[1..]).await,
-        Some(command) => Err(format!("unknown testing command {command:?}").into()),
-        None => Err("usage: testing <runtime|oracle|scenarios|bench> [options]".into()),
+    match Cli::parse().command {
+        Command::Runtime(options) => runtime::run(options).await,
+        Command::Oracle(options) => runtime::oracle(options),
+        Command::Scenarios(options) => scenario::run(options).await,
+        Command::Bench(options) => bench::run(options).await,
+        Command::Benchmark { command } => benchmark::Application::new(std::env::var_os("PATH"))
+            .execute(command)
+            .map_err(Into::into),
+        Command::Nested(options) => nested::run(options),
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::Cli;
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn help_exposes_all_typed_commands() {
+        let help = Cli::command().render_long_help().to_string();
+        for command in ["runtime", "oracle", "scenarios", "bench", "benchmark", "nested"] {
+            assert!(help.contains(command), "missing {command} from help");
+        }
+    }
+
+    #[test]
+    fn runtime_selection_parses() {
+        assert!(Cli::try_parse_from(["testing", "runtime", "core", "--isa", "arm64"]).is_ok());
+    }
+
+    #[test]
+    fn invalid_isa_and_conflicting_oracle_modes_fail() {
+        assert!(Cli::try_parse_from(["testing", "runtime", "--isa", "x86"]).is_err());
+        assert!(Cli::try_parse_from(["testing", "oracle", "--check", "--update"]).is_err());
+    }
+
+    #[test]
+    fn benchmark_guest_arguments_are_trailing() {
+        assert!(
+            Cli::try_parse_from([
+                "testing",
+                "benchmark",
+                "run",
+                "--provider",
+                "native",
+                "--arch",
+                "amd64",
+                "--binary",
+                "/guest",
+                "--",
+                "--phase",
+                "compute"
+            ])
+            .is_ok()
+        );
     }
 }

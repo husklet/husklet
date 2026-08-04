@@ -13,7 +13,6 @@ members = [
     "src/workspaces/hl-ws",
     "src/packages/hl-log",
     "src/packages/hl-fs",
-    "src/packages/hl-benchmark",
     "src/packages/hl-softfloat",
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
@@ -38,6 +37,7 @@ async-trait = "0.1"
 base64 = "0.22"
 bytes = "1"
 chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures-util = "0.3"
 fs2 = "0.4"
