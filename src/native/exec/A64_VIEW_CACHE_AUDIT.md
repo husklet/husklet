@@ -143,3 +143,50 @@ It was cancelled during dependency compilation when concurrent work reduced
 sample ran and no timing claim is made.  Existing exact-tree measurements rank
 the mechanism; a reproducible before/after result must wait for adequate
 scratch space rather than contend with active guest builds.
+
+## Slot-zero authenticated fast-path compaction
+
+The follow-up audit used Husklet revision
+`8ecaa7022c9bcf3596931adb3fe7f1820c648dcb`. Typed per-executor evidence
+rejects checking `memory_*`/active-view identity before the run-view cache:
+active fallback produced zero hits while run-view slot zero served 93.1863% of
+authenticated accesses. An active-first candidate would add hot-path work and
+was not implemented.
+
+The safe reduction is narrower: defer `read_count <= 4` until slot zero misses.
+The ownership chain was traced through
+`hl-memory/src/mapping/projection.rs::project_contiguous`,
+`ProjectionLease::project_additional`,
+`hl-engine/src/native/executor.rs::run_aarch64_inner`, and
+`native/exec/src/executor.c::{run_aarch64,run_view_install,run_view_publish,
+run_view_resolve}`. A `ProjectionLease` holds mapping/checkpoint admission, the
+mapping transaction lock, every host projection, and write reservations for the
+whole synchronous `hl_native_run` call. C execution admission excludes mapping
+reset, fork repair, and destroy while generated code runs.
+
+`run_view_publish` establishes the exact release/acquire chain. It release-
+stores zero to `read_token`, clears count, validates `count <= 4` and every
+view's bounds, incarnation, permissions, host-span overflow, and delta; copies
+the slots; stores count and incarnation; then release-stores the nonzero mapping
+incarnation to `read_token`. `guard.c::read_cache` loads token, rejects zero,
+executes `dmb ishld`, and requires equality with `read_incarnation` before
+reading count or slots. A matching live token therefore proves slot zero and
+count were validated. The upper bound remains before slots one through three.
+
+No public API can construct matching live token around malformed slot data.
+`run_aarch64` unconditionally clears token/count before request validation and
+only `run_view_publish` republishes them. Projection views remain borrowed for
+that call and Rust callers cannot access private native scratch inside
+`run_aarch64_inner`. Direct C callers may supply an old CPU image, but the same
+clear precedes execution. Resolver promotion passes through `run_view_install`
+and the same publication function. Fork, replacement, authority rotation,
+rejected fault publication, and return either cannot overlap the execution
+lease or clear identity before the next entry. No host delta persists.
+
+This moves exactly two emitted words—the count reload and `cmp count,#4`—off
+the 93.1863% slot-zero path. Cold slots, resolution, faults, writes, dirty/SMC
+publication, and cross-span behavior are unchanged. Tests execute a slot-zero
+hit, prove forged count five cannot reach matching slot one, and pin the
+deferred two-word location structurally. Instrumentation remains typed and
+per-executor through `operand_cache_hits`/`operand_callbacks`; no global or
+always-on hot-path counter was added.
