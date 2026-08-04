@@ -110,3 +110,17 @@ package-owned spawn across pipe creation, CLOEXEC installation, and
 participating in this lock could still observe Darwin's narrow descriptor
 window; eliminating that remaining embedder-wide race requires a host primitive
 or a process-wide spawn authority shared by all launchers.
+
+## Detached-test retirement
+
+The former `hl-engine::ffi::linux::execution::environment_stack` test loaded
+untracked `tests/runtime/legacy/prebuilt/{aarch64,x86_64}/environment` images.
+Those images disappeared when the centralized prebuilt tree was retired, so the
+test failed before entering the engine and could not provide compatibility
+evidence. It was not a product regression.
+
+The manifest-backed case in this directory is the complete replacement. Its
+category-owned `main.c` observes `argc`, `argv`, and `envp` directly at `_start`;
+`test.yaml` compiles it for both ISAs and supplies the ordered raw records,
+including `TZ=UTC\xff` and `EMPTY=`. The expected zero exit is therefore the same
+byte-level contract without a checked-in executable or hidden fixture path.

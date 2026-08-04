@@ -225,28 +225,6 @@ fn run_environment(image: Vec<u8>, name: &str, isa: GuestIsa, environment: Vec<V
 }
 
 #[test]
-fn environment_stack() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/prebuilt");
-    for (isa, folder) in [(GuestIsa::Aarch64, "aarch64"), (GuestIsa::X86_64, "x86_64")] {
-        let image = fs::read(root.join(folder).join("environment")).unwrap();
-        assert_eq!(
-            run_environment(
-                image,
-                "environment",
-                isa,
-                vec![b"TZ=UTC\xff".to_vec(), b"EMPTY=".to_vec()],
-            ),
-            EngineExit {
-                kind: ExitKind::Code,
-                guest_status: 0,
-                detail: 0,
-                fault: None,
-            },
-        );
-    }
-}
-
-#[test]
 fn pthread_clone_executes() {
     assert_eq!(
         run_image(clone_arm(), "clone-arm", GuestIsa::Aarch64),

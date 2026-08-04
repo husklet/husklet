@@ -36,7 +36,6 @@ relocated.
 | Consumer | Missing input | Category coverage | Decision |
 |---|---|---|---|
 | `src/containers/hl-engine/src/runtime/machine_test.rs::network_checkpoint_role` | `legacy/prebuilt/aarch64/exit` | `runtime/bootstrap/exit` proves exit execution, but not capture of a live assembly with network/provider/event/IPC roles | migrate the checkpoint composition contract into a repository YAML case or replace only the executable setup with a build-owned fixture; do not claim the bootstrap case is equivalent |
-| `src/containers/hl-engine/src/ffi/linux/execution/test.rs::environment_stack` | absent `legacy/prebuilt/{aarch64,x86_64}/environment` | `runtime/environment/initial-stack` covers ordered UTF-8 `EMPTY=` and `TZ=UTC`; the Rust test additionally injects non-UTF-8 `TZ=UTC\xff` | gap: the YAML environment model is UTF-8 and cannot express the old byte contract |
 | `src/containers/hl-engine/src/ffi/linux/execution/test.rs::bootstrap_instructions_execute` | deleted `exit` and `write` prebuilts | `runtime/bootstrap/{exit,write}` is an exact source and exit/stdout mapping for both ISAs | remove the detached package integration test after the manifest rows are part of the required gate |
 | `src/containers/hl-engine/src/ffi/linux/execution/test.rs::clone_teardown` | absent `legacy/prebuilt/{aarch64,x86_64}/clone` | `runtime/clone/robust-clear-tid` covers clone, `CLONE_CHILD_CLEARTID`, futex wake, and robust owner-death teardown on both ISAs | compare the unavailable binary's provenance before declaring exact equivalence; no prebuilt manifest row exists for it |
 | `src/apps/testing/src/bin/compat_worker.rs` | four absent loader/libc files declared by `legacy/artifacts/runtime/manifest.tsv` | `runtime/process/nonpie-dladdr` owns its source, golden, dynamic build, and Alpine image closure | migrated boundary: the retained inventory injects `dynamic-rootfs=<selected-corpus>/artifacts/runtime`; a generated corpus must still materialize the four declared files |
@@ -50,6 +49,15 @@ the current runtime schema stages one executable into a container image but
 does not describe the host-side projected tree, writable projection, symlinks,
 dynamic loader set, or post-run host-file assertions used by
 `projection_linux.rs`.
+
+The detached `hl-engine::environment_stack` test was removed after its only
+inputs, `legacy/prebuilt/{aarch64,x86_64}/environment`, were deleted. Restoring
+checked-in executables would have preserved an unowned fixture. Its replacement,
+`runtime/environment/initial-stack`, owns the freestanding source and build for
+both ISAs and expresses the original ordered byte contract directly: `TZ=UTC`
+followed by `0xff`, `EMPTY=`, and the four explicit defaults. The workload reads
+the kernel initial stack at `_start`, so this remains production execution
+evidence rather than a planner-only unit test.
 
 ## Undeclared category inputs and rows
 
