@@ -14,6 +14,11 @@ use definition::{App, EngineHost};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[allow(dead_code, reason = "consumed by the scenario cache-preflight command in its integration patch")]
+pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error> {
+    image::preflight(name, &target.platform())
+}
+
 pub async fn run(options: Options) -> Result<(), Error> {
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;

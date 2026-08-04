@@ -12,6 +12,8 @@ use tokio::{
     task::JoinSet,
 };
 
+mod process_lifecycle;
+
 pub(super) struct Summary {
     pub passed: usize,
     pub expected_failures: usize,
