@@ -1,15 +1,13 @@
 use clap::Args;
+use hl_process::{Capture, Command as ProcessCommand, Outcome as ProcessOutcome};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     fs,
-    io::Read,
     os::unix::fs::PermissionsExt,
-    os::unix::process::CommandExt,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
+    sync::atomic::AtomicBool,
+    time::Duration,
 };
 
 type Error = Box<dyn std::error::Error>;
@@ -263,99 +261,57 @@ fn execute(root: &Path, definition: &Path, chain: &Chain) -> Outcome {
         Duration::from_secs(chain.timeout_seconds),
         chain.capture_limit_bytes,
     ) {
-        Ok((status, stdout, stderr))
-            if status == Some(chain.expect.exit)
-                && stdout == expected
+        Ok(captured)
+            if captured.status == Some(chain.expect.exit)
+                && captured.stdout == expected
                 && (!chain.layers.iter().any(|layer| layer.options.native_execution)
-                    || String::from_utf8_lossy(&stderr).contains("hl-native-detail:")) =>
+                    || String::from_utf8_lossy(&captured.stderr).contains("hl-native-detail:")) =>
         {
             Outcome::Passed
         }
-        Ok((status, stdout, stderr)) => Outcome::Failed(format!(
+        Ok(captured) => Outcome::Failed(format!(
             "exit={status:?} expected={}; stdout={} bytes expected={} bytes; native diagnostics required={}; stderr={}",
             chain.expect.exit,
-            stdout.len(),
+            captured.stdout.len(),
             expected.len(),
             chain.layers.iter().any(|layer| layer.options.native_execution),
-            String::from_utf8_lossy(&stderr).trim()
+            String::from_utf8_lossy(&captured.stderr).trim(),
+            status = captured.status,
         )),
         Err(error) => Outcome::Failed(error),
     }
 }
 
-fn drain(mut stream: impl Read, limit: usize) -> Result<Vec<u8>, String> {
-    let mut captured = Vec::new();
-    let mut buffer = [0; 16 * 1024];
-    let mut overflow = false;
-    loop {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| format!("capture failed: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        if captured.len().saturating_add(count) <= limit {
-            captured.extend_from_slice(&buffer[..count]);
-        } else {
-            overflow = true;
-        }
-    }
-    if overflow {
-        Err(format!("output exceeded {limit} bytes"))
-    } else {
-        Ok(captured)
-    }
+#[derive(Debug)]
+struct ProcessOutput {
+    status: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
-fn capture(arguments: &[String], timeout: Duration, limit: usize) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+fn capture(arguments: &[String], timeout: Duration, limit: usize) -> Result<ProcessOutput, String> {
     let (program, guest) = arguments.split_first().ok_or("empty nested command")?;
-    let mut command = Command::new(program);
-    command
-        .args(guest)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    let mut child = command.spawn().map_err(|error| format!("spawn failed: {error}"))?;
-    let stdout = child.stdout.take().ok_or("missing stdout pipe")?;
-    let stderr = child.stderr.take().ok_or("missing stderr pipe")?;
-    let stdout = thread::spawn(move || drain(stdout, limit));
-    let stderr = thread::spawn(move || drain(stderr, limit));
-    let started = Instant::now();
-    let mut timed_out = false;
-    let status = loop {
-        match child.try_wait().map_err(|error| format!("wait failed: {error}"))? {
-            Some(status) => break status,
-            None if started.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
-            None => {
-                timed_out = true;
-                terminate_group(child.id());
-                let _ = child.kill();
-                break child.wait().map_err(|error| format!("reap failed: {error}"))?;
-            }
-        }
+    let output = tempfile::tempdir().map_err(|error| format!("capture directory failed: {error}"))?;
+    let capture = Capture {
+        stdout: output.path().join("stdout"),
+        stderr: output.path().join("stderr"),
+        stdout_limit: u64::try_from(limit).map_err(|_| "capture limit exceeds u64")?,
+        stderr_limit: u64::try_from(limit).map_err(|_| "capture limit exceeds u64")?,
     };
-    let stdout = stdout.join().map_err(|_| "stdout capture panicked")??;
-    let stderr = stderr.join().map_err(|_| "stderr capture panicked")??;
-    if timed_out {
-        return Err(format!("timed out after {} seconds", timeout.as_secs()));
-    }
-    Ok((status.code(), stdout, stderr))
-}
-
-fn terminate_group(process: u32) {
-    let group = format!("-{process}");
-    let quiet = || Stdio::null();
-    let _ = Command::new("kill")
-        .args(["-TERM", "--", &group])
-        .stdout(quiet())
-        .stderr(quiet())
-        .status();
-    thread::sleep(Duration::from_millis(100));
-    let _ = Command::new("kill")
-        .args(["-KILL", "--", &group])
-        .stdout(quiet())
-        .stderr(quiet())
-        .status();
+    let mut command = ProcessCommand::new(program);
+    command.args(guest);
+    let outcome = hl_process::run(&command, &capture, timeout, &AtomicBool::new(false))
+        .map_err(|error| format!("nested process failed: {error}"))?;
+    let status = match outcome {
+        ProcessOutcome::Exited(status) => status,
+        ProcessOutcome::Signaled(_) => None,
+        ProcessOutcome::TimedOut => return Err(format!("timed out after {} seconds", timeout.as_secs())),
+        ProcessOutcome::Cancelled => return Err("nested process was cancelled".into()),
+        ProcessOutcome::OutputLimit => return Err(format!("output exceeded {limit} bytes")),
+    };
+    let stdout = fs::read(&capture.stdout).map_err(|error| format!("stdout capture failed: {error}"))?;
+    let stderr = fs::read(&capture.stderr).map_err(|error| format!("stderr capture failed: {error}"))?;
+    Ok(ProcessOutput { status, stdout, stderr })
 }
 
 #[cfg(test)]
@@ -402,5 +358,44 @@ expect: { exit: 42, stdout: hello.txt }
             unavailable(Path::new("/definitely-absent"), &artifact),
             Some(Outcome::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn capture_success() {
+        let captured = capture(
+            &[
+                "/bin/sh".into(),
+                "-c".into(),
+                "printf output; printf detail >&2; exit 7".into(),
+            ],
+            Duration::from_secs(2),
+            1024,
+        )
+        .unwrap();
+        assert_eq!(captured.status, Some(7));
+        assert_eq!(captured.stdout, b"output");
+        assert_eq!(captured.stderr, b"detail");
+    }
+
+    #[test]
+    fn capture_timeout() {
+        let error = capture(
+            &["/bin/sh".into(), "-c".into(), "sleep 2".into()],
+            Duration::from_millis(20),
+            1024,
+        )
+        .unwrap_err();
+        assert!(error.contains("timed out"));
+    }
+
+    #[test]
+    fn capture_limit() {
+        let error = capture(
+            &["/bin/sh".into(), "-c".into(), "printf 12345".into()],
+            Duration::from_secs(2),
+            4,
+        )
+        .unwrap_err();
+        assert_eq!(error, "output exceeded 4 bytes");
     }
 }
