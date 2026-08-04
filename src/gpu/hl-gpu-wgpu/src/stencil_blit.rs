@@ -157,6 +157,18 @@ fn row_pitch(width: u32) -> Result<u32> {
         .ok_or(GpuError::OutOfBounds)
 }
 
+fn staging_size(width: u32, height: u32, limits: &wgpu::Limits) -> Result<u64> {
+    let size = u64::from(row_pitch(width)?)
+        .checked_mul(u64::from(height))
+        .ok_or(GpuError::OutOfBounds)?;
+    if size > limits.max_buffer_size || size > u64::from(limits.max_storage_buffer_binding_size) {
+        return Err(GpuError::Unsupported(
+            "wgpu: stencil blit source exceeds storage-buffer limits",
+        ));
+    }
+    Ok(size)
+}
+
 #[cfg(test)]
 fn source_coordinate(dst: u32, src_extent: u32, dst_extent: u32, mirrored: bool) -> u32 {
     let value =
@@ -250,10 +262,12 @@ impl WgpuExecutor {
             .ok_or(GpuError::OutOfBounds)?;
 
         let pitch = row_pitch(region.src_extent.width)?;
-        let staging_size = u64::from(pitch)
-            .checked_mul(u64::from(region.src_extent.height))
-            .ok_or(GpuError::OutOfBounds)?;
         let device = &self.gpu.device;
+        let staging_size = staging_size(
+            region.src_extent.width,
+            region.src_extent.height,
+            &device.limits(),
+        )?;
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hl-stencil-blit-source"),
             size: staging_size,
@@ -431,5 +445,29 @@ mod tests {
         assert_eq!(row_pitch(255), Ok(256));
         assert_eq!(row_pitch(256), Ok(256));
         assert_eq!(row_pitch(257), Ok(512));
+    }
+
+    #[test]
+    fn staging_size_respects_buffer_and_storage_binding_limits() {
+        let limits = wgpu::Limits {
+            max_buffer_size: 4096,
+            max_storage_buffer_binding_size: 2048,
+            ..wgpu::Limits::default()
+        };
+        assert_eq!(staging_size(257, 4, &limits), Ok(2048));
+        assert!(matches!(
+            staging_size(257, 5, &limits),
+            Err(GpuError::Unsupported(_))
+        ));
+
+        let limits = wgpu::Limits {
+            max_buffer_size: 1024,
+            max_storage_buffer_binding_size: 4096,
+            ..wgpu::Limits::default()
+        };
+        assert!(matches!(
+            staging_size(257, 3, &limits),
+            Err(GpuError::Unsupported(_))
+        ));
     }
 }
