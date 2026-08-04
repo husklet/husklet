@@ -1,4 +1,5 @@
 use super::*;
+use hl_ws::Arch;
 
 #[test]
 fn signatures_are_unambiguous_and_ignore_terminal_presentation() {
