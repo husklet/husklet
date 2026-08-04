@@ -5,7 +5,7 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
-use crate::io::{BoundedReader, Limit};
+use hl_io::{BoundedReader, Limit};
 
 /// Independent allocation limits applied while decoding untrusted input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

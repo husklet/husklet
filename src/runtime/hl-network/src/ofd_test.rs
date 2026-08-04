@@ -42,8 +42,6 @@ impl SocketHostIo for FakeSocketHost {
     fn readiness(&self, _token: u64) -> SocketHostReadiness {
         SocketHostReadiness {
             readable: true,
-            priority: false,
-            read_hangup: false,
             writable: true,
             error: false,
             hangup: false,

@@ -26,9 +26,9 @@ hl-runtime = { path = "../../runtime/hl-runtime" }
 hl-sync = { path = "../../runtime/hl-sync" }
 hl-task = { path = "../../runtime/hl-task" }
 hl-time = { path = "../../runtime/hl-time" }
-ring = "0.17.14"
-zeroize = "1.9"
+hl-session = { path = "../../packages/hl-session" }
 [dev-dependencies]
+ring = "0.17.14"
 
 [build-dependencies]
 cc = "1.4.0"

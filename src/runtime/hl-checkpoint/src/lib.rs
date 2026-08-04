@@ -5,10 +5,7 @@
 use std::fmt;
 use std::io::{Read, Write};
 
-mod codec;
-mod io;
-
-use codec::{DecodeError, Decoder, EncodeError, Encoder};
+use hl_codec::{DecodeError, Decoder, EncodeError, Encoder};
 
 mod image;
 mod port;
@@ -311,7 +308,7 @@ impl Header {
 mod tests {
     use std::io::Cursor;
 
-    use crate::codec::Limits;
+    use hl_codec::Limits;
 
     use super::*;
 

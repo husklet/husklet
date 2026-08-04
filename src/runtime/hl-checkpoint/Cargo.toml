@@ -10,4 +10,5 @@ publish = false
 workspace = true
 
 [dependencies]
+hl-codec = { path = "../../packages/hl-codec" }
 ring = "0.17.14"

@@ -1,4 +1,4 @@
-use super::{Direction, Session};
+use crate::{Direction, Session};
 use ring::{
     hmac,
     rand::{SecureRandom, SystemRandom},

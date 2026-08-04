@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::fd::AsRawFd;
 
 use hl_network::AuthoritySocketKey;
-use crate::session::FrameKind;
+use hl_session::FrameKind;
 
 use super::{Message, NetworkAuthority, Operation};
 use crate::engine::EngineError;

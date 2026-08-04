@@ -34,7 +34,6 @@ pub mod native_launcher {
 }
 pub mod options;
 pub mod program;
-mod session;
 #[cfg(target_os = "linux")]
 #[path = "runtime/api.rs"]
 pub mod runtime;

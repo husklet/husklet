@@ -37,7 +37,7 @@ fn inputs(root: &Path) -> NativeInputs {
     visit(&root.join("cache"), &mut inputs, true);
     visit(&root.join("include"), &mut inputs, false);
     // cpu.h crosses the native boundary through this project-owned ABI header.
-    visit(Path::new("../../native/cpu/include"), &mut inputs, false);
+    visit(Path::new("../../schema/cpu/include"), &mut inputs, false);
     inputs.sources.sort();
     inputs.assembly.sort();
     inputs.dependencies.sort();
@@ -46,7 +46,7 @@ fn inputs(root: &Path) -> NativeInputs {
 }
 
 fn main() {
-    let root = Path::new("../../native/exec");
+    let root = Path::new("../../native/execution");
     let inputs = inputs(root);
     let mut build = cc::Build::new();
     build
@@ -69,7 +69,7 @@ fn main() {
     // Directory watches discover newly added compilation units and headers.
     for directory in [root.join("src"), root.join("cache"), root.join("include")]
         .into_iter()
-        .chain([PathBuf::from("../../native/cpu/include")])
+        .chain([PathBuf::from("../../schema/cpu/include")])
     {
         println!("cargo:rerun-if-changed={}", directory.display());
     }
