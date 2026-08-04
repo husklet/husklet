@@ -158,11 +158,7 @@ impl OwnedWorkspace {
         })
     }
 
-    pub(super) fn stage_working_directory(
-        &self,
-        filesystem_root: &Path,
-        guest: &Path,
-    ) -> Result<(), EngineError> {
+    pub(super) fn stage_working_directory(&self, filesystem_root: &Path, guest: &Path) -> Result<(), EngineError> {
         let relative = guest
             .strip_prefix(Path::new("/"))
             .map_err(|_| EngineError::WorkspaceFailed)?;

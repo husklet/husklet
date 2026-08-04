@@ -348,10 +348,11 @@ impl Coordinator {
         let table = descriptors.candidate().ok_or(RuntimeExecError::Failed)?;
         let loader = self.loader.prepare_resolved(process, &target.plan, &target.execfn)?;
         let image = loader.candidate().ok_or(RuntimeExecError::Failed)?;
-        image
-            .address_space
-            .space()
-            .publish_procfs_image(&image.loaded, target.execfn.clone(), target.plan.environment.clone());
+        image.address_space.space().publish_procfs_image(
+            &image.loaded,
+            target.execfn.clone(),
+            target.plan.environment.clone(),
+        );
         let auxiliary = super::image_data::AuxiliaryImage::encode(image.loaded.initial_stack());
         let auxiliary_slot = current.auxiliary_slot().map_err(|_| RuntimeExecError::Failed)?;
         let retire = current.prepare_exec_retire(thread)?;

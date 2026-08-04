@@ -60,16 +60,13 @@ impl ProcfsSpaces {
     }
 
     pub(super) fn publish(&self, process: hl_task::ProcessId, space: &Arc<AddressSpace>) {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(
-                process,
-                ProcfsSpace {
-                    live: Arc::downgrade(space),
-                    retired_stat: None,
-                },
-            );
+        self.0.lock().unwrap_or_else(|error| error.into_inner()).insert(
+            process,
+            ProcfsSpace {
+                live: Arc::downgrade(space),
+                retired_stat: None,
+            },
+        );
     }
 
     pub(super) fn capture_exit(self: &Arc<Self>, process: hl_task::ProcessId) -> Result<(), hl_runtime::ProcfsError> {
@@ -109,16 +106,16 @@ impl ProcfsSpaces {
 
 impl hl_runtime::RuntimeReapPort for ProcfsSpaces {
     fn remove(&self, process: hl_task::ProcessId) {
-        self.0.lock().unwrap_or_else(|error| error.into_inner()).remove(&process);
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&process);
     }
 }
 
 impl ProcfsMemory {
     pub(super) fn new(spaces: Arc<ProcfsSpaces>) -> Self {
-        Self {
-            spaces,
-            paths: None,
-        }
+        Self { spaces, paths: None }
     }
 
     pub(super) fn with_paths(mut self, paths: super::path::MappingPaths) -> Self {
@@ -146,15 +143,12 @@ impl hl_runtime::ProcfsMemoryPort for ProcfsMemory {
                 let (shared, device, inode, backing_identity) = match region.backing() {
                     hl_memory::Backing::Shared(_) => (true, 0, 0, None),
                     hl_memory::Backing::Anonymous { identity, shared } => (shared, 0, 0, Some(identity)),
-                    hl_memory::Backing::File { identity, shared } => {
-                        (shared, identity.device, identity.object, None)
-                    }
+                    hl_memory::Backing::File { identity, shared } => (shared, identity.device, identity.object, None),
                 };
                 let start = region.range().start().get();
                 let end = region.range().end().get();
-                let in_range = |range: Option<(u64, u64)>| {
-                    range.is_some_and(|(lower, upper)| start < upper && lower < end)
-                };
+                let in_range =
+                    |range: Option<(u64, u64)>| range.is_some_and(|(lower, upper)| start < upper && lower < end);
                 let label = if in_range(provenance.stack_guard) {
                     Some(hl_runtime::ProcfsMemoryRegionLabel::StackGuard)
                 } else if in_range(provenance.stack) {
@@ -164,15 +158,15 @@ impl hl_runtime::ProcfsMemoryPort for ProcfsMemory {
                 } else {
                     None
                 };
-                let path = self
-                    .paths
-                    .as_ref()
-                    .and_then(|paths| (inode != 0).then(|| paths.path((device, inode))).flatten())
-                    .or_else(|| {
-                        provenance.executable.as_ref().and_then(|(lower, upper, path)| {
-                            (start >= *lower && end <= *upper).then(|| path.clone())
-                        })
-                    });
+                let path =
+                    self.paths
+                        .as_ref()
+                        .and_then(|paths| (inode != 0).then(|| paths.path((device, inode))).flatten())
+                        .or_else(|| {
+                            provenance.executable.as_ref().and_then(|(lower, upper, path)| {
+                                (start >= *lower && end <= *upper).then(|| path.clone())
+                            })
+                        });
                 let pages = region.range().length().div_ceil(4096);
                 hl_runtime::ProcfsMemoryRegionView {
                     start,
@@ -213,7 +207,10 @@ impl hl_runtime::ProcfsStatPort for ProcfsMemory {
         let space = match hl_runtime::ProcfsMemoryPort::address_space(self, process) {
             Ok(space) => Some(space),
             Err(hl_runtime::ProcfsError::NotFound) => {
-                return self.spaces.retired_stat(process).ok_or(hl_runtime::ProcfsError::NotFound);
+                return self
+                    .spaces
+                    .retired_stat(process)
+                    .ok_or(hl_runtime::ProcfsError::NotFound);
             }
             Err(error) => return Err(error),
         };
@@ -279,12 +276,15 @@ impl hl_runtime::ProcfsStatPort for ProcfsMemory {
             child_guest_ticks: 0,
             data_start: writable.map_or(0, |region| region.start),
             data_end: writable.map_or(0, |region| region.end),
-            heap_start: space.as_ref().and_then(|space| {
-                space
-                    .regions
-                    .iter()
-                    .find(|region| region.label == Some(hl_runtime::ProcfsMemoryRegionLabel::Heap))
-            }).map_or(0, |region| region.start),
+            heap_start: space
+                .as_ref()
+                .and_then(|space| {
+                    space
+                        .regions
+                        .iter()
+                        .find(|region| region.label == Some(hl_runtime::ProcfsMemoryRegionLabel::Heap))
+                })
+                .map_or(0, |region| region.start),
             arguments_start: 0,
             arguments_end: 0,
             environment_start: 0,
@@ -429,10 +429,7 @@ mod tests {
         peer_memory
             .0
             .mappings()
-            .unmap(
-                hl_isa::AddressRange::nonempty(GuestAddress::new(PAGE as u64), PAGE as u64)
-                    .unwrap(),
-            )
+            .unmap(hl_isa::AddressRange::nonempty(GuestAddress::new(PAGE as u64), PAGE as u64).unwrap())
             .unwrap();
         spaces.capture_exit(peer).unwrap();
         let fork_exit = hl_runtime::ProcfsStatPort::sample(&provider, peer).unwrap();

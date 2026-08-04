@@ -22,11 +22,7 @@ pub(super) struct HostCounter;
 
 impl hl_execution::ArchitecturalCounter for HostCounter {
     fn read(&self) -> u64 {
-        crate::native::HostSyscalls::clock_ns(
-            &crate::ffi::LinuxHost,
-            crate::native::ClockKind::Monotonic,
-        )
-        .unwrap_or(0)
+        crate::native::HostSyscalls::clock_ns(&crate::ffi::LinuxHost, crate::native::ClockKind::Monotonic).unwrap_or(0)
     }
 }
 
@@ -44,7 +40,10 @@ pub(super) struct ClockIdentity {
 
 impl std::fmt::Debug for ClockIdentity {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ClockIdentity").field("resource", &self.resource).finish()
+        formatter
+            .debug_struct("ClockIdentity")
+            .field("resource", &self.resource)
+            .finish()
     }
 }
 
@@ -144,7 +143,11 @@ impl ClockIdentity {
     ) -> Self {
         let resource = hl_runtime::EventResourceKey::new(0x1000_0000_0000_0000 | u64::from(process.number()))
             .expect("process identities are nonzero");
-        Self { deadlines, resource, tasks }
+        Self {
+            deadlines,
+            resource,
+            tasks,
+        }
     }
 }
 
@@ -365,31 +368,23 @@ impl TaskSignalTimeSyscalls for TaskAdapter {
         match operation.name {
             "exit" | "exit_group" | "getpid" | "gettid" | "getppid" | "futex" | "getuid" | "geteuid" | "getgid"
             | "getegid" | "getresuid" | "getresgid" | "getgroups" | "setgroups" | "setuid" | "setgid" | "setreuid"
-            | "setregid" | "setresuid" | "setresgid" | "setfsuid" | "setfsgid" | "getpgid" | "getpgrp" | "getsid" | "setpgid"
-            | "setsid" | "set_tid_address" | "set_robust_list" | "get_robust_list" | "wait4" | "waitid" | "getrlimit"
-            | "setrlimit" | "prlimit64" | "prctl" | "personality" | "fanotify_init" | "fanotify_mark" | "execve"
-            | "execveat"
-            | "bpf" | "userfaultfd" | "io_uring_setup" | "io_uring_enter" | "io_uring_register" | "ptrace"
-            | "umask" => {
-                self.process.handle(operation, arguments)
-            }
+            | "setregid" | "setresuid" | "setresgid" | "setfsuid" | "setfsgid" | "getpgid" | "getpgrp" | "getsid"
+            | "setpgid" | "setsid" | "set_tid_address" | "set_robust_list" | "get_robust_list" | "wait4" | "waitid"
+            | "getrlimit" | "setrlimit" | "prlimit64" | "prctl" | "personality" | "fanotify_init" | "fanotify_mark"
+            | "execve" | "execveat" | "bpf" | "userfaultfd" | "io_uring_setup" | "io_uring_enter"
+            | "io_uring_register" | "ptrace" | "umask" => self.process.handle(operation, arguments),
             "unshare" | "setns" => self.process.handle(operation, arguments),
             "capget" | "capset" | "pidfd_open" | "pidfd_getfd" | "pidfd_send_signal" => {
                 self.process.handle(operation, arguments)
             }
             "kill" | "tkill" | "tgkill" | "rt_sigaction" | "rt_sigprocmask" | "rt_sigpending" | "rt_sigqueueinfo"
-            | "rt_tgsigqueueinfo"
-            | "rt_sigreturn" | "sigaltstack" => {
-                self.process.handle(operation, arguments)
-            }
+            | "rt_tgsigqueueinfo" | "rt_sigreturn" | "sigaltstack" => self.process.handle(operation, arguments),
             name if Self::signal_wait(name) => self.process.handle(operation, arguments),
-            "alarm" | "nanosleep" | "clock_nanosleep" | "getitimer" | "setitimer" | "timer_create" | "timer_settime"
-            | "timer_gettime" | "timer_getoverrun" | "timer_delete" | "uname" | "sysinfo" | "sethostname"
-            | "setdomainname" => self.process.handle(operation, arguments),
-            "clock_gettime" | "clock_getres" | "clock_settime" | "clock_adjtime" | "adjtimex" | "gettimeofday" | "time"
-            | "getrusage" | "times" => {
-                self.process.handle(operation, arguments)
-            }
+            "alarm" | "nanosleep" | "clock_nanosleep" | "getitimer" | "setitimer" | "timer_create"
+            | "timer_settime" | "timer_gettime" | "timer_getoverrun" | "timer_delete" | "uname" | "sysinfo"
+            | "sethostname" | "setdomainname" => self.process.handle(operation, arguments),
+            "clock_gettime" | "clock_getres" | "clock_settime" | "clock_adjtime" | "adjtimex" | "gettimeofday"
+            | "time" | "getrusage" | "times" => self.process.handle(operation, arguments),
             "sched_setparam"
             | "sched_setscheduler"
             | "sched_getscheduler"

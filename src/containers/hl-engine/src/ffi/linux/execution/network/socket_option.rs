@@ -286,16 +286,25 @@ mod tests {
     fn filter_drops_and_accepts_datagrams() {
         let mut descriptors = [-1_i32; 2];
         // SAFETY: descriptors points to two writable integers.
-        assert_eq!(unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, descriptors.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, descriptors.as_mut_ptr()) },
+            0
+        );
         set(descriptors[1], 1, 26, returning(0)).unwrap();
         assert_eq!(unsafe { libc::send(descriptors[0], c"drop".as_ptr().cast(), 4, 0) }, 4);
         let mut byte = 0_u8;
-        assert_eq!(unsafe { libc::recv(descriptors[1], (&raw mut byte).cast(), 1, libc::MSG_DONTWAIT) }, -1);
+        assert_eq!(
+            unsafe { libc::recv(descriptors[1], (&raw mut byte).cast(), 1, libc::MSG_DONTWAIT) },
+            -1
+        );
         assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EAGAIN));
         set(descriptors[1], 1, 26, returning(u32::MAX)).unwrap();
         assert_eq!(unsafe { libc::send(descriptors[0], c"pass".as_ptr().cast(), 4, 0) }, 4);
         let mut bytes = [0_u8; 4];
-        assert_eq!(unsafe { libc::recv(descriptors[1], bytes.as_mut_ptr().cast(), bytes.len(), 0) }, 4);
+        assert_eq!(
+            unsafe { libc::recv(descriptors[1], bytes.as_mut_ptr().cast(), bytes.len(), 0) },
+            4
+        );
         assert_eq!(&bytes, b"pass");
         for descriptor in descriptors {
             assert_eq!(unsafe { libc::close(descriptor) }, 0);

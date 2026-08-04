@@ -74,7 +74,13 @@ impl RuntimeNetworkHost for Native {
         }
         let token = self.insert(descriptor)?;
         if protocol == libc::IPPROTO_ICMP {
-            if let Some(entry) = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner()).get_mut(&token) {
+            if let Some(entry) = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_mut(&token)
+            {
                 entry.icmp = true;
             }
         }
@@ -93,7 +99,10 @@ impl RuntimeNetworkHost for Native {
                 if *port != 0 && bindings.iter().any(|(guest, _)| guest == &address) {
                     return Err(RuntimeNetworkError::AddressInUse);
                 }
-                SocketAddress::Inet4 { address: [127, 0, 0, 1], port: 0 }
+                SocketAddress::Inet4 {
+                    address: [127, 0, 0, 1],
+                    port: 0,
+                }
             }
             _ => address.clone(),
         };
@@ -105,12 +114,16 @@ impl RuntimeNetworkHost for Native {
         let actual = self.address_of(token, false)?;
         if projected != address {
             let guest = match (&address, &actual) {
-                (SocketAddress::Inet4 { address, port: requested }, SocketAddress::Inet4 { port: actual, .. }) => {
+                (
                     SocketAddress::Inet4 {
-                        address: *address,
-                        port: if *requested == 0 { *actual } else { *requested },
-                    }
-                }
+                        address,
+                        port: requested,
+                    },
+                    SocketAddress::Inet4 { port: actual, .. },
+                ) => SocketAddress::Inet4 {
+                    address: *address,
+                    port: if *requested == 0 { *actual } else { *requested },
+                },
                 _ => return Err(RuntimeNetworkError::Failed),
             };
             if matches!(address, SocketAddress::Inet4 { port, .. } if port != 0) {
@@ -120,7 +133,13 @@ impl RuntimeNetworkHost for Native {
                     .unwrap_or_else(|error| error.into_inner())
                     .push((address.clone(), actual));
             }
-            if let Some(entry) = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner()).get_mut(&token) {
+            if let Some(entry) = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_mut(&token)
+            {
                 entry.guest_local = Some(guest.clone());
             }
             return Ok(guest);
@@ -209,11 +228,8 @@ impl RuntimeNetworkHost for Native {
             let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.resolver = true;
             if let Some(response) = super::resolver::response(input) {
-                if !super::resolver::queue_available(
-                    entry.resolver_packets.len(),
-                    entry.resolver_bytes,
-                    response.len(),
-                ) {
+                if !super::resolver::queue_available(entry.resolver_packets.len(), entry.resolver_bytes, response.len())
+                {
                     return Err(RuntimeNetworkError::WouldBlock);
                 }
                 entry.resolver_bytes += response.len();
@@ -253,15 +269,25 @@ impl RuntimeNetworkHost for Native {
         {
             let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.icmp) {
-                let packet = if peek { entry.icmp_packets.front().cloned() } else { entry.icmp_packets.pop_front() };
-                let Some((packet, source)) = packet else { return Err(RuntimeNetworkError::WouldBlock) };
+                let packet = if peek {
+                    entry.icmp_packets.front().cloned()
+                } else {
+                    entry.icmp_packets.pop_front()
+                };
+                let Some((packet, source)) = packet else {
+                    return Err(RuntimeNetworkError::WouldBlock);
+                };
                 if !peek {
                     entry.icmp_bytes = entry.icmp_bytes.saturating_sub(packet.len());
                 }
                 let full_length = packet.len();
                 let count = output.len().min(full_length);
                 output[..count].copy_from_slice(&packet[..count]);
-                return Ok(ReceivedDatagram { count, full_length, source });
+                return Ok(ReceivedDatagram {
+                    count,
+                    full_length,
+                    source,
+                });
             }
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.resolver) {
                 let packet = if peek {
@@ -281,7 +307,10 @@ impl RuntimeNetworkHost for Native {
                 return Ok(ReceivedDatagram {
                     count,
                     full_length,
-                    source: SocketAddress::Inet4 { address: [127, 0, 0, 11], port: 53 },
+                    source: SocketAddress::Inet4 {
+                        address: [127, 0, 0, 11],
+                        port: 53,
+                    },
                 });
             }
         }
@@ -316,7 +345,11 @@ impl RuntimeNetworkHost for Native {
         let descriptor = self.descriptor(token)?;
         // SAFETY: input remains readable and the table retains the descriptor.
         let result = unsafe { libc::send(descriptor, input.as_ptr().cast(), input.len(), libc::MSG_OOB) };
-        if result >= 0 { Ok(result as usize) } else { Err(Self::runtime_error()) }
+        if result >= 0 {
+            Ok(result as usize)
+        } else {
+            Err(Self::runtime_error())
+        }
     }
 
     fn receive_urgent(&self, token: u64, output: &mut [u8], peek: bool) -> Result<usize, RuntimeNetworkError> {
@@ -325,7 +358,11 @@ impl RuntimeNetworkHost for Native {
         let flags = libc::MSG_OOB | if peek { libc::MSG_PEEK } else { 0 };
         let result = unsafe { libc::recv(descriptor, output.as_mut_ptr().cast(), output.len(), flags) };
         self.arm_read(token);
-        if result >= 0 { Ok(result as usize) } else { Err(Self::runtime_error()) }
+        if result >= 0 {
+            Ok(result as usize)
+        } else {
+            Err(Self::runtime_error())
+        }
     }
 
     fn at_urgent_mark(&self, token: u64) -> Result<bool, RuntimeNetworkError> {

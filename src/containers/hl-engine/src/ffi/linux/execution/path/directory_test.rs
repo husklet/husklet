@@ -21,7 +21,13 @@ fn open_wait_classification() {
     ));
     std::fs::create_dir(&path).unwrap();
     std::fs::write(path.join("regular"), b"").unwrap();
-    assert!(std::process::Command::new("mkfifo").arg(path.join("fifo")).status().unwrap().success());
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(path.join("fifo"))
+            .status()
+            .unwrap()
+            .success()
+    );
     let bytes = path.as_os_str().as_encoded_bytes();
     let host = NativePath::new(bytes, watch::Hub::new(bytes).unwrap()).unwrap();
     let base = host.root_base().unwrap();
@@ -40,25 +46,50 @@ fn open_wait_classification() {
         resolve: ResolveFlags::default(),
     };
 
-    assert!(!host.open_may_block(&base, &plan(b"/regular", OpenIntent::READ, false)).unwrap());
-    assert!(!host.open_may_block(&base, &plan(b"/missing", OpenIntent::READ, false)).unwrap_or(false));
-    assert!(host.open_may_block(&base, &plan(b"/fifo", OpenIntent::READ, false)).unwrap());
-    assert!(host.open_may_block(&base, &plan(b"/fifo", OpenIntent::WRITE, false)).unwrap());
-    assert!(!host.open_may_block(&base, &plan(b"/fifo", OpenIntent::READ, true)).unwrap());
-    assert!(!host
-        .open_may_block(
-            &base,
-            &plan(b"/fifo", OpenIntent::READ | OpenIntent::WRITE, false),
-        )
-        .unwrap());
-    assert!(!host
-        .open_may_block(&base, &plan(b"/proc/self/stat", OpenIntent::READ, false))
-        .unwrap_or(false));
+    assert!(
+        !host
+            .open_may_block(&base, &plan(b"/regular", OpenIntent::READ, false))
+            .unwrap()
+    );
+    assert!(
+        !host
+            .open_may_block(&base, &plan(b"/missing", OpenIntent::READ, false))
+            .unwrap_or(false)
+    );
+    assert!(
+        host.open_may_block(&base, &plan(b"/fifo", OpenIntent::READ, false))
+            .unwrap()
+    );
+    assert!(
+        host.open_may_block(&base, &plan(b"/fifo", OpenIntent::WRITE, false))
+            .unwrap()
+    );
+    assert!(
+        !host
+            .open_may_block(&base, &plan(b"/fifo", OpenIntent::READ, true))
+            .unwrap()
+    );
+    assert!(
+        !host
+            .open_may_block(&base, &plan(b"/fifo", OpenIntent::READ | OpenIntent::WRITE, false),)
+            .unwrap()
+    );
+    assert!(
+        !host
+            .open_may_block(&base, &plan(b"/proc/self/stat", OpenIntent::READ, false))
+            .unwrap_or(false)
+    );
 
     let swap = plan(b"/regular", OpenIntent::READ, false);
     let mut prepared = host.prepare_open(&base, &swap).unwrap();
     std::fs::remove_file(path.join("regular")).unwrap();
-    assert!(std::process::Command::new("mkfifo").arg(path.join("regular")).status().unwrap().success());
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(path.join("regular"))
+            .status()
+            .unwrap()
+            .success()
+    );
     assert_eq!(prepared.commit(), Err(hl_runtime::RuntimePathError::WouldBlock));
     assert!(host.open_may_block(&base, &swap).unwrap());
 
@@ -70,12 +101,14 @@ fn open_wait_classification() {
     prepared.commit().unwrap();
 
     let projected = NativePath::projected(b"/workspace", watch::Hub::projected(b"/workspace").unwrap()).unwrap();
-    assert!(projected
-        .open_may_block(
-            &projected.root_base().unwrap(),
-            &plan(b"/provider", OpenIntent::READ, false),
-        )
-        .unwrap());
+    assert!(
+        projected
+            .open_may_block(
+                &projected.root_base().unwrap(),
+                &plan(b"/provider", OpenIntent::READ, false),
+            )
+            .unwrap()
+    );
     drop(host);
     std::fs::remove_dir_all(path).unwrap();
 }

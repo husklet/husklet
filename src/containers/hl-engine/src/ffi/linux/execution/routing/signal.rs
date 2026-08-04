@@ -92,8 +92,8 @@ impl hl_runtime::AsyncSignalPort for AsyncSignal {
         let Some(delivery) = source.delivery() else {
             return Ok(());
         };
-        let signal = hl_task::SignalNumber::new(if delivery.signal == 0 { 29 } else { delivery.signal })
-            .map_err(|_| ())?;
+        let signal =
+            hl_task::SignalNumber::new(if delivery.signal == 0 { 29 } else { delivery.signal }).map_err(|_| ())?;
         let snapshot = self.tasks.snapshot();
         let targets = match delivery.owner {
             hl_descriptor::SignalOwner::Process(0)

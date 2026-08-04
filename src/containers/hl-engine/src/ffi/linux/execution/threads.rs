@@ -75,25 +75,55 @@ pub(super) struct PreparedImage {
 }
 
 impl ThreadSet {
-    pub(super) fn stage_fork(&self, plan: &ForkProcessPlan, snapshot: ExecutionSnapshot) -> Result<ThreadStage, RuntimeThreadError> {
+    pub(super) fn stage_fork(
+        &self,
+        plan: &ForkProcessPlan,
+        snapshot: ExecutionSnapshot,
+    ) -> Result<ThreadStage, RuntimeThreadError> {
         self.stage_inner(plan.thread(), snapshot, false)
     }
 
-    fn stage_inner(&self, thread: ThreadId, snapshot: ExecutionSnapshot, register: bool) -> Result<ThreadStage, RuntimeThreadError> {
+    fn stage_inner(
+        &self,
+        thread: ThreadId,
+        snapshot: ExecutionSnapshot,
+        register: bool,
+    ) -> Result<ThreadStage, RuntimeThreadError> {
         let machine = Arc::new(self.machine(snapshot)?);
         let interrupt = Arc::new(crate::native::InterruptToken::create().map_err(|()| RuntimeThreadError::Invalid)?);
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
-        if state.machines.contains_key(&thread) { return Err(RuntimeThreadError::Duplicate); }
-        if !state.prepared.contains_key(&thread) { return Err(RuntimeThreadError::Missing); }
+        if state.machines.contains_key(&thread) {
+            return Err(RuntimeThreadError::Duplicate);
+        }
+        if !state.prepared.contains_key(&thread) {
+            return Err(RuntimeThreadError::Missing);
+        }
         let generation = Self::generation(&mut state)?;
         if register && let Some(tasks) = &self.tasks {
             let sink: Arc<dyn hl_task::InterruptSink> = interrupt.clone();
-            tasks.register_interrupt(thread, sink).map_err(|_| RuntimeThreadError::Invalid)?;
+            tasks
+                .register_interrupt(thread, sink)
+                .map_err(|_| RuntimeThreadError::Invalid)?;
         }
         let prepared = state.prepared.remove(&thread).expect("validated prepared thread");
-        let run = ThreadRun { thread, process: prepared.process, generation, machine, router: prepared.router, cancellation: prepared.cancellation, space: prepared.space, interrupt };
+        let run = ThreadRun {
+            thread,
+            process: prepared.process,
+            generation,
+            machine,
+            router: prepared.router,
+            cancellation: prepared.cancellation,
+            space: prepared.space,
+            interrupt,
+        };
         state.reserved += 1;
-        Ok(ThreadStage { state: Arc::clone(&self.state), tasks: self.tasks.clone(), thread, run: Some(run), registered: register && self.tasks.is_some() })
+        Ok(ThreadStage {
+            state: Arc::clone(&self.state),
+            tasks: self.tasks.clone(),
+            thread,
+            run: Some(run),
+            registered: register && self.tasks.is_some(),
+        })
     }
 
     fn copy_run(run: &ThreadRun) -> ThreadRun {
@@ -118,9 +148,11 @@ impl ThreadSet {
     }
 
     pub(super) fn acknowledge_interrupt(&self, thread: ThreadId) -> Result<bool, RuntimeThreadError> {
-        self.tasks
-            .as_ref()
-            .map_or(Ok(false), |tasks| tasks.acknowledge_interrupt(thread).map_err(|_| RuntimeThreadError::Invalid))
+        self.tasks.as_ref().map_or(Ok(false), |tasks| {
+            tasks
+                .acknowledge_interrupt(thread)
+                .map_err(|_| RuntimeThreadError::Invalid)
+        })
     }
 
     pub(super) fn charge_cpu(&self, process: ProcessId, nanoseconds: u64) {
@@ -214,10 +246,7 @@ impl ThreadSet {
         })
     }
 
-    pub(super) fn with_tasks(
-        capacity: usize,
-        tasks: Arc<hl_task::TaskRegistry>,
-    ) -> Result<Self, RuntimeThreadError> {
+    pub(super) fn with_tasks(capacity: usize, tasks: Arc<hl_task::TaskRegistry>) -> Result<Self, RuntimeThreadError> {
         let mut threads = Self::new(capacity)?;
         threads.tasks = Some(tasks);
         Ok(threads)
@@ -307,8 +336,9 @@ impl ThreadSet {
     pub(super) fn claim(&self, thread: ThreadId, generation: u64) -> Result<ThreadRun, RuntimeThreadError> {
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
         let run = state.machines.get(&thread).ok_or(RuntimeThreadError::Missing)?;
-        if run.generation != generation || state.parked.contains(&thread) ||
-            state.ownership.get(&thread) != Some(&RunOwnership::Ready)
+        if run.generation != generation
+            || state.parked.contains(&thread)
+            || state.ownership.get(&thread) != Some(&RunOwnership::Ready)
         {
             return Err(RuntimeThreadError::Missing);
         }
@@ -334,7 +364,9 @@ impl ThreadSet {
                 state.syscall_parked.remove(&run.thread);
                 state.gated.remove(&run.thread);
                 drop(state);
-                if let Some(tasks) = &self.tasks { tasks.unregister_interrupt(run.thread); }
+                if let Some(tasks) = &self.tasks {
+                    tasks.unregister_interrupt(run.thread);
+                }
             }
             _ => return Err(RuntimeThreadError::Missing),
         }
@@ -366,14 +398,17 @@ impl ThreadSet {
         state.syscall_parked.remove(&run.thread);
         state.gated.remove(&run.thread);
         drop(state);
-        if let Some(tasks) = &self.tasks { tasks.unregister_interrupt(run.thread); }
+        if let Some(tasks) = &self.tasks {
+            tasks.unregister_interrupt(run.thread);
+        }
         Ok(())
     }
 
     pub(super) fn park(&self, thread: ThreadId) -> Result<(), RuntimeThreadError> {
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
-        if !state.machines.contains_key(&thread) || state.ownership.get(&thread) != Some(&RunOwnership::Running) ||
-            !state.parked.insert(thread)
+        if !state.machines.contains_key(&thread)
+            || state.ownership.get(&thread) != Some(&RunOwnership::Running)
+            || !state.parked.insert(thread)
         {
             return Err(RuntimeThreadError::Missing);
         }
@@ -383,8 +418,9 @@ impl ThreadSet {
 
     pub(super) fn resume(&self, thread: ThreadId) -> Result<(), RuntimeThreadError> {
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
-        if !state.machines.contains_key(&thread) || state.ownership.get(&thread) != Some(&RunOwnership::Ready) ||
-            !state.parked.remove(&thread)
+        if !state.machines.contains_key(&thread)
+            || state.ownership.get(&thread) != Some(&RunOwnership::Ready)
+            || !state.parked.remove(&thread)
         {
             return Err(RuntimeThreadError::Missing);
         }
@@ -401,8 +437,10 @@ impl ThreadSet {
     pub(super) fn resume_run(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
-        if current.process != run.process || current.generation != run.generation ||
-            state.ownership.get(&run.thread) != Some(&RunOwnership::Waiter) || !state.parked.remove(&run.thread)
+        if current.process != run.process
+            || current.generation != run.generation
+            || state.ownership.get(&run.thread) != Some(&RunOwnership::Waiter)
+            || !state.parked.remove(&run.thread)
         {
             return Err(RuntimeThreadError::Missing);
         }
@@ -671,10 +709,12 @@ impl ThreadSet {
     pub(super) fn terminate_group(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
-        if current.process != run.process || current.generation != run.generation
+        if current.process != run.process
+            || current.generation != run.generation
             || state.ownership.get(&run.thread) != Some(&RunOwnership::Running)
             || state.machines.values().any(|candidate| {
-                candidate.process == run.process && candidate.thread != run.thread
+                candidate.process == run.process
+                    && candidate.thread != run.thread
                     && state.ownership.get(&candidate.thread) == Some(&RunOwnership::Running)
             })
         {
@@ -704,7 +744,9 @@ impl ThreadSet {
         // dropped so Pool::stop can join them after schedule returns.
         for run in retired {
             run.cancellation.request(9);
-            if let Some(tasks) = &self.tasks { tasks.unregister_interrupt(run.thread); }
+            if let Some(tasks) = &self.tasks {
+                tasks.unregister_interrupt(run.thread);
+            }
         }
         Ok(())
     }
@@ -730,7 +772,8 @@ impl PreparedImage {
         }
         let process = current.process;
         if state.machines.values().any(|run| {
-            run.process == process && run.thread != self.caller
+            run.process == process
+                && run.thread != self.caller
                 && state.ownership.get(&run.thread) == Some(&RunOwnership::Running)
         }) {
             return Err(RuntimeThreadError::Invalid);
@@ -799,7 +842,8 @@ impl RuntimeThreadPort for ThreadSet {
         thread: ThreadId,
         snapshot: ExecutionSnapshot,
     ) -> Result<Box<dyn PreparedThread>, RuntimeThreadError> {
-        self.stage_inner(thread, snapshot, true).map(|staged| Box::new(staged) as Box<dyn PreparedThread>)
+        self.stage_inner(thread, snapshot, true)
+            .map(|staged| Box::new(staged) as Box<dyn PreparedThread>)
     }
 
     fn terminate(&self, thread: ThreadId) -> Result<(), RuntimeThreadError> {
@@ -823,7 +867,9 @@ impl RuntimeThreadPort for ThreadSet {
         drop(state);
         if let Ok(run) = &removed {
             run.cancellation.request(9);
-            if let Some(tasks) = &self.tasks { tasks.unregister_interrupt(thread); }
+            if let Some(tasks) = &self.tasks {
+                tasks.unregister_interrupt(thread);
+            }
         }
         removed.map(|_| ())
     }
@@ -853,8 +899,11 @@ impl ThreadStage {
             return Err(RuntimeThreadError::Invalid);
         }
         let tasks = self.tasks.as_ref().ok_or(RuntimeThreadError::Missing)?;
-        let interrupt: Arc<dyn hl_task::InterruptSink> = self.run.as_ref().ok_or(RuntimeThreadError::Missing)?.interrupt.clone();
-        tasks.commit_fork_interrupt(plan, interrupt).map_err(|_| RuntimeThreadError::Invalid)?;
+        let interrupt: Arc<dyn hl_task::InterruptSink> =
+            self.run.as_ref().ok_or(RuntimeThreadError::Missing)?.interrupt.clone();
+        tasks
+            .commit_fork_interrupt(plan, interrupt)
+            .map_err(|_| RuntimeThreadError::Invalid)?;
         self.registered = true;
         Ok(())
     }
@@ -863,7 +912,9 @@ impl ThreadStage {
 impl Drop for ThreadStage {
     fn drop(&mut self) {
         if self.registered {
-            if let Some(tasks) = &self.tasks { tasks.unregister_interrupt(self.thread); }
+            if let Some(tasks) = &self.tasks {
+                tasks.unregister_interrupt(self.thread);
+            }
             self.registered = false;
         }
         let Some(run) = self.run.take() else { return };

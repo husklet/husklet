@@ -82,10 +82,10 @@ impl CheckpointRuntime {
     }
 
     pub(in crate::ffi::linux::execution) fn socket_ioctl(&self) -> Arc<hl_runtime::SocketIoctl<Native>> {
-        Arc::new(hl_runtime::SocketIoctl::new(
-            Arc::clone(&self.host),
-            Arc::clone(&self.sockets),
-        ).with_policy(self.policy.clone()))
+        Arc::new(
+            hl_runtime::SocketIoctl::new(Arc::clone(&self.host), Arc::clone(&self.sockets))
+                .with_policy(self.policy.clone()),
+        )
     }
 
     pub(super) fn transfer(&self) -> Arc<NativeTransfer> {
@@ -163,21 +163,44 @@ impl hl_runtime::ProcfsNetworkPort for CheckpointRuntime {
         let view = self.catalog.current().namespace_view();
         hl_runtime::ProcfsNetworkView {
             generation: view.generation,
-            internet: view.internet.into_iter().map(|socket| {
-                let (ipv6, local, local_port) = match socket.local {
-                    Some(hl_network::SocketAddress::Inet4 { address, port }) => {
-                        let mut bytes = [0; 16]; bytes[..4].copy_from_slice(&address); (false, bytes, port)
+            internet: view
+                .internet
+                .into_iter()
+                .map(|socket| {
+                    let (ipv6, local, local_port) = match socket.local {
+                        Some(hl_network::SocketAddress::Inet4 { address, port }) => {
+                            let mut bytes = [0; 16];
+                            bytes[..4].copy_from_slice(&address);
+                            (false, bytes, port)
+                        }
+                        Some(hl_network::SocketAddress::Inet6 { address, port, .. }) => (true, address, port),
+                        _ => (socket.family == AddressFamily::Inet6, [0; 16], 0),
+                    };
+                    let (remote, remote_port) = match socket.peer {
+                        Some(hl_network::SocketAddress::Inet4 { address, port }) => {
+                            let mut bytes = [0; 16];
+                            bytes[..4].copy_from_slice(&address);
+                            (bytes, port)
+                        }
+                        Some(hl_network::SocketAddress::Inet6 { address, port, .. }) => (address, port),
+                        _ => ([0; 16], 0),
+                    };
+                    hl_runtime::ProcfsInternetSocketView {
+                        ipv6,
+                        udp: socket.socket_type == SocketType::Datagram,
+                        local,
+                        local_port,
+                        remote,
+                        remote_port,
+                        state: match socket.state {
+                            SocketState::Listening { .. } => 0x0a,
+                            SocketState::Connected => 1,
+                            _ => 7,
+                        },
+                        inode: socket.inode,
                     }
-                    Some(hl_network::SocketAddress::Inet6 { address, port, .. }) => (true, address, port),
-                    _ => (socket.family == AddressFamily::Inet6, [0; 16], 0),
-                };
-                let (remote, remote_port) = match socket.peer {
-                    Some(hl_network::SocketAddress::Inet4 { address, port }) => { let mut bytes = [0; 16]; bytes[..4].copy_from_slice(&address); (bytes, port) }
-                    Some(hl_network::SocketAddress::Inet6 { address, port, .. }) => (address, port),
-                    _ => ([0; 16], 0),
-                };
-                hl_runtime::ProcfsInternetSocketView { ipv6, udp: socket.socket_type == SocketType::Datagram, local, local_port, remote, remote_port, state: match socket.state { SocketState::Listening { .. } => 0x0a, SocketState::Connected => 1, _ => 7 }, inode: socket.inode }
-            }).collect(),
+                })
+                .collect(),
             interfaces: std::iter::once(hl_runtime::ProcfsNetworkInterfaceView {
                 name: b"lo".to_vec(),
                 index: 1,

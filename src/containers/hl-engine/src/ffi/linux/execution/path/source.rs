@@ -290,9 +290,7 @@ impl OrdinaryContext {
             return Ok(false);
         };
         let name = CString::new(name.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
-        let parent = resolved
-            .duplicate_parent()
-            .map_err(|_| RuntimePathError::Invalid)?;
+        let parent = resolved.duplicate_parent().map_err(|_| RuntimePathError::Invalid)?;
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: the duplicated parent is live, the name is terminated,
         // and fstatat initializes status on success without retaining pointers.

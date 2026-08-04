@@ -30,9 +30,9 @@ mod entries;
 mod error;
 #[path = "path/executable.rs"]
 mod executable;
+mod fifo;
 #[path = "path/file.rs"]
 mod file;
-mod fifo;
 #[path = "path/filesystem.rs"]
 mod filesystem;
 #[path = "path/lease.rs"]
@@ -136,10 +136,7 @@ impl NativePath {
         Some((session.number(), leader))
     }
 
-    fn synthetic_plan(
-        base: &DirectoryBaseLease,
-        plan: &OpenAbiPlan,
-    ) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
+    fn synthetic_plan(base: &DirectoryBaseLease, plan: &OpenAbiPlan) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
         if plan.operand.path.is_absolute() {
             return Ok(None);
         }
@@ -305,11 +302,7 @@ impl NativePath {
         Arc::clone(&self.terminal_bindings)
     }
 
-    fn publish_synthetic(
-        &self,
-        plan: &OpenAbiPlan,
-        opened: &dyn PreparedPathOpen,
-    ) -> Result<(), RuntimePathError> {
+    fn publish_synthetic(&self, plan: &OpenAbiPlan, opened: &dyn PreparedPathOpen) -> Result<(), RuntimePathError> {
         let Ok(metadata) = opened.object().metadata() else {
             return Ok(());
         };
@@ -460,7 +453,9 @@ impl RuntimePathHost for NativePath {
         base: &DirectoryBaseLease,
         operand: &PathOperand,
     ) -> Result<Box<dyn ResolvedPathLease>, RuntimePathError> {
-        if !base.confines_root() && let Some(node) = self.procfs_node(operand.path.as_bytes())? {
+        if !base.confines_root()
+            && let Some(node) = self.procfs_node(operand.path.as_bytes())?
+        {
             if !operand.nofollow && self.procfs_namespace(operand.path.as_bytes())? {
                 return Ok(Box::new(node.follow_namespace()));
             }
@@ -501,32 +496,42 @@ impl RuntimePathHost for NativePath {
         base: &DirectoryBaseLease,
         plan: &OpenAbiPlan,
     ) -> Result<Box<dyn PreparedPathOpen>, RuntimePathError> {
-        let redirected = if base.confines_root() { None } else { self.procfs_plan(plan)? };
+        let redirected = if base.confines_root() {
+            None
+        } else {
+            self.procfs_plan(plan)?
+        };
         let plan = redirected.as_ref().unwrap_or(plan);
         resolution::Policy::from(plan.resolve).admit()?;
-        if !base.confines_root() && let Some(opened) = device::TerminalOpen::prepare(
-            plan.operand.path.as_bytes(),
-            plan.intent,
-            plan.nonblocking,
-            &self.terminals,
-            &self.terminal_bindings,
-            &self.terminal_signals,
-            self.terminal_session(),
-            plan.no_controlling_terminal,
-        )? {
+        if !base.confines_root()
+            && let Some(opened) = device::TerminalOpen::prepare(
+                plan.operand.path.as_bytes(),
+                plan.intent,
+                plan.nonblocking,
+                &self.terminals,
+                &self.terminal_bindings,
+                &self.terminal_signals,
+                self.terminal_session(),
+                plan.no_controlling_terminal,
+            )?
+        {
             self.publish_synthetic(plan, opened.as_ref())?;
             return Ok(opened);
         }
         let synthetic_plan = Self::synthetic_plan(base, plan)?;
         let synthetic_plan = synthetic_plan.as_ref().unwrap_or(plan);
-        if !base.confines_root() && let Some(opened) = self.synthetic_open(synthetic_plan)? {
+        if !base.confines_root()
+            && let Some(opened) = self.synthetic_open(synthetic_plan)?
+        {
             self.publish_synthetic(synthetic_plan, opened.as_ref())?;
             return Ok(opened);
         }
         if let Some(context) = self.source.projected_context() {
             return projected::Open::prepare(context, base, plan, self.projected.clone());
         }
-        if !base.confines_root() && let Some(opened) = self.builtin(plan)? {
+        if !base.confines_root()
+            && let Some(opened) = self.builtin(plan)?
+        {
             self.publish_synthetic(plan, opened.as_ref())?;
             return Ok(opened);
         }
@@ -636,11 +641,7 @@ impl RuntimePathHost for NativePath {
         )))
     }
 
-    fn open_may_block(
-        &self,
-        base: &DirectoryBaseLease,
-        plan: &OpenAbiPlan,
-    ) -> Result<bool, RuntimePathError> {
+    fn open_may_block(&self, base: &DirectoryBaseLease, plan: &OpenAbiPlan) -> Result<bool, RuntimePathError> {
         let bits = plan.intent.bits();
         if plan.nonblocking || bits & OpenIntent::READ != 0 && bits & OpenIntent::WRITE != 0 {
             return Ok(false);

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use hl_execution::{Aarch64CpuState, EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionSnapshot};
-use hl_runtime::{RouterDependencies, RuntimeSyscallRouter, RuntimeSyscallTrap};
 use hl_runtime::{PreparedThread, RuntimeThreadError, RuntimeThreadPort};
+use hl_runtime::{RouterDependencies, RuntimeSyscallRouter, RuntimeSyscallTrap};
 use hl_task::{ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry};
 
 use super::threads::ThreadSet;
@@ -52,7 +52,9 @@ fn context() -> (
     context_with_trace(true)
 }
 
-fn context_with_trace(trace: bool) -> (
+fn context_with_trace(
+    trace: bool,
+) -> (
     std::sync::Arc<RuntimeSyscallRouter>,
     std::sync::Arc<super::readiness::Cancellation>,
 ) {
@@ -72,7 +74,10 @@ fn context_with_trace(trace: bool) -> (
     };
     let router = RuntimeSyscallRouter::new(dependencies);
     let router = if trace { router.with_trace(4) } else { router };
-    (std::sync::Arc::new(router), std::sync::Arc::new(super::readiness::Cancellation::new().unwrap()))
+    (
+        std::sync::Arc::new(router),
+        std::sync::Arc::new(super::readiness::Cancellation::new().unwrap()),
+    )
 }
 
 fn space() -> std::sync::Arc<super::space::AddressSpace> {
@@ -140,7 +145,9 @@ fn snapshot(pc: u64) -> ExecutionSnapshot {
 
 fn syscall_snapshot(pc: u64, number: u64) -> ExecutionSnapshot {
     let mut snapshot = snapshot(pc);
-    let ExecutionCpuSnapshot::Aarch64(cpu) = &mut snapshot.cpu else { unreachable!() };
+    let ExecutionCpuSnapshot::Aarch64(cpu) = &mut snapshot.cpu else {
+        unreachable!()
+    };
     cpu.registers[8] = number;
     snapshot
 }
@@ -711,8 +718,14 @@ fn run_ownership_transfers_once_and_rejects_stale_claims() {
 
     let running = threads.next().unwrap();
     assert_eq!(running.thread, first);
-    assert!(matches!(threads.claim(first, running.generation), Err(RuntimeThreadError::Missing)));
-    assert!(matches!(threads.claim(first, running.generation + 1), Err(RuntimeThreadError::Missing)));
+    assert!(matches!(
+        threads.claim(first, running.generation),
+        Err(RuntimeThreadError::Missing)
+    ));
+    assert!(matches!(
+        threads.claim(first, running.generation + 1),
+        Err(RuntimeThreadError::Missing)
+    ));
     threads.release(&running).unwrap();
     assert_eq!(threads.release(&running), Err(RuntimeThreadError::Missing));
     let reclaimed = threads.claim(first, running.generation).unwrap();
@@ -740,7 +753,10 @@ fn run_ownership_transfers_once_and_rejects_stale_claims() {
 fn failed_turn_returns_exact_running_owner() {
     let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let (process, thread) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
     let threads = ThreadSet::new(1).unwrap();
     publish(&threads, process, thread, 0x1000, space());
@@ -758,7 +774,10 @@ fn failed_turn_returns_exact_running_owner() {
 fn rejected_waiter_reclaims_only_exact_generation() {
     let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let (process, thread) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
     let threads = ThreadSet::new(1).unwrap();
     publish(&threads, process, thread, 0x1000, space());
@@ -778,7 +797,10 @@ fn rejected_waiter_reclaims_only_exact_generation() {
 fn waiter_abort_never_reclaims_running_owner() {
     let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let (process, thread) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
     let threads = ThreadSet::new(1).unwrap();
     publish(&threads, process, thread, 0x1000, space());
@@ -805,7 +827,10 @@ fn turn_plan() -> crate::launch_plan::RuntimeLaunchPlan {
 fn replace_error_releases_running_owner() {
     let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     let (process, thread) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
     let threads = ThreadSet::with_tasks(1, Arc::clone(&tasks)).unwrap();
     publish(&threads, process, thread, 0x1000, space());
@@ -817,7 +842,10 @@ fn replace_error_releases_running_owner() {
         &turn_plan(),
         &threads,
         &waiters,
-        super::scheduler::TurnResult { run, action: super::scheduler::TurnAction::Replace(u64::MAX) },
+        super::scheduler::TurnResult {
+            run,
+            action: super::scheduler::TurnAction::Replace(u64::MAX),
+        },
     );
     assert!(result.is_err());
     assert_eq!(threads.next().unwrap().generation, generation);
@@ -828,7 +856,10 @@ fn replace_error_releases_running_owner() {
 fn trace_error_releases_running_owner() {
     let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     let (process, thread) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
     let threads = ThreadSet::with_tasks(1, Arc::clone(&tasks)).unwrap();
     publish(&threads, process, thread, 0x1000, space());
@@ -841,7 +872,10 @@ fn trace_error_releases_running_owner() {
         &turn_plan(),
         &threads,
         &waiters,
-        super::scheduler::TurnResult { run, action: super::scheduler::TurnAction::Dispatch },
+        super::scheduler::TurnResult {
+            run,
+            action: super::scheduler::TurnAction::Dispatch,
+        },
     );
     assert!(result.is_err());
     assert_eq!(threads.next().unwrap().generation, generation);
@@ -852,7 +886,10 @@ fn trace_error_releases_running_owner() {
 fn rejected_waiter_submission_restores_owner() {
     let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     let (process, thread) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
     let threads = ThreadSet::with_tasks(1, Arc::clone(&tasks)).unwrap();
     let (router, cancellation) = context_with_trace(false);
@@ -867,7 +904,10 @@ fn rejected_waiter_submission_restores_owner() {
         &turn_plan(),
         &threads,
         &waiters,
-        super::scheduler::TurnResult { run, action: super::scheduler::TurnAction::Dispatch },
+        super::scheduler::TurnResult {
+            run,
+            action: super::scheduler::TurnAction::Dispatch,
+        },
     );
     assert!(result.is_err());
     assert_eq!(threads.next().unwrap().generation, generation);
@@ -878,9 +918,14 @@ fn rejected_waiter_submission_restores_owner() {
 fn acknowledge_error_releases_running_owner() {
     let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     let (process, first) = tasks
-        .create_init(ProcessCredentials::new(0, 0, &[], 32).unwrap(), ProcessLimits::default())
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
         .unwrap();
-    let thread = tasks.commit_clone_thread(tasks.begin_clone_thread(first).unwrap()).unwrap();
+    let thread = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(first).unwrap())
+        .unwrap();
     let threads = ThreadSet::with_tasks(1, Arc::clone(&tasks)).unwrap();
     publish(&threads, process, thread, 0x1000, space());
     let run = threads.next().unwrap();

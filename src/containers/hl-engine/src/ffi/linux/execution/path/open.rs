@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fmt;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -167,19 +167,17 @@ impl PreparedPathOpen for PendingOpen {
         self.file
             .path_only
             .store(bits & OpenIntent::PATH_ONLY != 0, Ordering::Release);
-        self.file.anonymous_exclusive.store(
-            temporary && bits & OpenIntent::EXCLUSIVE != 0,
-            Ordering::Release,
-        );
-        let retained_link = if bits & (OpenIntent::PATH_ONLY | OpenIntent::NOFOLLOW)
-            == OpenIntent::PATH_ONLY | OpenIntent::NOFOLLOW
-        {
-            std::fs::read_link(&self.path)
-                .ok()
-                .map(|target| target.as_os_str().as_encoded_bytes().to_vec())
-        } else {
-            None
-        };
+        self.file
+            .anonymous_exclusive
+            .store(temporary && bits & OpenIntent::EXCLUSIVE != 0, Ordering::Release);
+        let retained_link =
+            if bits & (OpenIntent::PATH_ONLY | OpenIntent::NOFOLLOW) == OpenIntent::PATH_ONLY | OpenIntent::NOFOLLOW {
+                std::fs::read_link(&self.path)
+                    .ok()
+                    .map(|target| target.as_os_str().as_encoded_bytes().to_vec())
+            } else {
+                None
+            };
         self.file.retain_link(retained_link.clone());
         if bits & OpenIntent::WRITE != 0 && bits & OpenIntent::PATH_ONLY == 0 {
             let identity = (metadata.dev(), metadata.ino());
@@ -232,7 +230,8 @@ impl PreparedPathOpen for PendingOpen {
             *self.file.directory.lock().unwrap_or_else(|error| error.into_inner()) = Some(directory);
         }
         *self.file.file.lock().unwrap_or_else(|error| error.into_inner()) = Some(opened);
-        if created && !temporary
+        if created
+            && !temporary
             && let (Some(parent), Some(name)) = (self.path.parent(), self.path.file_name())
         {
             self.file

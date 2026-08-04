@@ -444,7 +444,15 @@ impl AddressSpace {
                 .advice_segments(region.range())
                 .map_err(|_| Error::Memory)?;
             for (range, advice) in segments {
-                self.copy_segment(authority, &current.image.arena, &arena, &mappings, region, range, advice)?;
+                self.copy_segment(
+                    authority,
+                    &current.image.arena,
+                    &arena,
+                    &mappings,
+                    region,
+                    range,
+                    advice,
+                )?;
             }
         }
         let forked = Self::new(arena, mappings);

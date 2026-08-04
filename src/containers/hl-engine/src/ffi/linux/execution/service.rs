@@ -21,8 +21,7 @@ impl GuestExecutionPort for GuestExecutor {
         let cancellation = Arc::new(readiness::Cancellation::new().map_err(|_| EngineError::LaunchFailed)?);
         let counter: Arc<dyn hl_execution::ArchitecturalCounter> = Arc::new(task::HostCounter);
         let threads = Arc::new(
-            threads::ThreadSet::with_counter(4096, assembly.tasks(), counter)
-                .map_err(|_| EngineError::LaunchFailed)?,
+            threads::ThreadSet::with_counter(4096, assembly.tasks(), counter).map_err(|_| EngineError::LaunchFailed)?,
         );
         {
             let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;

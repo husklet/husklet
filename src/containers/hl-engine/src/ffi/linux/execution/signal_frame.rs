@@ -27,10 +27,7 @@ struct Publication {
 
 impl Port {
     pub(super) fn new(threads: Arc<ThreadSet>, sigreturn_pc: u64) -> Arc<Self> {
-        Arc::new(Self {
-            threads,
-            sigreturn_pc,
-        })
+        Arc::new(Self { threads, sigreturn_pc })
     }
 
     fn execution(machine: &SignalMachine, previous: &ExecutionSnapshot) -> ExecutionSnapshot {

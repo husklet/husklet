@@ -1,9 +1,5 @@
-use crate::{service::ProcessConfig, Error, Result};
-use hl_engine::{
-    activation::GuestIsa,
-    launch_plan::RuntimePlan,
-    options::Options,
-};
+use crate::{Error, Result, service::ProcessConfig};
+use hl_engine::{activation::GuestIsa, launch_plan::RuntimePlan, options::Options};
 
 pub(super) struct Spec {
     pub(super) isa: GuestIsa,
@@ -67,8 +63,16 @@ impl Spec {
     }
 
     fn process(options: &mut Options, launch: &ProcessConfig, domain: hl_engine::Domain) -> Result<()> {
-        Self::set(options, "HL_CWD", launch.process.working_dir.as_os_str().as_encoded_bytes())?;
-        Self::set(options, "HL_PROCESS_DOMAIN", format!("{:016x}{:016x}", domain.identity()[0], domain.identity()[1]))?;
+        Self::set(
+            options,
+            "HL_CWD",
+            launch.process.working_dir.as_os_str().as_encoded_bytes(),
+        )?;
+        Self::set(
+            options,
+            "HL_PROCESS_DOMAIN",
+            format!("{:016x}{:016x}", domain.identity()[0], domain.identity()[1]),
+        )?;
         if let Some(uid) = launch.process.uid {
             Self::set(options, "HL_UID", uid.to_string())?;
         }

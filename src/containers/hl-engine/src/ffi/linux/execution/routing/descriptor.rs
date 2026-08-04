@@ -35,10 +35,13 @@ impl ProcessContext {
             self.thread_files
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
-                .insert(child, super::PrivateTable {
-                    table: Arc::downgrade(&table),
-                    permit,
-                });
+                .insert(
+                    child,
+                    super::PrivateTable {
+                        table: Arc::downgrade(&table),
+                        permit,
+                    },
+                );
         }
         table
     }
@@ -58,7 +61,10 @@ impl ProcessContext {
         last: u32,
         close_on_exec: bool,
     ) -> Result<(), hl_runtime::ControlError> {
-        let permit = self.table_admission.reserve().ok_or(hl_runtime::ControlError::Capacity)?;
+        let permit = self
+            .table_admission
+            .reserve()
+            .ok_or(hl_runtime::ControlError::Capacity)?;
         let current = self.files(thread);
         let candidate = Arc::new(self.epoll.unshare_range(&current, first, last, close_on_exec)?);
         let threads = self
@@ -79,10 +85,13 @@ impl ProcessContext {
         self.thread_files
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .insert(thread, super::PrivateTable {
-                table: Arc::downgrade(&candidate),
-                permit,
-            });
+            .insert(
+                thread,
+                super::PrivateTable {
+                    table: Arc::downgrade(&candidate),
+                    permit,
+                },
+            );
         let router = Arc::new(self.router(thread, cancellation, clone));
         if threads.replace_router(thread, router).is_err() {
             self.forget_files(thread);

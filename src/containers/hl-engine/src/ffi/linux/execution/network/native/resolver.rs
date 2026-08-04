@@ -7,7 +7,13 @@ const MESSAGE_LIMIT: usize = u16::MAX as usize;
 const ANSWER_LIMIT: usize = 32;
 
 pub(super) fn endpoint(address: &hl_network::SocketAddress) -> bool {
-    matches!(address, hl_network::SocketAddress::Inet4 { address: [127, 0, 0, 11], port: 53 })
+    matches!(
+        address,
+        hl_network::SocketAddress::Inet4 {
+            address: [127, 0, 0, 11],
+            port: 53
+        }
+    )
 }
 
 pub(super) fn response(query: &[u8]) -> Option<Vec<u8>> {

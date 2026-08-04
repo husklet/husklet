@@ -10,8 +10,8 @@ use hl_descriptor::ReadinessObserver;
 use hl_network::{SocketAddress, SocketConnectError, SocketConnectStatus, SocketHostError};
 use hl_runtime::RuntimeNetworkError;
 
-mod io;
 mod icmp;
+mod io;
 mod message;
 mod resolver;
 mod runtime;
@@ -265,8 +265,14 @@ impl Native {
             .iter()
             .find(|(guest, _)| match (guest, address) {
                 (
-                    SocketAddress::Inet4 { address: bound, port: bound_port },
-                    SocketAddress::Inet4 { address: target, port: target_port },
+                    SocketAddress::Inet4 {
+                        address: bound,
+                        port: bound_port,
+                    },
+                    SocketAddress::Inet4 {
+                        address: target,
+                        port: target_port,
+                    },
                 ) => bound_port == target_port && (bound == target || *bound == [0; 4]),
                 _ => guest == address,
             })

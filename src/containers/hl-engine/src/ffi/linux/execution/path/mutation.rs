@@ -136,7 +136,9 @@ impl Mutation {
         match self {
             Self::Rename(from, to, _) => Ok(denied(&from.path)? || denied(&to.path)?),
             Self::Link(_, to) | Self::Symlink(_, to, _) => denied(&to.path),
-            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => denied(&entry.path),
+            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => {
+                denied(&entry.path)
+            }
             Self::Chmod(inode, _, _) | Self::Chown(inode, _, _, _) | Self::SetTimes(inode, _, _) => denied(&inode.path),
         }
     }
@@ -156,7 +158,9 @@ impl Mutation {
                 from.parent_access(identity)?;
                 to.parent_access(identity)
             }
-            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => entry.parent_access(identity),
+            Self::Directory(entry, _, _) | Self::Node(entry, _, _, _) | Self::Unlink(entry, _, _) => {
+                entry.parent_access(identity)
+            }
             Self::Link(_, to) | Self::Symlink(_, to, _) => to.parent_access(identity),
         }
     }
@@ -397,10 +401,19 @@ impl PreparedPathMutation for PendingMutation {
                 // SAFETY: the owned parent descriptor and terminated name stay live;
                 // mknodat retains neither argument.
                 let result = unsafe {
-                    libc::mknodat(entry.parent.as_raw_fd(), entry.name.as_ptr(), *mode, *device as libc::dev_t)
+                    libc::mknodat(
+                        entry.parent.as_raw_fd(),
+                        entry.name.as_ptr(),
+                        *mode,
+                        *device as libc::dev_t,
+                    )
                 };
-                if result != 0 { return Err(HostError::map(std::io::Error::last_os_error())); }
-                budget.as_ref().map_or(Ok(()), |budget| entry.track_created(budget, false))
+                if result != 0 {
+                    return Err(HostError::map(std::io::Error::last_os_error()));
+                }
+                budget
+                    .as_ref()
+                    .map_or(Ok(()), |budget| entry.track_created(budget, false))
             }
             Mutation::Unlink(entry, directory, charge) => {
                 let flags = if *directory { libc::AT_REMOVEDIR } else { 0 };
@@ -445,11 +458,8 @@ impl PendingMutation {
             Mutation::Unlink(entry, _, _) => {
                 self.watches.publish(&entry.path, hl_event::InotifyMask::DELETE_SELF);
                 if let (Some(parent), Some(name)) = (entry.path.parent(), entry.path.file_name()) {
-                    self.watches.publish_child(
-                        parent,
-                        name.as_encoded_bytes(),
-                        hl_event::InotifyMask::DELETE,
-                    );
+                    self.watches
+                        .publish_child(parent, name.as_encoded_bytes(), hl_event::InotifyMask::DELETE);
                 }
             }
             Mutation::Rename(from, to, _) => self.watches.publish_move(&from.path, &to.path),

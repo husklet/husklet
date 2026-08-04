@@ -38,7 +38,10 @@ struct NativeBoundaries {
 
 impl NativeBoundaries {
     fn new() -> Self {
-        Self { records: [None; NATIVE_BOUNDARY_CAPACITY], next: 0 }
+        Self {
+            records: [None; NATIVE_BOUNDARY_CAPACITY],
+            next: 0,
+        }
     }
 
     fn push(&mut self, record: NativeBoundary) {
@@ -54,11 +57,25 @@ impl NativeBoundaries {
             };
             eprintln!(
                 "hl-native-boundary: start={:#x} exit={:?} instruction={:#x} next={:#x} rip={:#x} rsp={:#x} rax={:#x} rcx={:#x} rdx={:#x} rbx={:#x} rbp={:#x} rsi={:#x} rdi={:#x} xmm0={:#034x} xmm1={:#034x} rflags={:#x} mxcsr={:#x} fault={:#x} provenance={:#x}",
-                record.start, record.exit, record.instruction, record.next, record.rip, record.stack,
-                record.registers[0], record.registers[1], record.registers[2], record.registers[3],
-                record.registers[5], record.registers[6], record.registers[7], record.vectors[0],
-                record.vectors[1], record.flags, record.mxcsr,
-                record.fault_address, record.provenance,
+                record.start,
+                record.exit,
+                record.instruction,
+                record.next,
+                record.rip,
+                record.stack,
+                record.registers[0],
+                record.registers[1],
+                record.registers[2],
+                record.registers[3],
+                record.registers[5],
+                record.registers[6],
+                record.registers[7],
+                record.vectors[0],
+                record.vectors[1],
+                record.flags,
+                record.mxcsr,
+                record.fault_address,
+                record.provenance,
             );
         }
     }
@@ -74,7 +91,12 @@ pub(super) enum TurnAction {
     Dispatch,
     Error(EngineError),
     Replace(u64),
-    Signal { signal: u8, code: i32, address: u64, fallback: EngineExit },
+    Signal {
+        signal: u8,
+        code: i32,
+        address: u64,
+        fallback: EngineExit,
+    },
     Terminal(ThreadTerminal),
 }
 
@@ -141,8 +163,11 @@ impl NativePool {
             && plan.options.get("HL_NATIVE_EXECUTION") == Some("1")
     }
 
-    pub(super) fn new(isa: GuestIsa, plan: &RuntimeLaunchPlan,
-                      host_faults: Option<Arc<dyn crate::native::HostFaultOwner>>) -> Self {
+    pub(super) fn new(
+        isa: GuestIsa,
+        plan: &RuntimeLaunchPlan,
+        host_faults: Option<Arc<dyn crate::native::HostFaultOwner>>,
+    ) -> Self {
         Self {
             enabled: Self::selected(isa, plan),
             diagnostics: plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"),
@@ -154,8 +179,7 @@ impl NativePool {
             source_incarnations: BTreeMap::new(),
             instruction_epochs: BTreeMap::new(),
             boundary_sensitive: BTreeSet::new(),
-            boundaries: (plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1"))
-                .then(NativeBoundaries::new),
+            boundaries: (plan.options.get("HL_NATIVE_DIAGNOSTICS") == Some("1")).then(NativeBoundaries::new),
             counters: NativeCounters::default(),
             host_faults,
         }
@@ -180,8 +204,8 @@ impl NativePool {
         if !self.executors.contains_key(&process) {
             self.executors.insert(
                 process,
-                crate::native::NativeExecutor::create_with_fault_owner(
-                    self.diagnostics, self.host_faults.clone()).ok()?,
+                crate::native::NativeExecutor::create_with_fault_owner(self.diagnostics, self.host_faults.clone())
+                    .ok()?,
             );
         }
         self.executors.get(&process)
@@ -207,11 +231,7 @@ impl NativePool {
         self.fallbacks.clear();
     }
 
-    fn reset_observed_sources(
-        &mut self,
-        process: hl_task::ProcessId,
-        incarnation: u64,
-    ) -> Option<()> {
+    fn reset_observed_sources(&mut self, process: hl_task::ProcessId, incarnation: u64) -> Option<()> {
         self.executor(process)?.reset(incarnation).ok()?;
         self.sources.retain(|(owner, _, _, _), _| *owner != process);
         self.observations.retain(|(owner, _, _, _, _), _| *owner != process);
@@ -228,17 +248,24 @@ impl NativePool {
         complete: bool,
     ) -> Option<()> {
         let conflict = observed.iter().any(|(first, last, token)| {
-            token.incarnation != incarnation || last <= first || self.sources
-                .get(&(process, incarnation, *first, *last))
-                .is_some_and(|existing| existing != token)
+            token.incarnation != incarnation
+                || last <= first
+                || self
+                    .sources
+                    .get(&(process, incarnation, *first, *last))
+                    .is_some_and(|existing| existing != token)
         });
-        let additions = observed.iter().filter(|(first, last, _)|
-            !self.sources.contains_key(&(process, incarnation, *first, *last))).count();
+        let additions = observed
+            .iter()
+            .filter(|(first, last, _)| !self.sources.contains_key(&(process, incarnation, *first, *last)))
+            .count();
         if !complete || conflict || self.sources.len().saturating_add(additions) > NATIVE_SOURCE_LIMIT {
             self.reset_observed_sources(process, incarnation)?;
         }
         for (first, last, token) in observed {
-            if token.incarnation != incarnation || last <= first { continue; }
+            if token.incarnation != incarnation || last <= first {
+                continue;
+            }
             self.sources.insert((process, incarnation, first, last), token);
         }
         Some(())
@@ -263,7 +290,11 @@ impl NativePool {
         if let Some(previous) = self.sources.get_mut(&key) {
             let changed = *previous != token;
             *previous = token;
-            return if changed { SourceChange::Changed } else { SourceChange::Stable };
+            return if changed {
+                SourceChange::Changed
+            } else {
+                SourceChange::Stable
+            };
         }
         if self.sources.len() >= limit {
             self.disable();
@@ -287,7 +318,9 @@ impl NativePool {
     {
         let published = self.instruction_epochs.get(&process).copied();
         if published.is_some_and(|previous| previous != instruction_epoch) {
-            let observed: Vec<_> = self.sources.iter()
+            let observed: Vec<_> = self
+                .sources
+                .iter()
                 .filter(|((owner, incarnation, _, _), _)| *owner == process && *incarnation == token.incarnation)
                 .map(|(key @ (_, _, first, last), previous)| (*key, *previous, *first, *last))
                 .collect();
@@ -298,20 +331,34 @@ impl NativePool {
                 let mut refreshed = Vec::new();
                 let mut gap = false;
                 for (key, previous, source_first, source_last) in observed {
-                    let Some(current) = current_token(source_first, source_last) else { gap = true; break; };
-                    if current.incarnation != token.incarnation { gap = true; break; }
-                    if current != previous { changed.push((source_first, source_last)); }
+                    let Some(current) = current_token(source_first, source_last) else {
+                        gap = true;
+                        break;
+                    };
+                    if current.incarnation != token.incarnation {
+                        gap = true;
+                        break;
+                    }
+                    if current != previous {
+                        changed.push((source_first, source_last));
+                    }
                     refreshed.push((key, current));
                 }
                 if gap {
                     self.reset_observed_sources(process, token.incarnation)?;
                 } else {
-                    if !changed.is_empty() && self.executor(process)?
-                        .invalidate_ranges(&changed, token.incarnation).is_err() {
+                    if !changed.is_empty()
+                        && self
+                            .executor(process)?
+                            .invalidate_ranges(&changed, token.incarnation)
+                            .is_err()
+                    {
                         self.reset_observed_sources(process, token.incarnation)?;
                         refreshed.clear();
                     }
-                    for (key, current) in refreshed { self.sources.insert(key, current); }
+                    for (key, current) in refreshed {
+                        self.sources.insert(key, current);
+                    }
                 }
             }
         }
@@ -467,7 +514,9 @@ impl GuestExecutor {
     ) -> Result<EngineExit, EngineError> {
         struct FaultAttachment(Arc<dyn crate::native::HostFaultOwner>);
         impl Drop for FaultAttachment {
-            fn drop(&mut self) { self.0.detach(); }
+            fn drop(&mut self) {
+                self.0.detach();
+            }
         }
 
         let mut turns = 0_u64;
@@ -516,18 +565,10 @@ impl GuestExecutor {
         // Both supported hosts project CLOCK_THREAD_CPUTIME_ID. If a future
         // host cannot, leave accounting unchanged instead of charging wall
         // time that includes descheduling or blocked host work.
-        crate::native::HostSyscalls::clock_ns(
-            &crate::ffi::LinuxHost,
-            crate::native::ClockKind::ThreadCpu,
-        )
-        .ok()
+        crate::native::HostSyscalls::clock_ns(&crate::ffi::LinuxHost, crate::native::ClockKind::ThreadCpu).ok()
     }
 
-    fn charge_elapsed(
-        threads: &threads::ThreadSet,
-        process: hl_task::ProcessId,
-        charged_at: &mut Option<u64>,
-    ) {
+    fn charge_elapsed(threads: &threads::ThreadSet, process: hl_task::ProcessId, charged_at: &mut Option<u64>) {
         let Some(finished) = Self::thread_cpu() else { return };
         if let Some(started) = charged_at.replace(finished) {
             threads.charge_cpu(process, finished.saturating_sub(started));
@@ -601,7 +642,11 @@ impl GuestExecutor {
         // ownership, and parked peers; the fixed bound restores the ordinary
         // signal, CPU-timer, cancellation, accounting, and scheduling boundary.
         loop {
-            let native_budget = if threads.is_only_runnable(run.thread) { AARCH64_SOLO_BUDGET } else { SLICE_BUDGET };
+            let native_budget = if threads.is_only_runnable(run.thread) {
+                AARCH64_SOLO_BUDGET
+            } else {
+                SLICE_BUDGET
+            };
             let result = Self::execute_turn(isa, run, native, native_budget);
             run = result.run;
             if matches!(result.action, TurnAction::Dispatch) && Self::observes_cpu_accounting(isa, &run.machine) {
@@ -662,7 +707,10 @@ impl GuestExecutor {
                 plan,
                 threads,
                 waiters,
-                TurnResult { run, action: result.action },
+                TurnResult {
+                    run,
+                    action: result.action,
+                },
             );
         }
     }
@@ -683,7 +731,13 @@ impl GuestExecutor {
             Ok(action) => action,
             Err(error) => TurnAction::Error(error),
         };
-        if let TurnAction::Signal { signal: 11, code, address, .. } = &action {
+        if let TurnAction::Signal {
+            signal: 11,
+            code,
+            address,
+            ..
+        } = &action
+        {
             if let Some(boundaries) = &native.boundaries {
                 eprintln!("hl-native-terminal-sigsegv: code={code} address={address:#x}");
                 boundaries.report(run.process);
@@ -713,7 +767,12 @@ impl GuestExecutor {
                 // the running image. The old run no longer owns a scheduler slot.
                 return Ok(None);
             }
-            TurnAction::Signal { signal, code, address, fallback } => {
+            TurnAction::Signal {
+                signal,
+                code,
+                address,
+                fallback,
+            } => {
                 if run.router.queue_signal(signal, code, address).is_err() {
                     return Self::finish(plan, threads, run, ThreadTerminal::Thread(fallback));
                 }
@@ -1063,7 +1122,13 @@ impl GuestExecutor {
         }
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
-        let fallback_key = (run.process, lease.generation(), mappings.ledger().generation(), token.version, pc);
+        let fallback_key = (
+            run.process,
+            lease.generation(),
+            mappings.ledger().generation(),
+            token.version,
+            pc,
+        );
         if pool.suppressed.contains(&fallback_key) {
             return None;
         }
@@ -1078,23 +1143,38 @@ impl GuestExecutor {
         }
         let mut bytes = [0_u8; 256];
         let bytes = &mut bytes[..usize::try_from(length).ok()?];
-        mappings.read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE).ok()?;
+        mappings
+            .read_spans(GuestAddress::new(pc), bytes, Protection::EXECUTE)
+            .ok()?;
         let projection = if let Some((first, last)) = crate::native::direct_literal_interval(pc, bytes) {
-            mappings.project_contiguous(
-                GuestAddress::new(first), last.checked_sub(first)?, Protection::READ, lease.generation(),
-            ).ok()?
+            mappings
+                .project_contiguous(
+                    GuestAddress::new(first),
+                    last.checked_sub(first)?,
+                    Protection::READ,
+                    lease.generation(),
+                )
+                .ok()?
         } else {
-            let stack_region = mappings.ledger().resolve(
-                GuestAddress::new(stack.saturating_sub(1)),
-                Protection::READ.union(Protection::WRITE),
-            )?.region;
-            let stack_first = stack.saturating_sub(8 << 10)
-                .max(stack_region.range().start().get()) & !4095;
-            let stack_last = stack_first.saturating_add(16 << 10).min(stack_region.range().end().get());
-            mappings.project_contiguous(
-                GuestAddress::new(stack_first), stack_last.checked_sub(stack_first)?,
-                Protection::READ.union(Protection::WRITE), lease.generation(),
-            ).ok()?
+            let stack_region = mappings
+                .ledger()
+                .resolve(
+                    GuestAddress::new(stack.saturating_sub(1)),
+                    Protection::READ.union(Protection::WRITE),
+                )?
+                .region;
+            let stack_first = stack.saturating_sub(8 << 10).max(stack_region.range().start().get()) & !4095;
+            let stack_last = stack_first
+                .saturating_add(16 << 10)
+                .min(stack_region.range().end().get());
+            mappings
+                .project_contiguous(
+                    GuestAddress::new(stack_first),
+                    stack_last.checked_sub(stack_first)?,
+                    Protection::READ.union(Protection::WRITE),
+                    lease.generation(),
+                )
+                .ok()?
         };
         pool.prepare_source(
             run.process,
@@ -1179,12 +1259,7 @@ impl GuestExecutor {
             pool.counters.runs += 1;
             pool.counters.builds += stats.builds;
             pool.counters.hits += stats.hits;
-            pool.merge_observed_sources(
-                run.process,
-                lease.generation(),
-                stats.sources,
-                stats.sources_complete,
-            )?;
+            pool.merge_observed_sources(run.process, lease.generation(), stats.sources, stats.sources_complete)?;
         }
         if fallback {
             pool.counters.fallbacks += 1;
@@ -1232,7 +1307,13 @@ impl GuestExecutor {
         }
         let source_range = hl_isa::AddressRange::nonempty(GuestAddress::new(pc), length as u64).ok()?;
         let token = mappings.executable_token(source_range, lease.generation());
-        let key = (run.process, lease.generation(), mappings.ledger().generation(), token.version, pc);
+        let key = (
+            run.process,
+            lease.generation(),
+            mappings.ledger().generation(),
+            token.version,
+            pc,
+        );
         if pool.suppressed.contains(&key) {
             return None;
         }
@@ -1246,13 +1327,17 @@ impl GuestExecutor {
             return None;
         }
         let mut bytes = vec![0_u8; length];
-        mappings.read_spans(GuestAddress::new(pc), &mut bytes, Protection::EXECUTE).ok()?;
+        mappings
+            .read_spans(GuestAddress::new(pc), &mut bytes, Protection::EXECUTE)
+            .ok()?;
         let stack_region = snapshot.regions.iter().copied().find(|region| {
-            region.range().contains(GuestAddress::new(stack.saturating_sub(1))) &&
-                region.protection().contains(Protection::READ.union(Protection::WRITE))
+            region.range().contains(GuestAddress::new(stack.saturating_sub(1)))
+                && region.protection().contains(Protection::READ.union(Protection::WRITE))
         })?;
         let stack_first = stack.saturating_sub(8 << 10).max(stack_region.range().start().get()) & !4095;
-        let stack_last = stack_first.saturating_add(16 << 10).min(stack_region.range().end().get());
+        let stack_last = stack_first
+            .saturating_add(16 << 10)
+            .min(stack_region.range().end().get());
         let stack_projection = mappings
             .project_contiguous(
                 GuestAddress::new(stack_first),
@@ -1274,14 +1359,21 @@ impl GuestExecutor {
         )?;
         let diagnostics = pool.boundaries.is_some();
         let executor = pool.executor(run.process)?;
-        let source = [crate::native::NativeSource { guest_first: pc, bytes: &bytes }];
+        let source = [crate::native::NativeSource {
+            guest_first: pc,
+            bytes: &bytes,
+        }];
         let mut resolve = |target: u64, output: &mut [u8]| {
             let region = snapshot.regions.iter().copied().find(|region| {
-                region.range().contains(GuestAddress::new(target)) &&
-                    region.protection().contains(Protection::EXECUTE)
+                region.range().contains(GuestAddress::new(target)) && region.protection().contains(Protection::EXECUTE)
             })?;
             let length = usize::try_from(
-                region.range().end().get().saturating_sub(target).min(output.len() as u64),
+                region
+                    .range()
+                    .end()
+                    .get()
+                    .saturating_sub(target)
+                    .min(output.len() as u64),
             )
             .ok()?;
             if length == 0 {
@@ -1305,15 +1397,9 @@ impl GuestExecutor {
             let Some(projection) = stack_projection.take() else {
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
             };
-            let Ok((result, stats)) = executor.run_x86_lease(
-                cpu,
-                &source,
-                projection,
-                token,
-                SLICE_BUDGET,
-                false,
-                &mut resolve,
-            ) else {
+            let Ok((result, stats)) =
+                executor.run_x86_lease(cpu, &source, projection, token, SLICE_BUDGET, false, &mut resolve)
+            else {
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
             };
@@ -1346,7 +1432,10 @@ impl GuestExecutor {
                 crate::native::NativeExit::Branch => StepOutcome::Continue,
                 crate::native::NativeExit::Syscall => {
                     cpu.rip = result.next;
-                    StepOutcome::Syscall { instruction: result.instruction, next: result.next }
+                    StepOutcome::Syscall {
+                        instruction: result.instruction,
+                        next: result.next,
+                    }
                 }
                 crate::native::NativeExit::Yield => StepOutcome::Yield,
                 crate::native::NativeExit::Fallback | crate::native::NativeExit::Fault => {
@@ -1370,12 +1459,7 @@ impl GuestExecutor {
             pool.counters.runs += 1;
             pool.counters.builds += stats.builds;
             pool.counters.hits += stats.hits;
-            pool.merge_observed_sources(
-                run.process,
-                lease.generation(),
-                stats.sources,
-                stats.sources_complete,
-            )?;
+            pool.merge_observed_sources(run.process, lease.generation(), stats.sources, stats.sources_complete)?;
         }
         if let Some(record) = boundary
             && let Some(boundaries) = &mut pool.boundaries
@@ -1413,7 +1497,10 @@ impl GuestExecutor {
             StepOutcome::Fault(fault) => Ok(Self::fault_signal(memory, fault).map_or_else(
                 || TurnAction::Terminal(ThreadTerminal::Thread(Self::fault(isa, memory, fault))),
                 |(signal, code, address)| TurnAction::Signal {
-                    signal, code, address, fallback: Self::fault(isa, memory, fault),
+                    signal,
+                    code,
+                    address,
+                    fallback: Self::fault(isa, memory, fault),
                 },
             )),
         }
@@ -1487,8 +1574,7 @@ impl GuestExecutor {
             blocking = matches!((number, operation & 127), (98 | 202, 0 | 6 | 9 | 11 | 13))
                 || matches!(number, 35 | 61 | 101 | 115 | 230 | 260)
                 || Self::record_lock_blocks(isa, number, operation)
-                || (Self::descriptor_blocks(isa, number)
-                    && (!solo || router.descriptor_may_block(architecture, cpu)))
+                || (Self::descriptor_blocks(isa, number) && (!solo || router.descriptor_may_block(architecture, cpu)))
                 || Self::ipc_blocks(isa, number)
                 || Self::signal_blocks(isa, number)
                 || Self::readiness_blocks(isa, number);
@@ -1548,8 +1634,14 @@ mod tests {
         let mut options = crate::options::Options::default();
         options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
         let enabled = plan(options);
-        assert_eq!(NativePool::new(GuestIsa::Aarch64, &enabled, None).enabled, cfg!(target_arch = "aarch64"));
-        assert_eq!(NativePool::new(GuestIsa::X86_64, &enabled, None).enabled, cfg!(target_arch = "aarch64"));
+        assert_eq!(
+            NativePool::new(GuestIsa::Aarch64, &enabled, None).enabled,
+            cfg!(target_arch = "aarch64")
+        );
+        assert_eq!(
+            NativePool::new(GuestIsa::X86_64, &enabled, None).enabled,
+            cfg!(target_arch = "aarch64")
+        );
     }
 
     #[test]
@@ -1611,13 +1703,7 @@ mod tests {
         committed.registers[19] = 0xfeed_face;
         committed.pc = 0x4010;
         assert_eq!(
-            GuestExecutor::native_boundary(
-                &mut committed,
-                original,
-                crate::native::NativeExit::Epoch,
-                0x4010,
-                1,
-            ),
+            GuestExecutor::native_boundary(&mut committed, original, crate::native::NativeExit::Epoch, 0x4010, 1,),
             Some(StepOutcome::Yield),
         );
         assert_eq!(committed.pc, 0x4010);
@@ -1654,23 +1740,49 @@ mod tests {
         pool.enabled = true;
         let token = |incarnation, version| hl_memory::ExecutableToken { incarnation, version };
 
-        assert_eq!(pool.track_source(first, 0x1000, 0x1100, token(7, 1), 3), SourceChange::Stable);
-        assert_eq!(pool.track_source(first, 0x1000, 0x1100, token(7, 2), 3), SourceChange::Changed);
+        assert_eq!(
+            pool.track_source(first, 0x1000, 0x1100, token(7, 1), 3),
+            SourceChange::Stable
+        );
+        assert_eq!(
+            pool.track_source(first, 0x1000, 0x1100, token(7, 2), 3),
+            SourceChange::Changed
+        );
         assert_eq!(pool.sources[&(first, 7, 0x1000, 0x1100)], token(7, 2));
-        assert_eq!(pool.track_source(first, 0x1000, 0x1100, token(7, 2), 3), SourceChange::Stable);
-        assert_eq!(pool.track_source(first, 0x2000, 0x2100, token(7, 1), 3), SourceChange::Stable);
-        assert_eq!(pool.track_source(second, 0x3000, 0x3100, token(4, 1), 3), SourceChange::Stable);
+        assert_eq!(
+            pool.track_source(first, 0x1000, 0x1100, token(7, 2), 3),
+            SourceChange::Stable
+        );
+        assert_eq!(
+            pool.track_source(first, 0x2000, 0x2100, token(7, 1), 3),
+            SourceChange::Stable
+        );
+        assert_eq!(
+            pool.track_source(second, 0x3000, 0x3100, token(4, 1), 3),
+            SourceChange::Stable
+        );
         assert_eq!(pool.sources.len(), 3);
 
-        assert_eq!(pool.track_source(first, 0x4000, 0x4100, token(8, 1), 3), SourceChange::Stable);
+        assert_eq!(
+            pool.track_source(first, 0x4000, 0x4100, token(8, 1), 3),
+            SourceChange::Stable
+        );
         assert_eq!(pool.sources.len(), 2);
-        assert!(pool.sources.keys().all(|(owner, incarnation, _, _)| {
-            *owner != first || *incarnation == 8
-        }));
+        assert!(
+            pool.sources
+                .keys()
+                .all(|(owner, incarnation, _, _)| { *owner != first || *incarnation == 8 })
+        );
 
-        assert_eq!(pool.track_source(first, 0x5000, 0x5100, token(8, 1), 3), SourceChange::Stable);
+        assert_eq!(
+            pool.track_source(first, 0x5000, 0x5100, token(8, 1), 3),
+            SourceChange::Stable
+        );
         assert_eq!(pool.sources.len(), 3);
-        assert_eq!(pool.track_source(first, 0x6000, 0x6100, token(8, 1), 3), SourceChange::Disabled);
+        assert_eq!(
+            pool.track_source(first, 0x6000, 0x6100, token(8, 1), 3),
+            SourceChange::Disabled
+        );
         assert!(!pool.enabled && pool.sources.is_empty());
     }
 
@@ -1679,10 +1791,16 @@ mod tests {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
         pool.enabled = true;
-        let token = hl_memory::ExecutableToken { incarnation: 1, version: 1 };
+        let token = hl_memory::ExecutableToken {
+            incarnation: 1,
+            version: 1,
+        };
         for index in 0..NATIVE_SOURCE_LIMIT {
             let first = 0x1000 + index as u64 * 16;
-            assert_eq!(pool.track_source(process, first, first + 16, token, NATIVE_SOURCE_LIMIT), SourceChange::Stable);
+            assert_eq!(
+                pool.track_source(process, first, first + 16, token, NATIVE_SOURCE_LIMIT),
+                SourceChange::Stable
+            );
         }
         assert_eq!(pool.sources.len(), NATIVE_SOURCE_LIMIT);
         assert_eq!(
@@ -1697,15 +1815,22 @@ mod tests {
         let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
         let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
         pool.enabled = true;
-        let token = |version| hl_memory::ExecutableToken { incarnation: 7, version };
+        let token = |version| hl_memory::ExecutableToken {
+            incarnation: 7,
+            version,
+        };
         pool.executor(process).unwrap().reset(7).unwrap();
         pool.instruction_epochs.insert(process, 1);
-        pool.merge_observed_sources(process, 7, vec![(0x8000, 0x8100, token(1))], true).unwrap();
+        pool.merge_observed_sources(process, 7, vec![(0x8000, 0x8100, token(1))], true)
+            .unwrap();
 
-        assert!(pool.prepare_source(process, 0x4000, 0x4100, token(0), 2, |first, last| {
-            assert_eq!((first, last), (0x8000, 0x8100));
-            Some(token(2))
-        }).is_some());
+        assert!(
+            pool.prepare_source(process, 0x4000, 0x4100, token(0), 2, |first, last| {
+                assert_eq!((first, last), (0x8000, 0x8100));
+                Some(token(2))
+            })
+            .is_some()
+        );
 
         assert_eq!(pool.sources[&(process, 7, 0x8000, 0x8100)], token(2));
         assert_eq!(pool.sources[&(process, 7, 0x4000, 0x4100)], token(0));

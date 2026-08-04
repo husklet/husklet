@@ -354,11 +354,7 @@ impl ProcessContext {
             )),
         )));
         if let Some(shared) = mappings.shared_objects() {
-            memory = memory.with_memfd_objects(
-                Arc::clone(&shared),
-                u64::from(self.process.number()),
-                memfds,
-            );
+            memory = memory.with_memfd_objects(Arc::clone(&shared), u64::from(self.process.number()), memfds);
             if let Some(host) = &self.path_host {
                 memory = memory.with_descriptor_source(Arc::new(host.mapping_source(space.arena())));
             }
@@ -491,10 +487,7 @@ impl ProcessContext {
 
     pub(in crate::ffi::linux::execution) fn publish_procfs(&self) {
         self.procfs_spaces.publish(self.process, &self.space);
-        self.procfs_resources.publish(
-            self.process,
-            &self.epoll_table.descriptor_table(),
-            &self.working,
-        );
+        self.procfs_resources
+            .publish(self.process, &self.epoll_table.descriptor_table(), &self.working);
     }
 }

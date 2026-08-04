@@ -146,17 +146,29 @@ fn urgent_data_peek_mark_and_readiness() {
     let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let host = Native::new();
-    let socket = host.create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp).unwrap();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
     host.prepare_connect(
         socket.token,
-        SocketAddress::Inet4 { address: Ipv4Addr::LOCALHOST.octets(), port },
-    ).unwrap();
+        SocketAddress::Inet4 {
+            address: Ipv4Addr::LOCALHOST.octets(),
+            port,
+        },
+    )
+    .unwrap();
     let status = host.start_connect(socket.token, false);
-    assert!(matches!(status, SocketConnectStatus::Connected | SocketConnectStatus::Pending));
+    assert!(matches!(
+        status,
+        SocketConnectStatus::Connected | SocketConnectStatus::Pending
+    ));
     assert_eq!(await_connect(&host, socket.token), SocketConnectStatus::Connected);
     let (accepted, _) = listener.accept().unwrap();
     // SAFETY: accepted owns a connected TCP descriptor and the byte is readable.
-    assert_eq!(unsafe { libc::send(accepted.as_raw_fd(), b"Z".as_ptr().cast(), 1, libc::MSG_OOB) }, 1);
+    assert_eq!(
+        unsafe { libc::send(accepted.as_raw_fd(), b"Z".as_ptr().cast(), 1, libc::MSG_OOB) },
+        1
+    );
     let deadline = Instant::now() + Duration::from_secs(2);
     while !host.readiness(socket.token).priority && Instant::now() < deadline {
         std::thread::yield_now();

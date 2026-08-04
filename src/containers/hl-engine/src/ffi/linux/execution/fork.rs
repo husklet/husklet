@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use hl_execution::{EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionSnapshot};
 use hl_descriptor::{DescriptorFlags, StatusFlags};
+use hl_execution::{EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionSnapshot};
 use hl_linux::{ClonePlan, Errno, LinuxResult};
 use hl_linux::{GuestAccess, GuestMemory};
 use hl_runtime::{

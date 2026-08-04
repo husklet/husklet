@@ -1,10 +1,10 @@
 //! One running container process backed by the integrated Rust runtime.
 
-use crate::{service::Running, Error, ExitStatus, LogChunk, Result, Signal};
+use crate::{Error, ExitStatus, LogChunk, Result, Signal, service::Running};
 use async_trait::async_trait;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
 };
 
 static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
@@ -71,12 +71,10 @@ impl Running for Process {
         Ok(match exit.kind {
             hl_engine::engine::ExitKind::Code => ExitStatus::Code(exit.guest_status),
             hl_engine::engine::ExitKind::Signal => ExitStatus::Signal(exit.guest_status),
-            hl_engine::engine::ExitKind::Fault | hl_engine::engine::ExitKind::EngineError => {
-                ExitStatus::Fault {
-                    status: exit.guest_status,
-                    detail: exit.detail,
-                }
-            }
+            hl_engine::engine::ExitKind::Fault | hl_engine::engine::ExitKind::EngineError => ExitStatus::Fault {
+                status: exit.guest_status,
+                detail: exit.detail,
+            },
         })
     }
 
