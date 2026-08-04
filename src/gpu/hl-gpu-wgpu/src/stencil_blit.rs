@@ -524,18 +524,18 @@ mod tests {
         }
     }
 
-    fn copy_aspect_in(
+    fn copy_stencil_in(
         exec: &WgpuExecutor,
         texture: &wgpu::Texture,
         mip: u32,
         layer: u32,
-        aspect: wgpu::TextureAspect,
         width: u32,
         height: u32,
-        bytes_per_texel: u32,
         bytes: &[u8],
     ) {
-        let row_bytes = width * bytes_per_texel;
+        // Unlike the implementation-defined packed depth plane, WebGPU defines the stencil plane of
+        // Depth24PlusStencil8 as a copyable one-byte Stencil8 aspect.
+        let row_bytes = width;
         let pitch = row_pitch(row_bytes).unwrap();
         let mut padded = vec![0; (pitch * height) as usize];
         for y in 0..height as usize {
@@ -563,7 +563,7 @@ mod tests {
                 texture,
                 mip_level: mip,
                 origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
-                aspect,
+                aspect: wgpu::TextureAspect::StencilOnly,
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
@@ -620,6 +620,159 @@ mod tests {
         tight
     }
 
+    fn clear_depth(
+        exec: &WgpuExecutor,
+        texture: &wgpu::Texture,
+        mip: u32,
+        layer: u32,
+        value: f32,
+    ) {
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("hl-stencil-test-depth-clear"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: mip,
+            mip_level_count: Some(1),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        });
+        let mut encoder = exec.gpu.device.create_command_encoder(&Default::default());
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("hl-stencil-test-depth-clear"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(value),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        exec.gpu.queue.submit(Some(encoder.finish()));
+    }
+
+    fn depth_equals(
+        exec: &WgpuExecutor,
+        texture: &wgpu::Texture,
+        mip: u32,
+        layer: u32,
+        width: u32,
+        height: u32,
+        value: f32,
+    ) -> Vec<u8> {
+        let color = exec.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hl-stencil-test-depth-result"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let color_view = color.create_view(&Default::default());
+        let depth_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("hl-stencil-test-depth-probe"),
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: mip,
+            mip_level_count: Some(1),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        });
+        let shader = exec.gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hl-stencil-test-depth-probe"),
+            source: wgpu::ShaderSource::Wgsl(format!(r#"
+@vertex
+fn vs_main(@builtin(vertex_index) vertex: u32) -> @builtin(position) vec4<f32> {{
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    return vec4<f32>(positions[vertex], {value}, 1.0);
+}}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {{
+    return vec4<f32>(1.0);
+}}
+"#).into()),
+        });
+        let pipeline = exec.gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hl-stencil-test-depth-probe"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::R8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Equal,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let mut encoder = exec.gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("hl-stencil-test-depth-probe"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.draw(0..3, 0..1);
+        }
+        exec.gpu.queue.submit(Some(encoder.finish()));
+        copy_aspect_out(
+            exec, &color, 0, 0, width, height, wgpu::TextureAspect::All, 1,
+        )
+    }
+
     #[test]
     fn native_stencil_blit_scales_mirrors_layers_origins_and_aliases() {
         let mut exec = WgpuExecutor::new(crate::DeviceConfig::default()).expect("wgpu adapter");
@@ -651,13 +804,10 @@ mod tests {
         let src = texture::WgpuTexture::get(&session.resources, 1).unwrap();
         let dst = texture::WgpuTexture::get(&session.resources, 2).unwrap();
         let source = (0..64).map(|i| (i + 1) as u8).collect::<Vec<_>>();
-        copy_aspect_in(&exec, &src.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, 1, &source);
-        copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, 1, &[77; 64]);
-        let depth = (0..64).flat_map(|i| ((i as f32 + 1.0) / 65.0).to_le_bytes()).collect::<Vec<_>>();
-        copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::DepthOnly, 8, 8, 4, &depth);
-        let depth_before = copy_aspect_out(
-            &exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::DepthOnly, 4,
-        );
+        copy_stencil_in(&exec, &src.texture, 1, 1, 8, 8, &source);
+        copy_stencil_in(&exec, &dst.texture, 1, 1, 8, 8, &[77; 64]);
+        const PRESERVED_DEPTH: f32 = 0.375;
+        clear_depth(&exec, &dst.texture, 1, 1, PRESERVED_DEPTH);
 
         exec.blit_stencil_nearest(
             &session.resources,
@@ -675,8 +825,11 @@ mod tests {
         )
         .unwrap();
         let got = copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::StencilOnly, 1);
-        assert_eq!(copy_aspect_out(&exec, &dst.texture, 1, 1, 8, 8, wgpu::TextureAspect::DepthOnly, 4), depth_before,
-            "stencil-only render passes must preserve every destination depth texel");
+        assert_eq!(
+            depth_equals(&exec, &dst.texture, 1, 1, 8, 8, PRESERVED_DEPTH),
+            vec![255; 64],
+            "stencil-only render passes must preserve every destination depth texel",
+        );
         let mut want = vec![77; 64];
         for y in 0..4 {
             for x in 0..4 {
@@ -713,14 +866,8 @@ mod tests {
         // Exercise every representable stencil byte through the native fixed-function path. This is
         // specifically sensitive to the pipeline-static write masks and dynamic reference values.
         let every_value = (0..=u8::MAX).collect::<Vec<_>>();
-        copy_aspect_in(
-            &exec, &src.texture, 0, 0, wgpu::TextureAspect::StencilOnly, 16, 16, 1,
-            &every_value,
-        );
-        copy_aspect_in(
-            &exec, &dst.texture, 0, 0, wgpu::TextureAspect::StencilOnly, 16, 16, 1,
-            &[211; 256],
-        );
+        copy_stencil_in(&exec, &src.texture, 0, 0, 16, 16, &every_value);
+        copy_stencil_in(&exec, &dst.texture, 0, 0, 16, 16, &[211; 256]);
         exec.blit_stencil_nearest(
             &session.resources,
             1,
