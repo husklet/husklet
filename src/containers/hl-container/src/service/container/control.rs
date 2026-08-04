@@ -5,22 +5,38 @@ use super::{
 impl Service {
     pub(crate) async fn wait(&self, reference: &str, condition: WaitCondition) -> Result<Option<ExitStatus>> {
         let mut exit = None;
-        let mut observed = None;
+        let initial = {
+            let _operation = self.operations.lock().await;
+            match self.resolve(reference).await {
+                Ok(container) => container,
+                Err(Error::NotFound(_)) => {
+                    if let Some(completed) = self.exits.lock().await.get(reference).copied() {
+                        return Ok(Some(completed));
+                    }
+                    return Err(Error::NotFound(reference.into()));
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        let id = initial.id.clone();
+        let initial_generation = initial.generation;
+        let initially_active = matches!(
+            initial.state,
+            ContainerState::Running { .. } | ContainerState::Paused { .. }
+        );
         loop {
-            let container = match self.resolve(reference).await {
+            let operation = self.operations.lock().await;
+            let container = match self.required(&id).await {
                 Ok(value) => value,
                 Err(Error::NotFound(_)) => {
-                    let completed = self.exits.lock().await.get(reference).copied();
+                    let completed = self.exits.lock().await.get(id.as_str()).copied();
                     if condition == WaitCondition::Removed {
-                        if observed.is_some() || completed.is_some() {
-                            return Ok(exit.or(completed));
-                        }
-                        return Err(Error::NotFound(reference.into()));
+                        return Ok(exit.or(completed));
                     }
                     if completed.is_some() {
                         return Ok(completed);
                     }
-                    return Err(Error::NotFound(reference.into()));
+                    return Err(Error::NotFound(id.to_string()));
                 }
                 Err(error) => return Err(error),
             };
@@ -33,15 +49,6 @@ impl Service {
             {
                 return Err(Error::Corrupt(format!("failed to persist exit state: {message}")));
             }
-            let (initial_generation, initially_active) = *observed.get_or_insert_with(|| {
-                (
-                    container.generation,
-                    matches!(
-                        container.state,
-                        ContainerState::Running { .. } | ContainerState::Paused { .. }
-                    ),
-                )
-            });
             if let ContainerState::Exited { result, .. } = container.state {
                 if condition == WaitCondition::NotRunning {
                     return Ok(Some(result));
@@ -73,24 +80,15 @@ impl Service {
             };
             let notified = notify.notified();
             tokio::pin!(notified);
-            let changed = match self.resolve(reference).await {
-                Err(Error::NotFound(_)) => condition == WaitCondition::Removed,
-                Ok(current) => {
-                    condition == WaitCondition::NotRunning && matches!(current.state, ContainerState::Exited { .. })
-                        || condition == WaitCondition::NextExit
-                            && (current.generation > initial_generation
-                                || initially_active && current.generation == initial_generation)
-                            && matches!(
-                                current.state,
-                                ContainerState::Exited { .. } | ContainerState::Restarting { .. }
-                            )
-                }
-                Err(error) => return Err(error),
-            };
-            if !changed {
-                notified.await;
-            }
+            notified.as_mut().enable();
+            drop(operation);
+            notified.await;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn has_waiter(&self, id: &crate::ContainerId) -> bool {
+        self.waiters.lock().await.contains_key(id)
     }
 
     pub(crate) async fn signal(&self, reference: &str, signal: Signal) -> Result<()> {

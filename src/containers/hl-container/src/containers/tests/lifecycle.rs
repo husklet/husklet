@@ -383,6 +383,40 @@ async fn wait_removed_completes_without_status_after_observed_created_container_
 }
 
 #[tokio::test]
+async fn wait_removed_stays_pinned_when_the_observed_name_is_reused() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    let original = containers.create(spec("reused")).await.unwrap();
+    let removed = {
+        let containers = containers.clone();
+        tokio::spawn(async move { containers.wait_for("reused", WaitCondition::Removed).await })
+    };
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !containers.service.has_waiter(&original.id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("waiter registration timed out");
+
+    let replacement = tokio::task::unconstrained(async {
+        containers.remove("reused").await.unwrap();
+        containers.create(spec("reused")).await.unwrap()
+    })
+    .await;
+
+    assert_ne!(replacement.id, original.id);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), removed)
+            .await
+            .expect("wait remained attached to the replacement")
+            .unwrap()
+            .unwrap(),
+        None
+    );
+    assert_eq!(containers.inspect("reused").await.unwrap().id, replacement.id);
+}
+
+#[tokio::test]
 async fn next_exit_observes_a_restart_policy_exit_without_waiting_for_final_stop() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(7));
     runtime.delay = Duration::from_millis(20);
