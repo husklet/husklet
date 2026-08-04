@@ -89,8 +89,15 @@ fn inventory(repository: &Path) -> Result<Inventory, Box<dyn Error>> {
 }
 
 fn authority(root: &Mapping, path: &Path) -> Result<Authority, Box<dyn Error>> {
-    if root.get(Value::String("oracle".into())).is_some() {
-        return Ok(Authority::Oracle);
+    if let Some(oracle) = root.get(Value::String("oracle".into())) {
+        let provider = oracle
+            .as_mapping()
+            .and_then(|value| value.get(Value::String("provider".into())))
+            .and_then(Value::as_str);
+        return provider.map_or_else(
+            || Err(format!("{}: oracle provider must be declared", path.display()).into()),
+            |_| Ok(Authority::Oracle),
+        );
     }
     let Some(expectation) = root.get(Value::String("expectation".into())) else {
         return Ok(Authority::Unclassified);
