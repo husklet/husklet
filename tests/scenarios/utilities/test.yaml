@@ -1,0 +1,2582 @@
+cases:
+- id: utilities/sha256-abc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | sha256sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha256_abc.txt
+- id: utilities/md5-abc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | md5sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/md5_abc.txt
+- id: utilities/base64-encode
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf dd | base64
+  expect:
+    stdout_contains: golden/base64_encode.txt
+- id: utilities/base64-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf hello | base64 | base64 -d
+  expect:
+    stdout_contains: golden/base64_roundtrip.txt
+- id: utilities/sort-numeric
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''3
+
+        1
+
+        2
+
+        '' | sort -n | paste -sd, -'
+  expect:
+    stdout_contains: golden/sort_numeric.txt
+- id: utilities/tr-upper
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo 'the quick brown' | tr a-z A-Z
+  expect:
+    stdout_contains: golden/tr_upper.txt
+- id: utilities/cut-field
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'echo a:b:c | cut -d: -f2'
+  expect:
+    stdout_contains: golden/cut_field.txt
+- id: utilities/grep-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''foo
+
+        bar
+
+        foo
+
+        '' | grep -c foo'
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/sed-substitute
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo abcabc | sed 's/a/X/g'
+  expect:
+    stdout_contains: golden/sed_substitute.txt
+- id: utilities/head-tail
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 10 | head -3 | tail -1
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/wc-lines
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 100 | wc -l
+  expect:
+    stdout_contains: golden/wc_lines.txt
+- id: utilities/wc-chars
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | wc -c
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/factor
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: factor 500500 | tr ' ' '\n' | tail -n1
+  expect:
+    stdout_contains: golden/factor.txt
+- id: utilities/awk-squares
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk 'BEGIN{for(i=1;i<=100;i++)s+=i*i;print s}'
+  expect:
+    stdout_contains: golden/awk_squares.txt
+- id: utilities/seq-awk-sum
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 1000 | awk '{s+=$1} END{print "SUM="s}'
+  expect:
+    stdout_contains: golden/seq_awk.txt
+- id: utilities/paste-bc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 1000 | paste -sd+ - | bc
+  expect:
+    stdout_contains: golden/paste_bc.txt
+- id: utilities/sort-uniq-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''b
+
+        a
+
+        c
+
+        a
+
+        b
+
+        '' | sort | uniq -c | awk ''{print $1$2}'' | paste -sd, -'
+  expect:
+    stdout_contains: golden/sort_uniq.txt
+- id: utilities/word-frequency
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''apple
+
+        banana
+
+        apple
+
+        cherry
+
+        banana
+
+        apple
+
+        '' | sort | uniq -c | sort -rn | awk ''NR == 1 {print $2}'''
+  expect:
+    stdout_contains: golden/word_frequency.txt
+- id: utilities/printf-hex
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '%x\n' 255
+  expect:
+    stdout_contains: golden/printf_hex.txt
+- id: utilities/printf-pad
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '%05d\n' 42
+  expect:
+    stdout_contains: golden/printf_pad.txt
+- id: utilities/arith-shift
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo $((1 << 10))
+  expect:
+    stdout_contains: golden/arith_shift.txt
+- id: utilities/arith-mod
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo $((17 % 5))
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/param-length
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: s=hello; echo ${#s}
+  expect:
+    stdout_contains: golden/param_length.txt
+- id: utilities/param-suffix-strip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: f=archive.tar.gz; echo ${f%.gz}
+  expect:
+    stdout_contains: golden/param_suffix.txt
+- id: utilities/proc-version-linux
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c5 /proc/version
+  expect:
+    stdout_contains: golden/proc_version.txt
+- id: utilities/id-root
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: id -u
+  expect:
+    stdout_contains: golden/id_root.txt
+- id: utilities/uname-linux
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: uname -s
+  expect:
+    stdout_contains: golden/proc_version.txt
+- id: utilities/seq-separator
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq -s, 1 5
+  expect:
+    stdout_contains: golden/seq_separator.txt
+- id: utilities/tr-delete-digits
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo a1b2c3 | tr -d 0-9
+  expect:
+    stdout_contains: golden/tr_delete.txt
+- id: utilities/rev-string
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo abc | rev
+  expect:
+    stdout_contains: golden/rev_string.txt
+- id: utilities/od-hex-byte
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf A | od -An -tx1 | tr -d ' '
+  expect:
+    stdout_contains: golden/od_hex.txt
+- id: utilities/xargs-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo 1 2 3 4 | xargs -n1 | wc -l
+  expect:
+    stdout_contains: golden/xargs_count.txt
+- id: utilities/grep-only-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo foobar | grep -o o | wc -l
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/sed-print-line
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''a
+
+        b
+
+        c
+
+        '' | sed -n 2p'
+  expect:
+    stdout_contains: golden/cut_field.txt
+- id: utilities/awk-field-sep
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo a,b,c | awk -F, '{print $2}'
+  expect:
+    stdout_contains: golden/cut_field.txt
+- id: utilities/trap-exit
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: trap 'echo trapped' EXIT; true
+  expect:
+    stdout_contains: golden/trap_exit.txt
+- id: utilities/exit-code-capture
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: sh -c 'exit 3'; echo rc=$?
+  expect:
+    stdout_contains: golden/exit_code.txt
+- id: utilities/expr-length
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: expr length abcde
+  expect:
+    stdout_contains: golden/param_length.txt
+- id: utilities/proc-self-comm
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cat /proc/self/comm
+  expect:
+    stdout_contains: golden/proc_self.txt
+- id: utilities/proc-meminfo
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q MemTotal /proc/meminfo && echo mem-ok
+  expect:
+    stdout_contains: golden/proc_meminfo.txt
+- id: utilities/proc-mounts-root
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk '$2=="/"{print "root-fs"; exit}' /proc/mounts
+  expect:
+    stdout_contains: golden/proc_mounts.txt
+- id: utilities/proc-uptime
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk '{print ($1>=0)?"up-ok":"bad"}' /proc/uptime
+  expect:
+    stdout_contains: golden/proc_uptime.txt
+- id: utilities/proc-cpuinfo
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk '/^processor/{c++}END{print (c>=1)?"cpu-ok":"none"}' /proc/cpuinfo
+  expect:
+    stdout_contains: golden/proc_cpuinfo.txt
+- id: utilities/proc-stat-cpu
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q '^cpu ' /proc/stat && echo stat-ok
+  expect:
+    stdout_contains: golden/proc_stat.txt
+- id: utilities/sys-kernel-ostype
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cat /proc/sys/kernel/ostype
+  expect:
+    stdout_contains: golden/proc_version.txt
+- id: utilities/tail-plus
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 5 | tail -n +3 | head -1
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/cut-chars
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo abcdef | cut -c2-4
+  expect:
+    stdout_contains: golden/cut_chars.txt
+- id: utilities/comm-common
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'a\nb\nc\n' >/tmp/cx; printf 'b\nc\nd\n' >/tmp/cy; comm -12 /tmp/cx /tmp/cy | paste -sd, -
+  expect:
+    stdout_contains: golden/comm_common.txt
+- id: utilities/fold-width
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo abcdef | fold -w2 | wc -l
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/nl-number
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'x\ny\n' | nl | awk 'NR==2{print $1}'
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/tac-reverse
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '1\n2\n3\n' | tac | paste -sd, -
+  expect:
+    stdout_contains: golden/tac_reverse.txt
+- id: utilities/wc-words
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo 'one two three' | wc -w
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/sha1-abc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | sha1sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha1_abc.txt
+- id: utilities/sha512-abc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | sha512sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha512_abc.txt
+- id: utilities/cksum-abc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | cksum
+  expect:
+    stdout_contains: golden/cksum_abc.txt
+- id: utilities/sort-reverse
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '1\n2\n3\n' | sort -r | paste -sd, -
+  expect:
+    stdout_contains: golden/tac_reverse.txt
+- id: utilities/umask-default
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: umask
+  expect:
+    stdout_contains: golden/umask_default.txt
+- id: utilities/printf-octal
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '%o\n' 8
+  expect:
+    stdout_contains: golden/printf_octal.txt
+- id: utilities/printf-float
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '%.2f\n' 3.14159
+  expect:
+    stdout_contains: golden/printf_float.txt
+- id: utilities/getent-passwd-root
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'getent passwd root | cut -d: -f1'
+  expect:
+    stdout_contains: golden/getent_passwd.txt
+- id: utilities/dd-count-bs
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: dd if=/dev/zero bs=1024 count=4 2>/dev/null | wc -c
+  expect:
+    stdout_contains: golden/dd_count.txt
+- id: utilities/stat-size
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc > /tmp/statz; stat -c %s /tmp/statz
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/stat-name
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: stat -c %n /etc/passwd
+  expect:
+    stdout_contains: golden/stat_name.txt
+- id: utilities/find-type-name
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: find /etc -maxdepth 1 -type f -name passwd
+  expect:
+    stdout_contains: golden/stat_name.txt
+- id: utilities/test-string-eq
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ abc = abc ] && echo eq'
+  expect:
+    stdout_contains: golden/test_string.txt
+- id: utilities/test-int-gt
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ 5 -gt 3 ] && echo yes'
+  expect:
+    stdout_contains: golden/test_int.txt
+- id: utilities/case-glob
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: x=hello; case $x in hel*) echo match;; esac
+  expect:
+    stdout_contains: golden/case_glob.txt
+- id: utilities/while-read-loop
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'a\nb\nc\n' | while read l; do echo L:$l; done | tail -1
+  expect:
+    stdout_contains: golden/while_read.txt
+- id: utilities/getopts-flag
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'f(){ while getopts a: o; do echo $o=$OPTARG; done; }; f -a xyz'
+  expect:
+    stdout_contains: golden/getopts_flag.txt
+- id: utilities/env-clean
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: env -i FOO=bar sh -c 'echo $FOO'
+  expect:
+    stdout_contains: golden/env_clean.txt
+- id: utilities/readlink-canon
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: readlink -f /etc/../etc/passwd
+  expect:
+    stdout_contains: golden/stat_name.txt
+- id: utilities/basename-suffix
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: basename /usr/local/bin/foo.sh .sh
+  expect:
+    stdout_contains: golden/basename_suffix.txt
+- id: utilities/dirname-path
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: dirname /usr/local/bin/foo
+  expect:
+    stdout_contains: golden/dirname_path.txt
+- id: utilities/tr-class-lower
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo 'Hello World' | tr '[:upper:]' '[:lower:]'
+  expect:
+    stdout_contains: golden/tr_class.txt
+- id: utilities/sort-field-numeric
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''3:a\n1:b\n2:c\n'' | sort -t: -k1 -n | head -1'
+  expect:
+    stdout_contains: golden/sort_field.txt
+- id: utilities/uniq-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'a\na\nb\n' | uniq -c | awk 'NR==1{print $1}'
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/sed-range
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '1\n2\n3\n4\n' | sed -n '2,3p' | paste -sd, -
+  expect:
+    stdout_contains: golden/sed_range.txt
+- id: utilities/awk-nr-end
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'a\nb\nc\n' | awk 'END{print NR}'
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/head-bytes
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abcdef | head -c3
+  expect:
+    stdout_contains: golden/tr_delete.txt
+- id: utilities/expr-multiply
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: expr 6 '*' 7
+  expect:
+    stdout_contains: golden/expr_multiply.txt
+- id: utilities/expr-substr
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: expr substr abcdef 2 3
+  expect:
+    stdout_contains: golden/cut_chars.txt
+- id: utilities/test-file-exists
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ -e /etc/passwd ] && echo present'
+  expect:
+    stdout_contains: golden/test_file.txt
+- id: utilities/sort-unique
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'b\na\nb\n' | sort -u | paste -sd, -
+  expect:
+    stdout_contains: golden/sort_unique.txt
+- id: utilities/grep-extended
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo abc123 | grep -oE '[0-9]+'
+  expect:
+    stdout_contains: golden/grep_extended.txt
+- id: utilities/awk-gsub
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo aaa | awk '{gsub(/a/,"b"); print}'
+  expect:
+    stdout_contains: golden/awk_gsub.txt
+- id: utilities/ubuntu-stat-format-size
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abcde > /tmp/sf; stat --format=%s /tmp/sf
+  expect:
+    stdout_contains: golden/param_length.txt
+- id: utilities/ubuntu-stat-format-octal
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: install -m 640 /dev/null /tmp/pf; stat --format=%a /tmp/pf
+  expect:
+    stdout_contains: golden/ubuntu_stat.txt
+- id: utilities/ubuntu-du-apparent-size
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 0123456789 > /tmp/du; du --apparent-size -b /tmp/du | cut -f1
+  expect:
+    stdout_contains: golden/printf_octal.txt
+- id: utilities/ubuntu-numfmt-to-iec
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: numfmt --to=iec 1048576
+  expect:
+    stdout_contains: golden/ubuntu_numfmt.txt
+- id: utilities/ubuntu-numfmt-from-iec
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: numfmt --from=iec 1K
+  expect:
+    stdout_contains: golden/arith_shift.txt
+- id: utilities/ubuntu-factor-semicolon
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: factor 91
+  expect:
+    stdout_contains: golden/ubuntu_factor.txt
+- id: utilities/ubuntu-seq-width
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: seq -w 8 11 | paste -sd, -
+  expect:
+    stdout_contains: golden/ubuntu_seq.txt
+- id: utilities/ubuntu-sort-version
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '10\n9\n100\n' | sort --version-sort | paste -sd, -
+  expect:
+    stdout_contains: golden/ubuntu_sort.txt
+- id: utilities/ubuntu-nl-ba-blank
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'x\n\ny\n' | nl -ba | awk 'NR==2{print $1}'
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/ubuntu-fmt-width
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'aa bb cc dd ee ff\n' | fmt -w 8 | head -1
+  expect:
+    stdout_contains: golden/ubuntu_fmt.txt
+- id: utilities/ubuntu-proc-maps-exec
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q r-xp /proc/self/maps && echo maps-ok
+  expect:
+    stdout_contains: golden/ubuntu_proc.txt
+- id: utilities/ubuntu-proc-status-vmrss
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q VmRSS /proc/self/status && echo status-ok
+  expect:
+    stdout_contains: golden/ubuntu_proc2.txt
+- id: utilities/ubuntu-proc-limits-nofile
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q 'Max open files' /proc/self/limits && echo limits-ok
+  expect:
+    stdout_contains: golden/ubuntu_proc3.txt
+- id: utilities/ubuntu-proc-stat-comm
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: cat /proc/self/stat | sed 's/.*(\(.*\)).*/\1/'
+  expect:
+    stdout_contains: golden/proc_self.txt
+- id: utilities/ubuntu-getconf-longbit
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: getconf LONG_BIT
+  expect:
+    stdout_contains: golden/ubuntu_getconf.txt
+- id: utilities/ubuntu-getconf-pagesize
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: getconf PAGESIZE
+  expect:
+    stdout_contains: golden/dd_count.txt
+- id: utilities/ubuntu-ldd-version-glibc
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: ldd --version | head -1
+  expect:
+    stdout_contains: golden/ubuntu_ldd.txt
+- id: utilities/ubuntu-getent-group-root
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: 'getent group root | cut -d: -f1'
+  expect:
+    stdout_contains: golden/getent_passwd.txt
+- id: utilities/ubuntu-date-epoch-zero
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: date -u -d @0 +%Y-%m-%d
+  expect:
+    stdout_contains: golden/ubuntu_date.txt
+- id: utilities/ubuntu-date-parse-epoch
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: date -u -d '2000-01-01 12:00:00' +%s
+  expect:
+    stdout_contains: golden/ubuntu_date2.txt
+- id: utilities/ubuntu-large-pipe-count
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 100000 | wc -l
+  expect:
+    stdout_contains: golden/ubuntu_large.txt
+- id: utilities/ubuntu-printf-many-args
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '%s+' 1 2 3 4 5; echo
+  expect:
+    stdout_contains: golden/ubuntu_printf.txt
+- id: utilities/ubuntu-dd-copy-bytes
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: dd if=/dev/zero bs=1000 count=5 2>/dev/null | wc -c
+  expect:
+    stdout_contains: golden/ubuntu_dd.txt
+- id: utilities/ubuntu-iconv-roundtrip
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf AAA | iconv -f ascii -t utf-16 | iconv -f utf-16 -t ascii
+  expect:
+    stdout_contains: golden/ubuntu_iconv.txt
+- id: utilities/ubuntu-truncate-size
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: truncate -s 8192 /tmp/tr8; stat --format=%s /tmp/tr8
+  expect:
+    stdout_contains: golden/ubuntu_truncate.txt
+- id: utilities/deep-pipeline
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 100 | cat | cat | cat | cat | cat | cat | cat | cat | wc -l
+  expect:
+    stdout_contains: golden/wc_lines.txt
+- id: utilities/xargs-parallel
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 200 | xargs -P4 -n1 echo | wc -l
+  expect:
+    stdout_contains: golden/xargs_parallel.txt
+- id: utilities/subshell-fanout
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: (echo a & echo b & echo c & wait) | sort | paste -sd, -
+  expect:
+    stdout_contains: golden/subshell_fanout.txt
+- id: utilities/nested-subst
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 200 ]; do s=$(( $s + $(echo $i) )); i=$((i+1)); done; echo T=$s
+  expect:
+    stdout_contains: golden/nested_subst.txt
+- id: utilities/trap-usr1
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: trap 'echo got-usr1' USR1; kill -USR1 $$; echo done
+  expect:
+    stdout_contains: golden/trap_usr1.txt
+- id: utilities/trap-term-handler
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: trap 'echo caught-term; exit 0' TERM; kill -TERM $$; echo after
+  expect:
+    stdout_contains: golden/trap_term.txt
+- id: utilities/background-wait
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: (sleep 0.1; echo child-done) & wait; echo parent-done
+  expect:
+    stdout_contains: golden/background_wait.txt
+- id: utilities/wait-many
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: for i in 1 2 3 4 5; do (echo j$i) & done; wait; echo all-done
+  expect:
+    stdout_contains: golden/wait_many.txt
+- id: utilities/bang-pid-wait
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: sleep 0.1 & p=$!; wait $p; echo waited=$?
+  expect:
+    stdout_contains: golden/bang_pid.txt
+- id: utilities/timeout-ok
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: timeout 5 echo hi; echo rc=$?
+  expect:
+    stdout_contains: golden/timeout_ok.txt
+- id: utilities/large-pipe-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1000000 | wc -l
+  expect:
+    stdout_contains: golden/large_pipe.txt
+- id: utilities/zero-throughput
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c 10485760 /dev/zero | wc -c
+  expect:
+    stdout_contains: golden/zero_throughput.txt
+- id: utilities/dd-big-block
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: dd if=/dev/zero bs=1048576 count=16 2>/dev/null | wc -c
+  expect:
+    stdout_contains: golden/dd_big.txt
+- id: utilities/parallel-writers
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp; rm -f pw*; for i in 1 2 3 4 5 6 7 8; do (seq 1 1000 > /tmp/pw$i) & done; wait; cat /tmp/pw* | awk '{s+=$1}END{print "S="s}'
+  expect:
+    stdout_contains: golden/parallel_writers.txt
+- id: utilities/mkfifo-io
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/ff1; mkfifo /tmp/ff1; (echo fifo-ok > /tmp/ff1) & cat /tmp/ff1
+  expect:
+    stdout_contains: golden/mkfifo_io.txt
+- id: utilities/ubuntu-pipefail-status
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: bash -c 'set -o pipefail; (exit 42) | cat; echo rc=$?'
+  expect:
+    stdout_contains: golden/ubuntu_pipefail.txt
+- id: utilities/ubuntu-brace-jobs
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: bash -c 'for i in {1..8}; do (echo x) & done; wait; echo done8'
+  expect:
+    stdout_contains: golden/ubuntu_brace.txt
+- id: utilities/ubuntu-big-pipe
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 2000000 | wc -l
+  expect:
+    stdout_contains: golden/ubuntu_big.txt
+- id: utilities/date-epoch
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: date -u -d @0 +%Y-%m-%d
+  expect:
+    stdout_contains: golden/ubuntu_date.txt
+- id: utilities/date-utc-year
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: TZ=UTC0 date -u -d @1000000000 +%Y
+  expect:
+    stdout_contains: golden/date_utc.txt
+- id: utilities/uptime-mono
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: a=$(cut -d. -f1 /proc/uptime); sleep 1; b=$(cut -d. -f1 /proc/uptime); [ $b -ge $a ] && echo mono-ok
+  expect:
+    stdout_contains: golden/uptime_mono.txt
+- id: utilities/sleep-frac
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: sleep 0.1 && echo slept
+  expect:
+    stdout_contains: golden/sleep_frac.txt
+- id: utilities/hardlink-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp; rm -f h1 h2; echo x>h1; ln h1 h2; stat -c %h h1
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/truncate-grow
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/tg; truncate -s 4096 /tmp/tg; stat -c %s /tmp/tg
+  expect:
+    stdout_contains: golden/dd_count.txt
+- id: utilities/sparse-seek
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/sp; dd if=/dev/zero of=/tmp/sp bs=1 count=1 seek=1000000 2>/dev/null; stat -c %s /tmp/sp
+  expect:
+    stdout_contains: golden/sparse_seek.txt
+- id: utilities/mkdir-deep
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -rf /tmp/dd0; mkdir -p /tmp/dd0/a/b/c/d/e/f/g; [ -d /tmp/dd0/a/b/c/d/e/f/g ] && echo deep-ok
+  expect:
+    stdout_contains: golden/mkdir_deep.txt
+- id: utilities/readlink-chain
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp; rm -f l1 l2 tgt0; echo z>tgt0; ln -s tgt0 l1; ln -s l1 l2; readlink -f l2
+  expect:
+    stdout_contains: golden/readlink_chain.txt
+- id: utilities/mktemp
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: f=$(mktemp); [ -f "$f" ] && echo mktemp-ok; rm -f "$f"
+  expect:
+    stdout_contains: golden/mktemp.txt
+- id: utilities/rename-atomic
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp; rm -f ra rb; echo v>ra; mv ra rb; [ ! -e ra ] && [ -e rb ] && echo rename-ok
+  expect:
+    stdout_contains: golden/rename_atomic.txt
+- id: utilities/sort-big-buffer
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 100000 | sort -S 1M -n | tail -1
+  expect:
+    stdout_contains: golden/ubuntu_large.txt
+- id: utilities/awk-big-array
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk 'BEGIN{for(i=0;i<100000;i++)a[i]=i; s=0; for(k in a)s+=a[k]; print s}'
+  expect:
+    stdout_contains: golden/awk_big.txt
+- id: utilities/grep-huge
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 1000000 | grep -x 999999 | head -1
+  expect:
+    stdout_contains: golden/grep_huge.txt
+- id: utilities/nproc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: n=$(nproc); [ $n -ge 1 ] && echo nproc-ok
+  expect:
+    stdout_contains: golden/nproc.txt
+- id: utilities/getconf-nproc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ $(getconf _NPROCESSORS_ONLN) -ge 1 ] && echo cpu-conf-ok'
+  expect:
+    stdout_contains: golden/getconf_nproc.txt
+- id: utilities/self-threads
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q '^Threads:' /proc/self/status && echo threads-ok
+  expect:
+    stdout_contains: golden/self_threads.txt
+- id: utilities/exec-replace
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: sh -c 'exec echo replaced'
+  expect:
+    stdout_contains: golden/exec_replace.txt
+- id: utilities/eof-read
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: timeout 2 sh -c 'read x' </dev/null; echo rc=$?
+  expect:
+    stdout_contains: golden/eof_read.txt
+- id: utilities/lc-c-sort
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'b\nA\na\nB\n' | LC_ALL=C sort | paste -sd, -
+  expect:
+    stdout_contains: golden/lc_c.txt
+- id: utilities/getconf-clk
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: getconf CLK_TCK
+  expect:
+    stdout_contains: golden/wc_lines.txt
+- id: utilities/stat-blocks
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/sb; dd if=/dev/zero of=/tmp/sb bs=1024 count=8 2>/dev/null; stat -c %b /tmp/sb
+  expect:
+    stdout_contains: golden/stat_blocks.txt
+- id: utilities/ubuntu-flock
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: flock /tmp/lkx -c 'echo locked'
+  expect:
+    stdout_contains: golden/ubuntu_flock.txt
+- id: utilities/ubuntu-fallocate
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/fa; fallocate -l 8192 /tmp/fa; stat -c %s /tmp/fa
+  expect:
+    stdout_contains: golden/ubuntu_truncate.txt
+- id: utilities/ubuntu-iconv-latin1
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'caf\303\251' | iconv -f utf-8 -t latin1 | iconv -f latin1 -t utf-8 | wc -c
+  expect:
+    stdout_contains: golden/param_length.txt
+- id: utilities/ubuntu-wc-m
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '\303\251\303\251' | LC_ALL=C.UTF-8 wc -m
+  expect:
+    stdout_contains: golden/grep_count.txt
+- id: utilities/ubuntu-read-timeout
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: bash -c 'read -t 1 x < <(sleep 5); echo rc=$?'
+  expect:
+    stdout_contains: golden/eof_read.txt
+- id: utilities/ubuntu-taskset
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: taskset -c 0 sh -c 'echo pinned'
+  expect:
+    stdout_contains: golden/ubuntu_taskset.txt
+- id: utilities/ubuntu-nsenter-self
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: readlink /proc/self/ns/pid | grep -q 'pid:\[' && echo ns-ok
+  expect:
+    stdout_contains: golden/ubuntu_nsenter.txt
+- id: utilities/big-argv
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: set -- $(seq 1 50000); echo $#
+  expect:
+    stdout_contains: golden/big_argv.txt
+- id: utilities/argmax
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ $(getconf ARG_MAX) -ge 4096 ] && echo argmax-ok'
+  expect:
+    stdout_contains: golden/argmax.txt
+- id: utilities/self-fd
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ $(ls /proc/self/fd | wc -l) -ge 3 ] && echo fd-ok'
+  expect:
+    stdout_contains: golden/self_fd.txt
+- id: utilities/urandom
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c 16 /dev/urandom | wc -c
+  expect:
+    stdout_contains: golden/stat_blocks.txt
+- id: utilities/dev-full
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: dd if=/dev/zero of=/dev/full bs=1 count=1 2>/dev/null; echo rc=$?
+  expect:
+    stdout_contains: golden/eof_read.txt
+- id: utilities/sparse-blocks
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/sp3; truncate -s 1048576 /tmp/sp3; [ $(stat -c %b /tmp/sp3) -lt 100 ] && echo sparse-ok
+  expect:
+    stdout_contains: golden/sparse_blocks.txt
+- id: utilities/hardlink-share
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp; rm -f ha hb; echo one>ha; ln ha hb; echo two>>ha; [ "$(wc -l < hb)" = 2 ] && echo hl-share-ok
+  expect:
+    stdout_contains: golden/hardlink_share.txt
+- id: utilities/mtime-persist
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: touch -d @1000000000 /tmp/tmx; [ "$(date -u -d @$(stat -c %Y /tmp/tmx) +%Y)" = 2001 ] && echo mtime-ok
+  expect:
+    stdout_contains: golden/mtime_persist.txt
+- id: utilities/suid-bit
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/su0; touch /tmp/su0; chmod 4755 /tmp/su0; stat -c %a /tmp/su0
+  expect:
+    stdout_contains: golden/suid_bit.txt
+- id: utilities/statfs-bsize
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: stat -f -c %S / | grep -qE '^[0-9]+$' && echo bsz-ok
+  expect:
+    stdout_contains: golden/statfs_bsize.txt
+- id: utilities/truncate-shrink
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: rm -f /tmp/ts0; printf 0123456789 > /tmp/ts0; truncate -s 4 /tmp/ts0; cat /tmp/ts0; echo
+  expect:
+    stdout_contains: golden/truncate_shrink.txt
+- id: utilities/proc-net-tcp-header
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -1 /proc/net/tcp | grep -q local_address && echo tcp-hdr-ok
+  expect:
+    stdout_contains: golden/proc_net.txt
+- id: utilities/proc-net-dev-lo
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q 'lo:' /proc/net/dev && echo lo-dev-ok
+  expect:
+    stdout_contains: golden/proc_net2.txt
+- id: utilities/proc-net-unix-header
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -1 /proc/net/unix | grep -qi num && echo unix-hdr-ok
+  expect:
+    stdout_contains: golden/proc_net3.txt
+- id: utilities/getent-hosts-localhost
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: getent hosts localhost | grep -qE '::1|127.0.0.1' && echo getent-host-ok
+  expect:
+    stdout_contains: golden/getent_hosts.txt
+- id: utilities/sha256-1mb-zero
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c 1048576 /dev/zero | sha256sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha256_1mb.txt
+- id: utilities/md5-1mb-zero
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c 1048576 /dev/zero | md5sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/md5_1mb.txt
+- id: utilities/base64-large-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c 100000 /dev/zero | base64 | base64 -d | wc -c
+  expect:
+    stdout_contains: golden/ubuntu_large.txt
+- id: utilities/gzip9-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo hl-gz9-ok | gzip -9 | gunzip
+  expect:
+    stdout_contains: golden/gzip9_roundtrip.txt
+- id: utilities/zcat-stream
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo zcat-ok | gzip | zcat
+  expect:
+    stdout_contains: golden/zcat_stream.txt
+- id: utilities/gzip-ratio
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ $(head -c 5242880 /dev/zero | gzip | wc -c) -lt 100000 ] && echo gz-ratio-ok'
+  expect:
+    stdout_contains: golden/gzip_ratio.txt
+- id: utilities/tar-list
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf tl tl.tar && mkdir tl && echo x > tl/inside.txt && tar cf tl.tar tl && tar tf tl.tar | grep inside.txt
+  expect:
+    stdout_contains: golden/tar_list.txt
+- id: utilities/tar-big-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf tb tb.tar && mkdir tb && seq 1 5000 > tb/n && tar cf tb.tar tb && rm -rf tb && tar xf tb.tar && awk '{s+=$1}END{print s}' tb/n
+  expect:
+    stdout_contains: golden/tar_big.txt
+- id: utilities/find-head-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: find / -type f 2>/dev/null | wc -l | awk '{print ($1>100)?"find-count-ok":"low"}'
+  expect:
+    stdout_contains: golden/find_head.txt
+- id: utilities/grep-r-etc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -rl root /etc 2>/dev/null | head -1 | grep -q /etc/ && echo grep-r-ok
+  expect:
+    stdout_contains: golden/grep_r.txt
+- id: utilities/xargs-spawn-many
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 300 | xargs -n1 sh -c 'echo $1' _ | wc -l
+  expect:
+    stdout_contains: golden/xargs_spawn.txt
+- id: utilities/shell-fib
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: fib(){ [ $1 -lt 2 ] && echo $1 && return; echo $(( $(fib $(($1-1))) + $(fib $(($1-2))) )); }; fib 15
+  expect:
+    stdout_contains: golden/shell_fib.txt
+- id: utilities/sort-descending-huge
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 300000 | awk '{print 300000-$1}' | sort -n | tail -1
+  expect:
+    stdout_contains: golden/sort_descending.txt
+- id: utilities/sha256sum-check
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc > /tmp/scv; echo "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  /tmp/scv" | sha256sum -c
+  expect:
+    stdout_contains: golden/sha256sum_check.txt
+- id: utilities/ubuntu-flock-w
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: flock -w 2 /tmp/lkw -c 'echo flock-w-ok'
+  expect:
+    stdout_contains: golden/ubuntu_flock2.txt
+- id: utilities/ubuntu-getent-hosts
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: getent hosts localhost | grep -qE '::1|127.0.0.1' && echo getent-host-ok
+  expect:
+    stdout_contains: golden/getent_hosts.txt
+- id: utilities/ubuntu-tar-gzip-list
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf ug ug.tgz && mkdir ug && seq 1 2000 > ug/n && tar czf ug.tgz ug && tar tzf ug.tgz | grep ug/n
+  expect:
+    stdout_contains: golden/ubuntu_tar.txt
+- id: utilities/ubuntu-sha256-big
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c 1048576 /dev/zero | sha256sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha256_1mb.txt
+- id: utilities/ulimit-nofile
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: ulimit -n | grep -qE '^[0-9]+$|unlimited' && echo nofile-ok
+  expect:
+    stdout_contains: golden/ulimit_nofile.txt
+- id: utilities/ulimit-stack
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: ulimit -s | grep -qE '^[0-9]+$|unlimited' && echo stack-ok
+  expect:
+    stdout_contains: golden/ulimit_stack.txt
+- id: utilities/ulimit-cpu-unlimited
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: sh -c 'ulimit -t unlimited; echo ok'
+  expect:
+    stdout_contains: golden/ulimit_cpu.txt
+- id: utilities/getconf-openmax
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: getconf OPEN_MAX | grep -qE '^[0-9]+$' && echo openmax-ok
+  expect:
+    stdout_contains: golden/getconf_openmax.txt
+- id: utilities/proc-limits-nofile-value
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk '/Max open files/{print ($4>0)?"lim-ok":"bad"}' /proc/self/limits
+  expect:
+    stdout_contains: golden/proc_limits.txt
+- id: utilities/nice-default
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: nice
+  expect:
+    stdout_contains: golden/id_root.txt
+- id: utilities/nice-adjust
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: nice -n 7 nice
+  expect:
+    stdout_contains: golden/nice_adjust.txt
+- id: utilities/env-i-clears
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: FOO=bar env -i sh -c 'echo ${FOO:-cleared}'
+  expect:
+    stdout_contains: golden/env_i.txt
+- id: utilities/env-inline-var
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: A=1 sh -c 'echo $A'
+  expect:
+    stdout_contains: golden/env_inline.txt
+- id: utilities/export-cross
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: export XV=hi; sh -c 'echo $XV'
+  expect:
+    stdout_contains: golden/export_cross.txt
+- id: utilities/unset-cross
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: XV=hi; unset XV; echo "[${XV:-gone}]"
+  expect:
+    stdout_contains: golden/unset_cross.txt
+- id: utilities/long-env-var
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: export A=$(printf 'a%.0s' $(seq 1 5000)); echo ${#A}
+  expect:
+    stdout_contains: golden/ubuntu_dd.txt
+- id: utilities/printenv-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: env -i A=1 B=2 C=3 printenv | wc -l
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/positional-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: set -- a b c; echo $#
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/positional-at
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: set -- x y z; echo "$@"
+  expect:
+    stdout_contains: golden/positional_at.txt
+- id: utilities/set-reset
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: set -- a b c; set --; echo count=$#
+  expect:
+    stdout_contains: golden/set_reset.txt
+- id: utilities/dollar-zero
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: sh -c 'echo $0' myname
+  expect:
+    stdout_contains: golden/dollar_zero.txt
+- id: utilities/mountinfo-count
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ $(wc -l < /proc/self/mountinfo) -ge 1 ] && echo minfo-ok'
+  expect:
+    stdout_contains: golden/mountinfo_count.txt
+- id: utilities/proc-self-cgroup
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ -e /proc/self/cgroup ] && echo cgroup-ok'
+  expect:
+    stdout_contains: golden/proc_self2.txt
+- id: utilities/proc-init-comm
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cat /proc/1/comm | grep -q . && echo init-ok
+  expect:
+    stdout_contains: golden/proc_init.txt
+- id: utilities/proc-status-uid
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk '/^Uid:/{print $2}' /proc/self/status
+  expect:
+    stdout_contains: golden/id_root.txt
+- id: utilities/proc-status-gid
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk '/^Gid:/{print $2}' /proc/self/status
+  expect:
+    stdout_contains: golden/id_root.txt
+- id: utilities/hostname-read
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: hostname | grep -q . && echo host-ok
+  expect:
+    stdout_contains: golden/hostname_read.txt
+- id: utilities/statfs-stat-f
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: stat -f -c %b / | grep -qE '^[0-9]+$' && echo statf-ok
+  expect:
+    stdout_contains: golden/statfs_stat.txt
+- id: utilities/bc-power
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo '2^10' | bc
+  expect:
+    stdout_contains: golden/arith_shift.txt
+- id: utilities/bc-scale
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo 'scale=4; 10/3' | bc
+  expect:
+    stdout_contains: golden/bc_scale.txt
+- id: utilities/dc-rpn
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo '2 3 + p' | dc
+  expect:
+    stdout_contains: golden/param_length.txt
+- id: utilities/expr-precedence
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: expr \( 2 + 3 \) \* 4
+  expect:
+    stdout_contains: golden/expr_precedence.txt
+- id: utilities/awk-prime-sum
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: awk 'BEGIN{for(i=2;i<100;i++){p=1;for(j=2;j*j<=i;j++)if(i%j==0)p=0;if(p)s+=i}print s}'
+  expect:
+    stdout_contains: golden/awk_prime.txt
+- id: utilities/ubuntu-ulimit-nofile
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: ulimit -n | grep -qE '^[0-9]+$|unlimited' && echo nofile-ok
+  expect:
+    stdout_contains: golden/ulimit_nofile.txt
+- id: utilities/ubuntu-proc-cgroup-v2
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: grep -q '^0::' /proc/self/cgroup && echo cg2-ok
+  expect:
+    stdout_contains: golden/ubuntu_proc4.txt
+- id: utilities/ubuntu-getconf-openmax
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: getconf OPEN_MAX | grep -qE '^[0-9]+$' && echo openmax-ok
+  expect:
+    stdout_contains: golden/getconf_openmax.txt
+- id: utilities/ubuntu-nproc-all
+  image: ubuntu:24.04
+  timeout: 120
+  actions:
+  - shell:
+      script: '[ $(nproc --all) -ge 1 ] && echo nproc-all-ok'
+  expect:
+    stdout_contains: golden/ubuntu_nproc.txt
+- id: utilities/pycompute-fib30
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: "python3 -c \"import sys\nsys.setrecursionlimit(100000)\ndef f(n):\n return n if n<2 else f(n-1)+f(n-2)\nprint('FIB', f(30))\""
+  expect:
+    stdout_contains: golden/pycompute_fib30.txt
+- id: utilities/pycompute-ackermann
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: "python3 -c \"import sys\nsys.setrecursionlimit(100000)\ndef a(m,n):\n return n+1 if m==0 else (a(m-1,1) if n==0 else a(m-1,a(m,n-1)))\nprint('ACK',\
+        \ a(2,3))\""
+  expect:
+    stdout_contains: golden/pycompute_ackermann.txt
+- id: utilities/pycompute-bigint-pow
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: python3 -c "print('BI', 2**100)"
+  expect:
+    stdout_contains: golden/pycompute_bigint.txt
+- id: utilities/pycompute-sort-1e5
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "a=list(range(100000))
+
+        a.sort(reverse=True)
+
+        print(''S'', a[0], a[-1], sum(a))"'
+  expect:
+    stdout_contains: golden/pycompute_sort.txt
+- id: utilities/pycompute-dict-agg
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "d={}
+
+        for i in range(100000): d[i%1000]=d.get(i%1000,0)+i
+
+        print(''SUM'', sum(d.values()), len(d))"'
+  expect:
+    stdout_contains: golden/pycompute_dict.txt
+- id: utilities/pycompute-json-roundtrip
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "import json
+
+        o={''a'':list(range(1000)),''b'':{''x'':''ддд''}}
+
+        s=json.dumps(o,ensure_ascii=False)
+
+        p=json.loads(s)
+
+        print(''JSON'', sum(p[''a'']), p[''b''][''x''])"'
+  expect:
+    stdout_contains: golden/pycompute_json.txt
+- id: utilities/pycompute-sha256-1mb
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "import hashlib
+
+        print(hashlib.sha256(b''\0''*1048576).hexdigest())"'
+  expect:
+    stdout_contains: golden/sha256_1mb.txt
+- id: utilities/pycompute-harmonic
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: python3 -c "print('H %.6f' % sum(1.0/n for n in range(1,1000001)))"
+  expect:
+    stdout_contains: golden/pycompute_harmonic.txt
+- id: utilities/pycompute-regex
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "import re
+
+        s=''ab''*100000
+
+        print(''RE'', len(re.findall(''ab'',s)), bool(re.match(r''(a+)+$'',''a''*20)))"'
+  expect:
+    stdout_contains: golden/pycompute_regex.txt
+- id: utilities/pycompute-setops
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "A=set(range(100000))
+
+        B=set(range(50000,150000))
+
+        print(''SET'', len(A&B), len(A|B))"'
+  expect:
+    stdout_contains: golden/pycompute_setops.txt
+- id: utilities/pycompute-strbuilder
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: python3 -c "print('SB', len(''.join(str(i) for i in range(100000))))"
+  expect:
+    stdout_contains: golden/pycompute_strbuilder.txt
+- id: utilities/pycompute-gc-churn
+  image: python:3.13-slim
+  timeout: 120
+  actions:
+  - shell:
+      script: 'python3 -c "s=0
+
+        for _ in range(100): s+=sum([i*i for i in range(1000)])
+
+        print(''GC'', s)"'
+  expect:
+    stdout_contains: golden/pycompute_gc.txt
+- id: utilities/nodecompute-fib30
+  image: node:22-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: node -e 'function f(n){return n<2?n:f(n-1)+f(n-2)}console.log("FIB",f(30))'
+  expect:
+    stdout_contains: golden/pycompute_fib30.txt
+- id: utilities/nodecompute-bigint
+  image: node:22-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: node -e 'console.log("BI",(2n**100n).toString())'
+  expect:
+    stdout_contains: golden/pycompute_bigint.txt
+- id: utilities/nodecompute-typedarray
+  image: node:22-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: node -e 'let a=new Float64Array(100000);for(let i=0;i<a.length;i++)a[i]=Math.sqrt(i);let s=0;for(let i=0;i<a.length;i++)s+=a[i];console.log("TA",s.toFixed(2))'
+  expect:
+    stdout_contains: golden/nodecompute_typedarray.txt
+- id: utilities/nodecompute-json
+  image: node:22-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: node -e 'let o={a:[]};for(let i=0;i<1000;i++)o.a.push(i);let p=JSON.parse(JSON.stringify(o));console.log("J",p.a.reduce((x,y)=>x+y,0))'
+  expect:
+    stdout_contains: golden/nodecompute_json.txt
+- id: utilities/nodecompute-sort-1e5
+  image: node:22-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: node -e 'let a=[];for(let i=0;i<100000;i++)a.push((i*2654435761)%100000);a.sort((x,y)=>x-y);console.log("NS",a[0],a[99999])'
+  expect:
+    stdout_contains: golden/nodecompute_sort.txt
+- id: utilities/nodecompute-gc-churn
+  image: node:22-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: node -e 'let s=0;for(let k=0;k<100;k++){let a=[];for(let i=0;i<1000;i++)a.push(i);s+=a.reduce((x,y)=>x+y,0)}console.log("GC",s)'
+  expect:
+    stdout_contains: golden/nodecompute_gc.txt
+- id: utilities/rubycompute-fib30
+  image: ruby:3.3-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: 'ruby -e ''def f(n); n<2 ? n : f(n-1)+f(n-2); end; puts "FIB #{f(30)}"'''
+  expect:
+    stdout_contains: golden/pycompute_fib30.txt
+- id: utilities/rubycompute-bignum
+  image: ruby:3.3-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: 'ruby -e ''puts "BN #{2**100}"'''
+  expect:
+    stdout_contains: golden/rubycompute_bignum.txt
+- id: utilities/rubycompute-sort
+  image: ruby:3.3-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: 'ruby -e ''a=(0...100000).map{|i|(i*2654435761)%100000}.sort; puts "RS #{a.first} #{a.last}"'''
+  expect:
+    stdout_contains: golden/rubycompute_sort.txt
+- id: utilities/rubycompute-hash-agg
+  image: ruby:3.3-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: 'ruby -e ''h=Hash.new(0);(0...100000).each{|i| h[i%1000]+=i}; puts "HS #{h.values.sum} #{h.size}"'''
+  expect:
+    stdout_contains: golden/rubycompute_hash.txt
+- id: utilities/rubycompute-json
+  image: ruby:3.3-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: 'ruby -e ''require "json"; o={"a"=>(0...1000).to_a}; p=JSON.parse(o.to_json); puts "J #{p["a"].sum}"'''
+  expect:
+    stdout_contains: golden/nodecompute_json.txt
+- id: utilities/perlcompute-fib
+  image: perl:5.40
+  timeout: 120
+  actions:
+  - shell:
+      script: perl -e 'sub f{my $n=shift; $n<2?$n:f($n-1)+f($n-2)} print "FIB ",f(30),"\n"'
+  expect:
+    stdout_contains: golden/pycompute_fib30.txt
+- id: utilities/perlcompute-sort
+  image: perl:5.40
+  timeout: 120
+  actions:
+  - shell:
+      script: perl -e 'my @a=sort {$a<=>$b} map {($_*2654435761)%100000} (0..99999); print "PS $a[0] $a[-1]\n"'
+  expect:
+    stdout_contains: golden/perlcompute_sort.txt
+- id: utilities/perlcompute-hash
+  image: perl:5.40
+  timeout: 120
+  actions:
+  - shell:
+      script: perl -e 'my %h; for my $i (0..99999){ $h{$i%1000}+=$i } my $s=0; $s+=$_ for values %h; print "HS $s ",scalar(keys %h),"\n"'
+  expect:
+    stdout_contains: golden/rubycompute_hash.txt
+- id: utilities/perlcompute-regex
+  image: perl:5.40
+  timeout: 120
+  actions:
+  - shell:
+      script: perl -e 'my $s="ab" x 100000; my $c=()=($s=~/ab/g); print "RE $c\n"'
+  expect:
+    stdout_contains: golden/perlcompute_regex.txt
+- id: utilities/phpcompute-fib
+  image: php:8.3-cli
+  timeout: 120
+  actions:
+  - shell:
+      script: php -r 'function f($n){return $n<2?$n:f($n-1)+f($n-2);} echo "FIB ".f(30)."\n";'
+  expect:
+    stdout_contains: golden/pycompute_fib30.txt
+- id: utilities/phpcompute-sort
+  image: php:8.3-cli
+  timeout: 120
+  actions:
+  - shell:
+      script: php -r '$a=[];for($i=0;$i<100000;$i++)$a[]=($i*2654435761)%100000;sort($a);echo "PS ".$a[0]." ".$a[99999]."\n";'
+  expect:
+    stdout_contains: golden/perlcompute_sort.txt
+- id: utilities/compile-c-sieve
+  image: gcc:13
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/c_sieve.c
+    destination: /tmp/p.c
+  actions:
+  - shell:
+      script: gcc -O2 -x c -o /tmp/p /tmp/p.c && /tmp/p
+  expect:
+    stdout_contains: golden/compile_c.txt
+- id: utilities/compile-c-fib
+  image: gcc:13
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/c_fib.c
+    destination: /tmp/p.c
+  actions:
+  - shell:
+      script: gcc -O2 -x c -o /tmp/p /tmp/p.c && /tmp/p
+  expect:
+    stdout_contains: golden/compile_c2.txt
+- id: utilities/compile-c-qsort
+  image: gcc:13
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/c_qsort.c
+    destination: /tmp/p.c
+  actions:
+  - shell:
+      script: gcc -O2 -x c -o /tmp/p /tmp/p.c && /tmp/p
+  expect:
+    stdout_contains: golden/compile_c3.txt
+- id: utilities/compile-cpp-stl
+  image: gcc:13
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/cpp_stl.cpp
+    destination: /tmp/p.cpp
+  actions:
+  - shell:
+      script: g++ -O2 -x c++ -o /tmp/p /tmp/p.cpp && /tmp/p
+  expect:
+    stdout_contains: golden/compile_cpp.txt
+- id: utilities/compile-cpp-map
+  image: gcc:13
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/cpp_map.cpp
+    destination: /tmp/p.cpp
+  actions:
+  - shell:
+      script: g++ -O2 -x c++ -o /tmp/p /tmp/p.cpp && /tmp/p
+  expect:
+    stdout_contains: golden/compile_cpp2.txt
+- id: utilities/compile-rust-sieve
+  image: rust:1-slim
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/rust_sieve.rs
+    destination: /tmp/p.rs
+  actions:
+  - shell:
+      script: rustc -O /tmp/p.rs -o /tmp/p && /tmp/p
+  expect:
+    stdout_contains: golden/compile_c.txt
+- id: utilities/compile-rust-sum
+  image: rust:1-slim
+  timeout: 120
+  resources:
+  - process_heavy
+  fixtures:
+  - source: source/rust_sum.rs
+    destination: /tmp/p.rs
+  actions:
+  - shell:
+      script: rustc -O /tmp/p.rs -o /tmp/p && /tmp/p
+  expect:
+    stdout_contains: golden/compile_rust.txt
+- id: utilities/git-log-count
+  image: bitnami/git:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf r && mkdir r && cd r && git init -q && git config user.email dd@dd && git config user.name dd && for i in 1 2 3; do echo $i > f$i
+        && git add f$i && git commit -q -m "c$i"; done && printf 'COMMITS %s\n' "$(git log --oneline | wc -l | tr -d ' ')"
+  expect:
+    stdout_contains: golden/git_log.txt
+- id: utilities/sha256-abc-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | sha256sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha256_abc.txt
+- id: utilities/openssl-sha256-empty
+  image: alpine/openssl:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - openssl
+      - dgst
+      - -sha256
+      - -r
+  expect:
+    stdout_contains: golden/openssl_sha256.txt
+- id: utilities/openssl-version
+  image: alpine/openssl:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - openssl
+      - version
+  expect:
+    stdout_contains: golden/openssl_version.txt
+- id: utilities/sort-uniq-count-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''b
+
+        a
+
+        c
+
+        a
+
+        b
+
+        '' | sort | uniq -c | awk ''{print $1$2}'' | paste -sd, -'
+  expect:
+    stdout_contains: golden/sort_uniq.txt
+- id: utilities/awk-squares-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: awk 'BEGIN{for(i=1;i<=100;i++)s+=i*i;print s}'
+  expect:
+    stdout_contains: golden/awk_squares.txt
+- id: utilities/factor-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: factor 500500 | tr ' ' '\n' | tail -n1
+  expect:
+    stdout_contains: golden/factor.txt
+- id: utilities/paste-bc-bash
+  image: bash:5.2
+  timeout: 120
+  actions:
+  - shell:
+      script: bash -c 'seq 1 1000 | paste -sd+ - | bc'
+  expect:
+    stdout_contains: golden/paste_bc.txt
+- id: utilities/fork-loop
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/seq_awk.txt
+- id: utilities/fork-loop-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/seq_awk.txt
+- id: utilities/fork-subshells
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: t=0; n=1; while [ $n -le 500 ]; do v=$(sh -c "echo $((n*2))"); t=$(expr $t + $v); n=$(expr $n + 1); done; echo "T=$t"
+  expect:
+    stdout_contains: golden/fork_subshells.txt
+- id: utilities/fork-subshells-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: t=0; n=1; while [ $n -le 500 ]; do v=$(sh -c "echo $((n*2))"); t=$(expr $t + $v); n=$(expr $n + 1); done; echo "T=$t"
+  expect:
+    stdout_contains: golden/fork_subshells.txt
+- id: utilities/tar-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf d a.tar && mkdir d && echo hl-tar-ok > d/f.txt && tar cf a.tar d && rm -rf d && tar xf a.tar && cat d/f.txt
+  expect:
+    stdout_contains: golden/tar_roundtrip.txt
+- id: utilities/gzip-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''hl-gzip-ok
+
+        '' | gzip | gunzip'
+  expect:
+    stdout_contains: golden/gzip_roundtrip.txt
+- id: utilities/targz-roundtrip
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf g g.tgz && mkdir g && seq 1 1000 > g/n.txt && tar czf g.tgz g && rm -rf g && tar xzf g.tgz && awk '{s+=$1}END{print s}' g/n.txt
+  expect:
+    stdout_contains: golden/paste_bc.txt
+- id: utilities/tar-roundtrip-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /tmp && rm -rf d a.tar && mkdir d && echo hl-tar-ok > d/f.txt && tar cf a.tar d && rm -rf d && tar xf a.tar && cat d/f.txt
+  expect:
+    stdout_contains: golden/tar_roundtrip.txt
+- id: utilities/gzip-roundtrip-glibc
+  image: debian:bookworm
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''hl-gzip-ok
+
+        '' | gzip | gunzip'
+  expect:
+    stdout_contains: golden/gzip_roundtrip.txt
+- id: utilities/overlay-metadata
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: set -e; ls -laR /usr/lib >/dev/null; touch /usr/lib/NEWFILE; test -f /usr/lib/NEWFILE; sh -c 'echo x > /usr/lib/XPROC'; test -f /usr/lib/XPROC; rm /etc/os-release;
+        test ! -e /etc/os-release; ! ls /etc | grep -q '^os-release$'; echo SHADOW > /etc/hostname.d; chmod 600 /etc/passwd; [ "$(stat -c %a /etc/passwd)" = 600 ];
+        grep -q root /etc/passwd; rm -rf /usr/share/apk; mkdir /usr/share/apk; [ -z "$(ls /usr/share/apk)" ]; echo overlay-metadata-ok
+  expect:
+    stdout_contains: golden/overlay_metadata.txt
+- id: utilities/dentry-storm-overlay
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: ok=1; i=0; while [ $i -lt 15 ]; do echo v$i > /tmp/f; mv /tmp/f /tmp/g; [ -e /tmp/f ] && ok=0; read w < /tmp/g; [ "$w" = v$i ] || ok=0; rm /tmp/g; [
+        -e /tmp/g ] && ok=0; echo A > /tmp/a; echo B > /tmp/b; ln -s a /tmp/l; read w < /tmp/l; [ "$w" = A ] || ok=0; rm /tmp/l; ln -s b /tmp/l; read w < /tmp/l;
+        [ "$w" = B ] || ok=0; rm /tmp/l /tmp/a /tmp/b; i=$((i+1)); done; ls /usr/share/udhcpc >/dev/null; chmod 600 /usr/share/udhcpc/default.script || ok=0; grep
+        -q . /usr/share/udhcpc/default.script || ok=0; rm /etc/services; [ -e /etc/services ] && ok=0; echo re-created > /etc/services; read w < /etc/services; [
+        "$w" = re-created ] || ok=0; mv /usr/share/udhcpc /usr/share/udhcpc2; [ -e /usr/share/udhcpc/default.script ] && ok=0; [ -e /usr/share/udhcpc2/default.script
+        ] || ok=0; echo dentry-overlay ok=$ok
+  expect:
+    stdout_contains: golden/dentry_storm.txt
+- id: utilities/busybox-arith
+  image: busybox:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: sh -c 'echo $((7*6))'
+  expect:
+    stdout_contains: golden/expr_multiply.txt
+- id: utilities/busybox-pipe
+  image: busybox:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: seq 1 1000 | awk '{s+=$1}END{print s}'
+  expect:
+    stdout_contains: golden/paste_bc.txt
+- id: utilities/busybox-banner
+  image: busybox:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: busybox 2>&1 | head -1
+  expect:
+    stdout_contains: golden/busybox_banner.txt
+- id: utilities/busybox-fork-loop
+  image: busybox:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: s=0; i=1; while [ $i -le 1000 ]; do s=$(expr $s + $i); i=$(expr $i + 1); done; echo "SUM=$s"
+  expect:
+    stdout_contains: golden/seq_awk.txt
+- id: utilities/busybox-sha256
+  image: busybox:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: printf abc | sha256sum | cut -d' ' -f1
+  expect:
+    stdout_contains: golden/sha256_abc.txt
+- id: utilities/bash-base-convert
+  image: bash:5.2
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - bash
+      - -c
+      - echo $((2#1010))
+  expect:
+    stdout_contains: golden/printf_octal.txt
+- id: utilities/bash-brace-arith
+  image: bash:5.2
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - bash
+      - -c
+      - for i in {1..1000}; do :; done; echo $((1000*1001/2))
+  expect:
+    stdout_contains: golden/paste_bc.txt
+- id: utilities/bash-arrays
+  image: bash:5.2
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - bash
+      - -c
+      - a=(1 2 3); echo ${#a[@]}
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/bash-param-expand
+  image: bash:5.2
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - bash
+      - -c
+      - echo ${x:-default}
+  expect:
+    stdout_contains: golden/bash_param.txt
+- id: utilities/bash-version
+  image: bash:5.2
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - bash
+      - --version
+  expect:
+    stdout_contains: golden/bash_version.txt
+- id: utilities/jq-add
+  image: ghcr.io/jqlang/jq:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - jq
+      - -n
+      - '[range(1;1001)]|add'
+  expect:
+    stdout_contains: golden/paste_bc.txt
+- id: utilities/jq-object
+  image: ghcr.io/jqlang/jq:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - jq
+      - -n
+      - '{a:1,b:2}|.a+.b'
+  expect:
+    stdout_contains: golden/head_tail.txt
+- id: utilities/jq-sort
+  image: ghcr.io/jqlang/jq:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - jq
+      - -nc
+      - '[3,1,2]|sort'
+  expect:
+    stdout_contains: golden/jq_sort.txt
+- id: utilities/jq-version
+  image: ghcr.io/jqlang/jq:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - jq
+      - --version
+  expect:
+    stdout_contains: golden/jq_version.txt
+- id: utilities/git-version
+  image: alpine/git:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - git
+      - --version
+  expect:
+    stdout_contains: golden/git_version.txt
+- id: utilities/git-empty-blob
+  image: bitnami/git:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: printf '' | git hash-object --stdin
+  expect:
+    stdout_contains: golden/git_empty.txt
+- id: utilities/git-hashobject-dd
+  image: bitnami/git:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: 'printf ''dd
+
+        '' | git hash-object --stdin'
+  expect:
+    stdout_contains: golden/git_hashobject.txt
+- id: utilities/git-init-commit
+  image: bitnami/git:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: 'export GIT_AUTHOR_NAME=dd GIT_AUTHOR_EMAIL=dd@dd GIT_COMMITTER_NAME=dd GIT_COMMITTER_EMAIL=dd@dd GIT_AUTHOR_DATE=''2000-01-01T00:00:00Z'' GIT_COMMITTER_DATE=''2000-01-01T00:00:00Z'';
+        cd /tmp && rm -rf r && mkdir r && cd r && git init -q && echo dd > f && git add f && git commit -q -m ''dd: first commit'' && git log --format=''%s'' -1'
+  expect:
+    stdout_contains: golden/git_init.txt
+- id: utilities/git-deterministic-sha
+  image: bitnami/git:latest
+  timeout: 120
+  actions:
+  - shell:
+      script: 'export GIT_AUTHOR_NAME=dd GIT_AUTHOR_EMAIL=dd@dd GIT_COMMITTER_NAME=dd GIT_COMMITTER_EMAIL=dd@dd GIT_AUTHOR_DATE=''2000-01-01T00:00:00Z'' GIT_COMMITTER_DATE=''2000-01-01T00:00:00Z'';
+        cd /tmp && rm -rf r && mkdir r && cd r && git init -q && echo dd > f && git add f && git commit -q -m ''dd: first commit'' && git rev-parse HEAD'
+  expect:
+    stdout_contains: golden/git_deterministi.txt
+- id: utilities/curl-version
+  image: curlimages/curl:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - curl
+      - --version
+  expect:
+    stdout_contains: golden/curl_version.txt
+- id: utilities/socat-version
+  image: alpine/socat:latest
+  timeout: 120
+  actions:
+  - argv:
+      argv:
+      - socat
+      - -V
+  expect:
+    stdout_contains: golden/socat_version.txt
+- id: utilities/nc-loopback
+  image: alpine:3.24.1
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: '{ echo hl-echo-ok | nc -l -p 9000; } & sleep 0.4; nc 127.0.0.1 9000 </dev/null'
+  expect:
+    stdout_contains: golden/nc_loopback.txt
+- id: utilities/wget-loopback
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: mkdir -p /www && echo hl-http-ok > /www/f.txt && httpd -p 127.0.0.1:8080 -h /www && sleep 0.3 && wget -qO- http://127.0.0.1:8080/f.txt
+  expect:
+    stdout_contains: golden/wget_loopback.txt
