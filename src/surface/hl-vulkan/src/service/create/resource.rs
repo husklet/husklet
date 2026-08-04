@@ -548,6 +548,7 @@ pub fn create_image_geometry(
             dim,
             layers,
             mip_levels: mip_levels.max(1),
+            vk_format,
             format,
             usage,
             sample_count,

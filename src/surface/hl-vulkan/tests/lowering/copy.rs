@@ -2020,3 +2020,35 @@ fn a_depth_and_color_blit_is_refused_before_executor_validation() {
         assert!(matches!(err, GpuError::Invalid(m) if m.contains("depth and color")));
     }
 }
+
+#[test]
+fn depth_blits_preserve_exact_vulkan_format_compatibility() {
+    let attempt = |src_format, dst_format| {
+        let mut d = dev();
+        let mut s = RecordingSink::with_full_caps();
+        let usage = vk_image_usage::TRANSFER_SRC | vk_image_usage::TRANSFER_DST;
+        let src = create::create_image(&mut d, &mut s, 4, 4, src_format, usage, 1).unwrap();
+        let dst = create::create_image(&mut d, &mut s, 2, 2, dst_format, usage, 1).unwrap();
+        let cb = recording_cb(&mut d);
+        let depth = SubresourceLayers {
+            aspect_mask: SubresourceLayers::ASPECT_DEPTH,
+            ..SubresourceLayers::base()
+        };
+        record::cmd_blit_image(
+            &mut d, cb, src, dst, depth, depth,
+            Origin3d::default(), Extent3d { width: 4, height: 4, depth: 1 },
+            Origin3d::default(), Extent3d { width: 2, height: 2, depth: 1 }, false, Mirror::NONE,
+        )
+    };
+    assert!(attempt(vk_format::D16_UNORM, vk_format::D16_UNORM).is_ok());
+    assert!(attempt(vk_format::D32_SFLOAT, vk_format::D32_SFLOAT).is_ok());
+    for (src, dst) in [
+        (vk_format::D16_UNORM, vk_format::D32_SFLOAT),
+        (vk_format::D32_SFLOAT, vk_format::D16_UNORM),
+    ] {
+        assert!(matches!(
+            attempt(src, dst),
+            Err(GpuError::Invalid(m)) if m.contains("depth formats differ")
+        ));
+    }
+}

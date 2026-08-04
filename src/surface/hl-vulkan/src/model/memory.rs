@@ -64,6 +64,8 @@ pub struct ImageRec {
     pub dim: TextureDim,
     pub layers: u32,
     pub mip_levels: u32,
+    /// Original Vulkan format, retained because multiple Vulkan formats may lower to one wire format.
+    pub vk_format: u32,
     pub format: TextureFormat,
     /// hl-GPU `texture_usage` bits (translated from `VkImageUsageFlags`).
     pub usage: u32,

@@ -63,6 +63,7 @@ pub struct SurfaceRec {
     pub token: Option<SurfaceToken>,
     pub width: u32,
     pub height: u32,
+    pub vk_format: u32,
     pub format: TextureFormat,
 }
 

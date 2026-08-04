@@ -201,6 +201,7 @@ pub fn create_surface(
             token,
             width,
             height,
+            vk_format,
             format,
         },
     );
@@ -261,11 +262,11 @@ pub fn create_swapchain_for_target(
         ));
     }
     retire_swapchain(dev, old_swapchain)?;
-    let (width, height, format) = {
+    let (width, height, vk_format, format) = {
         let s = dev.surfaces.get(&surface).ok_or(GpuError::Invalid(
             "vkCreateSwapchainKHR: unknown VkSurfaceKHR",
         ))?;
-        (s.width, s.height, s.format)
+        (s.width, s.height, s.vk_format, s.format)
     };
     // DERIVED from what the surface advertises, through the same `VkImageUsageFlags` translation
     // `vkCreateImage` uses — not stated again here. `SURFACE_IMAGE_USAGE` is the one place that decides
@@ -342,6 +343,7 @@ pub fn create_swapchain_for_target(
                         dim: TextureDim::D2,
                         layers: 1,
                         mip_levels: 1,
+                        vk_format,
                         format,
                         usage,
                         sample_count: 1,
@@ -375,6 +377,7 @@ pub fn create_swapchain_for_target(
                 dim: TextureDim::D2,
                 layers: 1,
                 mip_levels: 1,
+                vk_format,
                 format,
                 usage,
                 sample_count: 1,

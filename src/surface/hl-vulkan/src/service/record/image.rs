@@ -265,7 +265,7 @@ pub fn cmd_blit_image(
     linear: bool,
     mirror: Mirror,
 ) -> Result<()> {
-    let (src_ir, src_fmt, src_usage, src_sub, siw, sih, sid, src_dim) = {
+    let (src_ir, src_vk_fmt, src_fmt, src_usage, src_sub, siw, sih, sid, src_dim) = {
         let i = dev
             .images
             .get(&src)
@@ -275,6 +275,7 @@ pub fn cmd_blit_image(
         let (w, h) = i.extent_at(sub.mip_level);
         (
             i.ir_id,
+            i.vk_format,
             i.format,
             i.usage,
             sub,
@@ -284,7 +285,7 @@ pub fn cmd_blit_image(
             i.dim,
         )
     };
-    let (dst_ir, dst_fmt, dst_usage, dst_sub, diw, dih, did, dst_dim) = {
+    let (dst_ir, dst_vk_fmt, dst_fmt, dst_usage, dst_sub, diw, dih, did, dst_dim) = {
         let i = dev
             .images
             .get(&dst)
@@ -294,6 +295,7 @@ pub fn cmd_blit_image(
         let (w, h) = i.extent_at(sub.mip_level);
         (
             i.ir_id,
+            i.vk_format,
             i.format,
             i.usage,
             sub,
@@ -342,6 +344,11 @@ pub fn cmd_blit_image(
     if (src_fmt == TextureFormat::Depth32Float) != (dst_fmt == TextureFormat::Depth32Float) {
         return Err(GpuError::Invalid(
             "vkCmdBlitImage: depth and color formats cannot be mixed",
+        ));
+    }
+    if src_fmt == TextureFormat::Depth32Float && src_vk_fmt != dst_vk_fmt {
+        return Err(GpuError::Invalid(
+            "vkCmdBlitImage: source and destination depth formats differ",
         ));
     }
     // Compressed sources have no per-texel byte layout, but the host sampler decodes them natively. They
