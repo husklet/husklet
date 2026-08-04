@@ -112,11 +112,6 @@ impl GuestExecutor {
             host_faults: None,
         }
     }
-    #[cfg(test)]
-    pub(crate) fn with_host_fault_owner(mut self, owner: Arc<dyn crate::native::HostFaultOwner>) -> Self {
-        self.host_faults = Some(owner);
-        self
-    }
     fn run(
         &self,
         isa: GuestIsa,

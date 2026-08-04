@@ -53,24 +53,15 @@ unsafe extern "C" {
     fn hl_native_interrupt_destroy(token: *mut InterruptHandle);
     fn hl_native_changed(executor: *mut Handle, changes: *const Change, count: usize) -> u32;
     fn hl_native_diagnose(executor: *const Handle, output: *mut Diagnostics) -> u32;
+    #[cfg(test)]
     fn hl_native_fault_scope_contains(scope: *const FaultScope, host_pc: u64) -> i32;
+    #[cfg(test)]
     fn hl_native_fault_scope_leave(scope: *mut FaultScope) -> u32;
-    fn hl_native_fault_scope_prepare_return(
-        scope: *const FaultScope,
-        host_pc: u64,
-        host_address: u64,
-        context: *mut c_void,
-    ) -> i32;
     fn hl_native_direct_register(
         executor: *mut Handle,
         authority: *const DirectDescriptor,
         output: *mut *mut DirectToken,
     ) -> u32;
-    fn hl_native_direct_validate(
-        executor: *const Handle,
-        token: *const DirectToken,
-        output: *mut DirectDescriptor,
-    ) -> i32;
     fn hl_native_direct_generation(executor: *const Handle, token: *const DirectToken) -> u64;
     fn hl_native_direct_identity(executor: *const Handle, token: *const DirectToken) -> u64;
     fn hl_native_direct_unregister(executor: *mut Handle, token: *mut DirectToken) -> u32;
@@ -100,25 +91,6 @@ pub(crate) struct DirectAuthority<'executor, 'memory, H: MemoryAccessHost> {
 }
 
 impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
-    #[cfg(test)]
-    fn descriptor(&self) -> Option<DirectDescriptor> {
-        let mut output = DirectDescriptor {
-            abi: ABI,
-            size: std::mem::size_of::<DirectDescriptor>() as u32,
-            permissions: 0,
-            reserved: 0,
-            guest_first: 0,
-            guest_last: 0,
-            host_first: 0,
-            mapping_incarnation: 0,
-            mapping_generation: 0,
-            instruction_generation: 0,
-        };
-        let token = self.token?;
-        (unsafe { hl_native_direct_validate(self.executor.handle.as_ptr(), token.as_ptr(), &raw mut output) } != 0)
-            .then_some(output)
-    }
-
     fn generation(&self) -> Option<u64> {
         let token = self.token?;
         let generation = unsafe { hl_native_direct_generation(self.executor.handle.as_ptr(), token.as_ptr()) };
@@ -135,15 +107,6 @@ impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
     pub(crate) fn into_lease(mut self) -> Result<DirectAuthorityLease<'memory, H>, ()> {
         self.retire()?;
         self.lease.take().ok_or(())
-    }
-
-    pub(crate) fn publish_written_ranges(mut self, dirty: &[AddressRange]) -> Result<(), ()> {
-        self.retire()?;
-        self.lease
-            .take()
-            .ok_or(())?
-            .publish_written_ranges(dirty)
-            .map_err(|_| ())
     }
 
     fn retire(&mut self) -> Result<(), ()> {
@@ -997,17 +960,12 @@ pub(crate) struct HostFaultView(FaultScope);
 unsafe impl Send for HostFaultView {}
 unsafe impl Sync for HostFaultView {}
 
+#[cfg(test)]
 impl HostFaultView {
     /// # Safety
     /// The view must still be inside its matching publish/unpublish interval.
-    pub(crate) unsafe fn contains(self, host_pc: u64) -> bool {
+    unsafe fn contains(self, host_pc: u64) -> bool {
         unsafe { hl_native_fault_scope_contains(&raw const self.0, host_pc) != 0 }
-    }
-    /// # Safety
-    /// The view must still be published on this thread and `context` must be
-    /// the live platform context delivered for the queried host instruction.
-    pub(crate) unsafe fn prepare_return(self, host_pc: u64, host_address: u64, context: *mut c_void) -> bool {
-        unsafe { hl_native_fault_scope_prepare_return(&raw const self.0, host_pc, host_address, context) != 0 }
     }
 }
 
@@ -1642,10 +1600,12 @@ impl Executor {
         protection
     }
 
+    #[cfg(test)]
     pub(crate) fn create() -> Result<Self, ()> {
         Self::create_diagnostics(false)
     }
 
+    #[cfg(test)]
     pub(crate) fn create_diagnostics(diagnostics_enabled: bool) -> Result<Self, ()> {
         Self::create_with_fault_owner(diagnostics_enabled, None)
     }
@@ -1745,10 +1705,6 @@ impl Executor {
         for view in views {
             state.append_view(view);
         }
-    }
-
-    pub(crate) fn as_raw(&self) -> *mut c_void {
-        self.handle.as_ptr().cast()
     }
 
     pub(crate) fn register_direct<'executor, 'memory, H: MemoryAccessHost>(

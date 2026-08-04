@@ -3,5 +3,5 @@
 mod frame;
 mod handshake;
 
-pub use frame::{Direction, Frame, FrameError, FrameKind, Session};
-pub use handshake::{HandshakeError, Limits, Secret, accept, connect};
+pub use frame::{Direction, FrameKind, Session};
+pub use handshake::{Limits, Secret, accept, connect};

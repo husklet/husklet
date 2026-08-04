@@ -29,10 +29,6 @@ impl Limits {
 
 pub struct Secret([u8; 32]);
 impl Secret {
-    pub const fn new(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
     pub fn pair() -> Result<(Self, Self), HandshakeError> {
         let mut bytes = [0_u8; 32];
         Handshake::random(&mut bytes)?;
@@ -198,14 +194,14 @@ impl Handshake {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::session::{FrameError, FrameKind};
+    use crate::session::{FrameKind, frame::FrameError};
     use std::{io::Write, os::unix::net::UnixStream, thread};
 
     fn limits() -> Limits {
         Limits::new(4096, 8).unwrap()
     }
     fn secret() -> Secret {
-        Secret::new([7; 32])
+        Secret([7; 32])
     }
 
     #[test]
@@ -261,7 +257,7 @@ mod tests {
     fn wrong_secret() {
         let (mut worker_io, mut authority_io) = UnixStream::pair().unwrap();
         let authority = thread::spawn(move || accept(&mut authority_io, secret(), limits()));
-        let worker = connect(&mut worker_io, Secret::new([8; 32]), limits());
+        let worker = connect(&mut worker_io, Secret([8; 32]), limits());
         assert!(matches!(worker, Err(HandshakeError::Truncated)));
         assert!(matches!(authority.join().unwrap(), Err(HandshakeError::Authentication)));
     }
