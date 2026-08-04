@@ -6,8 +6,8 @@ use hl_images::content::Store;
 
 use super::{ApiError, ApiResult, DockerState};
 use crate::api::{
-    Authentication, Container, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData,
-    Version, VolumeUsage,
+    Authentication, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version,
+    VolumeUsage,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -75,14 +75,8 @@ pub(super) async fn info(State(state): State<DockerState>) -> ApiResult<Json<Sys
 
 #[hl_design::adapter]
 pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<DiskUsage>> {
-    let containers = state
-        .containers
-        .list()
-        .await
-        .map_err(ApiError::container)?
-        .into_iter()
-        .map(Container::from)
-        .collect();
+    let listed_containers = state.containers.list().await.map_err(ApiError::container)?;
+    let containers = super::container::summaries(&state.containers, listed_containers, true).await?;
     let images = state.image_summaries().await?;
     let volume_service = state.containers.volumes();
     let listed_volumes = volume_service.list().await.map_err(ApiError::container)?;

@@ -51,7 +51,7 @@ pub(super) use create::create;
 pub(super) use inspect::{changes, inspect, update};
 pub(super) use kill::kill;
 pub(super) use lifecycle::{remove, wait};
-pub(super) use list::{PruneQuery, list, prune};
+pub(super) use list::{PruneQuery, list, prune, summaries};
 pub(super) use logs::logs;
 
 #[hl_design::adapter]

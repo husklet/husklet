@@ -24,6 +24,10 @@ pub struct Container {
     pub ports: Vec<crate::api::PortSummary>,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_rw: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_root_fs: Option<i64>,
 }
 
 /// Docker wire metadata shared by container summary and inspection views.
@@ -51,6 +55,12 @@ pub struct ContainerPrune {
 }
 
 impl Container {
+    #[cfg(feature = "runtime")]
+    pub(crate) fn size(&mut self, usage: hl_container::FilesystemUsage) {
+        self.size_rw = Some(i64::try_from(usage.writable).unwrap_or(i64::MAX));
+        self.size_root_fs = Some(i64::try_from(usage.rootfs).unwrap_or(i64::MAX));
+    }
+
     /// Docker's conventional twelve-character display identity.
     #[must_use]
     pub fn short_id(&self) -> String {
@@ -120,6 +130,8 @@ impl From<hl_container::Container> for Container {
             status: lifecycle.status,
             ports: Ports::from(&value.spec).summaries(),
             labels: value.spec.labels,
+            size_rw: None,
+            size_root_fs: None,
         }
     }
 }

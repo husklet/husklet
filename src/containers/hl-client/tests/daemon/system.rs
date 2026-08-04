@@ -4,11 +4,10 @@ use super::support::*;
 async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
+    let rootfs = root.path().join("rootfs");
+    std::fs::create_dir(&rootfs).unwrap();
     let created = containers
-        .create(ContainerSpec::from_directory(
-            "/rootfs",
-            Process::new("/bin/true"),
-        ))
+        .create(ContainerSpec::from_directory(&rootfs, Process::new("/bin/true")))
         .await
         .unwrap();
     let socket = root.path().join("run/docker.sock");

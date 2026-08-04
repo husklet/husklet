@@ -1,4 +1,7 @@
 use super::*;
+use futures_util::{StreamExt as _, stream::FuturesUnordered};
+
+const SIZE_PARALLELISM_MAX: usize = 8;
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct ListQuery {
@@ -6,6 +9,7 @@ pub(in super::super) struct ListQuery {
     all: bool,
     filters: Option<String>,
     limit: Option<String>,
+    size: Option<String>,
 }
 
 impl ListQuery {
@@ -24,7 +28,11 @@ impl ListQuery {
             .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "container limit exceeds host range"))
     }
 
-    fn select(&self, mut values: Vec<hl_container::Container>) -> ApiResult<Vec<Container>> {
+    fn include_size(&self) -> ApiResult<bool> {
+        self.size.as_deref().unwrap_or_default().parse::<Flag>().map(bool::from)
+    }
+
+    fn select(&self, mut values: Vec<hl_container::Container>) -> ApiResult<Vec<hl_container::Container>> {
         let limit = self.limit()?;
         let selection = crate::api::List::parse(self.all || limit.is_some(), self.filters.as_deref())
             .map_err(|message| ApiError::new(StatusCode::BAD_REQUEST, message))?;
@@ -41,9 +49,59 @@ impl ListQuery {
             .filter(|value| selection.matches(value))
             .take(limit.unwrap_or(usize::MAX))
             .cloned()
-            .map(Container::from)
             .collect())
     }
+}
+
+pub(in super::super) async fn summaries(
+    containers: &hl_container::Containers,
+    values: Vec<hl_container::Container>,
+    include_size: bool,
+) -> ApiResult<Vec<Container>> {
+    if !include_size {
+        return Ok(values.into_iter().map(Container::from).collect());
+    }
+    let parallelism = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(SIZE_PARALLELISM_MAX);
+    let capacity = values.len();
+    let mut values = values.into_iter().enumerate();
+    let mut pending = FuturesUnordered::new();
+    for (index, value) in values.by_ref().take(parallelism) {
+        pending.push(scan_summary(containers, index, value));
+    }
+    let mut summaries = Vec::with_capacity(capacity);
+    let mut error = None;
+    while let Some((index, value, usage)) = pending.next().await {
+        match usage {
+            Ok(usage) => {
+                let mut summary = Container::from(value);
+                summary.size(usage);
+                summaries.push((index, summary));
+            }
+            Err(failure) if error.is_none() => error = Some(ApiError::container(failure)),
+            Err(_) => {}
+        }
+        if error.is_none() {
+            if let Some((index, value)) = values.next() {
+                pending.push(scan_summary(containers, index, value));
+            }
+        }
+    }
+    if let Some(error) = error {
+        return Err(error);
+    }
+    summaries.sort_unstable_by_key(|(index, _)| *index);
+    Ok(summaries.into_iter().map(|(_, summary)| summary).collect())
+}
+
+async fn scan_summary(
+    containers: &hl_container::Containers,
+    index: usize,
+    value: hl_container::Container,
+) -> (usize, hl_container::Container, hl_container::Result<hl_container::FilesystemUsage>) {
+    let usage = containers.filesystem_usage(value.id.as_str()).await;
+    (index, value, usage)
 }
 
 #[derive(Clone, Debug)]
@@ -287,7 +345,9 @@ pub(in super::super) async fn list(
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Container>>> {
     let values = state.containers.list().await.map_err(ApiError::container)?;
-    Ok(Json(query.select(values)?))
+    let include_size = query.include_size()?;
+    let selected = query.select(values)?;
+    Ok(Json(summaries(&state.containers, selected, include_size).await?))
 }
 
 #[cfg(test)]
@@ -308,8 +368,11 @@ mod tests {
         }
     }
 
-    fn names(values: &[Container]) -> Vec<String> {
-        values.iter().map(Container::name).collect()
+    fn names(values: &[hl_container::Container]) -> Vec<String> {
+        values
+            .iter()
+            .map(|value| value.spec.name.clone().unwrap_or_default())
+            .collect()
     }
 
     #[test]
@@ -318,6 +381,7 @@ mod tests {
             all: true,
             filters: None,
             limit: None,
+            size: None,
         };
         let values = query
             .select(vec![
@@ -336,6 +400,7 @@ mod tests {
                 all: true,
                 filters: None,
                 limit: value.map(str::to_owned),
+                size: None,
             };
             assert_eq!(query.limit().unwrap(), None);
             assert_eq!(
@@ -347,6 +412,7 @@ mod tests {
             all: false,
             filters: None,
             limit: Some("2".into()),
+            size: None,
         };
         assert_eq!(query.limit().unwrap(), Some(2));
         for value in ["two", "9223372036854775808"] {
@@ -354,6 +420,7 @@ mod tests {
                 all: false,
                 filters: None,
                 limit: Some(value.into()),
+                size: None,
             };
             assert_eq!(
                 query.select(vec![container("value", 1)]).unwrap_err().status,
@@ -372,6 +439,7 @@ mod tests {
             all: false,
             filters: Some(r#"{"label":["role=keep"]}"#.into()),
             limit: Some("1".into()),
+            size: None,
         };
         let values = query.select(vec![old, container("newest-other", 30), new]).unwrap();
         assert_eq!(names(&values), ["new-match"]);
@@ -392,6 +460,7 @@ mod tests {
             all: true,
             filters: Some(r#"{"before":["89abcdef"]}"#.into()),
             limit: None,
+            size: None,
         };
 
         let values = query.select(vec![first_match, newer_match, candidate]).unwrap();
@@ -399,11 +468,19 @@ mod tests {
     }
 
     #[test]
-    fn size_omission() {
-        let query: ListQuery = serde_json::from_value(serde_json::json!({ "all": true, "size": true })).unwrap();
-        let value = serde_json::to_value(query.select(vec![container("sized", 1)]).unwrap().remove(0)).unwrap();
-        assert!(value.get("SizeRw").is_none());
-        assert!(value.get("SizeRootFs").is_none());
+    fn size_flag() {
+        for (value, expected) in [(None, false), (Some("0"), false), (Some("true"), true)] {
+            let query = ListQuery {
+                size: value.map(str::to_owned),
+                ..ListQuery::default()
+            };
+            assert_eq!(query.include_size().unwrap(), expected);
+        }
+        let query = ListQuery {
+            size: Some("maybe".into()),
+            ..ListQuery::default()
+        };
+        assert_eq!(query.include_size().unwrap_err().status, StatusCode::BAD_REQUEST);
     }
 }
 
