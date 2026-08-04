@@ -1,9 +1,10 @@
 #include "private.h"
 
-/* Unguarded cycles must retain one typed dispatcher exit. Publication cannot
- * allocate, so admission uses a fixed nonrecursive frontier. A guarded cycle
- * may close only when every examined entry has its own interrupt and budget
- * checkpoint. Saturation conservatively retains the original exit. */
+/* The imported cache closed every resolved cycle. Restrict that existing
+ * behavior: an unguarded cycle retains one typed dispatcher exit. Publication
+ * cannot allocate, so admission uses a fixed nonrecursive frontier. A guarded
+ * cycle may close only when every examined entry has its own interrupt and
+ * budget checkpoint. Saturation conservatively retains the original exit. */
 enum { CYCLE_FRONTIER_CAPACITY = 64 };
 
 typedef struct cycle_node { uint64_t guest, epoch; } cycle_node;

@@ -1,7 +1,10 @@
 # AArch64 guarded cycle audit
 
-This audit records the retained implementation studied before admitting cyclic
-native chains. The read-only oracle revision was
+This audit records the retained implementation studied before constraining
+cyclic native chains. The imported Rust cache at `8512e5e1c` already patched
+resolved cycles without qualification; `8c5b1283f` did not introduce cycle
+closure. It added the guarded-safety qualification described below. The
+read-only oracle revision was
 `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`.
 
 ## Retained implementation
@@ -69,15 +72,13 @@ does not cross a typed non-branch exit. Direct-memory authority and mapping
 incarnation remain part of cache identity. Invalidation still restores incoming
 relocations before retiring their target.
 
-## Performance evidence and acceptance
+## Validation scope
 
-The combined AArch64 memory phase performs a 1 MiB `memcpy` followed by
-`memcmp`. Its guest image contains the 64-byte memcpy loop at
-`0x1b580..0x1b59c` and memcmp loops at `0x1a200` and `0x1a300`. A diagnostic
-run before this change recorded 34,445,323 branch boundaries and 58,647,759
-completed guest instructions: one full spill, lookup, and re-entry per 1.70
-instructions. The full AArch64 stub saves and restores all vector registers,
-GPRs, flags, FP state, and stack at each such boundary.
+No performance improvement is attributed to this change. The imported cache
+already closed fully resolved AArch64 cycles, including the direct loops used
+by `memcpy` and `memcmp`. The new policy can only preserve that existing
+closure for guarded-safe graphs or retain a typed exit for a graph that is not
+proved safe.
 
 `test/a64_cycles.c` is the focused acceptance test. It proves:
 
@@ -89,7 +90,5 @@ GPRs, flags, FP state, and stack at each such boundary.
 - invalidating one member restores its incoming edge, incurs one dispatcher
   boundary for reconstruction, and preserves the exact budget result.
 
-The change is expected to remove tens of millions of full dispatcher crossings
-from the memory phase. Wall-time improvement is intentionally not claimed here;
-it requires an exact committed-tree benchmark with native diagnostics, stable
-checksum, and the pinned retained-C control.
+These checks validate the safety classification and existing chaining behavior;
+they are not benchmark evidence and do not establish a wall-time change.
