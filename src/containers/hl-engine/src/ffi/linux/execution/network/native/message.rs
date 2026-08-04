@@ -199,11 +199,9 @@ impl Native {
         let source = if header.msg_namelen == 0 {
             None
         } else {
-            let source = Self::decode_address(&source, header.msg_namelen)?;
-            Some(match source {
-                SocketAddress::Unix(path) => Self::switch_source(&path).ok_or(RuntimeNetworkError::Invalid)?,
-                source => source,
-            })
+            Self::decode_address(&source, header.msg_namelen)
+                .ok()
+                .map(Self::normalize_source)
         };
         Ok(HostReceive {
             payload,
@@ -213,6 +211,13 @@ impl Native {
             payload_truncated: header.msg_flags & libc::MSG_TRUNC != 0,
             control_truncated: header.msg_flags & libc::MSG_CTRUNC != 0,
         })
+    }
+
+    fn normalize_source(source: SocketAddress) -> SocketAddress {
+        match source {
+            SocketAddress::Unix(path) => Self::switch_source(&path).unwrap_or_else(|| SocketAddress::Unix(path)),
+            source => source,
+        }
     }
 
     fn encode_rights(rights: &[i32]) -> Result<Option<ControlBuffer>, RuntimeNetworkError> {
@@ -305,7 +310,7 @@ impl Native {
 mod test {
     use std::os::fd::OwnedFd;
 
-    use hl_network::SocketHostIo;
+    use hl_network::{EgressInterface, SocketAddress, SocketHostIo};
     use hl_runtime::{HostControl, HostSend};
 
     use super::Native;
@@ -345,5 +350,25 @@ mod test {
         assert_eq!(rights.len(), 1);
         native.close(sender);
         native.close(receiver);
+    }
+
+    #[test]
+    fn source_normalization_preserves_unix_and_maps_bridge_paths() {
+        let ordinary = SocketAddress::Unix(b"/tmp/application.sock".to_vec());
+        assert_eq!(Native::normalize_source(ordinary.clone()), ordinary);
+
+        let interface = EgressInterface {
+            bridge: b"source-test".to_vec(),
+            index: 2,
+            ipv4: [10, 0, 0, 2],
+        };
+        let (_, path) = Native::switch_path(&interface, [10, 0, 0, 9], 8080).unwrap();
+        assert_eq!(
+            Native::normalize_source(SocketAddress::Unix(path)),
+            SocketAddress::Inet4 {
+                address: [10, 0, 0, 9],
+                port: 8080,
+            }
+        );
     }
 }
