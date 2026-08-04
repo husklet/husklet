@@ -1,0 +1,855 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/process/job-control
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/job_control.c, output: job-control, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/job-control }
+    run: []
+    expect: { exit: 0, stdout: golden/job_control.txt }
+  - id: runtime/process/namespace-boundary
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/namespace_boundary.c, output: namespace-boundary, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/namespace-boundary }
+    run: []
+    expect: { exit: 0, stdout: golden/namespace_boundary.txt }
+  - id: runtime/process/uname-boundary
+    status: !broken
+      reason: "QEMU exposes host uname identity instead of the configured engine guest identity"
+      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/uname_boundary.c, output: uname-boundary, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/uname-boundary }
+    run: []
+    expect: { exit: 0, stdout: golden/uname_boundary.txt }
+  - id: runtime/process/inet-loopback
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/inet_loopback.c, output: inet-loopback, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/inet-loopback }
+    environment: { HL_NET_HOST: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/inet_loopback.txt }
+  - id: runtime/process/inet-isolated
+    status: !broken
+      reason: "QEMU does not implement the engine HL_NET_ISOLATE launch policy"
+      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/inet_isolated.c, output: inet-isolated, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/inet-isolated }
+    environment: { HL_NET_ISOLATE: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/inet_isolated.txt }
+  - id: runtime/process/credential-mutation
+    status: !broken
+      reason: "QEMU host credentials cannot satisfy the engine root credential mutation contract"
+      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/credential_mutation.c, output: credential-mutation, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/credential-mutation }
+    run: []
+    expect: { exit: 0, stdout: golden/credential_mutation.txt }
+  - id: runtime/process/prctl-lifecycle
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_lifecycle.c, output: prctl-lifecycle, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/prctl-lifecycle }
+    run: []
+    expect: { exit: 0, stdout: golden/prctl_lifecycle.txt }
+  - id: runtime/process/seccomp-filter
+    status: !broken
+      reason: "QEMU host seccomp behavior diverges from the engine filter lifecycle contract"
+      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/seccomp_filter.c, output: seccomp-filter, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/seccomp-filter }
+    run: []
+    expect: { exit: 0, stdout: golden/seccomp_filter.txt }
+  - id: runtime/process/seccomp-matrix
+    status: !broken
+      reason: "QEMU host seccomp behavior diverges from the engine action matrix contract"
+      evidence: "tests/runtime/process/QEMU_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/seccomp_matrix.c, output: seccomp-matrix, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/seccomp-matrix }
+    run: []
+    expect: { exit: 0, stdout: golden/seccomp_matrix.txt }
+  - id: runtime/process/clone3-lifecycle
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clone3_lifecycle.c, output: clone3-lifecycle, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/clone3-lifecycle }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/clone3_lifecycle.txt }
+  - id: runtime/process/futex-operations
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/futex_ops.c, output: futex-operations, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/futex-operations }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/futex_ops.txt }
+  - id: runtime/process/shared-key-futex
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shared_futex.c, output: shared-key-futex, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/shared-key-futex }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/shared_futex.txt }
+  - id: runtime/process/cross-process-futex
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/cross_futex.c, output: cross-process-futex, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/cross-process-futex }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/cross_futex.txt }
+  - id: runtime/process/resource-usage
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/resource_usage.c, output: resource-usage, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/resource-usage }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/resource_usage.txt }
+  - id: runtime/process/nonpie-pointer-arguments
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nonpie_args.c, output: nonpie-pointer-arguments, flags: ["-static", "-O2", "-no-pie", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/nonpie-pointer-arguments }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/nonpie_args.txt }
+  - id: runtime/process/pi-and-robust-futex
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/robust_futex.c, output: pi-and-robust-futex, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/pi-and-robust-futex }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/robust_futex.txt }
+  - id: runtime/process/posix-spawn
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/posix_spawn.c, output: posix-spawn, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/posix-spawn }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/posix_spawn.txt }
+  - id: runtime/process/pty-fd-handoff
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pty_handoff.c, output: pty-fd-handoff, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/pty-fd-handoff }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/pty_handoff.txt }
+  - id: runtime/process/process-limits
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/process_limits.c, output: process-limits, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/process-limits }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/process_limits.txt }
+  - id: runtime/process/ptrace-exec-stop
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ptrace_exec.c, output: ptrace-exec-stop, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/ptrace-exec-stop }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ptrace_exec.txt }
+  - id: runtime/process/ptrace-syscalls
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ptrace_syscalls.c, output: ptrace-syscalls, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/ptrace-syscalls }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ptrace_syscalls.txt }
+  - id: runtime/process/vfork-lifecycle
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vfork_lifecycle.c, output: vfork-lifecycle, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/vfork-lifecycle }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/vfork_lifecycle.txt }
+  - id: runtime/process/waitid-status
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/waitid_status.c, output: waitid-status, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/waitid-status }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/waitid_status.txt }
+  - id: runtime/process/fatal-signal-wait
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fatal_wait.c, output: fatal-signal-wait, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/fatal-signal-wait }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fatal_wait.txt }
+  - id: runtime/process/fatal-thread-group
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fatal_group.c, output: fatal-thread-group, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/fatal-thread-group }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fatal_group.txt }
+  - id: runtime/process/proc-self-exe
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "fdlink closed=0: readlink of a dup()'d-then-close()d /proc/self/fd/N still resolves (should ENOENT) on the typed engine -- the closed bound fd's number still resolves via a live native/shadow descriptor. Same bound-vfd fd-identity class as pf-peer-fd's peer view; clearing g_fdpath on bound close alone does not shed it. Deferred pending the unified shared-path vfd teardown."
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/proc_exe.c, output: proc-self-exe, flags: ["-static-pie", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/proc-self-exe }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/proc_exe.txt }
+  - id: runtime/process/proc-self-exe-comm
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/proc_comm.c, output: proc-self-exe-comm, flags: ["-static-pie", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/proc-self-exe-comm }
+    run: ["comm"]
+    timeout: 120
+    expect: { exit: 0, stdout: golden/proc_comm.txt }
+  - id: runtime/process/execfault
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/execfault.c, output: execfault, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/execfault }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/execfault.txt }
+  - id: runtime/process/forkstorm
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/forkstorm.c, output: forkstorm, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/forkstorm }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/forkstorm.txt }
+  - id: runtime/process/forkwait
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/forkwait.c, output: forkwait, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/forkwait }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/forkwait.txt }
+  - id: runtime/process/fork-blocked-io
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_blocked.c, output: fork-blocked-io, flags: ["-static-pie", "-O2", "-pthread"] }
+    artifact: { destination: /opt/husklet/fork-blocked-io }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fork_blocked.txt }
+  - id: runtime/process/ltp_checkpoint
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ltp_checkpoint.c, output: ltp_checkpoint, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/ltp_checkpoint }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ltp_checkpoint.txt }
+  - id: runtime/process/ltp_procmisc
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ltp_procmisc.c, output: ltp_procmisc, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/ltp_procmisc }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ltp_procmisc.txt }
+  - id: runtime/process/pipeproc
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pipeproc.c, output: pipeproc, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/pipeproc }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/pipeproc.txt }
+  - id: runtime/process/procreap
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/procreap.c, output: procreap, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/procreap }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/procreap.txt }
+  - id: runtime/process/sentry_fork
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_fork.c, output: sentry_fork, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/sentry_fork }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sentry_fork.txt }
+  - id: runtime/process/sentry_exec_proc
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_proc.c, output: sentry_exec_proc, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/sentry_exec_proc }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_proc.txt }
+  - id: runtime/process/sysinfo
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sysinfo.c, output: sysinfo, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/sysinfo }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sysinfo.txt }
+  - id: runtime/process/thrfork
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/thrfork.c, output: thrfork, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/thrfork }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/thrfork.txt }
+  - id: runtime/process/chrome-cache-storm
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/cache_storm.c, output: chrome-cache-storm, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/chrome-cache-storm }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/cache_storm.txt }
+  - id: runtime/process/waitcore
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/waitcore.c, output: waitcore, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/waitcore }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/waitcore.txt }
+  - id: runtime/process/nonpie-dladdr
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nonpie_dladdr.c, output: nonpie-dladdr, flags: ["-no-pie", "-O2", "-rdynamic", "-pthread", "-ldl"] }
+    artifact: { destination: /opt/husklet/nonpie-dladdr }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/nonpie_dladdr.txt }
+  - id: runtime/process/sentry-fork-untrusted
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_untrusted.c, output: sentry-fork-untrusted, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/sentry-fork-untrusted }
+    environment: {"HL_UNTRUSTED": "1"}
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fork_untrusted.txt }
+  - id: runtime/process/sentry-exec-proc-untrusted
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_exec.c, output: sentry-exec-proc-untrusted, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/sentry-exec-proc-untrusted }
+    environment: {"HL_UNTRUSTED": "1"}
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sentry_exec.txt }
+  - id: runtime/process/sentry-fork-sandbox
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_sandbox.c, output: sentry-fork-sandbox, flags: ["-static-pie", "-O2", "-pthread", "-lm"] }
+    artifact: { destination: /opt/husklet/sentry-fork-sandbox }
+    environment: {"HL_SANDBOX": "1"}
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fork_sandbox.txt }
+  - id: runtime/process/exec-self
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_self.c, output: exec-self, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-self }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_self.txt }
+  - id: runtime/process/exec-cloexec-signal
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/cloexec_signal.c, output: exec-cloexec-signal, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-cloexec-signal }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/cloexec_signal.txt }
+  - id: runtime/process/vfork-exec
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vfork_exec.c, output: vfork-exec, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/vfork-exec }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/vfork_exec.txt }
+  - id: runtime/process/vfork-parent-wait
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/vfork_wait.c, output: vfork-parent-wait, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/vfork-parent-wait }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/vfork_wait.txt }
+  - id: runtime/process/pgroup-session
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pgroup_session.c, output: pgroup-session, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/pgroup-session }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/pgroup_session.txt }
+  - id: runtime/process/clone3-pidfd
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clone3_pidfd.c, output: clone3-pidfd, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/clone3-pidfd }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/clone3_pidfd.txt }
+  - id: runtime/process/wait-variants
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/wait_variants.c, output: wait-variants, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/wait-variants }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/wait_variants.txt }
+  - id: runtime/process/wait-stop-cont
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/wait_cont.c, output: wait-stop-cont, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/wait-stop-cont }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/wait_cont.txt }
+  - id: runtime/process/identity
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/identity.c, output: identity, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/identity }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/identity.txt }
+  - id: runtime/process/posix-spawn-attr
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/spawn_attr.c, output: posix-spawn-attr, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/posix-spawn-attr }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/spawn_attr.txt }
+  - id: runtime/process/fork-reap-storm
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/reap_storm.c, output: fork-reap-storm, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/fork-reap-storm }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/reap_storm.txt }
+  - id: runtime/process/subreaper-reparent
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: Darwin has no PR_SET_CHILD_SUBREAPER equivalent, so an orphaned grandchild reparents to launchd and the engine cannot harvest it. Linux engine forwards to the host and still runs+passes this."
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/subreaper_reparent.c, output: subreaper-reparent, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/subreaper-reparent }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/subreaper_reparent.txt }
+  - id: runtime/process/clone-settid
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "raw clone(CLONE_VM|CLONE_PARENT_SETTID|CLONE_CHILD_SETTID|CLONE_CHILD_CLEARTID|SIGCHLD) is REJECTED outright by the engine on both targets (prints 'clone fail'), so PARENT_SETTID/CHILD_SETTID and the CHILD_CLEARTID futex wake are untested. Native does all three. Earlier note claimed a clear-tid futex hang; the current failure is the clone itself"
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/clone_settid.c, output: clone-settid, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/clone-settid }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/clone_settid.txt }
+  - id: runtime/process/clone-vm-vfork
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "CLONE_VM|CLONE_VFORK shares the address space so child writes are visible to the parent (engine breaks the shared-VM/vfork contract)"
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/clone_vfork.c, output: clone-vm-vfork, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/clone-vm-vfork }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/clone_vfork.txt }
+  - id: runtime/process/clone-stack
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/clone_stack.c, output: clone-stack, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/clone-stack }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/clone_stack.txt }
+  - id: runtime/process/prctl-name-pdeathsig
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/name_pdeathsig.c, output: prctl-name-pdeathsig, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/prctl-name-pdeathsig }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/name_pdeathsig.txt }
+  - id: runtime/process/close-range-child-progress
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/close_progress.c, output: close-range-child-progress, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/close-range-child-progress }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/close_progress.txt }
+  - id: runtime/process/exec-errno
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_errno.c, output: exec-errno, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-errno }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_errno.txt }
+  - id: runtime/process/credentials
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/credentials.c, output: credentials, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/credentials }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/credentials.txt }
+  - id: runtime/process/sched-attr
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sched_attr.c, output: sched-attr, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/sched-attr }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sched_attr.txt }
+  - id: runtime/process/waitstop
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/waitstop.c, output: waitstop, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/waitstop }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/waitstop.txt }
+  - id: runtime/process/sigchld-siginfo
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/sigchld_info.c, output: sigchld-siginfo, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/sigchld-siginfo }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sigchld_info.txt }
+  - id: runtime/process/pidfd-getfd-dup
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/pidfd_dup.c, output: pidfd-getfd-dup, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/pidfd-getfd-dup }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/pidfd_dup.txt }
+  - id: runtime/process/prctl-grabbag
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_misc.c, output: prctl-grabbag, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/prctl-grabbag }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/prctl_misc.txt }
+  - id: runtime/process/prctl-cap-ambient
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/cap_ambient.c, output: prctl-cap-ambient, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/prctl-cap-ambient }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/cap_ambient.txt }
+  - id: runtime/process/ptrace-control-writes
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ptrace_writes.c, output: ptrace-control-writes, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/ptrace-control-writes }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ptrace_writes.txt }
+  - id: runtime/process/ptrace-attach-detach
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ptrace_attach.c, output: ptrace-attach-detach, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/ptrace-attach-detach }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ptrace_attach.txt }
+  - id: runtime/process/ptrace-attach-blocked
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "PTRACE_ATTACH to a tracee blocked inside a host syscall (pause) does not interrupt it, so the group-stop is never delivered; needs async cross-process signal-delivery (signal.c) wired into the attach path. WORSE than previously noted: the case also WEDGES the tracer intermittently (2 of 3 runs never terminate despite its own alarm(4) -- the post-attach PTRACE_KILL/SIGKILL/waitpid reap does not complete), so it would burn the runner's full per-case timeout. Native golden is the correct behavior"
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/ptrace_blocked.c, output: ptrace-attach-blocked, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/ptrace-attach-blocked }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ptrace_blocked.txt }
+  - id: runtime/process/exit-teardown
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exit_teardown.c, output: exit-teardown, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exit-teardown }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exit_teardown.txt }
+  - id: runtime/process/reparent-topology
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "excluded-macos: prctl pdeathsig/name, SIGCHLD siginfo, pidfd-getfd and reparent topology diverge on the macOS engine process model; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/reparent_topology.c, output: reparent-topology, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/reparent-topology }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/reparent_topology.txt }
+  - id: runtime/process/nested-fork
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/nested_fork.c, output: nested-fork, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/nested-fork }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/nested_fork.txt }
+  - id: runtime/process/orphan-stop-hup
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/orphan_hup.c, output: orphan-stop-hup, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/orphan-stop-hup }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/orphan_hup.txt }
+  - id: runtime/process/fork-child-futex
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/child_futex.c, output: fork-child-futex, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/fork-child-futex }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/child_futex.txt }
+  - id: runtime/process/exec-cloexec
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_cloexec.c, output: exec-cloexec, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-cloexec }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_cloexec.txt }
+  - id: runtime/process/capget-version
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/capget_version.c, output: capget-version, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/capget-version }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/capget_version.txt }
+  - id: runtime/process/prctl-capbset
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/prctl_capbset.c, output: prctl-capbset, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/prctl-capbset }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/prctl_capbset.txt }
+  - id: runtime/process/times-contract
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/times_contract.c, output: times-contract, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/times-contract }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/times_contract.txt }
+  - id: runtime/process/getcpu-sysinfo-shape
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sysinfo_shape.c, output: getcpu-sysinfo-shape, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/getcpu-sysinfo-shape }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sysinfo_shape.txt }
+  - id: runtime/process/setpgid-errno
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/setpgid_errno.c, output: setpgid-errno, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/setpgid-errno }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/setpgid_errno.txt }
+  - id: runtime/process/credentials-shape
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/credential_shape.c, output: credentials-shape, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/credentials-shape }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/credential_shape.txt }
+  - id: runtime/process/sched-setscheduler-errno
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/scheduler_errno.c, output: sched-setscheduler-errno, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/sched-setscheduler-errno }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/scheduler_errno.txt }
+  - id: runtime/process/spawn-concurrent
+    targets: [arm64, amd64]
+    status: !broken
+      reason: "posix_spawn from 8 threads x 12 rounds with per-thread waitpid. ENGINE BUG surfaced by registering a case that had been built but never run: the guest's pthread_create intermittently fails with EAGAIN while concurrent posix_spawn/fork children are in flight (~1 run in 10 standalone; under the matrix runner the same shape also wedges past the 120s per-case budget). Native never fails. spawn_thread's only EAGAIN paths are the cgroup pids gate (unset here) and a host pthread_create failure, so the engine is losing host thread-creation capacity around guest fork. Native golden is the correct behavior"
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/spawn_concurrent.c, output: spawn-concurrent, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/spawn-concurrent }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/spawn_concurrent.txt }
+  - id: runtime/process/exec-symlink
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_symlink.c, output: exec-symlink, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-symlink }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_symlink.txt }
+  - id: runtime/process/exec-symlink-rootfs
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/symlink_rootfs.c, output: exec-symlink-rootfs, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-symlink-rootfs }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/symlink_rootfs.txt }
+  - id: runtime/process/exec-distinct
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/exec_distinct.c, output: exec-distinct, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-distinct }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/exec_distinct.txt }
+  - id: runtime/process/exec-symlink-entry
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/symlink_entry.c, output: exec-symlink-entry, flags: ["-static", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/exec-symlink-entry }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/symlink_entry.txt }
+  - id: runtime/process/forkserver-equivalence
+    targets: [arm64, amd64]
+    status: !unsupported
+      reason: "The canonical runner currently cannot express the retained two-program typed server/client integration protocol"
+      evidence: "tests/runtime/process/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fork_runner.c, output: forkserver-equivalence, flags: ["-static", "-O2", "-std=gnu11"] }
+    artifact: { destination: /opt/husklet/forkserver-equivalence }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/fork_equivalence.txt }
