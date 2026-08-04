@@ -266,7 +266,7 @@ mod tests {
     fn network_create_preserves_and_rejects_meaningful_unknown_fields() {
         let harmless: NetworkCreate = serde_json::from_value(serde_json::json!({
             "Name": "isolated",
-            "Driver": "none",
+            "Driver": "null",
             "FutureOption": false
         }))
         .unwrap();
@@ -274,7 +274,7 @@ mod tests {
 
         let meaningful: NetworkCreate = serde_json::from_value(serde_json::json!({
             "Name": "isolated",
-            "Driver": "none",
+            "Driver": "null",
             "FutureOption": "enabled"
         }))
         .unwrap();
