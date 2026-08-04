@@ -358,6 +358,31 @@ async fn rename_wait_removed_stop_and_force_remove_follow_owned_lifecycle() {
 }
 
 #[tokio::test]
+async fn wait_removed_rejects_a_container_that_was_never_observed() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+
+    assert!(matches!(
+        containers.wait_for("missing", WaitCondition::Removed).await,
+        Err(Error::NotFound(reference)) if reference == "missing"
+    ));
+}
+
+#[tokio::test]
+async fn wait_removed_completes_without_status_after_observed_created_container_is_removed() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    containers.create(spec("created")).await.unwrap();
+    let removed = {
+        let containers = containers.clone();
+        tokio::spawn(async move { containers.wait_for("created", WaitCondition::Removed).await })
+    };
+    tokio::task::yield_now().await;
+
+    containers.remove("created").await.unwrap();
+
+    assert_eq!(removed.await.unwrap().unwrap(), None);
+}
+
+#[tokio::test]
 async fn next_exit_observes_a_restart_policy_exit_without_waiting_for_final_stop() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(7));
     runtime.delay = Duration::from_millis(20);

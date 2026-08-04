@@ -12,7 +12,10 @@ impl Service {
                 Err(Error::NotFound(_)) => {
                     let completed = self.exits.lock().await.get(reference).copied();
                     if condition == WaitCondition::Removed {
-                        return Ok(exit.or(completed));
+                        if observed.is_some() || completed.is_some() {
+                            return Ok(exit.or(completed));
+                        }
+                        return Err(Error::NotFound(reference.into()));
                     }
                     if completed.is_some() {
                         return Ok(completed);
