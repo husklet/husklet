@@ -70,6 +70,28 @@ pub struct ExecPlan {
     pub flags: u32,
 }
 
+impl ExecPlan {
+    /// Returns the Linux task name derived from the path passed to `execve`.
+    ///
+    /// Linux retains the final path component before interpreter rewriting and
+    /// limits the visible name to 15 bytes plus its terminating NUL.
+    #[must_use]
+    pub fn comm(&self) -> [u8; 16] {
+        Self::comm_from_path(&self.path)
+    }
+
+    /// Derives a Linux task name when launch composition has not yet built an
+    /// `ExecPlan` but applies the same exec-path identity rule.
+    #[must_use]
+    pub fn comm_from_path(path: &[u8]) -> [u8; 16] {
+        let leaf = path.rsplit(|byte| *byte == b'/').next().unwrap_or(path);
+        let mut name = [0; 16];
+        let count = leaf.len().min(15);
+        name[..count].copy_from_slice(&leaf[..count]);
+        name
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitKind {
     Any,

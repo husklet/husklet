@@ -108,8 +108,8 @@ pub use exit_runtime::{
 };
 pub use futex_port::{FutexInterruptionSource, SafeRuntimeFutex};
 pub use hl_vfs::{
-    Procfs, ProcfsAddressSpaceView, ProcfsCpuModel, ProcfsCpuTicks, ProcfsError, ProcfsMemoryRegionLabel, ProcfsMemoryRegionView,
-    ProcfsMemoryView, ProcfsNodeKind,
+    Procfs, ProcfsAddressSpaceView, ProcfsCpuModel, ProcfsCpuTicks, ProcfsError, ProcfsMemoryRegionLabel,
+    ProcfsMemoryRegionView, ProcfsMemoryView, ProcfsNodeKind,
 };
 pub use hl_vfs::{ProcfsInternetSocketView, ProcfsNetworkInterfaceView, ProcfsNetworkView, ProcfsUnixSocketView};
 pub use ipc::ExitHandler as IpcExitHandler;
@@ -135,9 +135,9 @@ pub use process_time::{
 };
 pub use process_timer::TimerRegistry;
 pub use procfs::{
-    CpuPolicy as ProcfsCpuPolicy, CpuPort as ProcfsCpuPort, DescriptorTarget as ProcfsDescriptorTarget, MemoryPort as ProcfsMemoryPort,
-    MountPort as ProcfsMountPort, NetworkPort as ProcfsNetworkPort, StatMetrics as ProcfsStatMetrics,
-    ResourcePort as ProcfsResourcePort, StatPort as ProcfsStatPort, TaskProcfs,
+    CpuPolicy as ProcfsCpuPolicy, CpuPort as ProcfsCpuPort, DescriptorTarget as ProcfsDescriptorTarget,
+    MemoryPort as ProcfsMemoryPort, MountPort as ProcfsMountPort, NetworkPort as ProcfsNetworkPort,
+    ResourcePort as ProcfsResourcePort, StatMetrics as ProcfsStatMetrics, StatPort as ProcfsStatPort, TaskProcfs,
 };
 pub use robust::{ExitHandler as RobustExitHandler, Wake as RobustWake};
 pub use runtime_socket::RuntimeSocketRegistry;
@@ -146,7 +146,7 @@ pub use signal::{FramePort, PreparedFramePublication};
 pub use syscall_router::{
     RouterDependencies, RuntimeSyscallRouter, RuntimeTerminal, SignalBoundaryOutcome, SignalBoundaryPort, SyscallRecord,
 };
-pub use task_exec::{TaskExecParticipant, linux_comm};
+pub use task_exec::TaskExecParticipant;
 pub use thread::{
     CloneError as ThreadCloneError, ClonePlan as ThreadClonePlan, CloneRuntime as ThreadCloneRuntime,
     CloneTrap as ThreadCloneTrap, CloneTrapPort as ThreadCloneTrapPort, ContextPort as ThreadContextPort,
@@ -210,10 +210,9 @@ pub use event::{
 };
 pub use event::{SignalEventSource, SourceError, SourceError as EventSourceError, TimerEventSource, WatchEventSource};
 pub use filesystem::{
-    AsyncSignalPort, BackingChangePort, DnotifyError, DnotifyPort, FileSizeLimitPort, PipeCancellationPort, PipeSignalPort,
-    RuntimeFilesystemSyscalls,
-    RuntimePipeCancellation, SocketIoctlPort, VectorDirection, VectorError, VectorPosition, VectorRequest,
-    VectorTerminal,
+    AsyncSignalPort, BackingChangePort, DnotifyError, DnotifyPort, FileSizeLimitPort, PipeCancellationPort,
+    PipeSignalPort, RuntimeFilesystemSyscalls, RuntimePipeCancellation, SocketIoctlPort, VectorDirection, VectorError,
+    VectorPosition, VectorRequest, VectorTerminal,
 };
 pub use fork::DescriptorForkParticipant;
 pub use fork::EventForkParticipant;

@@ -104,11 +104,7 @@ impl TaskProcfs {
     }
 
     #[must_use]
-    pub fn with_seccomp(
-        mut self,
-        seccomp: Arc<crate::SeccompControl>,
-        baseline: hl_linux::SeccompBaseline,
-    ) -> Self {
+    pub fn with_seccomp(mut self, seccomp: Arc<crate::SeccompControl>, baseline: hl_linux::SeccompBaseline) -> Self {
         self.seccomp = Some(seccomp);
         self.seccomp_baseline = baseline;
         self
@@ -270,11 +266,7 @@ impl TaskProcfs {
         })
     }
 
-    const fn process_state(
-        &self,
-        process: ProcessLifecycle,
-        leader: hl_task::ThreadLifecycle,
-    ) -> ProcfsProcessState {
+    const fn process_state(&self, process: ProcessLifecycle, leader: hl_task::ThreadLifecycle) -> ProcfsProcessState {
         match process {
             ProcessLifecycle::Starting | ProcessLifecycle::Running => match leader {
                 hl_task::ThreadLifecycle::Blocked => ProcfsProcessState::Sleeping,
@@ -456,10 +448,7 @@ impl ProcfsSource for TaskProcfs {
             .find(|candidate| candidate.id.number() == process)
             .map(|candidate| candidate.id)
             .ok_or(ProcfsError::NotFound)?;
-        self.memory
-            .as_ref()
-            .ok_or(ProcfsError::NotFound)?
-            .address_space(id)
+        self.memory.as_ref().ok_or(ProcfsError::NotFound)?.address_space(id)
     }
 
     fn environment(&self, process: u32) -> Result<Vec<u8>, ProcfsError> {
@@ -537,7 +526,10 @@ impl ProcfsSource for TaskProcfs {
     fn cpu(&self) -> Result<ProcfsCpuView, ProcfsError> {
         let topology = self.tasks.topology();
         let view = ProcfsCpuView::new(topology.online(), self.cpu_model.clone()).ok_or(ProcfsError::Invalid)?;
-        Ok(self.cpu.as_ref().map_or(view.clone(), |cpu| view.with_ticks(cpu.ticks(topology.online()))))
+        Ok(self
+            .cpu
+            .as_ref()
+            .map_or(view.clone(), |cpu| view.with_ticks(cpu.ticks(topology.online()))))
     }
 
     fn cgroup(&self) -> Result<ProcfsCgroupView, ProcfsError> {
@@ -646,7 +638,7 @@ impl ProcfsSource for TaskProcfs {
 
     fn mounts(&self, process: u32) -> Result<hl_vfs::ProcfsMountView, ProcfsError> {
         self.view(process)?;
-        mount::view(
+        Self::mount_view(
             self.mounts
                 .as_ref()
                 .map(|mounts| mounts.snapshot())

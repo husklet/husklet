@@ -222,7 +222,7 @@ pub(in crate::ffi::linux::execution) fn create(
     // image basename when an image is present.
     let executable = super::image::WorkspaceRoot::executable(plan).unwrap_or_else(|| b"/hl-engine".to_vec());
     tasks
-        .set_name(child.1, hl_runtime::linux_comm(&executable))
+        .set_name(child.1, hl_linux::ExecPlan::comm_from_path(&executable))
         .map_err(|_| EngineError::LaunchFailed)?;
     seccomp
         .register_inheriting(source, &[])

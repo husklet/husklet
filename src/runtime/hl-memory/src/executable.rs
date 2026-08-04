@@ -26,8 +26,8 @@ pub(crate) struct ExecutableVersions {
 
 impl ExecutableVersions {
     pub(crate) fn token(&self, range: AddressRange, incarnation: u64) -> ExecutableToken {
-        let first = page(range.start().get());
-        let last = page(range.end().get().saturating_sub(1));
+        let first = Self::page(range.start().get());
+        let last = Self::page(range.end().get().saturating_sub(1));
         let pages = self.pages.read().unwrap_or_else(|error| error.into_inner());
         let version = pages
             .range(first..=last)
@@ -45,8 +45,8 @@ impl ExecutableVersions {
         let mut pages = self.pages.write().unwrap_or_else(|error| error.into_inner());
         let version = self.sequence.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         for range in ranges {
-            let first = page(range.start().get());
-            let last = page(range.end().get().saturating_sub(1));
+            let first = Self::page(range.start().get());
+            let last = Self::page(range.end().get().saturating_sub(1));
             for page in first..=last {
                 pages.insert(page, version);
             }
@@ -64,10 +64,10 @@ impl ExecutableVersions {
     pub(crate) fn generation(&self) -> u64 {
         self.sequence.load(Ordering::Acquire)
     }
-}
 
-const fn page(address: u64) -> u64 {
-    address / EXECUTABLE_PAGE_BYTES
+    const fn page(address: u64) -> u64 {
+        address / EXECUTABLE_PAGE_BYTES
+    }
 }
 
 #[cfg(test)]

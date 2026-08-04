@@ -4,8 +4,8 @@ use hl_isa::GuestArchitecture;
 use hl_task::{Limit, Resource};
 
 use crate::{
-    GuestAccess, GuestFault, GuestMarshaller, GuestMemory, PrctlPlan, ProcessAbi, ProcessMarshalError, ResourceUsage,
-    WaitKind,
+    ExecPlan, GuestAccess, GuestFault, GuestMarshaller, GuestMemory, PrctlPlan, ProcessAbi, ProcessMarshalError,
+    ResourceUsage, WaitKind,
 };
 
 const BASE: u64 = 0x1000;
@@ -145,6 +145,21 @@ fn exec_copies_plan() {
     assert_eq!(plan.path, b"/bin/x");
     assert_eq!(plan.arguments, [b"one".to_vec()]);
     assert_eq!(plan.environment, [b"K=V".to_vec()]);
+}
+
+#[test]
+fn exec_comm() {
+    let plan = |path: &[u8]| ExecPlan {
+        directory: None,
+        path: path.to_vec(),
+        arguments: Vec::new(),
+        environment: Vec::new(),
+        flags: 0,
+    };
+
+    assert_eq!(plan(b"./selfexe").comm(), *b"selfexe\0\0\0\0\0\0\0\0\0");
+    assert_eq!(plan(b"/proc/self/exe").comm(), *b"exe\0\0\0\0\0\0\0\0\0\0\0\0\0");
+    assert_eq!(plan(b"/long-executable-name").comm(), *b"long-executable\0");
 }
 
 #[test]
