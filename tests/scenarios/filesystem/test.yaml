@@ -1,0 +1,309 @@
+cases:
+- id: filesystem/busybox-symlink
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo bb > /r && ln -s /r /l && cat /l
+  expect:
+    stdout_contains: golden/bb.txt
+- id: filesystem/busybox-traversal
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /t/a/b/c && cd /t/a/b/c && cd ../../.. && pwd
+  expect:
+    stdout_contains: golden/t.txt
+- id: filesystem/cd-absolute
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /usr/bin && pwd
+  expect:
+    stdout_contains: golden/usr_bin.txt
+- id: filesystem/cd-dotdot-existing
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /usr/bin && cd .. && pwd | grep -qx /usr && echo CD_DOTDOT_OK
+  expect:
+    stdout_contains: golden/cd_dotdot.txt
+- id: filesystem/cd-relative
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /usr && cd bin && pwd
+  expect:
+    stdout_contains: golden/usr_bin.txt
+- id: filesystem/chmod-bits
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: touch /f && chmod 640 /f && stat -c %a /f
+  expect:
+    stdout_contains: golden/640.txt
+- id: filesystem/chmod-exec-runs
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: |-
+        printf '#!/bin/sh
+        echo SCRIPT_RAN
+        ' > /s && chmod +x /s && /s
+  expect:
+    stdout_contains: golden/script_ran.txt
+- id: filesystem/chown-uid-gid
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: touch /f && chown 1:1 /f && stat -c '%u:%g' /f
+  expect:
+    stdout_contains: golden/1_1.txt
+- id: filesystem/deep-mkdir
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /a/b/c/d/e && echo deep > /a/b/c/d/e/f && cat /a/b/c/d/e/f
+  expect:
+    stdout_contains: golden/deep.txt
+- id: filesystem/dev-full-enospc
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: if echo x 2>/dev/null > /dev/full; then echo WROTE; else echo FULL_ENOSPC; fi
+  expect:
+    stdout_contains: golden/full_enospc.txt
+- id: filesystem/dev-null
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo discard > /dev/null && head -c1 /dev/null | wc -c
+  expect:
+    stdout_contains: golden/0.txt
+- id: filesystem/dev-shm-rw
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo shmdata > /dev/shm/t && cat /dev/shm/t
+  expect:
+    stdout_contains: golden/shmdata.txt
+- id: filesystem/dev-zero
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: head -c8 /dev/zero | tr '\0' '0'
+  expect:
+    stdout_contains: golden/00000000.txt
+- id: filesystem/dot-stays
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /etc && cd . && pwd
+  expect:
+    stdout_contains: golden/etc.txt
+- id: filesystem/dotdot-ascends
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /t/a/b && cd /t/a/b && cd ../.. && pwd
+  expect:
+    stdout_contains: golden/t.txt
+- id: filesystem/dotdot-to-root
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /usr/lib && cd ../.. && pwd | grep -qx / && echo AT_ROOT
+  expect:
+    stdout_contains: golden/at_root.txt
+- id: filesystem/etc-files-present
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: test -f /etc/hosts && test -f /etc/resolv.conf && test -f /etc/hostname && echo ETC_OK
+  expect:
+    stdout_contains: golden/etc_ok.txt
+- id: filesystem/etc-hostname
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: test "$(cat /etc/hostname)" = "$(hostname)" && echo HN_MATCH
+  expect:
+    stdout_contains: golden/hn_match.txt
+- id: filesystem/find-by-name
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /t/x/y && touch /t/x/y/needle.txt && find /t -name needle.txt
+  expect:
+    stdout_contains: golden/t_x.txt
+- id: filesystem/find-type-d
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: |-
+        mkdir -p /t/d1 /t/d2 && find /t -mindepth 1 -type d | sort | tr '
+        ' ' '
+  expect:
+    stdout_contains: golden/t_d1.txt
+- id: filesystem/lower-read
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: test -f /etc/os-release && grep -q Alpine /etc/os-release && echo LOWER_READ_OK
+  expect:
+    stdout_contains: golden/lower_read.txt
+- id: filesystem/ls-rootfs
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd / && ls | grep -qx etc && ls | grep -qx bin && echo LS_OK
+  expect:
+    stdout_contains: golden/ls_ok.txt
+- id: filesystem/mkdir-rmdir
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /t/a && test -d /t/a && echo MADE && rm -r /t/a && test ! -e /t/a && echo REMOVED
+  expect:
+    stdout_contains:
+    - golden/made.txt
+    - golden/removed.txt
+- id: filesystem/overlay-copyup
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cat /etc/alpine-release > /dev/null && echo COPYUP_MARK >> /etc/hostname && grep -q COPYUP_MARK /etc/hostname
+        && echo COPYUP_OK
+  expect:
+    stdout_contains: golden/copyup_ok.txt
+- id: filesystem/overlay-newfile-upper
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo upper > /upper-file && sync && cat /upper-file
+  expect:
+    stdout_contains: golden/upper.txt
+- id: filesystem/proc-self-cwd
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: cd /usr && readlink /proc/self/cwd
+  expect:
+    stdout_contains: golden/usr.txt
+- id: filesystem/proc-self-root
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: readlink /proc/self/root
+  expect:
+    stdout_contains: golden/output.txt
+- id: filesystem/readlink
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: ln -s /etc/hostname /lnk && readlink /lnk
+  expect:
+    stdout_contains: golden/etc_hostname.txt
+- id: filesystem/rename-dir
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /src && echo x > /src/f && mv /src /dst && cat /dst/f && test ! -e /src && echo DMOVED
+  expect:
+    stdout_contains: golden/dmoved.txt
+- id: filesystem/rename-file
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo val > /a && mv /a /b && cat /b && test ! -e /a && echo MOVED
+  expect:
+    stdout_contains:
+    - golden/val.txt
+    - golden/moved.txt
+- id: filesystem/setuid-drop-owns-newfile
+  image: postgres:16-alpine
+  timeout: 120
+  actions:
+  - shell:
+      script: gosu postgres sh -c 'mkdir /td && touch /td/f && stat -c %u:%g /td/f && stat -c %u:%g /td'
+  expect:
+    stdout_contains: golden/70_70.txt
+- id: filesystem/stat-size
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: printf 'hello' > /f && stat -c %s /f
+  expect:
+    stdout_contains: golden/5.txt
+- id: filesystem/stat-type
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /d && stat -c %F /d
+  expect:
+    stdout_contains: golden/directory.txt
+- id: filesystem/symlink-dangling
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: ln -s /no/such/target /d && test -L /d && readlink /d && { cat /d 2>&1 || echo DANGLING; }
+  expect:
+    stdout_contains:
+    - golden/no_such.txt
+    - golden/dangling.txt
+- id: filesystem/symlink-follow
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo data > /real && ln -s /real /link && cat /link
+  expect:
+    stdout_contains: golden/data.txt
+- id: filesystem/symlink-is-link
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: echo x > /real && ln -s /real /link && test -L /link && echo IS_LINK
+  expect:
+    stdout_contains: golden/is_link.txt
+- id: filesystem/symlink-relative
+  image: alpine:3.24.1
+  timeout: 120
+  actions:
+  - shell:
+      script: mkdir -p /t && echo rel > /t/target && ln -s target /t/link && cat /t/link
+  expect:
+    stdout_contains: golden/rel.txt
