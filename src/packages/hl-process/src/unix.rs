@@ -26,8 +26,8 @@ pub(super) fn run(
 ) -> std::io::Result<Outcome> {
     let spawned = spawn(command)?;
     let mut owned = OwnedChild::new(spawned.process);
-    let stdout = Drain::spawn(spawned.stdout, capture.stdout_limit);
-    let stderr = Drain::spawn(spawned.stderr, capture.stderr_limit);
+    let stdout = Drain::spawn(spawned.stdout, capture.stdout_limit)?;
+    let stderr = Drain::spawn(spawned.stderr, capture.stderr_limit)?;
     supervise(&mut owned, stdout, stderr, capture, timeout, cancelled)
 }
 
@@ -357,19 +357,33 @@ struct Drained {
 struct Drain {
     count: Arc<AtomicU64>,
     limit: u64,
+    stopping: Arc<AtomicBool>,
     thread: thread::JoinHandle<std::io::Result<Vec<u8>>>,
 }
 
 impl Drain {
-    fn spawn(mut source: impl Read + Send + 'static, limit: u64) -> Self {
+    fn spawn(mut source: File, limit: u64) -> std::io::Result<Self> {
+        nonblocking(&source)?;
         let count = Arc::new(AtomicU64::new(0));
         let observed = Arc::clone(&count);
+        let stopping = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&stopping);
         let thread = thread::spawn(move || {
             let capacity = usize::try_from(limit.min(1024 * 1024)).unwrap_or(1024 * 1024);
             let mut retained = Vec::with_capacity(capacity);
             let mut buffer = [0_u8; 16 * 1024];
             loop {
-                let size = source.read(&mut buffer)?;
+                let size = match source.read(&mut buffer) {
+                    Ok(size) => size,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        thread::sleep(POLL);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 if size == 0 {
                     break;
                 }
@@ -379,7 +393,12 @@ impl Drain {
             }
             Ok(retained)
         });
-        Self { count, limit, thread }
+        Ok(Self {
+            count,
+            limit,
+            stopping,
+            thread,
+        })
     }
 
     fn exceeded(&self) -> bool {
@@ -387,13 +406,32 @@ impl Drain {
     }
 
     fn finish(self) -> std::io::Result<Drained> {
-        let exceeded = self.exceeded();
+        self.stopping.store(true, Ordering::Release);
         let bytes = self
             .thread
             .join()
             .map_err(|_| std::io::Error::other("subprocess capture thread panicked"))??;
+        let exceeded = self.count.load(Ordering::Acquire) > self.limit;
         Ok(Drained { bytes, exceeded })
     }
+}
+
+fn nonblocking(source: &File) -> std::io::Result<()> {
+    let descriptor = source.as_raw_fd();
+    // SAFETY: `descriptor` is a live pipe descriptor owned by `source`.
+    // F_GETFL reads integer descriptor flags, retains no pointer, and cannot
+    // unwind or affect the descriptor lifetime.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: the same uniquely owned descriptor remains live. F_SETFL copies
+    // the integer flags, retains no pointer, and concurrent code only reads the
+    // pipe through the drain thread created after this call.
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 struct OwnedChild {
@@ -566,6 +604,7 @@ impl Drop for OwnedChild {
 mod tests {
     use super::*;
     use crate::EnvironmentEntry;
+    use std::cell::Cell;
     use std::sync::Arc;
 
     fn capture(directory: &tempfile::TempDir) -> Capture {
@@ -739,6 +778,157 @@ mod tests {
         .unwrap();
         assert_eq!(outcome, Outcome::TimedOut);
         assert_reported_process_gone(&directory.path().join("stdout"));
+    }
+
+    #[test]
+    fn timeout_does_not_wait_for_detached_capture_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let detached = DetachedChild::new(directory.path().join("detached.pid"));
+        let mut command = OwnedCommand::new(std::env::current_exe().unwrap());
+        command.args(["--exact", "unix::tests::detached_capture_writer_child", "--ignored"]);
+        command
+            .exact_environment([EnvironmentEntry::new(
+                b"HL_PROCESS_DETACHED_PID_FILE",
+                detached.path.as_os_str().as_bytes(),
+            )
+            .unwrap()])
+            .unwrap();
+        let started = Instant::now();
+        let outcome = run(
+            &command,
+            &capture(&directory),
+            Duration::from_millis(250),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::TimedOut);
+        assert!(started.elapsed() < Duration::from_millis(1_500));
+        assert!(
+            fs::read(directory.path().join("stdout"))
+                .unwrap()
+                .ends_with(b"detached\n")
+        );
+        detached.terminate().unwrap();
+    }
+
+    #[test]
+    #[ignore = "executed as a subprocess retaining a detached capture writer"]
+    fn detached_capture_writer_child() {
+        let path = std::env::var_os("HL_PROCESS_DETACHED_PID_FILE").unwrap();
+        let report = File::create(path).unwrap();
+        // SAFETY: the fork child invokes only async-signal-safe libc operations,
+        // owns no Rust references after the fork, and terminates with `_exit`.
+        // The parent remains in its original process group until supervision
+        // terminates it; the child creates a new session and deliberately keeps
+        // inherited stdout/stderr open long enough to expose an unbounded drain.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            // SAFETY: this fork child is not a process-group leader, so setsid
+            // creates a detached session without touching Rust storage.
+            if unsafe { libc::setsid() } < 0 {
+                // SAFETY: this is the terminal action of the isolated child.
+                unsafe { libc::_exit(101) };
+            }
+            let marker = b"detached\n";
+            let mut digits = [0_u8; 32];
+            let mut value = unsafe { libc::getpid() } as u32;
+            let mut cursor = digits.len();
+            while value != 0 {
+                cursor -= 1;
+                digits[cursor] = b'0' + (value % 10) as u8;
+                value /= 10;
+            }
+            // SAFETY: stdout remains an inherited live descriptor, and marker
+            // and digits are immutable storage valid for their complete writes.
+            // The report descriptor was opened before fork. write, close,
+            // sleep, and `_exit` retain no Rust pointers and cannot unwind.
+            unsafe {
+                libc::write(libc::STDOUT_FILENO, marker.as_ptr().cast(), marker.len());
+                libc::write(
+                    report.as_raw_fd(),
+                    digits[cursor..].as_ptr().cast(),
+                    digits.len() - cursor,
+                );
+                libc::close(report.as_raw_fd());
+                libc::sleep(2);
+                libc::_exit(0);
+            }
+        }
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    struct DetachedChild {
+        path: PathBuf,
+        armed: Cell<bool>,
+    }
+
+    impl DetachedChild {
+        fn new(path: PathBuf) -> Self {
+            Self {
+                path,
+                armed: Cell::new(true),
+            }
+        }
+
+        fn pid(&self) -> std::io::Result<i32> {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                if let Ok(text) = fs::read_to_string(&self.path)
+                    && let Ok(pid) = text.parse()
+                {
+                    return Ok(pid);
+                }
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "detached fixture did not publish its pid",
+                    ));
+                }
+                thread::sleep(POLL);
+            }
+        }
+
+        fn terminate(&self) -> std::io::Result<()> {
+            if !self.armed.get() {
+                return Ok(());
+            }
+            let pid = self.pid()?;
+            // SAFETY: the positive PID came from the dedicated fixture file;
+            // SIGKILL carries no Rust pointer and cannot unwind.
+            if unsafe { libc::kill(pid, libc::SIGKILL) } < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(error);
+                }
+            }
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                // SAFETY: signal zero only observes the exact fixture PID and
+                // retains no pointer or Rust alias.
+                if unsafe { libc::kill(pid, 0) } < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() == Some(libc::ESRCH) {
+                        self.armed.set(false);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                if Instant::now() >= deadline {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "detached fixture was not reaped",
+                    ));
+                }
+                thread::sleep(POLL);
+            }
+        }
+    }
+
+    impl Drop for DetachedChild {
+        fn drop(&mut self) {
+            let _ = self.terminate();
+        }
     }
 
     #[test]
