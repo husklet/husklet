@@ -28,6 +28,7 @@
 #include "simd_immediate.h"
 #include "simd_integer.h"
 #include "simd_narrow.h"
+#include "simd_pairwise.h"
 #include "simd_permute.h"
 #include "simd_reduce.h"
 #include "simd_saturating.h"
@@ -120,6 +121,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_simd_fp_reduce_body(assembler, word) ||
            hl_a64_simd_integer_body(assembler, word) ||
            hl_a64_simd_narrow_body(assembler, word) ||
+           hl_a64_simd_pairwise_body(assembler, word) ||
            hl_a64_simd_permute_body(assembler, word) ||
            hl_a64_simd_reduce_body(assembler, word) ||
            hl_a64_simd_saturating_body(assembler, word) ||
