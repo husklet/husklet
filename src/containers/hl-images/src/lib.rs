@@ -22,13 +22,13 @@ pub use digest::Digest;
 pub use error::{Error, Result};
 pub use image::{FsImageStore, Graph, Image, ImageStore};
 pub use images::{
-    GcReport, History, ImageUsage, Images, Metadata, RuntimeConfig, RuntimeOverrides, UnpackedImage,
+    GcReport, GraphPruneScope, History, ImageUsage, Images, Metadata, RuntimeConfig, RuntimeOverrides, UnpackedImage,
 };
 pub use lease::{Lease, LeaseStore, Leases};
 pub use oci_spec::image::Descriptor;
 pub use platform::{Platform, PlatformError};
 pub use reference::Reference;
-pub use transfer::{copy_graph, CopyReport, DescriptorGraph, Successors, Target};
+pub use transfer::{CopyReport, DescriptorGraph, Successors, Target, copy_graph};
 
 pub(crate) trait DescriptorKind {
     fn is_index(&self) -> bool;
@@ -40,16 +40,14 @@ impl DescriptorKind for Descriptor {
     fn is_index(&self) -> bool {
         matches!(
             self.media_type().to_string().as_str(),
-            "application/vnd.oci.image.index.v1+json"
-                | "application/vnd.docker.distribution.manifest.list.v2+json"
+            "application/vnd.oci.image.index.v1+json" | "application/vnd.docker.distribution.manifest.list.v2+json"
         )
     }
 
     fn is_manifest(&self) -> bool {
         matches!(
             self.media_type().to_string().as_str(),
-            "application/vnd.oci.image.manifest.v1+json"
-                | "application/vnd.docker.distribution.manifest.v2+json"
+            "application/vnd.oci.image.manifest.v1+json" | "application/vnd.docker.distribution.manifest.v2+json"
         )
     }
 

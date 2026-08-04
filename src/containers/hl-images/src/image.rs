@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use crate::{storage, Descriptor, Error, Reference, Result};
+use crate::{Descriptor, Error, Reference, Result, storage};
 
 const CATALOG_VERSION: u32 = 1;
 
@@ -106,6 +106,7 @@ impl Catalog {
         generation: u64,
         digests: &BTreeSet<String>,
         content: BTreeMap<String, u64>,
+        scope: crate::GraphPruneScope,
     ) -> Result<Option<(String, PendingPrune)>> {
         if self.generation != generation {
             return Err(Error::InvalidMetadata(
@@ -115,9 +116,9 @@ impl Catalog {
         let removable = digests
             .iter()
             .filter(|digest| {
-                self.graphs
-                    .get(*digest)
-                    .is_some_and(|graph| graph.names.is_empty() || graph.build_cache)
+                self.graphs.get(*digest).is_some_and(|graph| {
+                    graph.names.is_empty() || graph.build_cache || scope == crate::GraphPruneScope::AllUnused
+                })
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -221,10 +222,7 @@ impl FsImageStore {
     ///
     /// # Errors
     /// Returns an error when metadata storage cannot be opened or decoded.
-    pub fn open_with(
-        root: impl AsRef<Path>,
-        persistence: Arc<dyn storage::Persistence>,
-    ) -> Result<Self> {
+    pub fn open_with(root: impl AsRef<Path>, persistence: Arc<dyn storage::Persistence>) -> Result<Self> {
         fs::create_dir_all(root.as_ref())?;
         let path = root.as_ref().join("images.json");
         let state = Catalog::read(&path)?;
@@ -256,8 +254,7 @@ impl FsImageStore {
         let mut candidate = Catalog::read(&self.path)?;
         let result = operation(&mut candidate)?;
         candidate.generation = candidate.generation.wrapping_add(1);
-        self.persistence
-            .replace(&self.path, &serde_json::to_vec(&candidate)?)?;
+        self.persistence.replace(&self.path, &serde_json::to_vec(&candidate)?)?;
         *state = candidate;
         Ok(result)
     }
@@ -271,8 +268,7 @@ impl FsImageStore {
         *self
             .state
             .write()
-            .map_err(|_| Error::InvalidMetadata("image metadata lock poisoned".into()))? =
-            Catalog::read(&self.path)?;
+            .map_err(|_| Error::InvalidMetadata("image metadata lock poisoned".into()))? = Catalog::read(&self.path)?;
         Ok(())
     }
 
@@ -327,8 +323,9 @@ impl FsImageStore {
         generation: u64,
         digests: &BTreeSet<String>,
         content: BTreeMap<String, u64>,
+        scope: crate::GraphPruneScope,
     ) -> Result<Option<(String, PendingPrune)>> {
-        self.try_update(|state| state.stage_prune(generation, digests, content))
+        self.try_update(|state| state.stage_prune(generation, digests, content, scope))
     }
 
     pub(crate) fn finish_prune(&self, id: &str) -> Result<()> {

@@ -1,8 +1,8 @@
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use hl_images::format::docker::{Archive, Limits};
 use hl_images::{Platform, Reference};
 use serde::Deserialize;
@@ -11,11 +11,11 @@ use std::io::{Seek, SeekFrom};
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
-use super::error::{ApiError, ApiResult};
 use super::DockerState;
+use super::error::{ApiError, ApiResult};
 use crate::api::{
-    CommitOptions, Distribution, DockerError, ImageCommit, ImageDelete, ImageHistory, ImageLoad,
-    ImagePrune, ImageSummary, InspectImage, PullProgress, Search,
+    CommitOptions, Distribution, DockerError, ImageCommit, ImageDelete, ImageHistory, ImageLoad, ImagePrune,
+    ImageSummary, InspectImage, PullProgress, Search,
 };
 
 const MAX_IMAGE_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024 * 1024;
@@ -29,20 +29,14 @@ impl DockerState {
             ));
         }
         if options.author.contains('\0') || options.comment.contains('\0') {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "commit metadata contains NUL",
-            ));
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "commit metadata contains NUL"));
         }
         self.containers
             .validate_commit(&options.container, &options.changes)
             .await
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         if options.container.is_empty() {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                "container is required",
-            ));
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "container is required"));
         }
         if options.repo.is_empty() {
             return Err(ApiError::new(StatusCode::BAD_REQUEST, "repo is required"));
@@ -50,11 +44,7 @@ impl DockerState {
         let name: Reference = format!(
             "{}:{}",
             options.repo,
-            if options.tag.is_empty() {
-                "latest"
-            } else {
-                &options.tag
-            }
+            if options.tag.is_empty() { "latest" } else { &options.tag }
         )
         .parse()
         .map_err(ApiError::image_request)?;
@@ -114,10 +104,7 @@ impl DockerState {
         self.image_summaries_with_shared_size(false).await
     }
 
-    async fn image_summaries_with_shared_size(
-        &self,
-        include_shared_size: bool,
-    ) -> ApiResult<Vec<ImageSummary>> {
+    async fn image_summaries_with_shared_size(&self, include_shared_size: bool) -> ApiResult<Vec<ImageSummary>> {
         let mut grouped: BTreeMap<String, (i64, Vec<String>)> = BTreeMap::new();
         let records = self.image_records().await?;
         let images = self.containers.images().map_err(ApiError::container)?;
@@ -129,9 +116,7 @@ impl DockerState {
                 .map(|image| {
                     let id = image.target.digest().to_string();
                     let usage = usage.get(&id).copied().ok_or_else(|| {
-                        hl_images::Error::InvalidMetadata(format!(
-                            "image usage is missing target {id}"
-                        ))
+                        hl_images::Error::InvalidMetadata(format!("image usage is missing target {id}"))
                     })?;
                     let labels = images.details(&image, &platform)?.labels;
                     Ok::<_, hl_images::Error>((image, usage, labels))
@@ -180,10 +165,7 @@ impl DockerState {
 
     pub(super) async fn find_image(&self, name: &str) -> ApiResult<hl_images::Image> {
         let records = self.image_records().await?;
-        if let Some(image) = records
-            .iter()
-            .find(|image| image.target.digest().to_string() == name)
-        {
+        if let Some(image) = records.iter().find(|image| image.target.digest().to_string() == name) {
             return Ok(image.clone());
         }
         let reference: Reference = name
@@ -206,11 +188,11 @@ mod registry;
 pub(super) use archive::{load, save};
 use fields::{Field, Fields};
 #[cfg(test)]
-use identity::RemoveQuery;
+use identity::{RemoveQuery, removal_conflicts};
 pub(super) use identity::{history, inspect, remove, tag};
-pub(super) use list::{list, prune, Prune};
 #[cfg(test)]
 use list::{ImageSelection, ListQuery};
+pub(super) use list::{Prune, list, prune};
 pub(super) use registry::{commit, distribution, pull, search};
 
 #[cfg(test)]

@@ -4,10 +4,17 @@ use sha2::{Digest, Sha256};
 use std::{fmt::Write as _, path::Path};
 
 pub(crate) fn write_image_archive(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    write_named_image_archive(path, "scenario/fixture:test", b"scenario fixture\n")
+}
+
+pub(crate) fn write_named_image_archive(
+    path: &Path,
+    tag: &str,
+    payload: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut layer = Vec::new();
     {
         let mut tar = tar::Builder::new(&mut layer);
-        let payload = b"scenario fixture\n";
         let mut header = tar::Header::new_gnu();
         header.set_size(payload.len() as u64);
         header.set_mode(0o644);
@@ -28,7 +35,7 @@ pub(crate) fn write_image_archive(path: &Path) -> Result<(), Box<dyn std::error:
     }))?;
     let manifest = serde_json::to_vec(&serde_json::json!([{
         "Config": "config.json",
-        "RepoTags": ["scenario/fixture:test"],
+        "RepoTags": [tag],
         "Layers": ["layer.tar"]
     }]))?;
     let file = std::fs::File::create(path)?;
@@ -53,10 +60,7 @@ pub(crate) fn append_archive_member<W: std::io::Write>(
     archive.append_data(&mut header, name, bytes)
 }
 
-pub(crate) async fn unpack(
-    archive: std::path::PathBuf,
-    destination: std::path::PathBuf,
-) -> Result<(), std::io::Error> {
+pub(crate) async fn unpack(archive: std::path::PathBuf, destination: std::path::PathBuf) -> Result<(), std::io::Error> {
     tokio::task::spawn_blocking(move || -> Result<(), std::io::Error> {
         std::fs::create_dir(&destination)?;
         let file = std::fs::File::open(archive)?;

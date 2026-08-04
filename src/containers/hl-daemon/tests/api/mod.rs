@@ -10,6 +10,7 @@ pub(crate) mod headless_lifecycle;
 pub(crate) mod headless_runtime;
 pub(crate) mod http_errors;
 pub(crate) mod image_archive;
+pub(crate) mod image_prune;
 pub(crate) mod malformed_image_archive;
 pub(crate) mod named_volume;
 pub(crate) mod network_bridge;

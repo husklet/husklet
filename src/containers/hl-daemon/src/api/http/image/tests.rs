@@ -1,4 +1,4 @@
-use super::{Fields, ImageSelection, ListQuery, Prune, RemoveQuery};
+use super::{Fields, ImageSelection, ListQuery, Prune, RemoveQuery, removal_conflicts};
 use axum::http::StatusCode;
 use std::collections::BTreeMap;
 
@@ -36,14 +36,56 @@ fn image_reference_wildcards_match_complete_names() {
 }
 
 #[test]
+fn image_remove_conflicts_only_when_the_target_would_become_unavailable() {
+    assert!(!removal_conflicts(false, false, 2, [false]));
+    assert!(removal_conflicts(false, false, 1, [false]));
+    assert!(!removal_conflicts(true, false, 1, [false]));
+    assert!(removal_conflicts(true, false, 2, [true]));
+    assert!(!removal_conflicts(false, false, 1, []));
+    assert!(removal_conflicts(false, true, 2, []));
+    assert!(!removal_conflicts(true, true, 2, []));
+}
+
+#[test]
 fn system_prune_preserves_all_and_filtered_operations() {
     assert!(matches!(Prune::parse(None).unwrap(), Prune::All));
     assert!(matches!(
         Prune::parse(Some(r#"{"until":["2"],"label":["stage=build"]}"#)).unwrap(),
-        Prune::Selected {
-            until: Some(2_000),
-            ..
-        }
+        Prune::Selected { until: Some(2_000), .. }
     ));
     assert!(Prune::parse(Some(r#"{"until":["1","2"]}"#)).is_err());
+}
+
+#[test]
+fn image_prune_defaults_to_dangling_and_accepts_metadata_filters() {
+    let Prune::Selected { values, until } = Prune::image(None).unwrap() else {
+        panic!("image prune must use a bounded selection")
+    };
+    assert_eq!(values.get("dangling").unwrap(), &["true"]);
+    assert_eq!(until, None);
+
+    let Prune::Selected { values, until } = Prune::image(Some(
+        r#"{"dangling":["true"],"until":["2"],"label":["stage=build"],"label!":["keep"]}"#,
+    ))
+    .unwrap() else {
+        panic!("filtered image prune must use a bounded selection")
+    };
+    assert_eq!(values.get("dangling").unwrap(), &["true"]);
+    assert_eq!(values.get("label").unwrap(), &["stage=build"]);
+    assert_eq!(values.get("label!").unwrap(), &["keep"]);
+    assert_eq!(until, Some(2_000));
+}
+
+#[test]
+fn image_prune_rejects_ambiguous_or_unsupported_filters() {
+    for filters in [
+        r#"{"dangling":[]}"#,
+        r#"{"dangling":["true","false"]}"#,
+        r#"{"dangling":["sometimes"]}"#,
+        r#"{"reference":["team/*"]}"#,
+        r#"{"until":["1","2"]}"#,
+    ] {
+        assert_eq!(Prune::image(Some(filters)).unwrap_err().status, StatusCode::BAD_REQUEST);
+    }
+    assert!(Prune::image(Some(r#"{"dangling":["false"]}"#)).is_ok());
 }

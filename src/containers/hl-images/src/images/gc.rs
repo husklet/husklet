@@ -8,24 +8,17 @@ impl Images {
     pub fn gc(&self) -> Result<GcReport> {
         let _operation = crate::storage::ExclusiveLock::acquire(&self.operation_lock)?;
         let mut marked = HashSet::new();
-        let mut stack: Vec<Descriptor> = self
-            .metadata
-            .graphs()?
-            .into_iter()
-            .map(|graph| graph.target)
-            .collect();
+        let mut stack: Vec<Descriptor> = self.metadata.graphs()?.into_iter().map(|graph| graph.target).collect();
         while let Some(descriptor) = stack.pop() {
             let digest: Digest = descriptor.digest().to_string().parse()?;
             if !marked.insert(digest.clone()) {
                 continue;
             }
             if descriptor.is_index() {
-                let doc: IndexDocument =
-                    serde_json::from_slice(&self.content.read_document(&descriptor)?)?;
+                let doc: IndexDocument = serde_json::from_slice(&self.content.read_document(&descriptor)?)?;
                 stack.extend(doc.manifests.into_iter().map(|entry| entry.descriptor));
             } else if descriptor.is_manifest() {
-                let doc: ManifestDocument =
-                    serde_json::from_slice(&self.content.read_document(&descriptor)?)?;
+                let doc: ManifestDocument = serde_json::from_slice(&self.content.read_document(&descriptor)?)?;
                 stack.push(doc.config);
                 stack.extend(doc.layers);
             }
@@ -45,8 +38,7 @@ impl Images {
                 let size = self.content.info(&digest)?.size;
                 if self.content.remove(&digest)? {
                     report.content_removed += 1;
-                    report.content_bytes_removed =
-                        report.content_bytes_removed.saturating_add(size);
+                    report.content_bytes_removed = report.content_bytes_removed.saturating_add(size);
                 }
             }
         }
@@ -73,6 +65,18 @@ impl Images {
     /// # Errors
     /// Returns an error for invalid graph metadata, missing content, or durable-store failures.
     pub fn prune_graphs(&self, digests: &BTreeSet<String>) -> Result<GcReport> {
+        self.prune_graphs_with(digests, crate::GraphPruneScope::Dangling)
+    }
+
+    /// Atomically forget selected graphs within the requested name scope.
+    ///
+    /// Callers selecting `AllUnused` must exclude graphs referenced by live
+    /// containers or another external owner before invoking this operation.
+    /// Leases remain authoritative for content retention in either mode.
+    ///
+    /// # Errors
+    /// Returns an error for invalid graph metadata, missing content, or durable-store failures.
+    pub fn prune_graphs_with(&self, digests: &BTreeSet<String>, scope: crate::GraphPruneScope) -> Result<GcReport> {
         let mut report = GcReport::default();
         for (id, pending) in self.metadata.pending_prunes()? {
             self.remove_pending(&id, &pending.content, &mut report)?;
@@ -83,7 +87,7 @@ impl Images {
             .iter()
             .filter(|graph| {
                 digests.contains(&graph.target.digest().to_string())
-                    && (graph.names.is_empty() || graph.build_cache)
+                    && (graph.names.is_empty() || graph.build_cache || scope == crate::GraphPruneScope::AllUnused)
             })
             .collect::<Vec<_>>();
         if selected.is_empty() {
@@ -124,20 +128,14 @@ impl Images {
                 true
             }
         });
-        let Some((id, pending)) = self.metadata.stage_prune(generation, digests, candidates)?
-        else {
+        let Some((id, pending)) = self.metadata.stage_prune(generation, digests, candidates, scope)? else {
             return Ok(report);
         };
         self.remove_pending(&id, &pending.content, &mut report)?;
         Ok(report)
     }
 
-    fn remove_pending(
-        &self,
-        id: &str,
-        content: &BTreeMap<String, u64>,
-        report: &mut GcReport,
-    ) -> Result<()> {
+    fn remove_pending(&self, id: &str, content: &BTreeMap<String, u64>, report: &mut GcReport) -> Result<()> {
         for (value, size) in content {
             let digest: Digest = value.parse()?;
             if self.content.remove(&digest)? {

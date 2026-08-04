@@ -1,11 +1,35 @@
-use super::support::{fixture, tar_file, FaultPersistence};
-use hl_images::{
-    content::Store, Descriptor, Digest, History, Images, Metadata, Platform, RuntimeConfig,
-};
+use super::support::{FaultPersistence, fixture, tar_file};
+use hl_images::{Descriptor, Digest, History, Images, Metadata, Platform, RuntimeConfig, content::Store};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+
+#[tokio::test]
+async fn all_unused_scope_removes_selected_named_graph_atomically() {
+    let temp = tempfile::tempdir().unwrap();
+    let images = Images::open(temp.path()).unwrap();
+    let (source, _) = fixture(None);
+    let image = images
+        .pull(
+            &source,
+            "example.test/prune:named".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+    let selected = BTreeSet::from([image.target.digest().to_string()]);
+
+    assert_eq!(images.prune_graphs(&selected).unwrap().content_removed, 0);
+    assert!(images.resolve(&image.name).unwrap().is_some());
+    let report = images
+        .prune_graphs_with(&selected, hl_images::GraphPruneScope::AllUnused)
+        .unwrap();
+    assert!(report.content_removed > 0);
+    assert!(report.content_bytes_removed > 0);
+    assert!(images.resolve(&image.name).unwrap().is_none());
+    assert!(images.metadata().graphs().unwrap().is_empty());
+}
 
 #[tokio::test]
 async fn failed_metadata_stage_preserves_graph_and_retry_reclaims_it() {
@@ -28,23 +52,19 @@ async fn failed_metadata_stage_preserves_graph_and_retry_reclaims_it() {
     let selected = BTreeSet::from([image.target.digest().to_string()]);
 
     assert!(images.prune_graphs(&selected).is_err());
-    assert!(images
-        .metadata()
-        .graphs()
-        .unwrap()
-        .iter()
-        .any(|graph| graph.target.digest() == image.target.digest()));
+    assert!(
+        images
+            .metadata()
+            .graphs()
+            .unwrap()
+            .iter()
+            .any(|graph| graph.target.digest() == image.target.digest())
+    );
     for descriptor in &graph {
         let digest: Digest = descriptor.digest().to_string().parse().unwrap();
         assert!(images.content().contains(&digest).unwrap());
     }
-    assert_eq!(
-        images
-            .prune_graphs(&selected)
-            .unwrap()
-            .content_bytes_removed,
-        expected
-    );
+    assert_eq!(images.prune_graphs(&selected).unwrap().content_bytes_removed, expected);
 }
 
 #[tokio::test]
@@ -74,10 +94,7 @@ async fn failed_blob_delete_leaves_a_durable_retryable_prune() {
     assert_eq!(report.content_removed, graph.len() as u64);
     assert_eq!(report.content_bytes_removed, expected);
     assert!(recovered.metadata().graphs().unwrap().is_empty());
-    assert_eq!(
-        recovered.prune_graphs(&selected).unwrap().content_removed,
-        0
-    );
+    assert_eq!(recovered.prune_graphs(&selected).unwrap().content_removed, 0);
 }
 
 #[tokio::test]
@@ -103,10 +120,7 @@ async fn failed_prune_completion_is_idempotent_after_reopen() {
     drop(images);
 
     let recovered = Images::open_with(temp.path(), persistence).unwrap();
-    assert_eq!(
-        recovered.prune_graphs(&selected).unwrap().content_removed,
-        0
-    );
+    assert_eq!(recovered.prune_graphs(&selected).unwrap().content_removed, 0);
     assert!(recovered.metadata().graphs().unwrap().is_empty());
     for descriptor in graph {
         let digest: Digest = descriptor.digest().to_string().parse().unwrap();

@@ -12,12 +12,12 @@ use oci_spec::image::{DescriptorBuilder, MediaType};
 use sha2::Digest as _;
 
 use crate::{
+    Descriptor, DescriptorGraph, DescriptorKind as _, Digest, Error, FsImageStore, Graph, Image, ImageStore,
+    LeaseStore, Leases, Platform, Reference, Result,
     content::{FsStore, Store},
     remote::Source,
     rootfs::{Reference as RootReference, Roots},
     snapshot::{Id, Snapshots},
-    Descriptor, DescriptorGraph, DescriptorKind as _, Digest, Error, FsImageStore, Graph, Image,
-    ImageStore, LeaseStore, Leases, Platform, Reference, Result,
 };
 
 /// Composition façade for content, names, leases, snapshots, pull, unpack, and GC.
@@ -178,9 +178,7 @@ impl RuntimeConfig {
     pub fn merge(&self, overrides: RuntimeOverrides) -> Result<Self> {
         let entrypoint_is_explicit = overrides.entrypoint.is_some();
         let mut merged = Self {
-            entrypoint: overrides
-                .entrypoint
-                .unwrap_or_else(|| self.entrypoint.clone()),
+            entrypoint: overrides.entrypoint.unwrap_or_else(|| self.entrypoint.clone()),
             command: match overrides.command {
                 Some(command) if !command.is_empty() => command,
                 Some(_) | None if entrypoint_is_explicit => Vec::new(),
@@ -220,9 +218,7 @@ impl RuntimeConfig {
             return Err(Error::MalformedOci("runtime strings contain NUL".into()));
         }
         if !self.working_directory.starts_with('/') {
-            return Err(Error::MalformedOci(
-                "working directory must be absolute".into(),
-            ));
+            return Err(Error::MalformedOci("working directory must be absolute".into()));
         }
         if self
             .environment
@@ -243,6 +239,13 @@ pub struct GcReport {
     pub content_kept: u64,
     pub snapshots_removed: u64,
     pub snapshots_kept: u64,
+}
+
+/// Determines whether graph pruning may remove named image records.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraphPruneScope {
+    Dangling,
+    AllUnused,
 }
 
 mod catalog;

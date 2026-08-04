@@ -1,6 +1,6 @@
 use super::{
-    ApiError, ApiResult, BTreeMap, Deserialize, DockerState, Field, Fields, ImagePrune,
-    ImageSummary, Json, Query, State, StatusCode,
+    ApiError, ApiResult, BTreeMap, Deserialize, DockerState, Field, Fields, ImagePrune, ImageSummary, Json, Query,
+    State, StatusCode,
 };
 
 #[derive(Default, Deserialize)]
@@ -34,12 +34,8 @@ impl ImageSelection {
         let Some(raw) = raw.filter(|value| Field::meaningful(value)) else {
             return Ok(Self::default());
         };
-        let values: BTreeMap<String, Vec<String>> = serde_json::from_str(raw).map_err(|error| {
-            ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("invalid image list filters: {error}"),
-            )
-        })?;
+        let values: BTreeMap<String, Vec<String>> = serde_json::from_str(raw)
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid image list filters: {error}")))?;
         let unsupported = values
             .keys()
             .filter(|name| !matches!(name.as_str(), "reference" | "dangling" | "label"))
@@ -61,10 +57,7 @@ impl ImageSelection {
         self.values.iter().all(|(name, values)| {
             values.is_empty()
                 || values.iter().any(|value| match name.as_str() {
-                    "reference" => image
-                        .repo_tags
-                        .iter()
-                        .any(|reference| Self::wildcard(value, reference)),
+                    "reference" => image.repo_tags.iter().any(|reference| Self::wildcard(value, reference)),
                     "dangling" => {
                         let dangling = image.repo_tags.is_empty();
                         Field::new("dangling", Some(value))
@@ -138,31 +131,10 @@ pub(in super::super) async fn prune(
     Query(query): Query<PruneQuery>,
 ) -> ApiResult<Json<ImagePrune>> {
     Fields::from(&query.unsupported).reject("image prune")?;
-    if let Some(filters) = query.filters.filter(|value| !value.is_empty()) {
-        let filters: BTreeMap<String, Vec<String>> =
-            serde_json::from_str(&filters).map_err(|error| {
-                ApiError::new(StatusCode::BAD_REQUEST, format!("invalid filters: {error}"))
-            })?;
-        for (name, values) in filters {
-            if name != "dangling" || values.iter().any(|value| value != "true" && value != "1") {
-                return Err(ApiError::new(
-                    StatusCode::NOT_IMPLEMENTED,
-                    format!("unsupported image prune filter {name:?}"),
-                ));
-            }
-        }
-    }
-    let images = state.containers.images().map_err(ApiError::container)?;
-    let report = tokio::task::spawn_blocking(move || images.gc())
-        .await
-        .map_err(ApiError::task)?
-        .map_err(ApiError::image)?;
-    Ok(Json(ImagePrune {
-        images_deleted: Vec::new(),
-        space_reclaimed: i64::try_from(report.content_bytes_removed).unwrap_or(i64::MAX),
-    }))
+    Ok(Json(Prune::image(query.filters.as_deref())?.execute(&state).await?))
 }
 
+#[derive(Debug)]
 pub(in super::super) enum Prune {
     All,
     Selected {
@@ -172,20 +144,44 @@ pub(in super::super) enum Prune {
 }
 
 impl Prune {
+    pub(in super::super) fn image(filters: Option<&str>) -> ApiResult<Self> {
+        let mut values: BTreeMap<String, Vec<String>> = filters
+            .filter(|value| !value.is_empty())
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid filters: {error}")))?
+            .unwrap_or_default();
+        if let Some(name) = values
+            .keys()
+            .find(|name| !matches!(name.as_str(), "dangling" | "until" | "label" | "label!"))
+        {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                format!("unsupported image prune filter {name:?}"),
+            ));
+        }
+        let dangling = match values.get("dangling").map(Vec::as_slice) {
+            None => true,
+            Some([value]) => Field::new("dangling", Some(value)).boolean()?,
+            Some(_) => return Err(ApiError::new(StatusCode::BAD_REQUEST, "dangling requires one value")),
+        };
+        values.insert("dangling".into(), vec![dangling.to_string()]);
+        let raw = serde_json::to_string(&values)
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+        Self::parse(Some(&raw))
+    }
+
     pub(in super::super) fn parse(filters: Option<&str>) -> ApiResult<Self> {
         let Some(raw) = filters.filter(|value| !value.is_empty()) else {
             return Ok(Self::All);
         };
-        let values: BTreeMap<String, Vec<String>> = serde_json::from_str(raw)
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+        let values: BTreeMap<String, Vec<String>> =
+            serde_json::from_str(raw).map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         let until = values
             .get("until")
             .map(|values| {
                 let [value] = values.as_slice() else {
-                    return Err(ApiError::new(
-                        StatusCode::BAD_REQUEST,
-                        "until requires one value",
-                    ));
+                    return Err(ApiError::new(StatusCode::BAD_REQUEST, "until requires one value"));
                 };
                 value
                     .parse::<crate::api::filter::PruneCutoff>()
@@ -213,32 +209,61 @@ impl Prune {
                 let selected = graphs
                     .into_iter()
                     .filter(hl_images::Graph::filterable)
-                    .filter(|graph| graph.names.is_empty() || graph.build_cache)
                     .filter(|graph| {
                         !referenced.contains(&graph.target.digest().to_string())
                             && graph.names.iter().all(|name| !referenced.contains(name))
                     })
+                    .filter(|graph| until.is_none_or(|until| graph.created_at_ms.is_some_and(|v| v < until)))
                     .filter(|graph| {
-                        until.is_none_or(|until| graph.created_at_ms.is_some_and(|v| v < until))
+                        values.get("dangling").is_none_or(|filters| {
+                            filters.iter().any(|value| {
+                                Field::new("dangling", Some(value))
+                                    .boolean()
+                                    .is_ok_and(|expected| graph.names.is_empty() == expected)
+                            })
+                        })
                     })
                     .filter(|graph| {
                         let labels = graph.labels.as_ref().expect("filterable graph has labels");
-                        values.get("label").is_none_or(|filters| {
-                            filters
-                                .iter()
-                                .any(|value| ImageSelection::label(labels, value))
-                        }) && values.get("label!").is_none_or(|filters| {
-                            filters
-                                .iter()
-                                .all(|value| !ImageSelection::label(labels, value))
-                        })
+                        values
+                            .get("label")
+                            .is_none_or(|filters| filters.iter().any(|value| ImageSelection::label(labels, value)))
+                            && values
+                                .get("label!")
+                                .is_none_or(|filters| filters.iter().all(|value| !ImageSelection::label(labels, value)))
                     })
-                    .map(|graph| graph.target.digest().to_string())
+                    .collect::<Vec<_>>();
+                let digests = selected.iter().map(|graph| graph.target.digest().to_string()).collect();
+                let scope = if values.get("dangling").is_some_and(|values| values == &["false"]) {
+                    hl_images::GraphPruneScope::AllUnused
+                } else {
+                    hl_images::GraphPruneScope::Dangling
+                };
+                let deleted = selected
+                    .iter()
+                    .flat_map(|graph| {
+                        graph
+                            .names
+                            .iter()
+                            .cloned()
+                            .map(|name| crate::api::ImageDelete {
+                                untagged: Some(name),
+                                deleted: None,
+                            })
+                            .chain(std::iter::once(crate::api::ImageDelete {
+                                untagged: None,
+                                deleted: Some(graph.target.digest().to_string()),
+                            }))
+                    })
                     .collect();
-                tokio::task::spawn_blocking(move || images.prune_graphs(&selected))
+                let report = tokio::task::spawn_blocking(move || images.prune_graphs_with(&digests, scope))
                     .await
                     .map_err(ApiError::task)?
-                    .map_err(ApiError::image)?
+                    .map_err(ApiError::image)?;
+                return Ok(ImagePrune {
+                    images_deleted: deleted,
+                    space_reclaimed: i64::try_from(report.content_bytes_removed).unwrap_or(i64::MAX),
+                });
             }
         };
         Ok(ImagePrune {
