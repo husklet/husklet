@@ -109,3 +109,16 @@ identical `1151364000` checksum. Public exits fell from 14 to 12 per
 invocation. This is focused dirty-tree evidence rather than a clean-commit
 parity claim. Warning-strict compilation and the complete `x86_translation`
 executable passed on AArch64.
+
+Exact clean detached commit `c84cf0d81` confirms the end-to-end effect at the
+standard `--divisor 20` workload. Five native-verified compute repeats held
+checksum 7,097,455,804,780,747,230 and reported an 83,652-us median with an
+82,216--97,228-us range. Diagnostics were identical across all repeats: 307
+public exits, 187 builds, 819 hits, five fallbacks, and 19,780,505 completed
+instructions. This is 11.63 times faster than the original 972,729-us Rust
+checkpoint median and 10.12 times faster than the exact 846,456-us scalar-SSE
+commit median. It remains 16.72 times slower than the retained-C median of
+5,003 us. The exact `hl-engine` SHA-256 was
+`a180e48ca2381618d1e4960fd2a8d7a4c73f6f46d625ac57869fa85b7a2e8132`;
+the exact `testing` SHA-256 was
+`aabeaf49d56f784abc7ecced06a22443267ae6dd14bd14a3371687a1f65428b2`.
