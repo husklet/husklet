@@ -89,6 +89,23 @@ int main(void) {
         CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x4004 + index * 4);
     }
 
+    *(uint64_t *)(uintptr_t)(base + 8) = UINT64_C(0xaaaaaaaaaaaaaaaa);
+    cpu.stack = base;
+    cpu.memory_first = (uint64_t)(uintptr_t)stack;
+    cpu.memory_last = (uint64_t)(uintptr_t)(stack + sizeof(stack));
+    cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
+    cpu.dirty_first = base + 64;
+    cpu.dirty_last = base + 72;
+    cpu.dirty_count = 16;
+    cpu.registers[9] = UINT64_C(0x0909090909090909);
+    cpu.registers[30] = UINT64_C(0xbbbbbbbbbbbbbbbb);
+    cpu.flags = UINT64_C(0xa0000000);
+    execute(&cpu, code + offsets[0]);
+    CHECK(cpu.reason == HL_NATIVE_EXIT_EPOCH && cpu.program == 0x4000);
+    CHECK(cpu.registers[9] == UINT64_C(0x0909090909090909));
+    CHECK(cpu.flags == UINT64_C(0xa0000000));
+    CHECK(*(uint64_t *)(uintptr_t)(base + 8) == UINT64_C(0xaaaaaaaaaaaaaaaa));
+
     memset(stack + 64, 0x5a, 16);
     cpu.stack = base;
     cpu.memory_last = base + 12; /* access [base+8,base+16) crosses the window */

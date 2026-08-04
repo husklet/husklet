@@ -113,6 +113,12 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     uint8_t *overflow_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, overflow, overflow_target, 2u);
+    /* The journal-capacity exit occurs before the guest store. Restore the
+     * non-stolen scratch register and architectural flags exactly as every
+     * other guard exit does before the common stub spills guest state. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
+    hl_a64_emit32(assembler, 0xD51B4200u | 17u); /* msr nzcv,x17 */
+    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
     if (!hl_a64_assembler_ok(assembler)) return;
     branch(assembler, after_overflow, assembler->cursor);
