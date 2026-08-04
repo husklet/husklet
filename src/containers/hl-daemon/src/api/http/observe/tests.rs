@@ -1,4 +1,9 @@
-use super::{CpuTime, Options, ProcessColumn, ProcessMetrics, ProcessRow, StatsMode, TopOptions, sample_with_metrics};
+use super::{
+    CpuTime, Options, ProcessColumn, ProcessMetrics, ProcessRow, StatsMode, TopOptions, sample_with_metrics,
+    stats_stream_response,
+};
+use axum::body::Body;
+use axum::http::header::CONTENT_TYPE;
 use hl_container::{Container, ContainerId, ContainerSpec, ContainerState, Process, Restart};
 use std::{collections::BTreeMap, str::FromStr};
 
@@ -39,6 +44,12 @@ fn stats_mode_keeps_the_default_stream_open_for_stopped_containers() {
         .mode(false),
         StatsMode::Once
     );
+}
+
+#[test]
+fn stats_stream_response_explicitly_advertises_json() {
+    let response = stats_stream_response(Body::empty());
+    assert_eq!(response.headers().get(CONTENT_TYPE).unwrap(), "application/json");
 }
 
 #[test]

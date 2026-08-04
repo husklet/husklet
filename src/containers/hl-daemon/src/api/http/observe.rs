@@ -305,7 +305,14 @@ pub(super) async fn stats(
             Some((Ok::<_, std::io::Error>(bytes), next))
         }
     });
-    Ok(Response::new(Body::from_stream(body)))
+    Ok(stats_stream_response(Body::from_stream(body)))
+}
+
+fn stats_stream_response(body: Body) -> Response {
+    Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(body)
+        .expect("static stats response is valid")
 }
 
 fn sample_with_metrics(container: &Container, pid: Option<u64>, metrics: ProcessMetrics, previous: u64) -> Stats {
