@@ -37,9 +37,62 @@ static void writeback(hl_a64_assembler *assembler, const hl_a64_memory *memory) 
         hl_a64_movr(assembler, (int)memory->base, 16);
 }
 
+static int transfer_bytes(uint32_t word, uint64_t *bytes) {
+    unsigned q = (word >> 30) & 1u;
+    unsigned registers;
+    if (((word >> 24) & 1u) == 0) {
+        switch ((word >> 12) & 15u) {
+            case 0:
+            case 2: registers = 4; break;
+            case 4:
+            case 6: registers = 3; break;
+            case 8:
+            case 10: registers = 2; break;
+            case 7: registers = 1; break;
+            default: return 0;
+        }
+        if (((word >> 10) & 3u) == 3u && q == 0 && registers > 1) return 0;
+        *bytes = (uint64_t)registers * (q ? 16u : 8u);
+        return 1;
+    }
+
+    unsigned load = (word >> 22) & 1u;
+    unsigned replicate_group = (word >> 21) & 1u;
+    unsigned opcode = (word >> 13) & 7u;
+    unsigned selector = (word >> 12) & 1u;
+    unsigned size = (word >> 10) & 3u;
+    unsigned element;
+    registers = (replicate_group ? 2u : 1u) + ((opcode & 1u) ? 2u : 0u);
+    switch (opcode >> 1) {
+        case 0: element = 0; break;
+        case 1:
+            if ((size & 1u) != 0) return 0;
+            element = 1;
+            break;
+        case 2:
+            if (size == 0)
+                element = 2;
+            else if (size == 1 && selector == 0)
+                element = 3;
+            else
+                return 0;
+            break;
+        default:
+            if (load == 0 || selector != 0) return 0;
+            element = size;
+            break;
+    }
+    *bytes = (uint64_t)registers << element;
+    return *bytes != 0 && *bytes <= 64;
+}
+
 static int valid(uint32_t word, uint64_t pc, hl_a64_memory *memory) {
-    return hl_a64_memory_decode(word, pc, memory) && memory->kind == HL_A64_MEMORY_STRUCTURE &&
-           memory->bytes != 0 && memory->bytes <= 64;
+    uint64_t bytes;
+    if (!hl_a64_memory_decode(word, pc, memory) || memory->kind != HL_A64_MEMORY_STRUCTURE ||
+        !transfer_bytes(word, &bytes))
+        return 0;
+    memory->bytes = bytes;
+    return 1;
 }
 
 int hl_a64_structure_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc, hl_a64_guard *guard,
