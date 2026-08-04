@@ -1,0 +1,139 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/regress/lseek-read
+    status: active
+    compat: { class: compatibility }
+    build: { source: lseek_read.c, output: lseek_read, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/lseek_read }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/lseek_read.out }
+  - id: runtime/regress/offset-track
+    status: active
+    compat: { class: compatibility }
+    build: { source: offset_track.c, output: offset_track, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/offset_track }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/offset_track.out }
+  - id: runtime/regress/sha512-kat
+    status: active
+    compat: { class: compatibility }
+    build: { source: sha512_kat.c, output: sha512_kat, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/sha512_kat }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/sha512_kat.out }
+  - id: runtime/regress/ccmp-chain
+    status: active
+    compat: { class: compatibility }
+    build: { source: ccmp_chain.c, output: ccmp_chain, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/ccmp_chain }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ccmp_chain.out }
+  - id: runtime/regress/getaffinity-tid
+    status: active
+    compat: { class: compatibility }
+    build: { source: affinity_tid.c, output: affinity_tid, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/affinity_tid }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/affinity_tid.out }
+  - id: runtime/regress/ldapr-nonpie
+    status: active
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: nonpie_ldapr.c, output: nonpie_ldapr, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/nonpie_ldapr }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/nonpie_ldapr.out }
+  - id: runtime/regress/pairatomics-nonpie
+    status: active
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: pair_atomics.c, output: pair_atomics, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/pair_atomics }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/pair_atomics.out }
+  - id: runtime/regress/go-cgo-sigurg
+    status: !unsupported
+      reason: "the runtime YAML compiler contract cannot express a cgo external-static Go build, and generated executables are not source artifacts"
+      evidence: "tests/runtime/regress/EVIDENCE.md"
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: cgo_stack.go, output: cgo_stack, flags: [] }
+    artifact: { destination: /opt/husklet/regress/cgo_stack }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/cgo_stack.out }
+  - id: runtime/regress/stackoverflow
+    status: active
+    compat: { class: compatibility }
+    build: { source: stack_overflow.c, output: stack_overflow, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/stack_overflow }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/stack_overflow.out }
+  - id: runtime/regress/stackoverflow-catch
+    status: active
+    compat: { class: compatibility }
+    build: { source: stack_catch.c, output: stack_catch, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/stack_catch }
+    run: []
+    timeout: 120
+    expect: { exit: 42, stdout: golden/stack_catch.out }
+  - id: runtime/regress/nonpie-vec
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: nonpie_vec.c, output: nonpie_vec, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/nonpie_vec }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/nonpie_vec.out }
+  - id: runtime/regress/repcmps-nonpie
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: repcmps_nopie.c, output: repcmps_nopie, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/repcmps_nopie }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/repcmps_nopie.out }
+  - id: runtime/regress/ldrsw-literal
+    status: active
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: ldrsw_literal.c, output: ldrsw_literal, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/ldrsw_literal }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/ldrsw_literal.out }
+  - id: runtime/regress/nonpie-v8blob
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: nonpie_v8.c, output: nonpie_v8, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/nonpie_v8 }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/nonpie_v8.out }
+  - id: runtime/regress/nonpie-guest-ptrs
+    status: !broken
+      reason: "QEMU reports set_robust_list=BAD on both guest ISAs while every other token matches the retained engine golden"
+      evidence: "tests/runtime/regress/EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: guest_ptrs.c, output: guest_ptrs, flags: [-static, -no-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/regress/guest_ptrs }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/guest_ptrs.out }

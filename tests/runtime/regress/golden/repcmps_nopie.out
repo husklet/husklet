@@ -1,0 +1,4 @@
+cmps stack-vs-S1: rcx=0 zf=1
+cmps S1-vs-S2: rcx=6 zf=0
+scas S1 find-w: rcx=6 zf=1
+scas S1 find-Z: rcx=0 zf=0

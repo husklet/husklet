@@ -1,0 +1,1 @@
+ set_tid_address=ok set_robust_list=ok get_robust_list=ok futex_wake=ok futex_wait=ok epoll_ctl=ok epoll_wait=ok timerfd=ok ioctl_winsize=ok prctl_getname=ok at_phdr=ok at_entry=ok at_random=ok personality=ok rseq=ok mprotect_ro=ok ro_store_faults=ok segv_si_addr=ok read_into_ro=ok read_into_rodata=ok maps_ro=ok maps_rodata=ok mprotect_rw=ok rw_store_lands=ok thread_join=ok
