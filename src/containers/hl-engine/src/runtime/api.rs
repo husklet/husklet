@@ -242,6 +242,28 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// Constructs the production Rust runtime from a fully resolved launch plan.
+    ///
+    /// Container composition uses this boundary after it has resolved images,
+    /// mounts, networking, identity, and resource policy. The engine retains
+    /// ownership of runtime construction and native execution.
+    pub fn from_plan(isa: GuestIsa, plan: RuntimePlan) -> Result<Self, EngineError> {
+        let workspace = OwnedWorkspace::create()?;
+        let factory = RustRuntimeFactory::new(
+            Arc::new(crate::native::GuestExecutor::default()),
+            Arc::new(Services),
+            RuntimeAssemblyConfig::default(),
+        );
+        let services = RuntimeServices {
+            activation: Arc::new(Activation),
+            checkpoint_sink: None,
+            checkpoint_source: None,
+        };
+        let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
+            .map_err(|_| EngineError::LaunchFailed)?;
+        Ok(Self { backend, workspace })
+    }
+
     pub fn start(&self) -> Result<(), EngineError> {
         self.backend.start()
     }

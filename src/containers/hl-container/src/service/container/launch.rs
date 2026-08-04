@@ -21,47 +21,6 @@ impl Service {
             })
     }
 
-    pub(super) fn devices(
-        &self,
-        guest: crate::Guest,
-        process: &mut crate::Process,
-        mounts: &mut Vec<crate::Mount>,
-        filesystem: crate::device::FilesystemView<'_>,
-    ) -> Result<crate::DeviceRequest> {
-        let request = self.devices.request(crate::DeviceContext {
-            guest,
-            process,
-            filesystem,
-        })?;
-        for device_mount in &request.mounts {
-            if mounts
-                .iter()
-                .any(|mount| mount.target == device_mount.target)
-            {
-                return Err(Error::InvalidSpec(format!(
-                    "device mount conflicts with container mount: {}",
-                    device_mount.target.display()
-                )));
-            }
-        }
-        mounts.extend(request.mounts.iter().cloned());
-        // A device owns the variables that name its own guest endpoints, so it wins over a caller
-        // value. Overriding a variable the caller asked for is a decision the caller cannot observe
-        // from the resulting process, so report each one; this fires only on an actual conflict,
-        // never on an ordinary launch or exec.
-        for (name, value) in &request.environment {
-            if let Some(requested) = process.env.insert(name.clone(), value.clone()) {
-                if &requested != value {
-                    hl_log::hl_error!(
-                        hl_log::tag::CONTAINER,
-                        "device environment overrode requested variable {name}={requested} with {value}"
-                    );
-                }
-            }
-        }
-        Ok(request)
-    }
-
     pub(crate) async fn start(self: &Arc<Self>, reference: &str) -> Result<()> {
         let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;
@@ -87,18 +46,9 @@ impl Service {
         let networks = self.launch_networks(&container).await?;
         let io = self.io(&container).await;
         let input = io.take_input().await?;
-        let mut process_spec = container.spec.process.clone();
-        let mut requested_mounts = container.spec.mounts.clone();
+        let process_spec = container.spec.process.clone();
+        let requested_mounts = container.spec.mounts.clone();
         let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
-        let devices = self.devices(
-            container.spec.guest,
-            &mut process_spec,
-            &mut requested_mounts,
-            crate::device::FilesystemView::new(
-                &rootfs,
-                overlay.as_ref().map(|overlay| overlay.upper.as_path()),
-            ),
-        )?;
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.prepare(&container, &networks)?);
         let filesystem_generation = self.identity.generation(&container)?.path().to_owned();
@@ -136,8 +86,6 @@ impl Service {
                 terminal: container.spec.process.console.terminal,
                 domain: None,
                 domain_owner: true,
-                extensions: devices.extensions,
-                authorities: devices.authorities,
             })
             .await;
         let process = match process {

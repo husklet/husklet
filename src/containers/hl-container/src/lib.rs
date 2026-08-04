@@ -5,7 +5,6 @@ mod checkpoint;
 mod config;
 mod console;
 mod containers;
-pub mod device;
 mod engine;
 mod error;
 mod executions;
@@ -25,7 +24,6 @@ pub use containers::{
     Builder, CommitMetadata, Containers, FilesystemUsage, LifecycleAction, LifecycleEvent,
     LifecycleEvents,
 };
-pub use device::{Authority, Device, DeviceContext, DeviceRequest, Devices, HandleAuthority};
 pub use error::{Error, Result};
 pub use executions::Executions;
 pub use filesystem::{Change, ChangeKind, Changes, Filesystem, Limits, Stat};

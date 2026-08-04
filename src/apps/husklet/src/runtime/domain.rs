@@ -2,7 +2,7 @@
 
 use crate::config::WorkspaceConfig;
 use crate::paths;
-use hl_container::{Config, Containers, Devices};
+use hl_container::{Config, Containers};
 use hl_images::remote::{Auth, Registry};
 use hl_images::{Images, Platform, Reference, RuntimeOverrides};
 use hl_ws::Arch;
@@ -431,7 +431,6 @@ impl Runtime {
         }
         let external = Images::open(paths::images_dir()).map_err(io::Error::other)?;
         let platform = Self::platform(workspace.arch);
-        let devices = Devices::new();
         let workspace_root = workspace.storage_dir(&paths::hl_root());
         let images = Images::workspace(
             Images::open(workspace_root.join("images")).map_err(io::Error::other)?,
@@ -447,7 +446,6 @@ impl Runtime {
         // regression is fixed; this is application-selected policy, not a container workaround.
         let containers = Containers::builder(Config::new(&root))
             .images(images)
-            .devices(devices)
             .checkpoints(checkpoints)
             .build()
             .await

@@ -12,7 +12,6 @@ pub struct Builder {
     config: Config,
     images: Option<hl_images::Images>,
     checkpoints: Option<Arc<dyn crate::CheckpointImages>>,
-    devices: crate::Devices,
 }
 
 struct Assembly<S> {
@@ -23,7 +22,6 @@ struct Assembly<S> {
     volume_root: std::path::PathBuf,
     runtime_root: std::path::PathBuf,
     translation_cache: Option<std::path::PathBuf>,
-    devices: crate::Devices,
     checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -51,7 +49,6 @@ impl<S: Storage + 'static> Assembly<S> {
             networks: networks.clone(),
             runtime_root: self.runtime_root,
             translation_cache: self.translation_cache,
-            devices: self.devices,
             checkpoints: self.checkpoints,
         }));
         service.reconcile().await?;
@@ -70,15 +67,7 @@ impl Builder {
             config,
             images: None,
             checkpoints: None,
-            devices: crate::Devices::new(),
         }
-    }
-
-    /// Supplies application-selected device backends to every process launched by this service.
-    #[must_use]
-    pub fn devices(mut self, value: crate::Devices) -> Self {
-        self.devices = value;
-        self
     }
 
     /// Uses an existing OCI content, metadata, snapshot, and lease service.
@@ -106,7 +95,6 @@ impl Builder {
             .translation_cache
             .map(crate::config::TranslationCache::prepare)
             .transpose()?;
-        let devices = self.devices;
         let volume_root = root.join("volumes");
         let runtime_root = root.join("runtime");
         let checkpoints = match self.checkpoints {
@@ -130,7 +118,6 @@ impl Builder {
                     volume_root,
                     runtime_root,
                     translation_cache,
-                    devices,
                     checkpoints,
                 }
                 .build()
@@ -145,7 +132,6 @@ impl Builder {
                     volume_root,
                     runtime_root,
                     translation_cache,
-                    devices,
                     checkpoints,
                 }
                 .build()
@@ -163,7 +149,6 @@ pub(super) async fn build_with<S: Storage + 'static>(
     images: Option<hl_images::Images>,
     volume_root: std::path::PathBuf,
     runtime_root: std::path::PathBuf,
-    devices: crate::Devices,
 ) -> Result<Containers> {
     let checkpoints = Arc::new(crate::checkpoint::DirectoryImages::open(
         runtime_root.join("checkpoints"),
@@ -176,7 +161,6 @@ pub(super) async fn build_with<S: Storage + 'static>(
         volume_root,
         runtime_root,
         translation_cache: None,
-        devices,
         checkpoints,
     }
     .build()
@@ -197,7 +181,6 @@ pub(crate) async fn test_containers(
         None,
         root,
         runtime_root,
-        crate::Devices::new(),
     )
     .await
 }

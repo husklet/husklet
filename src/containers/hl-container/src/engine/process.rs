@@ -1,19 +1,47 @@
-//! One running guest process: its native machine handle, log drain, terminal, and the engine domain
-//! whose lifetime it may own.
+//! One running container process backed by the integrated Rust runtime.
 
 use crate::{service::Running, Error, ExitStatus, LogChunk, Result, Signal};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+
+static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct Process {
     pub(super) id: u64,
-    pub(super) child: Mutex<Option<hl_engine::Machine>>,
-    pub(super) logs: StdMutex<Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>>>,
-    pub(super) terminal: Option<Arc<StdMutex<hl_engine::Terminal>>>,
+    pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
+    pub(super) logs: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>>>,
     pub(super) domain: hl_engine::Domain,
-    pub(super) domain_owner: bool,
     pub(super) checkpointable: bool,
+}
+
+impl Process {
+    pub(super) fn next_id() -> u64 {
+        NEXT_PROCESS.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn engine(&self) -> Result<Arc<hl_engine::runtime::Engine>> {
+        self.child
+            .lock()
+            .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| Error::Runtime("process result was already consumed".into()))
+    }
+
+    fn request(signal: Signal) -> hl_engine::engine::StopRequest {
+        match signal {
+            Signal::Kill => hl_engine::engine::StopRequest::Force,
+            Signal::Interrupt => hl_engine::engine::StopRequest::Interrupt,
+            Signal::Terminate => hl_engine::engine::StopRequest::Signal(15),
+            Signal::Quit => hl_engine::engine::StopRequest::Signal(3),
+            Signal::Hangup => hl_engine::engine::StopRequest::Signal(1),
+            Signal::User1 => hl_engine::engine::StopRequest::Signal(10),
+            Signal::User2 => hl_engine::engine::StopRequest::Signal(12),
+        }
+    }
 }
 
 #[async_trait]
@@ -21,135 +49,66 @@ impl Running for Process {
     fn id(&self) -> u64 {
         self.id
     }
+
     fn domain(&self) -> hl_engine::Domain {
         self.domain
     }
+
     fn checkpointable(&self) -> bool {
         self.checkpointable
     }
 
     async fn wait(self: Arc<Self>) -> Result<ExitStatus> {
-        loop {
-            let mut child = self.child.lock().await;
-            let Some(process) = child.as_mut() else {
-                return Err(Error::Runtime("process result was already consumed".into()));
-            };
-            if let Some(exit) = process
-                .try_wait()
-                .map_err(|error| Error::Runtime(error.to_string()))?
-            {
-                // `try_wait` consumed the native result. Drop the machine handle before domain cleanup so a
-                // cleanup failure cannot leave a consumed process stored as if it were still live.
-                child.take();
-                if self.domain_owner {
-                    self.terminate_domain()?;
+        let engine = self.engine()?;
+        let exit = tokio::task::spawn_blocking(move || engine.wait())
+            .await
+            .map_err(|error| Error::Runtime(format!("engine wait task: {error}")))?
+            .map_err(|error| Error::Runtime(format!("engine wait: {error:?}")))?;
+        self.child
+            .lock()
+            .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
+            .take();
+        Ok(match exit.kind {
+            hl_engine::engine::ExitKind::Code => ExitStatus::Code(exit.guest_status),
+            hl_engine::engine::ExitKind::Signal => ExitStatus::Signal(exit.guest_status),
+            hl_engine::engine::ExitKind::Fault | hl_engine::engine::ExitKind::EngineError => {
+                ExitStatus::Fault {
+                    status: exit.guest_status,
+                    detail: exit.detail,
                 }
-                return Ok(match exit {
-                    hl_engine::Exit::Code(code) => ExitStatus::Code(code),
-                    hl_engine::Exit::Signal(signal) => ExitStatus::Signal(signal),
-                    hl_engine::Exit::Fault { status, detail } => {
-                        ExitStatus::Fault { status, detail }
-                    }
-                });
             }
-            drop(child);
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        })
     }
 
     async fn signal(&self, signal: Signal) -> Result<()> {
-        if signal == Signal::Kill {
-            let stopped = if let Some(child) = self.child.lock().await.as_mut() {
-                match child.force_stop() {
-                    Ok(()) => Ok(()),
-                    Err(hl_engine::Error::Engine { status, .. }) if status == nix::libc::ESRCH => {
-                        Ok(())
-                    }
-                    Err(error) => Err(Error::Runtime(error.to_string())),
-                }
-            } else {
-                Ok(())
-            };
-            if self.domain_owner {
-                let terminated = self.terminate_domain();
-                return match (stopped, terminated) {
-                    (Ok(()), Ok(())) => Ok(()),
-                    (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-                    (Err(process), Err(domain)) => Err(Error::Runtime(format!(
-                        "{process}; engine domain cleanup also failed: {domain}"
-                    ))),
-                };
-            }
-            return stopped;
-        }
-        let raw = match signal {
-            Signal::Terminate => nix::sys::signal::Signal::SIGTERM,
-            Signal::Interrupt => nix::sys::signal::Signal::SIGINT,
-            Signal::Quit => nix::sys::signal::Signal::SIGQUIT,
-            Signal::Hangup => nix::sys::signal::Signal::SIGHUP,
-            Signal::User1 => nix::sys::signal::Signal::SIGUSR1,
-            Signal::User2 => nix::sys::signal::Signal::SIGUSR2,
-            Signal::Kill => unreachable!(),
-        };
-        self.send(raw)
+        self.engine()?
+            .stop(Self::request(signal))
+            .map_err(|error| Error::Runtime(format!("engine stop: {error:?}")))
     }
 
     async fn pause(&self) -> Result<()> {
-        self.send(nix::sys::signal::Signal::SIGSTOP)
+        self.engine()?
+            .stop(hl_engine::engine::StopRequest::Signal(19))
+            .map_err(|error| Error::Runtime(format!("engine pause: {error:?}")))
     }
 
     async fn resume(&self) -> Result<()> {
-        self.send(nix::sys::signal::Signal::SIGCONT)
+        self.engine()?
+            .stop(hl_engine::engine::StopRequest::Signal(18))
+            .map_err(|error| Error::Runtime(format!("engine resume: {error:?}")))
     }
 
-    async fn checkpoint(&self, timeout: std::time::Duration) -> Result<()> {
-        self.child
-            .lock()
-            .await
-            .as_ref()
-            .ok_or_else(|| Error::Runtime("process result was already consumed".into()))?
-            .checkpoint_into_store(timeout)
-            .map_err(|error| Error::Runtime(error.to_string()))
+    async fn checkpoint(&self, _timeout: std::time::Duration) -> Result<()> {
+        Err(Error::Runtime(
+            "Rust engine checkpoint capture is not connected to container storage".into(),
+        ))
     }
 
-    async fn resize(&self, size: crate::Size) -> Result<()> {
-        let terminal = self
-            .terminal
-            .as_ref()
-            .ok_or_else(|| Error::NoTerminal(self.id.to_string()))?;
-        let size = hl_engine::Size::new(size.rows(), size.columns())
-            .map_err(|error| Error::Runtime(error.to_string()))?;
-        terminal
-            .lock()
-            .map_err(|_| Error::Runtime("terminal lock is poisoned".into()))?
-            .resize(size)
-            .map_err(|error| Error::Runtime(error.to_string()))
+    async fn resize(&self, _size: crate::Size) -> Result<()> {
+        Err(Error::NoTerminal(self.id.to_string()))
     }
 
     fn take_logs(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>> {
         self.logs.lock().ok()?.take()
-    }
-}
-
-impl Process {
-    fn terminate_domain(&self) -> Result<()> {
-        match self.domain.terminate() {
-            Ok(()) => Ok(()),
-            Err(hl_engine::Error::Engine { status, .. }) if status == nix::libc::ESRCH => Ok(()),
-            Err(error) => Err(Error::Runtime(error.to_string())),
-        }
-    }
-
-    fn send(&self, signal: nix::sys::signal::Signal) -> Result<()> {
-        Self::send_id(self.id, signal)
-    }
-
-    pub(super) fn send_id(id: u64, signal: nix::sys::signal::Signal) -> Result<()> {
-        let pid = i32::try_from(id)
-            .map_err(|_| Error::Runtime("process id exceeds host range".into()))?;
-        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal) {
-            Ok(()) | Err(nix::errno::Errno::ESRCH) => Ok(()),
-            Err(error) => Err(Error::Runtime(error.to_string())),
-        }
     }
 }

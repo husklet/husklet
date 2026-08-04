@@ -23,7 +23,6 @@ pub(super) use crate::{
 };
 use async_trait::async_trait;
 pub(super) use std::{
-    collections::BTreeSet,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
@@ -76,7 +75,6 @@ pub(super) struct FakeRuntime {
     pub(super) mounts: RecordedMounts,
     pub(super) networks: Arc<std::sync::Mutex<Vec<Vec<NetworkConfig>>>>,
     pub(super) programs: Arc<std::sync::Mutex<Vec<Process>>>,
-    pub(super) extensions: Arc<std::sync::Mutex<Vec<Vec<hl_engine::extension::ExtensionSpec>>>>,
     pub(super) resources: Arc<std::sync::Mutex<Vec<crate::Resources>>>,
     pub(super) isolations: Arc<std::sync::Mutex<Vec<Isolation>>>,
     pub(super) publishes: Arc<std::sync::Mutex<Vec<Vec<crate::Publication>>>>,
@@ -103,7 +101,6 @@ impl FakeRuntime {
             mounts: Arc::new(std::sync::Mutex::new(Vec::new())),
             networks: Arc::new(std::sync::Mutex::new(Vec::new())),
             programs: Arc::new(std::sync::Mutex::new(Vec::new())),
-            extensions: Arc::new(std::sync::Mutex::new(Vec::new())),
             resources: Arc::new(std::sync::Mutex::new(Vec::new())),
             isolations: Arc::new(std::sync::Mutex::new(Vec::new())),
             publishes: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -196,7 +193,6 @@ impl Runtime for FakeRuntime {
                 .iter()
                 .any(|value| value == "__health__");
         self.programs.lock().unwrap().push(launch.process.clone());
-        self.extensions.lock().unwrap().push(launch.extensions);
         self.resources.lock().unwrap().push(launch.resources);
         self.isolations.lock().unwrap().push(launch.isolation);
         self.publishes.lock().unwrap().push(launch.publish);
@@ -274,35 +270,4 @@ pub(super) async fn service(runtime: Arc<FakeRuntime>) -> Containers {
     test_containers(Arc::new(Memory::default()), runtime)
         .await
         .unwrap()
-}
-
-pub(super) struct Clock;
-
-impl crate::Device for Clock {
-    fn name(&self) -> &'static str {
-        "clock"
-    }
-
-    fn request(&self, _context: crate::DeviceContext<'_>) -> Result<crate::DeviceRequest> {
-        Ok(crate::DeviceRequest {
-            environment: std::collections::BTreeMap::from([(
-                "CLOCK_PROVIDER".to_owned(),
-                "host".to_owned(),
-            )]),
-            extensions: vec![hl_engine::extension::ExtensionSpec {
-                provider: hl_engine::extension::ProviderId::new("test.clock").unwrap(),
-                version: hl_engine::spec::Version::new(1, 0),
-                required: false,
-                required_features: BTreeSet::default(),
-                optional_features: BTreeSet::default(),
-                config: hl_engine::extension::ExtensionConfig::empty("test.clock/v1"),
-                namespace: Vec::new(),
-                rules: Vec::new(),
-                services: Vec::new(),
-                memory: Vec::new(),
-                environment: Vec::new(),
-            }],
-            ..Default::default()
-        })
-    }
 }

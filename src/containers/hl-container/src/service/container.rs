@@ -56,7 +56,6 @@ pub(crate) struct Service {
     translation_cache: Option<std::path::PathBuf>,
     events: std::sync::RwLock<Vec<Arc<dyn crate::LifecycleEvents>>>,
     event_history: std::sync::Mutex<Vec<crate::LifecycleEvent>>,
-    devices: crate::Devices,
     checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -69,7 +68,6 @@ pub(crate) struct Dependencies<S> {
     pub(crate) networks: crate::Networks,
     pub(crate) runtime_root: std::path::PathBuf,
     pub(crate) translation_cache: Option<std::path::PathBuf>,
-    pub(crate) devices: crate::Devices,
     pub(crate) checkpoints: Arc<dyn crate::CheckpointImages>,
 }
 
@@ -87,7 +85,6 @@ impl Service {
             networks,
             runtime_root,
             translation_cache,
-            devices,
             checkpoints,
         } = dependencies;
         let operations = volumes.operation();
@@ -117,7 +114,6 @@ impl Service {
             translation_cache,
             events: std::sync::RwLock::new(Vec::new()),
             event_history: std::sync::Mutex::new(Vec::new()),
-            devices,
             checkpoints,
         }
     }

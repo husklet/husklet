@@ -162,37 +162,3 @@ impl CheckpointImage for DirectoryImage {
         Ok(objects)
     }
 }
-
-pub(crate) struct EngineImage(Arc<dyn CheckpointImage>);
-
-impl EngineImage {
-    pub(crate) fn new(image: Arc<dyn CheckpointImage>) -> Self {
-        Self(image)
-    }
-}
-
-impl hl_engine::CheckpointStore for EngineImage {
-    fn put(&self, name: &str, data: &[u8]) -> Result<(), hl_engine::StoreError> {
-        self.0
-            .put(name, data)
-            .map_err(|error| hl_engine::StoreError::new(error.to_string()))
-    }
-
-    fn get(&self, name: &str) -> Result<Vec<u8>, hl_engine::StoreError> {
-        self.0
-            .get(name)
-            .map_err(|error| hl_engine::StoreError::new(error.to_string()))
-    }
-
-    fn list(&self) -> Result<Vec<String>, hl_engine::StoreError> {
-        self.0
-            .list()
-            .map_err(|error| hl_engine::StoreError::new(error.to_string()))
-    }
-
-    fn commit(&self, manifest: &[u8]) -> Result<(), hl_engine::StoreError> {
-        self.0
-            .commit(manifest)
-            .map_err(|error| hl_engine::StoreError::new(error.to_string()))
-    }
-}

@@ -73,15 +73,6 @@ pub enum Error {
     Image(#[from] hl_images::Error),
 }
 
-/// The engine rejects an extension provider id or feature name with a `Debug`-only `ContractError`.
-/// A name the engine's contract refuses is a container-specification failure, so the boundary formats
-/// it once here instead of at every caller.
-impl From<crate::device::extension::ContractError> for Error {
-    fn from(error: crate::device::extension::ContractError) -> Self {
-        Error::InvalidSpec(format!("{error:?}"))
-    }
-}
-
 /// The boundary back onto `std::io` for callers that report `io::Result`. An I/O failure keeps its
 /// original `ErrorKind`; no other variant has an `ErrorKind` equivalent, so it is carried whole.
 impl From<Error> for std::io::Error {

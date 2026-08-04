@@ -1,331 +1,174 @@
 use crate::{service::ProcessConfig, Error, Result};
+use hl_engine::{
+    activation::GuestIsa,
+    launch_plan::RuntimePlan,
+    options::Options,
+};
 
-pub(super) struct Spec(hl_engine::MachineSpec);
+pub(super) struct Spec {
+    pub(super) isa: GuestIsa,
+    pub(super) plan: RuntimePlan,
+    pub(super) domain: hl_engine::Domain,
+}
 
 impl TryFrom<&ProcessConfig> for Spec {
     type Error = Error;
 
     fn try_from(launch: &ProcessConfig) -> Result<Self> {
-        let guest = match launch.guest {
-            crate::Guest::Aarch64 => hl_engine::Guest::Aarch64,
-            crate::Guest::X86_64 => hl_engine::Guest::X86_64,
+        let isa = match launch.guest {
+            crate::Guest::Aarch64 => GuestIsa::Aarch64,
+            crate::Guest::X86_64 => GuestIsa::X86_64,
         };
-        let mut spec = hl_engine::MachineSpec::new(guest, &launch.process.program);
-        Self::process(&mut spec, launch)?;
-        Self::filesystem(&mut spec, launch)?;
-        Self::resources(&mut spec, launch);
-        if let Some(directory) = &launch.translation_cache {
-            spec.cache.directory = Some(directory.clone());
-            spec.cache.policy = hl_engine::spec::CachePolicy::ReadWrite;
-        }
-        Self::network(&mut spec, launch)?;
-        spec.extensions.clone_from(&launch.extensions);
-        Ok(Self(spec))
-    }
-}
+        let domain = launch.domain.unwrap_or(hl_engine::Domain::new()?);
+        let mut options = Options::default();
+        Self::process(&mut options, launch, domain)?;
+        Self::filesystem(&mut options, launch)?;
+        Self::resources(&mut options, launch)?;
+        Self::network(&mut options, launch)?;
 
-impl From<Spec> for hl_engine::MachineSpec {
-    fn from(spec: Spec) -> Self {
-        spec.0
+        let executable = launch.rootfs.join(launch.process.program.trim_start_matches('/'));
+        let arguments = std::iter::once(launch.process.program.as_bytes().to_vec())
+            .chain(launch.process.args.iter().map(|argument| argument.as_bytes().to_vec()))
+            .collect();
+        let environment = launch
+            .process
+            .env
+            .iter()
+            .map(|(name, value)| format!("{name}={value}").into_bytes())
+            .collect();
+
+        Ok(Self {
+            isa,
+            domain,
+            plan: RuntimePlan {
+                rootfs: Some(launch.rootfs.as_os_str().as_encoded_bytes().to_vec()),
+                executable_host: Some(executable.as_os_str().as_encoded_bytes().to_vec()),
+                arguments,
+                environment,
+                result_path: None,
+                options,
+            },
+        })
     }
 }
 
 impl Spec {
-    fn process(spec: &mut hl_engine::MachineSpec, launch: &ProcessConfig) -> Result<()> {
-        spec.process
-            .argv
-            .extend(launch.process.args.iter().map(Into::into));
-        spec.process.env.extend(
-            launch
-                .process
-                .env
-                .iter()
-                .map(|(name, value)| (name.into(), value.into())),
-        );
-        launch
-            .process
-            .working_dir
-            .as_os_str()
-            .clone_into(&mut spec.process.cwd);
-        spec.process.domain = launch.domain;
-        spec.process.terminal = launch
-            .terminal
-            .map(|size| hl_engine::Size::new(size.rows(), size.columns()))
-            .transpose()
-            .map_err(|error| Error::Runtime(error.to_string()))?;
-        spec.identity.uid = launch
-            .process
-            .uid
-            .map(|uid| {
-                u32::try_from(uid)
-                    .map_err(|_| Error::InvalidSpec("process uid must be nonnegative".into()))
-            })
-            .transpose()?;
-        spec.identity.gid = launch
-            .process
-            .gid
-            .map(|gid| {
-                u32::try_from(gid)
-                    .map_err(|_| Error::InvalidSpec("process gid must be nonnegative".into()))
-            })
-            .transpose()?;
-        spec.identity.hostname = launch.hostname.as_ref().map(Into::into);
-        spec.security.sandbox = match launch.isolation.sandbox {
-            crate::Sandbox::Disabled => hl_engine::Sandbox::Disabled,
-            crate::Sandbox::Enabled => hl_engine::Sandbox::Enabled,
-            crate::Sandbox::SentryOnly => hl_engine::Sandbox::SentryOnly,
-        };
+    fn set(options: &mut Options, name: &str, value: impl AsRef<[u8]>) -> Result<()> {
+        options
+            .set_bytes(name, value.as_ref(), true)
+            .map_err(|error| Error::InvalidSpec(format!("engine option {name}: {error:?}")))
+    }
+
+    fn flag(options: &mut Options, name: &str, enabled: bool) -> Result<()> {
+        if enabled {
+            Self::set(options, name, b"1")?;
+        }
         Ok(())
     }
 
-    fn filesystem(spec: &mut hl_engine::MachineSpec, launch: &ProcessConfig) -> Result<()> {
-        use hl_engine::spec::{InitialOwnership, TreeSource};
+    fn process(options: &mut Options, launch: &ProcessConfig, domain: hl_engine::Domain) -> Result<()> {
+        Self::set(options, "HL_CWD", launch.process.working_dir.as_os_str().as_encoded_bytes())?;
+        Self::set(options, "HL_PROCESS_DOMAIN", format!("{:016x}{:016x}", domain.identity()[0], domain.identity()[1]))?;
+        if let Some(uid) = launch.process.uid {
+            Self::set(options, "HL_UID", uid.to_string())?;
+        }
+        if let Some(gid) = launch.process.gid {
+            Self::set(options, "HL_GID", gid.to_string())?;
+        }
+        if let Some(hostname) = &launch.hostname {
+            Self::set(options, "HL_HOSTNAME", hostname)?;
+        }
+        match launch.isolation.sandbox {
+            crate::Sandbox::Disabled => {}
+            crate::Sandbox::Enabled => {
+                Self::set(options, "HL_UNTRUSTED", b"1")?;
+                Self::set(options, "HL_SANDBOX", b"1")?;
+            }
+            crate::Sandbox::SentryOnly => Self::set(options, "HL_UNTRUSTED", b"1")?,
+        }
+        Ok(())
+    }
 
-        spec.filesystem.root = Some(match &launch.overlay {
-            Some(overlay) => TreeSource::Overlay {
-                lower: vec![TreeSource::HostDirectory(overlay.lower.clone())],
-                upper: overlay.upper.clone(),
-                work: overlay.work.clone(),
-            },
-            None => TreeSource::HostDirectory(launch.rootfs.clone()),
-        });
-        spec.filesystem.read_only = launch.isolation.read_only_root;
-        spec.filesystem.coherence = Some(
-            hl_engine::spec::CoherenceHandle::from_host_file(&launch.filesystem_generation)
-                .map_err(|error| Error::InvalidSpec(error.to_string()))?,
-        );
-        spec.filesystem.ownership = launch
+    fn filesystem(options: &mut Options, launch: &ProcessConfig) -> Result<()> {
+        Self::flag(options, "HL_ROOTFS_RO", launch.isolation.read_only_root)?;
+        Self::set(
+            options,
+            "HL_FSGEN_FILE",
+            launch.filesystem_generation.as_os_str().as_encoded_bytes(),
+        )?;
+        if let Some(cache) = &launch.translation_cache {
+            Self::set(options, "HL_PCACHE", b"1")?;
+            Self::set(options, "HL_PCACHE_DIR", cache.as_os_str().as_encoded_bytes())?;
+        }
+        if let Some(overlay) = &launch.overlay {
+            Self::set(options, "HL_LOWER", overlay.lower.as_os_str().as_encoded_bytes())?;
+            Self::set(options, "HL_OVERLAY_WORK", overlay.work.as_os_str().as_encoded_bytes())?;
+        }
+        let owners = launch
             .owners
             .iter()
-            .map(|(path, uid, gid)| InitialOwnership {
-                path: std::path::Path::new("/").join(path),
-                uid: *uid,
-                gid: *gid,
-            })
-            .collect();
-        spec.filesystem.mounts = launch
+            .map(|(path, uid, gid)| format!("{}\t{uid}\t{gid}", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !owners.is_empty() {
+            Self::set(options, "HL_FILE_OWNERS", owners)?;
+        }
+        let mounts = launch
             .mounts
             .iter()
-            .map(|mount| hl_engine::extension::HostBindEntry {
-                path: mount.target.clone(),
-                host: mount.source.clone(),
-                access: match mount.access {
-                    crate::Access::ReadOnly => hl_engine::extension::BindAccess::ReadOnly,
-                    crate::Access::ReadWrite => hl_engine::extension::BindAccess::ReadWrite,
-                },
+            .map(|mount| {
+                let access = match mount.access {
+                    crate::Access::ReadOnly => "ro",
+                    crate::Access::ReadWrite => "rw",
+                };
+                format!("{access}:{}:{}", mount.target.display(), mount.source.display())
             })
-            .collect();
-        Ok(())
-    }
-
-    fn resources(spec: &mut hl_engine::MachineSpec, launch: &ProcessConfig) {
-        spec.resources.memory_bytes =
-            (launch.resources.memory_bytes != 0).then_some(launch.resources.memory_bytes);
-        spec.resources.process_limit =
-            (launch.resources.process_count != 0).then_some(launch.resources.process_count);
-        spec.resources.cpu_limit =
-            (launch.resources.cpu_count != 0).then_some(launch.resources.cpu_count);
-    }
-
-    fn network(spec: &mut hl_engine::MachineSpec, launch: &ProcessConfig) -> Result<()> {
-        use hl_engine::spec::NetworkMode;
-
-        spec.network.mode = if launch.network_mode == crate::NetworkMode::Host {
-            if !launch.networks.is_empty() || !launch.publish.is_empty() {
-                return Err(Error::InvalidNetwork(
-                    "host networking cannot carry endpoints or port publications".into(),
-                ));
-            }
-            NetworkMode::Host
-        } else if launch.isolation.network_isolated {
-            NetworkMode::None
-        } else {
-            NetworkMode::Virtual
-        };
-        if spec.network.mode == NetworkMode::None {
-            spec.network.namespace = Some(
-                hl_engine::network::Namespace::new(&launch.network_namespace)
-                    .map_err(|error| Error::InvalidNetwork(error.to_string()))?,
-            );
-        }
-        if spec.network.mode == NetworkMode::Virtual {
-            let namespace = launch
-                .networks
-                .iter()
-                .find(|network| network.driver == crate::NetworkDriver::Bridge)
-                .map_or(launch.network_namespace.as_str(), |network| {
-                    network.namespace.as_str()
-                });
-            spec.network.namespace = Some(
-                hl_engine::network::Namespace::new(namespace)
-                    .map_err(|error| Error::InvalidNetwork(error.to_string()))?,
-            );
-        }
-        for network in &launch.networks {
-            if let (Some(bridge), Some(address), Some(prefix)) =
-                (&network.bridge, network.address, network.prefix)
-            {
-                let bridge = hl_engine::network::Bridge::new(bridge)
-                    .map_err(|error| Error::InvalidNetwork(error.to_string()))?;
-                spec.network.interfaces.push(
-                    hl_engine::network::Interface::new(bridge, address, prefix)
-                        .map_err(|error| Error::InvalidNetwork(error.to_string()))?,
-                );
-            }
-        }
-        for publish in &launch.publish {
-            let rule = hl_engine::network::Rule::new(publish.host, publish.port.guest)
-                .map_err(|error| Error::InvalidNetwork(error.to_string()))?
-                .address(publish.host_ip);
-            spec.network.port_forwards.push(rule);
+            .collect::<Vec<_>>()
+            .join(",");
+        if !mounts.is_empty() {
+            Self::set(options, "HL_VOLUMES", mounts)?;
         }
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::Spec;
-    use crate::service::ProcessConfig;
-
-    fn launch() -> ProcessConfig {
-        ProcessConfig {
-            network_namespace: "container-test".to_owned(),
-            rootfs: "/rootfs".into(),
-            overlay: None,
-            owners: Vec::new(),
-            filesystem_generation: "/generation".into(),
-            translation_cache: None,
-            checkpoint: None,
-            guest: crate::Guest::Aarch64,
-            process: crate::Process::new("/bin/true"),
-            hostname: None,
-            mounts: Vec::new(),
-            resources: crate::Resources::default(),
-            isolation: crate::Isolation {
-                network_isolated: false,
-                ..Default::default()
-            },
-            network_mode: crate::NetworkMode::Automatic,
-            networks: Vec::new(),
-            publish: Vec::new(),
-            input: None,
-            terminal: None,
-            domain: None,
-            domain_owner: true,
-            extensions: Vec::new(),
-            authorities: Vec::new(),
+    fn resources(options: &mut Options, launch: &ProcessConfig) -> Result<()> {
+        for (name, value) in [
+            ("HL_MEM_MAX", launch.resources.memory_bytes),
+            ("HL_PIDS_MAX", u64::from(launch.resources.process_count)),
+            ("HL_CPUS", u64::from(launch.resources.cpu_count)),
+        ] {
+            if value != 0 {
+                Self::set(options, name, value.to_string())?;
+            }
         }
+        Ok(())
     }
 
-    #[test]
-    fn automatic_networking_uses_a_private_namespace_without_endpoints() {
-        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch()).unwrap());
-
-        assert_eq!(spec.network.mode, hl_engine::spec::NetworkMode::Virtual);
-        assert_eq!(
-            spec.network
-                .namespace
-                .as_ref()
-                .map(hl_engine::network::Namespace::as_str),
-            Some("container-test")
-        );
-    }
-
-    #[test]
-    fn application_selected_translation_cache_is_forwarded_to_engine() {
-        let mut launch = launch();
-        launch.translation_cache = Some("/state/cache/translation".into());
-
-        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch).unwrap());
-
-        assert_eq!(
-            spec.cache.directory.as_deref(),
-            Some(std::path::Path::new("/state/cache/translation"))
-        );
-        assert_eq!(spec.cache.policy, hl_engine::spec::CachePolicy::ReadWrite);
-    }
-
-    #[test]
-    fn published_ports_use_the_private_namespace_without_an_explicit_bridge() {
-        let mut launch = launch();
-        launch
+    fn network(options: &mut Options, launch: &ProcessConfig) -> Result<()> {
+        match launch.network_mode {
+            crate::NetworkMode::Host => Self::set(options, "HL_NET_HOST", b"1")?,
+            crate::NetworkMode::Automatic => {
+                Self::set(options, "HL_NETNS", &launch.network_namespace)?;
+                Self::flag(options, "HL_NET_ISOLATE", launch.isolation.network_isolated)?;
+            }
+        }
+        if let Some(network) = launch.networks.iter().find(|network| network.bridge.is_some()) {
+            if let Some(bridge) = &network.bridge {
+                Self::set(options, "HL_NETBR", bridge)?;
+            }
+            if let Some(address) = network.address {
+                Self::set(options, "HL_IP", address.to_string())?;
+            }
+        }
+        let publish = launch
             .publish
-            .push(crate::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8_080, 80).unwrap());
-
-        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch).unwrap());
-
-        assert_eq!(spec.network.mode, hl_engine::spec::NetworkMode::Virtual);
-        assert_eq!(
-            spec.network
-                .namespace
-                .as_ref()
-                .map(hl_engine::network::Namespace::as_str),
-            Some("container-test")
-        );
-        assert_eq!(spec.network.port_forwards.len(), 1);
-    }
-
-    #[test]
-    fn streaming_checkpoint_transport_is_selected_by_the_runtime() {
-        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch()).unwrap());
-
-        assert!(!spec.checkpoint.enabled);
-        assert!(!spec.checkpoint.capture);
-        assert!(!spec.checkpoint.restore);
-    }
-
-    #[test]
-    fn maps_process_filesystem_identity_and_resource_contracts() {
-        let temporary = tempfile::tempdir().unwrap();
-        let rootfs = temporary.path().join("rootfs");
-        let generation = temporary.path().join("generation");
-        std::fs::create_dir(&rootfs).unwrap();
-        std::fs::write(&generation, b"0").unwrap();
-        let mut launch = launch();
-        launch.rootfs = rootfs.clone();
-        launch.filesystem_generation = generation;
-        launch.process = crate::Process::new("/bin/tool")
-            .args(["first", "second"])
-            .env("MODE", "test")
-            .working_dir("/workspace")
-            .user(1000, 1001);
-        launch.resources = crate::Resources {
-            memory_bytes: 64 * 1024 * 1024,
-            process_count: 32,
-            cpu_count: 2,
-        };
-        launch.isolation.read_only_root = true;
-
-        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch).unwrap());
-
-        assert_eq!(spec.process.argv.len(), 3);
-        assert_eq!(spec.identity.uid, Some(1000));
-        assert_eq!(spec.identity.gid, Some(1001));
-        assert!(spec.filesystem.read_only);
-        assert!(matches!(
-            spec.filesystem.root,
-            Some(hl_engine::spec::TreeSource::HostDirectory(path)) if path == rootfs
-        ));
-        assert_eq!(spec.resources.memory_bytes, Some(64 * 1024 * 1024));
-        assert_eq!(spec.resources.process_limit, Some(32));
-        assert_eq!(spec.resources.cpu_limit, Some(2));
-    }
-
-    #[test]
-    fn process_arguments_reach_the_engine_without_path_normalization() {
-        const URL: &str = "https://google.com";
-        let mut launch = launch();
-        launch.process = crate::Process::new("google-chrome").args([URL]);
-
-        let spec = hl_engine::MachineSpec::from(Spec::try_from(&launch).unwrap());
-
-        assert_eq!(
-            spec.process.argv,
-            [
-                std::ffi::OsString::from("google-chrome"),
-                std::ffi::OsString::from(URL)
-            ]
-        );
+            .iter()
+            .map(|rule| format!("{}:{}:{}", rule.host_ip, rule.host, rule.port.guest))
+            .collect::<Vec<_>>()
+            .join(",");
+        if !publish.is_empty() {
+            Self::set(options, "HL_PUBLISH", publish)?;
+        }
+        Ok(())
     }
 }

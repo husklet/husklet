@@ -39,10 +39,12 @@ impl Networks {
             return Err(Error::NetworkInUse(network.name));
         }
         if network.driver == NetworkDriver::Bridge {
-            hl_engine::network::Bridge::new(network.id.to_string())
-                .map_err(|error| Error::InvalidNetwork(error.to_string()))?
-                .remove()
-                .map_err(|error| Error::Runtime(error.to_string()))?;
+            let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{}", network.id));
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::Runtime(error.to_string())),
+            }
         }
         self.storage.remove(&network.name).await?;
         Ok(network)

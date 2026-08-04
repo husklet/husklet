@@ -198,7 +198,7 @@ impl Handshake {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::{FrameError, FrameKind};
+    use crate::session::{FrameError, FrameKind};
     use std::{io::Write, os::unix::net::UnixStream, thread};
 
     fn limits() -> Limits {

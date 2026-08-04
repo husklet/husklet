@@ -65,8 +65,6 @@ pub(crate) struct ProcessConfig {
     pub(crate) terminal: Option<Size>,
     pub(crate) domain: Option<hl_engine::Domain>,
     pub(crate) domain_owner: bool,
-    pub(crate) extensions: Vec<hl_engine::extension::ExtensionSpec>,
-    pub(crate) authorities: Vec<crate::Authority>,
 }
 
 #[derive(Clone)]

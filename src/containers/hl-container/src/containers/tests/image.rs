@@ -22,7 +22,6 @@ async fn image_rootfs_lease_survives_reopen_and_releases_on_remove() {
         None,
         temporary.path().join("volumes"),
         temporary.path().join("runtime"),
-        crate::Devices::new(),
     )
     .await
     .unwrap();
@@ -58,7 +57,6 @@ async fn image_rootfs_lease_survives_reopen_and_releases_on_remove() {
         None,
         temporary.path().join("volumes"),
         temporary.path().join("runtime"),
-        crate::Devices::new(),
     )
     .await
     .unwrap();

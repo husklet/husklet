@@ -53,18 +53,9 @@ impl Service {
                 container.spec.network_mode,
             )
             .await?;
-        let mut process = Self::health_process(container, check);
-        let mut requested_mounts = container.spec.mounts.clone();
+        let process = Self::health_process(container, check);
+        let requested_mounts = container.spec.mounts.clone();
         let (rootfs, overlay, owners) = self.rootfs_launch(&container.spec.rootfs).await?;
-        let devices = self.devices(
-            container.spec.guest,
-            &mut process,
-            &mut requested_mounts,
-            crate::device::FilesystemView::new(
-                &rootfs,
-                overlay.as_ref().map(|overlay| overlay.upper.as_path()),
-            ),
-        )?;
         let mut mounts = self.volumes.resolve(&requested_mounts).await?;
         mounts.extend(self.identity.open(container)?);
         let filesystem_generation = self.identity.generation(container)?.path().to_owned();
@@ -92,8 +83,6 @@ impl Service {
                 terminal: None,
                 domain: Some(domain),
                 domain_owner: false,
-                extensions: devices.extensions,
-                authorities: devices.authorities,
             })
             .await
     }
