@@ -26,17 +26,9 @@ pub(in super::super) async fn logs(
             "logs require stdout=true or stderr=true",
         ));
     }
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     let terminal = container.spec.process.console.terminal.is_some();
-    let mut session = state
-        .containers
-        .follow(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let mut session = state.containers.follow(&id).await.map_err(ApiError::container)?;
     let history = options.replay(session.history().await.map_err(ApiError::container)?);
     let (sender, receiver) = tokio::sync::mpsc::channel(16);
     tokio::spawn(async move {
@@ -69,20 +61,14 @@ pub(in super::super) async fn logs(
             }
         }
     });
-    let body = Body::from_stream(futures_util::stream::unfold(
-        receiver,
-        |mut receiver| async move {
-            receiver
-                .recv()
-                .await
-                .map(|bytes| (Ok::<_, std::convert::Infallible>(bytes), receiver))
-        },
-    ));
+    let body = Body::from_stream(futures_util::stream::unfold(receiver, |mut receiver| async move {
+        receiver
+            .recv()
+            .await
+            .map(|bytes| (Ok::<_, std::convert::Infallible>(bytes), receiver))
+    }));
     Ok((
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "application/vnd.docker.raw-stream",
-        )],
+        [(axum::http::header::CONTENT_TYPE, "application/vnd.docker.raw-stream")],
         body,
     )
         .into_response())
@@ -98,13 +84,7 @@ impl TryFrom<LogsQuery> for LogOptions {
                 format!("unsupported logs option {name:?}"),
             ));
         }
-        if bool::from(
-            query
-                .details
-                .as_deref()
-                .unwrap_or_default()
-                .parse::<Flag>()?,
-        ) {
+        if bool::from(query.details.as_deref().unwrap_or_default().parse::<Flag>()?) {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
                 "log details require container attribute logging",
@@ -114,40 +94,18 @@ impl TryFrom<LogsQuery> for LogOptions {
             "" | "all" => None,
             value => match value.parse::<i64>() {
                 Ok(value) if value < 0 => None,
-                Ok(value) => Some(usize::try_from(value).map_err(|_| {
-                    ApiError::new(StatusCode::BAD_REQUEST, "log tail exceeds host range")
-                })?),
-                Err(_) => {
-                    return Err(ApiError::new(
-                        StatusCode::BAD_REQUEST,
-                        format!("invalid log tail {value:?}"),
-                    ));
-                }
+                Ok(value) => Some(
+                    usize::try_from(value)
+                        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "log tail exceeds host range"))?,
+                ),
+                Err(_) => None,
             },
         };
         Ok(Self {
-            follow: bool::from(
-                query
-                    .follow
-                    .as_deref()
-                    .unwrap_or_default()
-                    .parse::<Flag>()?,
-            ),
+            follow: bool::from(query.follow.as_deref().unwrap_or_default().parse::<Flag>()?),
             streams: LogStreams {
-                stdout: bool::from(
-                    query
-                        .stdout
-                        .as_deref()
-                        .unwrap_or_default()
-                        .parse::<Flag>()?,
-                ),
-                stderr: bool::from(
-                    query
-                        .stderr
-                        .as_deref()
-                        .unwrap_or_default()
-                        .parse::<Flag>()?,
-                ),
+                stdout: bool::from(query.stdout.as_deref().unwrap_or_default().parse::<Flag>()?),
+                stderr: bool::from(query.stderr.as_deref().unwrap_or_default().parse::<Flag>()?),
             },
             since_ms: query
                 .since
@@ -161,13 +119,7 @@ impl TryFrom<LogsQuery> for LogOptions {
                 .map(str::parse::<LogTime>)
                 .transpose()?
                 .map(u64::from),
-            timestamps: bool::from(
-                query
-                    .timestamps
-                    .as_deref()
-                    .unwrap_or_default()
-                    .parse::<Flag>()?,
-            ),
+            timestamps: bool::from(query.timestamps.as_deref().unwrap_or_default().parse::<Flag>()?),
             tail,
         })
     }
@@ -193,10 +145,7 @@ impl LogTime {
         for _ in fraction.len().min(3)..3 {
             milliseconds *= 10;
         }
-        seconds
-            .checked_mul(1_000)?
-            .checked_add(milliseconds)
-            .map(Self)
+        seconds.checked_mul(1_000)?.checked_add(milliseconds).map(Self)
     }
 }
 
@@ -208,12 +157,7 @@ impl FromStr for LogTime {
             return Ok(time);
         }
         let timestamp = chrono::DateTime::parse_from_rfc3339(value)
-            .map_err(|_| {
-                ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid log time {value:?}"),
-                )
-            })?
+            .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid log time {value:?}")))?
             .timestamp_millis();
         u64::try_from(timestamp)
             .map(Self)

@@ -1,7 +1,7 @@
 use super::{ApiError, ArchiveQuery, DockerSignal, HostSettings, LogsQuery, NetworkPlan};
 use crate::api::{
-    DockerMount, EndpointConfig, EndpointIpam, EndpointsConfig, ExposedPorts, HostConfig,
-    LogOptions, NetworkingConfig, PortBinding, PortBindings, RestartPolicy,
+    DockerMount, EndpointConfig, EndpointIpam, EndpointsConfig, ExposedPorts, HostConfig, LogOptions, NetworkingConfig,
+    PortBinding, PortBindings, RestartPolicy,
 };
 use hl_container::{Access, ContainerSpec, NetworkDriver, NetworkSpec, Process, Signal, Subnet};
 use std::collections::BTreeMap;
@@ -12,18 +12,9 @@ fn parses_docker_signal_names_and_numbers() {
         Signal::from("SIGTERM".parse::<DockerSignal>().unwrap()),
         Signal::Terminate
     );
-    assert_eq!(
-        Signal::from("kill".parse::<DockerSignal>().unwrap()),
-        Signal::Kill
-    );
-    assert_eq!(
-        Signal::from("2".parse::<DockerSignal>().unwrap()),
-        Signal::Interrupt
-    );
-    assert_eq!(
-        Signal::from("SIGQUIT".parse::<DockerSignal>().unwrap()),
-        Signal::Quit
-    );
+    assert_eq!(Signal::from("kill".parse::<DockerSignal>().unwrap()), Signal::Kill);
+    assert_eq!(Signal::from("2".parse::<DockerSignal>().unwrap()), Signal::Interrupt);
+    assert_eq!(Signal::from("SIGQUIT".parse::<DockerSignal>().unwrap()), Signal::Quit);
     assert!("SIGBOGUS".parse::<DockerSignal>().is_err());
 }
 
@@ -67,10 +58,7 @@ async fn legacy_bind_strings_map_source_target_access_and_anonymous_volume() {
         .mount(&containers)
         .await
         .unwrap();
-    assert_eq!(
-        mount.source,
-        hl_container::MountSource::Bind(source.clone())
-    );
+    assert_eq!(mount.source, hl_container::MountSource::Bind(source.clone()));
     assert_eq!(mount.target, std::path::PathBuf::from("/data"));
     assert_eq!(mount.access, Access::ReadOnly);
     assert_eq!(owned, None);
@@ -82,33 +70,30 @@ async fn legacy_bind_strings_map_source_target_access_and_anonymous_volume() {
     assert_eq!(mount.access, Access::ReadWrite);
     assert_eq!(owned, None);
 
-    let (anonymous, owned) = super::LegacyBind::from("/cache")
-        .mount(&containers)
-        .await
-        .unwrap();
+    let (anonymous, owned) = super::LegacyBind::from("/cache").mount(&containers).await.unwrap();
     assert_eq!(anonymous.target, std::path::PathBuf::from("/cache"));
-    assert!(matches!(
-        anonymous.source,
-        hl_container::MountSource::Anonymous(_)
-    ));
+    assert!(matches!(anonymous.source, hl_container::MountSource::Anonymous(_)));
     assert!(owned.is_some());
 
-    assert!(super::LegacyBind::from(":")
-        .mount(&containers)
-        .await
-        .is_err());
-    assert!(super::LegacyBind::from("a:b:ro:extra")
-        .mount(&containers)
-        .await
-        .is_err());
-    assert!(super::LegacyBind::from("source:relative")
-        .mount(&containers)
-        .await
-        .is_err());
-    assert!(super::LegacyBind::from("source:/safe/../escape")
-        .mount(&containers)
-        .await
-        .is_err());
+    assert!(super::LegacyBind::from(":").mount(&containers).await.is_err());
+    assert!(
+        super::LegacyBind::from("a:b:ro:extra")
+            .mount(&containers)
+            .await
+            .is_err()
+    );
+    assert!(
+        super::LegacyBind::from("source:relative")
+            .mount(&containers)
+            .await
+            .is_err()
+    );
+    assert!(
+        super::LegacyBind::from("source:/safe/../escape")
+            .mount(&containers)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -133,11 +118,7 @@ async fn empty_mode_selects_default_bridge_and_explicit_none_stays_isolated() {
     assert_eq!(bridge.driver, hl_container::NetworkDriver::Bridge);
     assert_eq!(bridge.driver, NetworkDriver::Bridge);
 
-    containers
-        .networks()
-        .create(NetworkSpec::none("airgap"))
-        .await
-        .unwrap();
+    containers.networks().create(NetworkSpec::none("airgap")).await.unwrap();
     let custom = NetworkPlan::from_request(
         Some(&HostConfig {
             network_mode: "airgap".into(),
@@ -162,8 +143,7 @@ async fn published_automatic_container_is_inspectable_on_default_bridge() {
         .unwrap();
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
-    let publish =
-        hl_container::Publication::tcp("127.0.0.1".parse().unwrap(), 18083, 8083).unwrap();
+    let publish = hl_container::Publication::tcp("127.0.0.1".parse().unwrap(), 18083, 8083).unwrap();
     containers
         .create(
             ContainerSpec::from_directory(rootfs, Process::new("/bin/true"))
@@ -176,9 +156,7 @@ async fn published_automatic_container_is_inspectable_on_default_bridge() {
         )
         .await
         .unwrap();
-    plan.attach_created(&containers, "published-default")
-        .await
-        .unwrap();
+    plan.attach_created(&containers, "published-default").await.unwrap();
 
     let owner = containers.inspect("published-default").await.unwrap();
     assert_eq!(owner.spec.publish, vec![publish]);
@@ -203,10 +181,7 @@ async fn host_mode_has_no_endpoints_and_discards_publications() {
     assert_eq!(plan.mode(), hl_container::NetworkMode::Host);
     assert!(plan.attachments.is_empty());
     let conflicting = NetworkingConfig {
-        endpoints_config: EndpointsConfig(BTreeMap::from([(
-            "custom".into(),
-            EndpointConfig::default(),
-        )])),
+        endpoints_config: EndpointsConfig(BTreeMap::from([("custom".into(), EndpointConfig::default())])),
     };
     assert!(NetworkPlan::from_request(Some(&host), Some(&conflicting)).is_err());
     let linked = HostConfig {
@@ -255,17 +230,9 @@ async fn custom_bridge_attaches_and_failed_ipam_rolls_back_container() {
         None,
     )
     .unwrap();
-    plan.attach_created(&containers, first.id.as_str())
-        .await
-        .unwrap();
+    plan.attach_created(&containers, first.id.as_str()).await.unwrap();
     assert_eq!(
-        containers
-            .networks()
-            .inspect("custom")
-            .await
-            .unwrap()
-            .endpoints
-            .len(),
+        containers.networks().inspect("custom").await.unwrap().endpoints.len(),
         1
     );
 
@@ -292,10 +259,7 @@ async fn custom_bridge_attaches_and_failed_ipam_rolls_back_container() {
         }),
     )
     .unwrap();
-    assert!(plan
-        .attach_created(&containers, second.id.as_str())
-        .await
-        .is_err());
+    assert!(plan.attach_created(&containers, second.id.as_str()).await.is_err());
     assert!(containers.inspect(second.id.as_str()).await.is_err());
 }
 
@@ -346,20 +310,14 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
     assert_eq!(settings.resources.memory_bytes, 64 * 1024 * 1024);
     assert_eq!(settings.resources.process_count, 32);
     assert_eq!(settings.resources.cpu_count, 2);
-    assert_eq!(
-        settings.hosts.get("database"),
-        Some(&"203.0.113.9".parse().unwrap())
-    );
+    assert_eq!(settings.hosts.get("database"), Some(&"203.0.113.9".parse().unwrap()));
     assert!(settings.isolation.read_only_root);
     assert!(!settings.isolation.network_isolated);
     assert_eq!(settings.removal, hl_container::RemovalPolicy::Automatic);
     assert_eq!(settings.mounts.len(), 2);
     assert_eq!(settings.mounts[0].access, Access::ReadOnly);
     assert_eq!(settings.mounts[1].access, Access::ReadOnly);
-    assert_eq!(
-        settings.mounts[1].propagation,
-        hl_container::BindPropagation::Private
-    );
+    assert_eq!(settings.mounts[1].propagation, hl_container::BindPropagation::Private);
 }
 
 #[tokio::test]
@@ -393,16 +351,18 @@ async fn host_config_rejects_values_the_runtime_cannot_honor() {
     value
         .unsupported
         .insert("Privileged".into(), serde_json::Value::Bool(false));
-    assert!(HostSettings::parse(
-        Some(&value),
-        &ExposedPorts::default(),
-        BTreeMap::new(),
-        true,
-        hl_container::NetworkMode::Automatic,
-        &containers,
-    )
-    .await
-    .is_ok());
+    assert!(
+        HostSettings::parse(
+            Some(&value),
+            &ExposedPorts::default(),
+            BTreeMap::new(),
+            true,
+            hl_container::NetworkMode::Automatic,
+            &containers,
+        )
+        .await
+        .is_ok()
+    );
 }
 
 #[test]
@@ -426,11 +386,43 @@ fn log_query_parses_docker_time_tail_and_stream_selectors() {
     assert_eq!(options.until_ms, Some(2_000));
     assert_eq!(options.tail, Some(7));
     assert!(options.timestamps);
-    assert!(LogOptions::try_from(LogsQuery {
-        unsupported: BTreeMap::from([("compress".into(), "true".into())]),
-        ..LogsQuery::default()
-    })
-    .is_err());
+    for tail in [
+        None,
+        Some(""),
+        Some("all"),
+        Some("invalid"),
+        Some(" "),
+        Some("9223372036854775808"),
+        Some("-9"),
+    ] {
+        assert_eq!(
+            LogOptions::try_from(LogsQuery {
+                stdout: Some("true".into()),
+                tail: tail.map(str::to_owned),
+                ..LogsQuery::default()
+            })
+            .unwrap()
+            .tail,
+            None
+        );
+    }
+    assert_eq!(
+        LogOptions::try_from(LogsQuery {
+            stdout: Some("true".into()),
+            tail: Some("0".into()),
+            ..LogsQuery::default()
+        })
+        .unwrap()
+        .tail,
+        Some(0)
+    );
+    assert!(
+        LogOptions::try_from(LogsQuery {
+            unsupported: BTreeMap::from([("compress".into(), "true".into())]),
+            ..LogsQuery::default()
+        })
+        .is_err()
+    );
 }
 
 fn assert_not_implemented(error: &ApiError) {
