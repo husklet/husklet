@@ -31,6 +31,7 @@
 #include "simd_pairwise.h"
 #include "simd_permute.h"
 #include "simd_reduce.h"
+#include "simd_reciprocal.h"
 #include "simd_saturating.h"
 #include "single.h"
 #include "structure.h"
@@ -124,6 +125,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_simd_pairwise_body(assembler, word) ||
            hl_a64_simd_permute_body(assembler, word) ||
            hl_a64_simd_reduce_body(assembler, word) ||
+           hl_a64_simd_reciprocal_body(assembler, word) ||
            hl_a64_simd_saturating_body(assembler, word) ||
            hl_a64_system_body(assembler, word);
 }
