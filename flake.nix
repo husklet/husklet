@@ -217,6 +217,24 @@
         };
       };
 
+      linuxAlpineFor =
+        pkgs:
+        let
+          archives = alpineArchivesFor pkgs;
+        in
+        if pkgs.stdenv.hostPlatform.system == "aarch64-linux" then
+          {
+            target = "arm64";
+            archive = archives.arm64;
+          }
+        else if pkgs.stdenv.hostPlatform.system == "x86_64-linux" then
+          {
+            target = "amd64";
+            archive = archives.amd64;
+          }
+        else
+          throw "unsupported Linux Alpine fixture host: ${pkgs.stdenv.hostPlatform.system}";
+
       packageFor =
         pkgs:
         (rustPlatformFor pkgs).buildRustPackage {
@@ -254,7 +272,7 @@
       verificationFor =
         pkgs:
         let
-          alpine = alpineArchivesFor pkgs;
+          alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
         in
         (rustPlatformFor pkgs).buildRustPackage (
           {
@@ -303,9 +321,8 @@
             '';
           }
           // lib.optionalAttrs pkgs.stdenv.isLinux {
-            HL_ALPINE_ARM64_ARCHIVE = alpine.arm64;
-            HL_ALPINE_AMD64_ARCHIVE = alpine.amd64;
-            HL_ALPINE_ARCHIVE = alpine.arm64;
+            HL_SCENARIO_TARGET = alpine.target;
+            HL_ALPINE_ARCHIVE = alpine.archive;
           }
         );
     in
@@ -344,7 +361,8 @@
         pkgs:
         let
           toolchain = toolchainFor pkgs;
-          alpine = alpineArchivesFor pkgs;
+          alpineArchives = alpineArchivesFor pkgs;
+          alpine = if pkgs.stdenv.isLinux then linuxAlpineFor pkgs else null;
         in
         {
           default = pkgs.mkShell (
@@ -365,19 +383,11 @@
                 export NATIVE_CC="${toolchain.env.NATIVE_CC}"
                 export CARGO_BUILD_JOBS="''${CARGO_BUILD_JOBS:-1}"
                 export HL_COMPAT_JOBS="''${HL_COMPAT_JOBS:-1}"
-                if [ "${if pkgs.stdenv.isLinux then "1" else "0"}" = 1 ]; then
-                  case "''${HL_SCENARIO_TARGET:-arm64}" in
-                    arm64) export HL_ALPINE_ARCHIVE="$HL_ALPINE_ARM64_ARCHIVE" ;;
-                    amd64) export HL_ALPINE_ARCHIVE="$HL_ALPINE_AMD64_ARCHIVE" ;;
-                    *) echo "unsupported HL_SCENARIO_TARGET: $HL_SCENARIO_TARGET" >&2; return 1 ;;
-                  esac
-                fi
               '';
             }
             // lib.optionalAttrs pkgs.stdenv.isLinux {
-              HL_ALPINE_ARM64_ARCHIVE = alpine.arm64;
-              HL_ALPINE_AMD64_ARCHIVE = alpine.amd64;
-              HL_ALPINE_ARCHIVE = alpine.arm64;
+              HL_SCENARIO_TARGET = alpine.target;
+              HL_ALPINE_ARCHIVE = alpine.archive;
             }
             // lib.optionalAttrs pkgs.stdenv.isDarwin {
               nativeBuildInputs = [
@@ -398,7 +408,7 @@
               HL_ADWAITA_ICONS = pkgs.adwaita-icon-theme;
               HL_HICOLOR_ICONS = pkgs.hicolor-icon-theme;
               HL_GSETTINGS_SCHEMAS = pkgs.gsettings-desktop-schemas;
-              HL_ALPINE_ARCHIVE = alpine.arm64;
+              HL_ALPINE_ARCHIVE = alpineArchives.arm64;
             }
           );
         }
