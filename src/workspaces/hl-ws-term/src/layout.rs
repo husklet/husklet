@@ -63,9 +63,7 @@ impl Node {
                 true
             }
             Node::Leaf(_) => false,
-            Node::Split { a, b, .. } => {
-                a.split(target, dir, new, ratio) || b.split(target, dir, new, ratio)
-            }
+            Node::Split { a, b, .. } => a.split(target, dir, new, ratio) || b.split(target, dir, new, ratio),
         }
     }
 

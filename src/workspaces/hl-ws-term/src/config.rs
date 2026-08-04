@@ -56,8 +56,8 @@ pub struct TermConfig {
 /// The committed near-black defaults (mirror `term.rs`'s hard-coded look), so an absent/partial config
 /// yields exactly today's appearance.
 const DEFAULT_PALETTE: [&str; 16] = [
-    "#2b2d33", "#ff5f56", "#5af78e", "#f3f99d", "#57c7ff", "#ff6ac1", "#9aedfe", "#c7ccd6",
-    "#5c6370", "#ff6e67", "#5af78e", "#f4f99d", "#6dcbff", "#ff92d0", "#a5f0ff", "#ffffff",
+    "#2b2d33", "#ff5f56", "#5af78e", "#f3f99d", "#57c7ff", "#ff6ac1", "#9aedfe", "#c7ccd6", "#5c6370", "#ff6e67",
+    "#5af78e", "#f4f99d", "#6dcbff", "#ff92d0", "#a5f0ff", "#ffffff",
 ];
 
 impl Default for TermConfig {
@@ -186,8 +186,7 @@ impl TermConfig {
             return;
         }
         self.keybindings.retain(|(name, _)| name != action);
-        self.keybindings
-            .push((action.to_string(), value.to_string()));
+        self.keybindings.push((action.to_string(), value.to_string()));
     }
 
     fn apply_color(&mut self, value: &str, palette: Option<usize>) {
@@ -208,9 +207,7 @@ impl TermConfig {
         let parsed = value
             .rsplit_once(char::is_whitespace)
             .and_then(|(family, size)| size.parse::<f64>().ok().map(|size| (family.trim(), size)));
-        if let Some((family, size)) =
-            parsed.filter(|(family, size)| !family.is_empty() && *size > 0.0)
-        {
+        if let Some((family, size)) = parsed.filter(|(family, size)| !family.is_empty() && *size > 0.0) {
             self.font_family = family.to_string();
             self.font_size = size;
             return;
@@ -220,7 +217,8 @@ impl TermConfig {
 
     /// A commented sample config (written on first run so users have something to edit).
     pub fn sample() -> String {
-        let mut s = String::from("# hl terminal config — ~/.hl/term.conf\n# edit + save; open terminals live-reload.\n\n");
+        let mut s =
+            String::from("# hl terminal config — ~/.hl/term.conf\n# edit + save; open terminals live-reload.\n\n");
         s.push_str("font_family = Menlo\n");
         s.push_str("font_size = 12\n");
         s.push_str("# scrollback: a number of lines, or `unlimited`\n");

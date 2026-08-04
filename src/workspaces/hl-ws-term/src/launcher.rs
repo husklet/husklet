@@ -83,10 +83,7 @@ mod tests {
                 exited = true;
             }
         }
-        let screen: String = (0..10)
-            .map(|r| vt.grid().row_text(r))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let screen: String = (0..10).map(|r| vt.grid().row_text(r)).collect::<Vec<_>>().join("\n");
         assert!(
             screen.contains("hello-demo"),
             "workspace shell should have run the command; got:\n{screen}"

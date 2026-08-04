@@ -25,8 +25,7 @@ impl Vt {
                 // Reverse Index: move up, scrolling the region DOWN when at the top margin.
                 if self.grid.cursor_row == self.scroll_top {
                     let blank = self.blank();
-                    self.grid
-                        .scroll_region_down(self.scroll_top, self.scroll_bot, blank);
+                    self.grid.scroll_region_down(self.scroll_top, self.scroll_bot, blank);
                 } else if self.grid.cursor_row > 0 {
                     self.grid.cursor_row -= 1;
                 }
@@ -66,12 +65,7 @@ impl Vt {
         match b {
             b'0'..=b'9' => {
                 let d = (b - b'0') as u32;
-                self.cur_param = Some(
-                    self.cur_param
-                        .unwrap_or(0)
-                        .saturating_mul(10)
-                        .saturating_add(d),
-                );
+                self.cur_param = Some(self.cur_param.unwrap_or(0).saturating_mul(10).saturating_add(d));
             }
             b';' => self.push_param(false),
             b':' => {
@@ -108,11 +102,7 @@ impl Vt {
     }
 
     pub(super) fn param(&self, i: usize, default: u32) -> u32 {
-        self.params
-            .get(i)
-            .copied()
-            .filter(|&v| v != 0)
-            .unwrap_or(default)
+        self.params.get(i).copied().filter(|&v| v != 0).unwrap_or(default)
     }
 
     pub(super) fn dispatch_csi(&mut self, final_byte: u8) {
@@ -224,8 +214,7 @@ impl Vt {
                 let n = self.param(0, 1);
                 let blank = self.blank();
                 for _ in 0..n {
-                    self.grid
-                        .scroll_region_up(self.scroll_top, self.scroll_bot, blank);
+                    self.grid.scroll_region_up(self.scroll_top, self.scroll_bot, blank);
                 }
             }
             b'T' => {
@@ -233,8 +222,7 @@ impl Vt {
                 let n = self.param(0, 1);
                 let blank = self.blank();
                 for _ in 0..n {
-                    self.grid
-                        .scroll_region_down(self.scroll_top, self.scroll_bot, blank);
+                    self.grid.scroll_region_down(self.scroll_top, self.scroll_bot, blank);
                 }
             }
             b'h' | b'l' if self.private == b'?' => {

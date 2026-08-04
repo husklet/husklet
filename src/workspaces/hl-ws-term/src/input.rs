@@ -276,10 +276,7 @@ mod tests {
         assert_eq!(enc(Key::Right, Mods::CTRL), b"\x1b[1;5C");
         assert_eq!(enc(Key::Left, Mods::CTRL), b"\x1b[1;5D");
         // Even in application mode, a modifier forces the CSI `1;m` form.
-        assert_eq!(
-            encode_key(Key::Up, Mods::CTRL, CursorKeys::Application),
-            b"\x1b[1;5A"
-        );
+        assert_eq!(encode_key(Key::Up, Mods::CTRL, CursorKeys::Application), b"\x1b[1;5A");
     }
 
     #[test]
@@ -335,10 +332,7 @@ mod tests {
     #[test]
     fn paste_raw_vs_bracketed() {
         assert_eq!(PasteMode::Raw.encode("hi\nthere"), b"hi\nthere");
-        assert_eq!(
-            PasteMode::Bracketed.encode("hi"),
-            b"\x1b[200~hi\x1b[201~".to_vec()
-        );
+        assert_eq!(PasteMode::Bracketed.encode("hi"), b"\x1b[200~hi\x1b[201~".to_vec());
         // Nothing inside the payload is stripped or escaped.
         assert_eq!(
             PasteMode::Bracketed.encode("a\x1b[201~b"),

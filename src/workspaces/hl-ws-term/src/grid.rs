@@ -134,10 +134,7 @@ impl Grid {
             return String::new();
         }
         let start = self.idx(row, 0);
-        let s: String = self.cells[start..start + self.cols]
-            .iter()
-            .map(|c| c.ch)
-            .collect();
+        let s: String = self.cells[start..start + self.cols].iter().map(|c| c.ch).collect();
         s.trim_end().to_string()
     }
 

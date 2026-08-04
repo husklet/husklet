@@ -171,29 +171,15 @@ mod tests {
     fn all_printable_ascii_have_glyphs() {
         for c in 0x20u8..=0x7e {
             let ch = c as char;
-            assert!(
-                EMBEDDED.contains(ch),
-                "missing glyph for {:?} (0x{:02x})",
-                ch,
-                c
-            );
+            assert!(EMBEDDED.contains(ch), "missing glyph for {:?} (0x{:02x})", ch, c);
         }
     }
 
     #[test]
     fn unknown_chars_use_box_fallback() {
         for ch in ['\u{0}', '\u{1b}', 'あ', '€'] {
-            assert!(
-                !EMBEDDED.contains(ch),
-                "{:?} should not have a dedicated glyph",
-                ch
-            );
-            assert_eq!(
-                EMBEDDED.lookup(ch),
-                FALLBACK,
-                "{:?} should map to the box fallback",
-                ch
-            );
+            assert!(!EMBEDDED.contains(ch), "{:?} should not have a dedicated glyph", ch);
+            assert_eq!(EMBEDDED.lookup(ch), FALLBACK, "{:?} should map to the box fallback", ch);
         }
         // Sanity: the fallback really is a hollow box (solid top/bottom, hollow middle).
         assert_eq!(FALLBACK[0], 0xff);
@@ -209,10 +195,7 @@ mod tests {
         let o = EMBEDDED.lookup('o');
         let eight = EMBEDDED.lookup('8');
         for (name, g) in [("A", &a), ("o", &o), ("8", &eight)] {
-            assert!(
-                g.iter().any(|&r| r != 0),
-                "{name} glyph should be non-empty"
-            );
+            assert!(g.iter().any(|&r| r != 0), "{name} glyph should be non-empty");
         }
         assert_ne!(a, o);
         assert_ne!(a, eight);

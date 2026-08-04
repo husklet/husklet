@@ -198,11 +198,7 @@ mod tests {
         // ISO-8613-6 colon form must set the color, NOT abort and dump the tail as literal text.
         let mut vt = Vt::new(20, 2);
         vt.advance_bytes(b"\x1b[38:2::10:20:30mX");
-        assert_eq!(
-            vt.grid().row_text(0),
-            "X",
-            "no literal '2::10:20:30m' splatter"
-        );
+        assert_eq!(vt.grid().row_text(0), "X", "no literal '2::10:20:30m' splatter");
         assert_eq!(vt.grid().cell(0, 0).unwrap().fg, Color::Rgb(10, 20, 30));
     }
 

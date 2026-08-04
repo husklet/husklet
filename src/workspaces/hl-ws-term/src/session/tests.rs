@@ -67,28 +67,18 @@ fn escaping_survives_spaces_and_specials() {
     };
     let back = Session::parse(&s.serialize()).unwrap();
     assert_eq!(back.tabs[0].title, "a b%c");
-    assert_eq!(
-        back.tabs[0].root.leaves()[0].cwd.as_deref(),
-        Some("/p a/th")
-    );
+    assert_eq!(back.tabs[0].root.leaves()[0].cwd.as_deref(), Some("/p a/th"));
 }
 
 #[test]
 fn empty_and_absent_are_empty() {
     assert!(Session::parse("").is_err());
-    assert_eq!(
-        Session::parse("# just a comment\nversion 1\n")
-            .unwrap()
-            .tabs
-            .len(),
-        0
-    );
+    assert_eq!(Session::parse("# just a comment\nversion 1\n").unwrap().tabs.len(), 0);
 }
 
 #[test]
 fn parser_rejects_the_whole_malformed_layout() {
-    let result =
-        Session::parse("version 1\ntab valid leaf /ok hist 7\ntab broken hsplit nope leaf /a -\n");
+    let result = Session::parse("version 1\ntab valid leaf /ok hist 7\ntab broken hsplit nope leaf /a -\n");
     assert!(result.is_err());
 }
 
@@ -103,11 +93,7 @@ fn open_reports_corrupt_persistent_layouts() {
     let temporary = tempfile::tempdir().unwrap();
     let session = Session::dir(temporary.path());
     std::fs::create_dir_all(&session).unwrap();
-    std::fs::write(
-        session.join("layout.conf"),
-        "version 1\ntab broken hsplit nope\n",
-    )
-    .unwrap();
+    std::fs::write(session.join("layout.conf"), "version 1\ntab broken hsplit nope\n").unwrap();
 
     let error = Session::open(temporary.path()).unwrap_err();
 
@@ -159,10 +145,7 @@ fn successful_layout_commit_prunes_only_unreferenced_histories() {
         std::fs::read_to_string(directory.join("hist-current.txt")).unwrap(),
         "current"
     );
-    assert_eq!(
-        std::fs::read_to_string(directory.join("unrelated")).unwrap(),
-        "keep"
-    );
+    assert_eq!(std::fs::read_to_string(directory.join("unrelated")).unwrap(), "keep");
 }
 
 #[test]
@@ -213,10 +196,7 @@ fn replay_bytes_normalizes() {
 
 #[test]
 fn clamp_keeps_most_recent() {
-    let text = (0..100)
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = (0..100).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
     let clamped = History::new(&text).clamp(10);
     let lines: Vec<&str> = clamped.split('\n').collect();
     assert_eq!(lines.len(), 10);

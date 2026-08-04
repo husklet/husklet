@@ -26,12 +26,7 @@ pub struct LocalPty {
 impl LocalPty {
     /// Fork `argv` on a fresh PTY sized `cols × rows`. `argv[0]` should be an absolute path or a name on
     /// `PATH` (resolved by `execvp`). `env` entries are `setenv`'d in the child before exec.
-    pub fn spawn(
-        argv: &[&str],
-        cols: u16,
-        rows: u16,
-        env: &BTreeMap<String, String>,
-    ) -> io::Result<LocalPty> {
+    pub fn spawn(argv: &[&str], cols: u16, rows: u16, env: &BTreeMap<String, String>) -> io::Result<LocalPty> {
         if argv.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty argv"));
         }
@@ -48,10 +43,7 @@ impl LocalPty {
         }
         let prog = argv[0];
         let c_prog = CString::new(prog).unwrap_or_default();
-        let c_args: Vec<CString> = argv
-            .iter()
-            .map(|a| CString::new(*a).unwrap_or_default())
-            .collect();
+        let c_args: Vec<CString> = argv.iter().map(|a| CString::new(*a).unwrap_or_default()).collect();
         let mut c_argv: Vec<*const libc::c_char> = c_args.iter().map(|a| a.as_ptr()).collect();
         c_argv.push(std::ptr::null());
         // Merge the process environment with the caller's overrides into a full `KEY=VAL` envp.
@@ -145,13 +137,7 @@ impl LocalPty {
 impl PtyBackend for LocalPty {
     fn write(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         while !bytes.is_empty() {
-            let n = unsafe {
-                libc::write(
-                    self.master,
-                    bytes.as_ptr() as *const libc::c_void,
-                    bytes.len(),
-                )
-            };
+            let n = unsafe { libc::write(self.master, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EINTR) {
@@ -165,13 +151,7 @@ impl PtyBackend for LocalPty {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = unsafe {
-            libc::read(
-                self.master,
-                buf.as_mut_ptr() as *mut libc::c_void,
-                buf.len(),
-            )
-        };
+        let n = unsafe { libc::read(self.master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
         if n >= 0 {
             return Ok(n as usize);
         }
@@ -291,19 +271,12 @@ mod tests {
     #[test]
     fn real_shell_prints_text_through_the_vt() {
         // The end-to-end headless proof: a real shell on a real PTY -> our VT parser -> grid.
-        let sh = if have("/bin/bash") {
-            "/bin/bash"
-        } else {
-            "/bin/sh"
-        };
+        let sh = if have("/bin/bash") { "/bin/bash" } else { "/bin/sh" };
         let pty = LocalPty::spawn(
             &[sh, "-c", "printf 'hello\\r\\n'; printf 'world\\r\\n'"],
             40,
             10,
-            &std::collections::BTreeMap::from([(
-                String::from("TERM"),
-                String::from("xterm-256color"),
-            )]),
+            &std::collections::BTreeMap::from([(String::from("TERM"), String::from("xterm-256color"))]),
         )
         .expect("spawn shell");
         let vt = run_into_vt(pty, 40, 10);
@@ -313,19 +286,12 @@ mod tests {
 
     #[test]
     fn real_shell_ansi_color_reaches_the_grid() {
-        let sh = if have("/bin/bash") {
-            "/bin/bash"
-        } else {
-            "/bin/sh"
-        };
+        let sh = if have("/bin/bash") { "/bin/bash" } else { "/bin/sh" };
         let pty = LocalPty::spawn(
             &[sh, "-c", "printf '\\033[31mRED\\033[0m'"],
             40,
             5,
-            &std::collections::BTreeMap::from([(
-                String::from("TERM"),
-                String::from("xterm-256color"),
-            )]),
+            &std::collections::BTreeMap::from([(String::from("TERM"), String::from("xterm-256color"))]),
         )
         .expect("spawn shell");
         let vt = run_into_vt(pty, 40, 5);
@@ -335,23 +301,12 @@ mod tests {
 
     #[test]
     fn real_shell_renders_a_png() {
-        let shell = if have("/bin/bash") {
-            "/bin/bash"
-        } else {
-            "/bin/sh"
-        };
+        let shell = if have("/bin/bash") { "/bin/bash" } else { "/bin/sh" };
         let pty = LocalPty::spawn(
-            &[
-                shell,
-                "-c",
-                "printf '\\033[32mterminal-pipeline\\033[0m\\r\\n'",
-            ],
+            &[shell, "-c", "printf '\\033[32mterminal-pipeline\\033[0m\\r\\n'"],
             40,
             5,
-            &std::collections::BTreeMap::from([(
-                String::from("TERM"),
-                String::from("xterm-256color"),
-            )]),
+            &std::collections::BTreeMap::from([(String::from("TERM"), String::from("xterm-256color"))]),
         )
         .expect("spawn shell");
 
@@ -366,19 +321,12 @@ mod tests {
     #[test]
     fn write_to_shell_stdin_is_echoed_back() {
         // `cat` echoes stdin; prove the write path reaches the child and its output returns.
-        let cat = if have("/bin/cat") {
-            "/bin/cat"
-        } else {
-            "/usr/bin/cat"
-        };
+        let cat = if have("/bin/cat") { "/bin/cat" } else { "/usr/bin/cat" };
         let mut pty = LocalPty::spawn(
             &[cat],
             40,
             5,
-            &std::collections::BTreeMap::from([(
-                String::from("TERM"),
-                String::from("xterm-256color"),
-            )]),
+            &std::collections::BTreeMap::from([(String::from("TERM"), String::from("xterm-256color"))]),
         )
         .expect("spawn cat");
         pty.write(b"ping\n").unwrap();

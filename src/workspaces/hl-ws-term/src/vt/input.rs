@@ -176,8 +176,7 @@ impl Vt {
         if self.grid.cursor_row == self.scroll_bot {
             // At the bottom margin: scroll the region up (a pinned line outside the region stays put).
             let blank = self.blank();
-            self.grid
-                .scroll_region_up(self.scroll_top, self.scroll_bot, blank);
+            self.grid.scroll_region_up(self.scroll_top, self.scroll_bot, blank);
         } else if self.grid.cursor_row + 1 < self.grid.rows() {
             self.grid.cursor_row += 1;
         }

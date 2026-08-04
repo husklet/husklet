@@ -39,12 +39,7 @@ impl Image {
     /// The pixel at `(x, y)` as `(r, g, b, a)`.
     pub fn pixel(&self, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * self.width + x) * 4) as usize;
-        (
-            self.rgba[i],
-            self.rgba[i + 1],
-            self.rgba[i + 2],
-            self.rgba[i + 3],
-        )
+        (self.rgba[i], self.rgba[i + 1], self.rgba[i + 2], self.rgba[i + 3])
     }
 
     fn write_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
@@ -135,16 +130,8 @@ impl CpuRenderer {
         for row in 0..grid.rows() {
             for col in 0..grid.cols() {
                 let cell = grid.cell(row, col).copied().unwrap_or_default();
-                let is_cursor =
-                    grid.cursor_visible && row == grid.cursor_row && col == grid.cursor_col;
-                image.draw_cell(
-                    self,
-                    width,
-                    col as u32 * cw,
-                    row as u32 * ch,
-                    &cell,
-                    is_cursor,
-                );
+                let is_cursor = grid.cursor_visible && row == grid.cursor_row && col == grid.cursor_col;
+                image.draw_cell(self, width, col as u32 * cw, row as u32 * ch, &cell, is_cursor);
             }
         }
         image
@@ -157,15 +144,7 @@ impl CpuRenderer {
 }
 
 impl Image {
-    fn draw_cell(
-        &mut self,
-        renderer: &CpuRenderer,
-        img_w: u32,
-        ox: u32,
-        oy: u32,
-        cell: &Cell,
-        is_cursor: bool,
-    ) {
+    fn draw_cell(&mut self, renderer: &CpuRenderer, img_w: u32, ox: u32, oy: u32, cell: &Cell, is_cursor: bool) {
         let (cw, ch) = renderer.cell_px();
         let mut fg = renderer.resolve(cell.fg, true, cell.attrs);
         let mut bg = renderer.resolve(cell.bg, false, cell.attrs);
@@ -192,15 +171,7 @@ impl Image {
         }
     }
 
-    fn draw_glyph(
-        &mut self,
-        renderer: &CpuRenderer,
-        img_w: u32,
-        ox: u32,
-        oy: u32,
-        ch: char,
-        color: (u8, u8, u8),
-    ) {
+    fn draw_glyph(&mut self, renderer: &CpuRenderer, img_w: u32, ox: u32, oy: u32, ch: char, color: (u8, u8, u8)) {
         let bitmap = font::EMBEDDED.lookup(ch);
         for (gy, rowbits) in bitmap.iter().enumerate() {
             for gx in 0..GLYPH_W {

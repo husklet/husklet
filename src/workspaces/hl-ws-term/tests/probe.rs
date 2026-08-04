@@ -18,14 +18,8 @@ fn nonascii_title_and_cwd_roundtrip() {
         }],
     };
     let back = Session::parse(&s.serialize()).unwrap();
-    assert_eq!(
-        back.tabs[0].title, "café ☕",
-        "title must survive round-trip"
-    );
-    assert_eq!(
-        back.tabs[0].root.leaves()[0].cwd.as_deref(),
-        Some("/home/joão/prjá")
-    );
+    assert_eq!(back.tabs[0].title, "café ☕", "title must survive round-trip");
+    assert_eq!(back.tabs[0].root.leaves()[0].cwd.as_deref(), Some("/home/joão/prjá"));
 }
 
 #[test]
@@ -48,8 +42,7 @@ fn osc7_percent_encoded_utf8_path() {
 fn percent_before_literal_multibyte_does_not_panic() {
     // A stray/hand-edited '%' immediately before a literal multibyte char used to panic slicing mid-char.
     assert!(
-        WorkingDirectory::from_osc7("file://h/%aé").is_some()
-            || WorkingDirectory::from_osc7("file://h/%aé").is_none()
+        WorkingDirectory::from_osc7("file://h/%aé").is_some() || WorkingDirectory::from_osc7("file://h/%aé").is_none()
     );
     let _ = Session::parse("version 1\ntab %aé leaf /%zé - -\n").unwrap();
 }
@@ -79,12 +72,7 @@ fn sgr_semicolon_four_three_is_underline_then_italic() {
 fn sgr_colon_underline_off() {
     let mut vt = Vt::new(4, 1);
     vt.advance_bytes(b"\x1b[4m\x1b[4:0mX"); // underline on, then style 0 = off
-    assert!(!vt
-        .grid()
-        .cell(0, 0)
-        .unwrap()
-        .attrs
-        .contains(Attrs::UNDERLINE));
+    assert!(!vt.grid().cell(0, 0).unwrap().attrs.contains(Attrs::UNDERLINE));
 }
 
 // --- VT: delete/insert-line on the LAST row of a scroll region must clear it, not no-op ---
@@ -94,11 +82,7 @@ fn dl_at_region_bottom_clears_the_row() {
     let mut vt = Vt::new(6, 3);
     vt.advance_bytes(b"aaa\r\nbbb\r\nccc");
     vt.advance_bytes(b"\x1b[3;1H\x1b[1M"); // cursor to last row, DL 1
-    assert_eq!(
-        vt.grid().row_text(2),
-        "",
-        "DL at the region bottom must clear that row"
-    );
+    assert_eq!(vt.grid().row_text(2), "", "DL at the region bottom must clear that row");
     assert_eq!(vt.grid().row_text(0), "aaa");
     assert_eq!(vt.grid().row_text(1), "bbb");
 }
@@ -108,11 +92,7 @@ fn il_at_region_bottom_clears_the_row() {
     let mut vt = Vt::new(6, 3);
     vt.advance_bytes(b"aaa\r\nbbb\r\nccc");
     vt.advance_bytes(b"\x1b[3;1H\x1b[1L"); // cursor to last row, IL 1
-    assert_eq!(
-        vt.grid().row_text(2),
-        "",
-        "IL at the region bottom must clear that row"
-    );
+    assert_eq!(vt.grid().row_text(2), "", "IL at the region bottom must clear that row");
 }
 
 // --- VT: OSC 7 now surfaces the shell cwd (was silently dropped) ---

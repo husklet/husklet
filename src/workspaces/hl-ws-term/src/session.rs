@@ -207,8 +207,8 @@ impl Session {
     /// namespace. Layout files are persistent input and must not become arbitrary filesystem reads.
     pub fn history_path(storage_dir: &Path, file: &str) -> io::Result<PathBuf> {
         let mut components = Path::new(file).components();
-        let valid_component = matches!(components.next(), Some(std::path::Component::Normal(_)))
-            && components.next().is_none();
+        let valid_component =
+            matches!(components.next(), Some(std::path::Component::Normal(_))) && components.next().is_none();
         if !valid_component || !file.starts_with("hist-") || !file.ends_with(".txt") {
             return Err(Layout::invalid("invalid pane history filename"));
         }
@@ -273,10 +273,7 @@ impl<'a> Layout<'a> {
                 if let Some(file) = history_file.as_deref() {
                     Session::history_path(Path::new(""), file)?;
                 }
-                let slot = Self::value(
-                    self.next()
-                        .ok_or_else(|| Layout::invalid("leaf is missing its slot"))?,
-                );
+                let slot = Self::value(self.next().ok_or_else(|| Layout::invalid("leaf is missing its slot"))?);
                 Ok(PaneNode::Leaf(Pane {
                     cwd,
                     history_file,
