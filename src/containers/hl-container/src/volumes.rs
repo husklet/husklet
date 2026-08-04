@@ -1,7 +1,8 @@
 use crate::model::now_ms;
 use crate::storage::VolumeStore;
 use crate::{
-    Access, Error, Mount, MountSource, Result, Volume, VolumeKind, VolumeSource, VolumeSpec, model::ResolvedMount,
+    model::ResolvedMount, Access, Error, Mount, MountSource, Result, Volume, VolumeKind,
+    VolumeSource, VolumeSpec,
 };
 use hl_fs::Directory;
 use std::collections::{BTreeMap, BTreeSet};
@@ -48,7 +49,10 @@ impl Volumes {
         let spec = Self::canonicalize_source(spec)?;
         let _guard = self.operation.lock().await;
         if let Some(volume) = self.storage.get(&spec.name).await? {
-            if volume.labels == spec.labels && volume.options == spec.options && volume.source == spec.source {
+            if volume.labels == spec.labels
+                && volume.options == spec.options
+                && volume.source == spec.source
+            {
                 return Ok(volume);
             }
             return Err(Error::VolumeConflict(spec.name));
@@ -92,7 +96,10 @@ impl Volumes {
     ///
     /// # Errors
     /// Returns label-validation, filesystem, entropy, or persistence failures.
-    pub async fn create_anonymous<K, V>(&self, labels: impl IntoIterator<Item = (K, V)>) -> Result<Volume>
+    pub async fn create_anonymous<K, V>(
+        &self,
+        labels: impl IntoIterator<Item = (K, V)>,
+    ) -> Result<Volume>
     where
         K: Into<String>,
         V: Into<String>,
@@ -152,8 +159,8 @@ impl Volumes {
     /// Count persisted-container references for an already listed volume inventory.
     ///
     /// Each container contributes at most one reference to a volume, even when it
-    /// mounts that volume at multiple targets. Containers and mounts are scanned
-    /// once for the complete inventory.
+    /// mounts that volume at multiple targets. For `V` supplied volumes, `C`
+    /// containers, and `M` mounts, this costs `O(V log V + C*M log V)`.
     ///
     /// # Errors
     /// Returns persistence failures while reading the container inventory.
@@ -180,9 +187,11 @@ impl Volumes {
             return Ok(0);
         }
         let path = volume.path;
-        Ok(tokio::task::spawn_blocking(move || Directory::from(path).size())
-            .await
-            .map_err(|error| Error::Io(std::io::Error::other(error)))??)
+        Ok(
+            tokio::task::spawn_blocking(move || Directory::from(path).size())
+                .await
+                .map_err(|error| Error::Io(std::io::Error::other(error)))??,
+        )
     }
 
     /// Remove a volume and every entry in its managed data directory.
@@ -284,9 +293,17 @@ impl Volumes {
         for mount in mounts {
             let (source, forced_read_only) = match &mount.source {
                 MountSource::Bind(path) => (path.clone(), false),
-                MountSource::Volume(name) | MountSource::Anonymous(name) | MountSource::Tmpfs(name) => {
+                MountSource::Volume(name)
+                | MountSource::Anonymous(name)
+                | MountSource::Tmpfs(name) => {
                     let volume = self.inspect(name).await?;
-                    let read_only = matches!(volume.source, VolumeSource::Bind { read_only: true, .. });
+                    let read_only = matches!(
+                        volume.source,
+                        VolumeSource::Bind {
+                            read_only: true,
+                            ..
+                        }
+                    );
                     (volume.path, read_only)
                 }
             };
@@ -297,9 +314,14 @@ impl Volumes {
                     ));
                 }
                 let root = tokio::fs::canonicalize(&source).await?;
-                let selected = tokio::fs::canonicalize(source.join(subpath)).await.map_err(|error| {
-                    Error::InvalidSpec(format!("volume subpath {} is unavailable: {error}", subpath.display()))
-                })?;
+                let selected = tokio::fs::canonicalize(source.join(subpath))
+                    .await
+                    .map_err(|error| {
+                        Error::InvalidSpec(format!(
+                            "volume subpath {} is unavailable: {error}",
+                            subpath.display()
+                        ))
+                    })?;
                 let directory = tokio::fs::metadata(&selected).await?.is_dir();
                 if !selected.starts_with(&root) || !directory {
                     return Err(Error::InvalidSpec(format!(
@@ -326,7 +348,10 @@ impl Volumes {
 
     pub(crate) async fn validate(&self, mounts: &[Mount]) -> Result<()> {
         for mount in mounts {
-            if let MountSource::Volume(name) | MountSource::Anonymous(name) | MountSource::Tmpfs(name) = &mount.source {
+            if let MountSource::Volume(name)
+            | MountSource::Anonymous(name)
+            | MountSource::Tmpfs(name) = &mount.source
+            {
                 self.storage
                     .get(name)
                     .await?

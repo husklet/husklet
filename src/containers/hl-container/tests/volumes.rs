@@ -1,6 +1,6 @@
 use hl_container::{
-    Access, Config, ContainerSpec, Containers, Error, Limits, Mount, MountSource, Persistence, Process, VolumeSource,
-    VolumeSpec,
+    Access, Config, ContainerSpec, Containers, Error, Limits, Mount, MountSource, Persistence,
+    Process, VolumeSource, VolumeSpec,
 };
 use std::collections::BTreeMap;
 
@@ -29,7 +29,10 @@ async fn named_and_anonymous_volumes_are_validated_idempotent_and_ordered() {
             .await,
         Err(Error::VolumeConflict(name)) if name == "zebra"
     ));
-    let anonymous = volumes.create_anonymous([("scope", "anonymous")]).await.unwrap();
+    let anonymous = volumes
+        .create_anonymous([("scope", "anonymous")])
+        .await
+        .unwrap();
     assert_eq!(anonymous.name.len(), 32);
     assert_eq!(anonymous.labels["scope"], "anonymous");
     assert_eq!(
@@ -73,7 +76,13 @@ async fn bind_backed_volume_canonicalizes_and_never_owns_host_data() {
         .await
         .unwrap();
     assert_eq!(volume.path(), std::fs::canonicalize(&device).unwrap());
-    assert!(matches!(volume.source, VolumeSource::Bind { read_only: true, .. }));
+    assert!(matches!(
+        volume.source,
+        VolumeSource::Bind {
+            read_only: true,
+            ..
+        }
+    ));
     assert_eq!(containers.volumes().size("host-data").await.unwrap(), 0);
 
     containers.volumes().remove("host-data").await.unwrap();
@@ -111,7 +120,10 @@ async fn container_owned_volumes_follow_explicit_remove_policy() {
     let root = tempfile::tempdir().unwrap();
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
-    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
+    let containers = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
     let anonymous = containers
         .volumes()
         .create_anonymous(std::iter::empty::<(&str, &str)>())
@@ -136,7 +148,10 @@ async fn container_owned_volumes_follow_explicit_remove_policy() {
         )
         .await
         .unwrap();
-    containers.remove_volumes("remove-data", false).await.unwrap();
+    containers
+        .remove_volumes("remove-data", false)
+        .await
+        .unwrap();
     assert!(matches!(
         containers.volumes().inspect(&anonymous.name).await,
         Err(Error::VolumeNotFound(_))
@@ -168,7 +183,10 @@ async fn file_metadata_and_nonempty_data_survive_reopen_then_remove_together() {
     reopened.volumes().remove("durable").await.unwrap();
     assert!(!inspected.path().exists());
     drop(reopened);
-    let final_service = Containers::builder(Config::new(root.path())).build().await.unwrap();
+    let final_service = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
     assert!(matches!(
         final_service.volumes().inspect("durable").await,
         Err(Error::VolumeNotFound(_))
@@ -182,8 +200,16 @@ async fn prune_skips_every_volume_referenced_by_persisted_containers() {
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
     let containers = Containers::builder(config.clone()).build().await.unwrap();
-    let held = containers.volumes().create(VolumeSpec::new("held")).await.unwrap();
-    let free = containers.volumes().create(VolumeSpec::new("free")).await.unwrap();
+    let held = containers
+        .volumes()
+        .create(VolumeSpec::new("held"))
+        .await
+        .unwrap();
+    let free = containers
+        .volumes()
+        .create(VolumeSpec::new("free"))
+        .await
+        .unwrap();
     std::fs::write(held.path().join("owned"), b"container data").unwrap();
     containers
         .create(
@@ -204,11 +230,17 @@ async fn prune_skips_every_volume_referenced_by_persisted_containers() {
         containers.volumes().remove("held").await,
         Err(Error::VolumeInUse(name)) if name == "held"
     ));
-    assert_eq!(containers.volumes().prune().await.unwrap(), vec![free.clone()]);
+    assert_eq!(
+        containers.volumes().prune().await.unwrap(),
+        vec![free.clone()]
+    );
     assert_eq!(containers.volumes().inspect("held").await.unwrap(), held);
     assert!(!free.path().exists());
 
-    assert_eq!(containers.volumes().remove_force("held").await.unwrap(), held);
+    assert_eq!(
+        containers.volumes().remove_force("held").await.unwrap(),
+        held
+    );
     assert!(!held.path().exists());
     assert!(matches!(
         containers.volumes().inspect("held").await,
@@ -222,9 +254,20 @@ async fn reference_counts_scan_once_and_count_each_container_once_per_volume() {
     let root = tempfile::tempdir().unwrap();
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
-    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
-    let held = containers.volumes().create(VolumeSpec::new("held")).await.unwrap();
-    let free = containers.volumes().create(VolumeSpec::new("free")).await.unwrap();
+    let containers = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
+    let held = containers
+        .volumes()
+        .create(VolumeSpec::new("held"))
+        .await
+        .unwrap();
+    let free = containers
+        .volumes()
+        .create(VolumeSpec::new("free"))
+        .await
+        .unwrap();
     let anonymous = containers
         .volumes()
         .create_anonymous(std::iter::empty::<(&str, &str)>())
@@ -276,7 +319,10 @@ async fn container_creation_rejects_missing_semantic_volume_without_persisting_i
     let root = tempfile::tempdir().unwrap();
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
-    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
+    let containers = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
     assert!(matches!(
         containers
             .create(
@@ -299,8 +345,15 @@ async fn filesystem_resolves_volume_names_and_preserves_read_only_access() {
     let root = tempfile::tempdir().unwrap();
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
-    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
-    let volume = containers.volumes().create(VolumeSpec::new("documents")).await.unwrap();
+    let containers = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
+    let volume = containers
+        .volumes()
+        .create(VolumeSpec::new("documents"))
+        .await
+        .unwrap();
     std::fs::write(volume.path().join("message"), b"semantic source").unwrap();
     containers
         .create(
@@ -332,8 +385,15 @@ async fn volume_subpaths_resolve_existing_directories_without_symlink_escape() {
     let root = tempfile::tempdir().unwrap();
     let rootfs = root.path().join("rootfs");
     std::fs::create_dir(&rootfs).unwrap();
-    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
-    let volume = containers.volumes().create(VolumeSpec::new("subpaths")).await.unwrap();
+    let containers = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
+    let volume = containers
+        .volumes()
+        .create(VolumeSpec::new("subpaths"))
+        .await
+        .unwrap();
     std::fs::create_dir_all(volume.path().join("tenants/alpha")).unwrap();
     std::fs::write(volume.path().join("tenants/alpha/value"), b"alpha").unwrap();
     let valid = Mount::volume("subpaths", "/data", Access::ReadOnly)
@@ -358,7 +418,10 @@ async fn volume_subpaths_resolve_existing_directories_without_symlink_escape() {
         5
     );
 
-    for (name, subpath) in [("subpath-missing", "missing"), ("subpath-parent", "../escape")] {
+    for (name, subpath) in [
+        ("subpath-missing", "missing"),
+        ("subpath-parent", "../escape"),
+    ] {
         let mount = Mount::volume("subpaths", "/data", Access::ReadOnly).subpath(subpath);
         if let Ok(mount) = mount {
             containers
@@ -396,7 +459,10 @@ async fn reconciliation_preserves_unrecognized_directories() {
     let unknown = root.path().join("volumes/external");
     std::fs::create_dir_all(&unknown).unwrap();
     std::fs::write(unknown.join("keep"), b"not owned").unwrap();
-    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
+    let containers = Containers::builder(Config::new(root.path()))
+        .build()
+        .await
+        .unwrap();
     assert_eq!(std::fs::read(unknown.join("keep")).unwrap(), b"not owned");
     assert_eq!(containers.volumes().list().await.unwrap(), Vec::new());
 }
@@ -407,5 +473,8 @@ fn public_volume_types_remain_plain_composable_entities() {
         .label("purpose", "build")
         .option("copy", "false");
     assert_eq!(spec.name, "cache");
-    assert_eq!(spec.labels, BTreeMap::from([("purpose".into(), "build".into())]));
+    assert_eq!(
+        spec.labels,
+        BTreeMap::from([("purpose".into(), "build".into())])
+    );
 }
