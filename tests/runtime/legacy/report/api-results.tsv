@@ -415,24 +415,6 @@ core/syscall	typed-filelock	aarch64	fail	3	linux-libc,syscall,filesystem,fork/wa
 core/syscall	typed-sendfile	aarch64	fail	2	linux-libc,syscall,filesystem,scratch-rootfs	exit:e=0,a=2;stdout:e=e0ab96d8f0ee27c9,a=0fcd66f11c92c8a1,d=22,eb=31,ab=30,el=51,al=51	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
 core/syscall	typed-vector-io	aarch64	fail	2	linux-libc,syscall,filesystem,scratch-rootfs	exit:e=0,a=2;stdout:e=cfdeb14a3d046a5e,a=ce439719d74f1fc7,d=56,eb=31,ab=30,el=66,al=66	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
 core/syscall	utimes-family	aarch64	pass	0	linux-libc,syscall	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	allocchurn	aarch64	fail	-	heap,endurance	engine:timeout	timeout
-core/workload	bigarr	aarch64	fail	-	memory,indexing,heavy	engine:timeout	timeout
-core/workload	bigmem	aarch64	pass	0	mmap,512MiB,heavy	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	busyloop	aarch64	fail	-	compute,heavy	engine:timeout	timeout
-core/workload	codecache	aarch64	fail	-	code-cache,endurance	engine:timeout	timeout
-core/workload	dbserver	aarch64	fail	0	linux-libc,sqlite3,network,fork	stdout:e=cc54e82ba9886e02,a=593e1a26bd6c552a,d=15,eb=35,ab=30,el=27,al=23	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	forkchurn	aarch64	fail	-	fork/wait,endurance	engine:timeout	timeout
-core/workload	ibtc-dispatch	aarch64	fail	132	ibtc,computed-goto	exit:e=0,a=132;stdout:e=8ff41ef8a4b63e91,a=cbf29ce484222325,d=0,eb=69,ab=--,el=66,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/workload	indirect	aarch64	fail	-	ibtc,endurance	engine:timeout	timeout
-core/workload	luajit-trace	aarch64	fail	2	aarch64-smc,jit-in-jit,regression	exit:e=0,a=2;stdout:e=e695c7dc2adcb7d5,a=cbf29ce484222325,d=0,eb=6c,ab=--,el=24,al=0	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
-core/workload	smc	aarch64	fail	1	aarch64-smc,mmap-rwx,endurance	exit:e=0,a=1;stdout:e=369e8f5725d2b6d2,a=cbf29ce484222325,d=0,eb=73,ab=--,el=24,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-core/workload	smcmprotect	aarch64	pass	0	smc,mprotect	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	smcprecise	aarch64	fail	1	aarch64-smc,threads,regression	exit:e=0,a=1;stdout:e=51939ac42652f92c,a=cbf29ce484222325,d=0,eb=73,ab=--,el=15,al=0	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-core/workload	smcselfflush	aarch64	fail	1	aarch64-smc,endurance	exit:e=0,a=1;stdout:e=ff79e76a03fe6d41,a=cbf29ce484222325,d=0,eb=73,ab=--,el=30,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-core/workload	smcthreads	aarch64	fail	1	aarch64-smc,threads,endurance	exit:e=0,a=1;stdout:e=23de46452fa18d7d,a=cbf29ce484222325,d=0,eb=73,ab=--,el=27,al=0;stderr:e=cbf29ce484222325,a=8e4c31016a60bb64,d=0,eb=--,ab=6d,el=0,al=23	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-core/workload	sqlite	aarch64	fail	-	linux-libc,sqlite3,filesystem	engine:timeout	timeout
-core/workload	stwfutexquiesce	aarch64	pass	0	threads,futex,bus-transition,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	threadchurn	aarch64	fail	-	threads,endurance	engine:timeout	timeout
 exec	exec-edges	aarch64	pass	0	linux-libc,fork,pthreads,execve,futex,signals,shebang	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 exec	execveat-edges	aarch64	pass	0	linux-libc,fork,execveat,dirfd,AT_EMPTY_PATH,AT_SYMLINK_NOFOLLOW	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 isa/aarch64	isa-regress	aarch64	pass	0	lse-atomic-upgrade,exclusive-monitor,casp,nonpie-fold	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
@@ -1492,20 +1474,6 @@ core/syscall	typed-filelock	x86_64	fail	3	linux-libc,syscall,filesystem,fork/wai
 core/syscall	typed-sendfile	x86_64	fail	2	linux-libc,syscall,filesystem,scratch-rootfs	exit:e=0,a=2;stdout:e=e0ab96d8f0ee27c9,a=0fcd66f11c92c8a1,d=22,eb=31,ab=30,el=51,al=51	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
 core/syscall	typed-vector-io	x86_64	fail	2	linux-libc,syscall,filesystem,scratch-rootfs	exit:e=0,a=2;stdout:e=cfdeb14a3d046a5e,a=1d0f72be8047939a,d=28,eb=31,ab=30,el=66,al=66	EngineExit { kind: Code, guest_status: 2, detail: 0, fault: None }
 core/syscall	utimes-family	x86_64	fail	1	linux-libc,syscall	exit:e=0,a=1;stdout:e=99bb3a05b57b16b1,a=29d27d4477f5fcf8,d=14,eb=4f,ab=46,el=17,al=94	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-core/workload	allocchurn	x86_64	fail	-	heap,endurance	engine:timeout	timeout
-core/workload	bigarr	x86_64	fail	-	memory,indexing,heavy	engine:timeout	timeout
-core/workload	bigmem	x86_64	pass	0	mmap,512MiB,heavy	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	busyloop	x86_64	fail	-	compute,heavy	engine:timeout	timeout
-core/workload	codecache	x86_64	fail	-	code-cache,endurance	engine:timeout	timeout
-core/workload	forkchurn	x86_64	fail	-	fork/wait,endurance	engine:timeout	timeout
-core/workload	ibtc-dispatch	x86_64	fail	132	ibtc,computed-goto	exit:e=0,a=132;stdout:e=8ff41ef8a4b63e91,a=cbf29ce484222325,d=0,eb=69,ab=--,el=66,al=0	EngineExit { kind: Signal, guest_status: 4, detail: 0, fault: None }
-core/workload	indirect	x86_64	fail	-	ibtc,endurance	engine:timeout	timeout
-core/workload	smcmprotect	x86_64	pass	0	smc,mprotect	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	smcmremap	x86_64	fail	139	x86-smc,mremap	exit:e=0,a=139;stdout:e=891fddf901520113,a=cbf29ce484222325,d=0,eb=73,ab=--,el=38,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
-core/workload	smcremapreuse	x86_64	fail	139	x86-smc,munmap,map-fixed	exit:e=0,a=139;stdout:e=ce1a6e79064c2862,a=cbf29ce484222325,d=0,eb=73,ab=--,el=31,al=0	EngineExit { kind: Signal, guest_status: 11, detail: 0, fault: None }
-core/workload	smctableoverflow	x86_64	fail	1	x86-smc,capacity	exit:e=0,a=1;stdout:e=2d3d6f048e9d3658,a=6037c375cfb7e77b,d=13,eb=70,ab=6d,el=26,al=25	EngineExit { kind: Code, guest_status: 1, detail: 0, fault: None }
-core/workload	stwfutexquiesce	x86_64	pass	0	threads,futex,bus-transition,regression	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-core/workload	threadchurn	x86_64	fail	-	threads,endurance	engine:timeout	timeout
 exec	exec-edges	x86_64	pass	0	linux-libc,fork,pthreads,execve,futex,signals,shebang	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 exec	execveat-edges	x86_64	pass	0	linux-libc,fork,execveat,dirfd,AT_EMPTY_PATH,AT_SYMLINK_NOFOLLOW	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 isa/x86_64	ctest	x86_64	pass	7	raw-syscall,integer-arithmetic	-	EngineExit { kind: Code, guest_status: 7, detail: 0, fault: None }
