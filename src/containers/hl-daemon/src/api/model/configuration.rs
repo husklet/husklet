@@ -216,7 +216,7 @@ mod tests {
     use super::{Healthcheck, RestartPolicy, Update};
 
     #[test]
-    fn docker_healthcheck_maps_commands_defaults_and_validation() {
+    fn healthcheck_contract() {
         let shell = Healthcheck {
             test: vec!["CMD-SHELL".into(), "test -f /ready".into()],
             ..Default::default()
