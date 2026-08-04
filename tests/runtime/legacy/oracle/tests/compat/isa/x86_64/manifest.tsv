@@ -1,9 +1,0 @@
-# case	group	source	legacy_source	isas	cflags	defines	env	exit	stdout	dependencies	disposition	note
-hello	freestanding	hello_x86	x86/hello_x86	x86_64	prebuilt: -O2 -static -no-pie -nostdlib	-	-	42	expected/hello.out	raw-syscall,ET_EXEC	active	exact registered fixture; byte-identical committed binary
-ctest	freestanding	ctest_x64	x86/ctest_x64	x86_64	prebuilt: -O2 -static -no-pie -nostdlib	-	-	7	expected/ctest.out	raw-syscall,integer-arithmetic	active	exact registered fixture; byte-identical committed binary
-hx	freestanding	hx	x86/hx	x86_64	prebuilt: -O2 -static -no-pie -nostdlib	-	-	0	expected/hx.out	raw-syscall,idiv	active	exact registered fixture; byte-identical committed binary
-glibc	glibc	g_x64	x86/g_x64	x86_64	prebuilt: -O2 -static-pie	-	-	0	expected/glibc.out	glibc,ET_DYN	active	exact registered fixture; exact golden replaces legacy substring assertion
-glibc-min	glibc	gw	x86/gw	x86_64	prebuilt: -O2 -static -no-pie	-	-	0	expected/glibc-min.out	glibc,ET_EXEC	active	exact registered fixture; exact golden replaces legacy substring assertion
-go-static-goro	go-runtime	go_goro_x86	x86/go_goro_x86	x86_64	prebuilt: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 -trimpath -ldflags=-buildid=	-	-	0	expected/go-static-goro.out	go,scheduler,channels	active	exact registered static non-PIE fixture; deterministic verdict
-go-static-heapgc	go-runtime	go_heapgc_x86	x86/go_heapgc_x86	x86_64	prebuilt: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 -trimpath -ldflags=-buildid=	-	-	0	expected/go-static-heapgc.out	go,gc	active	exact registered static non-PIE fixture; deterministic verdict
-isa-regress	regression	isa_regress.c	-	x86_64	-O2 -static -no-pie	-	-	0	expected/isa-regress.out	sse-nan,partial-register,lazy-flags,cmpxchg,split-lock-atomics,sse3-horizontal,x87-indefinite	active	differential-fuzz regressions: every row is a lowering divergence the ISA fuzzer found against qemu-x86_64 and that is now fixed

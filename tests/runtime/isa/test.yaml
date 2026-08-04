@@ -1,0 +1,95 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/isa/aarch64/isa-regress
+    status: active
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: isa_regress_arm64.c, output: isa-regress-arm64, flags: [-O2, -static, -no-pie] }
+    artifact: { destination: /opt/husklet/isa-regress-arm64 }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/isa_regress_arm64.out }
+  - id: runtime/isa/x86_64/hello
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: hello.c, output: hello, flags: [-O2, -static, -no-pie, -nostdlib] }
+    artifact: { destination: /opt/husklet/isa-hello }
+    run: []
+    timeout: 120
+    expect: { exit: 42, stdout: golden/hello.out }
+  - id: runtime/isa/x86_64/ctest
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: ctest.c, output: ctest, flags: [-O2, -static, -no-pie, -nostdlib] }
+    artifact: { destination: /opt/husklet/isa-ctest }
+    run: []
+    timeout: 120
+    expect: { exit: 7, stdout: golden/ctest.out }
+  - id: runtime/isa/x86_64/hx
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: arithmetic.c, output: arithmetic, flags: [-O2, -static, -no-pie, -nostdlib] }
+    artifact: { destination: /opt/husklet/isa-arithmetic }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/arithmetic.out }
+  - id: runtime/isa/x86_64/glibc
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: glibc.c, output: glibc, flags: [-O2, -static-pie] }
+    artifact: { destination: /opt/husklet/isa-glibc }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/glibc.out }
+  - id: runtime/isa/x86_64/glibc-min
+    status: active
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: glibc_min.c, output: glibc-min, flags: [-O2, -static, -no-pie] }
+    artifact: { destination: /opt/husklet/isa-glibc-min }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/glibc_min.out }
+  - id: runtime/isa/x86_64/go-static-goro
+    status: !unsupported
+      reason: "The folder runner cannot yet express deterministic per-case GOOS/GOARCH compiler environments"
+      evidence: "tests/runtime/isa/ORACLE.md"
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: go_scheduler.go, output: go-static-goro, flags: [] }
+    artifact: { destination: /opt/husklet/isa-go-static-goro }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/go_scheduler.out }
+  - id: runtime/isa/x86_64/go-static-heapgc
+    status: !unsupported
+      reason: "The folder runner cannot yet express deterministic per-case GOOS/GOARCH compiler environments"
+      evidence: "tests/runtime/isa/ORACLE.md"
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: go_heapgc.go, output: go-static-heapgc, flags: [] }
+    artifact: { destination: /opt/husklet/isa-go-static-heapgc }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/go_heapgc.out }
+  - id: runtime/isa/x86_64/isa-regress
+    status: !broken
+      reason: "A source rebuild under current qemu-x86_64 diverges from the preserved SSE/SSE3 NaN contract"
+      evidence: "tests/runtime/isa/QEMU_EVIDENCE.md"
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: isa_regress_amd64.c, output: isa-regress-amd64, flags: [-O2, -static, -no-pie] }
+    artifact: { destination: /opt/husklet/isa-regress-amd64 }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/isa_regress_amd64.out }

@@ -666,15 +666,6 @@ ipc	xproc-prearm	aarch64	epoll	multi-process-service	-	-	linux-libc,threads,ipc	
 ipc	xproc-prearm	x86_64	epoll	multi-process-service	-	-	linux-libc,threads,ipc	tests/compat/ipc/expected/shared/ipc_xproc_prearm.out	shared	-	-	false	false	true	false	false
 ipc	zygote-inbound	aarch64	epoll	multi-process-service	-	-	linux-libc,threads,ipc	tests/compat/ipc/expected/shared/ipc_zygote_inbound.out	shared	-	-	false	false	true	false	false
 ipc	zygote-inbound	x86_64	epoll	multi-process-service	-	-	linux-libc,threads,ipc	tests/compat/ipc/expected/shared/ipc_zygote_inbound.out	shared	-	-	false	false	true	false	false
-isa/aarch64	isa-regress	aarch64	regression	executable	-	-	lse-atomic-upgrade,exclusive-monitor,casp,nonpie-fold	tests/compat/isa/aarch64/expected/isa-regress.out	common	-	-	false	false	false	false	false
-isa/x86_64	ctest	x86_64	freestanding	executable	-	-	raw-syscall,integer-arithmetic	tests/compat/isa/x86_64/expected/ctest.out	common	-	-	false	false	false	false	false
-isa/x86_64	glibc	x86_64	glibc	executable	-	-	glibc,ET_DYN	tests/compat/isa/x86_64/expected/glibc.out	common	-	-	false	false	false	false	false
-isa/x86_64	glibc-min	x86_64	glibc	executable	-	-	glibc,ET_EXEC	tests/compat/isa/x86_64/expected/glibc-min.out	common	-	-	false	false	false	false	false
-isa/x86_64	go-static-goro	x86_64	go-runtime	executable	-	-	go,scheduler,channels	tests/compat/isa/x86_64/expected/go-static-goro.out	common	-	-	false	false	false	false	false
-isa/x86_64	go-static-heapgc	x86_64	go-runtime	executable	-	-	go,gc	tests/compat/isa/x86_64/expected/go-static-heapgc.out	common	-	-	false	false	false	false	false
-isa/x86_64	hello	x86_64	freestanding	executable	-	-	raw-syscall,ET_EXEC	tests/compat/isa/x86_64/expected/hello.out	common	-	-	false	false	false	false	false
-isa/x86_64	hx	x86_64	freestanding	executable	-	-	raw-syscall,idiv	tests/compat/isa/x86_64/expected/hx.out	common	-	-	false	false	false	false	false
-isa/x86_64	isa-regress	x86_64	regression	executable	-	-	sse-nan,partial-register,lazy-flags,cmpxchg,split-lock-atomics,sse3-horizontal,x87-indefinite	tests/compat/isa/x86_64/expected/isa-regress.out	common	-	-	false	false	false	false	false
 isolation	cgroup-cpu-cap2	aarch64	cgroup	executable	-	HL_CPUS=2	linux-libc,procfs,sysfs,cgroup-v2,cpu-config	tests/compat/isolation/expected/cgroup-cpu-cap2.out	common	-	-	false	false	false	false	false
 isolation	cgroup-cpu-cap2	x86_64	cgroup	executable	-	HL_CPUS=2	linux-libc,procfs,sysfs,cgroup-v2,cpu-config	tests/compat/isolation/expected/cgroup-cpu-cap2.out	common	-	-	false	false	false	false	false
 isolation	cgroup-mem-cap512m	aarch64	cgroup	executable	-	HL_MEM_MAX=536870912	linux-libc,procfs,sysfs,cgroup-v2,memory-config	tests/compat/isolation/expected/cgroup-mem-cap512m.out	common	-	-	false	false	false	false	false
