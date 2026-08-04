@@ -162,6 +162,11 @@ fn staging_size(width: u32, height: u32, limits: &wgpu::Limits) -> Result<u64> {
         .checked_mul(u64::from(height))
         .ok_or(GpuError::OutOfBounds)?;
     if size > limits.max_buffer_size || size > u64::from(limits.max_storage_buffer_binding_size) {
+        // The exact maximum height for this width is
+        // `min(max_buffer_size, max_storage_buffer_binding_size) / row_pitch(width)`.
+        // Do not tile this operation naively: Vulkan permits source/destination aliasing, and rendering
+        // one tile could overwrite source texels needed by a later tile. Preserving those semantics needs
+        // either one complete immutable snapshot (this path) or an alias-aware multi-buffer tiler.
         return Err(GpuError::Unsupported(
             "wgpu: stencil blit source exceeds storage-buffer limits",
         ));
@@ -398,6 +403,9 @@ impl WgpuExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hl_gpu::protocol::model::descriptor::TextureDesc;
+    use hl_gpu::protocol::model::enums::{texture_usage, TextureDim};
+    use hl_gpu::{Cmd, FakeClock, GlobalLedger, GpuExecutor, Limits, Session};
 
     #[test]
     fn shader_is_valid_wgsl() {
@@ -469,5 +477,180 @@ mod tests {
             staging_size(257, 3, &limits),
             Err(GpuError::Unsupported(_))
         ));
+    }
+
+    fn copy_aspect_in(
+        exec: &WgpuExecutor,
+        texture: &wgpu::Texture,
+        mip: u32,
+        layer: u32,
+        aspect: wgpu::TextureAspect,
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+    ) {
+        let pitch = row_pitch(width).unwrap();
+        let mut padded = vec![0; (pitch * height) as usize];
+        for y in 0..height as usize {
+            padded[y * pitch as usize..y * pitch as usize + width as usize]
+                .copy_from_slice(&bytes[y * width as usize..(y + 1) * width as usize]);
+        }
+        let buffer = exec.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hl-stencil-test-upload"),
+            size: padded.len() as u64,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        exec.gpu.queue.write_buffer(&buffer, 0, &padded);
+        let mut encoder = exec.gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_texture(
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: mip,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                aspect,
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        exec.gpu.queue.submit(Some(encoder.finish()));
+    }
+
+    fn copy_stencil_out(
+        exec: &WgpuExecutor,
+        texture: &wgpu::Texture,
+        mip: u32,
+        layer: u32,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        let pitch = row_pitch(width).unwrap();
+        let buffer = exec.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hl-stencil-test-readback"),
+            size: u64::from(pitch * height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = exec.gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: mip,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                aspect: wgpu::TextureAspect::StencilOnly,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        exec.gpu.queue.submit(Some(encoder.finish()));
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| tx.send(result).unwrap());
+        exec.gpu.device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+        let mapped = slice.get_mapped_range();
+        let mut tight = Vec::with_capacity((width * height) as usize);
+        for y in 0..height as usize {
+            tight.extend_from_slice(&mapped[y * pitch as usize..y * pitch as usize + width as usize]);
+        }
+        tight
+    }
+
+    #[test]
+    fn native_stencil_blit_scales_mirrors_layers_origins_and_aliases() {
+        let mut exec = WgpuExecutor::new(crate::DeviceConfig::default()).expect("wgpu adapter");
+        let mut session = Session::new(
+            Limits::from_capabilities(exec.capabilities()),
+            GlobalLedger::unbounded(),
+            Box::new(FakeClock::new(0)),
+        );
+        let desc = TextureDesc {
+            width: 16,
+            height: 16,
+            depth: 2,
+            mip_levels: 2,
+            sample_count: 1,
+            dim: TextureDim::D2,
+            format: TextureFormat::Depth24PlusStencil8,
+            usage: texture_usage::COPY_SRC
+                | texture_usage::COPY_DST
+                | texture_usage::RENDER_TARGET,
+            label: String::new(),
+        };
+        hl_gpu::runtime::submit(
+            &mut session,
+            &mut exec,
+            0,
+            &[Cmd::CreateTexture(1, desc.clone()), Cmd::CreateTexture(2, desc)],
+        )
+        .unwrap();
+        let src = texture::WgpuTexture::get(&session.resources, 1).unwrap();
+        let dst = texture::WgpuTexture::get(&session.resources, 2).unwrap();
+        let source = (0..64).map(|i| (i + 1) as u8).collect::<Vec<_>>();
+        copy_aspect_in(&exec, &src.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, &source);
+        copy_aspect_in(&exec, &dst.texture, 1, 1, wgpu::TextureAspect::StencilOnly, 8, 8, &[77; 64]);
+
+        exec.blit_stencil_nearest(
+            &session.resources,
+            1,
+            &TextureSubresource { mip: 1, layer: 1, aspect: TextureAspect::StencilOnly },
+            2,
+            &TextureSubresource { mip: 1, layer: 1, aspect: TextureAspect::StencilOnly },
+            StencilBlitRegion {
+                src_origin: Origin3d { x: 2, y: 1, z: 0 },
+                src_extent: Extent3d { width: 2, height: 2, depth: 1 },
+                dst_origin: Origin3d { x: 1, y: 2, z: 0 },
+                dst_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                mirror: Mirror { x: true, y: false, z: false },
+            },
+        )
+        .unwrap();
+        let got = copy_stencil_out(&exec, &dst.texture, 1, 1, 8, 8);
+        let mut want = vec![77; 64];
+        for y in 0..4 {
+            for x in 0..4 {
+                let sx = 2 + source_coordinate(x, 2, 4, true);
+                let sy = 1 + source_coordinate(y, 2, 4, false);
+                want[((y + 2) * 8 + x + 1) as usize] = source[(sy * 8 + sx) as usize];
+            }
+        }
+        assert_eq!(got, want, "scale/mirror must preserve every outside stencil byte");
+
+        // Same-texture overlap must read the complete source before modifying its destination.
+        exec.blit_stencil_nearest(
+            &session.resources,
+            2,
+            &TextureSubresource { mip: 1, layer: 1, aspect: TextureAspect::StencilOnly },
+            2,
+            &TextureSubresource { mip: 1, layer: 1, aspect: TextureAspect::StencilOnly },
+            StencilBlitRegion {
+                src_origin: Origin3d { x: 1, y: 2, z: 0 },
+                src_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                dst_origin: Origin3d { x: 3, y: 3, z: 0 },
+                dst_extent: Extent3d { width: 4, height: 4, depth: 1 },
+                mirror: Mirror::NONE,
+            },
+        )
+        .unwrap();
+        let overlapped = copy_stencil_out(&exec, &dst.texture, 1, 1, 8, 8);
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(overlapped[((y + 3) * 8 + x + 3) as usize], want[((y + 2) * 8 + x + 1) as usize]);
+            }
+        }
     }
 }
