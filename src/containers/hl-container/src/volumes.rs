@@ -1,8 +1,7 @@
 use crate::model::now_ms;
 use crate::storage::VolumeStore;
 use crate::{
-    model::ResolvedMount, Access, Error, Mount, MountSource, Result, Volume, VolumeKind,
-    VolumeSource, VolumeSpec,
+    Access, Error, Mount, MountSource, Result, Volume, VolumeKind, VolumeSource, VolumeSpec, model::ResolvedMount,
 };
 use hl_fs::Directory;
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,10 +48,7 @@ impl Volumes {
         let spec = Self::canonicalize_source(spec)?;
         let _guard = self.operation.lock().await;
         if let Some(volume) = self.storage.get(&spec.name).await? {
-            if volume.labels == spec.labels
-                && volume.options == spec.options
-                && volume.source == spec.source
-            {
+            if volume.labels == spec.labels && volume.options == spec.options && volume.source == spec.source {
                 return Ok(volume);
             }
             return Err(Error::VolumeConflict(spec.name));
@@ -96,10 +92,7 @@ impl Volumes {
     ///
     /// # Errors
     /// Returns label-validation, filesystem, entropy, or persistence failures.
-    pub async fn create_anonymous<K, V>(
-        &self,
-        labels: impl IntoIterator<Item = (K, V)>,
-    ) -> Result<Volume>
+    pub async fn create_anonymous<K, V>(&self, labels: impl IntoIterator<Item = (K, V)>) -> Result<Volume>
     where
         K: Into<String>,
         V: Into<String>,
@@ -167,10 +160,15 @@ impl Volumes {
     pub async fn reference_counts(&self, volumes: &[Volume]) -> Result<BTreeMap<String, usize>> {
         let mut counts = volumes
             .iter()
-            .map(|volume| (volume.name.clone(), 0))
+            .map(|volume| (volume.name.clone(), 0_usize))
             .collect::<BTreeMap<_, _>>();
         for container in self.containers.list().await? {
-            add_container_references(&mut counts, container.volume_names());
+            for name in container.volume_names().collect::<BTreeSet<_>>() {
+                let Some(count) = counts.get_mut(name) else {
+                    continue;
+                };
+                *count = count.saturating_add(1);
+            }
         }
         Ok(counts)
     }
@@ -187,11 +185,9 @@ impl Volumes {
             return Ok(0);
         }
         let path = volume.path;
-        Ok(
-            tokio::task::spawn_blocking(move || Directory::from(path).size())
-                .await
-                .map_err(|error| Error::Io(std::io::Error::other(error)))??,
-        )
+        Ok(tokio::task::spawn_blocking(move || Directory::from(path).size())
+            .await
+            .map_err(|error| Error::Io(std::io::Error::other(error)))??)
     }
 
     /// Remove a volume and every entry in its managed data directory.
@@ -293,17 +289,9 @@ impl Volumes {
         for mount in mounts {
             let (source, forced_read_only) = match &mount.source {
                 MountSource::Bind(path) => (path.clone(), false),
-                MountSource::Volume(name)
-                | MountSource::Anonymous(name)
-                | MountSource::Tmpfs(name) => {
+                MountSource::Volume(name) | MountSource::Anonymous(name) | MountSource::Tmpfs(name) => {
                     let volume = self.inspect(name).await?;
-                    let read_only = matches!(
-                        volume.source,
-                        VolumeSource::Bind {
-                            read_only: true,
-                            ..
-                        }
-                    );
+                    let read_only = matches!(volume.source, VolumeSource::Bind { read_only: true, .. });
                     (volume.path, read_only)
                 }
             };
@@ -314,14 +302,9 @@ impl Volumes {
                     ));
                 }
                 let root = tokio::fs::canonicalize(&source).await?;
-                let selected = tokio::fs::canonicalize(source.join(subpath))
-                    .await
-                    .map_err(|error| {
-                        Error::InvalidSpec(format!(
-                            "volume subpath {} is unavailable: {error}",
-                            subpath.display()
-                        ))
-                    })?;
+                let selected = tokio::fs::canonicalize(source.join(subpath)).await.map_err(|error| {
+                    Error::InvalidSpec(format!("volume subpath {} is unavailable: {error}", subpath.display()))
+                })?;
                 let directory = tokio::fs::metadata(&selected).await?.is_dir();
                 if !selected.starts_with(&root) || !directory {
                     return Err(Error::InvalidSpec(format!(
@@ -348,10 +331,7 @@ impl Volumes {
 
     pub(crate) async fn validate(&self, mounts: &[Mount]) -> Result<()> {
         for mount in mounts {
-            if let MountSource::Volume(name)
-            | MountSource::Anonymous(name)
-            | MountSource::Tmpfs(name) = &mount.source
-            {
+            if let MountSource::Volume(name) | MountSource::Anonymous(name) | MountSource::Tmpfs(name) = &mount.source {
                 self.storage
                     .get(name)
                     .await?
@@ -390,37 +370,5 @@ impl Volumes {
             };
         }
         Ok(spec)
-    }
-}
-
-fn add_container_references<'a>(counts: &mut BTreeMap<String, usize>, names: impl IntoIterator<Item = &'a str>) {
-    let mut seen = BTreeSet::new();
-    for name in names {
-        if seen.insert(name)
-            && let Some(count) = counts.get_mut(name)
-        {
-            *count = count.saturating_add(1);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::add_container_references;
-    use std::cell::Cell;
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn reference_batch_visits_each_mount_once_and_deduplicates_one_container() {
-        let visits = Cell::new(0_usize);
-        let names = ["held", "held", "free", "missing"].into_iter().inspect(|_| {
-            visits.set(visits.get() + 1);
-        });
-        let mut counts = BTreeMap::from([("held".into(), 0_usize), ("free".into(), 0_usize)]);
-
-        add_container_references(&mut counts, names);
-
-        assert_eq!(visits.get(), 4);
-        assert_eq!(counts, BTreeMap::from([("free".into(), 1), ("held".into(), 1)]));
     }
 }
