@@ -18,15 +18,15 @@ pub enum Check {
 impl Check {
     fn validate(&self) -> Result<()> {
         match self {
-            Self::Command(process) if process.program.is_empty() => Err(Error::InvalidSpec(
-                "health command program must not be empty".into(),
-            )),
-            Self::Command(process) if process.console.terminal.is_some() => Err(
-                Error::InvalidSpec("health commands cannot allocate a terminal".into()),
-            ),
-            Self::Shell(command) if command.is_empty() => Err(Error::InvalidSpec(
-                "health shell command must not be empty".into(),
-            )),
+            Self::Command(process) if process.program.is_empty() => {
+                Err(Error::InvalidSpec("health command program must not be empty".into()))
+            }
+            Self::Command(process) if process.console.terminal.is_some() => {
+                Err(Error::InvalidSpec("health commands cannot allocate a terminal".into()))
+            }
+            Self::Shell(command) if command.is_empty() => {
+                Err(Error::InvalidSpec("health shell command must not be empty".into()))
+            }
             _ => Ok(()),
         }
     }
@@ -40,6 +40,12 @@ pub struct Healthcheck {
     pub timeout: Duration,
     pub retries: u32,
     pub start_period: Duration,
+    #[serde(default = "default_start_interval")]
+    pub start_interval: Duration,
+}
+
+fn default_start_interval() -> Duration {
+    Duration::from_secs(5)
 }
 
 impl Healthcheck {
@@ -51,6 +57,7 @@ impl Healthcheck {
             timeout: Duration::from_secs(30),
             retries: 3,
             start_period: Duration::ZERO,
+            start_interval: default_start_interval(),
         }
     }
 
@@ -78,22 +85,27 @@ impl Healthcheck {
         self
     }
 
+    #[must_use]
+    pub const fn start_interval(mut self, value: Duration) -> Self {
+        self.start_interval = value;
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         self.command.validate()?;
         if self.interval.is_zero() {
-            return Err(Error::InvalidSpec(
-                "health interval must be greater than zero".into(),
-            ));
+            return Err(Error::InvalidSpec("health interval must be greater than zero".into()));
         }
         if self.timeout.is_zero() {
+            return Err(Error::InvalidSpec("health timeout must be greater than zero".into()));
+        }
+        if self.start_interval.is_zero() {
             return Err(Error::InvalidSpec(
-                "health timeout must be greater than zero".into(),
+                "health start interval must be greater than zero".into(),
             ));
         }
         if self.retries == 0 {
-            return Err(Error::InvalidSpec(
-                "health retries must be greater than zero".into(),
-            ));
+            return Err(Error::InvalidSpec("health retries must be greater than zero".into()));
         }
         Ok(())
     }
@@ -118,12 +130,7 @@ pub struct Probe {
 
 impl Probe {
     #[must_use]
-    pub fn new(
-        started_at_ms: u64,
-        finished_at_ms: u64,
-        result: ExitStatus,
-        output: impl Into<String>,
-    ) -> Self {
+    pub fn new(started_at_ms: u64, finished_at_ms: u64, result: ExitStatus, output: impl Into<String>) -> Self {
         let output = output.into();
         let output = output
             .chars()
@@ -229,20 +236,30 @@ mod tests {
 
     #[test]
     fn policy_rejects_empty_or_zero_configuration() {
-        assert!(Healthcheck::new(Check::Shell(String::new()))
-            .validate()
-            .is_err());
-        assert!(Healthcheck::new(Check::Shell("true".into()))
-            .interval(Duration::ZERO)
-            .validate()
-            .is_err());
-        assert!(Healthcheck::new(Check::Shell("true".into()))
-            .timeout(Duration::ZERO)
-            .validate()
-            .is_err());
-        assert!(Healthcheck::new(Check::Shell("true".into()))
-            .retries(0)
-            .validate()
-            .is_err());
+        assert!(Healthcheck::new(Check::Shell(String::new())).validate().is_err());
+        assert!(
+            Healthcheck::new(Check::Shell("true".into()))
+                .interval(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            Healthcheck::new(Check::Shell("true".into()))
+                .timeout(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            Healthcheck::new(Check::Shell("true".into()))
+                .start_interval(Duration::ZERO)
+                .validate()
+                .is_err()
+        );
+        assert!(
+            Healthcheck::new(Check::Shell("true".into()))
+                .retries(0)
+                .validate()
+                .is_err()
+        );
     }
 }

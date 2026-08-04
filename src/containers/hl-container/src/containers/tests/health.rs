@@ -13,10 +13,7 @@ async fn health_monitor_persists_success_and_inherits_process_context() {
     let check = Healthcheck::new(Check::Command(Process::new("/health")))
         .interval(Duration::from_millis(5))
         .timeout(Duration::from_millis(20));
-    containers
-        .create(spec("healthy").healthcheck(check))
-        .await
-        .unwrap();
+    containers.create(spec("healthy").healthcheck(check)).await.unwrap();
     containers.start("healthy").await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
     let running = containers.inspect("healthy").await.unwrap();
@@ -27,10 +24,7 @@ async fn health_monitor_persists_success_and_inherits_process_context() {
     {
         let programs = runtime.programs.lock().unwrap();
         let parent = &programs[0];
-        let probe = programs
-            .iter()
-            .find(|process| process.program == "/health")
-            .unwrap();
+        let probe = programs.iter().find(|process| process.program == "/health").unwrap();
         assert_eq!(probe.env, parent.env);
         assert_eq!(probe.working_dir, parent.working_dir);
         assert_eq!(probe.uid, parent.uid);
@@ -57,12 +51,70 @@ async fn health_monitor_persists_success_and_inherits_process_context() {
         assert!(domains.len() >= 2);
         let parent = domains[0].0;
         assert!(domains[0].1);
-        assert!(domains[1..]
-            .iter()
-            .all(|domain| domain.0 == parent && !domain.1));
+        assert!(domains[1..].iter().all(|domain| domain.0 == parent && !domain.1));
     }
     assert!(runtime.domain_reads.load(Ordering::SeqCst) >= 1);
     containers.wait("healthy").await.unwrap();
+}
+
+#[tokio::test]
+async fn start_interval_drives_grace_probes_and_stop_cancels_an_inflight_probe() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(50);
+    *runtime.health.lock().unwrap() = Some((
+        Duration::from_secs(1),
+        std::collections::VecDeque::from([ExitStatus::Code(1)]),
+    ));
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    let check = Healthcheck::new(Check::Command(Process::new("/health")))
+        .interval(Duration::from_secs(1))
+        .start_period(Duration::from_secs(1))
+        .start_interval(Duration::from_millis(2))
+        .timeout(Duration::from_secs(2));
+    containers
+        .create(spec("cancel-health").healthcheck(check))
+        .await
+        .unwrap();
+    containers.start("cancel-health").await.unwrap();
+
+    tokio::time::timeout(Duration::from_millis(100), async {
+        while runtime.programs.lock().unwrap().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    containers.stop("cancel-health", Duration::ZERO).await.unwrap();
+    let probes = runtime
+        .programs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|process| process.program == "/health")
+        .count();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    assert_eq!(
+        runtime
+            .programs
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|process| process.program == "/health")
+            .count(),
+        probes
+    );
+    assert!(
+        runtime
+            .signals
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|signal| **signal == Signal::Kill)
+            .count()
+            >= 2
+    );
 }
 
 #[tokio::test]
@@ -115,20 +167,20 @@ async fn health_grace_threshold_timeout_and_pause_are_generation_safe() {
         .interval(Duration::from_millis(2))
         .timeout(Duration::from_millis(5))
         .start_period(Duration::from_millis(20))
+        .start_interval(Duration::from_millis(5))
         .retries(2);
-    containers
-        .create(spec("unhealthy").healthcheck(check))
-        .await
-        .unwrap();
+    containers.create(spec("unhealthy").healthcheck(check)).await.unwrap();
     containers.start("unhealthy").await.unwrap();
     tokio::time::sleep(Duration::from_millis(65)).await;
     let before_pause = containers.inspect("unhealthy").await.unwrap();
     let health = before_pause.health.as_ref().unwrap();
     assert_eq!(health.status, HealthStatus::Unhealthy);
-    assert!(health
-        .probes
-        .iter()
-        .all(|probe| matches!(probe.result, ExitStatus::Fault { status: -1, .. })));
+    assert!(
+        health
+            .probes
+            .iter()
+            .all(|probe| matches!(probe.result, ExitStatus::Fault { status: -1, .. }))
+    );
     assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
     containers.pause("unhealthy").await.unwrap();
     let count = containers
@@ -177,10 +229,7 @@ async fn late_probe_from_previous_generation_cannot_mutate_restart() {
         .await
         .unwrap();
     containers.start("generation-health").await.unwrap();
-    assert_eq!(
-        containers.wait("generation-health").await.unwrap(),
-        ExitStatus::Code(1)
-    );
+    assert_eq!(containers.wait("generation-health").await.unwrap(), ExitStatus::Code(1));
     tokio::time::sleep(Duration::from_millis(90)).await;
     let container = containers.inspect("generation-health").await.unwrap();
     assert_eq!(container.generation, 2);

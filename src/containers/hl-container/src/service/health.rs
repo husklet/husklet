@@ -32,8 +32,13 @@ impl Monitor {
     pub(super) async fn run(mut self) {
         let started = Instant::now();
         loop {
+            let interval = if started.elapsed() < self.check.start_period {
+                self.check.start_interval
+            } else {
+                self.check.interval
+            };
             tokio::select! {
-                () = tokio::time::sleep(self.check.interval) => {}
+                () = tokio::time::sleep(interval) => {}
                 changed = self.cancel.changed() => {
                     let _ = changed;
                     return;
@@ -41,17 +46,12 @@ impl Monitor {
             }
             let probe = self
                 .service
-                .execute_probe(&self.container, self.generation, &self.check)
+                .execute_probe(&self.container, self.generation, &self.check, &mut self.cancel)
                 .await;
+            let Some(probe) = probe else { return };
             if !self
                 .service
-                .record_probe(
-                    &self.container,
-                    self.generation,
-                    &self.check,
-                    started.elapsed(),
-                    probe,
-                )
+                .record_probe(&self.container, self.generation, &self.check, started.elapsed(), probe)
                 .await
             {
                 return;

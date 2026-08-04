@@ -9,7 +9,8 @@ impl Service {
         id: &ContainerId,
         generation: u64,
         check: &Healthcheck,
-    ) -> Probe {
+        cancel: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> Option<Probe> {
         let started_at_ms = now_ms();
         let process = {
             let _guard = self.operations.lock().await;
@@ -21,20 +22,20 @@ impl Service {
                     container
                 }
                 _ => {
-                    return Probe::new(
+                    return Some(Probe::new(
                         started_at_ms,
                         now_ms(),
                         ExitStatus::Fault { status: -1, detail: 0 },
                         "health generation is no longer running",
-                    );
+                    ));
                 }
             };
             match self.launch_probe(&container, check).await {
                 Ok(process) => process,
-                Err(error) => return Self::failed_probe(started_at_ms, error),
+                Err(error) => return Some(Self::failed_probe(started_at_ms, error)),
             }
         };
-        Self::finish_probe(process, check, started_at_ms).await
+        Self::finish_probe(process, check, started_at_ms, cancel).await
     }
 
     async fn launch_probe(&self, container: &Container, check: &Healthcheck) -> Result<Arc<dyn Running>> {
@@ -77,7 +78,12 @@ impl Service {
             .await
     }
 
-    async fn finish_probe(process: Arc<dyn Running>, check: &Healthcheck, started_at_ms: u64) -> Probe {
+    async fn finish_probe(
+        process: Arc<dyn Running>,
+        check: &Healthcheck,
+        started_at_ms: u64,
+        cancel: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> Option<Probe> {
         let mut logs = process.take_logs();
         let output = async move {
             let mut bytes = Vec::new();
@@ -97,8 +103,14 @@ impl Service {
                 let _ = waiting.await;
                 ExitStatus::Fault { status: -1, detail: 0 }
             }
+            changed = cancel.changed() => {
+                let _ = changed;
+                let _ = process.signal(Signal::Kill).await;
+                let _ = waiting.await;
+                return None;
+            }
         };
-        Probe::new(started_at_ms, now_ms(), result, output.await)
+        Some(Probe::new(started_at_ms, now_ms(), result, output.await))
     }
 
     pub(in crate::service) async fn record_probe(
