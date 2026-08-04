@@ -318,12 +318,16 @@ static size_t source_bytes(const hl_native_source *source, uint64_t pc, const ui
 
 static hl_native_status leave_exit(hl_native_execution *execution, hl_native_exit *output,
                                    uint32_t kind, uint64_t pc) {
+    if (execution->owner != NULL && execution->owner->diagnostics)
+        execution->owner->x86_public_exits++;
     return hl_native_execution_exit(execution, output, kind, HL_NATIVE_ACCESS_UNKNOWN,
                                     pc, pc, 0, 0);
 }
 
 static hl_native_status fatal_exit(hl_native_execution *execution, hl_native_exit *output,
                                    uint64_t code) {
+    if (execution->owner != NULL && execution->owner->diagnostics)
+        execution->owner->x86_public_exits++;
     return hl_native_execution_exit(execution, output, HL_NATIVE_EXIT_FATAL,
                                     HL_NATIVE_ACCESS_UNKNOWN, 0, 0, 0, code);
 }
@@ -332,6 +336,8 @@ static hl_native_status target_fallback(hl_native_execution *execution, hl_nativ
                                         const hl_native_x86_64_cpu *cpu) {
     if (cpu->indirect_site == 0)
         return leave_exit(execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
+    if (execution->owner != NULL && execution->owner->diagnostics)
+        execution->owner->x86_public_exits++;
     return hl_native_execution_exit(execution, output, HL_NATIVE_EXIT_FALLBACK,
                                     HL_NATIVE_ACCESS_EXECUTE, cpu->indirect_site, cpu->program,
                                     cpu->program, 0);
@@ -342,10 +348,21 @@ static uint32_t direct_branch(uint32_t source, uint32_t target) {
     return UINT32_C(0x14000000) | ((uint32_t)distance & UINT32_C(0x03ffffff));
 }
 
+_Static_assert(offsetof(hl_native_x86_64_cpu, registers) % (2u * sizeof(uint64_t)) == 0,
+               "paired x86 register spills require 16-byte-aligned register storage");
+_Static_assert(sizeof(((hl_native_x86_64_cpu *)0)->registers) == 16u * sizeof(uint64_t),
+               "paired x86 register spills require sixteen contiguous registers");
+
+static uint32_t store_pair_word(unsigned first, unsigned second, size_t offset) {
+    return UINT32_C(0xa9000000) | ((uint32_t)(offset / 8u) & UINT32_C(0x7f)) << 15 |
+           second << 10 | 28u << 5 | first;
+}
+
 static void spill_registers(uint32_t *words, uint32_t *cursor) {
-    for (unsigned index = 0; index < 16u; ++index)
-        words[(*cursor)++] = store_word(index, offsetof(hl_native_x86_64_cpu, registers) +
-                                               index * sizeof(uint64_t));
+    for (unsigned index = 0; index < 16u; index += 2u)
+        words[(*cursor)++] = store_pair_word(
+            index, index + 1u,
+            offsetof(hl_native_x86_64_cpu, registers) + index * sizeof(uint64_t));
 }
 
 static void finish_execution(uint32_t *words, uint32_t *cursor) {
@@ -373,7 +390,8 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
         .provenance = frontend_map,
         .provenance_capacity = HL_X86_A64_MAX_INSTRUCTIONS,
         .flags = HL_X86_A64_CHECKPOINTS | HL_X86_A64_CONDITIONAL_SELF_LOOP | HL_X86_A64_LIVE_CHAIN |
-                 (host_has_lse() ? HL_X86_A64_LSE : 0u),
+                 (host_has_lse() ? HL_X86_A64_LSE : 0u) |
+                 (executor->diagnostics ? HL_X86_A64_DIAGNOSTICS : 0u),
     };
     hl_x86_a64_result result = {.abi = HL_X86_A64_FRONTEND_ABI, .size = sizeof(result)};
     hl_native_translation_key key;
@@ -558,6 +576,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
     cpu->loop_pc = 0;
     cpu->read_token = 0;
     cpu->read_count = 0;
+    cpu->vector_dirty = 0;
     if (!source_valid(source) || source->mapping_incarnation != request->mapping_epoch) return HL_NATIVE_ARGUMENT;
     if (request->projection != NULL) {
         const hl_native_projection_view *view = &request->projection->views[request->projection->active];
@@ -696,16 +715,8 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         cpu->fault_size = 0;
         uint64_t executed_before = cpu->executed;
         hl_native_x86_64_enter(cpu, code.entry);
-        if (executor->diagnostics) {
-            executor->completed += cpu->executed - executed_before;
-            switch (cpu->reason) {
-                case HL_NATIVE_EXIT_BRANCH: executor->boundary_branch++; break;
-                case HL_NATIVE_EXIT_SYSCALL: executor->boundary_syscall++; break;
-                case HL_NATIVE_EXIT_FALLBACK: executor->boundary_fallback++; break;
-                case HL_NATIVE_EXIT_YIELD: executor->boundary_yield++; break;
-                default: break;
-            }
-        }
+        uint64_t vector_dirty = cpu->vector_dirty;
+        cpu->vector_dirty = 0;
         uint64_t completed = cpu->scratch[0];
         if (loop_active) {
             if (cpu->loop_block_count != code.instruction_count || cpu->loop_pc != pc ||
@@ -720,6 +731,16 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         budget -= completed;
         cpu->budget = budget;
         cpu->executed += completed;
+        if (executor->diagnostics) {
+            executor->completed += cpu->executed - executed_before;
+            switch (cpu->reason) {
+                case HL_NATIVE_EXIT_BRANCH: executor->boundary_branch++; break;
+                case HL_NATIVE_EXIT_SYSCALL: executor->boundary_syscall++; break;
+                case HL_NATIVE_EXIT_FALLBACK: executor->boundary_fallback++; break;
+                case HL_NATIVE_EXIT_YIELD: executor->boundary_yield++; break;
+                default: break;
+            }
+        }
         if ((cpu->executable_written & 4u) != 0)
             return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
         if (cpu->interrupt != 0)
@@ -760,9 +781,13 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             }
             if ((status = hl_native_execution_enter(executor, &execution)) != HL_NATIVE_OK) return status;
             if (result == HL_NATIVE_OPERAND_FAULT)
+            {
+                if (execution.owner != NULL && execution.owner->diagnostics)
+                    execution.owner->x86_public_exits++;
                 return hl_native_execution_exit(&execution, output, HL_NATIVE_EXIT_FAULT,
                                                 (uint32_t)cpu->fault_access, cpu->program, cpu->program,
                                                 cpu->fault_address, 1);
+            }
             if (result == HL_NATIVE_OPERAND_EPOCH)
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
             if (result != HL_NATIVE_OPERAND_DECLINED) {
@@ -774,9 +799,15 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         if (cpu->reason == HL_NATIVE_EXIT_BRANCH) {
             continue;
         }
-        if (cpu->reason == HL_NATIVE_EXIT_SYSCALL)
+        if (cpu->reason == HL_NATIVE_EXIT_SYSCALL) {
+            if (executor->diagnostics) {
+                executor->x86_public_exits++;
+                executor->x86_public_syscalls++;
+                if (vector_dirty != 0) executor->x86_syscall_vector_dirty++;
+            }
             return hl_native_execution_exit(&execution, output, HL_NATIVE_EXIT_SYSCALL,
                                             HL_NATIVE_ACCESS_UNKNOWN, cpu->scratch[1], cpu->program, 0, 0);
+        }
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK)
             return leave_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
         return fatal_exit(&execution, output, X86_FATAL_REASON);

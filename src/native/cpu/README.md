@@ -27,3 +27,8 @@ ordinary trace admission and emission must leave them zero.
 Each `loop_views` slot retains the exact authenticated envelope followed by the
 owning projection view bounds, delta, and permissions; owner bounds must not be
 reconstructed from the narrower envelope when publishing dirty records.
+
+`x86_64.vector_dirty` is diagnostics-only native scratch. Diagnostics-enabled
+translated blocks set it before their first vector-register write, chains carry
+it, and the dispatcher clears it before every run and after the unconditional
+architectural vector spill. It is never checkpointed or treated as guest state.

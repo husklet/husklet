@@ -33,6 +33,7 @@ struct hl_native_executor {
     uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
     uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;
     uint64_t operand_callbacks, operand_cache_hits;
+    uint64_t x86_public_exits, x86_public_syscalls, x86_syscall_vector_dirty;
 };
 
 typedef struct hl_native_execution {

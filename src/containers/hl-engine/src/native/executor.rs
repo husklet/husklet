@@ -292,6 +292,9 @@ struct Diagnostics {
     completed: u64,
     operand_callbacks: u64,
     operand_cache_hits: u64,
+    x86_public_exits: u64,
+    x86_public_syscalls: u64,
+    x86_syscall_vector_dirty: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1204,6 +1207,40 @@ impl NativeAarch64 {
         }
         cpu.clear_exclusive_reservation();
     }
+
+    fn writes(&self) -> NativeWrites {
+        let cpu = &self.0;
+        if cpu.memory_written == 0 {
+            return NativeWrites::None;
+        }
+        if cpu.dirty_overflow != 0 || cpu.dirty_count > cpu.dirty_records.len() as u64 {
+            return NativeWrites::Full;
+        }
+        let mut records = cpu.dirty_records[..cpu.dirty_count as usize].to_vec();
+        if cpu.dirty_first != u64::MAX {
+            records.push([
+                cpu.dirty_view_first,
+                cpu.dirty_view_last,
+                cpu.dirty_first,
+                cpu.dirty_last,
+            ]);
+        }
+        let mut ranges = Vec::with_capacity(records.len());
+        for [view_first, view_last, first, last] in records {
+            if view_first >= view_last || first < view_first || first >= last || last > view_last {
+                return NativeWrites::Full;
+            }
+            let Ok(range) = AddressRange::nonempty(GuestAddress::new(first), last - first) else {
+                return NativeWrites::Full;
+            };
+            ranges.push(range);
+        }
+        if ranges.is_empty() {
+            NativeWrites::Full
+        } else {
+            NativeWrites::Exact(ranges)
+        }
+    }
 }
 
 struct NativeX86(schema::X86_64Cpu);
@@ -1214,73 +1251,41 @@ pub(crate) enum NativeWrites {
     Full,
 }
 
-fn x86_writes(cpu: &schema::X86_64Cpu) -> NativeWrites {
-    if cpu.memory_written == 0 {
-        return NativeWrites::None;
-    }
-    if cpu.dirty_overflow != 0 || cpu.dirty_count > cpu.dirty_records.len() as u64 {
-        return NativeWrites::Full;
-    }
-    let mut records = cpu.dirty_records[..cpu.dirty_count as usize].to_vec();
-    if cpu.dirty_first != u64::MAX {
-        records.push([
-            cpu.dirty_view_first,
-            cpu.dirty_view_last,
-            cpu.dirty_first,
-            cpu.dirty_last,
-        ]);
-    }
-    let mut ranges = Vec::with_capacity(records.len());
-    for [view_first, view_last, first, last] in records {
-        if view_first >= view_last || first < view_first || first >= last || last > view_last {
-            return NativeWrites::Full;
-        }
-        let Ok(range) = AddressRange::nonempty(GuestAddress::new(first), last - first) else {
-            return NativeWrites::Full;
-        };
-        ranges.push(range);
-    }
-    if ranges.is_empty() {
-        NativeWrites::Full
-    } else {
-        NativeWrites::Exact(ranges)
-    }
-}
-
-fn aarch64_writes(cpu: &schema::Aarch64Cpu) -> NativeWrites {
-    if cpu.memory_written == 0 {
-        return NativeWrites::None;
-    }
-    if cpu.dirty_overflow != 0 || cpu.dirty_count > cpu.dirty_records.len() as u64 {
-        return NativeWrites::Full;
-    }
-    let mut records = cpu.dirty_records[..cpu.dirty_count as usize].to_vec();
-    if cpu.dirty_first != u64::MAX {
-        records.push([
-            cpu.dirty_view_first,
-            cpu.dirty_view_last,
-            cpu.dirty_first,
-            cpu.dirty_last,
-        ]);
-    }
-    let mut ranges = Vec::with_capacity(records.len());
-    for [view_first, view_last, first, last] in records {
-        if view_first >= view_last || first < view_first || first >= last || last > view_last {
-            return NativeWrites::Full;
-        }
-        let Ok(range) = AddressRange::nonempty(GuestAddress::new(first), last - first) else {
-            return NativeWrites::Full;
-        };
-        ranges.push(range);
-    }
-    if ranges.is_empty() {
-        NativeWrites::Full
-    } else {
-        NativeWrites::Exact(ranges)
-    }
-}
-
 impl NativeX86 {
+    fn writes(&self) -> NativeWrites {
+        let cpu = &self.0;
+        if cpu.memory_written == 0 {
+            return NativeWrites::None;
+        }
+        if cpu.dirty_overflow != 0 || cpu.dirty_count > cpu.dirty_records.len() as u64 {
+            return NativeWrites::Full;
+        }
+        let mut records = cpu.dirty_records[..cpu.dirty_count as usize].to_vec();
+        if cpu.dirty_first != u64::MAX {
+            records.push([
+                cpu.dirty_view_first,
+                cpu.dirty_view_last,
+                cpu.dirty_first,
+                cpu.dirty_last,
+            ]);
+        }
+        let mut ranges = Vec::with_capacity(records.len());
+        for [view_first, view_last, first, last] in records {
+            if view_first >= view_last || first < view_first || first >= last || last > view_last {
+                return NativeWrites::Full;
+            }
+            let Ok(range) = AddressRange::nonempty(GuestAddress::new(first), last - first) else {
+                return NativeWrites::Full;
+            };
+            ranges.push(range);
+        }
+        if ranges.is_empty() {
+            NativeWrites::Full
+        } else {
+            NativeWrites::Exact(ranges)
+        }
+    }
+
     fn fpcr(mxcsr: u32) -> u64 {
         // Retained-C projection: ARM RMode swaps the x86 down/up encodings and
         // ARM FZ represents either x86 DAZ or FTZ. Exception masks remain in
@@ -1372,6 +1377,7 @@ impl NativeX86 {
             fpsr: Self::fpsr(cpu.mxcsr),
             host_fpcr: 0,
             host_fpsr: 0,
+            vector_dirty: 0,
         })
     }
 
@@ -1845,6 +1851,9 @@ impl Executor {
             completed: 0,
             operand_callbacks: 0,
             operand_cache_hits: 0,
+            x86_public_exits: 0,
+            x86_public_syscalls: 0,
+            x86_syscall_vector_dirty: 0,
         };
         (unsafe { hl_native_diagnose(self.handle.as_ptr(), &raw mut output) } == 0)
             .then_some(output)
@@ -2148,7 +2157,7 @@ impl Executor {
             output.code,
             native.0.budget,
             native.0.executed,
-            aarch64_writes(&native.0),
+            native.writes(),
         ))
     }
 
@@ -2417,7 +2426,7 @@ impl Executor {
                 sources: provider.observed,
                 sources_complete: provider.complete,
             },
-            x86_writes(&native.0),
+            native.writes(),
         ))
     }
 }
@@ -2730,7 +2739,7 @@ mod test {
         native.0.dirty_view_last = 0x2000;
         native.0.dirty_first = 0x1100;
         native.0.dirty_last = 0x1108;
-        let NativeWrites::Exact(ranges) = x86_writes(&native.0) else {
+        let NativeWrites::Exact(ranges) = native.writes() else {
             panic!("not exact")
         };
         assert_eq!(ranges, [AddressRange::nonempty(GuestAddress::new(0x1100), 8).unwrap()]);
@@ -2744,7 +2753,7 @@ mod test {
         native.0.dirty_view_last = 0x4000;
         native.0.dirty_first = 0x3100;
         native.0.dirty_last = 0x3120;
-        let NativeWrites::Exact(ranges) = aarch64_writes(&native.0) else {
+        let NativeWrites::Exact(ranges) = native.writes() else {
             panic!("not exact")
         };
         assert_eq!(
@@ -2756,26 +2765,26 @@ mod test {
     #[test]
     fn aarch64_dirty_journal_preserves_overlap_and_overflow_fallback() {
         let mut native = NativeAarch64::capture(&Aarch64CpuState::default());
-        assert!(matches!(aarch64_writes(&native.0), NativeWrites::None));
+        assert!(matches!(native.writes(), NativeWrites::None));
         native.0.memory_written = 1;
         native.0.dirty_count = 2;
         native.0.dirty_records[0] = [0x1000, 0x2000, 0x1100, 0x1200];
         native.0.dirty_records[1] = [0x1000, 0x2000, 0x1180, 0x1300];
-        let NativeWrites::Exact(ranges) = aarch64_writes(&native.0) else {
+        let NativeWrites::Exact(ranges) = native.writes() else {
             panic!("not exact")
         };
         assert_eq!(ranges.len(), 2);
         native.0.dirty_overflow = 1;
-        assert!(matches!(aarch64_writes(&native.0), NativeWrites::Full));
+        assert!(matches!(native.writes(), NativeWrites::Full));
     }
 
     #[test]
     fn x86_dirty_journal_falls_back_on_overflow_or_unknown_write() {
         let mut native = NativeX86::capture(&X86CpuState::default(), false);
         native.0.memory_written = 1;
-        assert!(matches!(x86_writes(&native.0), NativeWrites::Full));
+        assert!(matches!(native.writes(), NativeWrites::Full));
         native.0.dirty_overflow = 1;
-        assert!(matches!(x86_writes(&native.0), NativeWrites::Full));
+        assert!(matches!(native.writes(), NativeWrites::Full));
     }
 
     #[test]
@@ -2784,7 +2793,7 @@ mod test {
         native.0.memory_written = 1;
         native.0.dirty_count = 1;
         native.0.dirty_records[0] = [0x1000, 0x2000, 0x0ff8, 0x1000];
-        assert!(matches!(x86_writes(&native.0), NativeWrites::Full));
+        assert!(matches!(native.writes(), NativeWrites::Full));
     }
 
     #[test]

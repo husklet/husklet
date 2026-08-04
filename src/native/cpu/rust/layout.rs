@@ -101,6 +101,7 @@ pub struct X86_64Cpu {
     pub fpsr: u64,
     pub host_fpcr: u64,
     pub host_fpsr: u64,
+    pub vector_dirty: u64,
 }
 
 const _: () = {
@@ -203,7 +204,8 @@ const _: () = {
     assert!(std::mem::offset_of!(X86_64Cpu, fpsr) == 1536);
     assert!(std::mem::offset_of!(X86_64Cpu, host_fpcr) == 1544);
     assert!(std::mem::offset_of!(X86_64Cpu, host_fpsr) == 1552);
-    assert!(std::mem::size_of::<X86_64Cpu>() == 1560);
+    assert!(std::mem::offset_of!(X86_64Cpu, vector_dirty) == 1560);
+    assert!(std::mem::size_of::<X86_64Cpu>() == 1568);
 
     assert!(std::mem::align_of::<X86_64Cpu>() == 8);
 

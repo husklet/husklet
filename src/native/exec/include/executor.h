@@ -84,6 +84,9 @@ typedef struct hl_native_diagnostics {
     uint64_t completed;
     uint64_t operand_callbacks;
     uint64_t operand_cache_hits;
+    uint64_t x86_public_exits;
+    uint64_t x86_public_syscalls;
+    uint64_t x86_syscall_vector_dirty;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -323,7 +326,9 @@ _Static_assert(UINTPTR_MAX == UINT64_MAX, "native execution requires a 64-bit ho
 _Static_assert(sizeof(hl_native_mapping) == 48, "native mapping ABI drifted");
 _Static_assert(sizeof(hl_native_memory) == 64, "native memory ABI drifted");
 _Static_assert(sizeof(hl_native_config) == 40, "native config ABI drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 192, "native diagnostics ABI drifted");
+_Static_assert(offsetof(hl_native_diagnostics, x86_public_exits) == 192,
+               "native diagnostics legacy prefix drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 216, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

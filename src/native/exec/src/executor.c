@@ -471,7 +471,8 @@ hl_native_status hl_native_after_fork(hl_native_executor *executor, uint32_t pre
 hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_native_diagnostics *output) {
     const hl_native_arena *arena;
     hl_native_cache_stats stats;
-    if (executor == NULL || output == NULL || output->abi != HL_NATIVE_ABI || output->size < sizeof(*output))
+    if (executor == NULL || output == NULL || output->abi != HL_NATIVE_ABI ||
+        output->size < offsetof(hl_native_diagnostics, x86_public_exits))
         return HL_NATIVE_ARGUMENT;
     arena = &executor->arena;
     output->capacity = arena->mapping.capacity;
@@ -499,6 +500,15 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
     output->completed = executor->completed;
     output->operand_callbacks = executor->operand_callbacks;
     output->operand_cache_hits = executor->operand_cache_hits;
+    if (output->size >= offsetof(hl_native_diagnostics, x86_public_syscalls)) {
+        output->x86_public_exits = executor->x86_public_exits;
+    }
+    if (output->size >= offsetof(hl_native_diagnostics, x86_syscall_vector_dirty)) {
+        output->x86_public_syscalls = executor->x86_public_syscalls;
+    }
+    if (output->size >= sizeof(*output)) {
+        output->x86_syscall_vector_dirty = executor->x86_syscall_vector_dirty;
+    }
     return HL_NATIVE_OK;
 }
 

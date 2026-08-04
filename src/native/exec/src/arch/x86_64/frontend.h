@@ -13,6 +13,8 @@
 #define HL_X86_A64_LIVE_CHAIN 4u
 /* Host guarantees FEAT_LSE single-copy atomic instructions. */
 #define HL_X86_A64_LSE 8u
+/* Emits diagnostics-only vector-dirty observation stores. */
+#define HL_X86_A64_DIAGNOSTICS 16u
 
 typedef enum hl_x86_a64_status {
     HL_X86_A64_OK = 0,

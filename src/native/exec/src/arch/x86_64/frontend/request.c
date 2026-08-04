@@ -10,7 +10,8 @@ int hl_x86_request_valid(const hl_x86_a64_request *request, const hl_x86_a64_res
            request->provenance != NULL && request->guest_size != 0 && request->max_instructions != 0 &&
            request->max_instructions <= HL_X86_A64_MAX_INSTRUCTIONS &&
            (request->flags & ~(HL_X86_A64_CHECKPOINTS | HL_X86_A64_CONDITIONAL_SELF_LOOP |
-                               HL_X86_A64_LIVE_CHAIN | HL_X86_A64_LSE)) == 0u &&
+                               HL_X86_A64_LIVE_CHAIN | HL_X86_A64_LSE |
+                               HL_X86_A64_DIAGNOSTICS)) == 0u &&
            ((request->flags & HL_X86_A64_LIVE_CHAIN) == 0u ||
             (request->flags & HL_X86_A64_CHECKPOINTS) != 0u) &&
            request->reserved == 0u;

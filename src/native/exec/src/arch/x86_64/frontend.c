@@ -19,6 +19,11 @@ static int may_fallback(const instruction *item) {
            item->operation == OP_VECTOR;
 }
 
+static int vector_register_write(const instruction *item) {
+    return item->operation == OP_VECTOR && item->memory_write == 0u &&
+           item->vector_kind != VECTOR_TO_INTEGER && item->vector_kind != VECTOR_BYTE_MASK;
+}
+
 void hl_x86_prepare_vector_immediate(instruction *item, uint8_t modrm, uint8_t rex,
                                      uint8_t immediate, uint8_t destructive_rm) {
     item->vector_immediate_form = destructive_rm != 0u ? VECTOR_IMMEDIATE_RM_DESTRUCTIVE :
@@ -938,6 +943,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
 hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_result *result) {
     decode block;
     uint32_t dirty = 0;
+    int vector_marked = 0;
     uint32_t words = 0;
     uint32_t index;
     uint32_t accounted = 0;
@@ -948,6 +954,11 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
     decode_block(request, &block);
     if (block.count > request->provenance_capacity) return HL_X86_A64_CAPACITY;
     for (index = 0; index < block.count; ++index) {
+        if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
+            vector_register_write(&block.instructions[index])) {
+            words += 2u;
+            vector_marked = 1;
+        }
         if (checkpoints && may_fallback(&block.instructions[index])) {
             words += (live_chain ? 2u : bit_count(dirty) + 4u);
             dirty = 0;
@@ -1062,6 +1073,7 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
 
     words = 0;
     dirty = 0;
+    vector_marked = 0;
     accounted = 0;
     for (index = 0; index < block.count; ++index) {
         const instruction *item = &block.instructions[index];
@@ -1077,6 +1089,13 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         provenance->guest_size = item->length;
         provenance->word_start = words;
         provenance->reserved = 0;
+        if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
+            vector_register_write(item)) {
+            request->host_words[words++] = UINT32_C(0xd2800031); /* mov x17,#1 */
+            request->host_words[words++] =
+                store_word(17, offsetof(hl_native_x86_64_cpu, vector_dirty));
+            vector_marked = 1;
+        }
         if (item->operation == OP_MOV_IMMEDIATE) {
             unsigned target = item->width == 2u ? 16u : item->destination;
 
