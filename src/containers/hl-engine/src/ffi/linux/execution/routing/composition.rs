@@ -269,8 +269,7 @@ pub(in crate::ffi::linux::execution) fn create(
             .with_account(Arc::new(super::super::memory_account::MemoryAccount::new(
                 limit,
                 Arc::clone(&system),
-            )))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            )));
     }
     let (path_host, watches) = image::WorkspaceRoot::host(
         plan,
