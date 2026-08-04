@@ -67,10 +67,10 @@ retains the original typed dispatcher edge. Acyclic relocation behavior is
 unchanged.
 
 This does not weaken partial-result, syscall, fault, cancellation, or errno
-semantics: the optimization joins only already-published control edges and
-does not cross a typed non-branch exit. Direct-memory authority and mapping
-incarnation remain part of cache identity. Invalidation still restores incoming
-relocations before retiring their target.
+semantics: the qualification changes only whether already-published control
+edges remain joined and does not cross a typed non-branch exit. Direct-memory
+authority and mapping incarnation remain part of cache identity. Invalidation
+still restores incoming relocations before retiring their target.
 
 ## Validation scope
 
