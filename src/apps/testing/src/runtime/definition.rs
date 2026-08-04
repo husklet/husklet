@@ -1,5 +1,7 @@
 use super::{scheduler, workspace};
+pub(super) mod input;
 use crate::suite::{Commands, Error, Execution, Target};
+use input::ManifestPath;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -44,19 +46,23 @@ struct Artifact {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Build {
-    source: Option<PathBuf>,
+    source: Option<ManifestPath>,
     output: Option<String>,
     compiler: Commands,
     #[serde(default)]
     flags: Vec<String>,
+    #[serde(default)]
+    inputs: Vec<ManifestPath>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CaseBuild {
-    pub(crate) source: PathBuf,
-    pub(crate) output: String,
-    pub(crate) flags: Vec<String>,
+    source: ManifestPath,
+    output: String,
+    flags: Vec<String>,
+    #[serde(default)]
+    inputs: Vec<ManifestPath>,
 }
 
 #[derive(Deserialize)]
@@ -128,9 +134,10 @@ pub struct RuntimeCase {
     pub exit: i32,
     pub golden: PathBuf,
     pub destination: String,
-    pub(crate) source: PathBuf,
+    pub(in crate::runtime) source: ManifestPath,
     pub(crate) output: String,
     pub(crate) flags: Vec<String>,
+    pub(in crate::runtime) inputs: Vec<ManifestPath>,
     status: Status,
     pub(crate) compat: CompatClass,
     pub soak: Option<scheduler::Plan>,
@@ -214,9 +221,9 @@ impl App {
                     )
                     .into());
                 }
-                let (source, output, flags, destination) =
+                let (source, output, flags, inputs, destination) =
                     resolve_build(case.build, case.artifact, &document.build, document.artifact.as_ref())?;
-                safe_relative(&source)?;
+                let inputs = input::validate(directory, &source, inputs)?;
                 safe_output(&output)?;
                 safe_absolute(&destination)?;
                 if !outputs.insert(output.clone()) || !destinations.insert(destination.clone()) {
@@ -234,6 +241,7 @@ impl App {
                     source,
                     output,
                     flags,
+                    inputs,
                     status: case.status,
                     compat: case.compat.class,
                     soak: case.soak,
@@ -268,7 +276,7 @@ impl App {
         let status = Command::new(compiler)
             .arg("-o")
             .arg(&output)
-            .arg(self.directory.join(&case.source))
+            .arg(self.directory.join(case.source.native()))
             .args(&case.flags)
             .status()?;
         if !status.success() {
@@ -350,13 +358,20 @@ fn resolve_build(
     artifact: Option<Artifact>,
     defaults: &Build,
     default_artifact: Option<&Artifact>,
-) -> Result<(PathBuf, String, Vec<String>, String), Error> {
+) -> Result<(ManifestPath, String, Vec<String>, Vec<ManifestPath>, String), Error> {
     match (case, artifact) {
-        (Some(build), Some(artifact)) => Ok((build.source, build.output, build.flags, artifact.destination)),
+        (Some(build), Some(artifact)) => Ok((
+            build.source,
+            build.output,
+            build.flags,
+            build.inputs,
+            artifact.destination,
+        )),
         (None, None) => Ok((
             defaults.source.clone().ok_or("document build has no default source")?,
             defaults.output.clone().ok_or("document build has no default output")?,
             defaults.flags.clone(),
+            defaults.inputs.clone(),
             default_artifact
                 .ok_or("document defines no default artifact")?
                 .destination
@@ -398,7 +413,7 @@ fn safe_output(output: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::{App, Execution};
-    use std::fs;
+    use std::{fs, path::Path};
 
     #[test]
     fn yaml_native_execution_maps_to_container_configuration() {
@@ -419,7 +434,13 @@ mod tests {
 
     fn category(case_rows: &str) -> Result<App, super::Error> {
         let directory = tempfile::tempdir().unwrap();
-        let definition = directory.path().join("test.yaml");
+        category_at(directory.path(), case_rows)
+    }
+
+    fn category_at(directory: &Path, case_rows: &str) -> Result<App, super::Error> {
+        fs::write(directory.join("one.c"), "one").unwrap();
+        fs::write(directory.join("two.c"), "two").unwrap();
+        let definition = directory.join("test.yaml");
         fs::write(
             &definition,
             format!(
@@ -427,7 +448,7 @@ mod tests {
             ),
         )
         .unwrap();
-        App::load(directory.path(), &definition)
+        App::load(directory, &definition)
     }
 
     #[test]
@@ -452,5 +473,56 @@ mod tests {
             "  - id: runtime/one\n    build: { source: one.c, output: same, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out }\n  - id: runtime/two\n    build: { source: two.c, output: same, flags: [] }\n    artifact: { destination: /opt/two }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/two.out }\n",
         );
         assert!(duplicate.is_err());
+    }
+
+    #[test]
+    fn build_inputs_are_normalized_sorted_contained_files() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("include")).unwrap();
+        fs::write(directory.path().join("include/a.h"), "a").unwrap();
+        fs::write(directory.path().join("z.ld"), "z").unwrap();
+        let app = category_at(
+            directory.path(),
+            "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [], inputs: [z.ld, include/a.h] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/one.out }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            app.cases[0].inputs.iter().map(|path| path.name()).collect::<Vec<_>>(),
+            vec!["include/a.h", "z.ld"]
+        );
+    }
+
+    #[test]
+    fn document_build_inputs_are_inherited_as_a_complete_default() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("main.c"), "main").unwrap();
+        fs::write(directory.path().join("layout.ld"), "layout").unwrap();
+        let definition = directory.path().join("test.yaml");
+        fs::write(
+            &definition,
+            "targets: [arm64]\nimage: alpine\nexecution: {}\nartifact: { destination: /opt/default }\nbuild:\n  source: main.c\n  output: default\n  compiler: { arm64: arm-cc, amd64: amd-cc }\n  flags: [-static]\n  inputs: [layout.ld]\ncases:\n  - id: runtime/default\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/default.out }\n",
+        )
+        .unwrap();
+
+        let app = App::load(directory.path(), &definition).unwrap();
+        assert_eq!(app.cases[0].source.name(), "main.c");
+        assert_eq!(app.cases[0].inputs[0].name(), "layout.ld");
+        assert_eq!(app.cases[0].flags, ["-static"]);
+    }
+
+    #[test]
+    fn build_inputs_reject_escape_missing_and_duplicate_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("one.c"), "one").unwrap();
+        fs::write(directory.path().join("header.h"), "header").unwrap();
+        let row = |inputs: &str| {
+            format!(
+                "  - id: runtime/one\n    build: {{ source: one.c, output: one, flags: [], inputs: {inputs} }}\n    artifact: {{ destination: /opt/one }}\n    status: active\n    compat: {{ class: compatibility }}\n    run: []\n    expect: {{ exit: 0, stdout: golden/one.out }}\n"
+            )
+        };
+
+        assert!(category_at(directory.path(), &row("[../escape.h]")).is_err());
+        assert!(category_at(directory.path(), &row("[missing.h]")).is_err());
+        assert!(category_at(directory.path(), &row("[header.h, header.h]")).is_err());
     }
 }

@@ -19,6 +19,8 @@ fn options(arguments: &[&str]) -> Options {
 fn app() -> App {
     let directory = tempfile::tempdir().unwrap();
     let definition = directory.path().join("test.yaml");
+    fs::write(directory.path().join("exact.c"), "exact").unwrap();
+    fs::write(directory.path().join("inactive.c"), "inactive").unwrap();
     fs::write(
         &definition,
         r#"targets: [arm64, amd64]

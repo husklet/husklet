@@ -2,6 +2,7 @@
 mod case_tests;
 pub(crate) mod definition;
 mod execution;
+mod fingerprint;
 pub(crate) mod image;
 mod ledger;
 mod pool;
@@ -17,7 +18,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
     let mut work = require_work(plan(apps, &options), options.case.as_deref())?;
-    let stamp = fingerprint(&work).await?;
+    let stamp = fingerprint::calculate(&work).await?;
     let keys = work.iter().map(|item| item.key.clone()).collect();
     let report = workspace()?.join(&options.results);
     let resume = options.resume;
@@ -240,50 +241,6 @@ fn require_work(planned: Planned, selected: Option<&str>) -> Result<Vec<Work>, E
 
 fn display_attempt(id: &str, attempt: Option<u16>) -> String {
     attempt.map_or_else(|| id.to_owned(), |ordinal| format!("{id}#attempt-{ordinal}"))
-}
-
-async fn fingerprint(work: &[Work]) -> Result<String, Error> {
-    let inputs = work
-        .iter()
-        .map(|item| {
-            let case = &item.app.cases[item.case_index];
-            (
-                item.key.clone(),
-                item.app.directory.join(&case.source),
-                case.golden.clone(),
-                format!(
-                    "{}\0{}\0{:?}\0{:?}\0{:?}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{:?}",
-                    item.app.image,
-                    item.app.compiler_name(item.target),
-                    item.app.execution,
-                    case.arguments,
-                    case.environment,
-                    case.timeout,
-                    case.exit,
-                    case.flags,
-                    case.destination,
-                    case.compat,
-                    case.soak
-                ),
-            )
-        })
-        .collect::<Vec<_>>();
-    tokio::task::spawn_blocking(move || {
-        use sha2::{Digest, Sha256};
-        let mut digest = Sha256::new();
-        for (key, source, golden, metadata) in inputs {
-            digest.update(key.id.as_bytes());
-            digest.update([0]);
-            digest.update(key.target.name().as_bytes());
-            digest.update([0]);
-            digest.update(metadata.as_bytes());
-            digest.update(std::fs::read(source).map_err(|error| error.to_string())?);
-            digest.update(std::fs::read(golden).map_err(|error| error.to_string())?);
-        }
-        Ok::<_, String>(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
-    })
-    .await?
-    .map_err(Into::into)
 }
 
 pub fn oracle(options: OracleOptions) -> Result<(), Error> {
