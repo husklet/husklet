@@ -1346,40 +1346,95 @@ fn compressed_sources_record_while_unwritable_formats_are_refused() {
                 } else {
                     (plain, odd)
                 };
-                let cb = recording_cb(&mut d);
-                let result = record::cmd_blit_image(
-                    &mut d,
-                    cb,
-                    src,
-                    dst,
-                    SubresourceLayers::base(),
-                    SubresourceLayers::base(),
-                    Origin3d { x: 0, y: 0, z: 0 },
-                    Extent3d {
-                        width: 4,
-                        height: 4,
-                        depth: 1,
-                    },
-                    Origin3d { x: 0, y: 0, z: 0 },
-                    Extent3d {
-                        width: 4,
-                        height: 4,
-                        depth: 1,
-                    },
-                    linear,
-                    Mirror::NONE,
-                );
                 let side = if as_source { "source" } else { "destination" };
                 if as_source && what != "depth" {
-                    assert!(
-                        result.is_ok(),
-                        "{what} source with linear={linear} must reach the native sampler: {result:?}"
+                    let (src_ir, dst_ir) = (img_ir(&d, src), img_ir(&d, dst));
+                    let enc = record_and_submit(&mut d, &mut s, |d, cb| {
+                        record::cmd_blit_image(
+                            d,
+                            cb,
+                            src,
+                            dst,
+                            SubresourceLayers::base(),
+                            SubresourceLayers::base(),
+                            Origin3d { x: 0, y: 0, z: 0 },
+                            Extent3d {
+                                width: 4,
+                                height: 4,
+                                depth: 1,
+                            },
+                            Origin3d { x: 0, y: 0, z: 0 },
+                            Extent3d {
+                                width: 4,
+                                height: 4,
+                                depth: 1,
+                            },
+                            linear,
+                            Mirror::NONE,
+                        )
+                        .unwrap();
+                    });
+                    assert_eq!(
+                        enc,
+                        vec![Enc::BlitTexture {
+                            src: src_ir,
+                            src_sub: TextureSubresource::base(),
+                            src_origin: Origin3d::default(),
+                            src_extent: Extent3d {
+                                width: 4,
+                                height: 4,
+                                depth: 1,
+                            },
+                            dst: dst_ir,
+                            dst_sub: TextureSubresource::base(),
+                            dst_origin: Origin3d::default(),
+                            dst_extent: Extent3d {
+                                width: 4,
+                                height: 4,
+                                depth: 1,
+                            },
+                            filter: if linear {
+                                Filter::Linear
+                            } else {
+                                Filter::Nearest
+                            },
+                            mirror: Mirror::NONE,
+                        }],
+                        "{what} source with linear={linear} must record exactly one native-sampler blit"
                     );
                 } else {
+                    let cb = recording_cb(&mut d);
+                    let result = record::cmd_blit_image(
+                        &mut d,
+                        cb,
+                        src,
+                        dst,
+                        SubresourceLayers::base(),
+                        SubresourceLayers::base(),
+                        Origin3d::default(),
+                        Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                        Origin3d::default(),
+                        Extent3d {
+                            width: 4,
+                            height: 4,
+                            depth: 1,
+                        },
+                        linear,
+                        Mirror::NONE,
+                    );
                     let err = result.expect_err("an unwritable colour-blit format must be refused");
+                    let expected = if what == "depth" && as_source {
+                        "source format is depth/stencil"
+                    } else {
+                        "destination format has no packed colour texel"
+                    };
                     assert!(
-                        matches!(err, GpuError::Unsupported(_)),
-                        "{what} as {side} with linear={linear} must be refused at record time: {err:?}"
+                        matches!(err, GpuError::Unsupported(m) if m.contains(expected)),
+                        "{what} as {side} with linear={linear} must be refused for {expected:?}: {err:?}"
                     );
                 }
             }
