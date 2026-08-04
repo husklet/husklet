@@ -30,6 +30,9 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
             [("8080/tcp".into(), serde_json::json!({}))].into_iter().collect(),
         ),
         host_config: Some(hl_client::model::HostConfig {
+            dns: vec!["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()],
+            dns_search: vec!["service.test".into()],
+            dns_options: vec!["ndots:2".into(), "timeout:1".into()],
             mounts: vec![hl_client::model::DockerMount {
                 kind: "volume".into(),
                 source: "named-data".into(),
@@ -65,7 +68,19 @@ async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     assert_eq!(durable.spec.publish.len(), 1);
     assert_eq!(durable.spec.publish[0].host, 49152);
     assert_eq!(durable.spec.publish[0].port.guest, 8080);
+    assert_eq!(
+        durable.spec.resolver.nameservers(),
+        ["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()]
+    );
+    assert_eq!(durable.spec.resolver.search(), ["service.test"]);
+    assert_eq!(durable.spec.resolver.options(), ["ndots:2", "timeout:1"]);
     let inspected = client.containers().inspect(&created.id).await.unwrap();
+    assert_eq!(
+        inspected.host_config.dns,
+        ["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()]
+    );
+    assert_eq!(inspected.host_config.dns_search, ["service.test"]);
+    assert_eq!(inspected.host_config.dns_options, ["ndots:2", "timeout:1"]);
     assert_eq!(
         inspected.network_settings.ports["8080/tcp"].as_ref().unwrap()[0].host_port,
         "49152"

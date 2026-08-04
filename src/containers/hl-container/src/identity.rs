@@ -10,6 +10,27 @@ pub(crate) struct Identity {
     root: PathBuf,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::Identity;
+
+    #[test]
+    fn host_resolver_overrides_only_configured_directives() {
+        let inherited = "# host resolver\nnameserver 10.0.0.2\nsearch host.test\noptions rotate\n".to_owned();
+        let search = crate::Resolver::new(Vec::new(), vec!["container.test".into()], Vec::new()).unwrap();
+        assert_eq!(
+            Identity::override_resolver(inherited.clone(), &search),
+            "# host resolver\nnameserver 10.0.0.2\noptions rotate\nsearch container.test\n"
+        );
+
+        let nameserver = crate::Resolver::new(vec!["192.0.2.53".parse().unwrap()], Vec::new(), Vec::new()).unwrap();
+        assert_eq!(
+            Identity::override_resolver(inherited, &nameserver),
+            "# host resolver\nsearch host.test\noptions rotate\nnameserver 192.0.2.53\n"
+        );
+    }
+}
+
 impl Identity {
     pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
@@ -118,6 +139,7 @@ impl Identity {
     }
 
     fn resolver(container: &Container, networks: &[NetworkConfig]) -> Result<String> {
+        let configured = &container.spec.resolver;
         if container.spec.network_mode == crate::NetworkMode::Host {
             let contents = std::fs::read_to_string("/etc/resolv.conf")?;
             if contents.len() > 1024 * 1024 {
@@ -125,15 +147,58 @@ impl Identity {
                     "host resolver configuration exceeds 1 MiB".into(),
                 ));
             }
-            return Ok(contents);
+            return Ok(Self::override_resolver(contents, configured));
         }
-        if !container.spec.isolation.network_isolated
+        let nameserver = if !container.spec.isolation.network_isolated
             || networks.iter().any(|network| network.driver == NetworkDriver::Bridge)
         {
-            Ok("nameserver 127.0.0.11\noptions ndots:0\n".into())
+            "127.0.0.11"
         } else {
-            Ok("nameserver 127.0.0.1\noptions ndots:0\n".into())
+            "127.0.0.1"
+        };
+        let mut contents = String::new();
+        if configured.nameservers().is_empty() {
+            writeln!(contents, "nameserver {nameserver}").expect("writing to String cannot fail");
+        } else {
+            for address in configured.nameservers() {
+                writeln!(contents, "nameserver {address}").expect("writing to String cannot fail");
+            }
         }
+        if !configured.search().is_empty() {
+            writeln!(contents, "search {}", configured.search().join(" ")).expect("writing to String cannot fail");
+        }
+        if configured.options().is_empty() {
+            contents.push_str("options ndots:0\n");
+        } else {
+            writeln!(contents, "options {}", configured.options().join(" ")).expect("writing to String cannot fail");
+        }
+        Ok(contents)
+    }
+
+    fn override_resolver(contents: String, configured: &crate::Resolver) -> String {
+        if configured.is_default() {
+            return contents;
+        }
+        let mut output = String::new();
+        for line in contents.lines() {
+            let directive = line.split_ascii_whitespace().next().unwrap_or_default();
+            let overridden = (!configured.nameservers().is_empty() && directive == "nameserver")
+                || (!configured.search().is_empty() && matches!(directive, "search" | "domain"))
+                || (!configured.options().is_empty() && directive == "options");
+            if !overridden {
+                writeln!(output, "{line}").expect("writing to String cannot fail");
+            }
+        }
+        for address in configured.nameservers() {
+            writeln!(output, "nameserver {address}").expect("writing to String cannot fail");
+        }
+        if !configured.search().is_empty() {
+            writeln!(output, "search {}", configured.search().join(" ")).expect("writing to String cannot fail");
+        }
+        if !configured.options().is_empty() {
+            writeln!(output, "options {}", configured.options().join(" ")).expect("writing to String cannot fail");
+        }
+        output
     }
 
     fn write(directory: &Path, name: &str, contents: &[u8]) -> Result<()> {

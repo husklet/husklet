@@ -13,8 +13,8 @@ mod restart;
 mod update;
 mod volume;
 
-pub(crate) use container::now_ms;
 pub(crate) use container::RuntimeDiagnostic;
+pub(crate) use container::now_ms;
 pub use container::{Checkpoint, Container, ContainerId, ContainerState, ExitStatus};
 pub use exec::{Exec, ExecId, ExecSpec, ExecState, Streams};
 pub(crate) use health::OUTPUT_LIMIT;
@@ -27,7 +27,9 @@ pub(crate) use mount::ResolvedMount;
 pub use mount::{Access, BindPropagation, Mount, MountSource};
 pub use network::{Endpoint, EndpointSpec, Network, NetworkDriver, NetworkId, NetworkSpec, Subnet};
 pub use port::{Port, Protocol, Publication};
-pub use process::{Console, ContainerSpec, Environment, EnvironmentRecord, Execution, Guest, Process, Rootfs, Size};
+pub use process::{
+    Console, ContainerSpec, Environment, EnvironmentRecord, Execution, Guest, Process, Resolver, Rootfs, Size,
+};
 pub use prune::Prune;
 pub use restart::{Restart, RestartPolicy};
 pub use update::Update;

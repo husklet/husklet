@@ -584,7 +584,7 @@ impl Guest {
 
 #[path = "process_spec.rs"]
 mod spec;
-pub use spec::ContainerSpec;
+pub use spec::{ContainerSpec, Resolver};
 
 /// Engine execution selection carried with a container launch.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

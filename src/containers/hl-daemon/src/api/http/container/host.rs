@@ -12,6 +12,7 @@ pub(super) struct HostSettings {
     pub(super) publish: Vec<hl_container::Publication>,
     pub(super) network_mode: hl_container::NetworkMode,
     pub(super) hosts: BTreeMap<String, std::net::IpAddr>,
+    pub(super) resolver: hl_container::Resolver,
 }
 
 impl HostSettings {
@@ -35,6 +36,9 @@ impl HostSettings {
 
         let resources = Self::resources(value)?;
         let hosts = Self::hosts(value)?;
+        let resolver =
+            hl_container::Resolver::new(value.dns.clone(), value.dns_search.clone(), value.dns_options.clone())
+                .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         let isolation = Self::isolation(value, network_isolated, network_mode);
         let restart = value
             .restart_policy
@@ -90,6 +94,7 @@ impl HostSettings {
             publish,
             network_mode,
             hosts,
+            resolver,
         })
     }
 
@@ -233,6 +238,7 @@ impl HostSettings {
         for (name, address) in self.hosts {
             spec = spec.host(name, address);
         }
+        spec = spec.resolver(self.resolver);
         spec.resources(self.resources)
             .isolation(self.isolation)
             .network_mode(self.network_mode)

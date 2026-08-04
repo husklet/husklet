@@ -8,6 +8,76 @@ use std::{
 use super::{Execution, Guest, Process, Rootfs};
 use crate::{Error, Healthcheck, Isolation, Mount, MountSource, Resources, RestartPolicy, Result, VolumeSpec};
 
+/// Persisted resolver policy projected into the container's `/etc/resolv.conf`.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct Resolver {
+    nameservers: Vec<IpAddr>,
+    search: Vec<String>,
+    options: Vec<String>,
+}
+
+impl Resolver {
+    const MAXIMUM_NAMESERVERS: usize = 8;
+    const MAXIMUM_SEARCH: usize = 16;
+    const MAXIMUM_OPTIONS: usize = 64;
+
+    /// Constructs a bounded resolver policy.
+    ///
+    /// # Errors
+    /// Returns an invalid-spec error for an excessive list or a token that cannot be represented
+    /// as one `resolv.conf` field without changing its meaning.
+    pub fn new(nameservers: Vec<IpAddr>, search: Vec<String>, options: Vec<String>) -> Result<Self> {
+        for (name, values, maximum) in [
+            ("search", &search, Self::MAXIMUM_SEARCH),
+            ("options", &options, Self::MAXIMUM_OPTIONS),
+        ] {
+            if values.len() > maximum {
+                return Err(Error::InvalidSpec(format!("resolver {name} entries exceed {maximum}")));
+            }
+            if values
+                .iter()
+                .any(|value| value.is_empty() || value.chars().any(char::is_whitespace))
+            {
+                return Err(Error::InvalidSpec(format!(
+                    "resolver {name} entries must be non-empty single tokens"
+                )));
+            }
+        }
+        if nameservers.len() > Self::MAXIMUM_NAMESERVERS {
+            return Err(Error::InvalidSpec(format!(
+                "resolver nameservers exceed {}",
+                Self::MAXIMUM_NAMESERVERS
+            )));
+        }
+        Ok(Self {
+            nameservers,
+            search,
+            options,
+        })
+    }
+
+    #[must_use]
+    pub fn nameservers(&self) -> &[IpAddr] {
+        &self.nameservers
+    }
+
+    #[must_use]
+    pub fn search(&self) -> &[String] {
+        &self.search
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &[String] {
+        &self.options
+    }
+
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.nameservers.is_empty() && self.search.is_empty() && self.options.is_empty()
+    }
+}
+
 /// Immutable launch definition persisted with a container.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ContainerSpec {
@@ -23,6 +93,8 @@ pub struct ContainerSpec {
     pub process: Process,
     pub hostname: Option<String>,
     pub hosts: BTreeMap<String, IpAddr>,
+    #[serde(default)]
+    pub resolver: Resolver,
     pub mounts: Vec<Mount>,
     pub resources: Resources,
     pub isolation: Isolation,
@@ -55,6 +127,7 @@ impl ContainerSpec {
             process,
             hostname: None,
             hosts: BTreeMap::new(),
+            resolver: Resolver::default(),
             mounts: Vec::new(),
             resources: Resources::default(),
             isolation: Isolation::default(),
@@ -85,6 +158,7 @@ impl ContainerSpec {
             process,
             hostname: None,
             hosts: BTreeMap::new(),
+            resolver: Resolver::default(),
             mounts: Vec::new(),
             resources: Resources::default(),
             isolation: Isolation::default(),
@@ -138,6 +212,12 @@ impl ContainerSpec {
     #[must_use]
     pub fn host(mut self, name: impl Into<String>, address: IpAddr) -> Self {
         self.hosts.insert(name.into(), address);
+        self
+    }
+
+    #[must_use]
+    pub fn resolver(mut self, value: Resolver) -> Self {
+        self.resolver = value;
         self
     }
 

@@ -31,9 +31,9 @@ pub use model::{
     Access, BindPropagation, Check, Checkpoint, Console, Container, ContainerId, ContainerSpec, ContainerState,
     Endpoint, EndpointSpec, Entry, Environment, EnvironmentRecord, Exec, ExecId, ExecSpec, ExecState, Execution,
     ExitStatus, Guest, Health, HealthStatus, Healthcheck, Isolation, Logs, Mount, MountSource, Network, NetworkDriver,
-    NetworkId, NetworkMode, NetworkSpec, Port, Probe, Process, Protocol, Prune, Publication, RemovalPolicy, Resources,
-    Restart, RestartPolicy, Rootfs, Sandbox, Signal, Size, Stream, Streams, Subnet, Update, Volume, VolumeKind,
-    VolumeSource, VolumeSpec, WaitCondition,
+    NetworkId, NetworkMode, NetworkSpec, Port, Probe, Process, Protocol, Prune, Publication, RemovalPolicy, Resolver,
+    Resources, Restart, RestartPolicy, Rootfs, Sandbox, Signal, Size, Stream, Streams, Subnet, Update, Volume,
+    VolumeKind, VolumeSource, VolumeSpec, WaitCondition,
 };
 pub(crate) use model::{JournalId, LogChunk};
 pub use networks::Networks;

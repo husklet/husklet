@@ -167,8 +167,23 @@ async fn generated_identity_access_follows_rootfs_writability() {
         }))
         .await
         .unwrap();
+    containers
+        .create(
+            spec("custom-resolver").resolver(
+                crate::Resolver::new(
+                    vec!["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()],
+                    vec!["service.test".into(), "example.test".into()],
+                    vec!["ndots:2".into(), "timeout:1".into()],
+                )
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
     containers.start("egress").await.unwrap();
     containers.wait("egress").await.unwrap();
+    containers.start("custom-resolver").await.unwrap();
+    containers.wait("custom-resolver").await.unwrap();
 
     let launches = runtime.mounts.lock().unwrap();
     for target in ["/etc/hosts", "/etc/resolv.conf", "/etc/hostname"] {
@@ -190,6 +205,14 @@ async fn generated_identity_access_follows_rootfs_writability() {
     assert_eq!(
         std::fs::read_to_string(&resolver.0).unwrap(),
         "nameserver 127.0.0.11\noptions ndots:0\n"
+    );
+    let resolver = launches[3]
+        .iter()
+        .find(|mount| mount.1 == std::path::Path::new("/etc/resolv.conf"))
+        .expect("custom resolver mount");
+    assert_eq!(
+        std::fs::read_to_string(&resolver.0).unwrap(),
+        "nameserver 192.0.2.53\nnameserver 2001:db8::53\nsearch service.test example.test\noptions ndots:2 timeout:1\n"
     );
 }
 

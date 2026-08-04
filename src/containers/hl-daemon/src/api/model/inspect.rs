@@ -56,6 +56,12 @@ pub struct InspectHostConfig {
     pub network_mode: String,
     #[serde(default)]
     pub extra_hosts: Vec<String>,
+    #[serde(default, rename = "Dns")]
+    pub dns: Vec<std::net::IpAddr>,
+    #[serde(default, rename = "DnsOptions")]
+    pub dns_options: Vec<String>,
+    #[serde(default, rename = "DnsSearch")]
+    pub dns_search: Vec<String>,
     pub auto_remove: bool,
     #[serde(default, rename = "ReadonlyRootfs")]
     pub readonly_rootfs: bool,
@@ -240,6 +246,9 @@ impl From<hl_container::Container> for InspectContainer {
                     .iter()
                     .map(|(name, address)| format!("{name}:{address}"))
                     .collect(),
+                dns: value.spec.resolver.nameservers().to_vec(),
+                dns_options: value.spec.resolver.options().to_vec(),
+                dns_search: value.spec.resolver.search().to_vec(),
                 auto_remove: value.spec.removal == hl_container::RemovalPolicy::Automatic,
                 readonly_rootfs: value.spec.isolation.read_only_root,
                 restart_policy: value.spec.restart.into(),
@@ -483,6 +492,14 @@ mod tests {
                 .unwrap(),
             hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
                 .name("web")
+                .resolver(
+                    hl_container::Resolver::new(
+                        vec!["192.0.2.53".parse().unwrap()],
+                        vec!["service.test".into()],
+                        vec!["ndots:2".into()],
+                    )
+                    .unwrap(),
+                )
                 .restart(hl_container::RestartPolicy::OnFailure { maximum: Some(3) }),
             hl_container::ContainerState::Running {
                 process_id: 7,
@@ -510,6 +527,9 @@ mod tests {
         assert_eq!(inspect["HostConfig"]["AutoRemove"], false);
         assert_eq!(inspect["HostConfig"]["RestartPolicy"]["Name"], "on-failure");
         assert_eq!(inspect["HostConfig"]["RestartPolicy"]["MaximumRetryCount"], 3);
+        assert_eq!(inspect["HostConfig"]["Dns"], serde_json::json!(["192.0.2.53"]));
+        assert_eq!(inspect["HostConfig"]["DnsSearch"], serde_json::json!(["service.test"]));
+        assert_eq!(inspect["HostConfig"]["DnsOptions"], serde_json::json!(["ndots:2"]));
         for key in [
             "Status",
             "Running",

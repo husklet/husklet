@@ -88,6 +88,12 @@ pub struct HostConfig {
     pub tmpfs: BTreeMap<String, String>,
     #[serde(default)]
     pub extra_hosts: Vec<String>,
+    #[serde(default, rename = "Dns")]
+    pub dns: Vec<std::net::IpAddr>,
+    #[serde(default, rename = "DnsOptions")]
+    pub dns_options: Vec<String>,
+    #[serde(default, rename = "DnsSearch")]
+    pub dns_search: Vec<String>,
     #[serde(default)]
     pub memory: i64,
     #[serde(default)]
@@ -204,7 +210,27 @@ impl CreateContainer {
 
 #[cfg(all(test, feature = "runtime"))]
 mod stop_timeout_tests {
-    use super::CreateContainer;
+    use super::{CreateContainer, HostConfig};
+
+    #[test]
+    fn resolver_fields_use_docker_wire_names_and_typed_addresses() {
+        let host: HostConfig = serde_json::from_value(serde_json::json!({
+            "Dns": ["192.0.2.53", "2001:db8::53"],
+            "DnsSearch": ["service.test"],
+            "DnsOptions": ["ndots:2"]
+        }))
+        .unwrap();
+        assert_eq!(host.dns[0], "192.0.2.53".parse().unwrap());
+        assert_eq!(host.dns[1], "2001:db8::53".parse().unwrap());
+        assert_eq!(host.dns_search, ["service.test"]);
+        assert_eq!(host.dns_options, ["ndots:2"]);
+
+        let wire = serde_json::to_value(host).unwrap();
+        assert_eq!(wire["Dns"], serde_json::json!(["192.0.2.53", "2001:db8::53"]));
+        assert_eq!(wire["DnsSearch"], serde_json::json!(["service.test"]));
+        assert_eq!(wire["DnsOptions"], serde_json::json!(["ndots:2"]));
+        assert!(serde_json::from_value::<HostConfig>(serde_json::json!({"Dns": ["not-an-address"]})).is_err());
+    }
 
     #[test]
     fn stop_timeout_is_optional_nonnegative_and_bounded() {

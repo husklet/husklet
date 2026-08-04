@@ -294,6 +294,9 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
         }],
         tmpfs: BTreeMap::new(),
         extra_hosts: vec!["database=203.0.113.9".into()],
+        dns: vec!["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()],
+        dns_options: vec!["ndots:2".into(), "timeout:1".into()],
+        dns_search: vec!["service.test".into()],
         memory: 64 * 1024 * 1024,
         pids_limit: Some(32),
         nano_cpus: 1_500_000_000,
@@ -320,6 +323,12 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
     assert_eq!(settings.resources.process_count, 32);
     assert_eq!(settings.resources.cpu_count, 2);
     assert_eq!(settings.hosts.get("database"), Some(&"203.0.113.9".parse().unwrap()));
+    assert_eq!(
+        settings.resolver.nameservers(),
+        ["192.0.2.53".parse().unwrap(), "2001:db8::53".parse().unwrap()]
+    );
+    assert_eq!(settings.resolver.search(), ["service.test"]);
+    assert_eq!(settings.resolver.options(), ["ndots:2", "timeout:1"]);
     assert!(settings.isolation.read_only_root);
     assert!(!settings.isolation.network_isolated);
     assert_eq!(settings.removal, hl_container::RemovalPolicy::Automatic);
@@ -327,6 +336,26 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
     assert_eq!(settings.mounts[0].access, Access::ReadOnly);
     assert_eq!(settings.mounts[1].access, Access::ReadOnly);
     assert_eq!(settings.mounts[1].propagation, hl_container::BindPropagation::Private);
+}
+
+#[tokio::test]
+async fn host_config_rejects_unrepresentable_resolver_tokens() {
+    let (_root, containers) = containers().await;
+    let value = HostConfig {
+        dns_search: vec!["safe.test\ninjected".into()],
+        ..HostConfig::default()
+    };
+    let error = HostSettings::parse(
+        Some(&value),
+        &ExposedPorts::default(),
+        BTreeMap::new(),
+        false,
+        hl_container::NetworkMode::Automatic,
+        &containers,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
