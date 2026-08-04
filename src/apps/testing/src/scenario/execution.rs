@@ -78,11 +78,23 @@ async fn run_case(
             .map_err(|_| format!("timed out after {} seconds", case.timeout))??;
         let logs = containers.logs(&name).await?;
         if status != ExitStatus::Code(case.exit) {
-            return Err(format!("exit {status:?}, expected {}", case.exit).into());
+            return Err(format!(
+                "exit {status:?}, expected {}; stdout={:?}; stderr={:?}",
+                case.exit,
+                String::from_utf8_lossy(&logs.stdout),
+                String::from_utf8_lossy(&logs.stderr),
+            )
+            .into());
         }
         let expected = fs::read(&case.stdout_contains)?;
         if !logs.stdout.windows(expected.len()).any(|window| window == expected) {
-            return Err(format!("stdout does not contain {:?}: {:?}", expected, logs.stdout).into());
+            return Err(format!(
+                "stdout does not contain {:?}; stdout={:?}; stderr={:?}",
+                String::from_utf8_lossy(&expected),
+                String::from_utf8_lossy(&logs.stdout),
+                String::from_utf8_lossy(&logs.stderr),
+            )
+            .into());
         }
         Ok::<(), Error>(())
     }
