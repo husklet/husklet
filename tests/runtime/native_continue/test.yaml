@@ -1,0 +1,16 @@
+targets: [amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/native_continue/quantum
+    status: active
+    compat: { class: compatibility }
+    build: { source: main.c, output: native_continue, flags: [-static-pie, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/native_continue }
+    run: []
+    timeout: 30
+    expect: { exit: 0, stdout: golden/continue.txt }
