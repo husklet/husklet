@@ -43,9 +43,9 @@ fixture target exception is the AMD64 non-PIE address-fold regression.
 
 | Retained C capability | Rust owner | Migration assessment |
 |---|---|---|
-| realtime, monotonic, raw, coarse, boottime, TAI and CPU clock reads | `hl-runtime/process/time.rs`, `ClockPort`, `CpuClockPort`; validation in `hl-linux/signal` | Implemented with typed clock identities and staged guest writes |
-| relative/absolute nanosleep, deadline recomputation, interruption remainder | `hl-runtime/process/time.rs::sleep_with`, `RuntimeSleepPort`; `hl-linux/futex/time.rs` | Implemented; interruption is an explicit outcome |
-| gettimeofday/time and guest structure marshalling | `hl-runtime/process/time.rs`; `hl-linux` marshaller | Implemented with bounded staged copies |
+| realtime, monotonic, raw, coarse, boottime, TAI and CPU clock reads | `hl-linux/src/futex/time.rs::TimeFutexAbi::{clock_read,clock}`, with runtime `ClockPort`/`CpuClockPort` execution | Implemented with typed clock identities and staged guest writes |
+| relative/absolute nanosleep, deadline recomputation, interruption remainder | `hl-linux/src/futex/time.rs::TimeFutexAbi::{nanosleep,clock_nanosleep,timespec}`, with the runtime sleep port | Implemented; interruption is an explicit outcome |
+| gettimeofday/time and guest structure marshalling | `hl-linux/src/futex/time.rs::TimeFutexAbi::{gettimeofday,stage_timeval,stage_process_times}` | Implemented with bounded staged copies |
 | getitimer/setitimer ownership and signal delivery | `hl-runtime/process/itimer.rs`, process alarm registry | Implemented as process-owned state, not ambient host state |
 | POSIX timer allocation, arm/disarm, periodic expiry, overrun, delete race | `hl-runtime/process/timer.rs::TimerRegistry` | Implemented with bounded slots, mutex ownership, generation checks, and tagged pending-signal removal |
 | SIGEV_SIGNAL/SIGEV_THREAD targeting | `TimerRegistry` plus task/signal delivery ports | Implemented through guest task ownership; no host signal is injected |
