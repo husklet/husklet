@@ -74,7 +74,12 @@ impl Native {
 
 impl NetworkCheckpointHost for Native {
     fn capture_prepare(&self) -> Result<(), NetworkCheckpointError> {
-        self.authority()?
+        let Some(authority) = &self.authority else {
+            return Ok(());
+        };
+        authority
+            .lock()
+            .map_err(|_| NetworkCheckpointError::InvalidImage)?
             .network()
             .capture_prepare()
             .map_err(|_| NetworkCheckpointError::InvalidImage)
@@ -98,7 +103,12 @@ impl NetworkCheckpointHost for Native {
     }
 
     fn capture_publish(&self, digest: [u8; 32]) -> Result<(), NetworkCheckpointError> {
-        self.authority()?
+        let Some(authority) = &self.authority else {
+            return Ok(());
+        };
+        authority
+            .lock()
+            .map_err(|_| NetworkCheckpointError::InvalidImage)?
             .network()
             .capture_publish(digest)
             .map_err(|_| NetworkCheckpointError::InvalidImage)
@@ -129,7 +139,16 @@ impl NetworkCheckpointHost for Native {
     }
 
     fn restore_begin(&self, digest: [u8; 32], image: &NetworkCheckpointImage) -> Result<(), NetworkCheckpointError> {
-        self.authority()?
+        let Some(authority) = &self.authority else {
+            return image
+                .authority
+                .is_empty()
+                .then_some(())
+                .ok_or(NetworkCheckpointError::InvalidImage);
+        };
+        authority
+            .lock()
+            .map_err(|_| NetworkCheckpointError::InvalidImage)?
             .network()
             .restore_begin(digest, image.authority.len())
             .map_err(|_| NetworkCheckpointError::InvalidImage)
@@ -180,7 +199,12 @@ impl NetworkCheckpointHost for Native {
     }
 
     fn checkpoint_commit(&self) -> Result<(), NetworkCheckpointError> {
-        self.authority()?
+        let Some(authority) = &self.authority else {
+            return Ok(());
+        };
+        authority
+            .lock()
+            .map_err(|_| NetworkCheckpointError::InvalidImage)?
             .network()
             .restore_commit()
             .map_err(|_| NetworkCheckpointError::InvalidImage)
@@ -199,9 +223,46 @@ impl NetworkCheckpointHost for Native {
     }
 
     fn checkpoint_resume(&self) -> Result<(), NetworkCheckpointError> {
-        self.authority()?
+        let Some(authority) = &self.authority else {
+            return Ok(());
+        };
+        authority
+            .lock()
+            .map_err(|_| NetworkCheckpointError::InvalidImage)?
             .network()
             .restore_resume()
             .map_err(|_| NetworkCheckpointError::InvalidImage)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hl_network::{NETWORK_CHECKPOINT_VERSION, NetworkCheckpointImage, NetworkConfiguration};
+    use hl_runtime::NetworkCheckpointHost;
+
+    use super::Native;
+
+    #[test]
+    fn internal_network_capture_does_not_require_external_authority() {
+        let host = Native::new();
+        host.capture_prepare().unwrap();
+        host.capture_publish([7; 32]).unwrap();
+        host.capture_finish();
+    }
+
+    #[test]
+    fn internal_network_restore_does_not_require_external_authority() {
+        let host = Native::new();
+        let image = NetworkCheckpointImage {
+            version: NETWORK_CHECKPOINT_VERSION,
+            generations: Vec::new(),
+            configuration: NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),
+            ports: Vec::new(),
+            authority: Vec::new(),
+            sockets: Vec::new(),
+        };
+        host.restore_begin([9; 32], &image).unwrap();
+        host.checkpoint_commit().unwrap();
+        host.checkpoint_resume().unwrap();
     }
 }

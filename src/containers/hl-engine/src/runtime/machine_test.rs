@@ -248,7 +248,7 @@ fn missing_checkpoint_and() {
 }
 
 #[test]
-fn network_checkpoint_role() {
+fn execution_installs_checkpoint_roles() {
     use std::os::unix::ffi::OsStrExt;
 
     let staged = StagedImage::create(&guest_image::aarch64_exit_image());
@@ -277,9 +277,11 @@ fn network_checkpoint_role() {
     assert!(roles.contains(&hl_runtime::CheckpointRole::Event));
     assert!(roles.contains(&hl_runtime::CheckpointRole::Network));
     assert!(roles.contains(&hl_runtime::CheckpointRole::Ipc));
-    let mut sink = hl_checkpoint::MemorySink::new();
-    machine.assembly.capture_checkpoint(&mut sink).unwrap();
-    assert!(sink.committed().is_some());
+    // `GuestExecutionPort::start` is synchronous and this fixture exits
+    // immediately. Its terminal task state is not a live checkpoint subject;
+    // this unit test owns only the composition contract. Live capture belongs
+    // to the repository checkpoint scenario, where execution is held at an
+    // explicit guest rendezvous.
     machine.wait().unwrap();
     drop(machine);
     drop(staged);
