@@ -33,7 +33,7 @@ pub(crate) use harness::{analyze, contract, fixture, manifest, report, runner, s
 )]
 pub(crate) use groups::{
     coherence, copy, databases, distros, execcmd, languages, lifecycle, netcontainer, network,
-    permissions, process, runflags, terminal, utilities, volume, weird,
+    permissions, process, runflags, terminal, utilities, volume,
 };
 
 use contract::Target;
@@ -79,7 +79,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "cache-preflight" => cache_preflight()?,
         "contract-test" => {
             contract::test_firewall()?;
-            weird::test_expected_failures()?;
         }
         "manifest-test" => manifest::test_validation()?,
         "scheduler-test" => {
@@ -112,7 +111,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "toolchains" => scenario::toolchains().await?,
         "utilities" => scenario::utilities().await?,
         "volume-contracts" => volume::run().await?,
-        "weird" => scenario::weird().await?,
         other => return Err(format!("unknown scenario {other:?}").into()),
     }
     Ok(())

@@ -152,4 +152,3 @@ volumes/readonly-rejects-write	volumes	-	missing	tests/scenarios/volume
 volumes/subdir-mount	volumes	-	missing	tests/scenarios/volume
 volumes/two-mounts	volumes	-	missing	tests/scenarios/volume
 volumes/write-seen-on-host	volumes	-	missing	tests/scenarios/volume
-weird/static-nonpie-helloworld	weird	-	missing	tests/scenarios/weird

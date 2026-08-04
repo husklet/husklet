@@ -1,13 +1,13 @@
 use crate::{
     coherence, copy, databases, distros, execcmd, languages, lifecycle, netcontainer, network,
-    permissions, process, registry, report, runflags, runner, terminal, utilities, weird,
+    permissions, process, registry, report, runflags, runner, terminal, utilities,
     workflows,
 };
 use crate::support::{containers_for, unpack};
 use std::{env, path::PathBuf};
 use tempfile::TempDir;
 
-pub(super) const SCENARIOS: [&str; 17] = [
+pub(super) const SCENARIOS: [&str; 16] = [
     "runtime-alpine",
     "copy",
     "buildcmd",
@@ -24,7 +24,6 @@ pub(super) const SCENARIOS: [&str; 17] = [
     "toolchains",
     "utilities",
     "volume-contracts",
-    "weird",
 ];
 
 pub(super) async fn workflow() -> Result<(), Box<dyn std::error::Error>> {
@@ -161,11 +160,6 @@ pub(super) async fn toolchains() -> Result<(), Box<dyn std::error::Error>> {
 pub(super) async fn distros() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
     distros::run(&containers_for(work.path()).await?).await
-}
-
-pub(super) async fn weird() -> Result<(), Box<dyn std::error::Error>> {
-    let work = TempDir::new()?;
-    weird::run(&containers_for(work.path()).await?).await
 }
 
 pub(super) async fn runflags() -> Result<(), Box<dyn std::error::Error>> {

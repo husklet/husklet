@@ -253,7 +253,7 @@ pub(crate) mod tests {
                 "--jobs".into(),
                 "3".into(),
                 "--category".into(),
-                "weird".into(),
+                "terminal".into(),
                 "--dry-run".into(),
                 "--target".into(),
                 "amd64".into(),
@@ -262,7 +262,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(options.jobs, 3);
-        assert_eq!(options.category.as_deref(), Some("weird"));
+        assert_eq!(options.category.as_deref(), Some("terminal"));
         assert!(options.dry_run);
         assert_eq!(options.target, crate::contract::Target::Amd64);
     }

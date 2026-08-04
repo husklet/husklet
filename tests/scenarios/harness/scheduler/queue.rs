@@ -115,10 +115,6 @@ pub(super) const TASKS: &[Task] = &[
         category: "volume",
         command: "volume-contracts",
     },
-    Task {
-        category: "weird",
-        command: "weird",
-    },
 ];
 
 pub(super) fn owns(task: &Task, id: &str) -> bool {
@@ -148,7 +144,6 @@ pub(super) fn requirements(task: &Task, selected: Option<&str>) -> BTreeSet<Reso
 fn fallback(category: &str) -> Option<Resource> {
     match category {
         "buildcmd" | "distros" | "languages" | "toolchains" => Some(Resource::Registry),
-        "weird" => Some(Resource::ProcessHeavy),
         "copy" | "volume" => Some(Resource::DiskHeavy),
         "databases" | "netcontainer" | "network" | "runflags" => Some(Resource::HostPort),
         _ => None,

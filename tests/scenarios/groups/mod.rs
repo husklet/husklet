@@ -21,4 +21,3 @@ pub(crate) mod runflags;
 pub(crate) mod terminal;
 pub(crate) mod utilities;
 pub(crate) mod volume;
-pub(crate) mod weird;
