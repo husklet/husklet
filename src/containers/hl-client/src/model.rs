@@ -13,7 +13,7 @@ pub use hl_daemon::api::{
     NetworkPrune, NetworkSettings, NetworkingConfig, PathStat, Pids, Plugin, PortBinding,
     PortBindings, PortSummary, ProgressDetail, PullProgress, PushAux, PushProgress, RestartPolicy,
     Search, Stats, SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, UsageData,
-    Version, Volume, VolumeCreate, VolumeList, VolumeOptions, VolumePrune, VolumeUsage, Wait,
+    Version, Volume, VolumeCreate, VolumeList, VolumeOptions, VolumePrune, Wait,
 };
 
 #[cfg(test)]

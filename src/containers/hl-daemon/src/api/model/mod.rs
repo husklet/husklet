@@ -42,7 +42,7 @@ pub use log::{ContainerLogs, LogOptions, LogProtocolError, LogStreams};
 pub use process::{EnvError, EnvVar, EnvVars};
 pub use stats::{BlockIo, Cpu, CpuUsage, Memory, Pids, Stats, Throttling, Top};
 pub use system::{
-    BuildCache, BuildCacheKind, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version, VolumeUsage,
+    BuildCache, BuildCacheKind, DiskUsage, Plugin, SystemInfo, SystemPrune, Version,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

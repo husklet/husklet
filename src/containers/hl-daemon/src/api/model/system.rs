@@ -1,4 +1,5 @@
 use super::{Container, ImageDelete, ImageSummary};
+use crate::api::Volume;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -43,7 +44,7 @@ pub struct DiskUsage {
     pub layers_size: i64,
     pub images: Vec<ImageSummary>,
     pub containers: Vec<Container>,
-    pub volumes: Vec<VolumeUsage>,
+    pub volumes: Vec<Volume>,
     pub build_cache: Vec<BuildCache>,
 }
 
@@ -91,22 +92,6 @@ pub struct SystemPrune {
     pub networks_deleted: Vec<String>,
     pub volumes_deleted: Vec<String>,
     pub space_reclaimed: u64,
-}
-
-/// Durable volume disk usage and reference accounting.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct VolumeUsage {
-    pub name: String,
-    pub mountpoint: String,
-    pub usage_data: UsageData,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct UsageData {
-    pub size: i64,
-    pub ref_count: i64,
 }
 
 /// Docker plugin metadata. The daemon currently returns an empty collection.

@@ -17,15 +17,15 @@ pub use model::{
     HostConfig, ImageCommit, ImageConfig, ImageDelete, ImageHistory, ImageLoad, ImagePrune, ImageSummary,
     InspectContainer, InspectHostConfig, InspectImage, LogOptions, LogProtocolError, LogStreams, Memory, MountPoint,
     NetworkSettings, NetworkingConfig, PathStat, Pids, Plugin, ProgressDetail, PullProgress, PushAux, PushProgress,
-    RestartPolicy, Search, Stats, SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, UsageData, Version,
-    VolumeOptions, VolumeUsage, Wait,
+    RestartPolicy, Search, Stats, SystemInfo, SystemPrune, Throttling, Top, Update, UpdateResult, Version,
+    VolumeOptions, Wait,
 };
 pub use network::{
     ConfigFrom, EndpointConfig, EndpointIpam, Ipam, IpamConfig, Network, NetworkConnect, NetworkContainer,
     NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune,
 };
 pub use port::{ExposedPorts, PortBinding, PortBindings, PortSummary};
-pub use volume::{Volume, VolumeCreate, VolumeList, VolumePrune};
+pub use volume::{UsageData, Volume, VolumeCreate, VolumeList, VolumePrune};
 
 #[cfg(feature = "runtime")]
 mod http;

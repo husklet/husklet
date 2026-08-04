@@ -7,7 +7,7 @@ use hl_images::content::Store;
 use super::{ApiError, ApiResult, DockerState};
 use crate::api::{
     Authentication, BuildCache, Container, Credentials, ImageSummary, Plugin, SystemInfo, SystemPrune, UsageData,
-    Version, VolumeUsage,
+    Version, Volume,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -135,7 +135,7 @@ pub(super) struct DiskUsageResponse {
     layers_size: i64,
     images: Option<Vec<ImageSummary>>,
     containers: Option<Vec<Container>>,
-    volumes: Option<Vec<VolumeUsage>>,
+    volumes: Option<Vec<Volume>>,
     build_cache: Option<Vec<BuildCache>>,
 }
 
@@ -182,7 +182,7 @@ async fn selected_images(state: DockerState, selected: bool) -> ApiResult<Option
     Ok(Some((layers_size?, images?)))
 }
 
-async fn selected_volumes(state: DockerState, selected: bool) -> ApiResult<Option<Vec<VolumeUsage>>> {
+async fn selected_volumes(state: DockerState, selected: bool) -> ApiResult<Option<Vec<Volume>>> {
     if !selected {
         return Ok(None);
     }
@@ -198,21 +198,20 @@ async fn selected_volumes(state: DockerState, selected: bool) -> ApiResult<Optio
         .map_err(ApiError::container)?;
     let mut volumes = Vec::new();
     for volume in listed_volumes {
-        let size = sizes.remove(&volume.name).ok_or_else(|| {
+        let name = volume.name.clone();
+        let size = sizes.remove(&name).ok_or_else(|| {
             ApiError::container(hl_container::Error::Corrupt(format!(
                 "volume size result omitted {:?}",
-                volume.name
+                name
             )))
         })?;
-        let references = reference_counts.get(&volume.name).copied().unwrap_or_default();
-        volumes.push(VolumeUsage {
-            name: volume.name,
-            mountpoint: volume.path.to_string_lossy().into_owned(),
-            usage_data: UsageData {
-                size: i64::try_from(size).unwrap_or(i64::MAX),
-                ref_count: i64::try_from(references).unwrap_or(i64::MAX),
-            },
+        let references = reference_counts.get(&name).copied().unwrap_or_default();
+        let mut wire = Volume::from(volume);
+        wire.usage_data = Some(UsageData {
+            size: i64::try_from(size).unwrap_or(i64::MAX),
+            ref_count: i64::try_from(references).unwrap_or(i64::MAX),
         });
+        volumes.push(wire);
     }
     Ok(Some(volumes))
 }

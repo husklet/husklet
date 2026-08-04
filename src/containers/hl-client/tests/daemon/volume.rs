@@ -28,6 +28,7 @@ async fn volume_crud_is_shared_with_headless_ownership_and_protects_references()
     };
     let volume = client.volumes().create(&request).await.unwrap();
     assert_eq!(volume.name, "shared-data");
+    assert_eq!(volume.usage_data, None);
     assert_eq!(
         client.volumes().create(&request).await.unwrap().mountpoint,
         volume.mountpoint
@@ -57,8 +58,9 @@ async fn volume_crud_is_shared_with_headless_ownership_and_protects_references()
     let usage = client.system().disk_usage().await.unwrap();
     assert_eq!(usage.volumes.len(), 1);
     assert_eq!(usage.volumes[0].name, "shared-data");
-    assert_eq!(usage.volumes[0].usage_data.size, 7);
-    assert_eq!(usage.volumes[0].usage_data.ref_count, 1);
+    let usage_data = usage.volumes[0].usage_data.as_ref().unwrap();
+    assert_eq!(usage_data.size, 7);
+    assert_eq!(usage_data.ref_count, 1);
     let error = client
         .volumes()
         .remove("shared-data", true)

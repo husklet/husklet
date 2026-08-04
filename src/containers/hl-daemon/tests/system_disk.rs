@@ -63,7 +63,10 @@ async fn wire_client() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .await?;
 
-    let alpha = containers.volumes().create(VolumeSpec::new("alpha")).await?;
+    let alpha = containers
+        .volumes()
+        .create(VolumeSpec::new("alpha").label("purpose", "disk").option("type", "none"))
+        .await?;
     std::fs::write(alpha.path().join("payload"), b"alpha")?;
     let zeta = containers.volumes().create(VolumeSpec::new("zeta")).await?;
     std::fs::write(zeta.path().join("payload"), b"zeta-content")?;
@@ -107,6 +110,45 @@ async fn wire_client() -> Result<(), Box<dyn std::error::Error>> {
                 == ["alpha", "external", "zeta"],
             "raw volume accounting was not name ordered",
         )?;
+        let alpha_wire = raw_volumes[0].as_object().ok_or("raw alpha volume was not an object")?;
+        require(
+            alpha_wire
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>()
+                == [
+                    "CreatedAt",
+                    "Driver",
+                    "Labels",
+                    "Mountpoint",
+                    "Name",
+                    "Options",
+                    "Scope",
+                    "UsageData",
+                ]
+                .into_iter()
+                .collect(),
+            "raw alpha volume did not use the canonical Docker shape",
+        )?;
+        require(raw_volumes[0]["Driver"] == "local", "raw alpha driver was incorrect")?;
+        require(raw_volumes[0]["Scope"] == "local", "raw alpha scope was incorrect")?;
+        require(
+            raw_volumes[0]["Mountpoint"] == alpha.path().to_string_lossy().as_ref(),
+            "raw alpha mountpoint was incorrect",
+        )?;
+        require(
+            raw_volumes[0]["Labels"] == serde_json::json!({"purpose": "disk"}),
+            "raw alpha labels were incorrect",
+        )?;
+        require(
+            raw_volumes[0]["Options"] == serde_json::json!({"type": "none"}),
+            "raw alpha options were incorrect",
+        )?;
+        chrono::DateTime::parse_from_rfc3339(
+            raw_volumes[0]["CreatedAt"]
+                .as_str()
+                .ok_or("raw alpha CreatedAt was not a string")?,
+        )?;
         require(raw_volumes[0]["UsageData"]["Size"] == 5, "raw alpha size was incorrect")?;
         require(
             raw_volumes[0]["UsageData"]["RefCount"] == 1,
@@ -122,14 +164,19 @@ async fn wire_client() -> Result<(), Box<dyn std::error::Error>> {
                 .volumes
                 .iter()
                 .map(|volume| {
+                    let usage = volume.usage_data.as_ref();
                     (
                         volume.name.as_str(),
-                        volume.usage_data.size,
-                        volume.usage_data.ref_count,
+                        usage.map(|usage| usage.size),
+                        usage.map(|usage| usage.ref_count),
                     )
                 })
                 .collect::<Vec<_>>()
-                == [("alpha", 5, 1), ("external", 0, 0), ("zeta", 12, 0)],
+                == [
+                    ("alpha", Some(5), Some(1)),
+                    ("external", Some(0), Some(0)),
+                    ("zeta", Some(12), Some(0)),
+                ],
             "typed client volume accounting diverged from the raw contract",
         )?;
         Ok::<_, Box<dyn std::error::Error>>(())
