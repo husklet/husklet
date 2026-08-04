@@ -1,0 +1,1058 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/ipc/socket-stop
+    status: !broken
+      reason: "the unified runner has no typed expected external-stop outcome"
+      evidence: "tests/runtime/ipc/EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/socket_stop.c, output: socket-stop, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/socket-stop }
+    run: []
+    timeout: 3
+    expect: { exit: 0, stdout: golden/socket_stop.bin }
+  - id: runtime/ipc/sysv-fork
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sysv_fork.c, output: sysv-fork, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/sysv-fork }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_fork.txt }
+  - id: runtime/ipc/sysv-blocking
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sysv_blocking.c, output: sysv-blocking, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/sysv-blocking }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_blocking.txt }
+  - id: runtime/ipc/mq-lifecycle
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/mq_lifecycle.c, output: mq-lifecycle, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq-lifecycle }
+    run: []
+    expect: { exit: 0, stdout: golden/mq_lifecycle.out }
+  - id: runtime/ipc/pipe
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe.c, output: pipe, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe.out }
+  - id: runtime/ipc/pipe-poll
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_poll.c, output: pipe-poll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-poll }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_poll.out }
+  - id: runtime/ipc/pipe-eof
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_eof.c, output: pipe-eof, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-eof }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_eof.out }
+  - id: runtime/ipc/splice-tee
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/splice_tee.c, output: splice-tee, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/splice-tee }
+    run: []
+    expect: { exit: 0, stdout: golden/splice_tee.out }
+  - id: runtime/ipc/fifo-nonblock
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/fifo_nonblock.c, output: fifo-nonblock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/fifo-nonblock }
+    run: []
+    expect: { exit: 0, stdout: golden/fifo_nonblock.out }
+  - id: runtime/ipc/fifo-multi-writer
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/fifo_multiwriter.c, output: fifo-multi-writer, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/fifo-multi-writer }
+    run: []
+    expect: { exit: 0, stdout: golden/fifo_multiwriter.out }
+  - id: runtime/ipc/fifo-twoway
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/fifo_twoway.c, output: fifo-twoway, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/fifo-twoway }
+    run: []
+    expect: { exit: 0, stdout: golden/fifo_twoway.out }
+  - id: runtime/ipc/sysv-shm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_shm.c, output: sysv-shm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-shm }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_shm.out }
+  - id: runtime/ipc/sysv-sem
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_sem.c, output: sysv-sem, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-sem }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_sem.out }
+  - id: runtime/ipc/sysv-msg
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_msg.c, output: sysv-msg, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-msg }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_msg.out }
+  - id: runtime/ipc/msgget-ftok
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/msgget_ftok.c, output: msgget-ftok, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/msgget-ftok }
+    run: []
+    expect: { exit: 0, stdout: golden/msgget_ftok.out }
+  - id: runtime/ipc/sysv-stress
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_stress.c, output: sysv-stress, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-stress }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_stress.out }
+  - id: runtime/ipc/posix-shm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/posix_shm.c, output: posix-shm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/posix-shm }
+    run: []
+    expect: { exit: 0, stdout: golden/posix_shm.out }
+  - id: runtime/ipc/shm-dsm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/shm_dsm.c, output: shm-dsm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/shm-dsm }
+    run: []
+    expect: { exit: 0, stdout: golden/shm_dsm.out }
+  - id: runtime/ipc/posix-sem-named
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/posix_semnamed.c, output: posix-sem-named, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/posix-sem-named }
+    run: []
+    expect: { exit: 0, stdout: golden/posix_semnamed.out }
+  - id: runtime/ipc/scm-rights
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_rights.c, output: scm-rights, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-rights }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_rights.out }
+  - id: runtime/ipc/exec-fd-epoll
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/exec_fdepoll.c, output: exec-fd-epoll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/exec-fd-epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/exec_fdepoll.out }
+  - id: runtime/ipc/sockpair-dgram
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sockpair_dgram.c, output: sockpair-dgram, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sockpair-dgram }
+    run: []
+    expect: { exit: 0, stdout: golden/sockpair_dgram.out }
+  - id: runtime/ipc/dup-offset
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/dup_offset.c, output: dup-offset, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/dup-offset }
+    run: []
+    expect: { exit: 0, stdout: golden/dup_offset.out }
+  - id: runtime/ipc/flock-fork
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/flock_fork.c, output: flock-fork, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/flock-fork }
+    run: []
+    expect: { exit: 0, stdout: golden/flock_fork.out }
+  - id: runtime/ipc/poslk-xproc
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/poslk_xproc.c, output: poslk-xproc, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/poslk-xproc }
+    run: []
+    expect: { exit: 0, stdout: golden/poslk_xproc.out }
+  - id: runtime/ipc/lockf-fork
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/lockf.c, output: lockf-fork, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/lockf-fork }
+    run: []
+    expect: { exit: 0, stdout: golden/lockf.out }
+  - id: runtime/ipc/sysv-edge
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_edge.c, output: sysv-edge, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-edge }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_edge.out }
+  - id: runtime/ipc/sysv-ctl
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_ctl.c, output: sysv-ctl, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-ctl }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_ctl.out }
+  - id: runtime/ipc/sysv-owner
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysv_owner.c, output: sysv-owner, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/sysv-owner }
+    run: []
+    expect: { exit: 0, stdout: golden/sysv_owner.out }
+  - id: runtime/ipc/mq-edge
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/mq_edge.c, output: mq-edge, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq-edge }
+    run: []
+    expect: { exit: 0, stdout: golden/mq_edge.out }
+  - id: runtime/ipc/mq-notify
+    status: !broken
+      reason: "excluded-macos: mq_notify SIGEV_SIGNAL si_code/SI_MESGQ delivery diverges on the macOS engine. Linux engine still runs+passes this."
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: source/mq_notify.c, output: mq-notify, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq-notify }
+    run: []
+    expect: { exit: 0, stdout: golden/mq_notify.out }
+  - id: runtime/ipc/mq
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/mq.c, output: mq, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq }
+    run: []
+    expect: { exit: 0, stdout: golden/mq.out }
+  - id: runtime/ipc/eventfd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd.c, output: eventfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd.out }
+  - id: runtime/ipc/seqpacket
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqpacket.c, output: seqpacket, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqpacket }
+    run: []
+    expect: { exit: 0, stdout: golden/seqpacket.out }
+  - id: runtime/ipc/seqcred
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqcred.c, output: seqcred, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqcred }
+    run: []
+    expect: { exit: 0, stdout: golden/seqcred.out }
+  - id: runtime/ipc/seqpacket-flags
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqpacket_flags.c, output: seqpacket-flags, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqpacket-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/seqpacket_flags.out }
+  - id: runtime/ipc/seqpacket-epoll-drain
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqpacket_epolldrain.c, output: seqpacket-epoll-drain, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqpacket-epoll-drain }
+    run: []
+    expect: { exit: 0, stdout: golden/seqpacket_epolldrain.out }
+  - id: runtime/ipc/seqpacket-passcred-full
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqpacket_passcredfull.c, output: seqpacket-passcred-full, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqpacket-passcred-full }
+    run: []
+    expect: { exit: 0, stdout: golden/seqpacket_passcredfull.out }
+  - id: runtime/ipc/seqpacket-passcred-ctrunc
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqpacket_passcredctrunc.c, output: seqpacket-passcred-ctrunc, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqpacket-passcred-ctrunc }
+    run: []
+    expect: { exit: 0, stdout: golden/seqpacket_passcredctrunc.out }
+  - id: runtime/ipc/xproc-inbound
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/xproc_inbound.c, output: xproc-inbound, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/xproc-inbound }
+    run: []
+    expect: { exit: 0, stdout: golden/xproc_inbound.out }
+  - id: runtime/ipc/zygote-inbound
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/zygote_inbound.c, output: zygote-inbound, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/zygote-inbound }
+    run: []
+    expect: { exit: 0, stdout: golden/zygote_inbound.out }
+  - id: runtime/ipc/xproc-prearm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/xproc_prearm.c, output: xproc-prearm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/xproc-prearm }
+    run: []
+    expect: { exit: 0, stdout: golden/xproc_prearm.out }
+  - id: runtime/ipc/pump-xproc-et
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pump_xprocet.c, output: pump-xproc-et, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pump-xproc-et }
+    run: []
+    expect: { exit: 0, stdout: golden/pump_xprocet.out }
+  - id: runtime/ipc/pump-xproc-oneshot
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pump_xproconeshot.c, output: pump-xproc-oneshot, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pump-xproc-oneshot }
+    run: []
+    expect: { exit: 0, stdout: golden/pump_xproconeshot.out }
+  - id: runtime/ipc/pump-worker-dispatch
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pump_workerdispatch.c, output: pump-worker-dispatch, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pump-worker-dispatch }
+    run: []
+    expect: { exit: 0, stdout: golden/pump_workerdispatch.out }
+  - id: runtime/ipc/pump-epollout-rearm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pump_epolloutrearm.c, output: pump-epollout-rearm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pump-epollout-rearm }
+    run: []
+    expect: { exit: 0, stdout: golden/pump_epolloutrearm.out }
+  - id: runtime/ipc/epoll-shared-xthread
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_sharedxthread.c, output: epoll-shared-xthread, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-shared-xthread }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_sharedxthread.out }
+  - id: runtime/ipc/epoll-wake-socket-collision
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_wakesocketcollision.c, output: epoll-wake-socket-collision, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/epoll-wake-socket-collision }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_wakesocketcollision.out }
+  - id: runtime/ipc/scm-futex
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_futex.c, output: scm-futex, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-futex }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_futex.out }
+  - id: runtime/ipc/scm-recv-epoll
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_recvepoll.c, output: scm-recv-epoll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-recv-epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_recvepoll.out }
+  - id: runtime/ipc/pump-primary-channel
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pump_primarychannel.c, output: pump-primary-channel, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pump-primary-channel }
+    run: []
+    expect: { exit: 0, stdout: golden/pump_primarychannel.out }
+  - id: runtime/ipc/shared-ring
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/shm_ring.c, output: shared-ring, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/shared-ring }
+    run: []
+    expect: { exit: 0, stdout: golden/shm_ring.out }
+  - id: runtime/ipc/tso-unaligned
+    status: active
+    compat: { class: compatibility }
+    targets: [amd64]
+    build: { source: source/tso_unaligned.c, output: tso-unaligned, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/tso-unaligned }
+    run: []
+    expect: { exit: 0, stdout: golden/tso_unaligned.out }
+  - id: runtime/ipc/tso-simd-mp
+    status: active
+    compat: { class: compatibility }
+    targets: [amd64]
+    build: { source: source/tso_simdmp.c, output: tso-simd-mp, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/tso-simd-mp }
+    run: []
+    expect: { exit: 0, stdout: golden/tso_simdmp.out }
+  - id: runtime/ipc/efd-xproc
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/efd_xproc.c, output: efd-xproc, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/efd-xproc }
+    run: []
+    expect: { exit: 0, stdout: golden/efd_xproc.out }
+  - id: runtime/ipc/efd-scm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/efd_scm.c, output: efd-scm, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/efd-scm }
+    run: []
+    expect: { exit: 0, stdout: golden/efd_scm.out }
+  - id: runtime/ipc/efd-scm-hifd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/efd_scmhifd.c, output: efd-scm-hifd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/efd-scm-hifd }
+    run: []
+    expect: { exit: 0, stdout: golden/efd_scmhifd.out }
+  - id: runtime/ipc/bootstrap-handle
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/bootstrap_handle.c, output: bootstrap-handle, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/bootstrap-handle }
+    run: []
+    expect: { exit: 0, stdout: golden/bootstrap_handle.out }
+  - id: runtime/ipc/scm-eventfd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_eventfd.c, output: scm-eventfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-eventfd }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_eventfd.out }
+  - id: runtime/ipc/scm-eventfd-untrusted
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_eventfd.c, output: scm-eventfd-untrusted, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-eventfd-untrusted }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_eventfd.out }
+  - id: runtime/ipc/scm-eventfd-dense
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_eventfddense.c, output: scm-eventfd-dense, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-eventfd-dense }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_eventfddense.out }
+  - id: runtime/ipc/scm-eventfd-dense-untrusted
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_eventfddense.c, output: scm-eventfd-dense-untrusted, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-eventfd-dense-untrusted }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_eventfddense.out }
+  - id: runtime/ipc/scm-memfd-seal
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_memfdseal.c, output: scm-memfd-seal, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-memfd-seal }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_memfdseal.out }
+  - id: runtime/ipc/credpid
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/credpid.c, output: credpid, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/credpid }
+    run: []
+    expect: { exit: 0, stdout: golden/credpid.out }
+  - id: runtime/ipc/seqbystander
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqbystander.c, output: seqbystander, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqbystander }
+    run: []
+    expect: { exit: 0, stdout: golden/seqbystander.out }
+  - id: runtime/ipc/seqpacket-lastclose
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/seqpacket_lastclose.c, output: seqpacket-lastclose, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/seqpacket-lastclose }
+    run: []
+    expect: { exit: 0, stdout: golden/seqpacket_lastclose.out }
+  - id: runtime/ipc/procfd-bundle
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/procfd_bundle.c, output: procfd-bundle, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/procfd-bundle }
+    run: []
+    expect: { exit: 0, stdout: golden/procfd_bundle.out }
+  - id: runtime/ipc/msg
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/msg.c, output: msg, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/msg }
+    run: []
+    expect: { exit: 0, stdout: golden/msg.out }
+  - id: runtime/ipc/neonshm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64]
+    build: { source: source/neonshm.c, output: neonshm, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/neonshm }
+    run: []
+    expect: { exit: 0, stdout: golden/neonshm.out }
+  - id: runtime/ipc/sem
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sem.c, output: sem, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/sem }
+    run: []
+    expect: { exit: 0, stdout: golden/sem.out }
+  - id: runtime/ipc/shm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/shm.c, output: shm, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/shm }
+    run: []
+    expect: { exit: 0, stdout: golden/shm.out }
+  - id: runtime/ipc/shmposix
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/shmposix.c, output: shmposix, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/shmposix }
+    run: []
+    expect: { exit: 0, stdout: golden/shmposix.out }
+  - id: runtime/ipc/sysvshm
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/sysvshm.c, output: sysvshm, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/sysvshm }
+    run: []
+    expect: { exit: 0, stdout: golden/sysvshm.out }
+  - id: runtime/ipc/epoll-level-edge
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_leveledge.c, output: epoll-level-edge, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-level-edge }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_leveledge.out }
+  - id: runtime/ipc/epoll-oneshot
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_oneshot.c, output: epoll-oneshot, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-oneshot }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_oneshot.out }
+  - id: runtime/ipc/epoll-ctl-errno
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_ctlerrno.c, output: epoll-ctl-errno, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-ctl-errno }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_ctlerrno.out }
+  - id: runtime/ipc/epoll-closefd-reuse
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_closefdreuse.c, output: epoll-closefd-reuse, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-closefd-reuse }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_closefdreuse.out }
+  - id: runtime/ipc/epoll-mod-interest
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_modinterest.c, output: epoll-mod-interest, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-mod-interest }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_modinterest.out }
+  - id: runtime/ipc/epoll-timeout
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_timeout.c, output: epoll-timeout, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-timeout }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_timeout.out }
+  - id: runtime/ipc/eventfd-semaphore
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_semaphore.c, output: eventfd-semaphore, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-semaphore }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_semaphore.out }
+  - id: runtime/ipc/eventfd-counter
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_counter.c, output: eventfd-counter, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-counter }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_counter.out }
+  - id: runtime/ipc/eventfd-overflow
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_overflow.c, output: eventfd-overflow, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-overflow }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_overflow.out }
+  - id: runtime/ipc/timerfd-relative
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/timerfd_relative.c, output: timerfd-relative, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/timerfd-relative }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_relative.out }
+  - id: runtime/ipc/timerfd-abstime
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/timerfd_abstime.c, output: timerfd-abstime, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/timerfd-abstime }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_abstime.out }
+  - id: runtime/ipc/timerfd-periodic
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/timerfd_periodic.c, output: timerfd-periodic, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/timerfd-periodic }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_periodic.out }
+  - id: runtime/ipc/timerfd-gettime
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/timerfd_gettime.c, output: timerfd-gettime, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/timerfd-gettime }
+    run: []
+    expect: { exit: 0, stdout: golden/timerfd_gettime.out }
+  - id: runtime/ipc/signalfd-read
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/signalfd_read.c, output: signalfd-read, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/signalfd-read }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_read.out }
+  - id: runtime/ipc/signalfd-nonblock
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/signalfd_nonblock.c, output: signalfd-nonblock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/signalfd-nonblock }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_nonblock.out }
+  - id: runtime/ipc/pipe-nonblock
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_nonblock.c, output: pipe-nonblock, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-nonblock }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_nonblock.out }
+  - id: runtime/ipc/pipe-setsize
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_setsize.c, output: pipe-setsize, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-setsize }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_setsize.out }
+  - id: runtime/ipc/pipe-sigpipe
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_sigpipe.c, output: pipe-sigpipe, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-sigpipe }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_sigpipe.out }
+  - id: runtime/ipc/pipe-poll-hup
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_pollhup.c, output: pipe-poll-hup, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-poll-hup }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_pollhup.out }
+  - id: runtime/ipc/poll-basic
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/poll_basic.c, output: poll-basic, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/poll-basic }
+    run: []
+    expect: { exit: 0, stdout: golden/poll_basic.out }
+  - id: runtime/ipc/poll-nval
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/poll_nval.c, output: poll-nval, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/poll-nval }
+    run: []
+    expect: { exit: 0, stdout: golden/poll_nval.out }
+  - id: runtime/ipc/ppoll-mask
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/ppoll_mask.c, output: ppoll-mask, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/ppoll-mask }
+    run: []
+    expect: { exit: 0, stdout: golden/ppoll_mask.out }
+  - id: runtime/ipc/select-basic
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/select_basic.c, output: select-basic, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/select-basic }
+    run: []
+    expect: { exit: 0, stdout: golden/select_basic.out }
+  - id: runtime/ipc/unix-dgram-boundary
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/unix_dgramboundary.c, output: unix-dgram-boundary, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/unix-dgram-boundary }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_dgramboundary.out }
+  - id: runtime/ipc/unix-peek
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/unix_peek.c, output: unix-peek, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/unix-peek }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_peek.out }
+  - id: runtime/ipc/unix-shutdown
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/unix_shutdown.c, output: unix-shutdown, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/unix-shutdown }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_shutdown.out }
+  - id: runtime/ipc/unix-peercred
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/unix_peercred.c, output: unix-peercred, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/unix-peercred }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_peercred.out }
+  - id: runtime/ipc/unix-abstract
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/unix_abstract.c, output: unix-abstract, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/unix-abstract }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_abstract.out }
+  - id: runtime/ipc/unix-scm-fd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/unix_scmfd.c, output: unix-scm-fd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/unix-scm-fd }
+    run: []
+    expect: { exit: 0, stdout: golden/unix_scmfd.out }
+  - id: runtime/ipc/tcp-loopback
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/tcp_loopback.c, output: tcp-loopback, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/tcp-loopback }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_loopback.out }
+  - id: runtime/ipc/udp-loopback
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/udp_loopback.c, output: udp-loopback, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/udp-loopback }
+    run: []
+    expect: { exit: 0, stdout: golden/udp_loopback.out }
+  - id: runtime/ipc/tcp-rcvtimeo
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/tcp_rcvtimeo.c, output: tcp-rcvtimeo, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/tcp-rcvtimeo }
+    run: []
+    expect: { exit: 0, stdout: golden/tcp_rcvtimeo.out }
+  - id: runtime/ipc/epoll-rdhup-hup
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_rdhuphup.c, output: epoll-rdhup-hup, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-rdhup-hup }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_rdhuphup.out }
+  - id: runtime/ipc/epoll-nested
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_nested.c, output: epoll-nested, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-nested }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_nested.out }
+  - id: runtime/ipc/epoll-exclusive
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/epoll_exclusive.c, output: epoll-exclusive, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/epoll-exclusive }
+    run: []
+    expect: { exit: 0, stdout: golden/epoll_exclusive.out }
+  - id: runtime/ipc/eventfd-poll
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_poll.c, output: eventfd-poll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-poll }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_poll.out }
+  - id: runtime/ipc/signalfd-multi
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/signalfd_multi.c, output: signalfd-multi, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/signalfd-multi }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_multi.out }
+  - id: runtime/ipc/signalfd-rt
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/signalfd_rt.c, output: signalfd-rt, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/signalfd-rt }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_rt.out }
+  - id: runtime/ipc/scm-rights-trunc
+    status: !broken
+      reason: "QEMU reports MSG_CTRUNC=0 while the retained Linux contract requires MSG_CTRUNC=1 for the truncated SCM_RIGHTS control buffer"
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_rightstrunc.c, output: scm-rights-trunc, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-rights-trunc }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_rightstrunc.out }
+  - id: runtime/ipc/scm-timerfd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_timerfd.c, output: scm-timerfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-timerfd }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_timerfd.out }
+  - id: runtime/ipc/scm-epoll
+    status: !broken
+      reason: "QEMU times out without reporting the transferred epoll descriptor readiness event"
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_epoll.c, output: scm-epoll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_epoll.out }
+  - id: runtime/ipc/scm-inotify
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_inotify.c, output: scm-inotify, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-inotify }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_inotify.out }
+  - id: runtime/ipc/scm-signalfd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/scm_signalfd.c, output: scm-signalfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/scm-signalfd }
+    run: []
+    expect: { exit: 0, stdout: golden/scm_signalfd.out }
+  - id: runtime/ipc/pipe-capacity
+    status: !broken
+      reason: "excluded-macos: POSIX mqueue / SCM-timerfd / pipe-capacity semantics diverge or hang on the macOS engine; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_capacity.c, output: pipe-capacity, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-capacity }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_capacity.out }
+  - id: runtime/ipc/mq-access
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/mq_access.c, output: mq-access, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq-access }
+    run: []
+    expect: { exit: 0, stdout: golden/mq_access.out }
+  - id: runtime/ipc/mq-xproc
+    status: !broken
+      reason: "excluded-macos: POSIX mqueue / SCM-timerfd / pipe-capacity semantics diverge or hang on the macOS engine; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/mq_xproc.c, output: mq-xproc, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq-xproc }
+    run: []
+    expect: { exit: 0, stdout: golden/mq_xproc.out }
+  - id: runtime/ipc/mq-poll
+    status: !broken
+      reason: "excluded-macos: POSIX mqueue / SCM-timerfd / pipe-capacity semantics diverge or hang on the macOS engine; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/mq_poll.c, output: mq-poll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/mq-poll }
+    run: []
+    expect: { exit: 0, stdout: golden/mq_poll.out }
+  - id: runtime/ipc/eventfd-bufsize
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_bufsize.c, output: eventfd-bufsize, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-bufsize }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_bufsize.out }
+  - id: runtime/ipc/signalfd-maskupdate
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/signalfd_maskupdate.c, output: signalfd-maskupdate, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/signalfd-maskupdate }
+    run: []
+    expect: { exit: 0, stdout: golden/signalfd_maskupdate.out }
+  - id: runtime/ipc/evtmix-epoll
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/evtmix_epoll.c, output: evtmix-epoll, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/evtmix-epoll }
+    run: []
+    expect: { exit: 0, stdout: golden/evtmix_epoll.out }
+  - id: runtime/ipc/eventfd-write-hotpath
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_writehotpath.c, output: eventfd-write-hotpath, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-write-hotpath }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_writehotpath.out }
+  - id: runtime/ipc/fork-epoll-timerfd
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/fork_epolltimerfd.c, output: fork-epoll-timerfd, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/fork-epoll-timerfd }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_epolltimerfd.out }
+  - id: runtime/ipc/pipe-fill-exact
+    status: !broken
+      reason: "F_SETPIPE_SZ page rounding, exact fill-to-capacity then EAGAIN, negative-size EINVAL, and PIPE_BUF atomic-write refusal near the limit. excluded-macos: macOS pipes have no F_SETPIPE_SZ and no Linux page-accounting, so capacity/rounding/negative-rejection/atomic-refusal are un-emulatable there; runs+passes on the Linux engine. native Linux oracle"
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/pipe_fill.c, output: pipe-fill-exact, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/pipe-fill-exact }
+    run: []
+    expect: { exit: 0, stdout: golden/pipe_fill.out }
+  - id: runtime/ipc/socketpair-peek
+    status: !broken
+      reason: "AF_UNIX datagram MSG_PEEK/MSG_TRUNC, zero-length datagram delivery, and shutdown EOF. excluded-macos: Linux MSG_PEEK|MSG_TRUNC reports the full datagram length into a short buffer; the macOS AF_UNIX datagram stack reports only the copied length, which the backend cannot emulate. Runs+passes on the Linux engine. native Linux oracle"
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/socketpair_peek.c, output: socketpair-peek, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/socketpair-peek }
+    run: []
+    expect: { exit: 0, stdout: golden/socketpair_peek.out }
+  - id: runtime/ipc/fork-fd-locks
+    status: !broken
+      reason: "POSIX record locks are per-process while OFD locks (F_OFD_SETLK) follow the open file description across fork. excluded-macos: macOS has no OFD locks, so F_OFD_SETLK cannot be emulated there; runs+passes on the Linux engine. native Linux oracle"
+      evidence: "tests/runtime/ipc/ORACLE.md"
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/fork_fdlocks.c, output: fork-fd-locks, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/fork-fd-locks }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_fdlocks.out }
+  - id: runtime/ipc/eventfd-lifecycle
+    status: active
+    compat: { class: compatibility }
+    targets: [arm64, amd64]
+    build: { source: source/eventfd_lifecycle.c, output: eventfd-lifecycle, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/eventfd-lifecycle }
+    run: []
+    expect: { exit: 0, stdout: golden/eventfd_lifecycle.out }
