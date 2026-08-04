@@ -30,10 +30,7 @@ fn peer(socket: &Path, response: &'static str) -> tokio::task::JoinHandle<String
                 }
             }
         }
-        stream
-            .write_all(response.as_bytes())
-            .await
-            .expect("write response");
+        stream.write_all(response.as_bytes()).await.expect("write response");
         String::from_utf8(bytes).expect("ASCII request")
     })
 }
@@ -44,10 +41,7 @@ async fn ping_uses_unversioned_endpoint() {
     let socket = root.path().join("daemon.sock");
     let request = peer(&socket, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
     Client::unix(&socket).unwrap().ping().await.unwrap();
-    assert!(request
-        .await
-        .unwrap()
-        .starts_with("GET /_ping HTTP/1.1\r\n"));
+    assert!(request.await.unwrap().starts_with("GET /_ping HTTP/1.1\r\n"));
 }
 
 #[tokio::test]

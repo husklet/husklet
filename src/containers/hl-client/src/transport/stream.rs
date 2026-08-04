@@ -6,7 +6,7 @@ use std::{
 use bytes::Bytes;
 use futures_util::TryStreamExt;
 use http::StatusCode;
-use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, StreamBody};
+use http_body_util::{BodyExt, Full, StreamBody, combinators::UnsyncBoxBody};
 use hyper::{
     body::{Body, Frame, Incoming, SizeHint},
     upgrade::Upgraded,
@@ -23,11 +23,7 @@ pub(super) struct RequestBody(UnsyncBoxBody<Bytes, BodyError>);
 
 impl RequestBody {
     pub(super) fn full(bytes: Bytes) -> Self {
-        Self(
-            Full::new(bytes)
-                .map_err(|never| match never {})
-                .boxed_unsync(),
-        )
+        Self(Full::new(bytes).map_err(|never| match never {}).boxed_unsync())
     }
 
     pub(super) fn stream<R>(reader: R) -> Self
@@ -127,11 +123,7 @@ impl AsyncRead for Upgrade {
 }
 
 impl AsyncWrite for Upgrade {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bytes: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, bytes: &[u8]) -> Poll<std::io::Result<usize>> {
         Pin::new(&mut self.0).poll_write(cx, bytes)
     }
 

@@ -80,10 +80,7 @@ async fn timeout_cancels_and_discards_connection() {
     });
     let config = Config::unix(root.path().join("daemon.sock")).timeout(Duration::from_millis(30));
     let client = Transport::new(config);
-    assert!(matches!(
-        client.get_unversioned("/_ping").await,
-        Err(Error::Timeout)
-    ));
+    assert!(matches!(client.get_unversioned("/_ping").await, Err(Error::Timeout)));
     assert_eq!(client.get_unversioned("/_ping").await.unwrap(), "OK");
     server.await.unwrap();
 }
@@ -96,11 +93,9 @@ async fn stream_is_pull_based_and_bounds_each_frame() {
         let (mut stream, _) = listener.accept().await.unwrap();
         read_request(&mut stream).await;
         stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n4\r\ncdef\r\n0\r\n\r\n",
-                )
-                .await
-                .unwrap();
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n4\r\ncdef\r\n0\r\n\r\n")
+            .await
+            .unwrap();
     });
     let client = Transport::new(Config::unix(root.path().join("daemon.sock")).response_limit(3));
     let mut response = client.stream(Method::GET, "/events").await.unwrap();
@@ -120,11 +115,9 @@ async fn upgraded_connection_is_bidirectional() {
         let (mut stream, _) = listener.accept().await.unwrap();
         read_request(&mut stream).await;
         stream
-                .write_all(
-                    b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nhello",
-                )
-                .await
-                .unwrap();
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nhello")
+            .await
+            .unwrap();
         let mut reply = [0_u8; 5];
         stream.read_exact(&mut reply).await.unwrap();
         assert_eq!(&reply, b"world");
@@ -152,15 +145,10 @@ async fn archive_upload_forwards_chunks_before_reader_eof() {
             let count = stream.read(&mut chunk).await.unwrap();
             assert_ne!(count, 0, "upload ended before second chunk");
             bytes.extend_from_slice(&chunk[..count]);
-            if first_seen.is_some() && bytes.windows(b"first".len()).any(|value| value == b"first")
-            {
+            if first_seen.is_some() && bytes.windows(b"first".len()).any(|value| value == b"first") {
                 first_seen.take().unwrap().send(()).unwrap();
             }
-            if bytes
-                .windows(b"second".len())
-                .any(|value| value == b"second")
-                && bytes.ends_with(b"0\r\n\r\n")
-            {
+            if bytes.windows(b"second".len()).any(|value| value == b"second") && bytes.ends_with(b"0\r\n\r\n") {
                 break;
             }
         }

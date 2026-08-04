@@ -4,8 +4,8 @@ use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::client::conn::http1::{self, SendRequest};
 use hyper_util::rt::TokioIo;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::io::AsyncRead;
 use tokio::net::UnixStream;
 use tokio::sync::Mutex;
@@ -55,15 +55,12 @@ impl Transport {
     }
 
     pub(crate) async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let bytes = self
-            .request(Method::GET, &self.versioned(path), Bytes::new())
-            .await?;
+        let bytes = self.request(Method::GET, &self.versioned(path), Bytes::new()).await?;
         Ok(serde_json::from_slice(&bytes)?)
     }
 
     pub(crate) async fn get(&self, path: &str) -> Result<Bytes> {
-        self.request(Method::GET, &self.versioned(path), Bytes::new())
-            .await
+        self.request(Method::GET, &self.versioned(path), Bytes::new()).await
     }
 
     pub(crate) async fn json<B: Serialize + ?Sized, T: DeserializeOwned>(
@@ -72,21 +69,12 @@ impl Transport {
         path: &str,
         body: Option<&B>,
     ) -> Result<T> {
-        let bytes = body
-            .map(serde_json::to_vec)
-            .transpose()?
-            .unwrap_or_default();
-        let response = self
-            .request(method, &self.versioned(path), Bytes::from(bytes))
-            .await?;
+        let bytes = body.map(serde_json::to_vec).transpose()?.unwrap_or_default();
+        let response = self.request(method, &self.versioned(path), Bytes::from(bytes)).await?;
         Ok(serde_json::from_slice(&response)?)
     }
 
-    pub(crate) async fn blocking_json<T: DeserializeOwned>(
-        &self,
-        method: Method,
-        path: &str,
-    ) -> Result<T> {
+    pub(crate) async fn blocking_json<T: DeserializeOwned>(&self, method: Method, path: &str) -> Result<T> {
         let request = build(
             method,
             &self.versioned(path),
@@ -104,16 +92,9 @@ impl Transport {
             .map(|_| ())
     }
 
-    pub(crate) async fn empty_json<B: Serialize + ?Sized>(
-        &self,
-        method: Method,
-        path: &str,
-        body: &B,
-    ) -> Result<()> {
+    pub(crate) async fn empty_json<B: Serialize + ?Sized>(&self, method: Method, path: &str, body: &B) -> Result<()> {
         let bytes = Bytes::from(serde_json::to_vec(body)?);
-        self.request(method, &self.versioned(path), bytes)
-            .await
-            .map(|_| ())
+        self.request(method, &self.versioned(path), bytes).await.map(|_| ())
     }
 
     pub(crate) async fn head(&self, path: &str) -> Result<http::HeaderMap> {
@@ -149,12 +130,7 @@ impl Transport {
     {
         let body = RequestBody::stream(reader);
         let response = self
-            .dedicated_request(
-                Method::POST,
-                &self.versioned(path),
-                body,
-                "application/x-tar",
-            )
+            .dedicated_request(Method::POST, &self.versioned(path), body, "application/x-tar")
             .await?;
         let bytes = self.read_response(response).await?;
         Ok(serde_json::from_slice(&bytes)?)
@@ -166,12 +142,7 @@ impl Transport {
     {
         let body = RequestBody::stream(reader);
         let response = self
-            .dedicated_request(
-                Method::POST,
-                &self.versioned(path),
-                body,
-                "application/x-tar",
-            )
+            .dedicated_request(Method::POST, &self.versioned(path), body, "application/x-tar")
             .await?;
         self.read_response(response).await
     }
@@ -271,18 +242,10 @@ impl Transport {
     async fn request(&self, method: Method, path: &str, body: Bytes) -> Result<Bytes> {
         let _span = hl_log::hl_span!(hl_log::tag::TRANSPORT, "docker_request");
         hl_log::hl_debug!(hl_log::tag::TRANSPORT, "docker request method={method}");
-        if let Ok(result) = timeout(
-            self.config.timeout,
-            self.request_once(method.clone(), path, body),
-        )
-        .await
-        {
+        if let Ok(result) = timeout(self.config.timeout, self.request_once(method.clone(), path, body)).await {
             result
         } else {
-            hl_log::hl_warn!(
-                hl_log::tag::TRANSPORT,
-                "docker request timed out method={method}"
-            );
+            hl_log::hl_warn!(hl_log::tag::TRANSPORT, "docker request timed out method={method}");
             self.invalidate().await;
             Err(Error::Timeout)
         }
@@ -309,11 +272,7 @@ impl Transport {
             .headers()
             .get(http::header::CONNECTION)
             .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| {
-                value
-                    .split(',')
-                    .any(|token| token.trim().eq_ignore_ascii_case("close"))
-            });
+            .is_some_and(|value| value.split(',').any(|token| token.trim().eq_ignore_ascii_case("close")));
         let result = self.read_response(response).await;
         if closes || result.is_err() {
             // A cancelled or incompletely consumed HTTP/1 body cannot be reused safely.
@@ -325,10 +284,7 @@ impl Transport {
     }
 
     async fn prepare(&self, slot: &mut Option<Connection>) -> Result<()> {
-        if slot
-            .as_ref()
-            .is_some_and(|connection| connection.driver.is_finished())
-        {
+        if slot.as_ref().is_some_and(|connection| connection.driver.is_finished()) {
             return self.replace_finished(slot).await;
         }
         if slot.is_none() {
@@ -363,9 +319,7 @@ impl Transport {
                 self.connect(slot).await
             }
             Ok(Err(error)) => Err(Error::Connection(error.to_string())),
-            Err(error) => Err(Error::Connection(format!(
-                "connection task failed: {error}"
-            ))),
+            Err(error) => Err(Error::Connection(format!("connection task failed: {error}"))),
         }
     }
 
@@ -395,16 +349,12 @@ impl Transport {
     }
 
     async fn blocking(&self, request: Request<RequestBody>) -> Result<Response<Incoming>> {
-        let stream = timeout(
-            self.config.timeout,
-            UnixStream::connect(&self.config.socket),
-        )
-        .await
-        .map_err(|_| Error::Timeout)??;
-        let (mut sender, connection) =
-            timeout(self.config.timeout, http1::handshake(TokioIo::new(stream)))
-                .await
-                .map_err(|_| Error::Timeout)??;
+        let stream = timeout(self.config.timeout, UnixStream::connect(&self.config.socket))
+            .await
+            .map_err(|_| Error::Timeout)??;
+        let (mut sender, connection) = timeout(self.config.timeout, http1::handshake(TokioIo::new(stream)))
+            .await
+            .map_err(|_| Error::Timeout)??;
         tokio::spawn(async move {
             if let Err(error) = connection.await {
                 hl_log::hl_debug!(
@@ -445,10 +395,7 @@ impl Transport {
         if status.is_success() {
             Ok(bytes)
         } else {
-            hl_log::hl_warn!(
-                hl_log::tag::TRANSPORT,
-                "docker request failed status={status}"
-            );
+            hl_log::hl_warn!(hl_log::tag::TRANSPORT, "docker request failed status={status}");
             Err(Error::docker(status, &bytes))
         }
     }
