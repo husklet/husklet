@@ -1,13 +1,16 @@
 use super::{scheduler, workspace};
+mod environment;
 mod host;
 pub(super) mod input;
+mod manifest;
 use crate::suite::{Commands, Error, Execution, Target};
+pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
 use input::ManifestPath;
-use serde::Deserialize;
+use manifest::{CompatClass, Document, Oracle, Status};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     path::{Component, Path, PathBuf},
     process::Command as StdCommand,
@@ -16,206 +19,6 @@ use std::{
 };
 
 const ORACLE_CAPTURE_LIMIT: u64 = 1024 * 1024;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Document {
-    targets: BTreeSet<Target>,
-    image: String,
-    #[serde(default)]
-    execution: Execution,
-    artifact: Option<Artifact>,
-    build: Build,
-    oracle: Option<Oracle>,
-    cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Oracle {
-    provider: OracleProvider,
-    commands: Commands,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum OracleProvider {
-    Native,
-    Qemu,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Artifact {
-    destination: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Build {
-    source: Option<ManifestPath>,
-    output: Option<String>,
-    compiler: Commands,
-    #[serde(default)]
-    flags: Vec<String>,
-    #[serde(default)]
-    inputs: Vec<ManifestPath>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CaseBuild {
-    source: ManifestPath,
-    output: String,
-    flags: Vec<String>,
-    #[serde(default)]
-    inputs: Vec<ManifestPath>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCase {
-    id: String,
-    build: Option<CaseBuild>,
-    artifact: Option<Artifact>,
-    #[serde(default)]
-    targets: BTreeSet<Target>,
-    status: Status,
-    compat: Compat,
-    soak: Option<scheduler::Plan>,
-    run: Vec<String>,
-    #[serde(default)]
-    #[serde(deserialize_with = "environment")]
-    environment: Vec<EnvironmentEntry>,
-    #[serde(default = "timeout")]
-    timeout: u64,
-    expect: Expect,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct EnvironmentEntry {
-    name: Vec<u8>,
-    value: Vec<u8>,
-}
-
-impl EnvironmentEntry {
-    pub(crate) fn name(&self) -> &[u8] {
-        &self.name
-    }
-
-    pub(crate) fn value(&self) -> &[u8] {
-        &self.value
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RawEnvironment {
-    Text(BTreeMap<String, String>),
-    Ordered(Vec<RawEnvironmentEntry>),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawEnvironmentEntry {
-    name: RawEnvironmentValue,
-    value: RawEnvironmentValue,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum RawEnvironmentValue {
-    Text(String),
-    Bytes { bytes: Vec<u8> },
-}
-
-fn environment<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<EnvironmentEntry>, D::Error> {
-    let raw = Option::<RawEnvironment>::deserialize(deserializer)?;
-    let values = match raw {
-        None => Vec::new(),
-        Some(RawEnvironment::Text(values)) => values
-            .into_iter()
-            .map(|(name, value)| EnvironmentEntry {
-                name: name.into_bytes(),
-                value: value.into_bytes(),
-            })
-            .collect(),
-        Some(RawEnvironment::Ordered(values)) => values
-            .into_iter()
-            .map(|entry| EnvironmentEntry {
-                name: entry.name.into_bytes(),
-                value: entry.value.into_bytes(),
-            })
-            .collect(),
-    };
-    let bytes = values.iter().try_fold(0_usize, |total, entry| {
-        total
-            .checked_add(entry.name.len())?
-            .checked_add(entry.value.len())?
-            .checked_add(2)
-    });
-    if values.len() > 4096
-        || bytes.is_none_or(|bytes| bytes > 64 * 1024 * 1024)
-        || values.iter().any(|entry| {
-            entry.name.is_empty() || entry.name.contains(&b'=') || entry.name.contains(&0) || entry.value.contains(&0)
-        })
-    {
-        return Err(serde::de::Error::custom("invalid or oversized process environment"));
-    }
-    Ok(values)
-}
-
-impl RawEnvironmentValue {
-    fn into_bytes(self) -> Vec<u8> {
-        match self {
-            Self::Text(value) => value.into_bytes(),
-            Self::Bytes { bytes } => bytes,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum Status {
-    Active,
-    Broken(Evidence),
-    Unsupported(Evidence),
-    HostExcluded(HostExclusion),
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Evidence {
-    reason: String,
-    evidence: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Compat {
-    class: CompatClass,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum CompatClass {
-    Smoke,
-    Compatibility,
-    Soak,
-}
-
-type Case = RawCase;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Expect {
-    exit: i32,
-    stdout: PathBuf,
-}
-
-const fn timeout() -> u64 {
-    30
-}
 
 pub struct RuntimeCase {
     pub id: String,
@@ -305,7 +108,9 @@ impl App {
                     .into());
                 }
                 let (source, output, flags, inputs, destination) =
-                    resolve_build(case.build, case.artifact, &document.build, document.artifact.as_ref())?;
+                    document
+                        .build
+                        .resolve(case.build, case.artifact, document.artifact.as_ref())?;
                 let inputs = input::validate(directory, &source, inputs)?;
                 safe_output(&output)?;
                 safe_absolute(&destination)?;
@@ -443,65 +248,6 @@ impl App {
     fn command<'a>(&self, oracle: &'a Oracle, target: Target) -> &'a str {
         let _provider = oracle.provider;
         oracle.commands.for_target(target)
-    }
-}
-
-impl Status {
-    fn validate(&self) -> Result<(), Error> {
-        if let Self::Broken(evidence) | Self::Unsupported(evidence) = self
-            && (evidence.reason.trim().is_empty() || evidence.evidence.trim().is_empty())
-        {
-            return Err("non-active status requires non-empty reason and evidence".into());
-        }
-        if let Self::HostExcluded(exclusion) = self {
-            exclusion.validate()?;
-        }
-        Ok(())
-    }
-
-    pub fn inactive(&self, host: EngineHost) -> Option<(&'static str, &str, &str)> {
-        match self {
-            Self::Active => None,
-            Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
-            Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
-            Self::HostExcluded(exclusion) => exclusion.inactive(host),
-        }
-    }
-
-    fn oracle_inactive(&self) -> Option<(&'static str, &str, &str)> {
-        match self {
-            Self::Active | Self::HostExcluded(_) => None,
-            Self::Broken(evidence) => Some(("BROKEN", &evidence.reason, &evidence.evidence)),
-            Self::Unsupported(evidence) => Some(("UNSUPPORTED", &evidence.reason, &evidence.evidence)),
-        }
-    }
-}
-
-fn resolve_build(
-    case: Option<CaseBuild>,
-    artifact: Option<Artifact>,
-    defaults: &Build,
-    default_artifact: Option<&Artifact>,
-) -> Result<(ManifestPath, String, Vec<String>, Vec<ManifestPath>, String), Error> {
-    match (case, artifact) {
-        (Some(build), Some(artifact)) => Ok((
-            build.source,
-            build.output,
-            build.flags,
-            build.inputs,
-            artifact.destination,
-        )),
-        (None, None) => Ok((
-            defaults.source.clone().ok_or("document build has no default source")?,
-            defaults.output.clone().ok_or("document build has no default output")?,
-            defaults.flags.clone(),
-            defaults.inputs.clone(),
-            default_artifact
-                .ok_or("document defines no default artifact")?
-                .destination
-                .clone(),
-        )),
-        _ => Err("case build and artifact must be declared together".into()),
     }
 }
 
