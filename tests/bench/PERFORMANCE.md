@@ -137,6 +137,17 @@ syscall boundary, and byte equality. Existing focused string tests retain DF,
 overlap, fault, dirty-range, executable-write, zero-count, and address-size
 coverage.
 
+Exact clean detached commit `5b0d27e85` confirms the bounded correction. Five
+AMD64 memory repeats were all `native-verified`, held checksum 36,526, and
+reported a 119,295-us median with a 118,386--138,524-us range. This is 2.54
+times faster than the 303,537-us checkpoint Rust median, while remaining 18.27
+times slower than the retained-C median of 6,531 us. Native diagnostics were
+identical across all five repeats (`x86_public_exits=7131`, 238 builds, 397,962
+hits, and five fallbacks). The exact `hl-engine` SHA-256 was
+`f363cc376f433def6740fd941d6c292bc85e70b4f9b2e65bffac9a82f9ffe2ff`; the
+exact `testing` SHA-256 was
+`071120b66176b44e0f456a2df4207ad66c000ef8a5f417d82c3c39d98c013824`.
+
 ### AMD64 scalar SSE2 audit
 
 The compute loop's hot instruction sequence is MULSD, integer XOR/IMUL/ROL,
