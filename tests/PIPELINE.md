@@ -248,6 +248,81 @@ Reports include minimum, median, p90, p99, coefficient of variation, and setup
 separately. Docker container creation, QEMU boot, image materialization, and
 Husklet startup must not be included in steady-state execution time.
 
+## Execution and isolation
+
+Runtime compatibility tests use warmed providers without placing the complete
+suite in one mutable failure domain. The default execution topology is:
+
+```text
+coordinator
+  |-- engine/arm64 worker: warmed provider and shared read-only rootfs
+  |-- engine/amd64 worker: warmed provider and shared read-only rootfs
+  |-- qemu/arm64 worker
+  `-- qemu/amd64 worker
+```
+
+Each worker reuses its provider session and immutable image realization. Each
+ordinary case receives a fresh guest process and resettable writable overlay.
+After execution, the worker captures the result, terminates every descendant,
+discards test-visible mutable state, and proceeds without rematerializing the
+image or recompiling the artifact.
+
+Running the entire suite inside one long-lived mutable container is not valid
+authoritative evidence. A case can leak descriptors, tasks, mappings, signals,
+environment, filesystem changes, or corrupted engine state into every later
+case. Conversely, restarting the complete provider for every ordinary syscall
+case wastes most execution time on setup.
+
+The runner therefore has two complementary modes:
+
+- `sweep` runs independently reset cases through warmed parallel workers for
+  fast feedback;
+- `isolated` gives each selected case an independent engine failure boundary.
+
+An authoritative run performs a parallel sweep, then automatically reruns every
+failure, crash, timeout, and unexecuted row in isolated mode. If a worker dies,
+rows it did not complete are `NOT_RUN`, never inferred failures or passes. The
+merged verdict uses the isolated result where one exists and preserves both
+attempts' provenance.
+
+YAML declares the smallest valid failure boundary:
+
+```yaml
+isolation: process
+```
+
+Supported levels are:
+
+- `process`: a new guest process; the ordinary runtime-test default;
+- `container`: new container state and writable overlay;
+- `engine`: a supervised engine subprocess for signal, fork, checkpoint,
+  corruption, and crash cases;
+- `provider`: a new QEMU, Docker, or other provider instance for provider
+  lifecycle tests; and
+- `exclusive`: no concurrent cases when a bounded host-global resource makes
+  isolation impossible.
+
+A category may set a default and individual cases may request a stronger level.
+The runner may strengthen isolation but must never weaken the declared level.
+Every level has a bounded setup, execution, teardown, and descendant-reaping
+deadline.
+
+One runtime category normally shares its image and toolchain definition while
+keeping separate source files and executables for independently meaningful
+cases. Compilation produces independently schedulable artifacts. A single giant
+test binary is appropriate only when the sources exercise one inseparable
+mechanism; it must not be used merely to reduce process startup.
+
+Hundreds of Alpine-derived cases reuse one compressed OCI layer chain and one
+materialized read-only rootfs. Per-case writable overlays are ephemeral. The
+runner must not create one full image or copied rootfs per case.
+
+Benchmarks use a stricter persistent protocol. After provider readiness and
+warmup, a benchmark may retain its container and guest process and accept framed
+repeat requests over a pipe or socket. This measures repeated payload execution;
+provider, container, process, and image startup remain separately reported. A
+benchmark's persistent state must never be reused as compatibility evidence.
+
 ## CI profiles
 
 Local and CI execution use the same binary:
@@ -287,4 +362,3 @@ incomplete execution. Interrupted work retains a resumable record.
 7. Classify existing goldens as generated, authored, or temporarily legacy.
 8. Remove the legacy direct-golden-update and unconditional-recompile paths only
    after inventory and focused parity gates prove every case is represented.
-
