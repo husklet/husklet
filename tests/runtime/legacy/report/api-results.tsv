@@ -853,62 +853,6 @@ posix	uname	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0
 posix	utimensat	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 posix	waitstatus	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 posix	wordexpt	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-auxv-execfn	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cgroup-ro	aarch64	pass	0	linux-libc,procfs,cgroup2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-comm-status	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpucount	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpuinfo	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpumodel	aarch64	pass	0	linux-libc,procfs,auxv	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpusysfs	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-devnodes	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-fdvis-capacity	aarch64	fail	-	linux-libc,procfs,process	engine:timeout	timeout
-procfs	pf-forkself	aarch64	fail	0	linux-libc,procfs,fork	stdout:e=008ad9e45f9075f1,a=00875fe45f8d70cc,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-futexstate	aarch64	fail	-	linux-libc,procfs,threads	engine:timeout	timeout
-procfs	pf-limits-view	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-mapnames	aarch64	fail	0	linux-libc,procfs	stdout:e=f9f0ce1dc764da93,a=5dac14b39ad6f04a,d=6,eb=31,ab=30,el=196,al=196	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-maps	aarch64	fail	0	linux-libc,procfs	stdout:e=3075732d301a5e1c,a=3078ed2d301d6341,d=8,eb=31,ab=30,el=10,al=10	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-meminfo	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-misc	aarch64	fail	0	linux-libc,procfs	stdout:e=a06fc50671e3f84e,a=a073270671e6d4ab,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-mountinfo-bind	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-net	aarch64	fail	0	linux-libc,procfs,network	stdout:e=8a38658125cff3dd,a=8a34fb8125cd09e8,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-net-iso	aarch64	fail	0	linux-libc,procfs,network	stdout:e=10d5b7f4b246a980,a=10d921f4b2499375,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-net2	aarch64	fail	0	linux-libc,procfs,network	stdout:e=0990b063b5437b25,a=098d4663b5409130,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-netnone-direct	aarch64	fail	0	linux-libc,procfs,network	stdout:e=7508ee6e75639430,a=9bc83d138598b990,d=11,eb=31,ab=30,el=13,al=21	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-nslinks	aarch64	fail	0	linux-libc,procfs	stdout:e=01343f289d733f51,a=2d51a5b0d4039bac,d=3,eb=31,ab=30,el=67,al=67	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-peer-identity	aarch64	fail	0	linux-libc,procfs,fork,prctl	stdout:e=d8787dee6fe5a70d,a=3a2492ba8394622e,d=7,eb=31,ab=30,el=130,al=130	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-peer-ns	aarch64	fail	0	linux-libc,procfs	stdout:e=7081a82f5361085f,a=707e462f535e2c02,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-permbits	aarch64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-procstate	aarch64	fail	-	linux-libc,procfs	engine:timeout	timeout
-procfs	pf-rng	aarch64	fail	0	linux-libc,procfs	stdout:e=6006cd021f9fb002,a=42369dddb13cf304,d=9,eb=31,ab=30,el=71,al=71	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-self-fd-links	aarch64	fail	0	linux-libc,procfs	stdout:e=ffaf5aa8065243e3,a=7d3d4908d070fce5,d=3,eb=30,ab=2d,el=83,al=85	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfauxv	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcaps	aarch64	fail	0	linux-libc,procfs	stdout:e=53755fda582015e8,a=b3ac637d9229b223,d=12,eb=31,ab=30,el=14,al=299	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcgroup	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcmdline	aarch64	fail	0	linux-libc,procfs	stdout:e=25929e97352a2ddd,a=258f3497352743e8,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcomm	aarch64	fail	0	linux-libc,procfs,prctl	stdout:e=c89a4336e50ee2e9,a=c896e936e50c1424,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcwd	aarch64	fail	0	linux-libc,procfs	stdout:e=6d13481874568685,a=6d0fde1874539c90,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfenviron	aarch64	fail	0	linux-libc,procfs	stdout:e=0689f14da8a5d4a6,a=068d534da8a8b103,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfexe	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selffd	aarch64	fail	0	linux-libc,procfs	stdout:e=bd8228b4915acd6f,a=bd7ec6b49157f112,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selffd-link	aarch64	fail	0	linux-libc,procfs	stdout:e=41c6d29aec7a2283,a=41c3709aec774626,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selflimits	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selflink	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfmounts	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfoom	aarch64	fail	0	linux-libc,procfs	stdout:e=5b3f0cc2ebfc7292,a=5b426ec2ebff4eef,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfrss	aarch64	fail	0	linux-libc,procfs	stdout:e=9792245f748e6b9f,a=f4643a7af615c266,d=11,eb=31,ab=30,el=13,al=22	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfsmaps	aarch64	fail	0	linux-libc,procfs	stdout:e=752bce466f36de29,a=752874466f340f64,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfstat	aarch64	fail	0	linux-libc,procfs	stdout:e=6d918d09320e2477,a=6d8e2b09320b481a,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfstatm	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfstatus	aarch64	fail	0	linux-libc,procfs	stdout:e=93900995e459573b,a=938ca795e4567ade,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selftask	aarch64	pass	0	linux-libc,procfs,threads	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfvm	aarch64	fail	0	linux-libc,procfs	stdout:e=94d70be7204a4770,a=94da75e7204d3165,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-stat	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-sysctl	aarch64	fail	0	linux-libc,procfs	stdout:e=10c9a6a1f0658b4d,a=10c63ca1f062a158,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-sysfs	aarch64	fail	0	linux-libc,procfs	stdout:e=098951cd23a8efb3,a=0985efcd23a61356,d=9,eb=31,ab=30,el=11,al=11	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-threadself	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-ttynonblock	aarch64	fail	0	linux-libc,procfs	stdout:e=118168a02019a345,a=fbfa19beb6b81665,d=15,eb=31,ab=30,el=34,al=35	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-umask	aarch64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-unamehost	aarch64	fail	0	linux-libc,procfs	stdout:e=090b1c444dfb5707,a=0907ba444df87aaa,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 soak	atomicchurn	aarch64	fail	-	linux-libc,stress,process-group-cleanup	engine:timeout	timeout
 soak	bitchurn	aarch64	fail	-	linux-libc,stress,process-group-cleanup	engine:timeout	timeout
 soak	callgraph	aarch64	fail	-	linux-libc,stress,process-group-cleanup	engine:timeout	timeout
@@ -1994,62 +1938,6 @@ posix	uname	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0,
 posix	utimensat	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 posix	waitstatus	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 posix	wordexpt	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-auxv-execfn	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cgroup-ro	x86_64	pass	0	linux-libc,procfs,cgroup2	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-comm-status	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpucount	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpuinfo	x86_64	fail	0	linux-libc,procfs	stdout:e=496ae08b52ab7f6b,a=49677e8b52a8a30e,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpumodel	x86_64	pass	0	linux-libc,procfs,auxv	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-cpusysfs	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-devnodes	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-fdvis-capacity	x86_64	fail	-	linux-libc,procfs,process	engine:timeout	timeout
-procfs	pf-forkself	x86_64	fail	0	linux-libc,procfs,fork	stdout:e=008ad9e45f9075f1,a=00875fe45f8d70cc,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-futexstate	x86_64	fail	-	linux-libc,procfs,threads	engine:timeout	timeout
-procfs	pf-limits-view	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-mapnames	x86_64	fail	0	linux-libc,procfs	stdout:e=f9f0ce1dc764da93,a=5dac14b39ad6f04a,d=6,eb=31,ab=30,el=196,al=196	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-maps	x86_64	fail	0	linux-libc,procfs	stdout:e=3075732d301a5e1c,a=3078ed2d301d6341,d=8,eb=31,ab=30,el=10,al=10	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-meminfo	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-misc	x86_64	fail	0	linux-libc,procfs	stdout:e=a06fc50671e3f84e,a=a073270671e6d4ab,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-mountinfo-bind	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-net	x86_64	fail	0	linux-libc,procfs,network	stdout:e=8a38658125cff3dd,a=8a34fb8125cd09e8,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-net-iso	x86_64	fail	0	linux-libc,procfs,network	stdout:e=10d5b7f4b246a980,a=10d921f4b2499375,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-net2	x86_64	fail	0	linux-libc,procfs,network	stdout:e=0990b063b5437b25,a=098d4663b5409130,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-netnone-direct	x86_64	fail	0	linux-libc,procfs,network	stdout:e=7508ee6e75639430,a=9bc83d138598b990,d=11,eb=31,ab=30,el=13,al=21	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-nslinks	x86_64	fail	0	linux-libc,procfs	stdout:e=01343f289d733f51,a=2d51a5b0d4039bac,d=3,eb=31,ab=30,el=67,al=67	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-peer-identity	x86_64	fail	0	linux-libc,procfs,fork,prctl	stdout:e=d8787dee6fe5a70d,a=3a2492ba8394622e,d=7,eb=31,ab=30,el=130,al=130	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-peer-ns	x86_64	fail	0	linux-libc,procfs	stdout:e=7081a82f5361085f,a=707e462f535e2c02,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-permbits	x86_64	pass	0	linux-libc	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-procstate	x86_64	fail	-	linux-libc,procfs	engine:timeout	timeout
-procfs	pf-rng	x86_64	fail	0	linux-libc,procfs	stdout:e=6006cd021f9fb002,a=42369dddb13cf304,d=9,eb=31,ab=30,el=71,al=71	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-self-fd-links	x86_64	fail	0	linux-libc,procfs	stdout:e=ffaf5aa8065243e3,a=7d3d4908d070fce5,d=3,eb=30,ab=2d,el=83,al=85	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfauxv	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcaps	x86_64	fail	0	linux-libc,procfs	stdout:e=53755fda582015e8,a=b3ac637d9229b223,d=12,eb=31,ab=30,el=14,al=299	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcgroup	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcmdline	x86_64	fail	0	linux-libc,procfs	stdout:e=25929e97352a2ddd,a=258f3497352743e8,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcomm	x86_64	fail	0	linux-libc,procfs,prctl	stdout:e=c89a4336e50ee2e9,a=c896e936e50c1424,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfcwd	x86_64	fail	0	linux-libc,procfs	stdout:e=6d13481874568685,a=6d0fde1874539c90,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfenviron	x86_64	fail	0	linux-libc,procfs	stdout:e=0689f14da8a5d4a6,a=068d534da8a8b103,d=15,eb=31,ab=30,el=17,al=17	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfexe	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selffd	x86_64	fail	0	linux-libc,procfs	stdout:e=bd8228b4915acd6f,a=bd7ec6b49157f112,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selffd-link	x86_64	fail	0	linux-libc,procfs	stdout:e=41c6d29aec7a2283,a=41c3709aec774626,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selflimits	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selflink	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfmounts	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfoom	x86_64	fail	0	linux-libc,procfs	stdout:e=5b3f0cc2ebfc7292,a=5b426ec2ebff4eef,d=11,eb=31,ab=30,el=13,al=13	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfrss	x86_64	fail	0	linux-libc,procfs	stdout:e=9792245f748e6b9f,a=f4643a7af615c266,d=11,eb=31,ab=30,el=13,al=22	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfsmaps	x86_64	fail	0	linux-libc,procfs	stdout:e=752bce466f36de29,a=752874466f340f64,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfstat	x86_64	fail	0	linux-libc,procfs	stdout:e=6d918d09320e2477,a=6d8e2b09320b481a,d=12,eb=31,ab=30,el=14,al=14	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfstatm	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfstatus	x86_64	fail	0	linux-libc,procfs	stdout:e=93900995e459573b,a=938ca795e4567ade,d=14,eb=31,ab=30,el=16,al=16	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selftask	x86_64	pass	0	linux-libc,procfs,threads	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-selfvm	x86_64	fail	0	linux-libc,procfs	stdout:e=94d70be7204a4770,a=94da75e7204d3165,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-stat	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-sysctl	x86_64	fail	0	linux-libc,procfs	stdout:e=10c9a6a1f0658b4d,a=10c63ca1f062a158,d=10,eb=31,ab=30,el=12,al=12	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-sysfs	x86_64	fail	0	linux-libc,procfs	stdout:e=098951cd23a8efb3,a=0985efcd23a61356,d=9,eb=31,ab=30,el=11,al=11	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-threadself	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-ttynonblock	x86_64	fail	0	linux-libc,procfs	stdout:e=118168a02019a345,a=fbfa19beb6b81665,d=15,eb=31,ab=30,el=34,al=35	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-umask	x86_64	pass	0	linux-libc,procfs	-	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
-procfs	pf-unamehost	x86_64	fail	0	linux-libc,procfs	stdout:e=090b1c444dfb5707,a=0907ba444df87aaa,d=13,eb=31,ab=30,el=15,al=15	EngineExit { kind: Code, guest_status: 0, detail: 0, fault: None }
 soak	atomicchurn	x86_64	fail	-	linux-libc,stress,process-group-cleanup	engine:timeout	timeout
 soak	bitchurn	x86_64	fail	-	linux-libc,stress,process-group-cleanup	engine:timeout	timeout
 soak	callgraph	x86_64	fail	-	linux-libc,stress,process-group-cleanup	engine:timeout	timeout
