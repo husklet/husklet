@@ -2,6 +2,7 @@ pub(crate) mod definition;
 mod execution;
 pub(crate) mod image;
 mod ledger;
+mod pool;
 pub(crate) mod scheduler;
 
 use crate::suite::{Error, Target};
@@ -9,7 +10,6 @@ use clap::Args;
 use definition::App;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::{sync::Semaphore, task::JoinSet};
 
 pub async fn run(options: Options) -> Result<(), Error> {
     let mut work = plan(apps(&options)?, &options);
@@ -27,11 +27,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let ledger = Arc::new(opened.ledger);
     let prior = opened.prior;
     work.retain(|item| !prior.contains_key(&item.key));
-    let semaphore = Arc::new(Semaphore::new(options.jobs));
-    let mut running = JoinSet::new();
-    for work in work {
-        spawn(&mut running, work, Arc::clone(&semaphore));
-    }
+    let mut running = pool::Pool::new(work, options.jobs);
     let mut completed = drain(&mut running, &ledger).await?;
     completed.sort_by(|left, right| left.key.cmp(&right.key));
     let (passed, failed) = summarize(&prior, completed);
@@ -44,28 +40,24 @@ pub async fn run(options: Options) -> Result<(), Error> {
     }
 }
 
-fn spawn(running: &mut JoinSet<Result<Completed, String>>, work: Work, semaphore: Arc<Semaphore>) {
-    running.spawn(async move {
-        let _permit = semaphore
-            .acquire_owned()
-            .await
-            .map_err(|_| "runtime worker pool closed".to_owned())?;
-        let started = std::time::Instant::now();
-        let result = execution::run_case(Arc::clone(&work.app), work.case_index, work.target)
-            .await
-            .map_err(|error| error.to_string());
-        Ok(Completed {
-            key: work.key,
-            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            result,
-        })
-    });
+async fn execute(work: Work) -> Completed {
+    let started = std::time::Instant::now();
+    let result = execution::run_case(Arc::clone(&work.app), work.case_index, work.target)
+        .await
+        .map_err(|error| error.to_string());
+    Completed {
+        key: work.key,
+        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        result,
+    }
 }
 
-async fn drain(running: &mut JoinSet<Result<Completed, String>>, ledger: &Arc<ledger::Ledger>) -> Result<Vec<Completed>, Error> {
+async fn drain(
+    running: &mut pool::Pool<Work, Completed>,
+    ledger: &Arc<ledger::Ledger>,
+) -> Result<Vec<Completed>, Error> {
     let mut completed = Vec::new();
-    while let Some(result) = running.join_next().await {
-        let result = result?.map_err(|error| -> Error { error.into() })?;
+    while let Some(result) = running.next(execute).await? {
         let row = result.row();
         let recording = Arc::clone(ledger);
         tokio::task::spawn_blocking(move || recording.record(row).map_err(|error| error.to_string())).await??;
@@ -367,12 +359,6 @@ pub(crate) struct OracleOptions {
 #[cfg(test)]
 mod tests {
     use super::display_attempt;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use std::time::{Duration, Instant};
-    use tokio::{sync::Semaphore, task::JoinSet};
 
     #[test]
     fn attempt_display_does_not_mutate_the_case_identity() {
@@ -380,36 +366,5 @@ mod tests {
         assert_eq!(display_attempt(&id, None), "runtime/soak");
         assert_eq!(display_attempt(&id, Some(7)), "runtime/soak#attempt-7");
         assert_eq!(id, "runtime/soak");
-    }
-
-    #[tokio::test]
-    async fn worker_bound_limits_concurrency_without_serializing() {
-        let active = Arc::new(AtomicUsize::new(0));
-        let maximum = Arc::new(AtomicUsize::new(0));
-        let semaphore = Arc::new(Semaphore::new(2));
-        let mut tasks = JoinSet::new();
-        let started = Instant::now();
-        for ordinal in 0..6 {
-            let active = Arc::clone(&active);
-            let maximum = Arc::clone(&maximum);
-            let semaphore = Arc::clone(&semaphore);
-            tasks.spawn(async move {
-                let _permit = semaphore.acquire_owned().await.unwrap();
-                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                maximum.fetch_max(current, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                active.fetch_sub(1, Ordering::SeqCst);
-                ordinal
-            });
-        }
-        let mut order = Vec::new();
-        while let Some(result) = tasks.join_next().await {
-            order.push(result.unwrap());
-        }
-        order.sort_unstable();
-        assert_eq!(maximum.load(Ordering::SeqCst), 2);
-        assert!(started.elapsed() >= Duration::from_millis(55));
-        assert!(started.elapsed() < Duration::from_millis(500));
-        assert_eq!(order, (0..6).collect::<Vec<_>>());
     }
 }
