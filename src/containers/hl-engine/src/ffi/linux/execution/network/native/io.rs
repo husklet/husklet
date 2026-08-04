@@ -75,8 +75,8 @@ impl SocketHostIo for Native {
                 return Ok(input.len());
             }
             if let Some(entry) = sockets.get_mut(&token).filter(|entry| entry.resolver) {
-                if let Some(response) = super::resolver::response(input) {
-                    if !super::resolver::queue_available(
+                if let Some(response) = super::resolver::Resolver::answer(input) {
+                    if !super::resolver::Resolver::queue_available(
                         entry.resolver_packets.len(),
                         entry.resolver_bytes,
                         response.len(),
@@ -163,7 +163,7 @@ impl SocketHostIo for Native {
         let Some(address) = entry.pending.take() else {
             return SocketConnectStatus::Failed(SocketConnectError::Io);
         };
-        if super::resolver::endpoint(&address) {
+        if super::resolver::Resolver::accepts(&address) {
             entry.resolver = true;
             entry.connecting = false;
             drop(sockets);

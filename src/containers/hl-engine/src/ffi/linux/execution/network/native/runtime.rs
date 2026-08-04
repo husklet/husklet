@@ -223,13 +223,16 @@ impl RuntimeNetworkHost for Native {
                 return Ok(input.len());
             }
         }
-        if super::resolver::endpoint(&address) {
+        if super::resolver::Resolver::accepts(&address) {
             let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
             let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
             entry.resolver = true;
-            if let Some(response) = super::resolver::response(input) {
-                if !super::resolver::queue_available(entry.resolver_packets.len(), entry.resolver_bytes, response.len())
-                {
+            if let Some(response) = super::resolver::Resolver::answer(input) {
+                if !super::resolver::Resolver::queue_available(
+                    entry.resolver_packets.len(),
+                    entry.resolver_bytes,
+                    response.len(),
+                ) {
                     return Err(RuntimeNetworkError::WouldBlock);
                 }
                 entry.resolver_bytes += response.len();
