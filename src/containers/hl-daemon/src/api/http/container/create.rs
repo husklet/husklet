@@ -131,6 +131,12 @@ impl HostConfig {
     }
 
     pub(super) fn validate_unsupported(&self) -> ApiResult<()> {
+        if !self.links.is_empty() {
+            return Err(ApiError::new(
+                StatusCode::NOT_IMPLEMENTED,
+                "HostConfig field is not implemented: Links",
+            ));
+        }
         let fields = crate::api::CompatibilityFields::from(&self.unsupported);
         let Some(name) = fields.first_meaningful() else {
             return Ok(());
@@ -145,13 +151,16 @@ impl HostConfig {
 impl CreateContainer {
     fn validate_unsupported(&self) -> ApiResult<()> {
         let fields = crate::api::CompatibilityFields::from(&self.unsupported);
-        let Some(name) = fields.first_meaningful() else {
-            return Ok(());
-        };
-        Err(ApiError::new(
-            StatusCode::NOT_IMPLEMENTED,
-            format!("container create field is not implemented: {name}"),
-        ))
+        if let Some(name) = fields.first_meaningful() {
+            return Err(ApiError::new(
+                StatusCode::NOT_IMPLEMENTED,
+                format!("container create field is not implemented: {name}"),
+            ));
+        }
+        if let Some(host) = &self.host_config {
+            host.validate_unsupported()?;
+        }
+        Ok(())
     }
 
     fn merge(&mut self, metadata: hl_images::Metadata) -> ApiResult<()> {
@@ -175,5 +184,27 @@ impl CreateContainer {
             self.stop_signal = metadata.stop_signal;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CreateContainer;
+
+    #[test]
+    fn create_preflight_includes_host_capabilities() {
+        let inert: CreateContainer = serde_json::from_value(serde_json::json!({
+            "Image": "alpine",
+            "HostConfig": {"Privileged": false, "CapAdd": []}
+        }))
+        .unwrap();
+        assert!(inert.validate_unsupported().is_ok());
+
+        let meaningful: CreateContainer = serde_json::from_value(serde_json::json!({
+            "Image": "alpine",
+            "HostConfig": {"Privileged": true}
+        }))
+        .unwrap();
+        assert!(meaningful.validate_unsupported().is_err());
     }
 }
