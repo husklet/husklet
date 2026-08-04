@@ -91,6 +91,12 @@ mod cli_tests {
     }
 
     #[test]
+    fn missing_and_unknown_commands_are_usage_errors() {
+        assert!(Cli::try_parse_from(["testing"]).is_err());
+        assert!(Cli::try_parse_from(["testing", "unknown"]).is_err());
+    }
+
+    #[test]
     fn benchmark_guest_arguments_are_trailing() {
         assert!(
             Cli::try_parse_from([
@@ -109,5 +115,29 @@ mod cli_tests {
             ])
             .is_ok()
         );
+        assert!(
+            Cli::try_parse_from([
+                "testing", "benchmark", "run", "--provider", "native", "--arch", "amd64", "--binary",
+                "/guest", "--phase", "compute"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn benchmark_architecture_spellings_are_explicit() {
+        for isa in ["arm64", "amd64", "aarch64", "x86_64"] {
+            assert!(
+                Cli::try_parse_from([
+                    "testing", "benchmark", "run", "--provider", "native", "--arch", isa, "--binary", "/guest"
+                ])
+                .is_ok(),
+                "{isa}"
+            );
+        }
+        assert!(Cli::try_parse_from([
+            "testing", "benchmark", "run", "--provider", "native", "--arch", "x86", "--binary", "/guest"
+        ])
+        .is_err());
     }
 }

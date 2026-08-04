@@ -54,6 +54,8 @@ struct Build {
 #[serde(deny_unknown_fields)]
 struct RawCase {
     id: String,
+    #[serde(default)]
+    targets: BTreeSet<Target>,
     pub status: Status,
     compat: Compat,
     soak: Option<scheduler::Plan>,
@@ -117,6 +119,7 @@ pub struct RuntimeCase {
     status: Status,
     pub compat: CompatClass,
     pub soak: Option<scheduler::Plan>,
+    pub targets: BTreeSet<Target>,
 }
 
 pub struct App {
@@ -132,6 +135,14 @@ pub struct App {
 }
 
 impl App {
+    pub fn supports(&self, target: Target) -> bool {
+        self.targets.contains(&target)
+    }
+
+    pub fn cases_for(&self, target: Target) -> impl Iterator<Item = &RuntimeCase> {
+        self.cases.iter().filter(move |case| case.targets.contains(&target))
+    }
+
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
         let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         if document.image.trim().is_empty() || document.targets.is_empty() || document.cases.is_empty() {
@@ -159,11 +170,24 @@ impl App {
                     return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
                 }
                 case.status.validate()?;
+                let targets = if case.targets.is_empty() {
+                    document.targets.clone()
+                } else {
+                    case.targets
+                };
+                if targets.is_empty() || !targets.is_subset(&document.targets) {
+                    return Err(format!("{} has invalid targets for {:?}", definition.display(), case.id).into());
+                }
                 if let Some(plan) = &case.soak {
                     plan.validate()?;
                 }
                 if matches!(case.compat.class, CompatClass::Soak) != case.soak.is_some() {
-                    return Err(format!("{} has inconsistent soak metadata for {:?}", definition.display(), case.id).into());
+                    return Err(format!(
+                        "{} has inconsistent soak metadata for {:?}",
+                        definition.display(),
+                        case.id
+                    )
+                    .into());
                 }
                 safe_relative(&case.expect.stdout)?;
                 Ok(RuntimeCase {
@@ -176,6 +200,7 @@ impl App {
                     status: case.status,
                     compat: case.compat.class,
                     soak: case.soak,
+                    targets,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -203,7 +228,7 @@ impl App {
             .join(target.name())
             .join(&self.build.output);
         fs::create_dir_all(output.parent().ok_or("runtime output has no parent")?)?;
-        let compiler = self.command(&self.build.compiler, target);
+        let compiler = self.build.compiler.for_target(target);
         let status = Command::new(compiler)
             .args(&self.build.flags)
             .arg("-o")
@@ -222,7 +247,7 @@ impl App {
             .as_ref()
             .ok_or_else(|| format!("{} defines no oracle", self.name))?;
         let artifact = self.build(target)?;
-        for case in &self.cases {
+        for case in self.cases_for(target) {
             if let Some((kind, reason, evidence)) = case.status.inactive() {
                 println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
                 continue;

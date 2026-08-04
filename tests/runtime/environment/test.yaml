@@ -1,10 +1,13 @@
+targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
 artifact:
   destination: /opt/husklet/runtime-environment
 oracle:
-  arm64: qemu-aarch64
-  amd64: qemu-x86_64
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
 build:
   source: main.c
   output: runtime-environment
@@ -19,6 +22,8 @@ build:
     - -Wl,--build-id=none
 cases:
   - id: runtime/environment/initial-stack
+    status: active
+    compat: { class: compatibility }
     run: [initial-stack]
     environment:
       TZ: UTC

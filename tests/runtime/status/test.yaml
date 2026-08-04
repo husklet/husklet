@@ -1,10 +1,13 @@
+targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
 artifact:
   destination: /opt/husklet/status
 oracle:
-  arm64: qemu-aarch64
-  amd64: qemu-x86_64
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
 build:
   source: main.c
   output: status
@@ -19,5 +22,7 @@ build:
     - -Wl,--build-id=none
 cases:
   - id: runtime/status
+    status: active
+    compat: { class: smoke }
     run: [status]
     expect: { exit: 17, stdout: golden/stdout.txt }

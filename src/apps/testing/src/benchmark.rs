@@ -13,9 +13,9 @@ const LIMIT: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum Isa {
-    #[value(alias = "aarch64")]
+    #[value(name = "arm64", alias = "aarch64")]
     Aarch64,
-    #[value(alias = "x86_64")]
+    #[value(name = "amd64", alias = "x86_64")]
     X86,
 }
 

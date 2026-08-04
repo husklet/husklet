@@ -1,3 +1,4 @@
+targets: [arm64, amd64]
 image: alpine:3.20
 execution: { native: true, diagnostics: true }
 artifact:
@@ -16,5 +17,7 @@ build:
     - -Wl,--build-id=none
 cases:
   - id: runtime/namespace/probes
+    status: active
+    compat: { class: compatibility }
     run: [probes]
     expect: { exit: 0, stdout: golden/probes.txt }

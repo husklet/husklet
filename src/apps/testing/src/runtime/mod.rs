@@ -12,8 +12,16 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let apps = apps(&options)?;
     let mut failed = Vec::new();
     let mut passed = 0_usize;
+    let mut eligible = false;
     for app in apps {
         for target in options.targets() {
+            if !app.supports(target) {
+                continue;
+            }
+            if app.cases_for(target).next().is_none() {
+                continue;
+            }
+            eligible = true;
             for result in execution::run(&app, target).await? {
                 match result {
                     execution::CaseResult::Passed(id) => {
@@ -28,6 +36,9 @@ pub async fn run(options: Options) -> Result<(), Error> {
             }
         }
     }
+    if !eligible {
+        return Err("no runtime cases support the selected target(s)".into());
+    }
     println!("runtime: {passed} passed; {} failed", failed.len());
     if failed.is_empty() {
         Ok(())
@@ -38,12 +49,24 @@ pub async fn run(options: Options) -> Result<(), Error> {
 
 pub fn oracle(options: OracleOptions) -> Result<(), Error> {
     let _check_requested = options.check;
+    let mut eligible = false;
     for app in apps(&options.selection)? {
         for target in options.selection.targets() {
+            if !app.supports(target) {
+                continue;
+            }
+            if app.cases_for(target).next().is_none() {
+                continue;
+            }
+            eligible = true;
             app.oracle(target, options.update)?;
         }
     }
-    Ok(())
+    if eligible {
+        Ok(())
+    } else {
+        Err("no oracle cases support the selected target(s)".into())
+    }
 }
 
 fn apps(options: &Options) -> Result<Vec<App>, Error> {
