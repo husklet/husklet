@@ -2,6 +2,16 @@ use crate::{ExitStatus, Guest, Isolation, LogChunk, Process, Resources, Result, 
 use async_trait::async_trait;
 use std::{path::PathBuf, sync::Arc};
 
+pub(crate) const LOG_QUEUE_DEPTH: usize = 64;
+pub(crate) const LOG_CHUNK_BYTES: usize = 16 * 1024;
+
+pub(crate) type LogReceiver = tokio::sync::mpsc::Receiver<LogChunk>;
+pub(crate) type LogSender = tokio::sync::mpsc::Sender<LogChunk>;
+
+pub(crate) fn log_channel() -> (LogSender, LogReceiver) {
+    tokio::sync::mpsc::channel(LOG_QUEUE_DEPTH)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NetworkConfig {
     pub(crate) namespace: String,
@@ -56,8 +66,12 @@ pub(crate) struct ProcessConfig {
     pub(crate) networks: Vec<NetworkConfig>,
     pub(crate) publish: Vec<crate::Publication>,
     pub(crate) input: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    // Runtime ports receive these launch semantics even though the built-in engine adapter does not
+    // consume them yet; substitute runtimes verify their propagation.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) terminal: Option<Size>,
     pub(crate) domain: Option<hl_engine::Domain>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) domain_owner: bool,
 }
 
@@ -87,7 +101,7 @@ pub(crate) trait Running: Send + Sync {
     async fn resume(&self) -> Result<()>;
     async fn checkpoint(&self, timeout: std::time::Duration) -> Result<()>;
     async fn resize(&self, size: Size) -> Result<()>;
-    fn take_logs(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>>;
+    fn take_logs(&self) -> Option<LogReceiver>;
 }
 
 #[async_trait]

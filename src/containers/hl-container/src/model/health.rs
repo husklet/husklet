@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::Duration;
 
-const OUTPUT_LIMIT: usize = 4096;
+pub(crate) const OUTPUT_LIMIT: usize = 4096;
 const HISTORY_LIMIT: usize = 5;
 
 /// Process executed to determine whether a container is healthy.

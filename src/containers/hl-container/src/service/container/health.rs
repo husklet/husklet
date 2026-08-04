@@ -1,6 +1,6 @@
 use super::{
-    Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck, JournalId, Probe,
-    ProcessConfig, Result, Running, Service, Signal, now_ms,
+    now_ms, Arc, Check, Container, ContainerId, ContainerState, Duration, ExitStatus, Healthcheck, JournalId, Probe,
+    ProcessConfig, Result, Running, Service, Signal,
 };
 
 impl Service {
@@ -84,16 +84,8 @@ impl Service {
         started_at_ms: u64,
         cancel: &mut tokio::sync::watch::Receiver<bool>,
     ) -> Option<Probe> {
-        let mut logs = process.take_logs();
-        let output = async move {
-            let mut bytes = Vec::new();
-            if let Some(logs) = logs.as_mut() {
-                while let Some(chunk) = logs.recv().await {
-                    bytes.extend_from_slice(&chunk.bytes);
-                }
-            }
-            String::from_utf8_lossy(&bytes).into_owned()
-        };
+        let (finished, process_finished) = tokio::sync::oneshot::channel();
+        let output = tokio::spawn(Self::collect_probe_output(process.take_logs(), process_finished));
         let waiting = Arc::clone(&process).wait();
         tokio::pin!(waiting);
         let result = tokio::select! {
@@ -107,10 +99,44 @@ impl Service {
                 let _ = changed;
                 let _ = process.signal(Signal::Kill).await;
                 let _ = waiting.await;
+                output.abort();
                 return None;
             }
         };
-        Some(Probe::new(started_at_ms, now_ms(), result, output.await))
+        let _ = finished.send(());
+        let output = output.await.unwrap_or_default();
+        Some(Probe::new(started_at_ms, now_ms(), result, output))
+    }
+
+    async fn collect_probe_output(
+        mut logs: Option<crate::service::LogReceiver>,
+        mut process_finished: tokio::sync::oneshot::Receiver<()>,
+    ) -> String {
+        let mut bytes = Vec::new();
+        if let Some(logs) = logs.as_mut() {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut process_finished => {
+                        for _ in 0..crate::service::LOG_QUEUE_DEPTH {
+                            let Ok(chunk) = logs.try_recv() else { break };
+                            Self::retain_probe_bytes(&mut bytes, &chunk.bytes);
+                        }
+                        break;
+                    }
+                    chunk = logs.recv() => {
+                        let Some(chunk) = chunk else { break };
+                        Self::retain_probe_bytes(&mut bytes, &chunk.bytes);
+                    }
+                }
+            }
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    fn retain_probe_bytes(output: &mut Vec<u8>, chunk: &[u8]) {
+        let remaining = crate::model::OUTPUT_LIMIT.saturating_sub(output.len());
+        output.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
     }
 
     pub(in crate::service) async fn record_probe(
@@ -175,5 +201,74 @@ impl Service {
             ExitStatus::Fault { status: -1, detail: 0 },
             error.to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Service;
+    use crate::{LogChunk, Stream};
+
+    #[tokio::test]
+    async fn bounds_noisy_output() {
+        let (sender, receiver) = crate::service::log_channel();
+        let (finished, process_finished) = tokio::sync::oneshot::channel();
+        let output = tokio::spawn(Service::collect_probe_output(Some(receiver), process_finished));
+        let producer_sender = sender.clone();
+        let producer = tokio::spawn(async move {
+            for _ in 0..crate::service::LOG_QUEUE_DEPTH * 4 {
+                producer_sender
+                    .send(LogChunk {
+                        stream: Stream::Stdout,
+                        bytes: vec![b'x'; crate::service::LOG_CHUNK_BYTES],
+                    })
+                    .await
+                    .unwrap();
+            }
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), producer)
+            .await
+            .unwrap()
+            .unwrap();
+        finished.send(()).unwrap();
+        let output = output.await.unwrap();
+        assert_eq!(output.len(), crate::model::OUTPUT_LIMIT);
+        assert!(output.bytes().all(|byte| byte == b'x'));
+        assert!(sender
+            .send(LogChunk {
+                stream: Stream::Stdout,
+                bytes: b"late".to_vec(),
+            })
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn ignores_retained_writer() {
+        let (sender, receiver) = crate::service::log_channel();
+        sender
+            .send(LogChunk {
+                stream: Stream::Stdout,
+                bytes: b"complete".to_vec(),
+            })
+            .await
+            .unwrap();
+        let (finished, process_finished) = tokio::sync::oneshot::channel();
+        let output = tokio::spawn(Service::collect_probe_output(Some(receiver), process_finished));
+
+        finished.send(()).unwrap();
+        let output = tokio::time::timeout(std::time::Duration::from_millis(100), output)
+            .await
+            .expect("collector must not wait for inherited senders")
+            .unwrap();
+        assert_eq!(output, "complete");
+        assert!(sender
+            .send(LogChunk {
+                stream: Stream::Stdout,
+                bytes: b"late".to_vec(),
+            })
+            .await
+            .is_err());
     }
 }

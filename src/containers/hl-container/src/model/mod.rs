@@ -16,6 +16,7 @@ mod volume;
 pub(crate) use container::now_ms;
 pub use container::{Checkpoint, Container, ContainerId, ContainerState, ExitStatus};
 pub use exec::{Exec, ExecId, ExecSpec, ExecState, Streams};
+pub(crate) use health::OUTPUT_LIMIT;
 pub use health::{Check, Health, HealthStatus, Healthcheck, Probe};
 pub use isolation::{Isolation, NetworkMode, Resources, Sandbox};
 pub use lifecycle::{RemovalPolicy, Signal, WaitCondition};

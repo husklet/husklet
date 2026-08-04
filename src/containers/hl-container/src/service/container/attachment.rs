@@ -1,6 +1,4 @@
-use super::{
-    Arc, Container, ContainerState, Error, ExitStatus, Io, JournalId, Result, Running, Service,
-};
+use super::{Arc, Container, ContainerState, Error, ExitStatus, Io, JournalId, Result, Running, Service};
 
 impl Service {
     pub(crate) async fn logs(&self, reference: &str) -> Result<crate::Logs> {
@@ -20,13 +18,7 @@ impl Service {
         let journal = JournalId::container(container.id.clone());
         let cursor = self.logs.cursor(&journal).await?;
         let io = self.io(&container).await;
-        Ok(crate::Session::new(
-            Arc::clone(self),
-            io,
-            journal,
-            cursor,
-            cursor,
-        ))
+        Ok(crate::Session::new(Arc::clone(self), io, journal, cursor, cursor))
     }
 
     pub(crate) async fn follow(self: &Arc<Self>, reference: &str) -> Result<crate::Session> {
@@ -37,20 +29,10 @@ impl Service {
         if matches!(container.state, ContainerState::Exited { .. }) {
             io.finish();
         }
-        Ok(crate::Session::new(
-            Arc::clone(self),
-            io,
-            journal,
-            0,
-            live_at,
-        ))
+        Ok(crate::Session::new(Arc::clone(self), io, journal, 0, live_at))
     }
 
-    pub(super) async fn own(
-        self: Arc<Self>,
-        process: Arc<dyn Running>,
-        journal: JournalId,
-    ) -> Result<ExitStatus> {
+    pub(super) async fn own(self: Arc<Self>, process: Arc<dyn Running>, journal: JournalId) -> Result<ExitStatus> {
         let logs = process.take_logs();
         let (finished, receiver) = tokio::sync::watch::channel(false);
         let service = Arc::clone(&self);
@@ -67,7 +49,7 @@ impl Service {
     async fn drain(
         &self,
         id: &JournalId,
-        logs: Option<tokio::sync::mpsc::UnboundedReceiver<crate::LogChunk>>,
+        logs: Option<crate::service::LogReceiver>,
         mut finished: tokio::sync::watch::Receiver<bool>,
     ) {
         let Some(mut logs) = logs else { return };
@@ -99,21 +81,13 @@ impl Service {
                 true
             }
             Err(error) => {
-                self.failures
-                    .lock()
-                    .await
-                    .insert(id.clone(), error.to_string());
+                self.failures.lock().await.insert(id.clone(), error.to_string());
                 false
             }
         }
     }
 
-    pub(crate) async fn output(
-        &self,
-        id: &JournalId,
-        cursor: u64,
-        io: &Io,
-    ) -> Result<Option<crate::Entry>> {
+    pub(crate) async fn output(&self, id: &JournalId, cursor: u64, io: &Io) -> Result<Option<crate::Entry>> {
         loop {
             let notified = io.notify.notified();
             tokio::pin!(notified);
@@ -130,12 +104,7 @@ impl Service {
         }
     }
 
-    pub(crate) async fn history(
-        &self,
-        id: &JournalId,
-        cursor: u64,
-        limit: usize,
-    ) -> Result<Vec<crate::Entry>> {
+    pub(crate) async fn history(&self, id: &JournalId, cursor: u64, limit: usize) -> Result<Vec<crate::Entry>> {
         self.logs.after(id, cursor, limit).await
     }
 

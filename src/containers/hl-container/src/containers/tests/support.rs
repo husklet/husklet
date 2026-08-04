@@ -1,10 +1,10 @@
 pub(super) use super::super::builder::build_with;
 pub(super) use super::super::*;
 pub(super) use crate::{
+    Container, ContainerSpec, ExitStatus, Signal,
     error::Result,
     service::Runtime,
     storage::{Disk, Memory},
-    Container, ContainerSpec, ExitStatus, Signal,
 };
 
 #[derive(Default)]
@@ -17,15 +17,15 @@ impl LifecycleEvents for Recorded {
 }
 
 pub(super) use crate::{
+    Access, ContainerState, Error, Guest, Isolation, Process,
     service::{NetworkConfig, ProcessConfig, Running},
     storage::Containers as _,
-    Access, ContainerState, Error, Guest, Isolation, Process,
 };
 use async_trait::async_trait;
 pub(super) use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -57,8 +57,7 @@ pub(super) const RESOLVE_A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
 pub(super) const RESOLVE_B: &str = "bbbbbbbb-0000-4000-8000-000000000002";
 pub(super) const RESOLVE_AMBIGUOUS: &str = "aaaaaaaa-1111-4000-8000-000000000003";
 
-pub(super) type RecordedMounts =
-    Arc<std::sync::Mutex<Vec<Vec<(std::path::PathBuf, std::path::PathBuf, Access)>>>>;
+pub(super) type RecordedMounts = Arc<std::sync::Mutex<Vec<Vec<(std::path::PathBuf, std::path::PathBuf, Access)>>>>;
 
 type CheckpointLaunch = Option<bool>;
 
@@ -122,8 +121,8 @@ struct FakeProcess {
     signals: Arc<std::sync::Mutex<Vec<Signal>>>,
     suspensions: Arc<std::sync::Mutex<Vec<bool>>>,
     resizes: Arc<std::sync::Mutex<Vec<crate::Size>>>,
-    logs: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<crate::LogChunk>>>,
-    _log_owner: Option<tokio::sync::mpsc::UnboundedSender<crate::LogChunk>>,
+    logs: std::sync::Mutex<Option<crate::service::LogReceiver>>,
+    _log_owner: Option<crate::service::LogSender>,
     checkpoint_armed: bool,
     domain: hl_engine::Domain,
     domain_reads: Arc<AtomicU64>,
@@ -164,16 +163,14 @@ impl Running for FakeProcess {
         if self.checkpoint_armed {
             Ok(())
         } else {
-            Err(Error::Runtime(
-                "process was not armed for checkpoint".into(),
-            ))
+            Err(Error::Runtime("process was not armed for checkpoint".into()))
         }
     }
     async fn resize(&self, size: crate::Size) -> Result<()> {
         self.resizes.lock().unwrap().push(size);
         Ok(())
     }
-    fn take_logs(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<crate::LogChunk>> {
+    fn take_logs(&self) -> Option<crate::service::LogReceiver> {
         self.logs.lock().unwrap().take()
     }
 }
@@ -183,30 +180,20 @@ impl Runtime for FakeRuntime {
     async fn start(&self, launch: ProcessConfig) -> Result<Arc<dyn Running>> {
         assert!(launch.rootfs.is_absolute());
         let domain = launch.domain.unwrap_or(
-            hl_engine::Domain::new()
-                .map_err(|error| Error::Runtime(format!("domain allocation failed: {error}")))?,
+            hl_engine::Domain::new().map_err(|error| Error::Runtime(format!("domain allocation failed: {error}")))?,
         );
-        let is_health = launch.process.program == "/health"
-            || launch
-                .process
-                .args
-                .iter()
-                .any(|value| value == "__health__");
+        let is_health =
+            launch.process.program == "/health" || launch.process.args.iter().any(|value| value == "__health__");
         self.programs.lock().unwrap().push(launch.process.clone());
         self.resources.lock().unwrap().push(launch.resources);
         self.isolations.lock().unwrap().push(launch.isolation);
         self.publishes.lock().unwrap().push(launch.publish);
         self.terminals.lock().unwrap().push(launch.terminal);
-        self.checkpoints.lock().unwrap().push(
-            launch
-                .checkpoint
-                .as_ref()
-                .map(|checkpoint| checkpoint.restore),
-        );
-        self.domains
+        self.checkpoints
             .lock()
             .unwrap()
-            .push((domain, launch.domain_owner));
+            .push(launch.checkpoint.as_ref().map(|checkpoint| checkpoint.restore));
+        self.domains.lock().unwrap().push((domain, launch.domain_owner));
         self.mounts.lock().unwrap().push(
             launch
                 .mounts
@@ -218,15 +205,15 @@ impl Runtime for FakeRuntime {
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Runtime("injected launch failure".into()));
         }
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = crate::service::log_channel();
         sender
-            .send(crate::LogChunk {
+            .try_send(crate::LogChunk {
                 stream: crate::Stream::Stdout,
                 bytes: b"fake-out\n".to_vec(),
             })
             .unwrap();
         sender
-            .send(crate::LogChunk {
+            .try_send(crate::LogChunk {
                 stream: crate::Stream::Stderr,
                 bytes: b"fake-err\n".to_vec(),
             })
@@ -249,8 +236,7 @@ impl Runtime for FakeRuntime {
             resizes: Arc::clone(&self.resizes),
             logs: std::sync::Mutex::new(Some(receiver)),
             _log_owner: log_owner,
-            checkpoint_armed: launch.checkpoint.is_some()
-                && self.checkpointable.load(Ordering::SeqCst),
+            checkpoint_armed: launch.checkpoint.is_some() && self.checkpointable.load(Ordering::SeqCst),
             domain,
             domain_reads: Arc::clone(&self.domain_reads),
         }))
@@ -258,16 +244,11 @@ impl Runtime for FakeRuntime {
 }
 
 pub(super) fn spec(name: &str) -> ContainerSpec {
-    ContainerSpec::from_directory(
-        "/rootfs",
-        Process::new("/bin/sh").args(["-c", "exit 7"]).env("A", "B"),
-    )
-    .name(name)
-    .guest(Guest::Aarch64)
+    ContainerSpec::from_directory("/rootfs", Process::new("/bin/sh").args(["-c", "exit 7"]).env("A", "B"))
+        .name(name)
+        .guest(Guest::Aarch64)
 }
 
 pub(super) async fn service(runtime: Arc<FakeRuntime>) -> Containers {
-    test_containers(Arc::new(Memory::default()), runtime)
-        .await
-        .unwrap()
+    test_containers(Arc::new(Memory::default()), runtime).await.unwrap()
 }

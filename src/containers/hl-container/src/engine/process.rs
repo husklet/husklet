@@ -1,6 +1,6 @@
 //! One running container process backed by the integrated Rust runtime.
 
-use crate::{Error, ExitStatus, LogChunk, Result, Signal, service::Running};
+use crate::{Error, ExitStatus, Result, Signal, service::Running};
 use async_trait::async_trait;
 use std::sync::{
     Arc, Mutex,
@@ -12,7 +12,7 @@ static NEXT_PROCESS: AtomicU64 = AtomicU64::new(1);
 pub(super) struct Process {
     pub(super) id: u64,
     pub(super) child: Mutex<Option<Arc<hl_engine::runtime::Engine>>>,
-    pub(super) logs: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>>>,
+    pub(super) logs: Mutex<Option<crate::service::LogReceiver>>,
     pub(super) domain: hl_engine::Domain,
     pub(super) checkpointable: bool,
 }
@@ -120,7 +120,7 @@ impl Running for Process {
         Err(Error::NoTerminal(self.id.to_string()))
     }
 
-    fn take_logs(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<LogChunk>> {
+    fn take_logs(&self) -> Option<crate::service::LogReceiver> {
         self.logs.lock().ok()?.take()
     }
 }

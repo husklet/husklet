@@ -111,11 +111,11 @@ impl Read for ChannelInput {
 
 struct LogOutput {
     stream: crate::Stream,
-    sender: tokio::sync::mpsc::UnboundedSender<crate::LogChunk>,
+    sender: crate::service::LogSender,
 }
 
 impl LogOutput {
-    fn new(stream: crate::Stream, sender: tokio::sync::mpsc::UnboundedSender<crate::LogChunk>) -> Self {
+    fn new(stream: crate::Stream, sender: crate::service::LogSender) -> Self {
         Self { stream, sender }
     }
 }
@@ -125,13 +125,14 @@ impl Write for LogOutput {
         if bytes.is_empty() {
             return Ok(0);
         }
+        let length = bytes.len().min(crate::service::LOG_CHUNK_BYTES);
         self.sender
-            .send(crate::LogChunk {
+            .blocking_send(crate::LogChunk {
                 stream: self.stream,
-                bytes: bytes.to_vec(),
+                bytes: bytes[..length].to_vec(),
             })
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "container log receiver closed"))?;
-        Ok(bytes.len())
+        Ok(length)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -153,7 +154,7 @@ impl Runtime for Engine {
             )));
         }
         let spec = Spec::try_from(&config)?;
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, receiver) = crate::service::log_channel();
         let streams = hl_engine::composition::StandardStreams::new(
             ChannelInput::new(config.input.take()),
             LogOutput::new(crate::Stream::Stdout, sender.clone()),
@@ -366,7 +367,7 @@ mod tests {
         assert_eq!(&bytes[..5], b"input");
         assert_eq!(input.read(&mut bytes).unwrap(), 0);
 
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (sender, mut receiver) = crate::service::log_channel();
         let mut output = LogOutput::new(crate::Stream::Stdout, sender.clone());
         let mut error = LogOutput::new(crate::Stream::Stderr, sender);
         assert_eq!(output.write(b"out\0").unwrap(), 4);
@@ -388,5 +389,42 @@ mod tests {
             }
         );
         assert!(receiver.blocking_recv().is_none());
+    }
+
+    #[test]
+    fn log_output_bounds_queue_and_each_owned_copy() {
+        let (sender, mut receiver) = crate::service::log_channel();
+        let mut output = LogOutput::new(crate::Stream::Stdout, sender.clone());
+        assert_eq!(sender.capacity(), crate::service::LOG_QUEUE_DEPTH);
+
+        let oversized = vec![b'x'; crate::service::LOG_CHUNK_BYTES + 1];
+        assert_eq!(output.write(&oversized).unwrap(), crate::service::LOG_CHUNK_BYTES);
+        assert_eq!(
+            receiver.blocking_recv().unwrap().bytes.len(),
+            crate::service::LOG_CHUNK_BYTES
+        );
+
+        for _ in 0..crate::service::LOG_QUEUE_DEPTH {
+            assert_eq!(output.write(&oversized).unwrap(), crate::service::LOG_CHUNK_BYTES);
+        }
+        assert_eq!(sender.capacity(), 0);
+        assert_eq!(
+            crate::service::LOG_QUEUE_DEPTH * crate::service::LOG_CHUNK_BYTES,
+            1024 * 1024
+        );
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let writer_ready = ready.clone();
+        let blocked = std::thread::spawn(move || {
+            writer_ready.wait();
+            output.write(b"blocked")
+        });
+        ready.wait();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!blocked.is_finished());
+        drop(receiver);
+        assert_eq!(
+            blocked.join().unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
     }
 }
