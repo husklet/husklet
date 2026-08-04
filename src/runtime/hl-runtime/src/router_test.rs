@@ -32,6 +32,12 @@ fn task_thread() -> hl_task::ThreadId {
         .1
 }
 
+fn task_identity() -> (hl_task::ProcessId, hl_task::ThreadId) {
+    let tasks = hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap();
+    let credentials = hl_task::ProcessCredentials::new(0, 0, &[], 1).unwrap();
+    tasks.create_init(credentials, hl_task::ProcessLimits::empty()).unwrap()
+}
+
 struct Port {
     calls: Arc<Mutex<Vec<&'static str>>>,
     result: LinuxResult,
@@ -428,6 +434,28 @@ fn group_exit_scope() {
         assert_eq!(router.dispatch(architecture, &mut cpu), RuntimeTrapOutcome::Exit(23));
         assert_eq!(router.take_terminal(), Some(RuntimeTerminal::Group(23)));
         assert_eq!(*fixture.calls.lock().unwrap(), vec!["exit_group"]);
+    }
+}
+
+#[test]
+fn immutable_task_identity_bypasses_mutable_process_port() {
+    let (process, thread) = task_identity();
+    for (architecture, getpid, gettid) in [
+        (GuestArchitecture::Aarch64, 172, 178),
+        (GuestArchitecture::X86_64, 39, 186),
+    ] {
+        let fixture = Fixture {
+            calls: Arc::new(Mutex::new(Vec::new())),
+        };
+        let router = fixture
+            .router(LinuxResult::Error(hl_linux::Errno::ENOSYS))
+            .with_task_identity(process, thread);
+        for (number, expected) in [(getpid, process.number()), (gettid, thread.number())] {
+            let mut cpu = Fixture::cpu(architecture, number, 0);
+            assert_eq!(router.dispatch(architecture, &mut cpu), RuntimeTrapOutcome::Continue);
+            assert_eq!(Fixture::result(&cpu), u64::from(expected));
+        }
+        assert!(fixture.calls.lock().unwrap().is_empty());
     }
 }
 

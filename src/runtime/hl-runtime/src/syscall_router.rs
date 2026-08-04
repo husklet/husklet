@@ -57,6 +57,7 @@ pub struct RouterDependencies {
 
 pub struct RuntimeSyscallRouter {
     ports: Mutex<RouterDependencies>,
+    task_identity: Option<(hl_task::ProcessId, hl_task::ThreadId)>,
     trace: Option<Mutex<SyscallTrace>>,
     terminal: Mutex<Option<RuntimeTerminal>>,
     signal_boundary: Option<Mutex<Box<dyn SignalBoundaryPort>>>,
@@ -93,11 +94,33 @@ impl RuntimeSyscallRouter {
     pub fn new(dependencies: RouterDependencies) -> Self {
         Self {
             ports: Mutex::new(dependencies),
+            task_identity: None,
             trace: None,
             terminal: Mutex::new(None),
             signal_boundary: None,
             exec: None,
             ptrace: None,
+        }
+    }
+
+    /// Publishes the immutable Linux task identity owned by this per-thread
+    /// router. Identity-only syscalls can then avoid entering the mutable
+    /// process port after seccomp has admitted the call.
+    #[must_use]
+    pub fn with_task_identity(mut self, process: hl_task::ProcessId, thread: hl_task::ThreadId) -> Self {
+        self.task_identity = Some((process, thread));
+        self
+    }
+
+    fn task_identity_result(&self, disposition: SyscallDisposition) -> Option<hl_linux::LinuxResult> {
+        let (process, thread) = self.task_identity?;
+        let SyscallDisposition::Operation(operation) = disposition else {
+            return None;
+        };
+        match operation.name {
+            "getpid" => Some(hl_linux::LinuxResult::Value(u64::from(process.number()))),
+            "gettid" => Some(hl_linux::LinuxResult::Value(u64::from(thread.number()))),
+            _ => None,
         }
     }
 
@@ -411,6 +434,8 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
         };
         let killed = enforced.and_then(|value| value.1);
         let result = if let Some((result, _)) = enforced {
+            result
+        } else if let Some(result) = self.task_identity_result(route.disposition) {
             result
         } else if matches!(route.disposition,
             SyscallDisposition::Operation(operation) if matches!(operation.name, "clone" | "clone3"))

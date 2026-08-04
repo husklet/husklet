@@ -62,6 +62,52 @@ justify an application-specific fast path.
 
 ## Candidate evidence after the checkpoint
 
+### Syscall and descriptor hot-path audit
+
+The retained implementation audit for the syscall/descriptor lane covered
+`../engine/src/linux_abi/syscall/dispatch.c` (`service`, `service_local`, and
+`svc_done`), `syscall/proc.c` (`svc_proc`, including canonical `getpid` and
+`gettid` identity), `syscall/io.c` (`svc_io`, scalar/vector I/O, descriptor
+duplication, close, seek, pipe, splice, and synchronization), and
+`syscall/helpers.c` (descriptor/OFD identity, close teardown, locking, and
+restart/error completion). The dispatch boundary owns signal-entry ordering,
+seccomp-before-service, ptrace routing, original-register preservation, errno
+projection, restart, and descriptor publication. Descriptor aliases share OFD
+state; descriptor-local flags remain per descriptor; close tears down emulated
+state only after alias and lock bookkeeping; blocking and partial-result paths
+retain Linux `EINTR` and progress semantics. AArch64 uses canonical syscall
+numbers and advances past `svc`; x86 translates its historical number table and
+must preserve the number in `rax` across restart.
+
+The Rust mapping is `hl-linux/src/syscall/{table,frame,mod,ports}.rs`
+for ABI admission, `hl-runtime/src/syscall_router.rs` for seccomp/ptrace/signal
+ordering and family dispatch, `hl-runtime/src/process/{dispatch,syscalls}.rs`
+for task identity and lifecycle, `hl-runtime/src/filesystem/` for descriptor
+syscall composition, and `hl-descriptor` for table, descriptor, OFD, operation
+lease, alias, and teardown ownership. Engine construction in
+`hl-engine/src/ffi/linux/execution/routing/mod.rs` creates one router per Linux
+thread. The measured identity loop exposed an avoidable generic divergence:
+after seccomp admission Rust dynamically redispatched immutable `getpid` and
+`gettid` through the mutable process port, whereas retained C reads identity
+directly from stable process/CPU state. The candidate publishes the typed
+`ProcessId`/`ThreadId` into the per-thread router and answers only those two
+operations there. Seccomp, tracing, result publication, restart, and signal
+boundaries remain on the common path; all mutable task operations continue
+through the process port.
+
+On exact base `0f3927e8b`, seven release-mode ARM64 native-verified repeats of
+the combined benchmark's syscall phase (`--divisor 20 --phase syscall`) had a
+241,851 us median and 239,284--249,135 us range. The candidate, built in the
+same isolated worktree and measured with the same guest and command, had a
+209,289 us median and 208,173--212,419 us range: 13.46% lower median time.
+Every repeat on both trees reported 24,999 syscall exits, two fallbacks, zero
+yields, and checksum/count 1,000,000. The candidate engine SHA-256 was
+`850079ad9d29ffb89cb58732f4576c9522b929a886febdbbbc1fb18dbaeda94d`;
+the testing runner was
+`0a338fde24f3e88453a5cf0eab075adca4fa8bd8957c435016d5ee373b564ac0`
+and the ARM64 guest was
+`b5f1df4463a41c926a7ce2819edd0e0363a0fd9b69cb84182607770e06d5ef6e`.
+
 The results below come from the shared dirty tree and are diagnostic candidate
 evidence, not evidence for `HEAD` or a stable revision.
 
