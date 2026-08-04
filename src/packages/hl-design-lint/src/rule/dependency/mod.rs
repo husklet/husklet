@@ -433,6 +433,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-runtime", "hl-ipc")
             | ("hl-runtime", "hl-vfs")
             | ("hl-runtime", "hl-terminal")
+            | ("hl-runtime", "hl-log")
             | ("hl-fake-host", "hl-descriptor")
             | ("hl-fake-host", "hl-execution")
             | ("hl-fake-host", "hl-isa")

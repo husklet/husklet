@@ -188,6 +188,21 @@ fn rejects_dev_edge_in_production() {
 }
 
 #[test]
+fn permits_runtime_logging_foundation() {
+    let root = fixture("runtime-logging");
+    package(&root, "packages", "hl-log", "");
+    package(
+        &root,
+        "runtime",
+        "hl-runtime",
+        "[dependencies]\nhl-log = { path = \"../../packages/hl-log\" }\n",
+    );
+
+    assert!(findings(&root).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn recognizes_integrated_layers() {
     let root = fixture("integrated-layers");
     package(&root, "packages", "hl-log", "");
