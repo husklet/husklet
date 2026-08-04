@@ -227,6 +227,295 @@ static int packed_integer_arithmetic(void) {
     return 0;
 }
 
+static unsigned pcmp_length(const uint8_t value[16]) {
+    unsigned index;
+    for (index = 0; index < 16u; ++index)
+        if (value[index] == 0u) return index;
+    return 16u;
+}
+
+static unsigned pcmp_equal_each(const uint8_t left[16], const uint8_t right[16],
+                                uint8_t immediate) {
+    unsigned left_length = pcmp_length(left);
+    unsigned right_length = pcmp_length(right);
+    unsigned result = 0;
+    unsigned index;
+    for (index = 0; index < 16u; ++index) {
+        int equal = index < left_length && index < right_length
+                        ? left[index] == right[index]
+                        : index >= left_length && index >= right_length;
+        if (equal) result |= 1u << index;
+    }
+    if ((immediate & 0x10u) != 0u)
+        result ^= (immediate & 0x20u) != 0u
+                      ? (1u << right_length) - 1u : UINT32_C(0xffff);
+    return result & UINT32_C(0xffff);
+}
+
+static const struct {
+    uint8_t left[16];
+    uint8_t right[16];
+    unsigned expected;
+} pcmp_boundary_cases[] = {
+    /* exact, no match, and mismatches before, at, and after a terminator */
+    {{1, 2, 3, 0}, {1, 2, 3, 0}, UINT32_C(0xffff)},
+    {{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+     {17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
+     UINT32_C(0x0000)},
+    {{1, 2, 3, 0}, {1, 9, 3, 0}, UINT32_C(0xfffd)},
+    {{1, 2, 0}, {1, 2, 9, 0}, UINT32_C(0xfffb)},
+    {{1, 2, 0, 4}, {1, 2, 0, 9}, UINT32_C(0xffff)},
+};
+
+static int pcmp_length_boundaries(void) {
+    unsigned index;
+    for (index = 0; index < sizeof pcmp_boundary_cases / sizeof pcmp_boundary_cases[0]; ++index)
+        CHECK(pcmp_equal_each(pcmp_boundary_cases[index].left,
+                              pcmp_boundary_cases[index].right, 0x08) ==
+              pcmp_boundary_cases[index].expected);
+    return 0;
+}
+
+static int pcmpistri_equal_each(void) {
+    static const uint8_t controls[] = {
+        0x08, 0x0a, 0x18, 0x1a, 0x28, 0x2a, 0x38, 0x3a,
+        0x48, 0x4a, 0x58, 0x5a, 0x68, 0x6a, 0x78, 0x7a,
+    };
+    const uint64_t changed = HL_X86_RFLAGS_CF | HL_X86_RFLAGS_PF | HL_X86_RFLAGS_AF |
+                             HL_X86_RFLAGS_ZF | HL_X86_RFLAGS_SF | HL_X86_RFLAGS_OF;
+    unsigned control;
+    uint32_t maximum_words = 0;
+
+    CHECK(pcmp_length_boundaries() == 0);
+
+    for (control = 0; control < sizeof controls; ++control) {
+        uint8_t guest[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, controls[control]};
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        hl_x86_a64_result result;
+
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.instruction_count == 1 && provenance[0].guest_size == sizeof guest);
+        if (provenance[0].word_end - provenance[0].word_start > maximum_words)
+            maximum_words = provenance[0].word_end - provenance[0].word_start;
+        CHECK(provenance[0].word_end - provenance[0].word_start <= 96u);
+#if defined(__aarch64__)
+        {
+            long page = sysconf(_SC_PAGESIZE);
+            uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            unsigned left_length;
+            CHECK(code != MAP_FAILED);
+            memcpy(code, host, result.word_count * sizeof(uint32_t));
+            ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+            __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+            CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+            for (left_length = 0; left_length <= 16u; ++left_length) {
+                unsigned right_length;
+                for (right_length = 0; right_length <= 16u; ++right_length) {
+                    hl_native_x86_64_cpu cpu = {0};
+                    uint8_t left[16];
+                    uint8_t right[16];
+                    uint64_t initial_flags = UINT64_C(0xad7) | UINT64_C(0x200);
+                    uint64_t flags = initial_flags & ~changed;
+                    unsigned expected;
+                    unsigned expected_index;
+                    unsigned index;
+                    unsigned mismatch;
+                    for (index = 0; index < 16u; ++index) {
+                        left[index] = (uint8_t)(index + 1u);
+                        right[index] = (uint8_t)(index + 1u);
+                    }
+                    if (left_length < 16u) left[left_length] = 0u;
+                    if (right_length < 16u) right[right_length] = 0u;
+                    mismatch = (left_length * 5u + right_length * 3u) & 15u;
+                    while (mismatch == left_length || mismatch == right_length)
+                        mismatch = (mismatch + 1u) & 15u;
+                    right[mismatch] ^= UINT8_C(0x55);
+                    expected = pcmp_equal_each(left, right, controls[control]);
+                    expected_index = expected == 0u ? 16u :
+                        (controls[control] & 0x40u) != 0u
+                            ? 31u - (unsigned)__builtin_clz(expected)
+                            : (unsigned)__builtin_ctz(expected);
+                    if (expected != 0u) flags |= HL_X86_RFLAGS_CF;
+                    if (pcmp_length(right) < 16u) flags |= HL_X86_RFLAGS_ZF;
+                    if (pcmp_length(left) < 16u) flags |= HL_X86_RFLAGS_SF;
+                    if ((expected & 1u) != 0u) flags |= HL_X86_RFLAGS_OF;
+                    memcpy(&cpu.vectors[0], left, sizeof left);
+                    memcpy(&cpu.vectors[2], right, sizeof right);
+                    cpu.registers[1] = UINT64_C(0xfeedface);
+                    cpu.flags = initial_flags;
+                    cpu.mxcsr = UINT32_C(0x5f80);
+                    hl_native_x86_64_enter(&cpu, code);
+                    CHECK(cpu.registers[1] == expected_index);
+                    CHECK(cpu.flags == flags);
+                    CHECK(memcmp(&cpu.vectors[0], left, sizeof left) == 0);
+                    CHECK(memcmp(&cpu.vectors[2], right, sizeof right) == 0);
+                    CHECK(cpu.mxcsr == UINT32_C(0x5f80));
+                }
+            }
+            if (controls[control] == 0x08u || controls[control] == 0x48u) {
+                unsigned boundary;
+                for (boundary = 0;
+                     boundary < sizeof pcmp_boundary_cases / sizeof pcmp_boundary_cases[0];
+                     ++boundary) {
+                    hl_native_x86_64_cpu cpu = {0};
+                    uint64_t initial_flags = UINT64_C(0xad7) | UINT64_C(0x200);
+                    uint64_t flags = initial_flags & ~changed;
+                    unsigned expected = pcmp_boundary_cases[boundary].expected;
+                    unsigned expected_index = expected == 0u ? 16u :
+                        controls[control] == 0x48u
+                            ? 31u - (unsigned)__builtin_clz(expected)
+                            : (unsigned)__builtin_ctz(expected);
+                    if (expected != 0u) flags |= HL_X86_RFLAGS_CF;
+                    if (pcmp_length(pcmp_boundary_cases[boundary].right) < 16u)
+                        flags |= HL_X86_RFLAGS_ZF;
+                    if (pcmp_length(pcmp_boundary_cases[boundary].left) < 16u)
+                        flags |= HL_X86_RFLAGS_SF;
+                    if ((expected & 1u) != 0u) flags |= HL_X86_RFLAGS_OF;
+                    memcpy(&cpu.vectors[0], pcmp_boundary_cases[boundary].left, 16u);
+                    memcpy(&cpu.vectors[2], pcmp_boundary_cases[boundary].right, 16u);
+                    cpu.registers[1] = UINT64_C(0xfeedface);
+                    cpu.flags = initial_flags;
+                    hl_native_x86_64_enter(&cpu, code);
+                    CHECK(cpu.registers[1] == expected_index);
+                    CHECK(cpu.flags == flags);
+                }
+            }
+            { /* Register aliasing observes one immutable operand value. */
+                hl_native_x86_64_cpu cpu = {0};
+                static const uint8_t value[16] = {
+                    1, 2, 3, 4, 5, 6, 7, 8, 0, 10, 11, 12, 13, 14, 15, 16,
+                };
+                unsigned expected = pcmp_equal_each(value, value, controls[control]);
+                unsigned expected_index = expected == 0u ? 16u :
+                    (controls[control] & 0x40u) != 0u
+                        ? 31u - (unsigned)__builtin_clz(expected)
+                        : (unsigned)__builtin_ctz(expected);
+                guest[4] = 0xc0;
+                request = request_for(guest, sizeof guest, host, provenance);
+                CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+                CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+                memcpy(code, host, result.word_count * sizeof(uint32_t));
+                ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+                __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+                CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+                memcpy(&cpu.vectors[0], value, sizeof value);
+                cpu.flags = UINT64_C(0xad7);
+                hl_native_x86_64_enter(&cpu, code);
+                CHECK(cpu.registers[1] == expected_index);
+                CHECK(memcmp(&cpu.vectors[0], value, sizeof value) == 0);
+            }
+            CHECK(munmap(code, (size_t)page) == 0);
+        }
+#endif
+    }
+    {
+        static const uint8_t memory[] = {0x66, 0x0f, 0x3a, 0x63, 0x44, 0x8b, 0x07, 0x1a};
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_request request = request_for(memory, sizeof memory, host, provenance);
+        hl_x86_a64_result result;
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.instruction_count == 1 && provenance[0].guest_size == sizeof memory);
+#if defined(__aarch64__)
+        {
+            static const uint8_t left[16] = {
+                'a', 'b', 'c', 'd', 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            };
+            static const uint8_t right[16] = {
+                'a', 'b', 'x', 'd', 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            };
+            long page = sysconf(_SC_PAGESIZE);
+            uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            uint8_t *pages = mmap(NULL, (size_t)page * 2u, PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            uint8_t *edge;
+            hl_native_x86_64_cpu cpu = {0};
+            unsigned expected = pcmp_equal_each(left, right, 0x1a);
+            uint64_t initial_flags = UINT64_C(0xad7) | UINT64_C(0x200);
+            uint64_t expected_flags = initial_flags & ~changed;
+            CHECK(code != MAP_FAILED);
+            CHECK(pages != MAP_FAILED);
+            CHECK(mprotect(pages + page, (size_t)page, PROT_NONE) == 0);
+            edge = pages + page - 16;
+            memcpy(code, host, result.word_count * sizeof(uint32_t));
+            ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+            __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+            CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+            memcpy(edge, right, sizeof right);
+            memcpy(&cpu.vectors[0], left, sizeof left);
+            cpu.registers[3] = UINT64_C(0x2000);
+            cpu.registers[1] = 1u;
+            cpu.memory_first = UINT64_C(0x200b);
+            cpu.memory_last = UINT64_C(0x201b);
+            cpu.memory_delta = (uint64_t)(uintptr_t)edge - UINT64_C(0x200b);
+            cpu.memory_permissions = 1u;
+            cpu.flags = initial_flags;
+            cpu.program = UINT64_C(0x400000);
+            cpu.budget = 7u;
+            if (expected != 0u) expected_flags |= HL_X86_RFLAGS_CF;
+            expected_flags |= HL_X86_RFLAGS_ZF | HL_X86_RFLAGS_SF;
+            if ((expected & 1u) != 0u) expected_flags |= HL_X86_RFLAGS_OF;
+            hl_native_x86_64_enter(&cpu, code);
+            CHECK(cpu.registers[1] == (unsigned)__builtin_ctz(expected));
+            CHECK(cpu.flags == expected_flags);
+            CHECK(memcmp(&cpu.vectors[0], left, sizeof left) == 0);
+            CHECK(cpu.program == UINT64_C(0x400008));
+            CHECK(cpu.budget == 7u && cpu.executed == 0u);
+            cpu.registers[1] = 1u;
+            cpu.flags = initial_flags;
+            cpu.reason = cpu.fault_access = cpu.fault_size = 0;
+            cpu.memory_last = UINT64_C(0x201a);
+            cpu.program = UINT64_C(0x400000);
+            cpu.scratch[0] = 0u;
+            cpu.budget = 7u;
+            cpu.executed = 0u;
+            hl_native_x86_64_enter(&cpu, code);
+            CHECK(cpu.registers[1] == 1u && cpu.flags == initial_flags);
+            CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.fault_access == 1u && cpu.fault_size == 16u);
+            CHECK(cpu.fault_address == UINT64_C(0x200b));
+            CHECK(cpu.program == UINT64_C(0x400000));
+            CHECK(cpu.scratch[0] == 0u && cpu.budget == 7u && cpu.executed == 0u);
+            CHECK(memcmp(&cpu.vectors[0], left, sizeof left) == 0);
+            CHECK(munmap(pages, (size_t)page * 2u) == 0);
+            CHECK(munmap(code, (size_t)page) == 0);
+        }
+#endif
+    }
+    {
+        static const uint8_t wrong_control[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x00};
+        static const uint8_t wrong_prefix[] = {0x0f, 0x3a, 0x63, 0xc1, 0x08};
+        static const uint8_t f2_prefix[] = {0xf2, 0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
+        static const uint8_t f3_prefix[] = {0xf3, 0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
+        static const uint8_t lock_prefix[] = {0xf0, 0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
+        static const uint8_t repeated_66[] = {0x66, 0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
+        static const uint8_t truncated[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1};
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(wrong_control, sizeof wrong_control, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(wrong_prefix, sizeof wrong_prefix, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(f2_prefix, sizeof f2_prefix, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(f3_prefix, sizeof f3_prefix, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(lock_prefix, sizeof lock_prefix, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(repeated_66, sizeof repeated_66, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.instruction_count == 1 && provenance[0].guest_size == sizeof repeated_66);
+        request = request_for(truncated, sizeof truncated, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_TRUNCATED);
+    }
+    CHECK(maximum_words <= 96u);
+    return 0;
+}
+
 static int scalar_double_family(void) {
     const uint8_t guest[] = {
         0xf2, 0x0f, 0x5c, 0xc1,       /* subsd xmm0,xmm1 */
@@ -4003,6 +4292,8 @@ int main(void) {
     status = floating_arithmetic();
     if (status != 0) return status;
     status = packed_integer_arithmetic();
+    if (status != 0) return status;
+    status = pcmpistri_equal_each();
     if (status != 0) return status;
     status = end_branch();
     if (status != 0) return status;

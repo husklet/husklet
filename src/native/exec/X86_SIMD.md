@@ -69,3 +69,40 @@ aliasing, unchanged flags and MXCSR, unaligned guarded memory, fault-before-
 commit, and rejection of the same unprefixed MMX opcode bytes. Broader
 benchmark evidence must not attribute unrelated unsupported SIMD/string
 families to this slice.
+
+## PCMPISTRI equal-each byte slice
+
+The retained correctness owner audited for this slice is
+`src/translator/guest/x86_64/avx.c::do_sse3b`, including `sse42_ilen`,
+`sse42_intres`, `sse42_index`, and `sse42_flags`. The retained native shortcut
+is `src/translator/guest/x86_64/translate.c::emit_pcmpistri_eqeach_byte` and its
+admission call site. It owns implicit-length, byte, equal-each PCMPISTRI for
+register or guarded 16-byte memory operand two, both signedness spellings, all
+four polarity encodings, and both index directions: the 16 encodings `08/0a`
+plus each combination of `10`, `20`, and `40`.
+
+The audit also inspected `avx_ea`, `avx_get_rm`, and the guest-access fault
+bracket in `avx.c`, plus the validator contract in `rep_runtime.h`. State is
+owned by one `struct cpu`; the operation has no independent identity,
+allocation, lock, or teardown. Register operands are borrowed from the CPU
+vector file. A memory operand is validated as one 16-byte read before ECX or
+flags are published. A rejected read records instruction PC, address, width,
+and access type, then abandons with `R_SOFTMISS`; dispatcher retry or guest
+fault delivery remains outside this operation. The shortcut is an AArch64
+emitter; effective-address bias folding is shared with the C fallback.
+
+Rust ownership maps to `frontend.c` for prefix/opcode admission and dirty
+architectural state, `frontend/memory.c` for guarded memory and AArch64
+emission, and the executor for block accounting. Other PCMPxSTR widths,
+aggregations, explicit lengths, and mask outputs remain unsupported by this
+native frontend slice.
+
+The frontend reserves at most 96 AArch64 words for the operation. Focused tests
+run all 16 controls across every 17-by-17 implicit-length pair, explicit exact
+and no-match results plus mismatches before, at, and after logical lengths,
+register aliasing, an RCX-based SIB address, and a real two-page mapping with an
+exact readable-page edge and `PROT_NONE` successor. They also check fault
+address/PC/state/accounting atomicity, F2/F3/LOCK/redundant-66 prefix decisions,
+invalid/truncated admission, and zero/one-unit executor budget boundaries.
+These are correctness and bounded-code-size claims only; performance requires
+a separately recorded exact-tree A/B run.

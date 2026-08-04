@@ -84,6 +84,28 @@ static int budget_contract(void) {
         CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.program == 0x7210 &&
               state.executed == 11 && state.budget == 5);
     }
+    {
+        static const uint8_t pcmp[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x08};
+        hl_native_source_span spans[] = {{0x7300, pcmp, sizeof(pcmp), 7, 16}};
+        hl_native_source source = {spans, 1, 7, 16};
+        const uint64_t comparison = UINT64_C(1) | UINT64_C(1) << 2 | UINT64_C(1) << 4 |
+                                    UINT64_C(1) << 6 | UINT64_C(1) << 7 | UINT64_C(1) << 11;
+        request.source = &source;
+        request.budget = 0;
+        state = (hl_native_x86_64_cpu){.program = 0x7300, .flags = UINT64_C(0xad7)};
+        state.vectors[0] = UINT64_C(0x61);
+        state.vectors[2] = UINT64_C(0x62);
+        state.registers[1] = UINT64_C(0xfeedface);
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 0);
+        CHECK(state.registers[1] == UINT64_C(0xfeedface) && state.flags == UINT64_C(0xad7));
+        request.budget = 1;
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 1 && state.budget == 0);
+        CHECK(state.registers[1] == 1);
+        CHECK(state.flags == ((UINT64_C(0xad7) & ~comparison) |
+                              UINT64_C(1) | UINT64_C(1) << 6 | UINT64_C(1) << 7));
+    }
     hl_native_destroy(executor);
     return 0;
 }

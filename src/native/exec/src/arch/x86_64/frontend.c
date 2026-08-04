@@ -23,7 +23,8 @@ static int vector_register_write(const instruction *item) {
     return item->operation == OP_VECTOR && item->memory_write == 0u &&
            item->vector_kind != VECTOR_TO_INTEGER && item->vector_kind != VECTOR_BYTE_MASK &&
            item->vector_kind != VECTOR_SCALAR_COMPARE_DOUBLE &&
-           item->vector_kind != VECTOR_TRUNC_DOUBLE_SIGNED;
+           item->vector_kind != VECTOR_TRUNC_DOUBLE_SIGNED &&
+           item->vector_kind != VECTOR_STRING_EQUAL_EACH;
 }
 
 void hl_x86_prepare_vector_immediate(instruction *item, uint8_t modrm, uint8_t rex,
@@ -187,6 +188,40 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->has_immediate = 1u;
             item->immediate = (uint64_t)load_signed(&request->guest_bytes[cursor], immediate_size);
             cursor += immediate_size;
+        } else if (operand_16 != 0u && semantic_prefix == 0u && opcode == 0x0fu &&
+                   cursor + 2u < request->guest_size && request->guest_bytes[cursor] == 0x3au &&
+                   request->guest_bytes[cursor + 1u] == 0x63u) {
+            uint8_t modrm;
+            cursor += 2u;
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = 16u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = VECTOR_STRING_EQUAL_EACH;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32,
+                                           start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = 16u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start;
+                block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER;
+                break;
+            }
+            item->vector_immediate = request->guest_bytes[cursor++];
+            if ((item->vector_immediate & 0x0du) != 0x08u) {
+                cursor = start;
+                block->status = HL_X86_A64_UNSUPPORTED;
+                block->exit = HL_X86_A64_INTERPRETER;
+                break;
+            }
         } else if (opcode == 0x0fu && cursor < request->guest_size &&
                    (request->guest_bytes[cursor] == 0x58u || request->guest_bytes[cursor] == 0x59u ||
                     request->guest_bytes[cursor] == 0x5cu || request->guest_bytes[cursor] == 0x5eu) &&
@@ -1169,7 +1204,9 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
             dirty |= UINT32_C(1) << 0;
         } else if (block.instructions[index].operation == OP_VECTOR) {
             words += hl_x86_vector_words(&block.instructions[index]);
-            if (block.instructions[index].vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
+            if (block.instructions[index].vector_kind == VECTOR_STRING_EQUAL_EACH)
+                dirty |= UINT32_C(1) << 1;
+            else if (block.instructions[index].vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
                 dirty |= UINT32_C(1) << block.instructions[index].destination;
             else if (block.instructions[index].memory_operand == 0u &&
                 (block.instructions[index].vector_kind == VECTOR_TO_INTEGER ||
@@ -1351,7 +1388,9 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
             dirty |= UINT32_C(1) << 0;
         } else if (item->operation == OP_VECTOR) {
             hl_x86_emit_vector(request->host_words, &words, item);
-            if (item->vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
+            if (item->vector_kind == VECTOR_STRING_EQUAL_EACH)
+                dirty |= UINT32_C(1) << 1;
+            else if (item->vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED)
                 dirty |= UINT32_C(1) << item->destination;
             else if (item->memory_operand == 0u &&
                 (item->vector_kind == VECTOR_TO_INTEGER || item->vector_kind == VECTOR_BYTE_MASK))

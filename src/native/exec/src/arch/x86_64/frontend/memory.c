@@ -648,6 +648,7 @@ static uint32_t vector_operation_words(const instruction *item) {
                                                   UINT64_C(0x80000000));
     case VECTOR_FLOAT_ARITHMETIC:
         return 28u + constant_words(item->pc) + (item->live_chain != 0u ? 18u : 0u);
+    case VECTOR_STRING_EQUAL_EACH: return 96u;
     case VECTOR_INSERT_WORD: return 1u;
     default: return 1u;
     }
@@ -670,7 +671,87 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
     uint32_t source = item->source;
     uint32_t lane = item->vector_lane;
 
-    if (item->vector_kind >= VECTOR_SCALAR_SQRT_DOUBLE &&
+    if (item->vector_kind == VECTOR_STRING_EQUAL_EACH) {
+        uint64_t clear = UINT64_C(1) | UINT64_C(1) << 2 | UINT64_C(1) << 4 |
+                         UINT64_C(1) << 6 | UINT64_C(1) << 7 | UINT64_C(1) << 11;
+        uint32_t immediate = item->vector_immediate;
+
+        /* IntRes1 for implicit-length byte equal-each.  Scratch vectors are
+         * outside the guest XMM bank; operand two has already passed the
+         * complete generic memory guard when it names v16. */
+        words[(*cursor)++] = UINT32_C(0x6e208c00) | source << 16 | destination << 5 | 18u;
+        words[(*cursor)++] = UINT32_C(0x4e209800) | destination << 5 | 19u;
+        words[(*cursor)++] = UINT32_C(0x4e209800) | source << 5 | 21u;
+#define EMIT_MASK(vector, target) do { \
+            words[(*cursor)++] = UINT32_C(0x6f090400) | (vector) << 5 | 17u; \
+            words[(*cursor)++] = UINT32_C(0x6f001400) | 25u << 16 | 17u << 5 | 17u; \
+            words[(*cursor)++] = UINT32_C(0x6f001400) | 50u << 16 | 17u << 5 | 17u; \
+            words[(*cursor)++] = UINT32_C(0x6f001400) | 100u << 16 | 17u << 5 | 17u; \
+            words[(*cursor)++] = UINT32_C(0x0e003c00) | 1u << 16 | 17u << 5 | 16u; \
+            words[(*cursor)++] = UINT32_C(0x0e003c00) | 17u << 16 | 17u << 5 | (target); \
+            words[(*cursor)++] = UINT32_C(0x2a000000) | (target) << 16 | 8u << 10 | 16u << 5 | (target); \
+        } while (0)
+        EMIT_MASK(18u, 19u);
+        EMIT_MASK(19u, 21u);
+        EMIT_MASK(21u, 24u);
+#undef EMIT_MASK
+        emit_constant(words, cursor, 16u, UINT64_C(0x10000));
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 16u << 16 | 21u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x5ac00000) | 17u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x5ac01000) | 17u << 5 | 22u;
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 16u << 16 | 24u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x5ac00000) | 17u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x5ac01000) | 17u << 5 | 23u;
+        emit_constant(words, cursor, 16u, 1u);
+        words[(*cursor)++] = UINT32_C(0x1ac02000) | 22u << 16 | 16u << 5 | 25u;
+        words[(*cursor)++] = UINT32_C(0x51000400) | 25u << 5 | 25u;
+        words[(*cursor)++] = UINT32_C(0x1ac02000) | 23u << 16 | 16u << 5 | 26u;
+        words[(*cursor)++] = UINT32_C(0x51000400) | 26u << 5 | 26u;
+        words[(*cursor)++] = UINT32_C(0x0a000000) | 25u << 16 | 19u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x0a000000) | 26u << 16 | 17u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 26u << 16 | 25u << 5 | 16u;
+        words[(*cursor)++] = UINT32_C(0x2a200000) | 16u << 16 | 17u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x53003c00) | 17u << 5 | 17u;
+        if ((immediate & 0x10u) != 0u) {
+            if ((immediate & 0x20u) != 0u) {
+                words[(*cursor)++] = UINT32_C(0x4a000000) | 26u << 16 | 17u << 5 | 17u;
+            } else {
+                emit_constant(words, cursor, 16u, UINT64_C(0xffff));
+                words[(*cursor)++] = UINT32_C(0x4a000000) | 16u << 16 | 17u << 5 | 17u;
+            }
+            words[(*cursor)++] = UINT32_C(0x53003c00) | 17u << 5 | 17u;
+        }
+        if ((immediate & 0x40u) == 0u) {
+            emit_constant(words, cursor, 16u, UINT64_C(0x10000));
+            words[(*cursor)++] = UINT32_C(0x2a000000) | 17u << 16 | 16u << 5 | 16u;
+            words[(*cursor)++] = UINT32_C(0x5ac00000) | 16u << 5 | 16u;
+            words[(*cursor)++] = UINT32_C(0x5ac01000) | 16u << 5 | 1u;
+        } else {
+            words[(*cursor)++] = UINT32_C(0x5ac01000) | 17u << 5 | 16u;
+            emit_constant(words, cursor, 25u, 31u);
+            words[(*cursor)++] = UINT32_C(0x4b000000) | 16u << 16 | 25u << 5 | 16u;
+            words[(*cursor)++] = UINT32_C(0x7100001f) | 17u << 5;
+            emit_constant(words, cursor, 25u, 16u);
+            words[(*cursor)++] = UINT32_C(0x1a800000) | 16u << 16 | 0u << 12 | 25u << 5 | 1u;
+        }
+
+        /* Publish all six defined flags together after RCX is ready. */
+        words[(*cursor)++] = load_word(20u, offsetof(hl_native_x86_64_cpu, flags));
+        emit_constant(words, cursor, 25u, clear);
+        words[(*cursor)++] = UINT32_C(0x8a200000) | 25u << 16 | 20u << 5 | 20u;
+        words[(*cursor)++] = UINT32_C(0x7100001f) | 17u << 5;
+        words[(*cursor)++] = UINT32_C(0x1a9f07f9); /* cset w25,ne: CF */
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 25u << 16 | 20u << 5 | 20u;
+        words[(*cursor)++] = UINT32_C(0x710042df); /* cmp w22,#16 */
+        words[(*cursor)++] = UINT32_C(0x1a9f27f9); /* cset w25,lo */
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 25u << 16 | 7u << 10 | 20u << 5 | 20u;
+        words[(*cursor)++] = UINT32_C(0x710042ff); /* cmp w23,#16 */
+        words[(*cursor)++] = UINT32_C(0x1a9f27f9); /* cset w25,lo */
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 25u << 16 | 6u << 10 | 20u << 5 | 20u;
+        words[(*cursor)++] = UINT32_C(0x12000239); /* and w25,w17,#1 */
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 25u << 16 | 11u << 10 | 20u << 5 | 20u;
+        words[(*cursor)++] = store_word(20u, offsetof(hl_native_x86_64_cpu, flags));
+    } else if (item->vector_kind >= VECTOR_SCALAR_SQRT_DOUBLE &&
         item->vector_kind <= VECTOR_SCALAR_DIV_DOUBLE) {
         uint32_t base = item->vector_kind == VECTOR_SCALAR_SQRT_DOUBLE ? UINT32_C(0x1e61c000) :
                         item->vector_kind == VECTOR_SCALAR_ADD_DOUBLE ? UINT32_C(0x1e602800) :
