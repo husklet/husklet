@@ -37,16 +37,24 @@ impl Rule for FileName {
             .into_iter()
             .filter_map(|path| {
                 let stem = path.file_stem()?.to_str()?;
+                let extension = path.extension()?.to_str()?;
+                let source_kind = match extension {
+                    "rs" => "Rust source",
+                    "c" => "C source",
+                    "h" => "C header",
+                    _ => return None,
+                };
                 if stem.contains('-') {
                     let mut finding = Finding::error(self.id(), stem, file_location(&path));
-                    finding.message = format!("Rust filename stem `{stem}` contains a dash");
-                    finding.help = "use Rust's underscore module convention so the source name maps directly to its module identifier".into();
+                    finding.message =
+                        format!("{source_kind} filename stem `{stem}` in `{stem}.{extension}` contains a dash");
+                    finding.help = "use the underscore naming convention so the source filename remains portable and mechanically identifiable".into();
                     return Some(finding);
                 }
                 if stem.chars().count() > MAXIMUM_FILE_STEM_LENGTH {
                     let mut finding = Finding::error(self.id(), stem, file_location(&path));
                     finding.message = format!(
-                        "Rust filename stem `{stem}` contains {} characters; the maximum is {MAXIMUM_FILE_STEM_LENGTH}",
+                        "{source_kind} filename stem `{stem}` in `{stem}.{extension}` contains {} characters; the maximum is {MAXIMUM_FILE_STEM_LENGTH}",
                         stem.chars().count()
                     );
                     finding.help = "move context into a noun-owned directory and keep the child filename focused on its local concept".into();
@@ -62,7 +70,7 @@ impl Rule for FileName {
                         file_location(&path),
                     );
                     finding.message = format!(
-                        "Rust filename `{stem}.rs` uses a numbered implementation fragment"
+                        "{source_kind} filename `{stem}.{extension}` uses a numbered implementation fragment"
                     );
                     finding.help = "split by a cohesive noun-owned concept; numeric fragments hide ownership and ordering instead of naming it".into();
                     return Some(finding);
@@ -76,7 +84,7 @@ impl Rule for FileName {
                     file_location(&path),
                 );
                 finding.message = format!(
-                    "Rust filename `{stem}.rs` contains more than two semantic words"
+                    "{source_kind} filename `{stem}.{extension}` contains more than two semantic words"
                 );
                 finding.help = "move the shared concept into a noun directory and name this file for its one- or two-word child concept".into();
                 Some(finding)

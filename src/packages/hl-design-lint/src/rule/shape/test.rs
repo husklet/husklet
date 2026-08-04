@@ -100,7 +100,27 @@ fn explicit_header_path_is_checked() {
     let findings = FileName.check(&workspace).unwrap();
 
     assert_eq!(findings.len(), 1);
-    assert!(findings[0].message.contains("contains a dash"));
+    assert_eq!(
+        findings[0].message,
+        "C header filename stem `invalid-header` in `invalid-header.h` contains a dash"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn c_source_diagnostic_names_source_and_extension() {
+    let root = fixture("c-source-diagnostic");
+    fs::write(root.join("src/three_word_name.c"), "").unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    let findings = FileName.check(&workspace).unwrap();
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].message,
+        "C source filename `three_word_name.c` contains more than two semantic words"
+    );
+    assert!(!findings[0].message.contains("Rust"));
+    assert!(!findings[0].message.contains(".rs"));
     fs::remove_dir_all(root).unwrap();
 }
 
