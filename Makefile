@@ -27,7 +27,8 @@ fmt-check:
 	cargo fmt --all -- --check
 
 test: design-lint
-	cargo test --workspace --all-targets --locked
+	cargo build -p engine -p testing --bins --locked
+	HL_TEST_ENGINE_APP_BIN_DIR="$(CURDIR)/target/debug" cargo test --workspace --all-targets --locked
 
 check:
 	cargo check --workspace --all-targets --locked
@@ -35,13 +36,13 @@ check:
 test-ci: fmt-check design-lint check test
 
 containers:
-	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client
+	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client -p dockerd
 
 test-compiles:
 	cargo test --no-run --workspace --all-targets
 
 engine:
-	cargo build --release -p hl-engine --bins --locked
+	cargo build --release -p engine --bins --locked
 
 app:
 	@chmod +x src/apps/husklet/package/bundle.sh src/apps/husklet/package/make-dmg.sh

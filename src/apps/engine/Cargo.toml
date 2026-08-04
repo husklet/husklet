@@ -1,0 +1,27 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+autobins = false
+
+[lints]
+workspace = true
+
+[dependencies]
+hl-engine = { path = "../../containers/hl-engine" }
+hl-log = { path = "../../packages/hl-log" }
+
+[[bin]]
+name = "hl-engine"
+path = "src/main.rs"
+
+[[bin]]
+name = "hl-aarch64"
+path = "src/bin/aarch64.rs"
+
+[[bin]]
+name = "hl-x86_64"
+path = "src/bin/x86.rs"

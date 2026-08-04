@@ -10,6 +10,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::UnixListener;
 use tower::Service;
 
+use crate::ProcessSampler;
 use crate::api::router;
 use crate::daemon::Release;
 use crate::events::Events;
@@ -23,6 +24,7 @@ pub struct Server {
     source: Arc<dyn Source>,
     events: Events,
     release: Release,
+    sampler: Arc<dyn ProcessSampler>,
 }
 
 impl Server {
@@ -33,6 +35,7 @@ impl Server {
         source: Arc<dyn Source>,
         events: Events,
         release: Release,
+        sampler: Arc<dyn ProcessSampler>,
     ) -> Self {
         Self {
             socket: socket.to_path_buf(),
@@ -41,18 +44,8 @@ impl Server {
             source,
             events,
             release,
+            sampler,
         }
-    }
-
-    /// Serve until Ctrl-C.
-    ///
-    /// # Errors
-    /// Returns socket setup, accept, signal, or filesystem cleanup failures.
-    pub async fn serve(self) -> Result<()> {
-        self.serve_with_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
     }
 
     /// Serve until `shutdown` resolves, then stop accepting and remove the owned socket.
@@ -114,7 +107,14 @@ impl Server {
             socket = %self.socket.display()
         );
         let guard = SocketGuard::new(self.socket.clone())?;
-        let app = router(self.containers, self.platform, self.source, self.events, self.release);
+        let app = router(
+            self.containers,
+            self.platform,
+            self.source,
+            self.events,
+            self.release,
+            self.sampler,
+        );
         let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
         let mut connections = tokio::task::JoinSet::new();
         tokio::pin!(shutdown);

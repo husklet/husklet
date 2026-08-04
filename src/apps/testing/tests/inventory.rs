@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+mod engine_binary;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -337,17 +338,16 @@ fn work(
         let case = queue.lock().unwrap_or_else(|error| error.into_inner()).pop_front();
         let Some(case) = case else { break };
         let panic_case = case.clone();
-        let mut result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                execute(case, engine_options.as_deref())
-            }))
-            .unwrap_or_else(|_| {
-                harness(
-                    panic_case,
-                    "worker-panic",
-                    io::Error::other("compatibility worker panicked"),
-                )
-            });
+        let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute(case, engine_options.as_deref())
+        }))
+        .unwrap_or_else(|_| {
+            harness(
+                panic_case,
+                "worker-panic",
+                io::Error::other("compatibility worker panicked"),
+            )
+        });
         if let Err(error) = ledger.record(&result) {
             stop.store(true, Ordering::Release);
             result.status = "fail";
@@ -743,7 +743,9 @@ fn setting(name: &str) -> Option<String> {
 }
 
 fn worker_environment(row: &str, appended: Option<&str>) -> Result<String, &'static str> {
-    let Some(appended) = appended else { return Ok(row.to_owned()) };
+    let Some(appended) = appended else {
+        return Ok(row.to_owned());
+    };
     if appended == "-" || appended.is_empty() {
         return Err("HL_COMPAT_ENGINE_OPTIONS must contain semicolon-separated NAME=VALUE options");
     }
@@ -755,7 +757,11 @@ fn worker_environment(row: &str, appended: Option<&str>) -> Result<String, &'sta
             return Err("HL_COMPAT_ENGINE_OPTIONS contains an unknown engine option");
         }
     }
-    Ok(if row == "-" { appended.to_owned() } else { format!("{row};{appended}") })
+    Ok(if row == "-" {
+        appended.to_owned()
+    } else {
+        format!("{row};{appended}")
+    })
 }
 
 fn switch(name: &str) -> bool {
@@ -789,8 +795,14 @@ fn run_stamp(
     for (label, path) in [
         ("inventory-runner", std::env::current_exe()?),
         ("compat-worker", PathBuf::from(env!("CARGO_BIN_EXE_hl-compat-worker"))),
-        ("arm-engine", PathBuf::from(env!("CARGO_BIN_EXE_hl-aarch64"))),
-        ("x86-engine", PathBuf::from(env!("CARGO_BIN_EXE_hl-x86_64"))),
+        (
+            "arm-engine",
+            engine_binary::EngineBinaryPaths::required().named("hl-aarch64"),
+        ),
+        (
+            "x86-engine",
+            engine_binary::EngineBinaryPaths::required().named("hl-x86_64"),
+        ),
         ("authority", PathBuf::from(env!("CARGO_BIN_EXE_hl-authority-child"))),
         ("projection", PathBuf::from(env!("CARGO_BIN_EXE_hl-projection-worker"))),
     ] {
@@ -956,7 +968,10 @@ fn corpus() -> PathBuf {
 
 #[test]
 fn corpus_override() {
-    assert_eq!(corpus_path(Some("/persistent/corpus")), PathBuf::from("/persistent/corpus"));
+    assert_eq!(
+        corpus_path(Some("/persistent/corpus")),
+        PathBuf::from("/persistent/corpus")
+    );
 }
 
 #[test]
@@ -1026,19 +1041,24 @@ fn dispositions_follow_host() {
 
 #[test]
 fn absent_stderr_golden_leaves_diagnostics_unconstrained() {
-    assert_eq!(mismatch(true, true, true, 0, "0", b"ok\n", b"ok\n", None, b"diagnostic\n"), "-");
-    assert!(mismatch(
-        true,
-        true,
-        true,
-        0,
-        "0",
-        b"ok\n",
-        b"ok\n",
-        Some(b"expected\n"),
-        b"diagnostic\n",
-    )
-    .starts_with("stderr:"));
+    assert_eq!(
+        mismatch(true, true, true, 0, "0", b"ok\n", b"ok\n", None, b"diagnostic\n"),
+        "-"
+    );
+    assert!(
+        mismatch(
+            true,
+            true,
+            true,
+            0,
+            "0",
+            b"ok\n",
+            b"ok\n",
+            Some(b"expected\n"),
+            b"diagnostic\n",
+        )
+        .starts_with("stderr:")
+    );
 }
 
 #[test]

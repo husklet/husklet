@@ -1,8 +1,8 @@
-use axum::routing::{delete, get, post};
 use axum::Router;
+use axum::routing::{delete, get, post};
 use hl_container::Containers;
-use hl_images::remote::Source;
 use hl_images::Platform;
+use hl_images::remote::Source;
 use std::sync::Arc;
 
 mod build;
@@ -30,6 +30,7 @@ pub(super) struct DockerState {
     pub(super) events: Events,
     pub(super) builds: crate::builder::Builds,
     pub(super) release: Release,
+    pub(super) sampler: Arc<dyn crate::ProcessSampler>,
 }
 
 pub(crate) fn router(
@@ -38,6 +39,7 @@ pub(crate) fn router(
     source: Arc<dyn Source>,
     events: Events,
     release: Release,
+    sampler: Arc<dyn crate::ProcessSampler>,
 ) -> Router {
     let state = DockerState {
         containers,
@@ -46,6 +48,7 @@ pub(crate) fn router(
         events,
         builds: crate::builder::Builds::default(),
         release,
+        sampler,
     };
     let api = Router::new()
         .route("/build", post(build::create))
@@ -60,9 +63,7 @@ pub(crate) fn router(
         .route("/containers/:id/export", get(container::export))
         .route(
             "/containers/:id/archive",
-            get(container::archive)
-                .head(container::stat)
-                .put(container::extract),
+            get(container::archive).head(container::stat).put(container::extract),
         )
         .route("/containers/:id/logs", get(container::logs))
         .route("/containers/:id/top", get(observe::top))
@@ -107,19 +108,13 @@ pub(crate) fn router(
         .route("/networks", get(network::list))
         .route("/networks/create", post(network::create))
         .route("/networks/prune", post(network::prune))
-        .route(
-            "/networks/:id",
-            get(network::inspect).delete(network::remove),
-        )
+        .route("/networks/:id", get(network::inspect).delete(network::remove))
         .route("/networks/:id/connect", post(network::connect))
         .route("/networks/:id/disconnect", post(network::disconnect))
         .route("/volumes", get(volume::list))
         .route("/volumes/create", post(volume::create))
         .route("/volumes/prune", post(volume::prune))
-        .route(
-            "/volumes/:name",
-            get(volume::inspect).delete(volume::remove),
-        );
+        .route("/volumes/:name", get(volume::inspect).delete(volume::remove));
     let mut router = Router::new()
         .route("/_ping", get(system::ping))
         .route("/version", get(system::version))

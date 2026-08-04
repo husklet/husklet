@@ -1,5 +1,14 @@
 #![cfg(target_os = "linux")]
 
+mod engine_binary;
+
+fn engine_binary(name: &str) -> String {
+    engine_binary::EngineBinaryPaths::required()
+        .named(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
 use hl_engine::native::{
     AuthorityAccess, ChildExit, FileAction, HostDescriptor, LinuxHost, ProcessAuthority, ProcessGroup, ProcessHandle,
     SpawnRequest,
@@ -117,7 +126,7 @@ fn confined_static_guest() {
     let descriptor = channel.descriptor();
     let health = channel.health();
     let request = SpawnRequest {
-        program: CString::new(env!("CARGO_BIN_EXE_hl-x86_64")).unwrap(),
+        program: CString::new(engine_binary("hl-x86_64")).unwrap(),
         arguments: vec![
             CString::new("--guest-isa").unwrap(),
             CString::new("x86_64").unwrap(),
@@ -166,7 +175,7 @@ fn confined_projected_file() {
     let descriptor = channel.descriptor();
     let health = channel.health();
     let request = SpawnRequest {
-        program: CString::new(env!("CARGO_BIN_EXE_hl-x86_64")).unwrap(),
+        program: CString::new(engine_binary("hl-x86_64")).unwrap(),
         arguments: vec![
             CString::new("--guest-isa").unwrap(),
             CString::new("x86_64").unwrap(),
@@ -293,22 +302,22 @@ fn projected_write(isa: &str, engine: &str) {
 
 #[test]
 fn directory_x86() {
-    projected_directory("x86_64", env!("CARGO_BIN_EXE_hl-x86_64"));
+    projected_directory("x86_64", &engine_binary("hl-x86_64"));
 }
 
 #[test]
 fn directory_arm() {
-    projected_directory("aarch64", env!("CARGO_BIN_EXE_hl-aarch64"));
+    projected_directory("aarch64", &engine_binary("hl-aarch64"));
 }
 
 #[test]
 fn write_x86() {
-    projected_write("x86_64", env!("CARGO_BIN_EXE_hl-x86_64"));
+    projected_write("x86_64", &engine_binary("hl-x86_64"));
 }
 
 #[test]
 fn write_arm() {
-    projected_write("aarch64", env!("CARGO_BIN_EXE_hl-aarch64"));
+    projected_write("aarch64", &engine_binary("hl-aarch64"));
 }
 
 #[test]
@@ -343,7 +352,7 @@ fn confined_dynamic_guest() {
     let descriptor = channel.descriptor();
     let health = channel.health();
     let request = SpawnRequest {
-        program: CString::new(env!("CARGO_BIN_EXE_hl-x86_64")).unwrap(),
+        program: CString::new(engine_binary("hl-x86_64")).unwrap(),
         arguments: vec![
             CString::new("--guest-isa").unwrap(),
             CString::new("x86_64").unwrap(),
@@ -398,7 +407,7 @@ fn confined_dynamic_arm() {
     let descriptor = channel.descriptor();
     let health = channel.health();
     let request = SpawnRequest {
-        program: CString::new(env!("CARGO_BIN_EXE_hl-aarch64")).unwrap(),
+        program: CString::new(engine_binary("hl-aarch64")).unwrap(),
         arguments: vec![
             CString::new("--guest-isa").unwrap(),
             CString::new("aarch64").unwrap(),

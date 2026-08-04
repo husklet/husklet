@@ -2,11 +2,12 @@ use std::path::Path;
 use std::sync::Arc;
 
 use hl_container::Containers as RuntimeContainers;
-use hl_images::remote::{Auth, Registry, Source};
 use hl_images::Platform;
+use hl_images::remote::{Auth, Registry, Source};
 
-use crate::events::Events;
 use crate::Server;
+use crate::events::Events;
+use crate::process::{ProcessSampler, Unavailable};
 
 /// Immutable build metadata supplied by an application composition root.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,6 +38,7 @@ pub struct Daemon {
     source: Arc<dyn Source>,
     events: Events,
     release: Release,
+    sampler: Arc<dyn ProcessSampler>,
 }
 
 impl Daemon {
@@ -50,6 +52,7 @@ impl Daemon {
             source: Arc::new(Registry::new(Auth::Anonymous)),
             events,
             release: Release::default(),
+            sampler: Arc::new(Unavailable),
         }
     }
 
@@ -74,6 +77,13 @@ impl Daemon {
         self
     }
 
+    /// Supply application-owned host process accounting.
+    #[must_use]
+    pub fn process_sampler(mut self, sampler: impl ProcessSampler) -> Self {
+        self.sampler = Arc::new(sampler);
+        self
+    }
+
     /// Direct access to the exact service instance exposed by server mode.
     #[must_use]
     pub fn headless(&self) -> Containers {
@@ -92,6 +102,7 @@ impl Daemon {
             self.source.clone(),
             self.events.clone(),
             self.release.clone(),
+            self.sampler.clone(),
         )
     }
 }

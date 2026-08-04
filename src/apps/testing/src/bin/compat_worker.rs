@@ -225,7 +225,8 @@ fn rootfs_input(
             }
         }
         "dynamic-rootfs" => {
-            let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/artifacts/runtime");
+            let runtime =
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/artifacts/runtime");
             let resources = match isa {
                 hl_engine::activation::GuestIsa::Aarch64 => [
                     ("aarch64/lib/ld-linux-aarch64.so.1", "lib/ld-linux-aarch64.so.1"),
@@ -276,19 +277,18 @@ fn fixture_input(
     }
     match fixture {
         Fixture::SideFile => {
-            return Ok(builder
-                .with_input(hl_engine::runtime::Input::File {
-                    source: guest
-                        .parent()
-                        .and_then(|path| path.parent())
-                        .and_then(|path| path.parent())
-                        .and_then(|path| path.parent())
-                        .and_then(|path| path.parent())
-                        .ok_or(())?
-                        .join(side_files),
-                    relative: PathBuf::from("tmp/hl_pclib_blob.bin"),
-                    executable: false,
-                }));
+            return Ok(builder.with_input(hl_engine::runtime::Input::File {
+                source: guest
+                    .parent()
+                    .and_then(|path| path.parent())
+                    .and_then(|path| path.parent())
+                    .and_then(|path| path.parent())
+                    .and_then(|path| path.parent())
+                    .ok_or(())?
+                    .join(side_files),
+                relative: PathBuf::from("tmp/hl_pclib_blob.bin"),
+                executable: false,
+            }));
         }
         Fixture::Directory => {
             return Ok(builder.with_input(hl_engine::runtime::Input::Directory {

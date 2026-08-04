@@ -1,4 +1,9 @@
 fn main() {
+    let logging = hl_log::EnvironmentConfig::parse(hl_log::Config::default(), std::env::vars());
+    for warning in logging.warnings() {
+        eprintln!("hl-engine: {warning}");
+    }
+    logging.apply();
     let mut arguments = std::env::args().collect::<Vec<_>>();
     let mut environment = hl_engine::environment::BootstrapEnvironment::capture(std::env::vars());
     let authority = match environment.take_authority_descriptor() {

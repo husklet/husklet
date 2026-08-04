@@ -26,8 +26,6 @@ api_test!(image_prune, image_prune);
 api_test!(malformed_image_archive, malformed_image_archive);
 api_test!(persistence_restart, persistence_restart);
 api_test!(removal_wait_race, removal_wait_race);
-api_test!(server_process, server_process);
-api_test!(server_restart_persistence, server_restart_persistence);
 
 /// These contracts execute real Linux programs and therefore require the pinned
 /// Alpine rootfs used by repository end-to-end runs.

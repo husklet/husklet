@@ -1,14 +1,14 @@
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use hl_container::{Container, ContainerState};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-use super::error::{ApiError, ApiResult};
 use super::DockerState;
+use super::error::{ApiError, ApiResult};
 use crate::api::{BlockIo, Cpu, CpuUsage, Memory, Pids, Stats, Throttling, Top};
 
 const DEFAULT_MEMORY: u64 = 8 * 1024 * 1024 * 1024;
@@ -20,11 +20,7 @@ pub(super) async fn top(
     Query(options): Query<TopOptions>,
 ) -> ApiResult<Json<Top>> {
     let columns = options.columns()?;
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     if !matches!(
         container.state,
         ContainerState::Running { .. } | ContainerState::Paused { .. }
@@ -40,10 +36,7 @@ pub(super) async fn top(
     let process = ProcessRow::new(&container);
     Ok(Json(Top {
         titles: columns.iter().map(|column| column.title().into()).collect(),
-        processes: vec![columns
-            .iter()
-            .map(|column| process.value(*column))
-            .collect()],
+        processes: vec![columns.iter().map(|column| process.value(*column)).collect()],
     }))
 }
 
@@ -246,10 +239,7 @@ pub(super) struct Options {
 
 impl Options {
     fn streams(&self) -> bool {
-        !matches!(
-            self.stream.as_deref(),
-            Some("0" | "false" | "False" | "no" | "off")
-        )
+        !matches!(self.stream.as_deref(), Some("0" | "false" | "False" | "no" | "off"))
     }
 }
 
@@ -259,19 +249,17 @@ pub(super) async fn stats(
     Path(id): Path<String>,
     Query(options): Query<Options>,
 ) -> ApiResult<Response> {
-    let container = state
-        .containers
-        .inspect(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
     if !options.streams() || !container.state.is_active() {
-        return Ok(Json(ProcessMetrics::sample(&container, 0)).into_response());
+        return Ok(Json(ProcessMetrics::sample(&container, state.sampler.as_ref(), 0)).into_response());
     }
     let containers = state.containers.clone();
     let reference = container.id.to_string();
+    let sampler = state.sampler.clone();
     let body = futures_util::stream::unfold((0_u64, 0_u64), move |(index, previous)| {
         let containers = containers.clone();
         let reference = reference.clone();
+        let sampler = sampler.clone();
         async move {
             if index > 0 {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -280,7 +268,7 @@ pub(super) async fn stats(
             if !container.state.is_active() {
                 return None;
             }
-            let value = ProcessMetrics::sample(&container, previous);
+            let value = ProcessMetrics::sample(&container, sampler.as_ref(), previous);
             let next = (index + 1, value.cpu_stats.cpu_usage.total_usage);
             let mut bytes = serde_json::to_vec(&value).ok()?;
             bytes.push(b'\n');
@@ -293,12 +281,7 @@ pub(super) async fn stats(
         .expect("static stats response is valid"))
 }
 
-fn sample_with_metrics(
-    container: &Container,
-    pid: Option<u64>,
-    metrics: ProcessMetrics,
-    previous: u64,
-) -> Stats {
+fn sample_with_metrics(container: &Container, pid: Option<u64>, metrics: ProcessMetrics, previous: u64) -> Stats {
     let (usage, total) = (metrics.memory, metrics.cpu.0);
     let previous = if previous == 0 { total } else { previous };
     let cpu = |total, system| Cpu {
@@ -321,9 +304,11 @@ fn sample_with_metrics(
         preread: "0001-01-01T00:00:00Z".into(),
         name: format!(
             "/{}",
-            container.spec.name.as_deref().unwrap_or_else(|| {
-                &container.id.as_str()[..container.id.as_str().len().min(12)]
-            })
+            container
+                .spec
+                .name
+                .as_deref()
+                .unwrap_or_else(|| { &container.id.as_str()[..container.id.as_str().len().min(12)] })
         ),
         id: container.id.to_string(),
         pids_stats: Pids { current },
@@ -355,26 +340,19 @@ struct ProcessMetrics {
 }
 
 impl ProcessMetrics {
-    fn sample(container: &Container, previous: u64) -> Stats {
+    fn sample(container: &Container, sampler: &dyn crate::ProcessSampler, previous: u64) -> Stats {
         let pid = match &container.state {
-            ContainerState::Running { process_id, .. }
-            | ContainerState::Paused { process_id, .. } => Some(*process_id),
+            ContainerState::Running { process_id, .. } | ContainerState::Paused { process_id, .. } => Some(*process_id),
             _ => None,
         };
-        sample_with_metrics(
-            container,
-            pid,
-            pid.map_or_else(Self::default, Self::read),
-            previous,
-        )
-    }
-
-    fn read(process_id: u64) -> Self {
-        let sample = crate::adapter::process::Sample::read(process_id);
-        Self {
-            memory: sample.memory,
-            cpu: CpuTime(sample.cpu_seconds.saturating_mul(1_000_000_000)),
-        }
+        let metrics = pid.map_or_else(Self::default, |process_id| {
+            let sample = sampler.sample(process_id);
+            Self {
+                memory: sample.memory,
+                cpu: CpuTime(sample.cpu_seconds.saturating_mul(1_000_000_000)),
+            }
+        });
+        sample_with_metrics(container, pid, metrics, previous)
     }
 }
 

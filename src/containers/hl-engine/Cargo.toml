@@ -40,35 +40,3 @@ libc = "0.2"
 [lib]
 name = "hl_engine"
 path = "src/lib.rs"
-
-[[bin]]
-name = "hl-engine"
-path = "src/main.rs"
-
-[[bin]]
-name = "hl-native-child-fixture"
-path = "src/bin/child-fixture.rs"
-
-[[bin]]
-name = "hl-compat-worker"
-path = "src/bin/compat-worker.rs"
-
-[[bin]]
-name = "hl-authority-child"
-path = "src/bin/authority-child.rs"
-
-[[bin]]
-name = "hl-aarch64"
-path = "src/bin/aarch64.rs"
-
-[[bin]]
-name = "hl-x86_64"
-path = "src/bin/x86.rs"
-
-[[bin]]
-name = "hl-confinement-child"
-path = "src/bin/confinement-child.rs"
-
-[[bin]]
-name = "hl-projection-worker"
-path = "src/bin/projection-worker.rs"

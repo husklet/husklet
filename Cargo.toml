@@ -17,6 +17,8 @@ members = [
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
     "src/apps/husklet",
+    "src/apps/engine",
+    "src/apps/daemon",
     "src/apps/testing",
 ]
 default-members = [
@@ -37,7 +39,7 @@ async-trait = "0.1"
 base64 = "0.22"
 bytes = "1"
 chrono = "0.4"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 futures-util = "0.3"
 fs2 = "0.4"

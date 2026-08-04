@@ -239,7 +239,11 @@ fn host_cpu() -> Option<HostCpu> {
         .collect::<Result<Vec<_>, _>>()
         .ok()?;
     let total = fields.iter().copied().fold(0_u64, u64::saturating_add);
-    let idle = fields.get(3).copied().unwrap_or(0).saturating_add(fields.get(4).copied().unwrap_or(0));
+    let idle = fields
+        .get(3)
+        .copied()
+        .unwrap_or(0)
+        .saturating_add(fields.get(4).copied().unwrap_or(0));
     Some(HostCpu {
         busy: total.saturating_sub(idle),
         total,

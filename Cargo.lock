@@ -526,10 +526,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "dockerd"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hl-client",
+ "hl-container",
+ "hl-daemon",
+ "hl-images",
+ "hl-log",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "hl-engine",
+ "hl-log",
+]
 
 [[package]]
 name = "english-pos-tagger"
@@ -1115,6 +1137,7 @@ dependencies = [
 name = "hl-design-lint"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "english-pos-tagger",
  "proc-macro2",
  "quote",
@@ -1138,7 +1161,6 @@ dependencies = [
  "hl-isa",
  "hl-linux",
  "hl-loader",
- "hl-log",
  "hl-memory",
  "hl-network",
  "hl-provider",
@@ -2782,11 +2804,20 @@ name = "testing"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hl-checkpoint",
  "hl-container",
+ "hl-descriptor",
+ "hl-engine",
  "hl-images",
  "hl-log",
+ "hl-network",
+ "hl-provider",
+ "hl-runtime",
+ "libc",
+ "ring",
  "serde",
  "serde_yaml",
+ "sha2",
  "tempfile",
  "tokio",
 ]

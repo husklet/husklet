@@ -51,7 +51,7 @@ SOURCE_CHANGES="$(source_changes)"
 # 1. Release product binaries. Cargo links the native archive shipped by the selected `hl-engine` crate,
 # keeping the Rust API and native ABI on one published version.
 log "building release husklet and hl-daemon"
-( cd "$ROOT" && cargo build --release -p hl-daemon && \
+( cd "$ROOT" && cargo build --release -p dockerd && \
     cargo build --release -p husklet --features gui,profile --bin husklet )
 [ "$(git -C "$ROOT" rev-parse HEAD)" = "$SOURCE_REVISION" ] \
   && [ "$(source_changes)" = "$SOURCE_CHANGES" ] \

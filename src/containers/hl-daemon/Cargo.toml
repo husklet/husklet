@@ -9,11 +9,6 @@ rust-version.workspace = true
 description = "Docker-compatible server over hl-container"
 readme = "../../../README.md"
 
-[[bin]]
-name = "hl-daemon"
-path = "src/bin/hl-daemon.rs"
-required-features = ["runtime"]
-
 [[test]]
 name = "scenarios"
 path = "../../../tests/scenarios/main.rs"
@@ -71,7 +66,7 @@ sha2 = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 tar = { workspace = true, optional = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync"], optional = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync"], optional = true }
 tokio-util = { workspace = true, features = ["io"], optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
 

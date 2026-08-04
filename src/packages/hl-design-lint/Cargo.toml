@@ -10,6 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
+clap.workspace = true
 english-pos-tagger = "0.1"
 wordnet-lemmatizer = "0.1"
 proc-macro2 = { version = "1", features = ["span-locations"] }

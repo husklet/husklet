@@ -320,10 +320,8 @@ impl Graph {
 fn allowed_edge(source: &str, target: &str) -> bool {
     matches!(
         (source, target),
-        // Transferable foundations and repository tools.
-        ("hl-benchmark", "hl-design")
-            // Container services and Docker-compatible APIs.
-            | ("hl-client", "hl-container")
+        // Container services and Docker-compatible APIs.
+        ("hl-client", "hl-container")
             | ("hl-client", "hl-daemon")
             | ("hl-client", "hl-images")
             | ("hl-client", "hl-log")
@@ -352,6 +350,21 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("husklet", "hl-log")
             | ("husklet", "hl-ws")
             | ("husklet", "hl-ws-term")
+            | ("dockerd", "hl-container")
+            | ("dockerd", "hl-daemon")
+            | ("dockerd", "hl-images")
+            | ("dockerd", "hl-log")
+            | ("engine", "hl-engine")
+            | ("engine", "hl-log")
+            | ("testing", "hl-checkpoint")
+            | ("testing", "hl-container")
+            | ("testing", "hl-descriptor")
+            | ("testing", "hl-engine")
+            | ("testing", "hl-images")
+            | ("testing", "hl-log")
+            | ("testing", "hl-network")
+            | ("testing", "hl-provider")
+            | ("testing", "hl-runtime")
         // Runtime foundations and domains.
             | ("hl-vfs", "hl-descriptor")
             | ("hl-vfs", "hl-fs")

@@ -1,0 +1,30 @@
+[package]
+name = "dockerd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Husklet Docker-compatible daemon application"
+publish = false
+
+[[bin]]
+name = "hl-daemon"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+hl-container = { path = "../../containers/hl-container" }
+hl-daemon = { path = "../../containers/hl-daemon" }
+hl-images = { path = "../../containers/hl-images" }
+hl-log = { path = "../../packages/hl-log" }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "signal"] }
+
+[dev-dependencies]
+hl-client = { path = "../../containers/hl-client" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "process", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

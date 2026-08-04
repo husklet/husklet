@@ -226,16 +226,13 @@
           doCheck = false;
           buildPhase = ''
             runHook preBuild
-            cargo build --release -p hl-engine --bins --locked --offline -j 1
+            cargo build --release -p engine --bins --locked --offline -j 1
             runHook postBuild
           '';
           installPhase = ''
             runHook preInstall
             mkdir -p "$out/bin"
-            for binary in \
-              hl-engine hl-native-child-fixture hl-compat-worker \
-              hl-authority-child hl-aarch64 hl-x86_64 \
-              hl-confinement-child hl-projection-worker
+            for binary in hl-engine hl-aarch64 hl-x86_64
             do
               install -Dm755 "target/release/$binary" "$out/bin/$binary"
             done
@@ -270,6 +267,8 @@
             cargo fmt --all --check --message-format short
             cargo run --locked --offline -q -p hl-design-lint -- src
             cargo run --locked --offline -q -p hl-design-lint -- --cases lint src
+            cargo build -p engine -p testing --bins --locked --offline -j 1
+            export HL_TEST_ENGINE_APP_BIN_DIR="$PWD/target/debug"
             cargo check --workspace --all-targets --locked --offline -j 1
             cargo clippy --workspace --all-targets --locked --offline -j 1 -- -D warnings
             cargo test --workspace --all-targets --locked --offline -j 1 --no-fail-fast

@@ -18,5 +18,3 @@ pub(crate) mod persistence_restart;
 pub(crate) mod port_publishing;
 pub(crate) mod removal_wait_race;
 pub(crate) mod resources;
-pub(crate) mod server_process;
-pub(crate) mod server_restart_persistence;
