@@ -56,7 +56,7 @@ impl Host {
 impl MemoryAccessHost for Host {
     type Projection = u64;
 
-    fn read(&self, range: AddressRange, output: &mut [u8]) -> Result<(), MemoryError> {
+    fn read(&self, range: AddressRange, output: &mut [u8], _: Protection) -> Result<(), MemoryError> {
         let bytes = self.bytes.lock().unwrap();
         for (offset, output) in output.iter_mut().enumerate() {
             *output = bytes.get(&(range.start().get() + offset as u64)).copied().unwrap_or(0);

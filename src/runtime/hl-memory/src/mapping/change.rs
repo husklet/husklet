@@ -145,7 +145,7 @@ mod tests {
     impl MemoryAccessHost for Host {
         type Projection = u64;
 
-        fn read(&self, _: AddressRange, output: &mut [u8]) -> Result<(), MemoryError> {
+        fn read(&self, _: AddressRange, output: &mut [u8], _: Protection) -> Result<(), MemoryError> {
             output.fill(0);
             Ok(())
         }

@@ -288,7 +288,11 @@ fn shared_mapping_coherent() {
 
     pin.write(0, b"backing").unwrap();
     let mut observed = [0_u8; 7];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 7).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 7).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
     assert_eq!(&observed, b"backing");
 
@@ -311,8 +315,32 @@ fn outside_stage_atomic() {
     let token = host.stage_map(GuestAddress::new(0), request(Protection::READ)).unwrap();
     host.commit(&[token]).unwrap();
     let mut observed = [0; 1];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
+}
+
+#[test]
+fn host_read_preserves_execute_authority() {
+    let arena = Arc::new(VirtualMemory::reserve(PAGE as usize).unwrap());
+    let host = MappingHostAdapter::new(arena);
+    let token = host
+        .stage_map(GuestAddress::new(0), request(Protection::EXECUTE))
+        .unwrap();
+    host.commit(&[token]).unwrap();
+    let range = AddressRange::nonempty(GuestAddress::new(0), 1).unwrap();
+    let mut observed = [0xa5];
+
+    host.read(range, &mut observed, Protection::EXECUTE).unwrap();
+
+    assert_eq!(observed, [0]);
+    assert_eq!(
+        host.read(range, &mut observed, Protection::READ),
+        Err(hl_memory::MemoryError::NoAddressSpace),
+    );
 }
 
 #[test]
@@ -333,7 +361,11 @@ fn logical_unmap_then() {
         .unwrap();
     host.commit(&[token]).unwrap();
     let mut observed = [1; 16];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 16).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 16).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
     assert_eq!(observed, [0; 16]);
 }
@@ -357,7 +389,11 @@ fn loader_commit_publishes() {
     loader.commit(&[*mapping.token()]).unwrap();
     let host = MappingHostAdapter::new(arena);
     let mut observed = [0; 4];
-    host.read(AddressRange::nonempty(GuestAddress::new(8), 4).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(8), 4).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
     assert_eq!(observed, [1, 2, 3, 4]);
 }
@@ -390,19 +426,25 @@ fn loader_protects_independent() {
     loader.commit(&[*mapping.token()]).unwrap();
     let host = MappingHostAdapter::new(arena);
     let mut observed = [0];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
     assert_eq!(observed, [1]);
     assert!(
         host.read(
             AddressRange::nonempty(GuestAddress::new(PAGE), 1).unwrap(),
             &mut observed,
+            Protection::READ,
         )
         .is_err()
     );
     host.read(
         AddressRange::nonempty(GuestAddress::new(PAGE * 2), 1).unwrap(),
         &mut observed,
+        Protection::READ,
     )
     .unwrap();
     assert_eq!(observed, [2]);
@@ -488,7 +530,11 @@ fn file_replacement() {
         .unwrap();
     host.commit_write(write, &[0x5a]).unwrap();
     let mut observed = [0];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
     assert_eq!(observed, [0x5a]);
     fs::remove_file(path).unwrap();
@@ -514,7 +560,11 @@ fn failed_batch_compensates() {
     assert!(host.commit(&tokens).is_err());
     arena.inject_failures(&[]);
     let mut byte = [0];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(), &mut byte)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 1).unwrap(),
+        &mut byte,
+        Protection::READ,
+    )
         .unwrap();
 }
 
@@ -583,7 +633,11 @@ fn atomic_later_mismatch() {
         .unwrap();
     assert!(host.commit_u32_batch(token).is_err());
     let mut observed = [1; 4];
-    host.read(AddressRange::nonempty(GuestAddress::new(0), 4).unwrap(), &mut observed)
+    host.read(
+        AddressRange::nonempty(GuestAddress::new(0), 4).unwrap(),
+        &mut observed,
+        Protection::READ,
+    )
         .unwrap();
     assert_eq!(observed, [0; 4]);
 }

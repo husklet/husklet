@@ -478,9 +478,9 @@ impl MemoryAccessHost for MappingHostAdapter {
             .map_err(|_| MemoryError::NoAddressSpace)
     }
 
-    fn read(&self, range: AddressRange, output: &mut [u8]) -> Result<(), MemoryError> {
+    fn read(&self, range: AddressRange, output: &mut [u8], access: Protection) -> Result<(), MemoryError> {
         self.arena
-            .snapshot_read(range.start().get(), output, Protection::READ)
+            .snapshot_read(range.start().get(), output, access)
             .map_err(|_| MemoryError::NoAddressSpace)
     }
 

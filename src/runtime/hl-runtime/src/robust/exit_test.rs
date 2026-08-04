@@ -50,7 +50,7 @@ impl MappingHost for Host {
 impl MemoryAccessHost for Host {
     type Projection = u64;
 
-    fn read(&self, range: AddressRange, output: &mut [u8]) -> Result<(), MemoryError> {
+    fn read(&self, range: AddressRange, output: &mut [u8], _: Protection) -> Result<(), MemoryError> {
         let state = self.state.lock().unwrap();
         for (offset, byte) in output.iter_mut().enumerate() {
             *byte = state

@@ -199,7 +199,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             let amount = bytes.len().min((count - reconciled) as usize);
             let start = GuestAddress::new(address.get() + reconciled);
             let chunk = AddressRange::nonempty(start, amount as u64).map_err(|_| MemoryError::AddressOverflow)?;
-            self.host.read(chunk, &mut bytes[..amount])?;
+            self.host.read(chunk, &mut bytes[..amount], Protection::WRITE)?;
             let offset = usize::try_from(backing_offset + reconciled).map_err(|_| MemoryError::BackingOverflow)?;
             pin.write(offset, &bytes[..amount])?;
             reconciled += amount as u64;

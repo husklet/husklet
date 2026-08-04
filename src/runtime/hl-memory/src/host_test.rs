@@ -147,7 +147,7 @@ impl MemoryAccessHost for FakeHost {
         )
         .map(Some)
     }
-    fn read(&self, range: AddressRange, output: &mut [u8]) -> Result<(), MemoryError> {
+    fn read(&self, range: AddressRange, output: &mut [u8], _: Protection) -> Result<(), MemoryError> {
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         for (offset, byte) in output.iter_mut().enumerate() {
             *byte = state

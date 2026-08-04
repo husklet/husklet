@@ -503,7 +503,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
                 .host
                 .validate_file(identity, resolution.backing_offset, length, address)?;
         }
-        self.host.read(range, output)
+        self.host.read(range, output, access)
     }
     pub fn prepare_write(&self, address: GuestAddress, length: u64) -> Result<WriteTransaction<H>, MemoryError> {
         let _admission = self.activity.admit_memory()?;

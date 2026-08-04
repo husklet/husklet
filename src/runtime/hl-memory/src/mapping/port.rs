@@ -61,7 +61,11 @@ pub trait MemoryAccessHost: Host {
         Ok(length)
     }
 
-    fn read(&self, range: AddressRange, output: &mut [u8]) -> Result<(), MemoryError>;
+    /// Copies bytes after the coordinator has admitted `access` for the full
+    /// range. The host must preserve that authority when its own mapping model
+    /// performs a second protection check; substituting read authority would
+    /// reject execute-only instruction fetches and write-only reconciliation.
+    fn read(&self, range: AddressRange, output: &mut [u8], access: Protection) -> Result<(), MemoryError>;
     fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError>;
     fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError>;
     /// Commits one already validated atomic write without requiring a retained

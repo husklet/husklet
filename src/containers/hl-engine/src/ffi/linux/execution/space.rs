@@ -174,7 +174,7 @@ impl AddressSpace {
             VirtualMemory::reserve_in(current.image.arena.resource_context(), current.image.arena.length())
                 .map_err(|_| Error::Memory)?
                 .with_shared_store(Arc::clone(&shared))
-                .with_shared_backings(current.image.arena.shared_backings.clone().ok_or(Error::Memory)?)
+                .with_inherited_backings(&current.image.arena)
                 .with_file_registry(current.image.arena.file_registry()),
         );
         let mappings = Arc::new(MappingCoordinator::with_shared_space(
