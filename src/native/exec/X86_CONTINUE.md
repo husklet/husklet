@@ -81,3 +81,24 @@ after any completed instruction remains an ordinary scheduler yield. This
 preserves the native block's atomic state contract while guaranteeing that a
 supported instruction stream either consumes budget natively or advances via
 the interpreter; it does not manufacture partial native execution.
+
+## Projected dynamic-return progress
+
+The AMD64 SysV shared-memory-lock investigation stopped inside
+`hl_native_x86_64_run` while the architectural PC named a two-instruction tail,
+`mov [r9],rdx; ret`. A stale branch reason or a zero-accounting dynamic-chain
+cycle was considered, but the instruction shape alone does not reproduce that
+failure. `projected_return_progress` executes the exact bytes with an authorized
+write destination and a 64-entry authorized return stack whose entries all
+target the same tail. This warms and then repeatedly uses the indirect-branch
+cache. A 64-instruction budget returns a typed yield with exactly 64 completed
+instructions, zero budget, 32 consumed stack entries, the original PC, and the
+expected committed destination value.
+
+The warning-strict direct native build and a five-second bounded execution pass.
+This proves the exact projected write/return cycle charges progress and reaches
+its public budget boundary. It also proves that converting a branch at this
+site to interpreter fallback would risk replaying an already committed write.
+No production progress guard is justified by this trace alone; the broader
+runtime hang requires a trace that distinguishes time spent inside generated
+code from time spent in the C dispatch loop before either owner is changed.

@@ -116,11 +116,56 @@ static int continuation_contract(void) {
     hl_native_destroy(executor);
     return 0;
 }
+
+static int projected_return_progress(void) {
+    static const uint8_t tail[] = {
+        0x49, 0x89, 0x11, /* mov [r9],rdx */
+        0xc3,             /* ret */
+    };
+    test_memory host = {0};
+    hl_native_memory memory = test_services(&host);
+    hl_native_executor *executor = NULL;
+    hl_native_x86_64_cpu state = {0};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    uint64_t destination = 0;
+    uint64_t return_targets[64];
+    hl_native_projection_view views[] = {
+        {0x9000, 0x9008, (uint64_t)(uintptr_t)&destination, 7,
+         HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0},
+        {0xa000, 0xa200, (uint64_t)(uintptr_t)return_targets, 7,
+         HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0},
+    };
+    hl_native_projection projection = {views, 2, 7, 0};
+    hl_native_source_span span = {0x8200, tail, sizeof tail, 7, 16};
+    hl_native_source source = {&span, 1, 7, 16};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_X86_64, .state.x86_64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .budget = 64,
+        .source = &source, .projection = &projection};
+
+    memory.write_begin = executable_begin;
+    memory.write_end = executable_end;
+    hl_native_config config = test_config(&memory, 0);
+    CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    for (size_t index = 0; index < 64; ++index) return_targets[index] = 0x8200;
+    state.program = 0x8200;
+    state.registers[2] = UINT64_C(0x123456789abcdef0);
+    state.registers[4] = 0xa000;
+    state.registers[9] = 0x9000;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 64 &&
+          state.budget == 0 && state.program == 0x8200);
+    CHECK(destination == UINT64_C(0x123456789abcdef0) && state.registers[4] == 0xa100);
+    hl_native_destroy(executor);
+    return 0;
+}
 #endif
 
 int main(void) {
 #if defined(__aarch64__)
-    return continuation_contract();
+    if (continuation_contract() != 0) return 1;
+    return projected_return_progress();
 #else
     return 0;
 #endif
