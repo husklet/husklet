@@ -190,7 +190,7 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/elf_rodatawrite.c, output: elf-rodata-write, flags: ["-static","-O2","-std=gnu11"] }
+    build: { source: source/elf_rodatawrite.c, output: elf-rodata-write, flags: ["-static","-O2","-std=gnu11","-Wl,-T,tests/runtime/memory/source/elf_rodatawrite.ld"] }
     artifact: { destination: /opt/husklet/memory/elf-rodata-write }
     run: []
     expect: { exit: 0, stdout: golden/elf_rodatawrite.out }

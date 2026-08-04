@@ -4,6 +4,13 @@ Retained C was studied read-only in `../engine/src/linux_abi/syscall/mem.c`, `..
 
 The four cases preserve lock scope, vector caps, validation ordering, atomic pipe writes, scatter reads, and forked aliases on both ISAs.
 
+The `elf-rodata-write` fixture also preserves its exceptional retained link
+contract from `../engine/cmake/Phase3Compat.cmake`: the byte-identical
+`source/elf_rodatawrite.ld` is passed with `-Wl,-T` so the `.elfwrite` section
+starts on a 16 KiB boundary and spans the intended 4 KiB guest subpage. The
+ordinary memory-suite flags in `../engine/tests/compat/memory/manifest.tsv` do
+not record this per-target CMake override by themselves.
+
 ## Complete retained memory domain
 
 The complete compatibility migration also studied the retained implementation,
