@@ -13,6 +13,7 @@ use tokio::time::sleep;
 
 pub struct TestImage {
     images: Images,
+    identity: String,
     reference: RootReference,
     view: View,
     runtime: RuntimeConfig,
@@ -44,6 +45,7 @@ impl TestImage {
         let view = images.roots().open(&reference)?;
         Ok(Self {
             images,
+            identity: image.target.digest().to_string(),
             reference,
             view,
             runtime,
@@ -52,6 +54,11 @@ impl TestImage {
 
     pub fn path(&self) -> &Path {
         self.view.path()
+    }
+
+    /// Immutable manifest identity selected for this platform.
+    pub fn identity(&self) -> &str {
+        &self.identity
     }
 
     pub fn runtime(&self) -> &RuntimeConfig {

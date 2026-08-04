@@ -11,6 +11,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use sha2::{Digest, Sha256};
 
 pub enum Result {
     Passed(Passed),
@@ -36,6 +37,14 @@ pub struct Provenance {
     pub execution: String,
     pub target: &'static str,
     pub warmups: u32,
+    pub identity: String,
+}
+
+pub struct Prepared {
+    artifact: std::path::PathBuf,
+    artifact_identity: String,
+    image_identity: String,
+    pub identity: String,
 }
 
 type MeasurementResult = (u128, Vec<u128>, BTreeMap<String, Vec<u128>>);
@@ -46,9 +55,58 @@ const DIAGNOSTIC_OUTPUT: usize = 16 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(120);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target) -> Result {
+pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -> std::result::Result<Prepared, Error> {
     let case = &benchmark.cases[case_index];
-    match execute(Arc::clone(&benchmark), case_index, target).await {
+    let artifact = benchmark.build(case, target).await?;
+    let artifact_identity = file_identity(&artifact)?;
+    let compiler = benchmark.compiler_name(target);
+    let compiler_version = tokio::process::Command::new(compiler).arg("--version").kill_on_drop(true).output().await?;
+    if !compiler_version.status.success() || compiler_version.stdout.len() > 64 * 1024 {
+        return Err(format!("{compiler} did not provide bounded compiler provenance").into());
+    }
+    let image = TestImage::materialize(&benchmark.image, &target.platform()).await?;
+    let image_identity = image.identity().to_owned();
+    image.release()?;
+    let runner = std::env::current_exe()?;
+    let runner_identity = file_identity(&runner)?;
+    let definition = fs::read(benchmark.directory.join("test.yaml"))?;
+    let source = fs::read(benchmark.source_path())?;
+    let golden = fs::read(&case.stdout_contains)?;
+    let execution = format!("{:?}", benchmark.execution);
+    let identity = provenance_identity(&[
+        b"husklet-benchmark-provenance-v1".as_slice(),
+        target.name().as_bytes(),
+        execution.as_bytes(),
+        compiler.as_bytes(),
+        compiler_version.stdout.as_slice(),
+        artifact_identity.as_bytes(),
+        image_identity.as_bytes(),
+        runner_identity.as_bytes(),
+        definition.as_slice(),
+        source.as_slice(),
+        golden.as_slice(),
+    ])?;
+    Ok(Prepared {
+        artifact,
+        artifact_identity,
+        image_identity,
+        identity,
+    })
+}
+
+fn provenance_identity(fields: &[&[u8]]) -> std::result::Result<String, Error> {
+    let mut digest = Sha256::new();
+    for field in fields {
+        digest.update(u64::try_from(field.len()).map_err(|_| "benchmark provenance field is too large")?.to_be_bytes());
+        digest.update(field);
+    }
+    Ok(hex(&digest.finalize()))
+}
+
+pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target, prepared: Prepared) -> Result {
+    let case = &benchmark.cases[case_index];
+    let identity = prepared.identity.clone();
+    match execute(Arc::clone(&benchmark), case_index, target, prepared).await {
         Ok((cold, samples, phases)) => Result::Passed(Passed {
             id: format!("{}/{}", benchmark.name, case.id),
             cold,
@@ -59,6 +117,7 @@ pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target) -
                 execution: format!("{:?}", benchmark.execution),
                 target: target.name(),
                 warmups: case.warmups,
+                identity,
             },
         }),
         Err(error) => Result::Failed(Failed {
@@ -73,13 +132,22 @@ async fn execute(
     benchmark: Arc<Benchmark>,
     case_index: usize,
     target: Target,
+    prepared: Prepared,
 ) -> std::result::Result<MeasurementResult, Error> {
     let case = &benchmark.cases[case_index];
     let deadline = tokio::time::Instant::now() + row_timeout(case)?;
     let image = tokio::time::timeout_at(deadline, TestImage::materialize(&benchmark.image, &target.platform()))
         .await
         .map_err(|_| "benchmark image materialization exceeded the total row deadline")??;
-    let outcome = execute_with_image(Arc::clone(&benchmark), case_index, target, image.path(), deadline)
+    if image.identity() != prepared.image_identity {
+        image.release()?;
+        return Err("benchmark image identity changed after resume admission".into());
+    }
+    if file_identity(&prepared.artifact)? != prepared.artifact_identity {
+        image.release()?;
+        return Err("benchmark artifact identity changed after resume admission".into());
+    }
+    let outcome = execute_with_image(Arc::clone(&benchmark), case_index, target, image.path(), &prepared.artifact, deadline)
         .await
         .map_err(|error| error.to_string());
     let release = tokio::time::timeout(
@@ -105,6 +173,7 @@ async fn execute_with_image(
     case_index: usize,
     target: Target,
     image: &std::path::Path,
+    artifact: &std::path::Path,
     deadline: tokio::time::Instant,
 ) -> std::result::Result<MeasurementResult, Error> {
     let state = isolated_state()?;
@@ -115,21 +184,27 @@ async fn execute_with_image(
     .await
     .map_err(|_| "benchmark container setup exceeded the total row deadline")??;
     let case = &benchmark.cases[case_index];
-    let artifact = tokio::time::timeout_at(deadline, benchmark.build(case, target))
-        .await
-        .map_err(|_| "benchmark build exceeded the total row deadline")??;
     let guest_program = format!("/opt/husklet/bench-{}", case.id);
+    let staging_artifact = artifact.to_path_buf();
     let staging_image = image.to_path_buf();
     let staging_program = guest_program.clone();
     tokio::time::timeout_at(
         deadline,
         tokio::task::spawn_blocking(move || {
-            stage(&artifact, &staging_image, &staging_program).map_err(|error| error.to_string())
+            stage(&staging_artifact, &staging_image, &staging_program).map_err(|error| error.to_string())
         }),
     )
     .await
     .map_err(|_| "benchmark staging exceeded the total row deadline")???;
     run_case(&containers, &benchmark, case, target, image, &guest_program, deadline).await
+}
+
+fn file_identity(path: &std::path::Path) -> std::result::Result<String, Error> {
+    Ok(hex(&Sha256::digest(fs::read(path)?)))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn isolated_state() -> std::result::Result<tempfile::TempDir, Error> {
@@ -446,7 +521,7 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 mod tests {
     use super::{
         Benchmark, CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, capture_size, isolated_state, output_excerpt,
-        parse_phases, stdout_contains,
+        parse_phases, provenance_identity, stdout_contains,
     };
     use hl_container::{Entry, Stream};
 
@@ -464,6 +539,21 @@ mod tests {
         let phases = parse_phases(b"noise\nPHASE compute us=42 ok=7\n").unwrap();
         assert_eq!(phases, vec![("compute".to_owned(), 42, 7)]);
         assert!(parse_phases(b"PHASE compute ms=42 ok=7\n").is_err());
+    }
+
+    #[test]
+    fn provenance_is_typed_and_changes_with_every_identity_field() {
+        let baseline = [b"provider".as_slice(), b"arm64", b"artifact", b"image", b"runner", b"definition"];
+        let expected = provenance_identity(&baseline).unwrap();
+        for index in 0..baseline.len() {
+            let mut changed = baseline;
+            changed[index] = b"changed";
+            assert_ne!(provenance_identity(&changed).unwrap(), expected, "field {index} did not bind provenance");
+        }
+        assert_ne!(
+            provenance_identity(&[b"ab", b"c"]).unwrap(),
+            provenance_identity(&[b"a", b"bc"]).unwrap(),
+        );
     }
 
     #[test]

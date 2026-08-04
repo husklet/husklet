@@ -8,10 +8,8 @@ use crate::{
 };
 use clap::Args;
 use definition::Benchmark;
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
-    fmt::Write as _,
     future::Future,
     path::{Component, PathBuf},
     sync::Arc,
@@ -20,15 +18,21 @@ use tokio::task::JoinSet;
 
 const EVIDENCE_LIMIT: usize = 64 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 16 * 1024;
+const LEDGER_IDENTITY: &str = "husklet-benchmark-ledger-v2";
 
 pub async fn run(options: Options) -> Result<(), Error> {
-    let mut work = plan(options.benchmarks()?, &options);
+    let planned = plan(options.benchmarks()?, &options);
+    let mut preparations = WorkPool::new(planned, options.jobs);
+    let mut work = Vec::new();
+    while let Some(prepared) = preparations.next(prepare_work).await? {
+        work.push(prepared?);
+    }
+    work.sort_by(|left, right| left.key.cmp(&right.key));
     let keys = work.iter().map(|item| item.key.clone()).collect::<BTreeSet<_>>();
-    let stamp = fingerprint(&work).await?;
     let report = runtime::workspace()?.join(&options.results);
     let resume = options.resume;
     let opened = tokio::task::spawn_blocking(move || {
-        ledger::Ledger::open(&report, &stamp, &keys, resume).map_err(|error| error.to_string())
+        ledger::Ledger::open(&report, LEDGER_IDENTITY, &keys, resume).map_err(|error| error.to_string())
     })
     .await??;
     let ledger = Arc::new(opened.ledger);
@@ -48,7 +52,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
 
 async fn execute_work(work: Work) -> Completed {
     let started = std::time::Instant::now();
-    let result = execution::run(work.benchmark, work.case_index, work.target).await;
+    let result = execution::run(work.benchmark, work.case_index, work.target, work.prepared).await;
     Completed {
         key: work.key,
         elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -88,6 +92,15 @@ impl<T: Send + 'static, R: Send + 'static> WorkPool<T, R> {
 struct WorkKey {
     id: String,
     target: Target,
+    provenance: String,
+}
+
+struct PlannedWork {
+    id: String,
+    key: WorkKey,
+    benchmark: Arc<Benchmark>,
+    case_index: usize,
+    target: Target,
 }
 
 struct Work {
@@ -95,6 +108,24 @@ struct Work {
     benchmark: Arc<Benchmark>,
     case_index: usize,
     target: Target,
+    prepared: execution::Prepared,
+}
+
+async fn prepare_work(work: PlannedWork) -> Result<Work, String> {
+    let prepared = execution::prepare(&work.benchmark, work.case_index, work.target)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Work {
+        key: WorkKey {
+            id: work.id,
+            target: work.target,
+            provenance: prepared.identity.clone(),
+        },
+        benchmark: work.benchmark,
+        case_index: work.case_index,
+        target: work.target,
+        prepared,
+    })
 }
 
 struct Completed {
@@ -200,9 +231,10 @@ fn excerpt(value: &str, limit: usize) -> String {
 fn format_passed(mut passed: execution::Passed) -> String {
     let statistics = Statistics::from_samples(&mut passed.samples);
     let mut lines = vec![format!(
-        "PASS bench/{} {} cold_ms={} min_ms={} median_ms={} p90_ms={} p99_ms={} max_ms={} samples={} warmups={} image={:?} execution={:?}",
+        "PASS bench/{} {} provenance={} cold_ms={} min_ms={} median_ms={} p90_ms={} p99_ms={} max_ms={} samples={} warmups={} image={:?} execution={:?}",
         passed.id,
         passed.provenance.target,
+        passed.provenance.identity,
         passed.cold,
         statistics.minimum,
         statistics.median,
@@ -231,16 +263,19 @@ fn format_passed(mut passed: execution::Passed) -> String {
     lines.join("\n")
 }
 
-fn plan(benchmarks: Vec<Benchmark>, options: &Options) -> Vec<Work> {
+fn plan(benchmarks: Vec<Benchmark>, options: &Options) -> Vec<PlannedWork> {
     let mut work = Vec::new();
     for benchmark in benchmarks {
         let benchmark = Arc::new(benchmark);
         for target in options.targets() {
             for (case_index, case) in benchmark.cases.iter().enumerate() {
-                work.push(Work {
+                let id = format!("bench/{}/{}", benchmark.name, case.id);
+                work.push(PlannedWork {
+                    id: id.clone(),
                     key: WorkKey {
-                        id: format!("bench/{}/{}", benchmark.name, case.id),
+                        id,
                         target,
+                        provenance: String::new(),
                     },
                     benchmark: Arc::clone(&benchmark),
                     case_index,
@@ -251,40 +286,6 @@ fn plan(benchmarks: Vec<Benchmark>, options: &Options) -> Vec<Work> {
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
     work
-}
-
-async fn fingerprint(work: &[Work]) -> Result<String, Error> {
-    let inputs = work
-        .iter()
-        .map(|item| {
-            let case = &item.benchmark.cases[item.case_index];
-            (
-                item.key.clone(),
-                item.benchmark.directory.join("test.yaml"),
-                item.benchmark.source_path(),
-                case.stdout_contains.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    tokio::task::spawn_blocking(move || {
-        let mut digest = Sha256::new();
-        for (key, definition, source, golden) in inputs {
-            digest.update(key.id);
-            digest.update([0]);
-            digest.update(key.target.name());
-            digest.update([0]);
-            digest.update(std::fs::read(definition).map_err(|error| error.to_string())?);
-            digest.update(std::fs::read(source).map_err(|error| error.to_string())?);
-            digest.update(std::fs::read(golden).map_err(|error| error.to_string())?);
-        }
-        let mut stamp = String::with_capacity(64);
-        for byte in digest.finalize() {
-            write!(&mut stamp, "{byte:02x}").map_err(|error| error.to_string())?;
-        }
-        Ok::<_, String>(stamp)
-    })
-    .await?
-    .map_err(Into::into)
 }
 
 #[derive(Args)]

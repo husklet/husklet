@@ -8,7 +8,7 @@ use std::{
     sync::Mutex,
 };
 
-const HEADER: &str = "id\ttarget\tstatus\telapsed_ms\toutput\n";
+const HEADER: &str = "id\ttarget\tprovenance\tstatus\telapsed_ms\toutput\n";
 const OUTPUT_LIMIT: usize = 1024 * 1024;
 const ROW_LIMIT: usize = OUTPUT_LIMIT * 2 + 4096;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
@@ -142,7 +142,7 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
     for line in lines.filter(|line| !line.is_empty()) {
         require(line.len() <= ROW_LIMIT, "benchmark resume row exceeds its byte bound")?;
         let fields = line.split('\t').collect::<Vec<_>>();
-        require(fields.len() == 5, "invalid benchmark resume row")?;
+        require(fields.len() == 6, "invalid benchmark resume row")?;
         let target = match fields[1] {
             "arm64" => Target::Arm64,
             "amd64" => Target::Amd64,
@@ -151,21 +151,28 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
         let key = WorkKey {
             id: fields[0].to_owned(),
             target,
+            provenance: fields[2].to_owned(),
         };
-        require(keys.contains(&key), "stale benchmark resume row")?;
-        require(!rows.contains_key(&key), "duplicate benchmark resume row")?;
-        let status = match fields[2] {
+        let status = match fields[3] {
             "pass" => "pass",
             "fail" => "fail",
             _ => return Err("invalid benchmark resume status".into()),
         };
+        let elapsed_ms = fields[4].parse()?;
+        let output = decode(fields[5])?;
+        if !keys.contains(&key) {
+            let current_row = keys.iter().any(|candidate| candidate.id == key.id && candidate.target == key.target);
+            require(current_row, "stale benchmark resume row")?;
+            continue;
+        }
+        require(!rows.contains_key(&key), "duplicate benchmark resume row")?;
         rows.insert(
             key.clone(),
             Row {
                 key,
                 status,
-                elapsed_ms: fields[3].parse()?,
-                output: decode(fields[4])?,
+                elapsed_ms,
+                output,
             },
         );
     }
@@ -174,7 +181,7 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
 
 fn format_row(row: &Row) -> Result<String, Error> {
     require(
-        !row.key.id.contains(['\t', '\n']),
+        !row.key.id.contains(['\t', '\n']) && !row.key.provenance.contains(['\t', '\n']),
         "benchmark result contains an unsafe delimiter",
     )?;
     require(
@@ -182,9 +189,10 @@ fn format_row(row: &Row) -> Result<String, Error> {
         "benchmark result output exceeds its byte bound",
     )?;
     let text = format!(
-        "{}\t{}\t{}\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\t{}\n",
         row.key.id,
         row.key.target.name(),
+        row.key.provenance,
         row.status,
         row.elapsed_ms,
         encode(row.output.as_bytes())
@@ -241,6 +249,7 @@ mod tests {
         WorkKey {
             id: id.to_owned(),
             target: Target::Arm64,
+            provenance: "provenance-a".to_owned(),
         }
     }
 
@@ -310,5 +319,27 @@ mod tests {
         drop(opened);
         let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
         assert_eq!(resumed.prior[&key("bench/boundary")].output.len(), OUTPUT_LIMIT);
+    }
+
+    #[test]
+    fn resume_rejects_a_row_from_different_provenance() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("results.tsv");
+        let original = key("bench/a");
+        let opened = Ledger::open(&report, "stamp", &BTreeSet::from([original.clone()]), false).unwrap();
+        opened
+            .ledger
+            .record(Row {
+                key: original,
+                status: "pass",
+                elapsed_ms: 1,
+                output: "PASS bench/a".into(),
+            })
+            .unwrap();
+        drop(opened);
+        let mut changed = key("bench/a");
+        changed.provenance = "provenance-b".into();
+        let resumed = Ledger::open(&report, "stamp", &BTreeSet::from([changed]), true).unwrap();
+        assert!(resumed.prior.is_empty());
     }
 }

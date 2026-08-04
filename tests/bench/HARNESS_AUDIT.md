@@ -87,6 +87,18 @@ admit a row only when its full provenance identity matches. Printed evidence mus
 include that identity so a result can be traced independently of the mutable
 ledger path.
 
-Until that boundary is implemented and tested by independently changing each
-input above, `--resume` is a convenience for exploratory runs, not an
-authoritative retained-C/Rust performance comparison.
+## Implemented resume boundary
+
+Benchmark preparation now completes before ledger admission. Each row carries a
+length-delimited SHA-256 identity over the selected provider/execution mode,
+guest ISA, compiler spelling and bounded version output, compiled artifact,
+selected OCI manifest, current runner/linked-engine executable, exact YAML,
+source, and expected-output bytes. Execution rechecks the prepared artifact and
+image identities before taking a sample, and successful evidence prints the row
+identity.
+
+The ledger stores that identity beside the row. An unchanged row resumes;
+changed provenance reruns only that row, while malformed records and rows whose
+benchmark/ISA no longer exist remain hard errors. This keeps resume useful for
+focused work without combining measurements from distinct providers, guest
+artifacts, images, runners, definitions, or ISAs.

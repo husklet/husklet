@@ -84,6 +84,10 @@ impl Benchmark {
         self.directory.join(&self.build.source)
     }
 
+    pub fn compiler_name(&self, target: Target) -> &str {
+        self.build.compiler.for_target(target)
+    }
+
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
         let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         safe_relative(&document.build.source)?;
