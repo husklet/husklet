@@ -412,6 +412,14 @@ fn health_idle_blocks() {
 
 #[test]
 fn rollback_releases_descriptors() {
+    if !std::env::args_os().any(|argument| argument == "--exact") {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["rollback_releases_descriptors", "--exact", "--test-threads=1"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
     let count = || std::fs::read_dir("/proc/self/fd").unwrap().count();
     let before = count();
     {
