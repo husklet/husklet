@@ -283,16 +283,12 @@ mod tests {
     use hl_container::{ContainerId, ContainerState, Process};
 
     fn container(name: &str, created_at_ms: u64) -> hl_container::Container {
-        hl_container::Container {
-            id: format!("{created_at_ms:032x}").parse::<ContainerId>().unwrap(),
-            spec: ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).name(name),
-            state: ContainerState::Created,
+        hl_container::Container::new(
+            format!("{created_at_ms:032x}").parse::<ContainerId>().unwrap(),
+            ContainerSpec::from_directory("/rootfs", Process::new("/bin/true")).name(name),
+            ContainerState::Created,
             created_at_ms,
-            generation: 0,
-            restart: hl_container::Restart::default(),
-            health: None,
-            checkpoint: None,
-        }
+        )
     }
 
     fn names(values: &[hl_container::Container]) -> Vec<String> {

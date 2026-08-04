@@ -477,23 +477,20 @@ mod tests {
 
     #[test]
     fn inspect_includes_docker_runtime_fields() {
-        let durable = hl_container::Container {
-            id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let mut durable = hl_container::Container::new(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .parse()
                 .unwrap(),
-            spec: hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
+            hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/server"))
                 .name("web")
                 .restart(hl_container::RestartPolicy::OnFailure { maximum: Some(3) }),
-            state: hl_container::ContainerState::Running {
+            hl_container::ContainerState::Running {
                 process_id: 7,
                 started_at_ms: 1_000,
             },
-            created_at_ms: 0,
-            generation: 1,
-            restart: hl_container::Restart::default(),
-            health: None,
-            checkpoint: None,
-        };
+            0,
+        );
+        durable.generation = 1;
         let inspect = serde_json::to_value(InspectContainer::from(durable)).unwrap();
         for key in [
             "Id",
@@ -532,18 +529,14 @@ mod tests {
 
     #[test]
     fn host_config_projects_readonly_rootfs_with_docker_casing() {
-        let mut durable = hl_container::Container {
-            id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let mut durable = hl_container::Container::new(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .parse()
                 .unwrap(),
-            spec: hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/true")),
-            state: hl_container::ContainerState::Created,
-            created_at_ms: 0,
-            generation: 0,
-            restart: hl_container::Restart::default(),
-            health: None,
-            checkpoint: None,
-        };
+            hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/true")),
+            hl_container::ContainerState::Created,
+            0,
+        );
         let mut writable = serde_json::to_value(InspectContainer::from(durable.clone())).unwrap();
         assert_eq!(writable["HostConfig"]["ReadonlyRootfs"], false);
         writable["HostConfig"].as_object_mut().unwrap().remove("ReadonlyRootfs");

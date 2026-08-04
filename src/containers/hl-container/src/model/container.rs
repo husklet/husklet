@@ -148,6 +148,22 @@ pub struct Container {
 }
 
 impl Container {
+    /// Construct a container record with a clean lifecycle generation and no terminal diagnostic.
+    #[must_use]
+    pub fn new(id: ContainerId, spec: ContainerSpec, state: ContainerState, created_at_ms: u64) -> Self {
+        Self {
+            id,
+            spec,
+            state,
+            created_at_ms,
+            generation: 0,
+            restart: Restart::default(),
+            health: None,
+            checkpoint: None,
+            runtime_diagnostic: None,
+        }
+    }
+
     pub(crate) fn uses_volume(&self, name: &str) -> bool {
         self.volume_names().any(|value| value == name)
     }

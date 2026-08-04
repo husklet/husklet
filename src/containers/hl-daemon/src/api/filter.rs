@@ -362,22 +362,20 @@ mod tests {
     use std::str::FromStr as _;
 
     fn container() -> Container {
-        Container {
-            id: "67ea8f51-9e4d-4f4f-957d-f834263fe522".parse().unwrap(),
-            spec: ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
+        let mut container = Container::new(
+            "67ea8f51-9e4d-4f4f-957d-f834263fe522".parse().unwrap(),
+            ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
                 .name("build-worker")
                 .label("role", "build")
                 .image(hl_images::Reference::from_str("registry.test/team/tool:7").unwrap()),
-            state: ContainerState::Exited {
+            ContainerState::Exited {
                 result: hl_container::ExitStatus::Code(0),
                 finished_at_ms: 1,
             },
-            created_at_ms: 0,
-            generation: 1,
-            restart: hl_container::Restart::default(),
-            health: None,
-            checkpoint: None,
-        }
+            0,
+        );
+        container.generation = 1;
+        container
     }
 
     fn matches(selection: List, container: &Container, containers: &[Container]) -> bool {

@@ -353,17 +353,13 @@ mod tests {
     async fn pause_identity() {
         let events = Events::new();
         let id = "00000000000040008000000000000001";
-        let mut container = hl_container::Container {
-            id: id.parse().unwrap(),
-            spec: hl_container::ContainerSpec::from_directory(".", hl_container::Process::new("/bin/true"))
+        let mut container = hl_container::Container::new(
+            id.parse().unwrap(),
+            hl_container::ContainerSpec::from_directory(".", hl_container::Process::new("/bin/true"))
                 .name("workload"),
-            state: hl_container::ContainerState::Created,
-            created_at_ms: 1,
-            generation: 0,
-            restart: hl_container::Restart::default(),
-            health: None,
-            checkpoint: None,
-        };
+            hl_container::ContainerState::Created,
+            1,
+        );
         let mut subscription = events.subscribe(EventQuery::default());
 
         events.container("pause", &container);

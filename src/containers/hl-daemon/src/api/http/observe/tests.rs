@@ -6,23 +6,19 @@ use axum::body::Body;
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
-use hl_container::{Container, ContainerId, ContainerSpec, ContainerState, Process, Restart};
+use hl_container::{Container, ContainerId, ContainerSpec, ContainerState, Process};
 use std::{collections::BTreeMap, str::FromStr, sync::Arc};
 
 fn running() -> Container {
-    Container {
-        id: ContainerId::from_str("00000000000000000000000000000000").unwrap(),
-        spec: ContainerSpec::from_directory(".", Process::new("/bin/true")),
-        state: ContainerState::Running {
+    Container::new(
+        ContainerId::from_str("00000000000000000000000000000000").unwrap(),
+        ContainerSpec::from_directory(".", Process::new("/bin/true")),
+        ContainerState::Running {
             process_id: 42,
             started_at_ms: 1,
         },
-        created_at_ms: 1,
-        generation: 0,
-        restart: Restart::default(),
-        health: None,
-        checkpoint: None,
-    }
+        1,
+    )
 }
 
 #[test]

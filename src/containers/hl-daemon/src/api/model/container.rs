@@ -323,21 +323,18 @@ mod tests {
         .unwrap();
         let mut process = hl_container::Process::new("/bin/server");
         process.args = vec!["--port".into(), "8080".into()];
-        let durable = hl_container::Container {
-            id: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        let mut durable = hl_container::Container::new(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                 .parse()
                 .unwrap(),
-            spec: hl_container::ContainerSpec::from_directory("/rootfs", process).name("web"),
-            state: hl_container::ContainerState::Running {
+            hl_container::ContainerSpec::from_directory("/rootfs", process).name("web"),
+            hl_container::ContainerState::Running {
                 process_id: 7,
                 started_at_ms: now_ms.saturating_sub(90_000),
             },
-            created_at_ms: now_ms.saturating_sub(3_600_000),
-            generation: 1,
-            restart: hl_container::Restart::default(),
-            health: None,
-            checkpoint: None,
-        };
+            now_ms.saturating_sub(3_600_000),
+        );
+        durable.generation = 1;
         let value = serde_json::to_value(Container::from(durable)).unwrap();
         assert_eq!(value["Command"], "/bin/server --port 8080");
         assert_eq!(value["State"], "running");
