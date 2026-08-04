@@ -79,12 +79,14 @@ excluded pending explicit host/guest feature policy. A warning-strict trace test
 covering AND, MOV, FMLA 4S, FMLS 2D, SCVTF 4S, UCVTF 2D, and SVC failed before
 the change and passes afterward.
 
-One full `--divisor 20 --phase float_simd` candidate row completed
-`native-verified` with the same checksum at 14,251,204 us. This is 8.2% faster
-than the clean checkpoint's 15,526,078-us median but remains about 1,352 times
-the retained-C median. It proves SIMD admission helps without identifying it as
-the dominant remaining cost. Vector memory guards and remaining fallback
-boundaries are the next measured owners.
+One shared dirty-tree `--divisor 20 --phase float_simd` row completed
+`native-verified` with the same checksum at 14,251,204 us, 8.2% below the clean
+checkpoint median. That tree contained unrelated companion native changes, so
+the delta cannot be attributed to SIMD admission. An exact clean detached run
+of accepted combined commit `31cefa656` took 19,484,700 us under higher host
+load, also with the same checksum and native proof. No end-to-end speed claim is
+accepted from these samples. Vector memory guards and remaining fallback
+boundaries are still the next measured owners.
 
 ### AMD64 REP bulk accounting
 
@@ -122,6 +124,19 @@ string-budget contract. It requires differential coverage for a greater-than-
 latency, DF and overlap order, exact RCX/RSI/RDI, dirty publication, and
 executable-write epoch behavior before another benchmark.
 
+The accepted bounded correction preserves that contract and removes an
+unrelated scheduler asymmetry. The scheduler already grants its sole runnable
+native task 65,536 element/instruction credits, but the x86 path discarded that
+selected budget and hardcoded 4,096. It now receives the same selected budget
+as AArch64. Shared-runnable execution remains at 4,096, while sole-runnable REP
+falls from 256 to 16 yield exits per MiB. Sixteen exits are intentional: making
+the complete MiB one accounting unit would again weaken the established
+checkpoint and scheduling bound. A greater-than-1-MiB native regression checks
+every 65,536-element partial state and resume, exact RCX/RSI/RDI, the final
+syscall boundary, and byte equality. Existing focused string tests retain DF,
+overlap, fault, dirty-range, executable-write, zero-count, and address-size
+coverage.
+
 ### AMD64 scalar SSE2 audit
 
 The compute loop's hot instruction sequence is MULSD, integer XOR/IMUL/ROL,
@@ -138,8 +153,17 @@ upper XMM lane. Its warning-strict focused structural and differential test
 passes. Five native-verified compute repeats produced a 616,183-us median and
 539,149--663,124-us range with checksum 7,097,455,804,780,747,230 throughout.
 That is 1.58 times faster than the checkpoint Rust median but still 123 times
-the retained-C median. The result confirms the coherent scalar family removes
-real fallback cost; packed and scalar-single SSE remain the larger gap. This is
-shared dirty-tree evidence. The observed post-build `HEAD` was
+the retained-C median. Structural tests prove the scalar family removes those
+fallbacks, while the timing only suggests their cost; packed and scalar-single
+SSE remain the larger gap. This is shared dirty-tree evidence. The observed post-build `HEAD` was
 `2114daca34f3790f0ce2c887dcaf3ad6551567eb`, and the candidate engine SHA-256
 was `a9a544aadfb9b7ec69c8c4c59036f24eed6fb60d60d8240396b37e7e8b2dbf92`.
+
+The exact clean detached `31cefa656` verification passed both warning-strict
+native tests. Its five-repeat compute median was 846,456 us with a wide
+655,170--1,420,562-us range and the same checksum. That is only 1.15 times below
+the checkpoint Rust median and remains about 169 times retained C; the spread
+is too large for an accepted timing claim. The exact engine SHA-256 was
+`1baf1ab38e73bfe91c4514b2793d963671f18b368d805efb9f30456641c6c3e8` and
+the exact testing binary was
+`91e12bbb0dc3e4488d69d35dab5656696a2662b32cf14d83c94793f09a30b6c6`.
