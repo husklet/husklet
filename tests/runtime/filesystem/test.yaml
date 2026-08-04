@@ -1,0 +1,705 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/filesystem/directory-lifecycle
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/directory.c, output: directory, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    artifact: { destination: /opt/husklet/runtime-directory }
+    run: [lifecycle]
+    expect: { exit: 0, stdout: golden/empty.bin }
+  - id: runtime/filesystem/positional-arm64
+    status: !broken
+      reason: "QEMU oracle cannot create the fixture's absolute /positional path"
+      evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
+    targets: [arm64]
+    compat: { class: compatibility }
+    build: { source: source/positional.c, output: positional, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/runtime-positional }
+    run: [io]
+    expect: { exit: 0, stdout: golden/empty.bin }
+  - id: runtime/filesystem/positional-amd64
+    status: !broken
+      reason: "QEMU oracle cannot create the fixture's absolute /positional path"
+      evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: source/positional.c, output: positional-amd64, flags: [-std=c11, -Os, -nostdlib, -static, -fno-pie, -no-pie, -fno-ident, -fno-stack-protector, -ffreestanding, "-Wl,--build-id=none", "-Wl,-z,noexecstack", "-Wl,-e,_start"] }
+    artifact: { destination: /opt/husklet/runtime-positional-amd64 }
+    run: [io]
+    expect: { exit: 0, stdout: golden/empty.bin }
+  - id: runtime/filesystem/path-metadata
+    status: !broken
+      reason: "QEMU oracle requires a fresh isolated working directory not yet supplied by the shared runner"
+      evidence: "tests/runtime/filesystem/POSITIONAL_EVIDENCE.md"
+    compat: { class: compatibility }
+    build: { source: source/path_metadata.c, output: path-metadata, flags: [-nostdlib, -static, -fno-stack-protector, -fno-asynchronous-unwind-tables, "-Wl,--build-id=none"] }
+    artifact: { destination: /opt/husklet/path-metadata }
+    run: []
+    expect: { exit: 0, stdout: golden/empty.bin }
+  - id: runtime/filesystem/typed-create-cache
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/create_cache.c, output: typed-create-cache, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-typed-create-cache }
+    run: []
+    expect: { exit: 0, stdout: golden/create_cache.out }
+  - id: runtime/filesystem/bound-uaccess
+    status: !broken
+      reason: "QEMU cannot reproduce the provider-bound guest-memory contract; direct oracle exits 2 on both ISAs"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/bound_uaccess.c, output: bound-uaccess, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-bound-uaccess }
+    environment: { HL_VOLUMES: "/mnt:/tmp" }
+    run: []
+    expect: { exit: 0, stdout: golden/bound_uaccess.out }
+  - id: runtime/filesystem/permissions
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/permissions.c, output: permissions, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-permissions }
+    environment: { HL_UID: "0", HL_GID: "0" }
+    run: []
+    expect: { exit: 0, stdout: golden/permissions.out }
+  - id: runtime/filesystem/fs-statfs-type
+    status: !broken
+      reason: "QEMU host filesystem type differs from the retained overlay-root golden on both ISAs"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/statfs_type.c, output: fs-statfs-type, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fs-statfs-type }
+    run: []
+    expect: { exit: 0, stdout: golden/statfs_type.out }
+  - id: runtime/filesystem/missing-root-stat
+    status: !unsupported
+      reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/missing_stat.c, output: missing-root-stat, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/filesystem-missing-root-stat }
+    run: []
+    expect: { exit: 0, stdout: golden/missing_stat.out }
+  - id: runtime/filesystem/fs-mounttab
+    status: !broken
+      reason: "QEMU host mount table presentation differs from the retained engine golden on both ISAs"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fs_mounttab.c, output: fs-mounttab, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fs-mounttab }
+    run: []
+    expect: { exit: 0, stdout: golden/fs_mounttab.out }
+  - id: runtime/filesystem/fs-mountpseudo
+    status: !broken
+      reason: "QEMU host mount presentation differs from the retained engine golden on both ISAs"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/fs_mountpseudo.c, output: fs-mountpseudo, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fs-mountpseudo }
+    run: []
+    expect: { exit: 0, stdout: golden/fs_mountpseudo.out }
+  - id: runtime/filesystem/fs-shm-visible
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/shm_visible.c, output: fs-shm-visible, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
+    artifact: { destination: /opt/husklet/filesystem-fs-shm-visible }
+    run: []
+    expect: { exit: 0, stdout: golden/shm_visible.out }
+  - id: runtime/filesystem/atflags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/atflags.c, output: atflags, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-atflags }
+    run: []
+    expect: { exit: 0, stdout: golden/atflags.out }
+  - id: runtime/filesystem/linkat
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/linkat.c, output: linkat, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-linkat }
+    run: []
+    expect: { exit: 0, stdout: golden/linkat.out }
+  - id: runtime/filesystem/mkfifoat
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mkfifoat.c, output: mkfifoat, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-mkfifoat }
+    run: []
+    expect: { exit: 0, stdout: golden/mkfifoat.out }
+  - id: runtime/filesystem/xattr
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/xattr.c, output: xattr, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-xattr }
+    run: []
+    expect: { exit: 0, stdout: golden/xattr.out }
+  - id: runtime/filesystem/xattr-edge
+    status: !broken
+      reason: "Native QEMU/Linux xattr edge output differs from the retained engine contract on both ISAs"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/xattr_edge.c, output: xattr-edge, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-xattr-edge }
+    run: []
+    expect: { exit: 0, stdout: golden/xattr_edge.out }
+  - id: runtime/filesystem/fadvise
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fadvise.c, output: fadvise, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fadvise }
+    run: []
+    expect: { exit: 0, stdout: golden/fadvise.out }
+  - id: runtime/filesystem/close-range
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/close_range.c, output: close-range, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-close-range }
+    run: []
+    expect: { exit: 0, stdout: golden/close_range.out }
+  - id: runtime/filesystem/opath
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/opath.c, output: opath, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-opath }
+    run: []
+    expect: { exit: 0, stdout: golden/opath.out }
+  - id: runtime/filesystem/fork-reopen
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fork_reopen.c, output: fork-reopen, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fork-reopen }
+    run: []
+    expect: { exit: 0, stdout: golden/fork_reopen.out }
+  - id: runtime/filesystem/child-create-reopen
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/child_reopen.c, output: child-create-reopen, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-child-create-reopen }
+    run: []
+    expect: { exit: 0, stdout: golden/child_reopen.out }
+  - id: runtime/filesystem/sibling-generation-stress
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sibling_stress.c, output: sibling-generation-stress, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-sibling-generation-stress }
+    run: []
+    expect: { exit: 0, stdout: golden/sibling_stress.out }
+  - id: runtime/filesystem/devfull
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/devfull.c, output: devfull, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-devfull }
+    run: []
+    expect: { exit: 0, stdout: golden/devfull.out }
+  - id: runtime/filesystem/rm-tree-coherence
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/rm_coherence.c, output: rm-tree-coherence, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-rm-tree-coherence }
+    run: []
+    expect: { exit: 0, stdout: golden/rm_coherence.out }
+  - id: runtime/filesystem/procself
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/procself.c, output: procself, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-procself }
+    run: []
+    expect: { exit: 0, stdout: golden/procself.out }
+  - id: runtime/filesystem/dentry-storm
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dentry_storm.c, output: dentry-storm, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-dentry-storm }
+    run: []
+    expect: { exit: 0, stdout: golden/dentry_storm.out }
+  - id: runtime/filesystem/pc-forkpipe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pc_forkpipe.c, output: pc-forkpipe, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-pc-forkpipe }
+    environment: { HL_PCACHE_DIR: "/tmp/hljit-pcache-matrix" }
+    run: []
+    expect: { exit: 0, stdout: golden/pc_forkpipe.out }
+  - id: runtime/filesystem/pc-selfexec
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pc_selfexec.c, output: pc-selfexec, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-pc-selfexec }
+    environment: { HL_PCACHE_DIR: "/tmp/hljit-pcache-matrix" }
+    run: []
+    expect: { exit: 0, stdout: golden/pc_selfexec.out }
+  - id: runtime/filesystem/pc-forkoutlive
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pc_forkoutlive.c, output: pc-forkoutlive, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-pc-forkoutlive }
+    environment: { HL_PCACHE_DIR: "/tmp/hljit-pcache-matrix" }
+    run: []
+    expect: { exit: 0, stdout: golden/pc_forkoutlive.out }
+  - id: runtime/filesystem/pc-execchain
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pc_execchain.c, output: pc-execchain, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-pc-execchain }
+    environment: { HL_PCACHE_DIR: "/tmp/hljit-pcache-matrix" }
+    run: []
+    expect: { exit: 0, stdout: golden/pc_execchain.out }
+  - id: runtime/filesystem/pc-libmap
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pc_libmap.c, output: pc-libmap, flags: [-static-pie, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-pc-libmap }
+    environment: { HL_PCACHE_DIR: "/tmp/hljit-pcache-matrix" }
+    run: [/tmp/hl_pclib_blob.bin]
+    expect: { exit: 0, stdout: golden/pc_libmap.out }
+  - id: runtime/filesystem/dup2redir
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dup2redir.c, output: dup2redir, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-dup2redir }
+    run: []
+    expect: { exit: 0, stdout: golden/dup2redir.out }
+  - id: runtime/filesystem/fcntlflags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fcntlflags.c, output: fcntlflags, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-fcntlflags }
+    run: []
+    expect: { exit: 0, stdout: golden/fcntlflags.out }
+  - id: runtime/filesystem/ltp_aterr
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ltp_aterr.c, output: ltp_aterr, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-ltp_aterr }
+    run: []
+    expect: { exit: 0, stdout: golden/ltp_aterr.out }
+  - id: runtime/filesystem/ltp_dupfcntl
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ltp_dupfcntl.c, output: ltp_dupfcntl, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-ltp_dupfcntl }
+    run: []
+    expect: { exit: 0, stdout: golden/ltp_dupfcntl.out }
+  - id: runtime/filesystem/ltp_linkstat
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/ltp_linkstat.c, output: ltp_linkstat, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-ltp_linkstat }
+    run: []
+    expect: { exit: 0, stdout: golden/ltp_linkstat.out }
+  - id: runtime/filesystem/mkfifo
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mkfifo.c, output: mkfifo, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-mkfifo }
+    run: []
+    expect: { exit: 0, stdout: golden/mkfifo.out }
+  - id: runtime/filesystem/sentry_fs
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_fs.c, output: sentry_fs, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-sentry_fs }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_fs.out }
+  - id: runtime/filesystem/scratch-exec
+    status: !unsupported
+      reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/scratch_exec.c, output: scratch-exec, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-scratch-exec }
+    run: []
+    expect: { exit: 0, stdout: golden/scratch_exec.out }
+  - id: runtime/filesystem/x86-rootfs-smoke
+    status: !unsupported
+      reason: "The canonical runtime runner does not yet provide this case’s isolated scratch-rootfs staging contract"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    targets: [amd64]
+    compat: { class: compatibility }
+    build: { source: source/rootfs_smoke.c, output: x86-rootfs-smoke, flags: [-static-pie, -O2] }
+    artifact: { destination: /opt/husklet/filesystem-x86-rootfs-smoke }
+    run: []
+    expect: { exit: 0, stdout: golden/rootfs_smoke.out }
+  - id: runtime/filesystem/sentry-fs-untrusted
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_fs.c, output: sentry-fs-untrusted, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-sentry-fs-untrusted }
+    environment: { HL_UNTRUSTED: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_fs.out }
+  - id: runtime/filesystem/sentry-fs-sandbox
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sentry_fs.c, output: sentry-fs-sandbox, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/filesystem-sentry-fs-sandbox }
+    environment: { HL_SANDBOX: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/sentry_fs.out }
+  - id: runtime/filesystem/absolute-symlink
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/absolute_symlink.c, output: absolute-symlink, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-absolute-symlink }
+    run: []
+    expect: { exit: 0, stdout: golden/absolute_symlink.out }
+  - id: runtime/filesystem/fchmodat2-empty
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fchmodat2_empty.c, output: fchmodat2-empty, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fchmodat2-empty }
+    run: []
+    expect: { exit: 0, stdout: golden/fchmodat2_empty.out }
+  - id: runtime/filesystem/statx-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/statx_probe.c, output: statx-probe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-statx-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/statx_probe.out }
+  - id: runtime/filesystem/statx-btime
+    status: !unsupported
+      reason: "excluded-macos: statx STATX_BTIME mask honesty diverges on the macOS engine. Linux engine still runs+passes this."
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/statx_btime.c, output: statx-btime, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-statx-btime }
+    run: []
+    expect: { exit: 0, stdout: golden/statx_btime.out }
+  - id: runtime/filesystem/fallocate-modes
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fallocate_modes.c, output: fallocate-modes, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fallocate-modes }
+    run: []
+    expect: { exit: 0, stdout: golden/fallocate_modes.out }
+  - id: runtime/filesystem/truncate-grow
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/truncate_grow.c, output: truncate-grow, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-truncate-grow }
+    run: []
+    expect: { exit: 0, stdout: golden/truncate_grow.out }
+  - id: runtime/filesystem/utimensat-times
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/utimensat_times.c, output: utimensat-times, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-utimensat-times }
+    run: []
+    expect: { exit: 0, stdout: golden/utimensat_times.out }
+  - id: runtime/filesystem/seek-hole
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/seek_hole.c, output: seek-hole, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-seek-hole }
+    run: []
+    expect: { exit: 0, stdout: golden/seek_hole.out }
+  - id: runtime/filesystem/copy-range
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/copy_range.c, output: copy-range, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-copy-range }
+    run: []
+    expect: { exit: 0, stdout: golden/copy_range.out }
+  - id: runtime/filesystem/sendfile-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/sendfile_probe.c, output: sendfile-probe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-sendfile-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/sendfile_probe.out }
+  - id: runtime/filesystem/getdents-dtype
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getdents_dtype.c, output: getdents-dtype, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-getdents-dtype }
+    run: []
+    expect: { exit: 0, stdout: golden/getdents_dtype.out }
+  - id: runtime/filesystem/getdents-einval
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/getdents_einval.c, output: getdents-einval, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-getdents-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/getdents_einval.out }
+  - id: runtime/filesystem/flock-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/flock_probe.c, output: flock-probe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-flock-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/flock_probe.out }
+  - id: runtime/filesystem/flock-ofd
+    status: !unsupported
+      reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/flock_ofd.c, output: flock-ofd, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-flock-ofd }
+    run: []
+    expect: { exit: 0, stdout: golden/flock_ofd.out }
+  - id: runtime/filesystem/pread-pwrite
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/pread_pwrite.c, output: pread-pwrite, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-pread-pwrite }
+    run: []
+    expect: { exit: 0, stdout: golden/pread_pwrite.out }
+  - id: runtime/filesystem/readlink-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/readlink_edges.c, output: readlink-edges, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-readlink-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/readlink_edges.out }
+  - id: runtime/filesystem/realpath-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/realpath_probe.c, output: realpath-probe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-realpath-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/realpath_probe.out }
+  - id: runtime/filesystem/symlink-chain-eloop
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/symlink_eloop.c, output: symlink-chain-eloop, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-symlink-chain-eloop }
+    run: []
+    expect: { exit: 0, stdout: golden/symlink_eloop.out }
+  - id: runtime/filesystem/mkdir-umask
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/mkdir_umask.c, output: mkdir-umask, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-mkdir-umask }
+    run: []
+    expect: { exit: 0, stdout: golden/mkdir_umask.out }
+  - id: runtime/filesystem/chmod-bits
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chmod_bits.c, output: chmod-bits, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-chmod-bits }
+    run: []
+    expect: { exit: 0, stdout: golden/chmod_bits.out }
+  - id: runtime/filesystem/dup-offset
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dup_offset.c, output: dup-offset, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-dup-offset }
+    run: []
+    expect: { exit: 0, stdout: golden/dup_offset.out }
+  - id: runtime/filesystem/append-mode
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/append_mode.c, output: append-mode, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-append-mode }
+    run: []
+    expect: { exit: 0, stdout: golden/append_mode.out }
+  - id: runtime/filesystem/open-errno
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/open_errno.c, output: open-errno, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-open-errno }
+    run: []
+    expect: { exit: 0, stdout: golden/open_errno.out }
+  - id: runtime/filesystem/fstatat-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fstatat_flags.c, output: fstatat-flags, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fstatat-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/fstatat_flags.out }
+  - id: runtime/filesystem/xattr-roundtrip
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/xattr_roundtrip.c, output: xattr-roundtrip, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-xattr-roundtrip }
+    run: []
+    expect: { exit: 0, stdout: golden/xattr_roundtrip.out }
+  - id: runtime/filesystem/lseek-errno
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/lseek_errno.c, output: lseek-errno, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-lseek-errno }
+    run: []
+    expect: { exit: 0, stdout: golden/lseek_errno.out }
+  - id: runtime/filesystem/chown-selfown
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/chown_selfown.c, output: chown-selfown, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-chown-selfown }
+    run: []
+    expect: { exit: 0, stdout: golden/chown_selfown.out }
+  - id: runtime/filesystem/openat2-resolve
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/openat2_resolve.c, output: openat2-resolve, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-openat2-resolve }
+    run: []
+    expect: { exit: 0, stdout: golden/openat2_resolve.out }
+  - id: runtime/filesystem/ofd-lock
+    status: !unsupported
+      reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/ofd_lock.c, output: ofd-lock, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-ofd-lock }
+    run: []
+    expect: { exit: 0, stdout: golden/ofd_lock.out }
+  - id: runtime/filesystem/otmpfile-link
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/otmpfile_link.c, output: otmpfile-link, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-otmpfile-link }
+    run: []
+    expect: { exit: 0, stdout: golden/otmpfile_link.out }
+  - id: runtime/filesystem/unlink-errno
+    status: !unsupported
+      reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/unlink_errno.c, output: unlink-errno, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-unlink-errno }
+    run: []
+    expect: { exit: 0, stdout: golden/unlink_errno.out }
+  - id: runtime/filesystem/fsync-probe
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/fsync_probe.c, output: fsync-probe, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-fsync-probe }
+    run: []
+    expect: { exit: 0, stdout: golden/fsync_probe.out }
+  - id: runtime/filesystem/proc-fd-readlink
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/procfd_readlink.c, output: proc-fd-readlink, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-proc-fd-readlink }
+    run: []
+    expect: { exit: 0, stdout: golden/procfd_readlink.out }
+  - id: runtime/filesystem/faccessat-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/faccessat_flags.c, output: faccessat-flags, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-faccessat-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/faccessat_flags.out }
+  - id: runtime/filesystem/symlink-nofollow
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/symlink_nofollow.c, output: symlink-nofollow, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-symlink-nofollow }
+    run: []
+    expect: { exit: 0, stdout: golden/symlink_nofollow.out }
+  - id: runtime/filesystem/renameat2-flags
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/renameat2_flags.c, output: renameat2-flags, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-renameat2-flags }
+    run: []
+    expect: { exit: 0, stdout: golden/renameat2_flags.out }
+  - id: runtime/filesystem/hardlink-nlink
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/hardlink_nlink.c, output: hardlink-nlink, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-hardlink-nlink }
+    run: []
+    expect: { exit: 0, stdout: golden/hardlink_nlink.out }
+  - id: runtime/filesystem/errno-matrix
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/errno_matrix.c, output: errno-matrix, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-errno-matrix }
+    run: []
+    expect: { exit: 0, stdout: golden/errno_matrix.out }
+  - id: runtime/filesystem/rw-semantics
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/rw_semantics.c, output: rw-semantics, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-rw-semantics }
+    run: []
+    expect: { exit: 0, stdout: golden/rw_semantics.out }
+  - id: runtime/filesystem/dev-random
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/dev_random.c, output: dev-random, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-dev-random }
+    run: []
+    expect: { exit: 0, stdout: golden/dev_random.out }
+  - id: runtime/filesystem/getdents64-fault
+    status: !unsupported
+      reason: "excluded-macos: OFD/flock lock and getdents64/unlink errno semantics diverge on the macOS engine host FS backend; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/getdents64_fault.c, output: getdents64-fault, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-getdents64-fault }
+    run: []
+    expect: { exit: 0, stdout: golden/getdents64_fault.out }
+  - id: runtime/filesystem/memf-adopt-scan
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/adopt_scan.c, output: memf-adopt-scan, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-memf-adopt-scan }
+    run: []
+    expect: { exit: 0, stdout: golden/adopt_scan.out }
+  - id: runtime/filesystem/memf-adopt-manyfd
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/adopt_many.c, output: memf-adopt-manyfd, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-memf-adopt-manyfd }
+    run: []
+    expect: { exit: 0, stdout: golden/adopt_many.out }
+  - id: runtime/filesystem/memfd-seals
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/memfd_seals.c, output: memfd-seals, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-memfd-seals }
+    run: []
+    expect: { exit: 0, stdout: golden/memfd_seals.out }
+  - id: runtime/filesystem/openat-edges
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/openat_edges.c, output: openat-edges, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-openat-edges }
+    run: []
+    expect: { exit: 0, stdout: golden/openat_edges.out }
+  - id: runtime/filesystem/openat2-einval
+    status: !broken
+      reason: "Native QEMU/Linux openat2 validation output differs from the retained engine contract on both ISAs"
+      evidence: "tests/runtime/filesystem/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: source/openat2_einval.c, output: openat2-einval, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-openat2-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/openat2_einval.out }
+  - id: runtime/filesystem/xattr-ranges
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/xattr_ranges.c, output: xattr-ranges, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-xattr-ranges }
+    run: []
+    expect: { exit: 0, stdout: golden/xattr_ranges.out }
+  - id: runtime/filesystem/statx-validate
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/statx_validate.c, output: statx-validate, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-statx-validate }
+    run: []
+    expect: { exit: 0, stdout: golden/statx_validate.out }
+  - id: runtime/filesystem/renameat2-einval
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/renameat2_einval.c, output: renameat2-einval, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/filesystem-renameat2-einval }
+    run: []
+    expect: { exit: 0, stdout: golden/renameat2_einval.out }
+  - id: runtime/filesystem/futimens-null-path
+    status: active
+    compat: { class: compatibility }
+    build: { source: source/futimens_path.c, output: futimens-null-path, flags: [-static, -O2, -std=gnu11, -pthread] }
+    artifact: { destination: /opt/husklet/filesystem-futimens-null-path }
+    run: []
+    expect: { exit: 0, stdout: golden/futimens_path.out }
