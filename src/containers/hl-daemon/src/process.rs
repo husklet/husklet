@@ -10,9 +10,9 @@ pub trait ProcessSampler: Send + Sync + 'static {
     fn sample(&self, process_id: u64) -> ProcessSample;
 }
 
-pub(crate) struct Unavailable;
+pub(crate) struct UnavailableProcessSampler;
 
-impl ProcessSampler for Unavailable {
+impl ProcessSampler for UnavailableProcessSampler {
     fn sample(&self, _process_id: u64) -> ProcessSample {
         ProcessSample::default()
     }

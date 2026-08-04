@@ -7,7 +7,7 @@ use hl_images::remote::{Auth, Registry, Source};
 
 use crate::Server;
 use crate::events::Events;
-use crate::process::{ProcessSampler, Unavailable};
+use crate::process::{ProcessSampler, UnavailableProcessSampler};
 
 /// Immutable build metadata supplied by an application composition root.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,7 +52,7 @@ impl Daemon {
             source: Arc::new(Registry::new(Auth::Anonymous)),
             events,
             release: Release::default(),
-            sampler: Arc::new(Unavailable),
+            sampler: Arc::new(UnavailableProcessSampler),
         }
     }
 

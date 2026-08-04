@@ -108,7 +108,7 @@ async fn stats_handler_rejects_streaming_one_shot_request() {
         events: crate::events::Events::new(),
         builds: crate::builder::Builds::default(),
         release: crate::daemon::Release::default(),
-        sampler: Arc::new(crate::process::Unavailable),
+        sampler: Arc::new(crate::process::UnavailableProcessSampler),
     };
 
     let error = stats(
