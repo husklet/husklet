@@ -81,6 +81,7 @@ struct HostState {
     local: Option<SocketAddress>,
     peer: Option<SocketAddress>,
     routes: Vec<(&'static str, hl_network::EgressRoute)>,
+    bind_routes: Vec<hl_network::BindRoute>,
     closed: Vec<u64>,
     sent_to: Vec<(u64, Vec<u8>, SocketAddress, bool)>,
     send_to_result: Option<Result<usize, crate::RuntimeNetworkError>>,
@@ -167,9 +168,9 @@ impl RuntimeNetworkHost for Host {
     fn bind_route(
         &self,
         token: u64,
-        route: hl_network::EgressRoute,
+        route: hl_network::BindRoute,
     ) -> Result<SocketAddress, crate::RuntimeNetworkError> {
-        self.state.lock().unwrap().routes.push(("bind", route.clone()));
+        self.state.lock().unwrap().bind_routes.push(route.clone());
         self.bind(token, route.address)
     }
 
@@ -444,13 +445,13 @@ fn interface_routes_reach_host_bind_connect_and_datagram_send() {
     );
 
     let state = fixture.host.state.lock().unwrap();
-    assert_eq!(state.routes.len(), 3);
-    assert_eq!(state.routes[0].0, "bind");
-    assert_eq!(state.routes[0].1.interface.as_ref().unwrap().bridge, b"narrow");
-    assert_eq!(state.routes[1].0, "connect");
+    assert_eq!(state.bind_routes.len(), 1);
+    assert_eq!(state.bind_routes[0].interface.as_ref().unwrap().bridge, b"narrow");
+    assert_eq!(state.routes.len(), 2);
+    assert_eq!(state.routes[0].0, "connect");
+    assert_eq!(state.routes[0].1.interface.as_ref().unwrap().bridge, b"wide");
+    assert_eq!(state.routes[1].0, "send");
     assert_eq!(state.routes[1].1.interface.as_ref().unwrap().bridge, b"wide");
-    assert_eq!(state.routes[2].0, "send");
-    assert_eq!(state.routes[2].1.interface.as_ref().unwrap().bridge, b"wide");
 }
 
 #[test]

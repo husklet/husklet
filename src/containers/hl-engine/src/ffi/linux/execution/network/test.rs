@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use hl_descriptor::ReadinessObserver;
 use hl_network::{
-    AddressFamily, EgressInterface, EgressRoute, SocketAddress, SocketConnectError, SocketConnectStatus,
+    AddressFamily, BindRoute, EgressInterface, EgressRoute, SocketAddress, SocketConnectError, SocketConnectStatus,
     SocketHostError, SocketHostIo, SocketProtocol, SocketType,
 };
 use hl_runtime::RuntimeNetworkHost;
@@ -155,7 +155,17 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
         address: interface.ipv4,
         port,
     };
+    let alias = EgressInterface {
+        bridge: format!("{bridge}-second").into_bytes(),
+        index: 3,
+        ipv4: [192, 0, 2, 2],
+    };
+    let alias_address = SocketAddress::Inet4 {
+        address: alias.ipv4,
+        port,
+    };
     let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.93.0.2:{port}"));
+    let alias_path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}-second/192.0.2.2:{port}"));
     let host = Native::new();
     let listener = host
         .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
@@ -163,9 +173,10 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
     assert_eq!(
         host.bind_route(
             listener.token,
-            EgressRoute {
+            BindRoute {
                 address: SocketAddress::Inet4 { address: [0; 4], port },
                 interface: Some(interface.clone()),
+                aliases: vec![alias.clone()],
             },
         )
         .unwrap(),
@@ -173,6 +184,7 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
     );
     host.listen(listener.token, 4).unwrap();
     assert!(path.exists());
+    assert!(alias_path.exists());
     // SAFETY: descriptor is live and dup returns an independently owned reference to the same socket.
     let duplicated = unsafe { libc::dup(host.descriptor(listener.token).unwrap()) };
     assert!(duplicated >= 0);
@@ -184,8 +196,8 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
     host.prepare_connect_route(
         client.token,
         EgressRoute {
-            address: address.clone(),
-            interface: Some(interface),
+            address: alias_address.clone(),
+            interface: Some(alias),
         },
     )
     .unwrap();
@@ -195,7 +207,7 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
         SocketConnectStatus::Connected | SocketConnectStatus::Pending
     ));
     assert_eq!(await_connect(&host, client.token), SocketConnectStatus::Connected);
-    assert_eq!(host.peer_address(client.token), Ok(address.clone()));
+    assert_eq!(host.peer_address(client.token), Ok(alias_address));
 
     let deadline = Instant::now() + Duration::from_secs(2);
     let accepted = loop {
@@ -226,8 +238,10 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
     assert!(path.exists());
     host.close(listener.token);
     assert!(path.exists());
+    assert!(alias_path.exists());
     host.close(duplicate_token);
     assert!(!path.exists());
+    assert!(!alias_path.exists());
 }
 
 #[test]
@@ -264,9 +278,10 @@ fn selected_interface_stream_connect_retries_until_listener_arrives() {
         .unwrap();
     host.bind_route(
         listener.token,
-        EgressRoute {
+        BindRoute {
             address: SocketAddress::Inet4 { address: [0; 4], port },
             interface: Some(interface),
+            aliases: Vec::new(),
         },
     )
     .unwrap();
@@ -281,6 +296,89 @@ fn selected_interface_stream_connect_retries_until_listener_arrives() {
     assert!(started_at.elapsed() < Duration::from_secs(2));
     host.close(client.token);
     host.close(listener.token);
+}
+
+#[test]
+fn selected_interface_stream_connect_retries_a_dead_on_arrival_listener() {
+    let bridge = format!("dead-arrival-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 5,
+        ipv4: [10, 96, 0, 5],
+    };
+    let port = 38_000 + (std::process::id() % 20_000) as u16;
+    let address = SocketAddress::Inet4 {
+        address: interface.ipv4,
+        port,
+    };
+    let host = Arc::new(Native::new());
+    let listener = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.bind_route(
+        listener.token,
+        BindRoute {
+            address: SocketAddress::Inet4 { address: [0; 4], port },
+            interface: Some(interface.clone()),
+            aliases: Vec::new(),
+        },
+    )
+    .unwrap();
+    host.listen(listener.token, 4).unwrap();
+    let server_host = Arc::clone(&host);
+    let server_interface = interface.clone();
+    let server = std::thread::spawn(move || {
+        let accept = |host: &Native, token| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match host.accept(token) {
+                    Ok(accepted) => return accepted,
+                    Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => {
+                        std::thread::yield_now()
+                    }
+                    result => panic!("switch accept failed: {result:?}"),
+                }
+            }
+        };
+        let stale = accept(&server_host, listener.token);
+        server_host.close(stale.token);
+        server_host.close(listener.token);
+        let replacement = server_host
+            .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+            .unwrap();
+        server_host
+            .bind_route(
+                replacement.token,
+                BindRoute {
+                    address: SocketAddress::Inet4 { address: [0; 4], port },
+                    interface: Some(server_interface),
+                    aliases: Vec::new(),
+                },
+            )
+            .unwrap();
+        server_host.listen(replacement.token, 4).unwrap();
+        let live = accept(&server_host, replacement.token);
+        assert_eq!(server_host.write(live.token, b"L", false), Ok(1));
+        server_host.close(live.token);
+        server_host.close(replacement.token);
+    });
+    let client = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.prepare_connect_route(
+        client.token,
+        EgressRoute {
+            address,
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    assert_eq!(host.start_connect(client.token, false), SocketConnectStatus::Connected);
+    let mut byte = [0_u8; 1];
+    assert_eq!(host.read(client.token, &mut byte, false), Ok(1));
+    assert_eq!(byte, *b"L");
+    host.close(client.token);
+    server.join().unwrap();
 }
 
 #[test]
@@ -353,13 +451,14 @@ fn invalid_switch_identity_is_transactional_and_direct_route_falls_back() {
     assert_eq!(
         host.bind_route(
             socket.token,
-            EgressRoute {
+            BindRoute {
                 address: loopback.clone(),
                 interface: Some(EgressInterface {
                     bridge: b"../escape".to_vec(),
                     index: 2,
                     ipv4: [10, 0, 0, 2],
                 }),
+                aliases: Vec::new(),
             },
         ),
         Err(hl_runtime::RuntimeNetworkError::Invalid)
@@ -367,9 +466,10 @@ fn invalid_switch_identity_is_transactional_and_direct_route_falls_back() {
     assert!(matches!(
         host.bind_route(
             socket.token,
-            EgressRoute {
+            BindRoute {
                 address: loopback,
                 interface: None,
+                aliases: Vec::new(),
             },
         ),
         Ok(SocketAddress::Inet4 {
@@ -377,6 +477,57 @@ fn invalid_switch_identity_is_transactional_and_direct_route_falls_back() {
             port: 1..
         })
     ));
+    host.close(socket.token);
+}
+
+#[test]
+fn wildcard_alias_failure_removes_partial_paths_and_resets_the_socket() {
+    let bridge = format!("alias-rollback-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 97, 0, 2],
+    };
+    let valid_alias = EgressInterface {
+        bridge: format!("{bridge}-valid").into_bytes(),
+        index: 3,
+        ipv4: [10, 98, 0, 2],
+    };
+    let invalid_alias = EgressInterface {
+        bridge: b"../escape".to_vec(),
+        index: 4,
+        ipv4: [10, 99, 0, 2],
+    };
+    let port = 39_000 + (std::process::id() % 20_000) as u16;
+    let primary_path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.97.0.2:{port}"));
+    let alias_path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}-valid/10.98.0.2:{port}"));
+    let host = Native::new();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    assert_eq!(
+        host.bind_route(
+            socket.token,
+            BindRoute {
+                address: SocketAddress::Inet4 { address: [0; 4], port },
+                interface: Some(interface),
+                aliases: vec![valid_alias, invalid_alias],
+            },
+        ),
+        Err(hl_runtime::RuntimeNetworkError::Invalid)
+    );
+    assert!(!primary_path.exists());
+    assert!(!alias_path.exists());
+    assert!(
+        host.bind(
+            socket.token,
+            SocketAddress::Inet4 {
+                address: Ipv4Addr::LOCALHOST.octets(),
+                port: 0,
+            },
+        )
+        .is_ok()
+    );
     host.close(socket.token);
 }
 
@@ -398,9 +549,10 @@ fn selected_interface_datagrams_preserve_source_and_connected_peer() {
     assert_eq!(
         host.bind_route(
             server.token,
-            EgressRoute {
+            BindRoute {
                 address: server_address.clone(),
                 interface: Some(interface.clone()),
+                aliases: Vec::new(),
             },
         ),
         Ok(server_address.clone())

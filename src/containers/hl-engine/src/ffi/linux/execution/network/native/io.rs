@@ -9,6 +9,7 @@ use hl_network::{
 use super::Native;
 
 const SWITCH_CONNECT_ATTEMPTS: usize = 60;
+const SWITCH_CONNECT_PROBE_MILLIS: i32 = 40;
 
 impl SocketHostIo for Native {
     type Token = u64;
@@ -228,12 +229,23 @@ impl SocketHostIo for Native {
             // SAFETY: storage is immutable and descriptor is an independently owned duplicate.
             let result = unsafe { libc::connect(descriptor, &storage as *const _ as *const _, length) };
             let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            // SAFETY: this call solely owns the duplicated descriptor.
-            unsafe { libc::close(descriptor) };
             if result == 0 {
-                status = SocketConnectStatus::Connected;
+                let dead_on_arrival = retry_switch && Self::switch_dead_on_arrival(descriptor);
+                // SAFETY: this call solely owns the duplicated descriptor.
+                unsafe { libc::close(descriptor) };
+                if !dead_on_arrival {
+                    status = SocketConnectStatus::Connected;
+                    break;
+                }
+                status = SocketConnectStatus::Failed(SocketConnectError::Refused);
+                if attempt + 1 != SWITCH_CONNECT_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
                 break;
             }
+            // SAFETY: this call solely owns the duplicated descriptor.
+            unsafe { libc::close(descriptor) };
             if error == libc::EINPROGRESS {
                 status = SocketConnectStatus::Pending;
                 break;
@@ -379,11 +391,14 @@ impl SocketHostIo for Native {
             if let Some(path) = &entry.switch_path
                 && Arc::strong_count(path) == 1
             {
-                self.shared
+                let mut registry = self
+                    .shared
                     .switch_paths
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .remove(&path.0);
+                    .unwrap_or_else(|error| error.into_inner());
+                for owned_path in &path.0 {
+                    registry.remove(owned_path);
+                }
             }
             // SAFETY: removal transfers the sole descriptor ownership to this call. Dropping the
             // final switch_path lease after close unlinks its rendezvous pathname.
@@ -392,5 +407,38 @@ impl SocketHostIo for Native {
             }
         }
         self.wake();
+    }
+}
+
+impl Native {
+    fn switch_dead_on_arrival(descriptor: i32) -> bool {
+        let mut poll = libc::pollfd {
+            fd: descriptor,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll references one initialized pollfd and retains no pointer after the bounded wait.
+        let result = unsafe { libc::poll(&mut poll, 1, SWITCH_CONNECT_PROBE_MILLIS) };
+        if result <= 0 {
+            return false;
+        }
+        let mut byte = 0_u8;
+        // SAFETY: byte is writable for one byte and MSG_PEEK does not consume pending guest data.
+        let received = unsafe {
+            libc::recv(
+                descriptor,
+                (&mut byte as *mut u8).cast(),
+                1,
+                libc::MSG_PEEK | libc::MSG_DONTWAIT,
+            )
+        };
+        if received == 0 {
+            return true;
+        }
+        if received < 0 {
+            let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            return error != libc::EAGAIN && error != libc::EWOULDBLOCK;
+        }
+        false
     }
 }

@@ -3,7 +3,7 @@ use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use hl_network::{
-    AddressFamily, EgressRoute, NetworkResourceKey, SocketAddress, SocketHostIo, SocketProtocol, SocketType,
+    AddressFamily, BindRoute, EgressRoute, NetworkResourceKey, SocketAddress, SocketHostIo, SocketProtocol, SocketType,
 };
 use hl_runtime::{
     AcceptedSocket, CreatedSocket, HostReceive, HostSend, HostSendResult, ReceivedDatagram, RuntimeNetworkError,
@@ -149,11 +149,14 @@ impl RuntimeNetworkHost for Native {
         Ok(actual)
     }
 
-    fn bind_route(&self, token: u64, route: EgressRoute) -> Result<SocketAddress, RuntimeNetworkError> {
+    fn bind_route(&self, token: u64, route: BindRoute) -> Result<SocketAddress, RuntimeNetworkError> {
+        if route.aliases.len() > hl_network::BIND_ROUTE_ALIAS_MAXIMUM {
+            return Err(RuntimeNetworkError::Invalid);
+        }
         let Some(interface) = route.interface else {
             return self.bind(token, route.address);
         };
-        let SocketAddress::Inet4 { port, .. } = route.address else {
+        let SocketAddress::Inet4 { address, port } = route.address else {
             return Err(RuntimeNetworkError::Invalid);
         };
         let kind = self.socket_type(token)?;
@@ -186,16 +189,46 @@ impl RuntimeNetworkHost for Native {
                     address: interface.ipv4,
                     port: candidate,
                 };
+                let mut paths = vec![path.clone()];
+                let aliases = (|| {
+                    if address != [0; 4] || kind != libc::SOCK_STREAM {
+                        return Ok(());
+                    }
+                    for alias in route.aliases {
+                        let (alias_directory, alias_path) = Self::switch_path(&alias, alias.ipv4, candidate)?;
+                        Self::mkdir_switch(&alias_directory)?;
+                        let target = std::ffi::CString::new(path.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
+                        let alias_name =
+                            std::ffi::CString::new(alias_path.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
+                        // SAFETY: both paths are live NUL-terminated strings and neither call retains them.
+                        unsafe { libc::unlink(alias_name.as_ptr()) };
+                        // SAFETY: target and alias are valid NUL-terminated paths retained only by the filesystem.
+                        if unsafe { libc::symlink(target.as_ptr(), alias_name.as_ptr()) } != 0 {
+                            return Err(Self::runtime_error());
+                        }
+                        paths.push(alias_path);
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = aliases {
+                    drop(SwitchPath(paths));
+                    let _ = self.reset_switch_socket(token, kind);
+                    return Err(error);
+                }
                 let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
                 let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
                 entry.guest_local = Some(local.clone());
                 entry.switch_interface = Some(interface.clone());
-                let ownership = Arc::new(SwitchPath(path.clone()));
-                self.shared
+                let ownership = Arc::new(SwitchPath(paths.clone()));
+                let weak = Arc::downgrade(&ownership);
+                let mut registry = self
+                    .shared
                     .switch_paths
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .insert(path, Arc::downgrade(&ownership));
+                    .unwrap_or_else(|error| error.into_inner());
+                for owned_path in paths {
+                    registry.insert(owned_path, weak.clone());
+                }
                 entry.switch_path = Some(ownership);
                 return Ok(local);
             }
@@ -238,12 +271,13 @@ impl RuntimeNetworkHost for Native {
             if needs_source {
                 self.bind_route(
                     token,
-                    EgressRoute {
+                    BindRoute {
                         address: SocketAddress::Inet4 {
                             address: interface.ipv4,
                             port: 0,
                         },
                         interface: Some(interface.clone()),
+                        aliases: Vec::new(),
                     },
                 )?;
             }
@@ -422,12 +456,13 @@ impl RuntimeNetworkHost for Native {
         if needs_source {
             self.bind_route(
                 token,
-                EgressRoute {
+                BindRoute {
                     address: SocketAddress::Inet4 {
                         address: interface.ipv4,
                         port: 0,
                     },
                     interface: Some(interface.clone()),
+                    aliases: Vec::new(),
                 },
             )?;
         }

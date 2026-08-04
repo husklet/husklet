@@ -5,7 +5,7 @@ use hl_linux::{
     Errno, GuestAccess, GuestArchitecture, GuestMarshaller, GuestMemory, GuestNetworkAddress, LinuxResult, NetworkAbi,
 };
 use hl_network::{
-    AddressFamily, EgressRoute, NetworkCatalog, SocketAddress, SocketConnectError, SocketConnectStatus,
+    AddressFamily, BindRoute, EgressRoute, NetworkCatalog, SocketAddress, SocketConnectError, SocketConnectStatus,
     SocketDescription, SocketProtocol, SocketState, SocketType, UnixAddress, UnixSocketPair,
 };
 
@@ -137,12 +137,13 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         }
     }
 
-    pub(crate) fn bind_route(&self, address: SocketAddress) -> EgressRoute {
+    pub(crate) fn bind_route(&self, address: SocketAddress) -> BindRoute {
         match &self.policy {
             Some(policy) => policy.bind_route(address),
-            None => EgressRoute {
+            None => BindRoute {
                 address,
                 interface: None,
+                aliases: Vec::new(),
             },
         }
     }

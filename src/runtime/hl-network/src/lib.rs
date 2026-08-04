@@ -26,7 +26,7 @@ pub use checkpoint::{
     NETWORK_CHECKPOINT_VERSION, NetworkCatalogRestore, NetworkCheckpointError, NetworkCheckpointImage,
     NetworkCheckpointRebind, NetworkResourceKey, NetworkSocketResource, NetworkSocketState, PortCheckpoint,
 };
-pub use egress::{EgressInterface, EgressRoute};
+pub use egress::{BIND_ROUTE_ALIAS_MAXIMUM, BindRoute, EgressInterface, EgressRoute};
 pub use listener::{AcceptError, AcceptedToken};
 pub use policy::{InterfaceConfiguration, NamespaceInterface, NetworkPolicy, NetworkPolicyError, RouteDisposition};
 pub use socket_ofd::{

@@ -40,14 +40,16 @@ pub(super) struct Entry {
     pub(super) switched: bool,
 }
 
-pub(super) struct SwitchPath(Vec<u8>);
+pub(super) struct SwitchPath(Vec<Vec<u8>>);
 
 impl Drop for SwitchPath {
     fn drop(&mut self) {
-        if let Ok(path) = std::ffi::CString::new(self.0.clone()) {
-            // SAFETY: path is a live NUL-terminated pathname and unlink retains no pointer.
-            unsafe {
-                libc::unlink(path.as_ptr());
+        for path in &self.0 {
+            if let Ok(path) = std::ffi::CString::new(path.clone()) {
+                // SAFETY: path is a live NUL-terminated pathname and unlink retains no pointer.
+                unsafe {
+                    libc::unlink(path.as_ptr());
+                }
             }
         }
     }

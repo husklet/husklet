@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use hl_linux::GuestSocketOption;
 use hl_network::{
-    AddressFamily, EgressRoute, NetworkResourceKey, NetworkSocketResource, SocketAddress, SocketHostIo, SocketProtocol,
-    SocketType,
+    AddressFamily, BindRoute, EgressRoute, NetworkResourceKey, NetworkSocketResource, SocketAddress, SocketHostIo,
+    SocketProtocol, SocketType,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -122,7 +122,7 @@ pub trait RuntimeNetworkHost: SocketHostIo {
         protocol: SocketProtocol,
     ) -> Result<CreatedSocket<Self::Token>, RuntimeNetworkError>;
     fn bind(&self, token: Self::Token, address: SocketAddress) -> Result<SocketAddress, RuntimeNetworkError>;
-    fn bind_route(&self, token: Self::Token, route: EgressRoute) -> Result<SocketAddress, RuntimeNetworkError> {
+    fn bind_route(&self, token: Self::Token, route: BindRoute) -> Result<SocketAddress, RuntimeNetworkError> {
         self.bind(token, route.address)
     }
     fn prepare_connect(&self, token: Self::Token, address: SocketAddress) -> Result<(), RuntimeNetworkError>;
