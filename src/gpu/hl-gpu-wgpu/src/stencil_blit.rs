@@ -1,10 +1,10 @@
 //! GPU-only nearest-neighbour stencil blits.
 //!
 //! WGSL cannot return a fragment stencil value. Instead, copy the source stencil aspect to a packed
-//! byte buffer, then draw the destination rectangle once for each possible 8-bit value. The fragment
-//! shader discards pixels whose source byte differs from the draw's instance index; fixed-function
-//! `Replace` writes that index through the dynamic stencil reference. One pipeline and one render pass
-//! serve all 256 values.
+//! byte buffer, clear the owned destination pixels to zero, then reconstruct each source byte one bit at
+//! a time. The fragment shader discards pixels whose source bit is zero; fixed-function `Replace` writes
+//! the selected bit through the dynamic stencil reference and a pipeline-static one-bit write mask. Nine
+//! cached pipelines and nine draws per tile serve all 256 values.
 
 use hl_gpu::protocol::model::descriptor::{Extent3d, Mirror, Origin3d, TextureSubresource};
 use hl_gpu::protocol::model::enums::{TextureAspect, TextureFormat};
@@ -29,7 +29,7 @@ struct Params {
 
 struct Out {
     @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) reference: u32,
+    @location(0) @interpolate(flat) bit: u32,
 };
 
 @vertex
@@ -41,13 +41,12 @@ fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance
     );
     var out: Out;
     out.position = vec4<f32>(positions[vertex], 0.0, 1.0);
-    out.reference = instance;
+    out.bit = instance;
     return out;
 }
 
-@fragment
-fn fs_main(in: Out) {
-    let dst = vec2<u32>(in.position.xy) - params.dst_origin;
+fn source_value(position: vec4<f32>) -> u32 {
+    let dst = vec2<u32>(position.xy) - params.dst_origin;
     var src = vec2<u32>(
         ((2u * dst.x + 1u) * params.src_extent.x) / (2u * params.dst_extent.x),
         ((2u * dst.y + 1u) * params.src_extent.y) / (2u * params.dst_extent.y),
@@ -56,8 +55,17 @@ fn fs_main(in: Out) {
     if ((params.mirror_bits & 2u) != 0u) { src.y = params.src_extent.y - 1u - src.y; }
     if (src.y < params.tile_origin_y || src.y >= params.tile_origin_y + params.tile_height) { discard; }
     let byte_index = (src.y - params.tile_origin_y) * params.row_pitch + src.x;
-    let value = (source[byte_index / 4u] >> (8u * (byte_index & 3u))) & 255u;
-    if (value != in.reference) { discard; }
+    return (source[byte_index / 4u] >> (8u * (byte_index & 3u))) & 255u;
+}
+
+@fragment
+fn fs_clear(in: Out) {
+    _ = source_value(in.position);
+}
+
+@fragment
+fn fs_bit(in: Out) {
+    if ((source_value(in.position) & (1u << in.bit)) == 0u) { discard; }
 }
 "#;
 
@@ -72,7 +80,8 @@ pub(crate) struct StencilBlitRegion {
 
 pub(crate) struct StencilBlitCache {
     layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    clear_pipeline: wgpu::RenderPipeline,
+    bit_pipelines: [wgpu::RenderPipeline; 8],
 }
 
 impl StencilBlitCache {
@@ -117,39 +126,45 @@ impl StencilBlitCache {
             depth_fail_op: wgpu::StencilOperation::Keep,
             pass_op: wgpu::StencilOperation::Replace,
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("hl-stencil-blit"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[],
-            }),
-            primitive: Default::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24PlusStencil8,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Always,
-                stencil: wgpu::StencilState {
-                    front: replace,
-                    back: replace,
-                    read_mask: 0xff,
-                    write_mask: 0xff,
+        let pipeline = |label: &'static str, fragment: &'static str, write_mask| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
                 },
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fragment),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth24PlusStencil8,
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::Always,
+                    stencil: wgpu::StencilState {
+                        front: replace,
+                        back: replace,
+                        read_mask: 0xff,
+                        write_mask,
+                    },
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let clear_pipeline = pipeline("hl-stencil-blit-clear", "fs_clear", 0xff);
+        let bit_pipelines = std::array::from_fn(|bit| {
+            pipeline("hl-stencil-blit-bit", "fs_bit", 1 << bit)
         });
-        Self { layout, pipeline }
+        Self { layout, clear_pipeline, bit_pipelines }
     }
 }
 
@@ -183,6 +198,23 @@ fn source_coordinate(dst: u32, src_extent: u32, dst_extent: u32, mirrored: bool)
     } else {
         value
     }
+}
+
+#[cfg(test)]
+fn stencil_replace(current: u8, reference: u8, write_mask: u8) -> u8 {
+    (current & !write_mask) | (reference & write_mask)
+}
+
+#[cfg(test)]
+fn reconstruct_stencil(previous: u8, value: u8) -> u8 {
+    let mut stencil = stencil_replace(previous, 0, 0xff);
+    for bit in 0..8 {
+        let mask = 1u8 << bit;
+        if value & mask != 0 {
+            stencil = stencil_replace(stencil, mask, mask);
+        }
+    }
+    stencil
 }
 
 impl WgpuExecutor {
@@ -357,7 +389,6 @@ impl WgpuExecutor {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&cache.pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.set_viewport(
                 region.dst_origin.x as f32,
@@ -373,9 +404,14 @@ impl WgpuExecutor {
                 region.dst_extent.width,
                 region.dst_extent.height,
             );
-            for reference in 0..=255 {
+            pass.set_pipeline(&cache.clear_pipeline);
+            pass.set_stencil_reference(0);
+            pass.draw(0..3, 0..1);
+            for (bit, pipeline) in cache.bit_pipelines.iter().enumerate() {
+                let reference = 1 << bit;
+                pass.set_pipeline(pipeline);
                 pass.set_stencil_reference(reference);
-                pass.draw(0..3, reference..reference + 1);
+                pass.draw(0..3, bit as u32..bit as u32 + 1);
             }
         }
         self.gpu.queue.submit(Some(encoder.finish()));
@@ -428,6 +464,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             [2, 0]
         );
+    }
+
+    #[test]
+    fn bit_plane_reconstruction_covers_every_stencil_value() {
+        for previous in 0..=u8::MAX {
+            for value in 0..=u8::MAX {
+                assert_eq!(reconstruct_stencil(previous, value), value);
+            }
+        }
     }
 
     #[test]
@@ -664,5 +709,38 @@ mod tests {
                 assert_eq!(overlapped[((y + 3) * 8 + x + 3) as usize], want[((y + 2) * 8 + x + 1) as usize]);
             }
         }
+
+        // Exercise every representable stencil byte through the native fixed-function path. This is
+        // specifically sensitive to the pipeline-static write masks and dynamic reference values.
+        let every_value = (0..=u8::MAX).collect::<Vec<_>>();
+        copy_aspect_in(
+            &exec, &src.texture, 0, 0, wgpu::TextureAspect::StencilOnly, 16, 16, 1,
+            &every_value,
+        );
+        copy_aspect_in(
+            &exec, &dst.texture, 0, 0, wgpu::TextureAspect::StencilOnly, 16, 16, 1,
+            &[211; 256],
+        );
+        exec.blit_stencil_nearest(
+            &session.resources,
+            1,
+            &TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::StencilOnly },
+            2,
+            &TextureSubresource { mip: 0, layer: 0, aspect: TextureAspect::StencilOnly },
+            StencilBlitRegion {
+                src_origin: Origin3d::default(),
+                src_extent: Extent3d { width: 16, height: 16, depth: 1 },
+                dst_origin: Origin3d::default(),
+                dst_extent: Extent3d { width: 16, height: 16, depth: 1 },
+                mirror: Mirror::NONE,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            copy_aspect_out(
+                &exec, &dst.texture, 0, 0, 16, 16, wgpu::TextureAspect::StencilOnly, 1,
+            ),
+            every_value,
+        );
     }
 }
