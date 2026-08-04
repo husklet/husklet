@@ -712,3 +712,62 @@ cases:
   - shell:
       script: mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'print(db.version())'
   expect: { stdout_contains: golden/mongo_version_8.txt }
+- id: databases/realsw-redis
+  image: redis:alpine
+  class: long
+  timeout: 90
+  resources: [host_port]
+  readiness:
+    startup: redis-server --save '' --appendonly no --daemonize yes >/tmp/redis.log 2>&1
+    probe: redis-cli ping 2>/dev/null | grep -q PONG
+    attempts: 50
+    delay_ms: 200
+    logs: [/tmp/redis.log]
+  actions:
+  - shell:
+      script: |
+        echo ping=$(redis-cli ping)
+        redis-cli set k hello-redis >/dev/null
+        echo get=$(redis-cli get k)
+        redis-cli incr ctr >/dev/null
+        echo incr=$(redis-cli incr ctr)
+  expect: { stdout_contains: golden/realsw_redis.txt }
+- id: databases/realsw-postgres
+  image: postgres:alpine
+  class: long
+  timeout: 90
+  resources: [host_port]
+  readiness:
+    startup: |
+      export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PGDATA=/var/lib/postgresql/data
+      mkdir -p "$PGDATA"
+      chown postgres:postgres "$PGDATA"
+      gosu postgres initdb -D "$PGDATA" --auth=trust >/tmp/initdb.log
+      gosu postgres pg_ctl -D "$PGDATA" -o '-k /tmp' start >/tmp/pg.log
+    probe: psql -h /tmp -U postgres -tAc 'SELECT 1' >/dev/null 2>&1
+    attempts: 50
+    delay_ms: 200
+    logs: [/tmp/initdb.log, /tmp/pg.log]
+  actions:
+  - shell:
+      script: |
+        echo postgres-ready
+        psql -h /tmp -U postgres -tAc 'CREATE TABLE t(v int); INSERT INTO t SELECT generate_series(1,1000); SELECT count(*), sum(v) FROM t;'
+        gosu postgres pg_ctl -D /var/lib/postgresql/data -m fast -w stop >/dev/null
+  expect:
+    stdout_contains: [golden/postgres_ready.txt, golden/postgres_sum.txt]
+- id: databases/realsw-nats
+  image: nats:latest
+  class: long
+  timeout: 90
+  resources: [host_port]
+  readiness:
+    startup: /nats-server >/tmp/nats.log 2>&1 &
+    probe: grep -q 'Server is ready' /tmp/nats.log
+    attempts: 40
+    delay_ms: 100
+    logs: [/tmp/nats.log]
+  actions:
+  - shell:
+      script: grep -m1 'Server is ready' /tmp/nats.log
+  expect: { stdout_contains: golden/nats_ready.txt }

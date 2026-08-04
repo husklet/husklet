@@ -128,3 +128,14 @@ its input sender alive; a backpressured writer observes the same close as
 `BrokenPipe`. The adapter preserves partial reads, caps each accepted output
 write to the existing log chunk bound, and labels all terminal output as the
 merged stdout stream. This does not yet allocate or attach a PTY.
+
+## Interactive-input workflow holdout
+
+The remaining `workflows/pty.rs` is intentionally retained. Its five sessions
+write ordered byte fragments after container start, including DEL editing,
+canonical carriage returns, raw-mode input, and explicit session close. The
+current YAML action vocabulary can request a PTY but cannot drive timed input
+into the attached session or assert absence of a raw byte in the merged
+transcript. Pipe-fed shell commands do not prove the same contract. Removing
+the workflow requires typed interactive-input actions and transcript byte
+assertions; neither is part of this static ownership migration.

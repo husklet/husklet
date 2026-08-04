@@ -12,8 +12,6 @@ const LEGACY_WORKFLOWS: [&str; 7] = [
     "compose",
     "compose-multinet",
     "pty-conformance",
-    "realsw",
-    "smoke-realimage",
 ];
 
 #[derive(Args)]

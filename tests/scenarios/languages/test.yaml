@@ -674,3 +674,20 @@ cases:
         EOF
         rustc /m.rs -o /m && /m
   expect: { stdout_contains: golden/values/factorial.txt }
+- id: languages/python-realsw
+  image: python:alpine
+  class: long
+  timeout: 90
+  actions:
+  - argv:
+      argv:
+      - python3
+      - -c
+      - |-
+        import functools
+        @functools.lru_cache(None)
+        def fib(n): return n if n<2 else fib(n-1)+fib(n-2)
+        d={}
+        for i in range(100000): d[i%1000]=d.get(i%1000,0)+i
+        print('py', 'fib35='+str(fib(35)), 'dictsum='+str(sum(d.values())), 'sorted='+str(sorted([3,1,2])))
+  expect: { stdout_contains: golden/python_realsw.txt }

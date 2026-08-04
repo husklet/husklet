@@ -9,6 +9,12 @@ or in-memory SQLite cases retain no explicit resource. Existing expected
 substring files remain byte-identical; the final Mongo values include their
 ordinary line terminator because each command emits a complete output line.
 
+Three additional folder-owned cases preserve the retired `realsw` workflow's
+Redis round trip and increment, PostgreSQL initialization and aggregation, and
+NATS daemon-readiness contracts. Typed readiness replaces fixed sleeps while
+retaining its images, guest commands, markers, timeout, isolation, and bounded
+per-case cleanup.
+
 The final five Mongo cases use the typed readiness lifecycle:
 
 - `databases/mongo-agg-7`: startup `mongod --bind_ip 127.0.0.1 --fork --logpath /tmp/mongo.log`, probe `mongosh 'mongodb://%2Ftmp%2Fmongodb-27017.sock' --quiet --eval 'db.runCommand({ping:1}).ok'`, attempts 3, delay 1000 ms, logs `/tmp/mongo.log`.

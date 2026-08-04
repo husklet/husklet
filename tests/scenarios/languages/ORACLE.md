@@ -5,6 +5,9 @@ scenario domain. It consolidates the previously prepared .NET and Elixir cases
 with the declarative Perl, PHP, Ruby, Python, and Node cohorts while preserving
 every stable case ID independently.
 
+The `python-realsw` case also owns the retired `realsw` workflow's exact
+memoized Fibonacci, dictionary accumulation, sorting program, and output.
+
 The migration sources studied were the former `languages-dotnet/test.yaml`, the
 legacy `fixtures/languages-{node,perl,php,python,ruby}.yaml` manifests, the
 compiled Go/Java/Rust manifest, the former language aggregation and uniqueness
