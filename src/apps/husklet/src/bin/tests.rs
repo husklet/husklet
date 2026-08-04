@@ -27,18 +27,9 @@ fn finds_launchers_and_their_forks() {
     assert!(pids.contains(&"45125"), "missing launcher 45125");
     assert!(pids.contains(&"90001"), "missing guest fork 90001");
     assert!(pids.contains(&"16020"), "missing orphaned launcher 16020");
-    assert!(
-        !pids.contains(&"17980"),
-        "must not match ubuntu-dev launcher"
-    );
-    assert!(
-        !pids.contains(&"55500"),
-        "must not match `generalizer` substring"
-    );
-    assert!(
-        !pids.contains(&"43405"),
-        "Husklet itself is not a workspace process"
-    );
+    assert!(!pids.contains(&"17980"), "must not match ubuntu-dev launcher");
+    assert!(!pids.contains(&"55500"), "must not match `generalizer` substring");
+    assert!(!pids.contains(&"43405"), "Husklet itself is not a workspace process");
     // The fork is a plain process; launchers are named by shell + uptime (from etime).
     let fork = rows.iter().find(|r| r[0] == "90001").unwrap();
     assert_eq!(fork[2], "process");
@@ -49,8 +40,7 @@ fn finds_launchers_and_their_forks() {
 #[test]
 fn exact_name_match_no_prefix_collision() {
     // `general` must never pull in `general-2`'s launcher.
-    let ps =
-        "100 1 00:10 /x/husklet --worker launch general-2\n101 1 00:20 /x/husklet --worker launch general";
+    let ps = "100 1 00:10 /x/husklet --worker launch general-2\n101 1 00:20 /x/husklet --worker launch general";
     let rows = filter_workspace_procs(ps, "general", "fish");
     let pids: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
     assert_eq!(pids, vec!["101"]);
@@ -76,13 +66,11 @@ fn workspace_overview_decodes_resource_fields() {
     assert_eq!(containers[0].image, "nginx");
 
     let images: Vec<ImageSummary> =
-        serde_json::from_str(r#"[{"RepoTags":["ubuntu:24.04"],"Id":"sha256:abc","Size":123}]"#)
-            .unwrap();
+        serde_json::from_str(r#"[{"RepoTags":["ubuntu:24.04"],"Id":"sha256:abc","Size":123}]"#).unwrap();
     assert_eq!(images[0].repo_tags, ["ubuntu:24.04"]);
     assert_eq!(images[0].size, 123);
 
-    let volumes: VolumesResponse =
-        serde_json::from_str(r#"{"Volumes":[{"Name":"cache","Driver":"local"}]}"#).unwrap();
+    let volumes: VolumesResponse = serde_json::from_str(r#"{"Volumes":[{"Name":"cache","Driver":"local"}]}"#).unwrap();
     assert_eq!(volumes.volumes[0].name, "cache");
 
     let networks: Vec<NetworkSummary> =

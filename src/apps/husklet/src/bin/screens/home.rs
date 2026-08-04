@@ -37,10 +37,7 @@ impl View {
         let workspaces = gtk::ListBox::new();
         workspaces.add_css_class("wslist");
         workspaces.set_selection_mode(gtk::SelectionMode::None);
-        let scroller = gtk::ScrolledWindow::builder()
-            .vexpand(true)
-            .child(&workspaces)
-            .build();
+        let scroller = gtk::ScrolledWindow::builder().vexpand(true).child(&workspaces).build();
         scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         widget.append(&scroller);
 

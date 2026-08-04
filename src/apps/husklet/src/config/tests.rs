@@ -11,15 +11,9 @@ fn vpn_spec_parses_and_roundtrips() {
     let c = VpnConfig::parse("127.30.0.1:1080").unwrap();
     assert_eq!(c, VpnConfig::socks5("127.30.0.1:1080"));
     assert_eq!(c.socks_endpoint(), Some("127.30.0.1:1080"));
-    assert_eq!(
-        VpnConfig::parse("socks5:127.0.0.1:9050").unwrap().kind,
-        VpnKind::Socks5
-    );
+    assert_eq!(VpnConfig::parse("socks5:127.0.0.1:9050").unwrap().kind, VpnKind::Socks5);
     let wg = VpnConfig::parse("wireguard:vpn/wg.conf").unwrap();
-    assert_eq!(
-        (wg.kind, wg.endpoint.as_str()),
-        (VpnKind::Wireguard, "vpn/wg.conf")
-    );
+    assert_eq!((wg.kind, wg.endpoint.as_str()), (VpnKind::Wireguard, "vpn/wg.conf"));
     assert_eq!(wg.socks_endpoint(), None);
     assert_eq!(VpnConfig::parse(&wg.to_spec()).unwrap(), wg);
     assert_eq!(VpnConfig::parse(""), None);
@@ -40,9 +34,7 @@ fn vpn_spec_parses_and_roundtrips() {
         assert_eq!(VpnConfig::parse(malformed), None, "{malformed}");
     }
     assert_eq!(
-        VpnConfig::parse("socks5:[::1]:1080")
-            .unwrap()
-            .socks_endpoint(),
+        VpnConfig::parse("socks5:[::1]:1080").unwrap().socks_endpoint(),
         Some("[::1]:1080")
     );
 }
@@ -54,20 +46,12 @@ fn cuda_device_spec_parses_and_roundtrips() {
     assert_eq!(CudaDevice::parse(&d.to_spec()).unwrap(), d);
     let full = CudaDevice::parse("My GPU|7.5|8192").unwrap();
     assert_eq!(
-        (
-            full.name.as_str(),
-            full.compute_capability.as_str(),
-            full.vram_mb
-        ),
+        (full.name.as_str(), full.compute_capability.as_str(), full.vram_mb),
         ("My GPU", "7.5", 8192)
     );
     let bare = CudaDevice::parse("JustAName").unwrap();
     assert_eq!(
-        (
-            bare.name.as_str(),
-            bare.compute_capability.as_str(),
-            bare.vram_mb
-        ),
+        (bare.name.as_str(), bare.compute_capability.as_str(), bare.vram_mb),
         ("JustAName", "8.6", 4096)
     );
     assert_eq!(CudaDevice::parse(""), None);
@@ -89,21 +73,13 @@ fn store_persists_across_reload() {
     let mut store = WorkspaceStore::load(&path).unwrap();
     assert!(store.all().is_empty());
     store
-        .upsert(WorkspaceConfig::new(
-            "ubuntu-dev",
-            "ubuntu:24.04",
-            Arch::Arm64,
-        ))
+        .upsert(WorkspaceConfig::new("ubuntu-dev", "ubuntu:24.04", Arch::Arm64))
         .unwrap();
     store
         .upsert(WorkspaceConfig::new("centos", "centos:7", Arch::Amd64))
         .unwrap();
     store
-        .upsert(WorkspaceConfig::new(
-            "ubuntu-dev",
-            "ubuntu:22.04",
-            Arch::Arm64,
-        ))
+        .upsert(WorkspaceConfig::new("ubuntu-dev", "ubuntu:22.04", Arch::Arm64))
         .unwrap();
 
     let reloaded = WorkspaceStore::load(&path).unwrap();
@@ -144,11 +120,7 @@ fn rich_config_roundtrips() {
     let mut store = WorkspaceStore::load(&path).unwrap();
     store.upsert(cfg.clone()).unwrap();
 
-    let got = WorkspaceStore::load(&path)
-        .unwrap()
-        .get("api")
-        .cloned()
-        .unwrap();
+    let got = WorkspaceStore::load(&path).unwrap().get("api").cloned().unwrap();
     assert_eq!(
         got, cfg,
         "rich workspace config should round-trip through the block format"
@@ -161,9 +133,7 @@ fn store_remove() {
     let path = tmp_path("remove");
     let _ = std::fs::remove_file(&path);
     let mut store = WorkspaceStore::load(&path).unwrap();
-    store
-        .upsert(WorkspaceConfig::new("a", "alpine", Arch::Arm64))
-        .unwrap();
+    store.upsert(WorkspaceConfig::new("a", "alpine", Arch::Arm64)).unwrap();
     assert!(store.remove("a").unwrap());
     assert!(!store.remove("a").unwrap());
     assert!(WorkspaceStore::load(&path).unwrap().all().is_empty());
@@ -259,10 +229,7 @@ fn duplicate_workspace_names_are_rejected() {
     let error = WorkspaceStore::load(&path).unwrap_err();
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(
-        error.to_string().contains("duplicate workspace name"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("duplicate workspace name"), "{error}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     let _ = std::fs::remove_file(path);
 }
@@ -270,11 +237,7 @@ fn duplicate_workspace_names_are_rejected() {
 #[test]
 fn empty_workspace_identity_is_rejected() {
     let path = tmp_path("empty-identity");
-    std::fs::write(
-        &path,
-        "[workspace]\nname = \nimage = ubuntu\narch = arm64\n",
-    )
-    .unwrap();
+    std::fs::write(&path, "[workspace]\nname = \nimage = ubuntu\narch = arm64\n").unwrap();
 
     let error = WorkspaceStore::load(&path).unwrap_err();
 

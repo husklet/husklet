@@ -52,9 +52,7 @@ impl Peer {
 
     pub(super) fn request(&self, signal: libc::c_int) -> io::Result<()> {
         if self.process <= 1 {
-            return Err(io::Error::other(
-                "socket owner reported an invalid process identity",
-            ));
+            return Err(io::Error::other("socket owner reported an invalid process identity"));
         }
         self.signal(signal)?;
         Ok(())
@@ -70,10 +68,7 @@ impl Peer {
                 Err(error) if Self::offline(&error) => return Ok(()),
                 Err(error) => return Err(error),
                 Ok(_) if std::time::Instant::now() >= deadline => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "socket owner did not stop",
-                    ));
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "socket owner did not stop"));
                 }
                 Ok(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
             }
@@ -97,9 +92,7 @@ impl Peer {
     pub(super) fn offline(error: &io::Error) -> bool {
         matches!(
             error.kind(),
-            io::ErrorKind::NotFound
-                | io::ErrorKind::ConnectionRefused
-                | io::ErrorKind::ConnectionReset
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
         )
     }
 
@@ -162,10 +155,7 @@ mod tests {
         let client = std::os::unix::net::UnixStream::connect(socket).unwrap();
         let accepted = server.join().unwrap();
 
-        assert_eq!(
-            Peer::new(client).unwrap().process,
-            std::process::id() as i32
-        );
+        assert_eq!(Peer::new(client).unwrap().process, std::process::id() as i32);
         drop(accepted);
     }
 }

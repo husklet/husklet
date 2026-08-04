@@ -10,9 +10,7 @@ pub(super) struct RestoreSummary {
 impl RestoreSummary {
     pub(super) fn new(workspace: &WorkspaceConfig) -> Self {
         Self {
-            path: workspace
-                .storage_dir(&paths::hl_root())
-                .join("state/restore.txt"),
+            path: workspace.storage_dir(&paths::hl_root()).join("state/restore.txt"),
         }
     }
 

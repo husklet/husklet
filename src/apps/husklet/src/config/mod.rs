@@ -95,8 +95,7 @@ impl VpnConfig {
         if endpoint.is_empty() {
             return None;
         }
-        if matches!(kind, VpnKind::Socks5 | VpnKind::Http) && !Self::valid_proxy_endpoint(endpoint)
-        {
+        if matches!(kind, VpnKind::Socks5 | VpnKind::Http) && !Self::valid_proxy_endpoint(endpoint) {
             return None;
         }
         Some(VpnConfig {
@@ -301,12 +300,7 @@ impl WorkspaceConfig {
         if let Some(value) = &self.terminal.background {
             config.background = value.clone();
         }
-        if let Some(value) = self
-            .terminal
-            .cursor_shape
-            .as_deref()
-            .and_then(CursorShape::parse)
-        {
+        if let Some(value) = self.terminal.cursor_shape.as_deref().and_then(CursorShape::parse) {
             config.cursor_shape = value;
         }
         if let Some(value) = self.terminal.cursor_blink {
@@ -427,10 +421,7 @@ impl WorkspaceStore {
                 out.field("terminal_cursor", value);
             }
             if let Some(value) = w.terminal.cursor_blink {
-                out.field(
-                    "terminal_cursor_blink",
-                    if value { "true" } else { "false" },
-                );
+                out.field("terminal_cursor_blink", if value { "true" } else { "false" });
             }
             for (k, v) in &w.env {
                 out.field("env", &format!("{k}={v}"));
@@ -438,12 +429,7 @@ impl WorkspaceStore {
             for m in &w.mounts {
                 out.field(
                     "mount",
-                    &format!(
-                        "{}:{}:{}",
-                        m.host,
-                        m.container,
-                        if m.ro { "ro" } else { "rw" }
-                    ),
+                    &format!("{}:{}:{}", m.host, m.container, if m.ro { "ro" } else { "rw" }),
                 );
             }
         }

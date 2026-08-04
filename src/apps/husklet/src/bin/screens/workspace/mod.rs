@@ -95,11 +95,7 @@ impl View {
         split.set_shrink_start_child(false);
         widget.append(&split);
 
-        Self {
-            widget,
-            pages,
-            items,
-        }
+        Self { widget, pages, items }
     }
 
     pub fn select_name(&self, name: &str) {

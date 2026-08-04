@@ -253,11 +253,7 @@ impl TerminalWindow {
                     tw.ws.name
                 );
                 Tabs::new(&tw).terminal();
-                if let Some(terminal) = tw
-                    .stack
-                    .visible_child()
-                    .and_then(|page| TerminalPane::first(&page))
-                {
+                if let Some(terminal) = tw.stack.visible_child().and_then(|page| TerminalPane::first(&page)) {
                     terminal.feed(
                         format!(
                             "\r\n\x1b[31mworkspace restore incomplete: layout/history could not be restored: {error}\x1b[0m\r\n"
@@ -275,11 +271,7 @@ impl TerminalWindow {
         }
         // Debug: HL_TERM_SPLIT=h|v splits the current shell tab (to screenshot the split separator).
         if let Some(dir) = AppConfig::get().split.as_deref() {
-            if let Some(t) = tw
-                .stack
-                .visible_child()
-                .and_then(|c| TerminalPane::first(&c))
-            {
+            if let Some(t) = tw.stack.visible_child().and_then(|c| TerminalPane::first(&c)) {
                 *tw.focused.borrow_mut() = Some(t.clone());
                 let o = if dir == "v" {
                     gtk::Orientation::Vertical
@@ -339,8 +331,8 @@ impl<'a> Terminal<'a> {
             // Cmd/Ctrl-click opens the link under the pointer (an explicit OSC-8 hyperlink, else a regex URL
             // match). A modifier is required so a plain click / text selection is never hijacked.
             let state = g.current_event_state();
-            let modified = state.contains(gdk::ModifierType::META_MASK)
-                || state.contains(gdk::ModifierType::CONTROL_MASK);
+            let modified =
+                state.contains(gdk::ModifierType::META_MASK) || state.contains(gdk::ModifierType::CONTROL_MASK);
             if !modified {
                 return;
             }
@@ -413,25 +405,10 @@ mod shortcut_tests {
     #[test]
     fn macos_edit_shortcuts_never_fall_through_to_vte() {
         let command = gdk::ModifierType::META_MASK;
-        assert_eq!(
-            Shortcut::from_key(gdk::Key::c, command),
-            Some(Shortcut::Copy)
-        );
-        assert_eq!(
-            Shortcut::from_key(gdk::Key::x, command),
-            Some(Shortcut::Cut)
-        );
-        assert_eq!(
-            Shortcut::from_key(gdk::Key::v, command),
-            Some(Shortcut::Paste)
-        );
-        assert_eq!(
-            Shortcut::from_key(gdk::Key::a, command),
-            Some(Shortcut::SelectAll)
-        );
-        assert_eq!(
-            Shortcut::from_key(gdk::Key::c, gdk::ModifierType::empty()),
-            None
-        );
+        assert_eq!(Shortcut::from_key(gdk::Key::c, command), Some(Shortcut::Copy));
+        assert_eq!(Shortcut::from_key(gdk::Key::x, command), Some(Shortcut::Cut));
+        assert_eq!(Shortcut::from_key(gdk::Key::v, command), Some(Shortcut::Paste));
+        assert_eq!(Shortcut::from_key(gdk::Key::a, command), Some(Shortcut::SelectAll));
+        assert_eq!(Shortcut::from_key(gdk::Key::c, gdk::ModifierType::empty()), None);
     }
 }

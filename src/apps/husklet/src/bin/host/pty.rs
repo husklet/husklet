@@ -3,11 +3,7 @@ use crate::*;
 pub(crate) struct PtyProcess;
 
 impl PtyProcess {
-    pub(crate) fn spawn(
-        term: &vte4::Terminal,
-        argv: &[&str],
-        env: &[&str],
-    ) -> std::io::Result<(i32, vte4::Pty)> {
+    pub(crate) fn spawn(term: &vte4::Terminal, argv: &[&str], env: &[&str]) -> std::io::Result<(i32, vte4::Pty)> {
         use std::ffi::{CStr, CString};
         let c_argv = Self::strings(argv, "argument")?;
         if c_argv.is_empty() {
@@ -77,22 +73,13 @@ impl PtyProcess {
             // actions, preventing GTK event pipes/sockets from leaking into the engine worker.
             libc::posix_spawnattr_setflags(&mut attr, POSIX_SPAWN_FLAGS);
 
-            let mut p_argv: Vec<*mut libc::c_char> =
-                c_argv.iter().map(|c| c.as_ptr() as *mut _).collect();
+            let mut p_argv: Vec<*mut libc::c_char> = c_argv.iter().map(|c| c.as_ptr() as *mut _).collect();
             p_argv.push(std::ptr::null_mut());
-            let mut p_env: Vec<*mut libc::c_char> =
-                c_env.iter().map(|c| c.as_ptr() as *mut _).collect();
+            let mut p_env: Vec<*mut libc::c_char> = c_env.iter().map(|c| c.as_ptr() as *mut _).collect();
             p_env.push(std::ptr::null_mut());
 
             let mut pid: libc::pid_t = 0;
-            let rc = libc::posix_spawn(
-                &mut pid,
-                p_argv[0],
-                &fa,
-                &attr,
-                p_argv.as_ptr(),
-                p_env.as_ptr(),
-            );
+            let rc = libc::posix_spawn(&mut pid, p_argv[0], &fa, &attr, p_argv.as_ptr(), p_env.as_ptr());
             libc::posix_spawn_file_actions_destroy(&mut fa);
             libc::posix_spawnattr_destroy(&mut attr);
             if rc != 0 {

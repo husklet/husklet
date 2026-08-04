@@ -80,8 +80,7 @@ impl Overview<'_> {
         form.name.set_text(&workspace.name);
         form.image.set_text(&workspace.image);
         form.cpu_amd.set(workspace.arch == Arch::Amd64);
-        form.shell
-            .set_text(workspace.shell.as_deref().unwrap_or_default());
+        form.shell.set_text(workspace.shell.as_deref().unwrap_or_default());
         if let Some(storage) = workspace.storage.as_deref() {
             form.storage.set_text(&storage.to_string_lossy());
         } else {
@@ -100,12 +99,8 @@ impl Overview<'_> {
         if let Some(cuda) = &workspace.cuda {
             form.features.cuda.set_active(true);
             form.features.cuda_name.set_text(&cuda.name);
-            form.features
-                .cuda_capability
-                .set_text(&cuda.compute_capability);
-            form.features
-                .cuda_memory
-                .set_text(&cuda.vram_mb.to_string());
+            form.features.cuda_capability.set_text(&cuda.compute_capability);
+            form.features.cuda_memory.set_text(&cuda.vram_mb.to_string());
         }
     }
 
@@ -123,15 +118,13 @@ impl Overview<'_> {
         {
             let status = status.clone();
             save.connect_clicked(move |_| {
-                let result = form.configuration().and_then(|workspace| {
-                    WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace)
-                });
+                let result = form
+                    .configuration()
+                    .and_then(|workspace| WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace));
                 match result {
                     Ok(()) => {
                         status.remove_css_class("err");
-                        status.set_text(
-                            "Saved — applies to newly-opened tabs (⌘T) and future launches.",
-                        );
+                        status.set_text("Saved — applies to newly-opened tabs (⌘T) and future launches.");
                     }
                     Err(error) => {
                         status.add_css_class("err");

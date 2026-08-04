@@ -56,23 +56,14 @@ impl Diagnostics {
         let Some(path) = &self.0 else {
             return;
         };
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
             let _ = writeln!(file, "{message}");
         }
     }
 }
 
 impl Worker {
-    pub fn launch(
-        name: &str,
-        cwd: Option<&str>,
-        slot: Option<&str>,
-        diagnostics: Option<&Path>,
-    ) -> ! {
+    pub fn launch(name: &str, cwd: Option<&str>, slot: Option<&str>, diagnostics: Option<&Path>) -> ! {
         let diagnostics = Diagnostics::new(diagnostics);
         diagnostics.record(format_args!("worker pid={} starting", std::process::id()));
         if let Err(error) = ControllingTerminal::claim() {
@@ -99,15 +90,14 @@ impl Worker {
             std::process::exit(WorkerStatus::WORKSPACE_MISSING);
         };
         let (columns, rows) = terminal::size().unwrap_or((80, 24));
-        let mut terminal =
-            match crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot) {
-                Ok(terminal) => terminal,
-                Err(error) => {
-                    diagnostics.record(format_args!("workspace launch failed: {error}"));
-                    eprintln!("workspace launch failed: {error}");
-                    std::process::exit(WorkerStatus::LAUNCH_FAILED);
-                }
-            };
+        let mut terminal = match crate::runtime::execution::launch(&workspace, columns, rows, cwd, slot) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                diagnostics.record(format_args!("workspace launch failed: {error}"));
+                eprintln!("workspace launch failed: {error}");
+                std::process::exit(WorkerStatus::LAUNCH_FAILED);
+            }
+        };
         match crate::runtime::domain::Domain::take_restore_summary(&workspace) {
             Ok(Some(summary)) => eprintln!("{summary}"),
             Ok(None) => {}

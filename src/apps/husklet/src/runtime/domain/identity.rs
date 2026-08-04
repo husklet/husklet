@@ -15,11 +15,7 @@ impl RuntimeIdentity {
         Self::field(&mut digest, env!("CARGO_PKG_VERSION").as_bytes());
         Self::field(&mut digest, env!("HUSKLET_RUNTIME_BUILD_ID").as_bytes());
         Self::field(&mut digest, workspace.arch.as_str().as_bytes());
-        let identity = digest
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let identity = digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(Self(identity))
     }
 

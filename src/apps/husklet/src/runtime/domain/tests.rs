@@ -12,14 +12,8 @@ fn signatures_are_unambiguous_and_ignore_terminal_presentation() {
     );
     let signature = Configuration::new(&first).signature_for("runtime-a");
     first.terminal.font_size = Some(18);
-    assert_eq!(
-        signature,
-        Configuration::new(&first).signature_for("runtime-a")
-    );
-    assert_ne!(
-        signature,
-        Configuration::new(&first).signature_for("runtime-b")
-    );
+    assert_eq!(signature, Configuration::new(&first).signature_for("runtime-a"));
+    assert_ne!(signature, Configuration::new(&first).signature_for("runtime-b"));
     assert_eq!(signature.len(), 64);
     assert!(!signature.contains("ubuntu"));
     assert!(!signature.contains("AB"));
@@ -42,10 +36,7 @@ fn domain_protocol_separates_an_absent_publication_from_a_wrong_one() {
     let protocol = PublishedProtocol::new(root.path());
     assert_eq!(protocol.state().unwrap(), Publication::Unpublished);
     std::fs::write(&protocol.path, "obsolete\n").unwrap();
-    assert_eq!(
-        protocol.state().unwrap(),
-        Publication::Mismatched("obsolete".into())
-    );
+    assert_eq!(protocol.state().unwrap(), Publication::Mismatched("obsolete".into()));
     protocol.publish().unwrap();
     assert_eq!(protocol.state().unwrap(), Publication::Compatible);
 }
@@ -89,14 +80,11 @@ fn live_domain_without_configuration_identity_is_rejected() {
     let workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     let error = publication.validate(&workspace).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    assert!(error
-        .to_string()
-        .contains("no verifiable configuration identity"));
+    assert!(error.to_string().contains("no verifiable configuration identity"));
 }
 
 /// A workspace whose runtime directory exists, with a bound socket standing in for a live domain.
-fn live_domain(root: &std::path::Path) -> (WorkspaceConfig, Domain, std::os::unix::net::UnixListener)
-{
+fn live_domain(root: &std::path::Path) -> (WorkspaceConfig, Domain, std::os::unix::net::UnixListener) {
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     workspace.storage = Some(root.to_owned());
     let domain = Domain::new(&workspace);
@@ -119,10 +107,7 @@ fn a_live_compatible_domain_is_served_and_never_replaced() {
         .unwrap();
     let original = inode(&domain.socket());
 
-    assert!(matches!(
-        domain.decide(&workspace).unwrap(),
-        Decision::Serve
-    ));
+    assert!(matches!(domain.decide(&workspace).unwrap(), Decision::Serve));
     // The whole start, not just the decision: a healthy domain is neither unlinked nor respawned,
     // even while it holds the lease it holds for its entire life.
     let _lease = Lease::acquire(domain.directory.join("domain.lock")).unwrap();
@@ -143,10 +128,7 @@ fn a_domain_that_has_not_published_yet_is_awaited_rather_than_judged_incompatibl
         PublishedProtocol::new(&directory).publish().unwrap();
     });
 
-    assert!(matches!(
-        domain.decide(&workspace).unwrap(),
-        Decision::Serve
-    ));
+    assert!(matches!(domain.decide(&workspace).unwrap(), Decision::Serve));
 
     publishing.join().unwrap();
     assert!(domain.socket().exists());
@@ -235,9 +217,7 @@ fn domain_startup_reports_an_exited_worker_without_waiting_for_timeout() {
     let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
     workspace.storage = Some(root.path().to_owned());
     let domain = Domain::new(&workspace);
-    let child = std::process::Command::new("/usr/bin/false")
-        .spawn()
-        .unwrap();
+    let child = std::process::Command::new("/usr/bin/false").spawn().unwrap();
     let started = std::time::Instant::now();
     let error = domain
         .wait_for_start(child, std::time::Duration::from_secs(10))

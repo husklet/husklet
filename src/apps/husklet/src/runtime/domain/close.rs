@@ -30,10 +30,7 @@ impl ResultFile {
             match std::fs::read_to_string(&self.0) {
                 Ok(value) if value.trim() == "ok" => return Ok(()),
                 Ok(value) => {
-                    let message = value
-                        .strip_prefix("error\n")
-                        .unwrap_or(value.as_str())
-                        .trim();
+                    let message = value.strip_prefix("error\n").unwrap_or(value.as_str()).trim();
                     return Err(io::Error::other(message.to_owned()));
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -68,9 +65,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let result = ResultFile::new(root.path());
         result
-            .publish(&Err(std::io::Error::other(
-                "terminal is not checkpointable",
-            )))
+            .publish(&Err(std::io::Error::other("terminal is not checkpointable")))
             .unwrap();
         let value = std::fs::read_to_string(root.path().join("close.result")).unwrap();
         assert_eq!(value, "error\nterminal is not checkpointable");

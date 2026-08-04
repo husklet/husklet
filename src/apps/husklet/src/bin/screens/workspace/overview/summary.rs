@@ -36,16 +36,10 @@ impl Overview<'_> {
         append("Image", workspace.image.clone());
         append("Architecture", workspace.arch.as_str().to_string());
         let home = Home::current();
-        append(
-            "Storage",
-            home.display(&workspace.storage_dir(&home.root())),
-        );
+        append("Storage", home.display(&workspace.storage_dir(&home.root())));
         append(
             "Shell",
-            workspace
-                .shell
-                .clone()
-                .unwrap_or_else(|| "auto (bash → sh)".into()),
+            workspace.shell.clone().unwrap_or_else(|| "auto (bash → sh)".into()),
         );
         append(
             "CPU cores",

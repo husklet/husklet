@@ -47,18 +47,11 @@ impl CheckpointImages for WorkspaceCheckpoints {
                     root.join(generation).map_err(Self::error)?,
                 ))
             }
-            Err(hl_ws::storage::Error::Io(error))
-                if error.kind() == std::io::ErrorKind::NotFound =>
-            {
-                None
-            }
+            Err(hl_ws::storage::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(Self::error(error)),
         };
         let generation = Self::generation();
-        let staging = Namespace::new(
-            self.storage.clone(),
-            root.join(&generation).map_err(Self::error)?,
-        );
+        let staging = Namespace::new(self.storage.clone(), root.join(&generation).map_err(Self::error)?);
         Ok(Arc::new(WorkspaceImage {
             storage: self.storage.clone(),
             root,
@@ -121,11 +114,7 @@ impl CheckpointImage for WorkspaceImage {
         };
         current
             .list(None)
-            .map(|keys| {
-                keys.into_iter()
-                    .map(|key| key.as_str().to_owned())
-                    .collect()
-            })
+            .map(|keys| keys.into_iter().map(|key| key.as_str().to_owned()).collect())
             .map_err(WorkspaceCheckpoints::error)
     }
 
@@ -134,19 +123,14 @@ impl CheckpointImage for WorkspaceImage {
         state
             .staging
             .put(&Self::key("MANIFEST")?, manifest)
-            .and_then(|()| {
-                self.storage
-                    .put(&self.current_key, state.generation.as_bytes())
-            })
+            .and_then(|()| self.storage.put(&self.current_key, state.generation.as_bytes()))
             .map_err(WorkspaceCheckpoints::error)?;
 
         state.current = Some(state.staging.clone());
         state.generation = WorkspaceCheckpoints::generation();
         state.staging = Namespace::new(
             self.storage.clone(),
-            self.root
-                .join(&state.generation)
-                .map_err(WorkspaceCheckpoints::error)?,
+            self.root.join(&state.generation).map_err(WorkspaceCheckpoints::error)?,
         );
         Ok(())
     }
@@ -184,10 +168,7 @@ mod tests {
         beta.put("state", b"beta").unwrap();
         beta.commit(b"manifest").unwrap();
 
-        assert_eq!(
-            images.open("alpha").unwrap().get("state").unwrap(),
-            b"alpha"
-        );
+        assert_eq!(images.open("alpha").unwrap().get("state").unwrap(), b"alpha");
         assert_eq!(images.open("beta").unwrap().get("state").unwrap(), b"beta");
     }
 

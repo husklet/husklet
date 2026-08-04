@@ -8,11 +8,7 @@ impl Form {
         if name.is_empty() || image.is_empty() {
             return Err(Self::invalid("Workspace name and image are required."));
         }
-        let arch = if self.cpu_amd.get() {
-            Arch::Amd64
-        } else {
-            Arch::Arm64
-        };
+        let arch = if self.cpu_amd.get() { Arch::Amd64 } else { Arch::Arm64 };
         let mut workspace = WorkspaceConfig::new(&name, &image, arch);
         let shell = self.shell.text().trim().to_string();
         if !shell.is_empty() {
@@ -72,9 +68,7 @@ impl Form {
                 .ok()
                 .filter(|value| *value > 0)
                 .map(Some)
-                .ok_or_else(|| {
-                    Self::invalid("Scrollback must be a positive number or “unlimited”.")
-                }),
+                .ok_or_else(|| Self::invalid("Scrollback must be a positive number or “unlimited”.")),
         }
     }
 
@@ -99,9 +93,7 @@ impl Form {
             self.features.cuda_memory.text().trim()
         );
         CudaDevice::parse(&spec).map(Some).ok_or_else(|| {
-            Self::invalid(
-                "CUDA requires a name, numeric major.minor capability, and positive memory size.",
-            )
+            Self::invalid("CUDA requires a name, numeric major.minor capability, and positive memory size.")
         })
     }
 

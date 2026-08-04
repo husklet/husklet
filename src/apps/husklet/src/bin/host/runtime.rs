@@ -45,10 +45,7 @@ impl Runtime {
             return None;
         }
         let directory = macos.parent()?.join("Resources/glib-2.0/schemas");
-        directory
-            .join("gschemas.compiled")
-            .is_file()
-            .then_some(directory)
+        directory.join("gschemas.compiled").is_file().then_some(directory)
     }
 }
 
@@ -67,9 +64,6 @@ mod tests {
         std::fs::write(schemas.join("gschemas.compiled"), "schema index").unwrap();
 
         assert_eq!(Runtime::bundled_schemas(&executable), Some(schemas));
-        assert_eq!(
-            Runtime::bundled_schemas(Path::new("/usr/bin/husklet")),
-            None
-        );
+        assert_eq!(Runtime::bundled_schemas(Path::new("/usr/bin/husklet")), None);
     }
 }

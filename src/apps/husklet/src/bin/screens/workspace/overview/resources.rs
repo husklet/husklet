@@ -86,17 +86,8 @@ impl<'a> WorkspaceResources<'a> {
             .get::<Vec<ImageSummary>>("/images/json")?
             .into_iter()
             .map(|image| {
-                let repository = image
-                    .repo_tags
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "<none>".to_string());
-                let id = image
-                    .id
-                    .trim_start_matches("sha256:")
-                    .chars()
-                    .take(12)
-                    .collect();
+                let repository = image.repo_tags.first().cloned().unwrap_or_else(|| "<none>".to_string());
+                let id = image.id.trim_start_matches("sha256:").chars().take(12).collect();
                 let size = format!("{} MB", image.size / 1_000_000);
                 vec![repository, id, size]
             })

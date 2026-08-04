@@ -50,10 +50,8 @@ impl Session {
         if !image_user.is_empty() {
             let (uid, gid) = Process::resolve_user(image_user, root).map_err(io::Error::other)?;
             if uid != 0 {
-                let uid = u32::try_from(uid)
-                    .map_err(|_| io::Error::other("image user has a negative UID"))?;
-                let gid = u32::try_from(gid)
-                    .map_err(|_| io::Error::other("image user has a negative GID"))?;
+                let uid = u32::try_from(uid).map_err(|_| io::Error::other("image user has a negative UID"))?;
+                let gid = u32::try_from(gid).map_err(|_| io::Error::other("image user has a negative GID"))?;
                 let home = accounts
                     .iter()
                     .find(|account| account.uid == uid)
@@ -66,10 +64,7 @@ impl Session {
             return Ok(Self::existing(account.uid, account.gid, &account.home));
         }
 
-        let used_uids = accounts
-            .iter()
-            .map(|account| account.uid)
-            .collect::<BTreeSet<_>>();
+        let used_uids = accounts.iter().map(|account| account.uid).collect::<BTreeSet<_>>();
         let used_gids = Groups::ids(&group);
         let id = (1000..65534)
             .find(|id| !used_uids.contains(id) && !used_gids.contains(id))
@@ -86,10 +81,7 @@ impl Session {
             provision: Some(Provision {
                 uid: id,
                 gid: id,
-                passwd: Self::append_line(
-                    passwd,
-                    &format!("{name}:x:{id}:{id}:Husklet Workspace:{home}:/bin/sh"),
-                ),
+                passwd: Self::append_line(passwd, &format!("{name}:x:{id}:{id}:Husklet Workspace:{home}:/bin/sh")),
                 group: Self::append_line(group, &format!("{name}:x:{id}:")),
             }),
         })
@@ -124,9 +116,7 @@ impl Session {
         contents
     }
 
-    pub(super) fn from_labels(
-        labels: &std::collections::BTreeMap<String, String>,
-    ) -> io::Result<Self> {
+    pub(super) fn from_labels(labels: &std::collections::BTreeMap<String, String>) -> io::Result<Self> {
         let user = labels
             .get(USER_LABEL)
             .filter(|value| !value.is_empty())
@@ -151,8 +141,7 @@ impl Session {
     }
 
     pub(super) fn label(&self, spec: hl_container::ContainerSpec) -> hl_container::ContainerSpec {
-        spec.label(USER_LABEL, &self.user)
-            .label(HOME_LABEL, &self.home)
+        spec.label(USER_LABEL, &self.user).label(HOME_LABEL, &self.home)
     }
 
     pub(super) async fn provision(&self, containers: &Containers) -> io::Result<()> {
@@ -162,13 +151,7 @@ impl Session {
         let mut bytes = Vec::new();
         {
             let mut archive = tar::Builder::new(&mut bytes);
-            Self::file(
-                &mut archive,
-                "etc/passwd",
-                provision.passwd.as_bytes(),
-                0,
-                0,
-            )?;
+            Self::file(&mut archive, "etc/passwd", provision.passwd.as_bytes(), 0, 0)?;
             Self::file(&mut archive, "etc/group", provision.group.as_bytes(), 0, 0)?;
             Self::directory(
                 &mut archive,
@@ -203,12 +186,7 @@ impl Session {
         archive.append_data(&mut header, path, contents)
     }
 
-    fn directory(
-        archive: &mut tar::Builder<&mut Vec<u8>>,
-        path: &str,
-        uid: u32,
-        gid: u32,
-    ) -> io::Result<()> {
+    fn directory(archive: &mut tar::Builder<&mut Vec<u8>>, path: &str, uid: u32, gid: u32) -> io::Result<()> {
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Directory);
         header.set_mode(0o755);
@@ -324,10 +302,6 @@ mod tests {
         let session = Session::from_root("", root.path()).unwrap();
 
         assert_eq!(session.user(), "1000:1000");
-        assert!(session
-            .provision
-            .unwrap()
-            .passwd
-            .starts_with("husklet:x:1000:1000:"));
+        assert!(session.provision.unwrap().passwd.starts_with("husklet:x:1000:1000:"));
     }
 }

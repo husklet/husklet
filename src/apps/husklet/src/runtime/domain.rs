@@ -21,9 +21,7 @@ use close::ResultFile;
 use configuration::Configuration;
 use identity::RuntimeIdentity;
 use lifecycle::{Disposition, Lease, Shutdown};
-use publication::{
-    ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol, Publication,
-};
+use publication::{ConfigurationIdentity as PublishedConfiguration, Protocol as PublishedProtocol, Publication};
 use restore::RestoreSummary;
 
 const CONTAINER: &str = "workspace";
@@ -75,10 +73,7 @@ impl Domain {
     /// Starts the workspace domain process when needed and waits until its API accepts connections.
     pub fn ensure(&self, workspace: &WorkspaceConfig) -> io::Result<PathBuf> {
         std::fs::create_dir_all(&self.directory)?;
-        let _startup = Lease::acquire_wait(
-            self.directory.join("startup.lock"),
-            std::time::Duration::from_secs(180),
-        )?;
+        let _startup = Lease::acquire_wait(self.directory.join("startup.lock"), std::time::Duration::from_secs(180))?;
         let reason = match self.decide(workspace)? {
             Decision::Serve => return Ok(self.socket()),
             Decision::Replace(peer, reason) => {
@@ -87,11 +82,9 @@ impl Domain {
                     "replacing workspace '{}' execution domain: {reason}",
                     workspace.name
                 );
-                peer.stop(
-                    libc::SIGTERM,
-                    std::time::Duration::from_secs(10),
-                    || std::os::unix::net::UnixStream::connect(self.socket()),
-                )?;
+                peer.stop(libc::SIGTERM, std::time::Duration::from_secs(10), || {
+                    std::os::unix::net::UnixStream::connect(self.socket())
+                })?;
                 reason
             }
             Decision::Start(reason) => reason,
@@ -135,9 +128,7 @@ impl Domain {
         let deadline = std::time::Instant::now() + SETTLE;
         loop {
             let Ok(connection) = std::os::unix::net::UnixStream::connect(self.socket()) else {
-                return Ok(Decision::Start(
-                    "no live domain owns the workspace socket".into(),
-                ));
+                return Ok(Decision::Start("no live domain owns the workspace socket".into()));
             };
             match PublishedProtocol::new(&self.directory).state()? {
                 Publication::Compatible => {
@@ -147,9 +138,7 @@ impl Domain {
                 Publication::Mismatched(published) => {
                     return Ok(Decision::Replace(
                         Peer::new(connection)?,
-                        format!(
-                            "domain speaks protocol {published}, this build speaks {PROTOCOL}"
-                        ),
+                        format!("domain speaks protocol {published}, this build speaks {PROTOCOL}"),
                     ));
                 }
                 // A live socket with nothing published means the owner is still starting up or
@@ -197,11 +186,7 @@ impl Domain {
     }
 
     /// Writes a boundary line so a restart is legible in the appended domain log.
-    fn mark_restart(
-        mut log: &std::fs::File,
-        workspace: &WorkspaceConfig,
-        reason: &str,
-    ) -> io::Result<()> {
+    fn mark_restart(mut log: &std::fs::File, workspace: &WorkspaceConfig, reason: &str) -> io::Result<()> {
         use std::io::Write as _;
         writeln!(
             log,
@@ -240,11 +225,7 @@ impl Domain {
         RestoreSummary::new(workspace).take()
     }
 
-    fn wait_for_start(
-        &self,
-        mut child: std::process::Child,
-        timeout: std::time::Duration,
-    ) -> io::Result<PathBuf> {
+    fn wait_for_start(&self, mut child: std::process::Child, timeout: std::time::Duration) -> io::Result<PathBuf> {
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
             if std::os::unix::net::UnixStream::connect(self.socket()).is_ok()
@@ -262,10 +243,7 @@ impl Domain {
         }
         Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            format!(
-                "workspace execution domain did not publish {}",
-                self.socket().display()
-            ),
+            format!("workspace execution domain did not publish {}", self.socket().display()),
         ))
     }
 
@@ -317,15 +295,9 @@ impl Domain {
                                 .map(|daemon| daemon.close(crate::runtime::resources::Close::Kill))
                                 .unwrap_or(Ok(()));
                             let workspace =
-                                match crate::runtime::execution::PaneExecution::clear_all(
-                                    &stopped_workspace,
-                                ) {
-                                    Ok(()) => {
-                                        stopping.shutdown(std::time::Duration::from_secs(5)).await
-                                    }
-                                    Err(error) => {
-                                        Err(hl_container::Error::Runtime(error.to_string()))
-                                    }
+                                match crate::runtime::execution::PaneExecution::clear_all(&stopped_workspace) {
+                                    Ok(()) => stopping.shutdown(std::time::Duration::from_secs(5)).await,
+                                    Err(error) => Err(hl_container::Error::Runtime(error.to_string())),
                                 };
                             docker.and_then(|()| workspace.map_err(io::Error::other))
                         }
@@ -385,22 +357,13 @@ impl Domain {
 struct Runtime;
 
 impl Runtime {
-    async fn checkpoint(
-        containers: &Containers,
-        docker: Option<&crate::runtime::resources::Daemon>,
-    ) -> io::Result<()> {
+    async fn checkpoint(containers: &Containers, docker: Option<&crate::runtime::resources::Daemon>) -> io::Result<()> {
         let executions = containers.executions();
-        executions
-            .require_checkpointable()
-            .await
-            .map_err(io::Error::other)?;
+        executions.require_checkpointable().await.map_err(io::Error::other)?;
         if let Some(daemon) = docker {
             daemon.close(crate::runtime::resources::Close::Checkpoint)?;
         }
-        let checkpoint = match executions
-            .checkpoint_all(std::time::Duration::from_secs(30))
-            .await
-        {
+        let checkpoint = match executions.checkpoint_all(std::time::Duration::from_secs(30)).await {
             Ok(()) => containers
                 .shutdown(std::time::Duration::from_secs(5))
                 .await
@@ -437,8 +400,7 @@ impl Runtime {
             external,
         );
         let checkpoints = std::sync::Arc::new(
-            crate::runtime::checkpoint::WorkspaceCheckpoints::open(&workspace_root)
-                .map_err(io::Error::other)?,
+            crate::runtime::checkpoint::WorkspaceCheckpoints::open(&workspace_root).map_err(io::Error::other)?,
         );
         let root = workspace_root.join("containers");
         // The engine's AArch64 persistent translation cache currently corrupts dynamic
@@ -453,10 +415,7 @@ impl Runtime {
         Ok((containers, platform))
     }
 
-    async fn ensure_container(
-        containers: &Containers,
-        workspace: &WorkspaceConfig,
-    ) -> io::Result<()> {
+    async fn ensure_container(containers: &Containers, workspace: &WorkspaceConfig) -> io::Result<()> {
         let signature = Configuration::new(workspace).signature()?;
         match containers.inspect(CONTAINER).await {
             Ok(container) => {
@@ -464,10 +423,7 @@ impl Runtime {
                 let session = crate::runtime::session::Session::from_labels(&container.spec.labels);
                 if stored == Some(&signature) && session.is_ok() {
                     if !container.state.is_active() {
-                        containers
-                            .start(CONTAINER)
-                            .await
-                            .map_err(io::Error::other)?;
+                        containers.start(CONTAINER).await.map_err(io::Error::other)?;
                     }
                     return Ok(());
                 }
@@ -475,10 +431,7 @@ impl Runtime {
                     hl_log::tag::CONTAINER,
                     "recreating incompatible workspace runtime container"
                 );
-                containers
-                    .remove_force(CONTAINER)
-                    .await
-                    .map_err(io::Error::other)?;
+                containers.remove_force(CONTAINER).await.map_err(io::Error::other)?;
             }
             Err(hl_container::Error::NotFound(_)) => {}
             Err(error) => return Err(io::Error::other(error)),
@@ -498,10 +451,7 @@ impl Runtime {
         let session = crate::runtime::session::Session::select(&images, &unpacked)?;
         let overrides = RuntimeOverrides {
             entrypoint: Some(vec!["/bin/sh".into()]),
-            command: Some(vec![
-                "-c".into(),
-                "while :; do sleep 2147483647 & wait $!; done".into(),
-            ]),
+            command: Some(vec!["-c".into(), "while :; do sleep 2147483647 & wait $!; done".into()]),
             environment: Configuration::new(workspace).environment(),
             working_directory: Some("/root".into()),
             user: Some("0:0".into()),
@@ -532,10 +482,7 @@ impl Runtime {
             .filter(|execution| execution.checkpoint.is_none())
             .collect::<Vec<_>>();
         for execution in &removable {
-            executions
-                .remove(&execution.id)
-                .await
-                .map_err(io::Error::other)?;
+            executions.remove(&execution.id).await.map_err(io::Error::other)?;
         }
         if !removable.is_empty() {
             hl_log::hl_info!(
@@ -559,11 +506,7 @@ impl Runtime {
             if let Err(error) = containers.start(container.id.as_str()).await {
                 failures.push(format!(
                     "{}: {error}",
-                    container
-                        .spec
-                        .name
-                        .as_deref()
-                        .unwrap_or(container.id.as_str())
+                    container.spec.name.as_deref().unwrap_or(container.id.as_str())
                 ));
             }
         }

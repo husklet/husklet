@@ -65,9 +65,7 @@ impl Output {
 
 impl PtyBackend for ExecPty {
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.runtime
-            .block_on(self.input.write(bytes))
-            .map_err(io::Error::other)
+        self.runtime.block_on(self.input.write(bytes)).map_err(io::Error::other)
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
@@ -98,12 +96,7 @@ impl PtyBackend for ExecPty {
     fn try_wait(&mut self) -> Option<i32> {
         self.output
             .finished()
-            .then(|| {
-                *self
-                    .exited
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-            })
+            .then(|| *self.exited.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
             .flatten()
     }
 }

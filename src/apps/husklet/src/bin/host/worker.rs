@@ -29,10 +29,7 @@ impl Operation {
                     "launch" => {
                         let name = name.ok_or_else(|| "workspace name is missing".to_owned())?;
                         let slot = arguments.next().filter(|value| !value.is_empty());
-                        let diagnostics = arguments
-                            .next()
-                            .filter(|value| !value.is_empty())
-                            .map(PathBuf::from);
+                        let diagnostics = arguments.next().filter(|value| !value.is_empty()).map(PathBuf::from);
                         let cwd = arguments.next().filter(|value| !value.is_empty());
                         if arguments.next().is_some() {
                             return Err("workspace launch received unexpected arguments".into());
@@ -81,12 +78,7 @@ impl Worker {
                 slot,
                 cwd,
                 diagnostics,
-            } => hl::runtime::worker::Worker::launch(
-                &name,
-                cwd.as_deref(),
-                slot.as_deref(),
-                diagnostics.as_deref(),
-            ),
+            } => hl::runtime::worker::Worker::launch(&name, cwd.as_deref(), slot.as_deref(), diagnostics.as_deref()),
             Operation::Daemon { name } => match hl::runtime::worker::Worker::daemon(&name) {
                 Ok(socket) => {
                     println!("{}", socket.display());
@@ -124,16 +116,9 @@ mod tests {
 
     #[test]
     fn parses_launch_worker() {
-        let operation = parse(&[
-            "--worker",
-            "launch",
-            "demo",
-            "pane-1",
-            "/tmp/diagnostics",
-            "/work",
-        ])
-        .unwrap()
-        .expect("private operation");
+        let operation = parse(&["--worker", "launch", "demo", "pane-1", "/tmp/diagnostics", "/work"])
+            .unwrap()
+            .expect("private operation");
         assert!(matches!(
             operation,
             Operation::Launch { name, slot: Some(slot), .. }

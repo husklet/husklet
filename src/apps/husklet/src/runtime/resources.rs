@@ -81,10 +81,7 @@ impl Daemon {
         if !bin.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!(
-                    "hl-daemon binary not found at {} (set HL_DAEMON_BIN)",
-                    bin.display()
-                ),
+                format!("hl-daemon binary not found at {} (set HL_DAEMON_BIN)", bin.display()),
             ));
         }
 
@@ -148,9 +145,7 @@ impl Daemon {
                         Err(error) => return Err(error),
                     }
                     match std::os::unix::net::UnixStream::connect(self.socket()) {
-                        Err(error) if crate::runtime::process::Peer::offline(&error) => {
-                            return Ok(())
-                        }
+                        Err(error) if crate::runtime::process::Peer::offline(&error) => return Ok(()),
                         Err(error) => return Err(error),
                         Ok(_) => {}
                     }
@@ -166,11 +161,7 @@ impl Daemon {
         }
     }
 
-    fn wait_for_start(
-        &self,
-        mut child: std::process::Child,
-        timeout: std::time::Duration,
-    ) -> std::io::Result<PathBuf> {
+    fn wait_for_start(&self, mut child: std::process::Child, timeout: std::time::Duration) -> std::io::Result<PathBuf> {
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
             if self.is_up() {
@@ -211,13 +202,10 @@ mod tests {
     #[test]
     fn startup_reports_an_exited_daemon_without_waiting_for_timeout() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut workspace =
-            crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Arm64);
+        let mut workspace = crate::config::WorkspaceConfig::new("demo", "ubuntu", hl_ws::Arch::Arm64);
         workspace.storage = Some(temporary.path().join("workspace"));
         let daemon = Daemon::new(&workspace);
-        let child = std::process::Command::new("/usr/bin/false")
-            .spawn()
-            .unwrap();
+        let child = std::process::Command::new("/usr/bin/false").spawn().unwrap();
         let started = std::time::Instant::now();
 
         let error = daemon

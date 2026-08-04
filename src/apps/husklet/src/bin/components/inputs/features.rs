@@ -54,11 +54,7 @@ impl WorkspaceFeatureFields {
             &self.cuda,
         ));
         content.append(&Field::text("DEVICE NAME", &self.cuda_name, None));
-        content.append(&Field::text(
-            "COMPUTE CAPABILITY",
-            &self.cuda_capability,
-            None,
-        ));
+        content.append(&Field::text("COMPUTE CAPABILITY", &self.cuda_capability, None));
         content.append(&Field::text("MEMORY (MB)", &self.cuda_memory, None));
         content
     }

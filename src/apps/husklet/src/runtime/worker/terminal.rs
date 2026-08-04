@@ -37,10 +37,7 @@ pub(super) struct OpenFiles;
 impl OpenFiles {
     const REQUIRED: libc::rlim_t = 65_536;
 
-    fn target(
-        current: libc::rlim_t,
-        maximum: libc::rlim_t,
-    ) -> std::io::Result<Option<libc::rlim_t>> {
+    fn target(current: libc::rlim_t, maximum: libc::rlim_t) -> std::io::Result<Option<libc::rlim_t>> {
         if current >= Self::REQUIRED {
             return Ok(None);
         }
@@ -223,9 +220,7 @@ pub(super) fn contract() -> String {
         if name.is_null() {
             "?".to_owned()
         } else {
-            std::ffi::CStr::from_ptr(name)
-                .to_string_lossy()
-                .into_owned()
+            std::ffi::CStr::from_ptr(name).to_string_lossy().into_owned()
         }
     };
     let mut nofile: libc::rlimit = unsafe { std::mem::zeroed() };
@@ -286,10 +281,7 @@ impl RawMode {
             let saved = t;
             libc::cfmakeraw(&mut t);
             libc::tcsetattr(fd, libc::TCSANOW, &t);
-            RawMode {
-                fd,
-                saved: Some(saved),
-            }
+            RawMode { fd, saved: Some(saved) }
         }
     }
 }

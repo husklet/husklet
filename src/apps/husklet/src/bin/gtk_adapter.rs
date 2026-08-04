@@ -70,11 +70,7 @@ impl Dialog {
         window
     }
 
-    fn button(
-        window: &gtk::Window,
-        action: Action,
-        handler: Rc<impl Fn(EventId) + 'static>,
-    ) -> gtk::Button {
+    fn button(window: &gtk::Window, action: Action, handler: Rc<impl Fn(EventId) + 'static>) -> gtk::Button {
         let button = gtk::Button::with_label(&action.label);
         match action.role {
             Role::Suggested => button.add_css_class("suggested-action"),
@@ -97,20 +93,11 @@ pub struct DirectoryPicker {
 
 impl DirectoryPicker {
     pub fn new(title: impl Into<String>) -> Self {
-        Self {
-            title: title.into(),
-        }
+        Self { title: title.into() }
     }
 
-    pub fn present(
-        self,
-        parent: Option<&gtk::Window>,
-        on_selected: impl Fn(std::path::PathBuf) + 'static,
-    ) {
-        let dialog = gtk::FileDialog::builder()
-            .title(self.title)
-            .modal(true)
-            .build();
+    pub fn present(self, parent: Option<&gtk::Window>, on_selected: impl Fn(std::path::PathBuf) + 'static) {
+        let dialog = gtk::FileDialog::builder().title(self.title).modal(true).build();
         dialog.select_folder(parent, gtk::gio::Cancellable::NONE, move |result| {
             if let Ok(file) = result {
                 if let Some(path) = file.path() {
@@ -264,8 +251,7 @@ impl FontPicker {
     }
 
     pub fn set_value(&self, family: &str) {
-        self.0
-            .set_font_desc(&gtk::pango::FontDescription::from_string(family));
+        self.0.set_font_desc(&gtk::pango::FontDescription::from_string(family));
     }
 
     pub fn value(&self) -> String {

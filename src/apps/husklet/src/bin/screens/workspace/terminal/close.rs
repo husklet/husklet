@@ -17,15 +17,12 @@ impl CloseRequest {
                 Some(dialog_parent.upcast_ref()),
                 crate::components::dialog::CloseWorkspace::model(),
                 move |event| {
-                    let Some(choice) = crate::components::dialog::CloseWorkspace::choice(&event)
-                    else {
+                    let Some(choice) = crate::components::dialog::CloseWorkspace::choice(&event) else {
                         return;
                     };
                     terminal.closing.set(true);
                     let preparation = match choice {
-                        crate::components::dialog::CloseChoice::Continue => {
-                            WindowSession::new(&terminal).save()
-                        }
+                        crate::components::dialog::CloseChoice::Continue => WindowSession::new(&terminal).save(),
                         crate::components::dialog::CloseChoice::Kill => {
                             Session::clear(&terminal.ws.storage_dir(&Home::current().root()))
                         }
@@ -41,15 +38,10 @@ impl CloseRequest {
                     let workspace = terminal.ws.clone();
                     std::thread::spawn(move || {
                         let disposition = match choice {
-                            crate::components::dialog::CloseChoice::Kill => {
-                                hl::runtime::domain::Close::Kill
-                            }
-                            crate::components::dialog::CloseChoice::Continue => {
-                                hl::runtime::domain::Close::Continue
-                            }
+                            crate::components::dialog::CloseChoice::Kill => hl::runtime::domain::Close::Kill,
+                            crate::components::dialog::CloseChoice::Continue => hl::runtime::domain::Close::Continue,
                         };
-                        let closed =
-                            hl::runtime::domain::Domain::new(&workspace).close(disposition);
+                        let closed = hl::runtime::domain::Domain::new(&workspace).close(disposition);
                         if let Ok(mut result) = completed.lock() {
                             *result = Some(closed);
                         }
@@ -80,10 +72,7 @@ impl CloseRequest {
     fn failure(parent: &gtk::ApplicationWindow, error: std::io::Error) {
         let failure = hl_gui::Dialog::new("Could not close workspace")
             .detail(error.to_string())
-            .action(hl_gui::Action::new(
-                hl_gui::EventId::new("dismiss"),
-                "Dismiss",
-            ));
+            .action(hl_gui::Action::new(hl_gui::EventId::new("dismiss"), "Dismiss"));
         crate::gtk_adapter::Dialog::present(Some(parent.upcast_ref()), failure, |_| {});
     }
 }

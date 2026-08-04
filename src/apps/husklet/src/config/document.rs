@@ -95,10 +95,7 @@ impl WsBuilder {
         match k {
             "name" => self.name = Some(v.to_string()),
             "image" => self.image = Some(v.to_string()),
-            "arch" => {
-                self.arch =
-                    Some(Arch::parse(v).ok_or_else(|| Value::new("architecture", v).invalid())?)
-            }
+            "arch" => self.arch = Some(Arch::parse(v).ok_or_else(|| Value::new("architecture", v).invalid())?),
             "storage" if !v.is_empty() => self.storage = Some(PathBuf::from(v)),
             "shell" if !v.is_empty() => self.shell = Some(v.to_string()),
             "cpus" => self.cpus = Some(Value::new("cpus", v).number()?),
@@ -110,13 +107,10 @@ impl WsBuilder {
                 self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?)
             }
             "cuda" if !v.is_empty() => {
-                self.cuda =
-                    Some(CudaDevice::parse(v).ok_or_else(|| Value::new("cuda", v).invalid())?)
+                self.cuda = Some(CudaDevice::parse(v).ok_or_else(|| Value::new("cuda", v).invalid())?)
             }
             "terminal_font" if !v.is_empty() => self.terminal.font_family = Some(v.to_owned()),
-            "terminal_size" => {
-                self.terminal.font_size = Some(Value::new("terminal_size", v).number()?)
-            }
+            "terminal_size" => self.terminal.font_size = Some(Value::new("terminal_size", v).number()?),
             "terminal_foreground" if !v.is_empty() => self.terminal.foreground = Some(v.to_owned()),
             "terminal_background" if !v.is_empty() => self.terminal.background = Some(v.to_owned()),
             "terminal_cursor" if !v.is_empty() => self.terminal.cursor_shape = Some(v.to_owned()),
@@ -137,8 +131,7 @@ impl WsBuilder {
         if key.trim().is_empty() {
             return Err(Value::new("environment key", key).invalid());
         }
-        self.env
-            .push((key.trim().to_owned(), value.trim().to_owned()));
+        self.env.push((key.trim().to_owned(), value.trim().to_owned()));
         Ok(())
     }
 
@@ -188,10 +181,7 @@ impl WsBuilder {
     }
 
     fn missing(field: &str) -> io::Error {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("workspace is missing {field}"),
-        )
+        io::Error::new(io::ErrorKind::InvalidData, format!("workspace is missing {field}"))
     }
 }
 
@@ -243,10 +233,7 @@ impl WorkspaceText {
     }
 
     pub(super) fn field(&mut self, key: &str, value: &str) {
-        if value
-            .chars()
-            .any(|character| matches!(character, '\t' | '\n' | '\r'))
-        {
+        if value.chars().any(|character| matches!(character, '\t' | '\n' | '\r')) {
             self.error.get_or_insert_with(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,

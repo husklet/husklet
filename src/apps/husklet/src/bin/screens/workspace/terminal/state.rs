@@ -105,18 +105,13 @@ impl<'a> WindowSession<'a> {
         // entries[0] is the non-closable overview; shells are the rest.
         let entries: Vec<(String, String)> = {
             let es = tw.entries.borrow();
-            es.iter()
-                .skip(1)
-                .map(|e| (e.name.clone(), e.title()))
-                .collect()
+            es.iter().skip(1).map(|e| (e.name.clone(), e.title())).collect()
         };
         for (page_name, title) in entries {
             let Some(child) = tw.stack.child_by_name(&page_name) else {
                 continue;
             };
-            if let Some(root) =
-                self.snapshot_node(&child, &storage, generation.as_str(), &mut hist_idx)?
-            {
+            if let Some(root) = self.snapshot_node(&child, &storage, generation.as_str(), &mut hist_idx)? {
                 tabs.push(SessionTab { title, root });
             }
         }
@@ -289,11 +284,7 @@ impl HistorySnapshot {
 
     pub(super) fn persistent(text: &str) -> String {
         text.lines()
-            .filter(|line| {
-                !Self::TRANSIENT_MESSAGES
-                    .iter()
-                    .any(|message| line.contains(message))
-            })
+            .filter(|line| !Self::TRANSIENT_MESSAGES.iter().any(|message| line.contains(message)))
             .collect::<Vec<_>>()
             .join("\n")
     }

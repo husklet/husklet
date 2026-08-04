@@ -21,10 +21,7 @@ impl<'a> Configuration<'a> {
                 Arch::Amd64 => Guest::X86_64,
             })
             .resources(Resources {
-                memory_bytes: self
-                    .0
-                    .memory_mb
-                    .map_or(0, |value| u64::from(value) * 1024 * 1024),
+                memory_bytes: self.0.memory_mb.map_or(0, |value| u64::from(value) * 1024 * 1024),
                 cpu_count: self.0.cpus.unwrap_or(0),
                 ..Resources::default()
             })
@@ -94,14 +91,8 @@ impl<'a> Configuration<'a> {
             Self::field(&mut value, if mount.ro { "ro" } else { "rw" });
         }
         for item in [
-            self.0
-                .cpus
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-            self.0
-                .memory_mb
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
+            self.0.cpus.map(|value| value.to_string()).unwrap_or_default(),
+            self.0.memory_mb.map(|value| value.to_string()).unwrap_or_default(),
             self.0.docker_sock.to_string(),
             self.0.gui.to_string(),
             format!("{:?}", self.0.vpn),

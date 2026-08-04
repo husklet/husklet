@@ -76,9 +76,7 @@ pub(crate) fn make_terminal_ex(
     let pid = Rc::new(Cell::new(0));
     // Register this pane (terminal + its slot + pid) so the window's close handler can freeze it into its
     // own slot, and `save_session` can record which slot each pane owns.
-    tw.panes
-        .borrow_mut()
-        .push(PaneRegistration::new(&term, slot.clone()));
+    tw.panes.borrow_mut().push(PaneRegistration::new(&term, slot.clone()));
     let application = application_path().to_string_lossy().into_owned();
     let workspace_key = tw.ws.key();
     // DEBUG: HL_TERM_CMD overrides the whole command (isolate VTE-spawn vs hl). The debug-log path is
@@ -151,10 +149,7 @@ pub(crate) fn make_terminal_ex(
                 let status = ChildStatus::from_wait(status);
                 if !status.succeeded() && born.elapsed() < std::time::Duration::from_millis(2500) {
                     te.feed(
-                        format!(
-                            "\r\n\x1b[31mworkspace session ended immediately ({status})\x1b[0m\r\n"
-                        )
-                        .as_bytes(),
+                        format!("\r\n\x1b[31mworkspace session ended immediately ({status})\x1b[0m\r\n").as_bytes(),
                     );
                     return;
                 }
@@ -167,17 +162,14 @@ pub(crate) fn make_terminal_ex(
                 });
             }
         }
-        Err(e) => {
-            term.feed(format!("\r\n\x1b[31mfailed to start shell: {e}\x1b[0m\r\n").as_bytes())
-        }
+        Err(e) => term.feed(format!("\r\n\x1b[31mfailed to start shell: {e}\x1b[0m\r\n").as_bytes()),
     }
     (term, pid)
 }
 
 /// A URL matcher for auto-linking bare URLs (VTE turns matches into clickable regions). Explicit OSC-8
 /// hyperlinks are handled separately (via `hyperlink_hover_uri`).
-pub(crate) const URL_REGEX: &str =
-    r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+[^\s<>\x22'`{}|\\^\[\].,;:!?)]";
+pub(crate) const URL_REGEX: &str = r"(?:https?://|www\.)[^\s<>\x22'`{}|\\^\[\]]+[^\s<>\x22'`{}|\\^\[\].,;:!?)]";
 
 #[cfg(test)]
 mod child_status_tests {

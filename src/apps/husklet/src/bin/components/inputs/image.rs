@@ -86,10 +86,7 @@ impl ImagePicker {
             let n = gtk::Label::new(Some(template.name));
             n.add_css_class("imgname");
             n.set_xalign(0.0);
-            let r = gtk::Label::new(Some(&format!(
-                "{}  ·  {}",
-                template.reference, template.description
-            )));
+            let r = gtk::Label::new(Some(&format!("{}  ·  {}", template.reference, template.description)));
             r.add_css_class("imgref");
             r.set_xalign(0.0);
             bx.append(&n);
@@ -106,10 +103,7 @@ impl ImagePicker {
             row.add_controller(click);
             list.append(&row);
         }
-        let scroller = gtk::ScrolledWindow::builder()
-            .vexpand(true)
-            .child(&list)
-            .build();
+        let scroller = gtk::ScrolledWindow::builder().vexpand(true).child(&list).build();
         root.append(&scroller);
 
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);

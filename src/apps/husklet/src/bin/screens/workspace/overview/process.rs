@@ -63,11 +63,7 @@ impl HostProcess {
 /// walking the ppid tree. Each shell is named by its `shell` binary + how long it has run (its `etime`) —
 /// e.g. `bash · up 04:12` — which is meaningful and distinguishes sessions (the guest's own processes run
 /// in-process and aren't individually visible host-side).
-pub(crate) fn filter_workspace_procs(
-    ps_text: &str,
-    ws_name: &str,
-    shell: &str,
-) -> Vec<Vec<String>> {
+pub(crate) fn filter_workspace_procs(ps_text: &str, ws_name: &str, shell: &str) -> Vec<Vec<String>> {
     let procs: Vec<HostProcess> = ps_text
         .lines()
         .filter_map(|line| {
@@ -159,12 +155,7 @@ pub(crate) fn live_proc_pane() -> (gtk::ScrolledWindow, gtk::Box) {
     (sc, body)
 }
 
-pub(crate) fn fill_proc_table(
-    body: &gtk::Box,
-    workspace: &str,
-    rows: &[Vec<String>],
-    error: Option<&str>,
-) {
+pub(crate) fn fill_proc_table(body: &gtk::Box, workspace: &str, rows: &[Vec<String>], error: Option<&str>) {
     while let Some(c) = body.first_child() {
         body.remove(&c);
     }
@@ -213,10 +204,7 @@ pub(crate) fn fill_proc_table(
         let stop_pid = pid.clone();
         stop.connect_clicked(move |_| {
             if let Err(error) = stop_pid.terminate() {
-                hl_log::hl_warn!(
-                    hl_log::tag::RUNTIME,
-                    "workspace process stop ignored: {error}"
-                );
+                hl_log::hl_warn!(hl_log::tag::RUNTIME, "workspace process stop ignored: {error}");
             }
         });
         let force = gtk::Button::from_icon_name("user-trash-symbolic");
@@ -225,10 +213,7 @@ pub(crate) fn fill_proc_table(
         force.set_valign(gtk::Align::Center);
         force.connect_clicked(move |_| {
             if let Err(error) = pid.kill() {
-                hl_log::hl_warn!(
-                    hl_log::tag::RUNTIME,
-                    "workspace process kill ignored: {error}"
-                );
+                hl_log::hl_warn!(hl_log::tag::RUNTIME, "workspace process kill ignored: {error}");
             }
         });
         row.append(&stop);

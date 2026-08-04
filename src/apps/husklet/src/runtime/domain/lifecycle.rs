@@ -149,13 +149,7 @@ impl Lease {
             .open(path)?;
         // SAFETY: `file` owns a valid open descriptor for this call. `flock` does not retain
         // the descriptor or access Rust-managed memory.
-        if unsafe {
-            libc::flock(
-                std::os::fd::AsRawFd::as_raw_fd(&file),
-                libc::LOCK_EX | libc::LOCK_NB,
-            )
-        } != 0
-        {
+        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "workspace execution domain is already starting",

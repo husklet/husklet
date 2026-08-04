@@ -76,9 +76,9 @@ impl Form {
                     FormValidation::focus_missing(&form, name_ok);
                     return;
                 }
-                let result = form.configuration().and_then(|workspace| {
-                    WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace)
-                });
+                let result = form
+                    .configuration()
+                    .and_then(|workspace| WorkspaceStore::load(Home::current().workspaces_config())?.upsert(workspace));
                 match result {
                     Ok(()) => {
                         on_created();
@@ -250,11 +250,7 @@ impl Form {
             let form2 = form.clone();
             choose.connect_clicked(move |b| {
                 if let Some(win) = b.root().and_downcast::<gtk::Window>() {
-                    let architecture = if form2.cpu_amd.get() {
-                        Arch::Amd64
-                    } else {
-                        Arch::Arm64
-                    };
+                    let architecture = if form2.cpu_amd.get() { Arch::Amd64 } else { Arch::Arm64 };
                     let image = form2.image.clone();
                     ImagePicker::new(architecture).present(&win, move |reference| {
                         image.set_text(reference);
@@ -280,8 +276,8 @@ impl Form {
         sbox.append(&browse);
         srow.append(&sbox);
         let sh = gtk::Label::new(Some(
-        "Holds this workspace's docker images, volumes + state. Blank = ~/.hl/workspaces/<name>.",
-    ));
+            "Holds this workspace's docker images, volumes + state. Blank = ~/.hl/workspaces/<name>.",
+        ));
         sh.add_css_class("fhint");
         sh.set_xalign(0.0);
         srow.append(&sh);

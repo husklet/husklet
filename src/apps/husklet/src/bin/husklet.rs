@@ -98,9 +98,7 @@ impl AppConfig {
             workspace: std::env::var("HL_TERM_WS").ok(),
             new_workspace_pane: std::env::var("HL_TERM_NEWWS_PANE").ok(),
             open_color_picker: std::env::var("HL_TERM_OPEN_COLOR").is_ok(),
-            tabs: std::env::var("HL_TERM_TABS")
-                .ok()
-                .and_then(|value| value.parse().ok()),
+            tabs: std::env::var("HL_TERM_TABS").ok().and_then(|value| value.parse().ok()),
             split: std::env::var("HL_TERM_SPLIT").ok(),
             overview: std::env::var("HL_TERM_OVERVIEW").is_ok(),
             command: std::env::var("HL_TERM_CMD").ok(),
@@ -118,9 +116,7 @@ impl AppConfig {
     }
 
     fn get() -> &'static Self {
-        APP_CONFIG
-            .get()
-            .expect("application config initialized in main")
+        APP_CONFIG.get().expect("application config initialized in main")
     }
 }
 
@@ -145,11 +141,7 @@ fn main() -> glib::ExitCode {
         let p = gtk::CssProvider::new();
         p.load_from_data(&css());
         if let Some(d) = gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(
-                &d,
-                &p,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
+            gtk::style_context_add_provider_for_display(&d, &p, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
         }
         let quit = gio::SimpleAction::new("quit", None);
         let app = application.clone();
@@ -188,8 +180,7 @@ impl Application {
         {
             let app = self.0.clone();
             let refresh = refresh.clone();
-            home.create
-                .connect_clicked(move |_| Form::open(&app, refresh.clone()));
+            home.create.connect_clicked(move |_| Form::open(&app, refresh.clone()));
         }
         refresh();
 
@@ -203,9 +194,7 @@ impl Application {
             Some("terminal") => {
                 if let Ok(store) = WorkspaceStore::load(Home::current().workspaces_config()) {
                     let want = AppConfig::get().workspace.as_deref();
-                    let ws = want
-                        .and_then(|n| store.get(n))
-                        .or_else(|| store.all().first());
+                    let ws = want.and_then(|n| store.get(n)).or_else(|| store.all().first());
                     if let Some(ws) = ws {
                         self.open_terminal(ws);
                     }
@@ -400,10 +389,7 @@ impl Terminal<'_> {
         let term = self.0;
         let mut font = gtk::pango::FontDescription::from_string(&cfg.font_string());
         if font.family().is_none() {
-            font = gtk::pango::FontDescription::from_string(&format!(
-                "monospace {}",
-                cfg.font_size as i64
-            ));
+            font = gtk::pango::FontDescription::from_string(&format!("monospace {}", cfg.font_size as i64));
         }
         term.set_font(Some(&font));
         term.set_cell_height_scale(1.0);
@@ -423,15 +409,10 @@ impl Terminal<'_> {
         });
         // OSC 8 hyperlinks: let VTE parse explicit links (URL auto-matching is added per-terminal).
         term.set_allow_hyperlink(true);
-        let hex =
-            |s: &str| gdk::RGBA::parse(s).unwrap_or_else(|_| gdk::RGBA::parse("#ffffff").unwrap());
+        let hex = |s: &str| gdk::RGBA::parse(s).unwrap_or_else(|_| gdk::RGBA::parse("#ffffff").unwrap());
         let palette: Vec<gdk::RGBA> = cfg.palette.iter().map(|s| hex(s)).collect();
         let refs: Vec<&gdk::RGBA> = palette.iter().collect();
-        term.set_colors(
-            Some(&hex(&cfg.foreground)),
-            Some(&hex(&cfg.background)),
-            &refs,
-        );
+        term.set_colors(Some(&hex(&cfg.foreground)), Some(&hex(&cfg.background)), &refs);
         // Search-match highlight: a visible accent block on the all-black theme (VTE highlights the current
         // match with these colors).
         term.set_color_highlight(Some(&hex(ACCENT)));

@@ -27,26 +27,17 @@ impl<'a> LocalHttp<'a> {
         stream.set_write_timeout(Some(std::time::Duration::from_secs(3)))?;
         write!(stream, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
         let mut response = Vec::new();
-        stream
-            .take(MAX_RESPONSE_BYTES + 1)
-            .read_to_end(&mut response)?;
+        stream.take(MAX_RESPONSE_BYTES + 1).read_to_end(&mut response)?;
         if response.len() as u64 > MAX_RESPONSE_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("daemon response for {path} exceeds {MAX_RESPONSE_BYTES} bytes"),
             ));
         }
-        let response = std::str::from_utf8(&response).map_err(|error| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("HTTP UTF-8: {error}"),
-            )
-        })?;
+        let response = std::str::from_utf8(&response)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("HTTP UTF-8: {error}")))?;
         let (headers, body) = response.split_once("\r\n\r\n").ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "HTTP response has no header boundary",
-            )
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "HTTP response has no header boundary")
         })?;
         let status = headers.lines().next().unwrap_or_default();
         let successful = status
@@ -115,12 +106,7 @@ mod tests {
     #[test]
     fn local_http_distinguishes_content_from_transport_and_protocol_failures() {
         let valid = Server::new(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n[1,2]");
-        assert_eq!(
-            LocalHttp::new(&valid.socket)
-                .get::<Vec<u8>>("/values")
-                .unwrap(),
-            [1, 2]
-        );
+        assert_eq!(LocalHttp::new(&valid.socket).get::<Vec<u8>>("/values").unwrap(), [1, 2]);
 
         let failed = Server::new(b"HTTP/1.0 500 Error\r\n\r\n{}");
         let error = LocalHttp::new(&failed.socket)
@@ -154,9 +140,7 @@ mod tests {
     fn local_http_rejects_request_target_injection_before_connecting() {
         let missing = std::path::Path::new("/definitely/missing/husklet.sock");
         for path in ["relative", "/valid\r\nInjected: yes", "/has space"] {
-            let error = LocalHttp::new(missing)
-                .get::<serde_json::Value>(path)
-                .unwrap_err();
+            let error = LocalHttp::new(missing).get::<serde_json::Value>(path).unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput, "{path:?}");
         }
     }

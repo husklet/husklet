@@ -57,20 +57,17 @@ pub(super) fn spawn_overview_poller(
 
             let mut snapshot = OverviewData::poll();
             match &socket {
-                Ok(socket) if !socket.as_os_str().is_empty() => {
-                    match WorkspaceResources::new(socket).read() {
-                        Ok(resources) => {
-                            snapshot.containers = resources.containers;
-                            snapshot.images = resources.images;
-                            snapshot.volumes = resources.volumes;
-                            snapshot.networks = resources.networks;
-                        }
-                        Err(error) => {
-                            snapshot.resources_error =
-                                Some(format!("workspace resource query failed: {error}"));
-                        }
+                Ok(socket) if !socket.as_os_str().is_empty() => match WorkspaceResources::new(socket).read() {
+                    Ok(resources) => {
+                        snapshot.containers = resources.containers;
+                        snapshot.images = resources.images;
+                        snapshot.volumes = resources.volumes;
+                        snapshot.networks = resources.networks;
                     }
-                }
+                    Err(error) => {
+                        snapshot.resources_error = Some(format!("workspace resource query failed: {error}"));
+                    }
+                },
                 Ok(_) => {
                     snapshot.resources_error = Some("workspace daemon returned no socket".into());
                 }
@@ -86,14 +83,11 @@ pub(super) fn spawn_overview_poller(
             match WorkspaceProcesses::new(&workspace, &shell).read() {
                 Ok(processes) => snapshot.processes = processes,
                 Err(error) => {
-                    snapshot.processes_error =
-                        Some(format!("workspace process query failed: {error}"));
+                    snapshot.processes_error = Some(format!("workspace process query failed: {error}"));
                 }
             }
 
-            *data
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
+            *data.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
             std::thread::sleep(std::time::Duration::from_secs(2));
         }
     });
@@ -106,16 +100,8 @@ mod tests {
     #[test]
     fn initial_overview_never_claims_backend_results_are_empty() {
         let loading = OverviewData::loading();
-        assert!(loading
-            .resources_error
-            .as_deref()
-            .unwrap()
-            .contains("Loading"));
-        assert!(loading
-            .processes_error
-            .as_deref()
-            .unwrap()
-            .contains("Loading"));
+        assert!(loading.resources_error.as_deref().unwrap().contains("Loading"));
+        assert!(loading.processes_error.as_deref().unwrap().contains("Loading"));
 
         let poll = OverviewData::poll();
         assert_eq!(poll.resources_error, None);

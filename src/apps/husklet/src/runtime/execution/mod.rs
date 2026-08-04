@@ -24,8 +24,7 @@ impl PaneExecution {
         let Some(slot) = slot else {
             return Ok(None);
         };
-        let storage = Directory::open(workspace.storage_dir(&crate::paths::hl_root()))
-            .map_err(LauncherError::io)?;
+        let storage = Directory::open(workspace.storage_dir(&crate::paths::hl_root())).map_err(LauncherError::io)?;
         let key = Key::parse(format!("state/executions/{slot}")).map_err(LauncherError::io)?;
         Ok(Some(Self { storage, key }))
     }
@@ -35,17 +34,13 @@ impl PaneExecution {
             Ok(bytes) => String::from_utf8(bytes)
                 .map(Some)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
-            Err(hl_ws::storage::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-                Ok(None)
-            }
+            Err(hl_ws::storage::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(LauncherError::io(error)),
         }
     }
 
     fn save(&self, id: &str) -> io::Result<()> {
-        self.storage
-            .put(&self.key, id.as_bytes())
-            .map_err(LauncherError::io)
+        self.storage.put(&self.key, id.as_bytes()).map_err(LauncherError::io)
     }
 
     fn clear(&self, id: &str) -> io::Result<()> {
@@ -54,16 +49,13 @@ impl PaneExecution {
         }
         match self.storage.remove(&self.key) {
             Ok(()) => Ok(()),
-            Err(hl_ws::storage::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-                Ok(())
-            }
+            Err(hl_ws::storage::Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(LauncherError::io(error)),
         }
     }
 
     pub(crate) fn clear_all(workspace: &WorkspaceConfig) -> io::Result<()> {
-        let storage = Directory::open(workspace.storage_dir(&crate::paths::hl_root()))
-            .map_err(LauncherError::io)?;
+        let storage = Directory::open(workspace.storage_dir(&crate::paths::hl_root())).map_err(LauncherError::io)?;
         let prefix = Key::parse("state/executions").map_err(LauncherError::io)?;
         for key in storage.list(Some(&prefix)).map_err(LauncherError::io)? {
             storage.remove(&key).map_err(LauncherError::io)?;
@@ -106,10 +98,7 @@ pub fn launch(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map_or_else(
-            || {
-                "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi"
-                    .to_owned()
-            },
+            || "if command -v bash >/dev/null 2>&1; then exec bash -il; else exec sh -i; fi".to_owned(),
             |shell| format!("exec {shell}"),
         );
     let command = format!("cd {} 2>/dev/null; {base}", Shell::quote(start_dir));
@@ -204,23 +193,17 @@ pub fn launch(
             Ok(status) => {
                 let code = i32::try_from(status.status_code).unwrap_or(70);
                 if let Err(error) = waiting.executions().remove(&waiting_id).await {
-                    let _ = lifecycle_tx.send(
-                        format!("\r\nworkspace execution cleanup failed: {error}\r\n").into_bytes(),
-                    );
+                    let _ =
+                        lifecycle_tx.send(format!("\r\nworkspace execution cleanup failed: {error}\r\n").into_bytes());
                 }
                 if let Some(pane) = waiting_pane {
                     let _ = pane.clear(&waiting_id);
                 }
-                *exit
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(code);
+                *exit.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(code);
             }
             Err(error) => {
-                let _ = lifecycle_tx
-                    .send(format!("\r\nworkspace execution wait failed: {error}\r\n").into_bytes());
-                *exit
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(70);
+                let _ = lifecycle_tx.send(format!("\r\nworkspace execution wait failed: {error}\r\n").into_bytes());
+                *exit.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(70);
             }
         }
     });
@@ -256,9 +239,7 @@ impl WorkspaceContainer {
                     .map_err(io::Error::other)?;
                 crate::runtime::session::Session::from_labels(&container.config.labels)
             }
-            Err(hl_client::Error::Docker { status, .. })
-                if matches!(status.as_u16(), 304 | 409) =>
-            {
+            Err(hl_client::Error::Docker { status, .. }) if matches!(status.as_u16(), 304 | 409) => {
                 let container = client
                     .containers()
                     .inspect("workspace")
@@ -286,9 +267,7 @@ mod pane_execution_tests {
         let temporary = tempfile::tempdir().unwrap();
         let mut workspace = WorkspaceConfig::new("demo", "ubuntu", Arch::Arm64);
         workspace.storage = Some(temporary.path().to_owned());
-        let pane = PaneExecution::new(&workspace, Some("pane-3"))
-            .unwrap()
-            .unwrap();
+        let pane = PaneExecution::new(&workspace, Some("pane-3")).unwrap().unwrap();
 
         assert_eq!(pane.id().unwrap(), None);
         pane.save("exec-one").unwrap();
@@ -303,9 +282,7 @@ mod pane_execution_tests {
         );
         pane.clear("different-exec").unwrap();
         assert_eq!(pane.id().unwrap().as_deref(), Some("exec-one"));
-        let other = PaneExecution::new(&workspace, Some("pane-4"))
-            .unwrap()
-            .unwrap();
+        let other = PaneExecution::new(&workspace, Some("pane-4")).unwrap().unwrap();
         other.save("exec-two").unwrap();
         PaneExecution::clear_all(&workspace).unwrap();
         assert_eq!(pane.id().unwrap(), None);

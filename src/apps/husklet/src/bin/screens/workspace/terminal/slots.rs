@@ -32,29 +32,25 @@ impl<'a> Slots<'a> {
     pub(crate) fn of(&self, term: &vte4::Terminal) -> Option<String> {
         let tw = self.0;
         let mut found = None;
-        tw.panes
-            .borrow_mut()
-            .retain(|pane| match pane.terminal.upgrade() {
-                Some(t) if &t == term => {
-                    found = Some(pane.slot.clone());
-                    true
-                }
-                Some(_) => true,
-                None => false, // prune a dead pane
-            });
+        tw.panes.borrow_mut().retain(|pane| match pane.terminal.upgrade() {
+            Some(t) if &t == term => {
+                found = Some(pane.slot.clone());
+                true
+            }
+            Some(_) => true,
+            None => false, // prune a dead pane
+        });
         found
     }
 
     /// A pane closed by the user is dropped from the live registry.
     pub(crate) fn discard(&self, term: &vte4::Terminal) {
         let tw = self.0;
-        tw.panes
-            .borrow_mut()
-            .retain(|pane| match pane.terminal.upgrade() {
-                Some(t) if &t == term => false,
-                Some(_) => true,
-                None => false, // prune dead entries while we're here
-            });
+        tw.panes.borrow_mut().retain(|pane| match pane.terminal.upgrade() {
+            Some(t) if &t == term => false,
+            Some(_) => true,
+            None => false, // prune dead entries while we're here
+        });
     }
 
     /// Discard the slots of every terminal under a page's widget subtree (a whole tab being closed).

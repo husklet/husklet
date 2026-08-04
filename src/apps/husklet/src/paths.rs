@@ -4,9 +4,7 @@ use std::path::PathBuf;
 
 /// `$HOME`, or `.` as a last resort.
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(Into::into)
-        .unwrap_or_else(|| ".".into())
+    std::env::var_os("HOME").map(Into::into).unwrap_or_else(|| ".".into())
 }
 
 /// `~/.hl` — state root (images, volumes, state.json, run/).

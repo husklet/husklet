@@ -9,11 +9,7 @@ impl RemoveWorkspace {
         Self { name: name.into() }
     }
 
-    pub(crate) fn present(
-        self,
-        parent: Option<&gtk::Window>,
-        on_remove: impl Fn() -> std::io::Result<()> + 'static,
-    ) {
+    pub(crate) fn present(self, parent: Option<&gtk::Window>, on_remove: impl Fn() -> std::io::Result<()> + 'static) {
         let remove = EventId::new("remove");
         let model = Dialog::new(format!("Remove {}?", self.name))
             .detail("Its files on disk are kept. Only the workspace entry is removed.")

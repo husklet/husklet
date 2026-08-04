@@ -19,10 +19,7 @@ pub(crate) struct Overview<'a> {
 }
 
 impl<'a> Overview<'a> {
-    pub(crate) fn new(
-        workspace: &'a WorkspaceConfig,
-        page: Option<screens::workspace::Page>,
-    ) -> Self {
+    pub(crate) fn new(workspace: &'a WorkspaceConfig, page: Option<screens::workspace::Page>) -> Self {
         Self { workspace, page }
     }
 
@@ -33,12 +30,7 @@ impl<'a> Overview<'a> {
         // Live panes fed by a background poller over the workspace daemon's Unix socket.
         let data = std::sync::Arc::new(std::sync::Mutex::new(OverviewData::loading()));
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        spawn_overview_poller(
-            ws.name.clone(),
-            self.shell_label(),
-            data.clone(),
-            stop.clone(),
-        );
+        spawn_overview_poller(ws.name.clone(), self.shell_label(), data.clone(), stop.clone());
         let containers = Table::new(&["NAME", "IMAGE", "STATUS"]);
         let images = Table::new(&["REPOSITORY", "IMAGE ID", "SIZE"]);
         let volumes = Table::new(&["NAME", "DRIVER"]);
@@ -46,10 +38,7 @@ impl<'a> Overview<'a> {
         let (ppane, pbody) = live_proc_pane();
         let view = screens::workspace::View::new([
             (WorkspacePage::Overview, self.overview().upcast()),
-            (
-                WorkspacePage::Containers,
-                containers.widget.clone().upcast(),
-            ),
+            (WorkspacePage::Containers, containers.widget.clone().upcast()),
             (WorkspacePage::Images, images.widget.clone().upcast()),
             (WorkspacePage::Volumes, volumes.widget.clone().upcast()),
             (WorkspacePage::Networks, networks.widget.clone().upcast()),
@@ -64,10 +53,7 @@ impl<'a> Overview<'a> {
                 stop.store(true, std::sync::atomic::Ordering::Release);
                 return glib::ControlFlow::Break;
             }
-            let d = data
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
+            let d = data.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
             if last.borrow().as_ref() == Some(&d) {
                 return glib::ControlFlow::Continue;
             }
@@ -75,12 +61,7 @@ impl<'a> Overview<'a> {
             images.fill(&d.images, d.resources_error.as_deref());
             volumes.fill(&d.volumes, d.resources_error.as_deref());
             networks.fill(&d.networks, d.resources_error.as_deref());
-            fill_proc_table(
-                &pbody,
-                &workspace,
-                &d.processes,
-                d.processes_error.as_deref(),
-            );
+            fill_proc_table(&pbody, &workspace, &d.processes, d.processes_error.as_deref());
             *last.borrow_mut() = Some(d);
             glib::ControlFlow::Continue
         });
