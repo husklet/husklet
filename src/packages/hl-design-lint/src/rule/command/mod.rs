@@ -386,3 +386,7 @@ fn shell_program(program: &str) -> bool {
         Some("sh" | "bash" | "dash" | "zsh" | "ksh" | "osascript")
     )
 }
+
+#[cfg(test)]
+#[path = "test.rs"]
+mod tests;
