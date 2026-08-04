@@ -6,6 +6,87 @@ use std::sync::{Condvar, Mutex};
 use std::thread;
 
 #[derive(Default)]
+struct TerminalPortStub;
+
+impl TerminalPort for TerminalPortStub {
+    fn read(&self, _: &mut [u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+
+    fn write(&self, bytes: &[u8]) -> std::io::Result<usize> {
+        Ok(bytes.len())
+    }
+
+    fn close(&self) {}
+}
+
+#[derive(Default)]
+struct WindowNotification(AtomicUsize);
+
+impl TerminalWindowNotification for WindowNotification {
+    fn changed(&self) -> Result<(), CompositionError> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+}
+
+struct TerminalSignals;
+
+impl hl_runtime::TerminalSignalSink for TerminalSignals {
+    fn publish(
+        &self,
+        _: Option<hl_descriptor::OperationActor>,
+        _: hl_runtime::TerminalId,
+        _: Option<hl_runtime::TerminalForegroundGroup>,
+        _: hl_runtime::TerminalSignal,
+    ) {
+    }
+}
+
+#[test]
+fn external_resize_notifies_only_when_dimensions_change() {
+    let catalog = Arc::new(hl_runtime::TerminalCatalog::default());
+    let pair = catalog.allocate().unwrap();
+    pair.set_window(hl_runtime::TerminalWindow {
+        rows: 24,
+        columns: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    })
+    .unwrap();
+    let master = Arc::new(hl_runtime::TerminalDescription::new(
+        Arc::clone(&pair),
+        hl_runtime::TerminalEndpoint::Master,
+        Arc::downgrade(&catalog),
+        Arc::new(TerminalSignals),
+    ));
+    let notification = Arc::new(WindowNotification::default());
+    let terminal = Terminal::new(Arc::new(TerminalPortStub), 24, 80).unwrap();
+    terminal
+        .attach(
+            master,
+            hl_descriptor::OperationActor {
+                process: 1,
+                process_generation: 1,
+                thread: 1,
+                thread_generation: 1,
+            },
+            notification.clone(),
+        )
+        .unwrap();
+
+    terminal.resize(24, 80).unwrap();
+    assert_eq!(notification.0.load(Ordering::Relaxed), 0);
+    terminal.resize(40, 120).unwrap();
+    assert_eq!(pair.window().rows, 40);
+    assert_eq!(pair.window().columns, 120);
+    assert_eq!(notification.0.load(Ordering::Relaxed), 1);
+    terminal.resize(40, 120).unwrap();
+    assert_eq!(notification.0.load(Ordering::Relaxed), 1);
+    terminal.close();
+}
+
+#[derive(Default)]
 struct Channel {
     messages: Mutex<Vec<Vec<u8>>>,
 }

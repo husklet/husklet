@@ -141,7 +141,6 @@ impl Write for LogOutput {
     }
 }
 
-#[allow(dead_code, reason = "constructed by the next initial-PTY composition slice")]
 struct TerminalState {
     receiver: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     pending: VecDeque<u8>,
@@ -153,14 +152,12 @@ struct TerminalState {
 /// The condition variable provides bounded cancellation independently of the
 /// client input sender's lifetime. Tokio's bounded queues provide backpressure;
 /// timed waits avoid holding a lock across a channel operation or busy-spinning.
-#[allow(dead_code, reason = "constructed by the next initial-PTY composition slice")]
 struct TerminalChannel {
     state: StdMutex<TerminalState>,
     changed: Condvar,
     output: crate::service::LogSender,
 }
 
-#[allow(dead_code, reason = "constructed by the next initial-PTY composition slice")]
 impl TerminalChannel {
     const CANCELLATION_POLL: Duration = Duration::from_millis(10);
 
@@ -280,11 +277,20 @@ impl Runtime for Engine {
         }
         let spec = Spec::try_from(&config)?;
         let (sender, receiver) = crate::service::log_channel();
-        let streams = hl_engine::composition::StandardStreams::new(
-            ChannelInput::new(config.input.take()),
-            LogOutput::new(crate::Stream::Stdout, sender.clone()),
-            LogOutput::new(crate::Stream::Stderr, sender),
-        );
+        let streams = match config.terminal {
+            Some(size) => {
+                let port = Arc::new(TerminalChannel::new(config.input.take(), sender));
+                let terminal = hl_engine::composition::Terminal::new(port, size.rows(), size.columns())
+                    .map_err(|_| Error::Runtime("terminal construction failed".into()))?;
+                hl_engine::composition::StandardStreams::new(std::io::empty(), std::io::sink(), std::io::sink())
+                    .with_terminal(terminal)
+            }
+            None => hl_engine::composition::StandardStreams::new(
+                ChannelInput::new(config.input.take()),
+                LogOutput::new(crate::Stream::Stdout, sender.clone()),
+                LogOutput::new(crate::Stream::Stderr, sender),
+            ),
+        };
         let checkpoint = config
             .checkpoint
             .map(|checkpoint| Arc::new(CheckpointTransport::new(checkpoint.image)));

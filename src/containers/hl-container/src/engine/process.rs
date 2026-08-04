@@ -116,8 +116,13 @@ impl Running for Process {
         }
     }
 
-    async fn resize(&self, _size: crate::Size) -> Result<()> {
-        Err(Error::NoTerminal(self.id.to_string()))
+    async fn resize(&self, size: crate::Size) -> Result<()> {
+        self.engine()?
+            .resize_terminal(size.rows(), size.columns())
+            .map_err(|error| match error {
+                hl_engine::engine::EngineError::Unsupported => Error::NoTerminal(self.id.to_string()),
+                _ => Error::Runtime(format!("terminal resize: {error:?}")),
+            })
     }
 
     fn take_logs(&self) -> Option<crate::service::LogReceiver> {

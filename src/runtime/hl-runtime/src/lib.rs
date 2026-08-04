@@ -238,7 +238,7 @@ pub use hl_ipc::IpcCatalog;
 pub use hl_terminal::{
     Bindings as TerminalBindings, Catalog as TerminalCatalog, Description as TerminalDescription,
     Endpoint as TerminalEndpoint, ForegroundGroup as TerminalForegroundGroup, PairId as TerminalId,
-    Signal as TerminalSignal, SignalSink as TerminalSignalSink,
+    Signal as TerminalSignal, SignalSink as TerminalSignalSink, Window as TerminalWindow,
 };
 pub use hl_vfs::{
     Access, AccessIdentity, AdvisoryLockCoordinator, BUILTIN_DEVICES, BuiltinDescription, Capabilities, DeviceEntropy,
@@ -261,7 +261,7 @@ pub use ipc::{CommittedFork as CommittedRuntimeSharedMemoryFork, PreparedFork as
 pub use ipc::{EmptyIpcExec, ExecParticipant, ExecParticipant as IpcExecParticipant};
 pub use memfd::{MemfdBindings, Registry as MemfdRegistry};
 pub use memory::RuntimeMemorySyscalls;
-pub use memory::{BRK_BACKING_IDENTITY, BrkAccount, BrkRegion, BrkSnapshot};
+pub use memory::{AnonymousMemoryAccount, AnonymousMemoryLease, BRK_BACKING_IDENTITY, BrkRegion, BrkSnapshot};
 pub use memory::{DescriptorMappingSource, RuntimeMemoryError, RuntimeMemoryHost};
 pub use network::RuntimeNetworkSyscalls;
 pub use network::{

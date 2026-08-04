@@ -203,7 +203,11 @@ impl Builder {
             Ok(value) => value,
             Err(_) => return workspace.fail(EngineError::LaunchFailed),
         };
-        Ok(Engine { backend, workspace })
+        Ok(Engine {
+            backend,
+            workspace,
+            terminal: None,
+        })
     }
 
     fn environment(values: Vec<(Vec<u8>, Vec<u8>)>) -> Option<Vec<Vec<u8>>> {
@@ -240,6 +244,7 @@ type Backend = EngineBackend<RustRuntimeMachine<crate::native::GuestExecutor>, O
 pub struct Engine {
     backend: Backend,
     workspace: OwnedWorkspace,
+    terminal: Option<Arc<crate::composition::Terminal>>,
 }
 
 impl Engine {
@@ -258,6 +263,7 @@ impl Engine {
         plan: RuntimePlan,
         streams: crate::composition::StandardStreams,
     ) -> Result<Self, EngineError> {
+        let terminal = streams.terminal();
         let workspace = OwnedWorkspace::create()?;
         let factory = RustRuntimeFactory::new(
             Arc::new(crate::native::GuestExecutor::default()),
@@ -272,7 +278,11 @@ impl Engine {
         };
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
             .map_err(|_| EngineError::LaunchFailed)?;
-        Ok(Self { backend, workspace })
+        Ok(Self {
+            backend,
+            workspace,
+            terminal,
+        })
     }
 
     /// Constructs a runtime with application-owned durable checkpoint transport.
@@ -283,6 +293,7 @@ impl Engine {
         sink: Arc<dyn crate::composition::CheckpointSink>,
         source: Arc<dyn crate::composition::CheckpointSource>,
     ) -> Result<Self, EngineError> {
+        let terminal = streams.terminal();
         let workspace = OwnedWorkspace::create()?;
         let factory = RustRuntimeFactory::new(
             Arc::new(crate::native::GuestExecutor::default()),
@@ -297,7 +308,11 @@ impl Engine {
         };
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
             .map_err(|_| EngineError::LaunchFailed)?;
-        Ok(Self { backend, workspace })
+        Ok(Self {
+            backend,
+            workspace,
+            terminal,
+        })
     }
 
     pub fn start(&self) -> Result<(), EngineError> {
@@ -314,6 +329,13 @@ impl Engine {
     }
     pub fn capture_checkpoint(&self) -> Result<(), EngineError> {
         self.backend.capture_checkpoint()
+    }
+    pub fn resize_terminal(&self, rows: u16, columns: u16) -> Result<(), EngineError> {
+        self.terminal
+            .as_ref()
+            .ok_or(EngineError::Unsupported)?
+            .resize(rows, columns)
+            .map_err(|_| EngineError::LaunchFailed)
     }
     pub fn destroy(&self) -> Result<Option<EngineExit>, EngineError> {
         self.backend.destroy()

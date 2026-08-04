@@ -107,9 +107,6 @@ pub(in crate::ffi::linux::execution) fn create(
     let policy = LaunchPolicy::new(plan);
     let seccomp_baseline = policy.seccomp_baseline()?;
     let table = assembly.descriptors().descriptor_table();
-    let descriptors = Arc::new(
-        descriptor_table::Set::with_table(Arc::clone(&table), streams).expect("valid standard descriptor table"),
-    );
     let handles = Arc::new(hl_runtime::ProcessHandleRegistry::new());
     let namespace_handles = Arc::new(hl_runtime::NamespaceHandleRegistry::new());
     let events = assembly.events();
@@ -268,10 +265,12 @@ pub(in crate::ffi::linux::execution) fn create(
     )
     .map_err(|_| EngineError::LaunchFailed)?;
     if let Some(limit) = memory_limit {
-        brk = brk.with_account(Arc::new(super::super::memory_account::MemoryAccount::new(
-            limit,
-            Arc::clone(&system),
-        )));
+        brk = brk
+            .with_account(Arc::new(super::super::memory_account::MemoryAccount::new(
+                limit,
+                Arc::clone(&system),
+            )))
+            .map_err(|_| EngineError::LaunchFailed)?;
     }
     let (path_host, watches) = image::WorkspaceRoot::host(
         plan,
@@ -292,6 +291,18 @@ pub(in crate::ffi::linux::execution) fn create(
     {
         return Err(EngineError::LaunchFailed);
     }
+    let descriptors = Arc::new(match streams.terminal() {
+        Some(terminal) => path_host.as_ref().ok_or(EngineError::LaunchFailed)?.initial_terminal(
+            Arc::clone(&table),
+            &tasks,
+            child.0,
+            child.1,
+            &terminal,
+        )?,
+        None => {
+            descriptor_table::Set::with_table(Arc::clone(&table), streams).expect("valid standard descriptor table")
+        }
+    });
     let exit = exit_runtime(
         Arc::clone(&tasks),
         Arc::clone(&mappings),

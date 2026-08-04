@@ -72,6 +72,29 @@ impl Set {
         Ok(Self { table, standard })
     }
 
+    pub(super) fn with_terminal(
+        table: Arc<DescriptorTable>,
+        slave: Arc<hl_runtime::TerminalDescription>,
+        bindings: &Arc<hl_runtime::TerminalBindings>,
+    ) -> Result<Self, DescriptorError> {
+        let reservation = table.reserve_exact(0)?;
+        table.commit(
+            reservation,
+            slave.clone(),
+            StatusFlags::from_bits(2),
+            DescriptorFlags::default(),
+        )?;
+        let description_identity = table.pin(0)?.description_identity();
+        let identity = table.snapshot(0)?.description_identity;
+        slave.bind(description_identity, bindings);
+        table.duplicate_exact(0, 1, ExactDuplicate::Dup2)?;
+        table.duplicate_exact(0, 2, ExactDuplicate::Dup2)?;
+        Ok(Self {
+            table,
+            standard: [identity; 3],
+        })
+    }
+
     pub(super) fn slot(&self, descriptor: i32) -> Option<Slot> {
         let snapshot = self.table.snapshot(descriptor).ok()?;
         let native = self
@@ -267,6 +290,20 @@ impl OpenFileDescription for StandardIo {
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct IgnoreSignals;
+
+    impl hl_runtime::TerminalSignalSink for IgnoreSignals {
+        fn publish(
+            &self,
+            _actor: Option<hl_descriptor::OperationActor>,
+            _terminal: hl_runtime::TerminalId,
+            _foreground: Option<hl_runtime::TerminalForegroundGroup>,
+            _signal: hl_runtime::TerminalSignal,
+        ) {
+        }
+    }
+
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
 
@@ -292,5 +329,49 @@ mod tests {
         assert_eq!(descriptors.pin(2).unwrap().write(b"err\xff").unwrap(), 4);
         assert_eq!(&*output.0.lock().unwrap(), b"out\0");
         assert_eq!(&*error.0.lock().unwrap(), b"err\xff");
+    }
+
+    #[test]
+    fn terminal_standard_descriptors_share_read_write_slave() {
+        let catalog = Arc::new(hl_runtime::TerminalCatalog::default());
+        let pair = catalog.allocate().unwrap();
+        let signals: Arc<dyn hl_runtime::TerminalSignalSink> = Arc::new(IgnoreSignals);
+        let master = Arc::new(hl_runtime::TerminalDescription::new(
+            Arc::clone(&pair),
+            hl_runtime::TerminalEndpoint::Master,
+            Arc::downgrade(&catalog),
+            Arc::clone(&signals),
+        ));
+        let slave = Arc::new(hl_runtime::TerminalDescription::new(
+            pair,
+            hl_runtime::TerminalEndpoint::Slave,
+            Arc::downgrade(&catalog),
+            signals,
+        ));
+        let table = Arc::new(DescriptorTable::new(DESCRIPTOR_LIMIT).unwrap());
+        let bindings = Arc::new(hl_runtime::TerminalBindings::default());
+        let descriptors = Set::with_terminal(table, slave, &bindings).unwrap();
+
+        let identity = descriptors.pin(0).unwrap().description_identity();
+        for descriptor in 0..=2 {
+            let lease = descriptors.pin(descriptor).unwrap();
+            assert_eq!(lease.description_identity(), identity);
+            assert_eq!(lease.status().bits() & StatusFlags::ACCESS_MODE_MASK, 2);
+            let terminal = bindings.get(lease.description_identity()).unwrap();
+            assert_eq!(terminal.endpoint, hl_runtime::TerminalEndpoint::Slave);
+        }
+
+        master.write(b"input\n").unwrap();
+        let mut input = [0_u8; 6];
+        assert_eq!(descriptors.pin(0).unwrap().read(&mut input).unwrap(), input.len());
+        assert_eq!(&input, b"input\n");
+        let mut echoed = [0_u8; 6];
+        assert_eq!(master.read(&mut echoed).unwrap(), echoed.len());
+        assert_eq!(&echoed, b"input\n");
+
+        assert_eq!(descriptors.pin(1).unwrap().write(b"output\n").unwrap(), 7);
+        let mut output = [0_u8; 8];
+        assert_eq!(master.read(&mut output).unwrap(), output.len());
+        assert_eq!(&output, b"output\r\n");
     }
 }

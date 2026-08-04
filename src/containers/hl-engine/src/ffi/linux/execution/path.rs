@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex};
 
-use super::{ports, watch};
+use super::{descriptor as descriptor_table, ports, watch};
 
 use hl_linux::{OpenAbiPlan, PathOperand};
 use hl_runtime::{
@@ -114,6 +114,24 @@ struct SyntheticProvenance {
 }
 
 pub(super) use transfer::{FileIntent, FileOperation, FileTransferRegistry};
+
+struct InitialTerminalWindowNotification {
+    tasks: Arc<hl_task::TaskRegistry>,
+    session: hl_task::SessionId,
+    terminal: Arc<hl_runtime::TerminalDescription>,
+}
+
+impl crate::composition::TerminalWindowNotification for InitialTerminalWindowNotification {
+    fn changed(&self) -> Result<(), crate::composition::CompositionError> {
+        if let Some(foreground) = self.terminal.pair().foreground()
+            && let Some(slot) = foreground.number.checked_sub(1)
+            && let Some(group) = hl_task::ProcessGroupId::from_wire(slot, foreground.generation)
+        {
+            let _ = self.tasks.terminal_window_changed(self.session.number(), group);
+        }
+        Ok(())
+    }
+}
 
 impl NativePath {
     pub(in crate::ffi::linux::execution) fn exec_image(&self, executable: Vec<u8>, auxiliary: Vec<u8>) -> Arc<Self> {
@@ -301,6 +319,77 @@ impl NativePath {
 
     pub(super) fn terminal_bindings(&self) -> Arc<hl_runtime::TerminalBindings> {
         Arc::clone(&self.terminal_bindings)
+    }
+
+    pub(super) fn initial_terminal(
+        &self,
+        table: Arc<hl_descriptor::DescriptorTable>,
+        tasks: &Arc<hl_task::TaskRegistry>,
+        process: hl_task::ProcessId,
+        thread: hl_task::ThreadId,
+        terminal: &Arc<crate::composition::Terminal>,
+    ) -> Result<descriptor_table::Set, crate::engine::EngineError> {
+        let pair = self
+            .terminals
+            .allocate()
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        pair.set_window(terminal.initial())
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        let session = tasks
+            .session_id(process)
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        let foreground = tasks
+            .process_group_id(process)
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        self.terminals
+            .acquire(session.number(), pair.id())
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        tasks
+            .attach_terminal(process, session)
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        tasks
+            .set_foreground_group(process, foreground)
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        let (_, foreground_generation) = foreground.wire_parts();
+        pair.set_foreground(hl_runtime::TerminalForegroundGroup {
+            number: foreground.number(),
+            generation: foreground_generation,
+        })
+        .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        let master = Arc::new(hl_runtime::TerminalDescription::new(
+            Arc::clone(&pair),
+            hl_runtime::TerminalEndpoint::Master,
+            Arc::downgrade(&self.terminals),
+            Arc::clone(&self.terminal_signals),
+        ));
+        let slave = Arc::new(hl_runtime::TerminalDescription::new(
+            pair,
+            hl_runtime::TerminalEndpoint::Slave,
+            Arc::downgrade(&self.terminals),
+            Arc::clone(&self.terminal_signals),
+        ));
+        let descriptors = descriptor_table::Set::with_terminal(table, slave, &self.terminal_bindings)
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        let (process, process_generation) = process.wire_parts();
+        let (thread, thread_generation) = thread.wire_parts();
+        let window_notification = Arc::new(InitialTerminalWindowNotification {
+            tasks: Arc::clone(tasks),
+            session,
+            terminal: Arc::clone(&master),
+        });
+        terminal
+            .attach(
+                master,
+                hl_descriptor::OperationActor {
+                    process,
+                    process_generation,
+                    thread,
+                    thread_generation,
+                },
+                window_notification,
+            )
+            .map_err(|_| crate::engine::EngineError::LaunchFailed)?;
+        Ok(descriptors)
     }
 
     fn publish_synthetic(&self, plan: &OpenAbiPlan, opened: &dyn PreparedPathOpen) -> Result<(), RuntimePathError> {
@@ -712,5 +801,96 @@ impl RuntimePathHost for NativePath {
 
     fn access_identity_for(&self, effective: bool) -> Result<AccessIdentity, RuntimePathError> {
         mutation::Identity::access(self, effective)
+    }
+}
+
+#[cfg(test)]
+mod terminal_window_test {
+    use super::*;
+    use crate::composition::TerminalWindowNotification as _;
+
+    struct NoopSignal;
+
+    impl hl_runtime::TerminalSignalSink for NoopSignal {
+        fn publish(
+            &self,
+            _: Option<hl_descriptor::OperationActor>,
+            _: hl_runtime::TerminalId,
+            _: Option<hl_runtime::TerminalForegroundGroup>,
+            _: hl_runtime::TerminalSignal,
+        ) {
+        }
+    }
+
+    #[test]
+    fn external_resize_follows_current_generation_qualified_foreground() {
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        let (leader, leader_thread) = tasks
+            .create_init(
+                hl_task::ProcessCredentials::new(0, 0, &[], 8).unwrap(),
+                hl_task::ProcessLimits::default(),
+            )
+            .unwrap();
+        let session = tasks.session_id(leader).unwrap();
+        let old = tasks.begin_fork_process(leader_thread).unwrap();
+        let (old_process, old_thread) = (old.process(), old.thread());
+        tasks.commit_fork_process(old).unwrap();
+        let old_group = tasks.set_process_group(leader, old_process, None).unwrap();
+        let new = tasks.begin_fork_process(leader_thread).unwrap();
+        let (new_process, new_thread) = (new.process(), new.thread());
+        tasks.commit_fork_process(new).unwrap();
+        let new_group = tasks.set_process_group(leader, new_process, None).unwrap();
+        for process in [old_process, new_process] {
+            tasks
+                .set_action(
+                    process,
+                    hl_task::SignalNumber::new(28).unwrap(),
+                    hl_task::SignalAction {
+                        disposition: hl_task::SignalDisposition::Handler(0x4000),
+                        ..hl_task::SignalAction::DEFAULT
+                    },
+                )
+                .unwrap();
+        }
+        tasks.set_foreground_group(leader, old_group).unwrap();
+
+        let catalog = Arc::new(hl_runtime::TerminalCatalog::default());
+        let pair = catalog.allocate().unwrap();
+        let (_, old_generation) = old_group.wire_parts();
+        pair.set_foreground(hl_runtime::TerminalForegroundGroup {
+            number: old_group.number(),
+            generation: old_generation,
+        })
+        .unwrap();
+        let terminal = Arc::new(hl_runtime::TerminalDescription::new(
+            Arc::clone(&pair),
+            hl_runtime::TerminalEndpoint::Master,
+            Arc::downgrade(&catalog),
+            Arc::new(NoopSignal),
+        ));
+        let notification = InitialTerminalWindowNotification {
+            tasks: Arc::clone(&tasks),
+            session,
+            terminal,
+        };
+
+        tasks.set_foreground_group(leader, new_group).unwrap();
+        let (_, new_generation) = new_group.wire_parts();
+        pair.set_foreground(hl_runtime::TerminalForegroundGroup {
+            number: new_group.number(),
+            generation: new_generation,
+        })
+        .unwrap();
+        notification.changed().unwrap();
+        assert_eq!(tasks.pending_signal_mask(old_thread).unwrap().bits(), 0);
+        assert_ne!(tasks.pending_signal_mask(new_thread).unwrap().bits() & (1 << 27), 0);
+
+        pair.set_foreground(hl_runtime::TerminalForegroundGroup {
+            number: new_group.number(),
+            generation: new_generation.saturating_add(1),
+        })
+        .unwrap();
+        notification.changed().unwrap();
+        assert_eq!(tasks.pending_signal_mask(old_thread).unwrap().bits(), 0);
     }
 }

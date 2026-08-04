@@ -8,6 +8,7 @@ use crate::launch_plan::RuntimeLaunchPlan;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompositionError {
@@ -45,6 +46,167 @@ pub trait TerminalPort: Send + Sync {
     fn close(&self);
 }
 
+pub(crate) trait TerminalWindowNotification: Send + Sync {
+    fn changed(&self) -> Result<(), CompositionError>;
+}
+
+struct TerminalBridge {
+    master: Arc<hl_runtime::TerminalDescription>,
+    window_notification: Arc<dyn TerminalWindowNotification>,
+    workers: Vec<JoinHandle<()>>,
+}
+
+/// One application-owned terminal transport attached to one runtime PTY.
+pub struct Terminal {
+    port: Arc<dyn TerminalPort>,
+    initial: hl_runtime::TerminalWindow,
+    bridge: Mutex<Option<TerminalBridge>>,
+}
+
+impl Terminal {
+    /// Creates an unattached terminal with a non-empty initial cell size.
+    pub fn new(port: Arc<dyn TerminalPort>, rows: u16, columns: u16) -> Result<Arc<Self>, CompositionError> {
+        if rows == 0 || columns == 0 {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        Ok(Arc::new(Self {
+            port,
+            initial: hl_runtime::TerminalWindow {
+                rows,
+                columns,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            bridge: Mutex::new(None),
+        }))
+    }
+
+    pub(crate) fn initial(&self) -> hl_runtime::TerminalWindow {
+        self.initial
+    }
+
+    pub(crate) fn attach(
+        &self,
+        master: Arc<hl_runtime::TerminalDescription>,
+        actor: hl_descriptor::OperationActor,
+        window_notification: Arc<dyn TerminalWindowNotification>,
+    ) -> Result<(), CompositionError> {
+        use hl_descriptor::OpenFileDescription as _;
+
+        let mut bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
+        if bridge.is_some() {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        let input_master = Arc::clone(&master);
+        let input_port = Arc::clone(&self.port);
+        let input = std::thread::Builder::new()
+            .name("hl-terminal-input".into())
+            .spawn(move || {
+                let mut bytes = [0_u8; 16 * 1024];
+                while let Ok(count) = input_port.read(&mut bytes) {
+                    if count == 0 {
+                        break;
+                    }
+                    let mut offset = 0;
+                    while offset < count {
+                        match input_master.write_context(
+                            &bytes[offset..count],
+                            hl_descriptor::OperationContext {
+                                actor: Some(actor),
+                                cancellation: None,
+                            },
+                        ) {
+                            Ok(0) => std::thread::park_timeout(Duration::from_millis(1)),
+                            Ok(written) => offset += written,
+                            Err(_) => return,
+                        }
+                    }
+                }
+            })
+            .map_err(|_| CompositionError::RuntimeConstruction)?;
+        let output_master = Arc::clone(&master);
+        let output_port = Arc::clone(&self.port);
+        let output = std::thread::Builder::new()
+            .name("hl-terminal-output".into())
+            .spawn(move || {
+                let mut bytes = [0_u8; 16 * 1024];
+                loop {
+                    let Ok(count) = output_master.read(&mut bytes) else {
+                        break;
+                    };
+                    if count == 0 {
+                        break;
+                    }
+                    let mut offset = 0;
+                    while offset < count {
+                        match output_port.write(&bytes[offset..count]) {
+                            Ok(0) => return,
+                            Ok(written) => offset += written,
+                            Err(_) => return,
+                        }
+                    }
+                }
+            });
+        let output = match output {
+            Ok(output) => output,
+            Err(_) => {
+                self.port.close();
+                master.close();
+                let _ = input.join();
+                return Err(CompositionError::RuntimeConstruction);
+            }
+        };
+        *bridge = Some(TerminalBridge {
+            master,
+            window_notification,
+            workers: vec![input, output],
+        });
+        Ok(())
+    }
+
+    pub fn resize(&self, rows: u16, columns: u16) -> Result<(), CompositionError> {
+        if rows == 0 || columns == 0 {
+            return Err(CompositionError::RuntimeConstruction);
+        }
+        let (pair, notification) = {
+            let bridge = self.bridge.lock().map_err(|_| CompositionError::RuntimeConstruction)?;
+            let bridge = bridge.as_ref().ok_or(CompositionError::RuntimeConstruction)?;
+            (Arc::clone(bridge.master.pair()), Arc::clone(&bridge.window_notification))
+        };
+        let changed = pair
+            .set_window(hl_runtime::TerminalWindow {
+                rows,
+                columns,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|_| CompositionError::RuntimeConstruction)?;
+        if changed {
+            notification.changed()?;
+        }
+        Ok(())
+    }
+
+    pub fn close(&self) {
+        use hl_descriptor::OpenFileDescription as _;
+
+        let bridge = self.bridge.lock().ok().and_then(|mut bridge| bridge.take());
+        self.port.close();
+        if let Some(bridge) = bridge {
+            bridge.master.close();
+            for worker in bridge.workers {
+                let _ = worker.join();
+            }
+        }
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 type StandardInput = Arc<Mutex<Box<dyn Read + Send>>>;
 type StandardOutput = Arc<Mutex<Box<dyn Write + Send>>>;
 
@@ -57,6 +219,7 @@ pub struct StandardStreams {
     input: StandardInput,
     output: StandardOutput,
     error: StandardOutput,
+    terminal: Option<Arc<Terminal>>,
 }
 
 impl StandardStreams {
@@ -70,7 +233,18 @@ impl StandardStreams {
             input: Arc::new(Mutex::new(Box::new(input))),
             output: Arc::new(Mutex::new(Box::new(output))),
             error: Arc::new(Mutex::new(Box::new(error))),
+            terminal: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_terminal(mut self, terminal: Arc<Terminal>) -> Self {
+        self.terminal = Some(terminal);
+        self
+    }
+
+    pub(crate) fn terminal(&self) -> Option<Arc<Terminal>> {
+        self.terminal.clone()
     }
 
     pub(crate) fn input(&self) -> StandardInput {
