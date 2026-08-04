@@ -11,6 +11,7 @@ autobins = false
 workspace = true
 
 [dependencies]
+clap.workspace = true
 hl-engine = { path = "../../containers/hl-engine" }
 hl-log = { path = "../../packages/hl-log" }
 
