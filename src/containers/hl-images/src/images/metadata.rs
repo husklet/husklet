@@ -6,20 +6,26 @@ impl Images {
     /// # Errors
     /// Returns an error for missing, malformed, or platform-incompatible image content.
     pub fn details(&self, image: &Image, platform: &Platform) -> Result<Metadata> {
-        self.mirror(image)?;
-        let root = self.content.read_document(&image.target)?;
-        let manifest = if image.target.is_index() {
+        self.details_target(&image.target, platform)
+    }
+
+    /// Read runtime metadata directly from a durable graph target.
+    ///
+    /// # Errors
+    /// Returns an error for missing, malformed, or platform-incompatible image content.
+    pub fn details_target(&self, target: &Descriptor, platform: &Platform) -> Result<Metadata> {
+        self.mirror_target(target)?;
+        let root = self.content.read_document(target)?;
+        let manifest = if target.is_index() {
             serde_json::from_slice::<IndexDocument>(&root)?.select_platform(platform)?
         } else {
-            image.target.clone()
+            target.clone()
         };
-        let document: ManifestDocument =
-            serde_json::from_slice(&self.content.read_document(&manifest)?)
-                .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let document: ManifestDocument = serde_json::from_slice(&self.content.read_document(&manifest)?)
+            .map_err(|error| Error::MalformedOci(error.to_string()))?;
         document.validate()?;
-        let config: ConfigDocument =
-            serde_json::from_slice(&self.content.read_document(&document.config)?)
-                .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        let config: ConfigDocument = serde_json::from_slice(&self.content.read_document(&document.config)?)
+            .map_err(|error| Error::MalformedOci(error.to_string()))?;
         config.require_platform(platform)?;
         let labels = config.config.labels.clone().unwrap_or_default();
         let onbuild = config.config.on_build.clone();

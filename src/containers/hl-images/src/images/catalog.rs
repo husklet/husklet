@@ -107,17 +107,21 @@ impl Images {
     }
 
     pub(super) fn mirror(&self, image: &Image) -> Result<()> {
+        self.mirror_target(&image.target)
+    }
+
+    pub(super) fn mirror_target(&self, target: &Descriptor) -> Result<()> {
         use std::io::Read as _;
 
-        if self.content.reader(&image.target).is_ok() {
+        if self.content.reader(target).is_ok() {
             return Ok(());
         }
         let source = self
             .fallback
             .as_deref()
-            .ok_or_else(|| Error::ContentNotFound(image.target.digest().to_string()))?;
-        let source = source.owner(image)?;
-        for descriptor in DescriptorGraph::walk(image.target.clone(), &source.content)? {
+            .ok_or_else(|| Error::ContentNotFound(target.digest().to_string()))?;
+        let source = source.owner_target(target)?;
+        for descriptor in DescriptorGraph::walk(target.clone(), &source.content)? {
             let digest: Digest = descriptor.digest().to_string().parse()?;
             if self.content.contains(&digest)? {
                 continue;
@@ -131,14 +135,14 @@ impl Images {
         Ok(())
     }
 
-    pub(super) fn owner(&self, image: &Image) -> Result<&Images> {
-        if self.content.reader(&image.target).is_ok() {
+    fn owner_target(&self, target: &Descriptor) -> Result<&Images> {
+        if self.content.reader(target).is_ok() {
             return Ok(self);
         }
         self.fallback
             .as_deref()
-            .ok_or_else(|| Error::ContentNotFound(image.target.digest().to_string()))?
-            .owner(image)
+            .ok_or_else(|| Error::ContentNotFound(target.digest().to_string()))?
+            .owner_target(target)
     }
 
     /// Return the deduplicated compressed byte size of an image's complete descriptor graph.
@@ -146,8 +150,16 @@ impl Images {
     /// # Errors
     /// Returns an error when referenced content is missing, corrupt, or malformed.
     pub fn size(&self, image: &Image) -> Result<u64> {
-        self.mirror(image)?;
-        crate::DescriptorGraph::walk(image.target.clone(), &self.content)?
+        self.size_target(&image.target)
+    }
+
+    /// Return the deduplicated compressed size of a durable graph target.
+    ///
+    /// # Errors
+    /// Returns an error when referenced content is missing, corrupt, or malformed.
+    pub fn size_target(&self, target: &Descriptor) -> Result<u64> {
+        self.mirror_target(target)?;
+        crate::DescriptorGraph::walk(target.clone(), &self.content)?
             .into_iter()
             .try_fold(0_u64, |total, descriptor| {
                 total
@@ -163,16 +175,24 @@ impl Images {
     /// # Errors
     /// Returns an error when referenced content is missing, corrupt, or malformed.
     pub fn usage(&self, images: &[Image]) -> Result<BTreeMap<String, ImageUsage>> {
-        for image in images {
-            self.mirror(image)?;
+        self.usage_targets(&images.iter().map(|image| image.target.clone()).collect::<Vec<_>>())
+    }
+
+    /// Account total and shared bytes for distinct durable graph targets.
+    ///
+    /// # Errors
+    /// Returns an error when referenced content is missing, corrupt, or malformed.
+    pub fn usage_targets(&self, targets: &[Descriptor]) -> Result<BTreeMap<String, ImageUsage>> {
+        for target in targets {
+            self.mirror_target(target)?;
         }
         let mut graphs = BTreeMap::new();
-        for image in images {
-            let target = image.target.digest().to_string();
+        for descriptor in targets {
+            let target = descriptor.digest().to_string();
             if graphs.contains_key(&target) {
                 continue;
             }
-            let descriptors = crate::DescriptorGraph::walk(image.target.clone(), &self.content)?
+            let descriptors = crate::DescriptorGraph::walk(descriptor.clone(), &self.content)?
                 .into_iter()
                 .map(|descriptor| (descriptor.digest().to_string(), descriptor.size()))
                 .collect::<BTreeMap<_, _>>();
