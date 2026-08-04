@@ -5,9 +5,7 @@ pub(crate) use crate::{contract, fixture, registry, runner};
 
 pub(crate) mod copy;
 pub(crate) mod databases;
-pub(crate) mod distros;
 pub(crate) mod execcmd;
-pub(crate) mod filesystem;
 pub(crate) mod imagescmd;
 pub(crate) mod languages;
 pub(crate) mod netcontainer;
@@ -16,5 +14,4 @@ pub(crate) mod observe;
 pub(crate) mod runflags;
 pub(crate) mod utilities;
 pub(crate) mod volume;
-pub(crate) mod web;
 pub(crate) mod weird;
