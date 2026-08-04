@@ -6,7 +6,7 @@ use crate::{
 use clap::Args;
 use std::collections::BTreeSet;
 
-const LEGACY_WORKFLOWS: [&str; 7] = [
+const LEGACY_WORKFLOWS: [&str; 5] = [
     "docker-build",
     "docker-net",
     "compose",

@@ -10,7 +10,7 @@ use hl_container::Containers;
 
 type Error = Box<dyn std::error::Error>;
 
-pub(crate) const NAMES: [&str; 7] = [
+pub(crate) const NAMES: [&str; 5] = [
     "docker-build",
     "docker-net",
     "compose",

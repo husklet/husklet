@@ -15,8 +15,8 @@ for this closure.
 
 | Detached workflow | Durable owner | Current closure |
 |---|---|---|
-| `smoke.rs` | `tests/scenarios/smoke-realimage/` | Exact image, ISA, command, marker, timeout, and output coverage exists for all three rows. |
-| `software.rs` | Folder-owned application scenarios | Redis and PostgreSQL behavior is substantially covered by `databases`, and Python by `languages`, but the exact four historical observations require an explicit mapping before deletion. |
+| Former smoke workflow | `tests/scenarios/smoke-realimage/` | Exact image, ISA, command, marker, timeout, and output coverage exists for all three rows; the detached module and registration are deleted. |
+| Former software workflow | `tests/scenarios/{databases,languages}/` | Exact Redis, PostgreSQL, NATS, and Python observations are folder-owned with local goldens and oracle mappings; the detached module and registration are deleted. |
 | `pty.rs` | `tests/scenarios/terminal/` | Terminal allocation and termios behavior exists, but the five retained cases drive an attached session with timed input. The current YAML action model cannot express attached interactive input, so this workflow is not closed. |
 | `network.rs` | `hl-container` public network/runtime contract | Durable IPAM, aliases, multiple attachments, removal, and metadata are covered by `hl-container/tests/networks.rs`; live name routing is covered by the daemon bridge test. Live address routing and the complete teardown sequence remain to be mapped. |
 | `compose.rs` | Container/network/volume public contracts plus repository multi-container E2E | Labels, volumes, endpoints, aliases, and atomic multi-network attachment have package coverage. The live two-network routing topology remains a repository-level E2E gap because the current YAML runner creates one container per case. |
