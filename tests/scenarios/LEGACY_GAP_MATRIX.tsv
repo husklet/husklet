@@ -1,0 +1,155 @@
+old_full_id	owning_domain	existing_exact_mapping	status	proposed_owner
+buildcmd/full	buildcmd	-	missing	tests/scenarios/build
+buildcmd/simple	buildcmd	-	missing	tests/scenarios/build
+cpcmd/container-to-host-dir	cpcmd	-	missing	tests/scenarios/copy
+cpcmd/container-to-host-file	cpcmd	-	missing	tests/scenarios/copy
+cpcmd/host-to-container-dir	cpcmd	-	missing	tests/scenarios/copy
+cpcmd/host-to-container-file	cpcmd	-	missing	tests/scenarios/copy
+cpcoherence/cp-dir-tree-live-poll	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-dir-tree-live-poll.amd	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-into-held-open-dir	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-into-held-open-dir.amd	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-new-file-live-poll	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-new-file-live-poll.amd	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-overwrite-cached-positive	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+cpcoherence/cp-overwrite-cached-positive.amd	cpcoherence	src/containers/hl-container/tests/filesystem_coherence.rs	mapped-crate-test	hl-container
+databases/mongo-agg-7	databases	tests/scenarios/databases/test.yaml	migrated-YAML-in-patch	tests/scenarios/databases
+databases/mongo-count-7	databases	tests/scenarios/databases/test.yaml	migrated-YAML-in-patch	tests/scenarios/databases
+databases/mongo-filter-count-7	databases	tests/scenarios/databases/test.yaml	migrated-YAML-in-patch	tests/scenarios/databases
+databases/mongo-parallel-readiness-7	databases	tests/scenarios/databases/test.yaml	migrated-YAML-in-patch	tests/scenarios/databases
+databases/mongo-version-8	databases	tests/scenarios/databases/test.yaml	migrated-YAML-in-patch	tests/scenarios/databases
+dockernet/connect	dockernet	-	missing	tests/scenarios/network
+dockernet/create-ls	dockernet	-	missing	tests/scenarios/network
+dockernet/create-multi-alias	dockernet	-	missing	tests/scenarios/network
+dockernet/host-mode	dockernet	-	missing	tests/scenarios/network
+dockernet/inspect	dockernet	-	missing	tests/scenarios/network
+dockernet/reach-by-name	dockernet	-	missing	tests/scenarios/network
+dockernet/reach-by-name-late	dockernet	-	missing	tests/scenarios/network
+dockernet/rm	dockernet	-	missing	tests/scenarios/network
+dockervol/anon-volume	dockervol	-	missing	tests/scenarios/volume
+dockervol/bind-nonrecursive-reject	dockervol	-	missing	tests/scenarios/volume
+dockervol/bind-private-recursive-ro	dockervol	-	missing	tests/scenarios/volume
+dockervol/bind-shared-reject	dockervol	-	missing	tests/scenarios/volume
+dockervol/create-ls	dockervol	-	missing	tests/scenarios/volume
+dockervol/inspect	dockervol	-	missing	tests/scenarios/volume
+dockervol/local-bind	dockervol	-	missing	tests/scenarios/volume
+dockervol/local-bind-inspect	dockervol	-	missing	tests/scenarios/volume
+dockervol/local-filesystem-reject	dockervol	-	missing	tests/scenarios/volume
+dockervol/mount-tmpfs	dockervol	-	missing	tests/scenarios/volume
+dockervol/mount-volume-inuse	dockervol	-	missing	tests/scenarios/volume
+dockervol/persist-across-runs	dockervol	-	missing	tests/scenarios/volume
+dockervol/rm	dockervol	-	missing	tests/scenarios/volume
+dockervol/subpath	dockervol	-	missing	tests/scenarios/volume
+dockervol/subpath-missing	dockervol	-	missing	tests/scenarios/volume
+dockervol/subpath-symlink-escape	dockervol	-	missing	tests/scenarios/volume
+dockervol/tmpfs-fresh	dockervol	-	missing	tests/scenarios/volume
+execcmd/basic	execcmd	-	missing	hl-container
+execcmd/detached-d	execcmd	-	missing	hl-container
+execcmd/env-e	execcmd	-	missing	hl-container
+execcmd/exit-code	execcmd	-	missing	hl-container
+execcmd/stdin-i	execcmd	-	missing	hl-container
+execcmd/user-u	execcmd	-	missing	hl-container
+execcmd/workdir-w	execcmd	-	missing	hl-container
+languages/go-fib-123-alpine	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/go-sum-122-alpine	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/go-sum-122-bookworm	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/go-version-122-alpine	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/java-fib-21	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/java-sum-17	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/java-sum-temurin21	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/java-sum-temurin21-alpine	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/java-version-temurin17	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/rust-fib-1-slim	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/rust-sum-1-alpine	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+languages/rust-version-1-slim	languages	-	missing	tests/scenarios/languages or tests/scenarios/toolchains
+lifecycle/create-start	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/healthcheck-healthy	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/healthcheck-unhealthy	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/kill-signal	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/pause-unpause	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/rename	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/restart	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/restart-on-failure-count	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/rm	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/rm-force	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/rm-multi	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/rm-multi-force	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/stop	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/stop-signal-inspect	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/stop-signal-quit	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/unless-stopped-manual	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+lifecycle/wait	lifecycle	src/containers/hl-container/src/containers/tests/lifecycle.rs + src/containers/hl-container/tests/lifecycle_contract.rs	mapped-crate-test	hl-container
+netcontainer/isolation-off-network	netcontainer	-	missing	hl-container
+netcontainer/nc-echo-by-name	netcontainer	-	missing	hl-container
+netcontainer/ping-by-name	netcontainer	-	missing	hl-container
+netcontainer/redis-by-ip	netcontainer	-	missing	hl-container
+netcontainer/redis-by-name	netcontainer	-	missing	hl-container
+observe/container-prune-filter	observe	-	missing	hl-daemon or repository Docker E2E
+observe/inspect-cmd	observe	-	missing	hl-daemon or repository Docker E2E
+observe/inspect-config-env	observe	-	missing	hl-daemon or repository Docker E2E
+observe/inspect-mounts	observe	-	missing	hl-daemon or repository Docker E2E
+observe/inspect-network-ip	observe	-	missing	hl-daemon or repository Docker E2E
+observe/inspect-state	observe	-	missing	hl-daemon or repository Docker E2E
+observe/logs	observe	-	missing	hl-daemon or repository Docker E2E
+observe/logs-follow	observe	-	missing	hl-daemon or repository Docker E2E
+observe/logs-tail	observe	-	missing	hl-daemon or repository Docker E2E
+observe/port	observe	-	missing	hl-daemon or repository Docker E2E
+observe/ps-all-exited	observe	-	missing	hl-daemon or repository Docker E2E
+observe/ps-ports	observe	-	missing	hl-daemon or repository Docker E2E
+observe/ps-running	observe	-	missing	hl-daemon or repository Docker E2E
+observe/stats-oneshot	observe	-	missing	hl-daemon or repository Docker E2E
+observe/system-prune-filter-reject	observe	-	missing	hl-daemon or repository Docker E2E
+observe/top	observe	-	missing	hl-daemon or repository Docker E2E
+process/env-multiple	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/env-passthrough	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/exec-env	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/exec-into-running	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/exec-sees-shared-fs	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/exit-nonzero	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/exit-rc-check	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/exit-zero	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/hostname-flag	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/pid1-is-init	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/sigterm-clean-stop	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/stdout-stderr-split	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/uid-root	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/workdir	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+process/workdir-created	process	src/containers/hl-container/tests/process_contract.rs	mapped-crate-test	hl-container
+runflags/bind-mount-v	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/cpus-accepted	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/detached-d	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/entrypoint	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/env-e	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/exit-code	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/memory-accepted	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/memory-cgroup-honored	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/name	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/network-bridge	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/network-none	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/publish-p	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/publish-p-explicit	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/restart-on-failure	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/rm	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/stdin-i	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/tty-t	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/user-name	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/user-uidgid	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+runflags/workdir-w	runflags	-	missing	hl-container (direct) or repository Docker E2E (daemon)
+utilities/hello-world	utilities	-	missing	tests/scenarios/utilities
+volumes/cmd-append-redirect	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-cat-grep-wc	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-chmod-perms	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-cp-mv-rm	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-mkdir-touch-find	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-sed-inplace	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-sort-head-tail	volumes	-	missing	tests/scenarios/volume
+volumes/cmd-wc-bytes	volumes	-	missing	tests/scenarios/volume
+volumes/delete-propagates	volumes	-	missing	tests/scenarios/volume
+volumes/host-seen-in-container	volumes	-	missing	tests/scenarios/volume
+volumes/nested-dotdot-crosses-boundary	volumes	-	missing	tests/scenarios/volume
+volumes/persist-across-runs	volumes	-	missing	tests/scenarios/volume
+volumes/readonly-rejects-write	volumes	-	missing	tests/scenarios/volume
+volumes/subdir-mount	volumes	-	missing	tests/scenarios/volume
+volumes/two-mounts	volumes	-	missing	tests/scenarios/volume
+volumes/write-seen-on-host	volumes	-	missing	tests/scenarios/volume
+weird/static-nonpie-helloworld	weird	-	missing	tests/scenarios/weird
