@@ -131,11 +131,13 @@ pub struct Container {
 
 impl Container {
     pub(crate) fn uses_volume(&self, name: &str) -> bool {
-        self.spec.mounts.iter().any(|mount| {
-            matches!(
-                &mount.source,
-                MountSource::Volume(value) | MountSource::Anonymous(value) if value == name
-            )
+        self.volume_names().any(|value| value == name)
+    }
+
+    pub(crate) fn volume_names(&self) -> impl Iterator<Item = &str> {
+        self.spec.mounts.iter().filter_map(|mount| match &mount.source {
+            MountSource::Volume(name) | MountSource::Anonymous(name) => Some(name.as_str()),
+            MountSource::Bind(_) | MountSource::Tmpfs(_) => None,
         })
     }
 
@@ -176,10 +178,7 @@ mod tests {
 
     #[test]
     fn engine_namespace_is_stable_and_bounded_for_docker_ids() {
-        let id = ContainerId::from_str(
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap();
+        let id = ContainerId::from_str("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
 
         assert_eq!(id.namespace(), "c-0123456789abcdef0123456789abcdef");
         assert!(id.namespace().len() <= 39);
@@ -222,33 +221,36 @@ mod tests {
         let first = ContainerId::new();
         let second = ContainerId::new();
         assert_eq!(first.as_str().len(), 64);
-        assert!(first
-            .as_str()
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert!(
+            first
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
         assert_ne!(first, second);
     }
 
     #[test]
     fn new_id_bulk_are_all_64_lowercase_hex_and_collision_free() {
         let ids = (0..200).map(|_| ContainerId::new()).collect::<Vec<_>>();
-        assert!(ids.iter().all(|id| id.as_str().len() == 64
-            && id
-                .as_str()
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))));
-        assert_eq!(
-            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
-            ids.len()
-        );
+        assert!(ids.iter().all(|id| {
+            id.as_str().len() == 64
+                && id
+                    .as_str()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }));
+        assert_eq!(ids.iter().collect::<std::collections::BTreeSet<_>>().len(), ids.len());
     }
 
     #[test]
     fn new_id_short_id_prefix_is_hex() {
         let id = ContainerId::new();
-        assert!(id.as_str()[..12]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert!(
+            id.as_str()[..12]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
     }
 
     #[test]

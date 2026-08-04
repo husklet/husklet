@@ -1,13 +1,12 @@
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use hl_container::ContainerState;
 use hl_images::content::Store;
 
 use super::{ApiError, ApiResult, DockerState};
 use crate::api::{
-    Authentication, Container, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData,
-    Version, VolumeUsage,
+    Authentication, Container, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version, VolumeUsage,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -58,13 +57,11 @@ pub(super) async fn info(State(state): State<DockerState>) -> ApiResult<Json<Sys
         containers: i64::try_from(containers.len()).unwrap_or(i64::MAX),
         containers_running: i64::try_from(running).unwrap_or(i64::MAX),
         containers_paused: i64::try_from(paused).unwrap_or(i64::MAX),
-        containers_stopped: i64::try_from(containers.len().saturating_sub(running + paused))
-            .unwrap_or(i64::MAX),
+        containers_stopped: i64::try_from(containers.len().saturating_sub(running + paused)).unwrap_or(i64::MAX),
         images: i64::try_from(images.len()).unwrap_or(i64::MAX),
         driver: "hl-engine".into(),
         memory_limit: false,
-        ncpu: std::thread::available_parallelism()
-            .map_or(1, |value| i64::try_from(value.get()).unwrap_or(i64::MAX)),
+        ncpu: std::thread::available_parallelism().map_or(1, |value| i64::try_from(value.get()).unwrap_or(i64::MAX)),
         os_type: state.platform.os.clone(),
         architecture: state.platform.architecture.clone(),
         operating_system: "Linux".into(),
@@ -85,16 +82,15 @@ pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<Dis
         .collect();
     let images = state.image_summaries().await?;
     let volume_service = state.containers.volumes();
+    let listed_volumes = volume_service.list().await.map_err(ApiError::container)?;
+    let reference_counts = volume_service
+        .reference_counts(&listed_volumes)
+        .await
+        .map_err(ApiError::container)?;
     let mut volumes = Vec::new();
-    for volume in volume_service.list().await.map_err(ApiError::container)? {
-        let size = volume_service
-            .size(&volume.name)
-            .await
-            .map_err(ApiError::container)?;
-        let references = volume_service
-            .references(&volume.name)
-            .await
-            .map_err(ApiError::container)?;
+    for volume in listed_volumes {
+        let size = volume_service.size(&volume.name).await.map_err(ApiError::container)?;
+        let references = reference_counts.get(&volume.name).copied().unwrap_or_default();
         volumes.push(VolumeUsage {
             name: volume.name,
             mountpoint: volume.path.to_string_lossy().into_owned(),
@@ -112,9 +108,7 @@ pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<Dis
             .into_iter()
             .try_fold(0_i64, |total, digest| {
                 let size = image_service.content().info(&digest)?.size;
-                Ok::<_, hl_images::Error>(
-                    total.saturating_add(i64::try_from(size).unwrap_or(i64::MAX)),
-                )
+                Ok::<_, hl_images::Error>(total.saturating_add(i64::try_from(size).unwrap_or(i64::MAX)))
             })
     })
     .await
@@ -223,10 +217,7 @@ impl Filters {
         if !unsupported.is_empty() {
             return Err(ApiError::new(
                 StatusCode::BAD_REQUEST,
-                format!(
-                    "unsupported system prune filters: {}",
-                    unsupported.join(", ")
-                ),
+                format!("unsupported system prune filters: {}", unsupported.join(", ")),
             ));
         }
         Ok(Self(values))
