@@ -254,58 +254,53 @@ impl Engine {
     /// mounts, networking, identity, and resource policy. The engine retains
     /// ownership of runtime construction and native execution.
     pub fn from_plan(isa: GuestIsa, plan: RuntimePlan) -> Result<Self, EngineError> {
-        Self::from_plan_with_streams(isa, plan, crate::composition::StandardStreams::default())
+        Self::with_streams(isa, plan, crate::composition::StandardStreams::default())
     }
 
     /// Constructs a runtime whose Linux descriptors 0, 1, and 2 use the supplied process streams.
-    pub fn from_plan_with_streams(
+    pub fn with_streams(
         isa: GuestIsa,
         plan: RuntimePlan,
         streams: crate::composition::StandardStreams,
     ) -> Result<Self, EngineError> {
-        let terminal = streams.terminal();
-        let workspace = OwnedWorkspace::create()?;
-        let factory = RustRuntimeFactory::new(
-            Arc::new(crate::native::GuestExecutor::default()),
-            Arc::new(Services),
-            RuntimeAssemblyConfig::default(),
-        );
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             checkpoint_sink: None,
             checkpoint_source: None,
             streams,
         };
-        let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
-            .map_err(|_| EngineError::LaunchFailed)?;
-        Ok(Self {
-            backend,
-            workspace,
-            terminal,
-        })
+        Self::construct(isa, plan, services)
     }
 
     /// Constructs a runtime with application-owned durable checkpoint transport.
-    pub fn from_plan_with_checkpoint(
+    pub fn with_checkpoint(
         isa: GuestIsa,
         plan: RuntimePlan,
         streams: crate::composition::StandardStreams,
         sink: Arc<dyn crate::composition::CheckpointSink>,
         source: Arc<dyn crate::composition::CheckpointSource>,
     ) -> Result<Self, EngineError> {
-        let terminal = streams.terminal();
-        let workspace = OwnedWorkspace::create()?;
-        let factory = RustRuntimeFactory::new(
-            Arc::new(crate::native::GuestExecutor::default()),
-            Arc::new(Services),
-            RuntimeAssemblyConfig::default(),
-        );
         let services = RuntimeServices {
             activation: Arc::new(Activation),
             checkpoint_sink: Some(sink),
             checkpoint_source: Some(source),
             streams,
         };
+        Self::construct(isa, plan, services)
+    }
+
+    fn construct(
+        isa: GuestIsa,
+        plan: RuntimePlan,
+        services: RuntimeServices,
+    ) -> Result<Self, EngineError> {
+        let terminal = services.streams.terminal();
+        let workspace = OwnedWorkspace::create()?;
+        let factory = RustRuntimeFactory::new(
+            Arc::new(crate::native::GuestExecutor::default()),
+            Arc::new(Services),
+            RuntimeAssemblyConfig::default(),
+        );
         let backend = EngineBackend::construct(isa, plan, services, &factory, workspace.clone())
             .map_err(|_| EngineError::LaunchFailed)?;
         Ok(Self {

@@ -297,14 +297,14 @@ impl Runtime for Engine {
         let checkpointable = checkpoint.is_some();
         let engine = Arc::new(
             match checkpoint {
-                Some(transport) => hl_engine::runtime::Engine::from_plan_with_checkpoint(
+                Some(transport) => hl_engine::runtime::Engine::with_checkpoint(
                     spec.isa,
                     spec.plan,
                     streams,
                     transport.clone(),
                     transport,
                 ),
-                None => hl_engine::runtime::Engine::from_plan_with_streams(spec.isa, spec.plan, streams),
+                None => hl_engine::runtime::Engine::with_streams(spec.isa, spec.plan, streams),
             }
             .map_err(|error| Error::Runtime(format!("engine construction: {error:?}")))?,
         );
