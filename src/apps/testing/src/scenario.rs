@@ -1,50 +1,26 @@
 mod definition;
 mod execution;
-
-use definition::Scenario;
-use std::path::{Path, PathBuf};
+mod ledger;
+mod scheduler;
 
 use crate::suite::{Error, Target};
 use clap::Args;
+use definition::Scenario;
+use std::path::{Path, PathBuf};
 
 pub async fn run(options: Options) -> Result<(), Error> {
-    let mut passed = 0_usize;
-    let mut expected_failures = 0_usize;
-    let mut failed = Vec::new();
-
-    for scenario in scenarios(&options)? {
-        for target in options.targets() {
-            for result in execution::run(&scenario, target).await? {
-                match result {
-                    execution::CaseResult::Passed(id) => {
-                        println!("PASS {id} {}", target.name());
-                        passed += 1;
-                    }
-                    execution::CaseResult::Failed(id, error) => {
-                        println!("FAIL {id} {}: {error}", target.name());
-                        failed.push(format!("{id} {}: {error}", target.name()));
-                    }
-                    execution::CaseResult::ExpectedFailure(id, error) => {
-                        println!("XFAIL {id} {}: {error}", target.name());
-                        expected_failures += 1;
-                    }
-                    execution::CaseResult::UnexpectedPass(id) => {
-                        println!("XPASS {id} {}", target.name());
-                        failed.push(format!("{id} {}: unexpected pass", target.name()));
-                    }
-                }
-            }
-        }
-    }
-
+    let report = workspace()?.join(&options.results);
+    let summary = scheduler::run(scenarios(&options)?, &options, &report).await?;
     println!(
-        "scenarios: {passed} passed; {expected_failures} expected failures; {} failed",
-        failed.len()
+        "scenarios: {} passed; {} expected failures; {} failed",
+        summary.passed,
+        summary.expected_failures,
+        summary.failed.len()
     );
-    if failed.is_empty() {
+    if summary.failed.is_empty() {
         Ok(())
     } else {
-        Err(failed.join("\n").into())
+        Err(summary.failed.join("\n").into())
     }
 }
 
@@ -54,7 +30,6 @@ fn scenarios(options: &Options) -> Result<Vec<Scenario>, Error> {
         .map(|entry| entry.map(|value| value.path()))
         .collect::<Result<Vec<_>, _>>()?;
     directories.sort();
-
     let mut result = Vec::new();
     for directory in directories.into_iter().filter(|value| value.is_dir()) {
         let name = directory
@@ -90,11 +65,65 @@ pub(crate) struct Options {
     /// Run only one guest ISA.
     #[arg(long = "isa", value_enum)]
     target: Option<Target>,
+    /// Maximum number of concurrently executing cases.
+    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = logical_jobs(), value_parser = parse_jobs)]
+    jobs: usize,
+    /// Resume completed case/target keys from the durable partial result.
+    #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
+    resume: bool,
+    /// Relative durable result path beneath the repository workspace.
+    #[arg(long, default_value = "target/testing/scenarios/results.tsv", value_parser = parse_results)]
+    results: PathBuf,
+}
+
+fn logical_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(256)
+}
+
+fn parse_jobs(value: &str) -> Result<usize, String> {
+    let jobs = value
+        .parse::<usize>()
+        .map_err(|_| "jobs must be an integer".to_owned())?;
+    (1..=256)
+        .contains(&jobs)
+        .then_some(jobs)
+        .ok_or_else(|| "jobs must be between 1 and 256".to_owned())
+}
+
+fn parse_results(value: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value);
+    if value.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        Err("results must be a safe relative path".to_owned())
+    } else {
+        Ok(path)
+    }
 }
 
 impl Options {
     fn targets(&self) -> Vec<Target> {
         self.target
             .map_or_else(|| vec![Target::Arm64, Target::Amd64], |value| vec![value])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{logical_jobs, parse_jobs};
+
+    #[test]
+    fn jobs_are_positive_and_bounded() {
+        assert_eq!(parse_jobs("1"), Ok(1));
+        assert_eq!(parse_jobs("256"), Ok(256));
+        for invalid in ["0", "257", "many"] {
+            assert!(parse_jobs(invalid).is_err(), "accepted {invalid}");
+        }
+        assert!((1..=256).contains(&logical_jobs()));
     }
 }

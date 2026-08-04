@@ -186,6 +186,7 @@ fn working_directory() -> String {
 
 pub struct Scenario {
     pub name: String,
+    pub definition: PathBuf,
     pub cases: Vec<ScenarioCase>,
 }
 
@@ -259,7 +260,11 @@ impl Scenario {
             .into_iter()
             .map(|case| load_case(directory, definition, case, &mut ids))
             .collect::<Result<Vec<_>, Error>>()?;
-        Ok(Self { name, cases })
+        Ok(Self {
+            name,
+            definition: definition.to_path_buf(),
+            cases,
+        })
     }
 }
 
