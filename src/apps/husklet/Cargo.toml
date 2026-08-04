@@ -30,14 +30,6 @@ hl-container = { path = "../../containers/hl-container", optional = true }
 hl-daemon = { path = "../../containers/hl-daemon", optional = true }
 hl-client = { path = "../../containers/hl-client", optional = true }
 hl-images = { path = "../../containers/hl-images", optional = true }
-# GPU composition is being moved into this crate. The new hl-gpu exposes protocol/runtime ports;
-# hl will construct the selected drivers and executor rather than enabling an integration sidecar.
-hl-gpu = { path = "../../gpu/hl-gpu", optional = true }
-hl-cuda = { path = "../../surface/hl-cuda", optional = true }
-hl-gl = { path = "../../surface/hl-gl", optional = true }
-hl-vulkan = { path = "../../surface/hl-vulkan", optional = true }
-hl-gpu-wgpu = { path = "../../gpu/hl-gpu-wgpu", optional = true }
-hl-compositor = { path = "../../surface/hl-compositor", features = ["smithay-adapter", "macos-surface"], optional = true }
 hl-gui = { path = "../../workspaces/hl-gui", optional = true }
 libc = { version = "0.2", optional = true }
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros"], optional = true }
@@ -71,12 +63,6 @@ runtime = [
     "dep:hl-daemon",
     "dep:hl-client",
     "dep:hl-images",
-    "dep:hl-gpu",
-    "dep:hl-cuda",
-    "dep:hl-gl",
-    "dep:hl-vulkan",
-    "dep:hl-gpu-wgpu",
-    "dep:hl-compositor",
     "dep:libc",
     "dep:tokio",
     "dep:serde_json",

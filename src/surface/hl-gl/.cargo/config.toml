@@ -1,7 +1,0 @@
-# This crate's GLSL corpus battery (`tests/glsl_corpus.rs`) pulls in `naga` (a dev-dependency) to compile
-# each translated shader through the executor's real naga route. In this offline vendored environment naga
-# and its transitive crates are cached only under the git-based crates.io index (the sparse index lacks
-# them), so the registry protocol is pinned to `git` here — otherwise an offline `cargo test` cannot resolve
-# naga. This file is scoped to `hl_wip-gl` (its OWN workspace), so it never perturbs the repo-root build.
-[registries.crates-io]
-protocol = "git"

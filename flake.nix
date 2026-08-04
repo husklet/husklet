@@ -48,16 +48,10 @@
           pkgs.gobject-introspection
           pkgs.glib                # glib-compile-schemas
           pkgs.gdk-pixbuf          # gdk-pixbuf-query-loaders
-          pkgs.cmake
-          pkgs.clang
-          pkgs.perl
           pkgs.macdylibbundler     # provides `dylibbundler` — relocate the dylib graph
           pkgs.create-dmg          # build the .dmg
         ];
-        # libxkbcommon: the Smithay-native `hl-compositor` links it at build+run time (its keymap seat).
-        # Provided here so the mac-crates build gate (`make mac-crates`) and the .app bundling can find it
-        # (RUSTFLAGS `-L native=$HL_LIBXKBCOMMON/lib` + relocation into Contents/Frameworks).
-        buildInputs = [ pkgs.gtk4 pkgs.librsvg pkgs.vte-gtk4 pkgs.libxkbcommon ];
+        buildInputs = [ pkgs.gtk4 pkgs.librsvg pkgs.vte-gtk4 ];
 
         # Exported so tools/bundle.sh can find the runtime data to stage (no extra nix calls).
         HL_GTK4 = pkgs.gtk4;
@@ -66,11 +60,6 @@
         HL_ADWAITA_ICONS = pkgs.adwaita-icon-theme;
         HL_HICOLOR_ICONS = pkgs.hicolor-icon-theme;
         HL_GSETTINGS_SCHEMAS = pkgs.gsettings-desktop-schemas;
-        HL_LIBXKBCOMMON = pkgs.libxkbcommon;
-        # An explicit tool path avoids activating the cross stdenv setup hook, which would replace CC/CXX
-        # globally and make native macOS dependencies compile with the Linux compiler.
-        HL_AARCH64_LINUX_CC = "${pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc}/bin/aarch64-unknown-linux-gnu-gcc";
-        HL_X86_64_LINUX_CC = "${pkgs.pkgsCross.gnu64.stdenv.cc}/bin/x86_64-unknown-linux-gnu-gcc";
         # Deterministic Linux fixture used by the container integration suite.
         HL_ALPINE_ARCHIVE = alpine;
       };

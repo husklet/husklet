@@ -9,18 +9,12 @@ pub(super) struct RuntimeIdentity(String);
 
 impl RuntimeIdentity {
     pub(super) fn current(workspace: &WorkspaceConfig) -> io::Result<Self> {
-        let drivers = crate::runtime::drivers::Drivers::fingerprint(
-            crate::paths::drivers_dir(),
-            workspace.arch,
-            workspace.gui,
-            workspace.cuda.is_some(),
-        )?;
         let mut digest = sha2::Sha256::new();
         Self::field(&mut digest, ABI.as_bytes());
         Self::field(&mut digest, PROTOCOL.as_bytes());
         Self::field(&mut digest, env!("CARGO_PKG_VERSION").as_bytes());
         Self::field(&mut digest, env!("HUSKLET_RUNTIME_BUILD_ID").as_bytes());
-        Self::field(&mut digest, drivers.as_bytes());
+        Self::field(&mut digest, workspace.arch.as_str().as_bytes());
         let identity = digest
             .finalize()
             .iter()

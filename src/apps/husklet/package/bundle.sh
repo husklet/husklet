@@ -36,28 +36,6 @@ for tool in gdk-pixbuf-query-loaders glib-compile-schemas gtk4-update-icon-cache
   command -v "$tool" >/dev/null || die "$tool not found (nix dev shell)"
 done
 
-# A cross compiler that cannot run here fails much later, inside a nested cargo build, with a message
-# naming bash or an unrecognised flag rather than the compiler. Both have happened: a wrapper whose
-# interpreter was built for Linux dies on `declare -g` under macOS's bash 3.2, and pointing an arch at
-# another arch's compiler dies on `-m64`. Compile an empty translation unit for each now instead.
-cross_compilers_run() {
-  local probe status
-  # The template needs its own X's: macOS mktemp appends a suffix to a -t prefix, GNU mktemp refuses one
-  # without them. The dev shell supplies GNU coreutils, so the macOS-only spelling fails there.
-  probe="$(mktemp -t hl-bundle-cc.XXXXXX)" || return 1
-  : > "$probe.c"
-  for spec in "aarch64:${HL_AARCH64_LINUX_CC:-}" "x86_64:${HL_X86_64_LINUX_CC:-}"; do
-    local arch="${spec%%:*}" compiler="${spec#*:}"
-    [ -n "$compiler" ] || die "HL_${arch^^}_LINUX_CC is required to build the $arch guest drivers"
-    if ! status="$("$compiler" -c "$probe.c" -o "$probe.o" 2>&1)"; then
-      die "$arch cross compiler cannot run here: $compiler
-$status"
-    fi
-  done
-  rm -f "$probe" "$probe.c" "$probe.o"
-}
-cross_compilers_run
-
 source_changes() {
   {
     git -C "$ROOT" diff --no-ext-diff --binary HEAD
@@ -67,23 +45,13 @@ source_changes() {
   } | shasum -a 256 | awk '{print $1}'
 }
 
-# Guest artifacts are staged in a source-generation directory owned by this build, never in mutable
-# application state. A source change selects a fresh directory and therefore reruns each driver build.
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
 SOURCE_CHANGES="$(source_changes)"
-export HL_DRIVER_STAGE="$BUILD_TARGET/guest-drivers/${SOURCE_REVISION}-${SOURCE_CHANGES}"
-export HL_DRIVER_ARCHES=aarch64,x86_64
-DRIVER_READY="${HL_DRIVER_STAGE}.ready"
-if [ ! -f "$DRIVER_READY" ]; then
-  rm -rf "$HL_DRIVER_STAGE"
-  ( cd "$ROOT" && cargo clean -p hl-gl -p hl-vulkan -p hl-cuda )
-fi
 
 # 1. Release product binaries. Cargo links the native archive shipped by the selected `hl-engine` crate,
 # keeping the Rust API and native ABI on one published version.
 log "building release husklet and hl-daemon"
-( cd "$ROOT" && export RUSTFLAGS="-L native=$HL_LIBXKBCOMMON/lib ${RUSTFLAGS:-}" && \
-    cargo build --release -p hl-daemon && \
+( cd "$ROOT" && cargo build --release -p hl-daemon && \
     cargo build --release -p husklet --features gui,profile --bin husklet )
 [ "$(git -C "$ROOT" rev-parse HEAD)" = "$SOURCE_REVISION" ] \
   && [ "$(source_changes)" = "$SOURCE_CHANGES" ] \
@@ -104,103 +72,6 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@REVISION@/$SOURCE_REVISION/g" -e "s/@CHAN
 [ -f "$ROOT/src/apps/husklet/package/husklet.icns" ] && cp "$ROOT/src/apps/husklet/package/husklet.icns" "$RES/husklet.icns" || true
 [ -f "$ROOT/assets/logo.png" ] && cp "$ROOT/assets/logo.png" "$RES/logo.png" || true # onboarding logo
 [ -d "$ROOT/assets/images" ] && cp -R "$ROOT/assets/images" "$RES/images" || true # bundled starter images
-
-# Linux guest drivers are part of the product, not mutable user state. Copy only the committed manifest
-# from this revision-bound stage; stale architectures and undeclared files fail the build.
-DRIVER_STAGE="$HL_DRIVER_STAGE"
-DRIVER_DEST="$RES/drivers"
-DRIVER_MANIFEST="$ROOT/src/apps/husklet/package/drivers.manifest"
-[ -f "$DRIVER_MANIFEST" ] || die "guest driver manifest missing: $DRIVER_MANIFEST"
-[ -d "$DRIVER_STAGE" ] || die "guest driver stage missing: $DRIVER_STAGE"
-EXPECTED_DRIVERS="$(mktemp -t husklet-driver-expected.XXXXXX)"
-ACTUAL_DRIVERS="$(mktemp -t husklet-driver-actual.XXXXXX)"
-awk 'NF >= 2 && $1 !~ /^#/ { print $2 }' "$DRIVER_MANIFEST" | LC_ALL=C sort > "$EXPECTED_DRIVERS"
-find "$DRIVER_STAGE" \( -type f -o -type l \) -print \
-  | sed "s#^$DRIVER_STAGE/##" | LC_ALL=C sort > "$ACTUAL_DRIVERS"
-if ! diff -u "$EXPECTED_DRIVERS" "$ACTUAL_DRIVERS"; then
-  rm -f "$EXPECTED_DRIVERS" "$ACTUAL_DRIVERS"
-  die "guest driver stage contains missing, stale, or undeclared artifacts"
-fi
-rm -f "$EXPECTED_DRIVERS" "$ACTUAL_DRIVERS"
-
-while read -r kind driver target; do
-  [ -n "$kind" ] || continue
-  case "$kind" in
-    file)
-      [ -f "$DRIVER_STAGE/$driver" ] && [ ! -L "$DRIVER_STAGE/$driver" ] \
-        || die "declared guest driver file missing: $DRIVER_STAGE/$driver"
-      ;;
-    link)
-      [ -L "$DRIVER_STAGE/$driver" ] \
-        || die "declared guest driver link missing: $DRIVER_STAGE/$driver"
-      [ "$(readlink "$DRIVER_STAGE/$driver")" = "$target" ] \
-        || die "guest driver link has wrong target: $DRIVER_STAGE/$driver"
-      ;;
-    *) die "invalid guest driver manifest kind: $kind" ;;
-  esac
-done < "$DRIVER_MANIFEST"
-DRIVER_SONAMES=(
-  gl/libEGL.so.1:libEGL.so.1
-  gl/libGLESv2.so.2:libGLESv2.so.2
-  gl/libwayland-egl.so.1:libwayland-egl.so.1
-  gl/libgbm.so.1:libgbm.so.1
-  vulkan/libvk_hl.so.1:libvk_hl.so.1
-  cuda/libcuda.so.1:libcuda.so.1
-  cuda/libcudart.so.1:libcudart.so.1
-  nvml/libnvidia-ml.so.1:libnvidia-ml.so.1
-)
-for arch in aarch64 x86_64; do
-  case "$arch" in
-    aarch64)
-      compiler="${HL_AARCH64_LINUX_CC:?HL_AARCH64_LINUX_CC is required}"
-      description='ELF 64-bit.*ARM aarch64'
-      ;;
-    x86_64)
-      compiler="${HL_X86_64_LINUX_CC:?HL_X86_64_LINUX_CC is required}"
-      description='ELF 64-bit.*x86-64'
-      ;;
-  esac
-  readelf="${compiler%gcc}readelf"
-  [ -x "$readelf" ] || die "$arch Linux readelf missing beside $compiler"
-  elf_nm="${compiler%gcc}nm"
-  [ -x "$elf_nm" ] || die "$arch Linux nm missing beside $compiler"
-  for entry in "${DRIVER_SONAMES[@]}"; do
-    relative="${entry%%:*}"
-    family="${relative%%/*}"
-    library="${relative#*/}"
-    soname="${entry#*:}"
-    artifact="$DRIVER_STAGE/$family/$arch/$library"
-    file "$artifact" | grep -q "$description" || die "guest driver has wrong architecture: $artifact"
-    "$readelf" -d "$artifact" | grep -Fq "Library soname: [$soname]" || \
-      die "guest driver has wrong SONAME (expected $soname): $artifact"
-  done
-  "$readelf" -d "$DRIVER_STAGE/gl/$arch/libGLESv2.so.2" | \
-    grep -Fq 'Shared library: [libEGL.so.1]' || die "$arch libGLESv2 does not bind shared EGL state"
-  for api in gl egl; do
-    if [ "$api" = gl ]; then artifact="$DRIVER_STAGE/gl/$arch/libGLESv2.so.2"; else artifact="$DRIVER_STAGE/gl/$arch/libEGL.so.1"; fi
-    golden="$ROOT/src/surface/hl-gl/shim/egl/tests/golden/abi_symbols_${api}.txt"
-    actual="$(mktemp -t husklet-${arch}-${api}-exports.XXXXXX)"
-    "$elf_nm" -D --defined-only "$artifact" | awk '{print $3}' | grep "^${api}" | LC_ALL=C sort -u > "$actual" || true
-    diff -u "$golden" "$actual" >/dev/null || { rm -f "$actual"; die "$artifact does not export the complete ${api} ABI"; }
-    rm -f "$actual"
-  done
-done
-log "staging Linux guest drivers"
-while read -r kind driver target; do
-  [ -n "$kind" ] || continue
-  destination="$DRIVER_DEST/$driver"
-  mkdir -p "$(dirname "$destination")"
-  case "$kind" in
-    file) cp "$DRIVER_STAGE/$driver" "$destination" ;;
-    link) ln -s "$target" "$destination" ;;
-  esac
-done < "$DRIVER_MANIFEST"
-touch "$DRIVER_READY"
-
-# The compositor is a library linked into the Husklet executable. Husklet re-executes itself with the
-# private `__compositor` operation so AppKit presentation starts on that process's main thread. There is no
-# standalone compositor binary to package; relocating Husklet's dylib graph below includes libxkbcommon.
-[ -n "${HL_LIBXKBCOMMON:-}" ] || die "HL_LIBXKBCOMMON is required by the embedded compositor"
 
 # 3. Stage gdk-pixbuf loaders (png from gdk-pixbuf, svg from librsvg) with a RELATIVE cache.
 #    They live under Resources/ (NOT Frameworks/) so Frameworks stays a flat set of dylibs —
@@ -230,11 +101,7 @@ else
   : > "$DEST_LOADERS/loaders.cache"
 fi
 
-# 4. Relocate the dylib graph: Husklet + each loader .so (+ hl-compositor when built) ->
-#    Contents/Frameworks. Adding the compositor binaries here pulls libxkbcommon (and any other non-system
-#    dylib the Smithay renderer links) into Frameworks with @executable_path/../Frameworks install names,
-#    which — for a binary in Resources/ — resolves to Contents/Frameworks. That is what lets an end-user
-#    hl.app launch the compositor (readiness Gap 4).
+# 4. Relocate the application dylib graph into Contents/Frameworks.
 log "relocating dylibs (dylibbundler)"
 XARGS=( -x "$MACOS/husklet" -x "$RES/hl-daemon" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
@@ -337,8 +204,6 @@ done
 for b in hl-daemon; do
   [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f --entitlements "$ENT" "$RES/$b" >/dev/null 2>&1 || true
 done
-# The compositor has no JIT entitlement and is signed like the CLI.
-for b in hl-compositor; do [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$RES/$b" >/dev/null 2>&1 || true; done
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/husklet" >/dev/null 2>&1 || true
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$APP" >/dev/null 2>&1 || true   # outermost signed last
 codesign --verify --deep --strict "$APP" || die "bundle signature verification failed"

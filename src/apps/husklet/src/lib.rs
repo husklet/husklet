@@ -1,5 +1,4 @@
-//! Husklet's lightweight workspace configuration and application runtime. The signed application
-//! composes the engine, GPU, compositor, terminal, and workspace resource services.
+//! Husklet's lightweight workspace configuration and headless application runtime.
 
 pub mod config;
 pub mod logging;

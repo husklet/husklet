@@ -11,7 +11,6 @@ fn main() {
         crate_root.join("src/config"),
         crate_root.join("src/runtime"),
         workspace.join("src/containers"),
-        workspace.join("src/gpu/hl-gpu/src"),
         workspace.join("src/workspaces/hl-ws"),
     ];
     let mut files = Vec::new();

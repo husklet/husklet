@@ -10,7 +10,7 @@
 //!   - [`WorkspaceStore`], the persistence (`~/.hl/workspaces.conf`) that round-trips the full config.
 //!
 //! `hl` (the CLI launcher) maps each setting to the owning crate's PRIMITIVE at launch (vpn→engine egress
-//! arg, cuda→hl-gpu, gui→compositor socket, docker_sock→mount); this module is pure data + IO only.
+//! arg and docker_sock→mount); this module is pure data + IO only.
 
 use hl_ws::{Arch, Mount, Workspace};
 use std::io;
@@ -136,7 +136,7 @@ impl VpnConfig {
 /// A per-workspace **simulated CUDA device** SETTING. `None` on a [`WorkspaceConfig`] = no GPU device
 /// presented. These fields are exactly what NVML / `cudaGetDeviceProperties` report — *presentation* data,
 /// not real hardware. The injection MECHANISM (NVML shim, `nvidia-smi`, command-forward to Metal) is an
-/// `hl-gpu` primitive that Husklet drives from these fields at launch.
+/// GPU configuration retained in persisted input while the replacement Surface service is built.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CudaDevice {
     /// Reported device name, e.g. `"hl Metal (CUDA-sim) Device"`.
@@ -228,8 +228,8 @@ pub struct WorkspaceConfig {
     pub ws: Workspace,
     /// Mount the docker socket + set `DOCKER_HOST` so `docker` works inside (default on).
     pub docker_sock: bool,
-    /// GUI display: bind the host compositor socket into the guest so a Linux GUI app renders on the Mac
-    /// (default OFF). The render MECHANISM is an `hl-gpu`/engine primitive `hl` arms when this is set.
+    /// GUI display request (default OFF). Opening this configuration currently fails clearly because
+    /// the graphics stack has moved out of Husklet and its replacement is not integrated yet.
     pub gui: bool,
     /// Terminal scrollback (lines of history each shell retains). `None` = unlimited (the default). A
     /// TERMINAL knob (see `hl-ws-term`'s `TermConfig::scrollback`) persisted per-workspace here.

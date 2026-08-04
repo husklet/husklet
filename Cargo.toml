@@ -6,26 +6,16 @@ members = [
     "src/containers/hl-container",
     "src/containers/hl-daemon",
     "src/containers/hl-images",
-    "src/gpu/hl-gpu",
-    "src/gpu/hl-gpu-wgpu",
-    "src/surface/hl-compositor",
-    "src/surface/hl-surface-protocol",
-    "src/surface/hl-cuda",
-    "src/surface/hl-gl",
-    "src/surface/hl-vulkan",
     "src/workspaces/hl-gui",
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
     "src/packages/hl-log",
     "src/packages/hl-fs",
-    "src/packages/hl-iosurface",
     "src/packages/hl-design",
     "src/packages/hl-design-lint",
     "src/apps/husklet",
 ]
-exclude = ["vendor/smithay-0.7.0", "vendor/rust/wgpu-hal-24.0.4"]
 default-members = [
-    "src/gpu/hl-gpu",
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
 ]
@@ -78,35 +68,8 @@ pedantic = "warn"
 # hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
 # Keep it out of the default set so a bare `cargo build` works everywhere; build it
 # explicitly with `cargo build -p hl-gui` (or `make app`) on the macOS host.
-# hl-compositor pulls in Smithay and is kept out of default-members so a bare headless build does not
-# compile the Wayland adapter. Its build script locates the platform's versioned libxkbcommon library.
-# hl-gpu-wgpu wraps wgpu/naga (macOS-gated deps; compiles to an empty lib elsewhere) and is likewise
-# kept out of default-members so a bare Linux `cargo build` never fetches/compiles wgpu.
-# Guest GPU libraries now belong to their drivers: hl-gl owns EGL/GLES, hl-cuda owns CUDA/CUDART/NVML,
-# and hl-vulkan owns its ICD. Their cdylib packages remain outside default-members because they are
-# cross-built for guest ELF targets by the owning driver packages.
-# Offline-vendored smithay 0.7.0 with a single macOS-only fix: its `zwp_linux_dmabuf` v4-feedback
-# format-table is backed by a POSIX shm object whose name (`smithay-dmabuffeedback-format-table` +
-# random suffix, ~43 bytes) exceeds macOS `PSHMNAMLEN` (31) and fails `shm_open` with ENAMETOOLONG,
-# so the v4 global could not stand up on the macOS host and `hl-compositor` fell back to advertising
-# `zwp_linux_dmabuf` v3 only (no feedback → no accelerated-Chromium render-node probe). The vendored
-# copy shortens that shm object name in `src/utils/sealed_file.rs`; nothing else is changed. smithay is
-# only a dependency of the macOS-only `hl-compositor` (kept out of default-members), so this patch is a
-# no-op for the Linux headless build — resolution reads the manifest but never compiles smithay there.
 [patch.crates-io]
 hl-engine = { path = "../engine/pkgs/rust" }
-smithay = { path = "vendor/smithay-0.7.0" }
-naga = { path = "vendor/rust/naga-24.0.0" }
-wgpu-types = { path = "vendor/rust/wgpu-types-24.0.0" }
-# Exact crates.io wgpu-core 24.0.5 source, vendored because Husklet's Naga patch
-# preserves SPIR-V DimBuffer as ImageDimension::Buffer. wgpu-core exhaustively
-# consumes that public enum; its validation boundary rejects an unlowered texel
-# buffer so the hl-gpu-wgpu pre-WGSL lowering remains load-bearing.
-wgpu-core = { path = "vendor/rust/wgpu-core-24.0.5" }
-# Exact crates.io wgpu-hal 24.0.4 source, vendored because its Metal backend
-# must keep WebGPU's logical vertex-buffer count separate from Metal's shared
-# physical buffer-resource namespace. See the adjacent HUSKLET.md.
-wgpu-hal = { path = "vendor/rust/wgpu-hal-24.0.4" }
 
 [profile.release]
 opt-level = 2

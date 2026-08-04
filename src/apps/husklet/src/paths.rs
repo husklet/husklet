@@ -24,35 +24,6 @@ pub fn images_dir() -> PathBuf {
     hl_root().join("images")
 }
 
-/// Guest driver artifacts shipped with the application, or the development staging tree.
-pub fn drivers_dir() -> PathBuf {
-    DriverDirectory::resolve()
-}
-
-struct DriverDirectory;
-
-impl DriverDirectory {
-    fn resolve() -> PathBuf {
-        std::env::current_exe()
-            .ok()
-            .and_then(|executable| Self::bundled(&executable))
-            .unwrap_or_else(Self::development)
-    }
-
-    fn bundled(executable: &std::path::Path) -> Option<PathBuf> {
-        let macos = executable.parent()?;
-        if macos.file_name()? != "MacOS" {
-            return None;
-        }
-        let directory = macos.parent()?.join("Resources/drivers");
-        directory.is_dir().then_some(directory)
-    }
-
-    fn development() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/guest-drivers")
-    }
-}
-
 /// Workspace resource daemon shipped beside the application or in its macOS resource directory.
 pub fn daemon_bin() -> PathBuf {
     DaemonBinary::resolve()
@@ -88,36 +59,5 @@ impl DaemonBinary {
         }
         let binary = macos.parent()?.join("Resources/hl-daemon");
         binary.exists().then_some(binary)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DriverDirectory;
-    use std::path::Path;
-
-    #[test]
-    fn bundled_drivers_are_resolved_from_the_application_contents() {
-        let root = tempfile::tempdir().unwrap();
-        let contents = root.path().join("Husklet.app/Contents");
-        let executable = contents.join("MacOS/husklet");
-        std::fs::create_dir_all(contents.join("Resources/drivers")).unwrap();
-        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
-
-        assert_eq!(
-            DriverDirectory::bundled(&executable),
-            Some(contents.join("Resources/drivers"))
-        );
-        assert_eq!(
-            DriverDirectory::bundled(Path::new("/usr/bin/husklet")),
-            None
-        );
-    }
-
-    #[test]
-    fn development_drivers_are_build_artifacts_not_mutable_user_state() {
-        let directory = DriverDirectory::development();
-        assert!(directory.ends_with("target/guest-drivers"));
-        assert!(!directory.ends_with(".hl"));
     }
 }

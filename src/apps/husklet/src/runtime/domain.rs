@@ -111,9 +111,6 @@ impl Domain {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(output))
             .stderr(std::process::Stdio::from(errors));
-        if let Some(capture) = crate::runtime::gpu::CaptureOptions::configured()? {
-            command.args(capture.worker_arguments()?);
-        }
         // SAFETY: the hook runs after `fork` and before `exec` in the child. It only invokes
         // the async-signal-safe `setsid` syscall and converts its errno into an I/O error.
         unsafe {
@@ -426,9 +423,15 @@ impl Runtime {
     }
 
     async fn open(workspace: &WorkspaceConfig) -> io::Result<(Containers, Platform)> {
+        if workspace.gui || workspace.cuda.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "GUI and CUDA workspaces are unavailable while Surface is being replaced",
+            ));
+        }
         let external = Images::open(paths::images_dir()).map_err(io::Error::other)?;
         let platform = Self::platform(workspace.arch);
-        let devices = Devices::new().with(crate::runtime::devices::Workspace::new(workspace)?);
+        let devices = Devices::new();
         let workspace_root = workspace.storage_dir(&paths::hl_root());
         let images = Images::workspace(
             Images::open(workspace_root.join("images")).map_err(io::Error::other)?,
