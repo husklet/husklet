@@ -32,7 +32,7 @@ pub(crate) use harness::{analyze, contract, fixture, manifest, report, runner, s
     reason = "categories are referenced through the registry catalog and provenance auditor"
 )]
 pub(crate) use groups::{
-    coherence, copy, databases, distros, execcmd, filesystem, imagescmd, languages, lifecycle,
+    coherence, copy, databases, distros, execcmd, filesystem, languages, lifecycle,
     netcontainer, network, observe, permissions, process, runflags, terminal, utilities, volume,
     web, weird,
 };
@@ -102,7 +102,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "database-cleanup" => scenario::database_cleanup().await?,
         "distros" => scenario::distros().await?,
         "execcmd" => scenario::exec().await?,
-        "imagescmd" => imagescmd::run().await?,
         "languages" => scenario::languages().await?,
         "netcontainer" => scenario::netcontainer().await?,
         "network-contracts" => scenario::network().await?,

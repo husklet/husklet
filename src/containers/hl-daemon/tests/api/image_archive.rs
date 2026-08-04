@@ -1,6 +1,6 @@
 //! Image archive load/list/inspect/tag/save/remove round trip.
 
-use crate::api::support::{require, wait_for_path, write_image_archive};
+use crate::api::support::{raw_http, require, wait_for_path, write_image_archive};
 use hl_client::Client;
 use hl_container::{Config, Containers};
 use hl_daemon::Daemon;
@@ -60,6 +60,24 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     require(
         inspected.id == listed[0].id,
         "image inspect and list disagreed on identity",
+    )?;
+    let history = raw_http(
+        &socket,
+        b"GET /v1.43/images/scenario%2Ffixture:test/history HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await?;
+    require(
+        history.starts_with("HTTP/1.1 200"),
+        "image history endpoint did not accept an imported image",
+    )?;
+    let inspect = raw_http(
+        &socket,
+        b"GET /v1.43/images/scenario%2Ffixture:test/json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await?;
+    require(
+        inspect.contains("\"Os\":\"linux\"") && inspect.contains("\"Architecture\":\"arm64\""),
+        "image inspect omitted imported platform metadata",
     )?;
     client
         .images()

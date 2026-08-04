@@ -76,10 +76,6 @@ pub(super) const TASKS: &[Task] = &[
         command: "filesystem",
     },
     Task {
-        category: "imagescmd",
-        command: "imagescmd",
-    },
-    Task {
         category: "languages",
         command: "languages",
     },
@@ -167,7 +163,6 @@ fn fallback(category: &str) -> Option<Resource> {
         "weird" => Some(Resource::ProcessHeavy),
         "copy" | "filesystem" | "volume" => Some(Resource::DiskHeavy),
         "databases" | "netcontainer" | "network" | "runflags" | "web" => Some(Resource::HostPort),
-        "imagescmd" => Some(Resource::ImageMutation),
         _ => None,
     }
 }

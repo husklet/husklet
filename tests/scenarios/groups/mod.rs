@@ -12,7 +12,6 @@ pub(crate) mod databases;
 pub(crate) mod distros;
 pub(crate) mod execcmd;
 pub(crate) mod filesystem;
-pub(crate) mod imagescmd;
 pub(crate) mod languages;
 pub(crate) mod lifecycle;
 pub(crate) mod netcontainer;

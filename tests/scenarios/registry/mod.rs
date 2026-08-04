@@ -4,7 +4,6 @@ pub(crate) mod build;
 pub(crate) mod copy;
 pub(crate) mod dockernet;
 pub(crate) mod dockervol;
-pub(crate) mod images;
 pub(crate) mod netinstall;
 pub(crate) mod networking;
 pub(crate) mod observe;
@@ -18,7 +17,6 @@ pub(crate) fn build() -> crate::contract::Registry {
     registry.add(crate::databases::group());
     registry.add(dockervol::group());
     registry.add(dockernet::group());
-    registry.add(images::group());
     registry.add(networking::group());
     registry.add(netinstall::group());
     registry.add(observe::group());

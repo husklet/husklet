@@ -1,5 +1,5 @@
 use crate::{
-    coherence, copy, databases, distros, execcmd, filesystem, imagescmd, languages, lifecycle,
+    coherence, copy, databases, distros, execcmd, filesystem, languages, lifecycle,
     netcontainer, network, observe, permissions, process, registry, report, runflags, runner,
     terminal, utilities, web, weird, workflows,
 };
@@ -7,14 +7,13 @@ use crate::support::{containers_for, unpack};
 use std::{env, path::PathBuf};
 use tempfile::TempDir;
 
-pub(super) const SCENARIOS: [&str; 21] = [
+pub(super) const SCENARIOS: [&str; 20] = [
     "runtime-alpine",
     "copy",
     "buildcmd",
     "databases",
     "distros",
     "execcmd",
-    "imagescmd",
     "languages",
     "netcontainer",
     "network-contracts",
@@ -75,7 +74,6 @@ pub(super) async fn runtime() -> Result<(), Box<dyn std::error::Error>> {
     let rootfs = alpine(work.path()).await?;
     let containers = containers_for(work.path()).await?;
     execcmd::run(&containers, &rootfs).await?;
-    imagescmd::run().await?;
     netcontainer::run(&containers, &rootfs).await?;
     observe::run(&containers, &rootfs, work.path()).await?;
     filesystem::run(&containers).await?;
