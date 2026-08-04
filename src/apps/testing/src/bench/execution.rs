@@ -38,6 +38,8 @@ pub struct Provenance {
     pub warmups: u32,
 }
 
+type MeasurementResult = (u128, Vec<u128>, BTreeMap<String, Vec<u128>>);
+
 const CAPTURE_LIMIT: usize = 1024 * 1024;
 const DIAGNOSTIC_CAPTURE: usize = 4096;
 const DIAGNOSTIC_OUTPUT: usize = 16 * 1024;
@@ -71,7 +73,7 @@ async fn execute(
     benchmark: Arc<Benchmark>,
     case_index: usize,
     target: Target,
-) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
+) -> std::result::Result<MeasurementResult, Error> {
     let case = &benchmark.cases[case_index];
     let deadline = tokio::time::Instant::now() + row_timeout(case)?;
     let image = tokio::time::timeout_at(deadline, TestImage::materialize(&benchmark.image, &target.platform()))
@@ -104,7 +106,7 @@ async fn execute_with_image(
     target: Target,
     image: &std::path::Path,
     deadline: tokio::time::Instant,
-) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
+) -> std::result::Result<MeasurementResult, Error> {
     let state = isolated_state()?;
     let containers = tokio::time::timeout_at(
         deadline,
@@ -161,7 +163,7 @@ async fn run_case(
     image: &std::path::Path,
     program: &str,
     deadline: tokio::time::Instant,
-) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
+) -> std::result::Result<MeasurementResult, Error> {
     let expected_stdout = fs::read(&case.stdout_contains)?;
     let total = 1_u32
         .checked_add(case.warmups)
@@ -348,15 +350,15 @@ impl Measurements {
         }
         self.samples.push(elapsed);
         for (name, time, checksum) in phases {
-            self.record_phase(name, time, checksum)?;
+            self.record_phase(&name, time, checksum)?;
         }
         Ok(())
     }
 
-    fn record_phase(&mut self, name: String, time: u128, checksum: u64) -> std::result::Result<(), Error> {
+    fn record_phase(&mut self, name: &str, time: u128, checksum: u64) -> std::result::Result<(), Error> {
         let phase = self
             .phases
-            .entry(name.clone())
+            .entry(name.to_owned())
             .or_insert_with(|| (checksum, Vec::new()));
         if name != "syscall" && phase.0 != checksum {
             return Err(format!("PHASE {name} checksum changed across samples").into());
@@ -365,7 +367,7 @@ impl Measurements {
         Ok(())
     }
 
-    fn finish(self, samples: u32) -> std::result::Result<(u128, Vec<u128>, BTreeMap<String, Vec<u128>>), Error> {
+    fn finish(self, samples: u32) -> std::result::Result<MeasurementResult, Error> {
         if self.phases.values().any(|(_, times)| times.len() != samples as usize) {
             return Err("PHASE set changed across samples".into());
         }

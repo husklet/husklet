@@ -40,7 +40,7 @@ impl Ledger {
         if let Some(parent) = report.parent() {
             fs::create_dir_all(parent)?;
         }
-        let lock = hl_engine::native::FileLock::acquire(&report.with_extension("lock"))?;
+        let lock = hl_engine::native::FileLock::acquire(report.with_extension("lock"))?;
         let prior = if resume && partial.exists() {
             load(&partial, stamp, keys)?
         } else {

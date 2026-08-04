@@ -11,6 +11,7 @@ use definition::Benchmark;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
+    fmt::Write as _,
     future::Future,
     path::{Component, PathBuf},
     sync::Arc,
@@ -42,7 +43,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
         rows.insert(row.key.clone(), row);
     }
     tokio::task::spawn_blocking(move || ledger.finish().map_err(|error| error.to_string())).await??;
-    Report::finish(rows)
+    Report::finish(&rows)
 }
 
 async fn execute_work(work: Work) -> Completed {
@@ -143,7 +144,7 @@ impl Statistics {
 struct Report;
 
 impl Report {
-    fn finish(rows: std::collections::BTreeMap<WorkKey, ledger::Row>) -> Result<(), Error> {
+    fn finish(rows: &std::collections::BTreeMap<WorkKey, ledger::Row>) -> Result<(), Error> {
         let mut passed = 0;
         let mut failures = Vec::new();
         for row in rows.values() {
@@ -276,7 +277,11 @@ async fn fingerprint(work: &[Work]) -> Result<String, Error> {
             digest.update(std::fs::read(source).map_err(|error| error.to_string())?);
             digest.update(std::fs::read(golden).map_err(|error| error.to_string())?);
         }
-        Ok::<_, String>(digest.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+        let mut stamp = String::with_capacity(64);
+        for byte in digest.finalize() {
+            write!(&mut stamp, "{byte:02x}").map_err(|error| error.to_string())?;
+        }
+        Ok::<_, String>(stamp)
     })
     .await?
     .map_err(Into::into)
