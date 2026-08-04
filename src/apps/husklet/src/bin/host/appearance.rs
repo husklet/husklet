@@ -11,7 +11,9 @@ impl Appearance {
         use objc2_app_kit::{NSAppearance, NSApplication};
         use objc2_foundation::{MainThreadMarker, NSString};
 
-        let main = unsafe { MainThreadMarker::new_unchecked() };
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
         let application = NSApplication::sharedApplication(main);
         let name = NSString::from_str("NSAppearanceNameDarkAqua");
         if let Some(appearance) = NSAppearance::appearanceNamed(&name) {
