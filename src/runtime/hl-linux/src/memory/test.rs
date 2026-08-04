@@ -122,6 +122,15 @@ fn range_remap_rules() {
     assert!(MemoryAbi::<Memory>::munmap(0x1001, 4096).is_err());
     assert!(MemoryAbi::<Memory>::munmap(0x1000, 0).is_err());
     assert_eq!(MemoryAbi::<Memory>::mprotect(1, 0, u32::MAX), Ok(None));
+    let writable_executable = MemoryAbi::<Memory>::mprotect(0x1000, 4096, 6).unwrap().unwrap();
+    assert_eq!(
+        writable_executable.protection,
+        Some(Protection::WRITE.union(Protection::EXECUTE))
+    );
+    assert_eq!(
+        MemoryAbi::<Memory>::mprotect(0x1000, 4096, 8),
+        Err(MemoryMarshalError::Invalid)
+    );
     let lock = MemoryAbi::<Memory>::mlock(0x1800, 0x1000).unwrap().unwrap();
     assert_eq!(lock.range.start().get(), 0x1000);
     assert_eq!(lock.range.length(), 0x2000);

@@ -717,8 +717,14 @@ fn production_memory_family() {
         assert_eq!(&retained, b"memory");
         assert_eq!(
             route_call(&router, architecture, mprotect, [address, 4096, 6, 0, 0, 0]),
+            0
+        );
+        arena.write(address, b"updated").unwrap();
+        assert_eq!(
+            route_call(&router, architecture, mprotect, [address, 4096, 8, 0, 0, 0]),
             LinuxResult::Error(Errno::EINVAL).encode()
         );
+        arena.write(address, b"retained").unwrap();
         assert_eq!(
             route_call(&router, architecture, munmap, [address, 4096, 0, 0, 0, 0]),
             0
