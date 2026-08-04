@@ -9,6 +9,7 @@ struct Memory {
     bytes: Vec<u8>,
     generation: u64,
     fetches: std::cell::Cell<u64>,
+    cacheable: bool,
 }
 
 impl Memory {
@@ -17,6 +18,14 @@ impl Memory {
             bytes: vec![0; size],
             generation: 0,
             fetches: std::cell::Cell::new(0),
+            cacheable: true,
+        }
+    }
+
+    fn interpreted(size: usize) -> Self {
+        Self {
+            cacheable: false,
+            ..Self::new(size)
         }
     }
 
@@ -184,7 +193,7 @@ impl ExecutionInstructionMemory for Memory {
     }
 
     fn instruction_epoch(&self) -> Option<crate::InstructionEpoch> {
-        Some(crate::InstructionEpoch {
+        self.cacheable.then_some(crate::InstructionEpoch {
             incarnation: 1,
             mappings: 1,
             writes: self.generation,
@@ -548,6 +557,41 @@ fn x86_slice_boundaries() {
         machine.run_slice(1, 4, &mut memory),
         StepOutcome::Fault(ExecutionFault::Frozen)
     );
+}
+
+#[test]
+fn repeated_x86_interpreter_slices_stop_at_decoder_boundaries() {
+    const FIRST: u64 = 0x1000;
+    // add rax,1; dec rax; jmp FIRST. These repository-owned bytes mix four-,
+    // three-, and two-byte instructions so an interior return is observable.
+    const CODE: &[u8] = &[0x48, 0x83, 0xc0, 0x01, 0x48, 0xff, 0xc8, 0xeb, 0xf7];
+    let mut memory = Memory::interpreted(0x2000);
+    memory.put(FIRST as usize, CODE);
+    let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
+        rip: FIRST,
+        ..CpuState::default()
+    }));
+    let mut starts = Vec::new();
+    let mut offset = 0;
+    while offset < CODE.len() {
+        starts.push(FIRST + offset as u64);
+        let decoded = crate::X86ScalarDecoder::decode(&CODE[offset..], FIRST + offset as u64).unwrap();
+        offset += usize::from(decoded.length);
+    }
+
+    for budget in [1, 2, 5, 3, 8, 13, 1, 21] {
+        assert_eq!(machine.run_slice(1, budget, &mut memory), StepOutcome::Yield);
+        machine.freeze().unwrap();
+        let ExecutionCpuSnapshot::X86_64(cpu) = machine.snapshot().unwrap().cpu else {
+            panic!("x86-64")
+        };
+        assert!(
+            starts.contains(&cpu.rip),
+            "budget {budget} returned interior instruction pointer {:#x}",
+            cpu.rip,
+        );
+        machine.thaw().unwrap();
+    }
 }
 
 #[test]

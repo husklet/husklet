@@ -4232,6 +4232,82 @@ mod test {
 
     #[cfg(target_arch = "aarch64")]
     #[test]
+    fn x86_budget_return_child() {
+        if std::env::var_os("HL_X86_BUDGET_RETURN_CHILD").is_none() {
+            return;
+        }
+        let executor = Executor::create().unwrap();
+        // Four NOPs; cmp eax,0; je to the first NOP. This is the same bounded
+        // branch shape exercised by the native C budget contract.
+        let bytes = [0x90, 0x90, 0x90, 0x90, 0x83, 0xf8, 0x00, 0x74, 0xf7];
+        let source = [BorrowedSource {
+            guest_first: 0x5000,
+            bytes: &bytes,
+        }];
+        let mut resolve = |_: u64, _: &mut [u8]| None;
+        for budget in [1, 65_536] {
+            let mut cpu = X86CpuState {
+                rip: 0x5000,
+                ..X86CpuState::default()
+            };
+            let mut completed = false;
+            for _ in 0..2 {
+                let outcome = executor
+                    .run_x86(&mut cpu, &source, 41, 1, budget, false, None, &mut resolve)
+                    .unwrap()
+                    .0;
+                if outcome.executed == 0 {
+                    assert_eq!(
+                        (outcome.exit, outcome.remaining, cpu.rip),
+                        (Exit::Yield, budget, 0x5000)
+                    );
+                    continue;
+                }
+                assert_eq!(
+                    (outcome.exit, outcome.executed, outcome.remaining),
+                    (Exit::Yield, budget, 0)
+                );
+                assert_eq!(cpu.rip, if budget == 1 { 0x5001 } else { 0x5004 });
+                completed = true;
+                break;
+            }
+            assert!(completed, "native x86 made no progress for budget {budget}");
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn x86_native_small_and_large_budget_returns_are_bounded() {
+        let executable = std::env::current_exe().unwrap();
+        let mut child = std::process::Command::new(executable)
+            .args(["x86_budget_return_child", "--nocapture"])
+            .env("HL_X86_BUDGET_RETURN_CHILD", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait().unwrap() {
+                Some(status) => {
+                    assert!(status.success(), "native budget child failed: {status}");
+                    break;
+                }
+                None if started.elapsed() < std::time::Duration::from_secs(3) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                None => {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("native budget child timed out");
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
     fn x86_register_memory_alu_is_guarded() {
         let bytes = [0x4c, 0x01, 0x23, 0x48, 0x03, 0x03, 0x48, 0x3b, 0x0b, 0x0f, 0x05];
         let source = [BorrowedSource {
