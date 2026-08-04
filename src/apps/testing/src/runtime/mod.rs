@@ -8,7 +8,7 @@ mod ledger;
 mod pool;
 pub(crate) mod scheduler;
 
-use crate::suite::{Error, Target};
+use crate::suite::{self, Error, Target};
 use clap::Args;
 use definition::{App, EngineHost};
 use std::path::{Path, PathBuf};
@@ -295,23 +295,9 @@ fn validate_case_ids(apps: &[App]) -> Result<(), Error> {
 
 fn apps(options: &Options) -> Result<Vec<App>, Error> {
     let root = workspace()?.join("tests/runtime");
-    let mut directories = std::fs::read_dir(&root)?
-        .map(|entry| entry.map(|value| value.path()))
-        .collect::<Result<Vec<_>, _>>()?;
-    directories.sort();
     let mut result = Vec::new();
-    for directory in directories.into_iter().filter(|value| value.is_dir()) {
-        let name = directory
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if options.app.as_deref().is_some_and(|selected| selected != name) {
-            continue;
-        }
-        let definition = directory.join("test.yaml");
-        if definition.is_file() {
-            result.push(App::load(&directory, &definition)?);
-        }
+    for manifest in suite::manifests(&root, options.app.as_deref())? {
+        result.push(App::load(&manifest.directory, &manifest.definition)?);
     }
     if result.is_empty() {
         return Err(format!("no runtime apps matched under {}", root.display()).into());

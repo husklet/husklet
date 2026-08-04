@@ -6,7 +6,7 @@ mod options;
 mod process;
 mod scheduler;
 
-use crate::suite::Error;
+use crate::suite::{self, Error};
 use definition::Scenario;
 pub(crate) use options::Options;
 use std::path::{Path, PathBuf};
@@ -38,23 +38,9 @@ pub async fn run(options: Options) -> Result<(), Error> {
 
 fn scenarios(options: &Options) -> Result<Vec<Scenario>, Error> {
     let root = workspace()?.join("tests/scenarios");
-    let mut directories = std::fs::read_dir(&root)?
-        .map(|entry| entry.map(|value| value.path()))
-        .collect::<Result<Vec<_>, _>>()?;
-    directories.sort();
     let mut result = Vec::new();
-    for directory in directories.into_iter().filter(|value| value.is_dir()) {
-        let name = directory
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        if options.scenario.as_deref().is_some_and(|selected| selected != name) {
-            continue;
-        }
-        let definition = directory.join("test.yaml");
-        if definition.is_file() {
-            result.push(Scenario::load(&directory, &definition)?);
-        }
+    for manifest in suite::manifests(&root, options.scenario.as_deref())? {
+        result.push(Scenario::load(&manifest.directory, &manifest.definition)?);
     }
     let result = options.select_cases(result)?;
     if result.is_empty() {
