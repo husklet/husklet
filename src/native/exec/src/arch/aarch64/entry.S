@@ -17,6 +17,10 @@ hl_native_aarch64_enter:
     stp q10,q11,[x0,#928]
     stp q12,q13,[x0,#960]
     stp q14,q15,[x0,#992]
+    sub sp,sp,#16
+    mrs x9,fpcr
+    mrs x10,fpsr
+    stp x9,x10,[sp]
     mov x9,sp
     str x9,[x0,#280]
     br x1
@@ -38,7 +42,10 @@ hl_native_aarch64_return:
     ldp q12,q13,[x0,#960]
     ldp q14,q15,[x0,#992]
     ldr x9,[x0,#280]
-    mov sp,x9
+    ldp x10,x11,[x9]
+    add sp,x9,#16
+    msr fpcr,x10
+    msr fpsr,x11
     ret
 .size hl_native_aarch64_return,.-hl_native_aarch64_return
 
