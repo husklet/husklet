@@ -31,13 +31,17 @@ fn image_queries_reject_meaningful_unknown_options_before_work() {
 fn summaries_without_shared_size_visit_each_target_once() {
     let digest = format!("sha256:{}", "1".repeat(64));
     let record = |name: &str| {
-        serde_json::from_value::<hl_images::Image>(serde_json::json!({
-            "name": name,
+        serde_json::from_value::<hl_images::Graph>(serde_json::json!({
             "target": {
                 "mediaType": "application/vnd.oci.image.manifest.v1+json",
                 "digest": digest,
                 "size": 23
-            }
+            },
+            "names": [name.parse::<hl_images::Reference>().unwrap().to_string()],
+            "created_at_ms": null,
+            "labels": null,
+            "build_cache": false,
+            "metadata_known": false
         }))
         .unwrap()
     };
@@ -45,7 +49,6 @@ fn summaries_without_shared_size_visit_each_target_once() {
     let details = std::cell::Cell::new(0);
     let summaries = build_image_summaries(
         vec![record("example:first"), record("example:second")],
-        Vec::new(),
         false,
         |_| {
             sizes.set(sizes.get() + 1);
@@ -74,13 +77,17 @@ fn summaries_without_shared_size_visit_each_target_once() {
 #[test]
 fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
     let record = |name: &str, digit: char| {
-        serde_json::from_value::<hl_images::Image>(serde_json::json!({
-            "name": name,
+        serde_json::from_value::<hl_images::Graph>(serde_json::json!({
             "target": {
                 "mediaType": "application/vnd.oci.image.manifest.v1+json",
                 "digest": format!("sha256:{}", digit.to_string().repeat(64)),
                 "size": 23
-            }
+            },
+            "names": [name.parse::<hl_images::Reference>().unwrap().to_string()],
+            "created_at_ms": null,
+            "labels": null,
+            "build_cache": false,
+            "metadata_known": false
         }))
         .unwrap()
     };
@@ -92,7 +99,6 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
             record("first:tag", '1'),
             record("second:tag", '2'),
         ],
-        Vec::new(),
         true,
         |_| panic!("individual size walks must be skipped"),
         |unique| {
@@ -131,7 +137,6 @@ fn summaries_with_shared_size_batch_unique_targets_and_propagate_reads() {
 
     let error = build_image_summaries(
         vec![record("broken:tag", '3')],
-        Vec::new(),
         false,
         |_| Err(hl_images::Error::InvalidMetadata("unreadable target".into())),
         |_| panic!("shared usage must remain skipped"),
@@ -151,14 +156,12 @@ fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
         }))
         .unwrap()
     };
-    let tagged = serde_json::from_value::<hl_images::Image>(serde_json::json!({
-        "name": "example:tagged",
-        "target": descriptor('1')
-    }))
-    .unwrap();
-    let graph = |digit: char, build_cache: bool| hl_images::Graph {
+    let graph = |digit: char, names: &[&str], build_cache: bool| hl_images::Graph {
         target: descriptor(digit),
-        names: Default::default(),
+        names: names
+            .iter()
+            .map(|name| name.parse::<hl_images::Reference>().unwrap().to_string())
+            .collect(),
         created_at_ms: None,
         labels: None,
         build_cache,
@@ -166,8 +169,11 @@ fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
     };
 
     let summaries = build_image_summaries(
-        vec![tagged],
-        vec![graph('1', false), graph('2', false), graph('3', true)],
+        vec![
+            graph('1', &["example:tagged"], false),
+            graph('2', &[], false),
+            graph('3', &["hl-build-cache/step:v1"], true),
+        ],
         false,
         |_| Ok(101),
         |_| panic!("shared descriptor accounting must be skipped"),

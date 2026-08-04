@@ -105,14 +105,12 @@ impl DockerState {
     }
 
     async fn image_summaries_with_shared_size(&self, include_shared_size: bool) -> ApiResult<Vec<ImageSummary>> {
-        let records = self.image_records().await?;
         let images = self.containers.images().map_err(ApiError::container)?;
         let platform = self.platform.clone();
         tokio::task::spawn_blocking(move || {
-            let graphs = images.graphs()?;
+            let inventory = images.inventory()?;
             build_image_summaries(
-                records,
-                graphs,
+                inventory,
                 include_shared_size,
                 |target| images.size_target(target),
                 |unique| images.usage_targets(unique),
@@ -141,8 +139,7 @@ impl DockerState {
 }
 
 fn build_image_summaries<Size, Usage, Labels>(
-    records: Vec<hl_images::Image>,
-    graphs: Vec<hl_images::Graph>,
+    inventory: Vec<hl_images::Graph>,
     include_shared_size: bool,
     mut size: Size,
     usage: Usage,
@@ -154,21 +151,25 @@ where
     Labels: FnMut(&hl_images::Descriptor) -> hl_images::Result<BTreeMap<String, String>>,
 {
     let mut grouped = BTreeMap::<String, (hl_images::Descriptor, Vec<String>)>::new();
-    for image in records {
-        let id = image.target.digest().to_string();
-        grouped
-            .entry(id)
-            .and_modify(|(_, tags)| tags.push(image.name.to_string()))
-            .or_insert_with(|| {
-                let tag = image.name.to_string();
-                (image.target, vec![tag])
-            });
-    }
-    for graph in graphs {
-        if graph.names.is_empty() && !graph.build_cache {
-            grouped
-                .entry(graph.target.digest().to_string())
-                .or_insert((graph.target, Vec::new()));
+    for graph in inventory {
+        if graph.build_cache {
+            continue;
+        }
+        let tags = graph
+            .names
+            .into_iter()
+            .map(|name| name.parse::<Reference>())
+            .collect::<hl_images::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|name| !name.repository().starts_with("hl-build-cache/"))
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>();
+        let id = graph.target.digest().to_string();
+        match grouped.entry(id) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((graph.target, tags));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => entry.get_mut().1.extend(tags),
         }
     }
     let unique = grouped.values().map(|(target, _)| target.clone()).collect::<Vec<_>>();
