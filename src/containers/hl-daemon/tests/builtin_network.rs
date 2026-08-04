@@ -105,7 +105,8 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await?;
         require(listed.starts_with("HTTP/1.1 200"), "network list was not HTTP 200")?;
-        let networks = body(&listed)?
+        let listed_body = body(&listed)?;
+        let networks = listed_body
             .as_array()
             .ok_or("network list was not a JSON array")?
             .iter()
@@ -119,7 +120,7 @@ async fn wire_contract() -> Result<(), Box<dyn std::error::Error>> {
             networks == [("bridge".into(), "bridge".into()), ("none".into(), "null".into())],
             "Docker list did not expose Moby built-in names and drivers",
         )?;
-        let bridge = body(&listed)?
+        let bridge = listed_body
             .as_array()
             .and_then(|networks| networks.iter().find(|network| network["Name"] == "bridge"))
             .ok_or("Docker list omitted its built-in bridge")?;
