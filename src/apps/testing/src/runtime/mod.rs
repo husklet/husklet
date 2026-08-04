@@ -100,16 +100,32 @@ impl Completed {
 fn outcome(result: &Result<Vec<execution::CaseResult>, String>) -> (&'static str, String) {
     match result {
         Ok(results) if results.iter().all(execution::CaseResult::passed) => ("pass", String::new()),
-        Ok(results) => ("fail", results.iter().filter_map(execution::CaseResult::diagnostic).collect::<Vec<_>>().join("; ")),
+        Ok(results) => (
+            "fail",
+            results
+                .iter()
+                .filter_map(execution::CaseResult::diagnostic)
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
         Err(error) => ("fail", error.clone()),
     }
 }
 
-fn summarize(prior: &std::collections::BTreeMap<WorkKey, ledger::Row>, completed: Vec<Completed>) -> (usize, Vec<String>) {
+fn summarize(
+    prior: &std::collections::BTreeMap<WorkKey, ledger::Row>,
+    completed: Vec<Completed>,
+) -> (usize, Vec<String>) {
     let mut passed = 0;
     let mut failed = Vec::new();
     for row in prior.values() {
-        println!("RESUME {} {} {} elapsed_ms={}", row.status, row.key.id, row.key.target.name(), row.elapsed_ms);
+        println!(
+            "RESUME {} {} {} elapsed_ms={}",
+            row.status,
+            row.key.id,
+            row.key.target.name(),
+            row.elapsed_ms
+        );
         if row.status == "pass" {
             passed += 1;
         } else {
@@ -143,7 +159,11 @@ fn summarize_results(
     for result in results {
         match result {
             execution::CaseResult::Passed(id, attempt) => {
-                println!("PASS {} {} elapsed_ms={elapsed_ms}", display_attempt(&id, attempt), key.target.name());
+                println!(
+                    "PASS {} {} elapsed_ms={elapsed_ms}",
+                    display_attempt(&id, attempt),
+                    key.target.name()
+                );
                 *passed += 1;
             }
             execution::CaseResult::Failed(id, attempt, error) => {
