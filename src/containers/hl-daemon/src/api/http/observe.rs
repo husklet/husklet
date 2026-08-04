@@ -21,33 +21,35 @@ pub(super) async fn top(
 ) -> ApiResult<Json<Top>> {
     let columns = options.columns()?;
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
-    top_response(&container, &columns).map(Json)
+    Top::for_container(&container, &columns).map(Json)
 }
 
-fn top_response(container: &Container, columns: &[ProcessColumn]) -> ApiResult<Top> {
-    if !matches!(
-        container.state,
-        ContainerState::Running { .. } | ContainerState::Paused { .. }
-    ) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            format!(
-                "Container {} is not running",
-                &container.id.as_str()[..container.id.as_str().len().min(12)]
-            ),
-        ));
+impl Top {
+    fn for_container(container: &Container, columns: &[ProcessColumn]) -> ApiResult<Self> {
+        if !matches!(
+            container.state,
+            ContainerState::Running { .. } | ContainerState::Paused { .. }
+        ) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                format!(
+                    "Container {} is not running",
+                    &container.id.as_str()[..container.id.as_str().len().min(12)]
+                ),
+            ));
+        }
+        if !columns.iter().any(|column| matches!(column, ProcessColumn::Pid)) {
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Couldn't find PID field in ps output",
+            ));
+        }
+        let process = ProcessRow::new(container);
+        Ok(Self {
+            titles: columns.iter().map(|column| column.title().into()).collect(),
+            processes: vec![columns.iter().map(|column| process.value(*column)).collect()],
+        })
     }
-    if !columns.iter().any(|column| matches!(column, ProcessColumn::Pid)) {
-        return Err(ApiError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Couldn't find PID field in ps output",
-        ));
-    }
-    let process = ProcessRow::new(container);
-    Ok(Top {
-        titles: columns.iter().map(|column| column.title().into()).collect(),
-        processes: vec![columns.iter().map(|column| process.value(*column)).collect()],
-    })
 }
 
 #[derive(Default, Deserialize)]

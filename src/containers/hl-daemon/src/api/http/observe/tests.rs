@@ -1,6 +1,6 @@
 use super::{
-    CpuTime, Options, ProcessColumn, ProcessMetrics, ProcessRow, StatsMode, TopOptions, docker_bool,
-    sample_with_metrics, stats, stats_stream_response, supports_one_shot, top, top_response,
+    CpuTime, Options, ProcessColumn, ProcessMetrics, ProcessRow, StatsMode, Top, TopOptions, docker_bool,
+    sample_with_metrics, stats, stats_stream_response, supports_one_shot, top,
 };
 use axum::body::Body;
 use axum::extract::{OriginalUri, Path, Query, State};
@@ -192,7 +192,7 @@ fn custom_top(fields: &str) -> TopOptions {
 }
 
 #[test]
-fn top_custom_columns_preserve_order_before_pid_validation() {
+fn custom_column_order() {
     assert_eq!(
         custom_top("user,args")
             .columns()
@@ -214,7 +214,7 @@ fn top_custom_columns_preserve_order_before_pid_validation() {
 }
 
 #[tokio::test]
-async fn top_status_precedes_pid_header_validation() {
+async fn status_order() {
     let root = tempfile::tempdir().unwrap();
     let containers = hl_container::Containers::builder(
         hl_container::Config::new(root.path()).persistence(hl_container::Persistence::Memory),
@@ -262,9 +262,9 @@ async fn top_status_precedes_pid_header_validation() {
 }
 
 #[test]
-fn top_active_pid_validation_and_lifecycle_contract() {
+fn active_pid_contract() {
     let without_pid = custom_top("user,args").columns().unwrap();
-    let error = match top_response(&running(), &without_pid) {
+    let error = match Top::for_container(&running(), &without_pid) {
         Ok(_) => panic!("active result without PID must fail"),
         Err(error) => error,
     };
@@ -272,7 +272,7 @@ fn top_active_pid_validation_and_lifecycle_contract() {
     assert!(format!("{error:?}").contains("Couldn't find PID"));
 
     let with_pid = custom_top("user,pid,args").columns().unwrap();
-    let response = top_response(&running(), &with_pid).unwrap();
+    let response = Top::for_container(&running(), &with_pid).unwrap();
     assert_eq!(response.titles, ["USER", "PID", "CMD"]);
     assert_eq!(response.processes[0][1], "1");
 
@@ -282,7 +282,7 @@ fn top_active_pid_validation_and_lifecycle_contract() {
         finished_at_ms: 2,
         ready_at_ms: 3,
     };
-    let error = match top_response(&restarting, &without_pid) {
+    let error = match Top::for_container(&restarting, &without_pid) {
         Ok(_) => panic!("restarting container must fail"),
         Err(error) => error,
     };
