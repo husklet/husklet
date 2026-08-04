@@ -1,0 +1,120 @@
+cases:
+- id: networking/getent-localhost
+  image: debian:bookworm
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: getent hosts localhost
+  expect:
+    stdout_contains: golden/localhost.txt
+- id: networking/loopback-iface
+  image: alpine:latest
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: ip addr show lo 2>/dev/null | grep -q '127.0.0.1' && echo LO_UP || { ifconfig lo 2>/dev/null | grep -q '127.0.0.1'
+        && echo LO_UP; }
+  expect:
+    stdout_contains: golden/lo_up.txt
+- id: networking/outbound-dns
+  image: alpine:latest
+  timeout: 30
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        cat /etc/resolv.conf
+        nslookup one.one.one.one 2>&1 | tee /tmp/nslookup.out
+        grep -qiE '1\.1\.1\.1|1\.0\.0\.1' /tmp/nslookup.out && echo DNS_OUT_OK
+  expect:
+    stdout_contains: golden/dns_out.txt
+- id: networking/outbound-tcp
+  image: busybox:latest
+  timeout: 30
+  class: long
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        nc -z -v -w 3 1.1.1.1 53
+        status=$?
+        if [ "$status" -eq 0 ]; then
+          echo OUT_TCP_OK
+        else
+          echo "OUT_TCP_FAIL status=$status"
+          ip route
+          exit "$status"
+        fi
+  expect:
+    stdout_contains: golden/out_tcp.txt
+- id: networking/redis-loopback-incr
+  image: redis:alpine
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        redis-server --save '' --appendonly no --daemonize yes >/dev/null 2>&1
+        for i in $(seq 1 40); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.1; done
+        for i in $(seq 1 1000); do redis-cli incr c >/dev/null; done
+        redis-cli get c
+  expect:
+    stdout_contains: golden/1000.txt
+- id: networking/redis-loopback-setget
+  image: redis:alpine
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        redis-server --save '' --appendonly no --daemonize yes >/dev/null 2>&1
+        for i in $(seq 1 40); do redis-cli ping 2>/dev/null | grep -q PONG && break; sleep 0.1; done
+        redis-cli set k loopval >/dev/null
+        redis-cli get k
+  expect:
+    stdout_contains: golden/loopval.txt
+- id: networking/tcp-loopback
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        ( echo TCPOK | nc -l -p 9100 ) & sleep 0.4
+        nc -w 2 127.0.0.1 9100
+  expect:
+    stdout_contains: golden/tcpok.txt
+- id: networking/two-ports
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        ( echo AAA | nc -l -p 9110 ) & ( echo BBB | nc -l -p 9111 ) & sleep 0.4
+        echo "$(nc -w 2 127.0.0.1 9110)-$(nc -w 2 127.0.0.1 9111)"
+  expect:
+    stdout_contains: golden/aaa_bbb.txt
+- id: networking/udp-loopback
+  image: busybox:latest
+  timeout: 120
+  resources:
+  - host_port
+  actions:
+  - shell:
+      script: |-
+        ( echo UDPOK | nc -u -l -s 127.0.0.1 -p 9101 -w 1 ) & sleep 0.4
+        echo ping | nc -u -w 1 127.0.0.1 9101
+  expect:
+    stdout_contains: golden/udpok.txt
