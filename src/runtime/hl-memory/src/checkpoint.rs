@@ -5,7 +5,7 @@ use crate::{
     SharedObjectStore, SharedStoreSnapshot,
 };
 
-pub const MEMORY_CHECKPOINT_VERSION: u32 = 1;
+pub const MEMORY_CHECKPOINT_VERSION: u32 = 2;
 pub const MEMORY_CHECKPOINT_REGION_MAXIMUM: usize = 1 << 20;
 pub const MEMORY_CHECKPOINT_BYTES_MAXIMUM: usize = 1 << 32;
 pub const MEMORY_ADDRESS_MAXIMUM: u64 = 1 << 40;
@@ -51,11 +51,7 @@ pub struct MemoryHostStage<H> {
 
 pub trait MemoryCheckpointHost<H>: Send + Sync {
     fn address_limit(&self) -> u64;
-    fn snapshot_mapping(
-        &self,
-        authority: &FrozenSnapshotAuthority,
-        region: Region,
-    ) -> Result<Vec<u8>, MemoryError>;
+    fn snapshot_mapping(&self, authority: &FrozenSnapshotAuthority, region: Region) -> Result<Vec<u8>, MemoryError>;
 
     fn stage(&self, image: &MemoryCheckpointImage) -> Result<MemoryHostStage<H>, MemoryError>;
 }

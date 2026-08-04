@@ -49,6 +49,8 @@ pub struct Region {
     pub(crate) protection: Protection,
     pub(crate) backing: Backing,
     pub(crate) backing_offset: u64,
+    pub(crate) charge: Option<AddressRange>,
+    pub(crate) reserved: bool,
 }
 
 impl Region {
@@ -57,12 +59,16 @@ impl Region {
         protection: Protection,
         backing: Backing,
         backing_offset: u64,
+        charge: Option<AddressRange>,
+        reserved: bool,
     ) -> Result<Self, MemoryError> {
         let region = Self {
             range,
             protection,
             backing,
             backing_offset,
+            charge,
+            reserved,
         };
         region.validate()?;
         Ok(region)
@@ -87,6 +93,16 @@ impl Region {
         self.backing_offset
     }
 
+    #[must_use]
+    pub const fn charge(self) -> Option<AddressRange> {
+        self.charge
+    }
+
+    #[must_use]
+    pub const fn reserved(self) -> bool {
+        self.reserved
+    }
+
     pub(crate) const fn overlaps(self, range: AddressRange) -> bool {
         self.range.start().get() < range.end().get() && range.start().get() < self.range.end().get()
     }
@@ -96,14 +112,21 @@ impl Region {
             .get()
             .checked_sub(self.range.start().get())
             .ok_or(MemoryError::InvariantViolation)?;
+        let range = AddressRange::nonempty(start, end.get() - start.get())?;
         Ok(Self {
-            range: AddressRange::nonempty(start, end.get() - start.get())?,
+            range,
             protection: self.protection,
             backing: self.backing,
             backing_offset: self
                 .backing_offset
                 .checked_add(offset)
                 .ok_or(MemoryError::BackingOverflow)?,
+            charge: self.charge.and_then(|charge| {
+                let first = charge.start().max(range.start());
+                let last = charge.end().min(range.end());
+                AddressRange::nonempty(first, last.get().saturating_sub(first.get())).ok()
+            }),
+            reserved: self.reserved,
         })
     }
 
@@ -111,6 +134,14 @@ impl Region {
         if self.range.end() != right.range.start()
             || self.protection != right.protection
             || self.backing != right.backing
+            || self.reserved != right.reserved
+        {
+            return Ok(false);
+        }
+        if self
+            .charge
+            .zip(right.charge)
+            .is_some_and(|(left, right)| left.end() != right.start())
         {
             return Ok(false);
         }
@@ -123,6 +154,14 @@ impl Region {
 
     pub(crate) fn merge(&mut self, right: Self) -> Result<(), MemoryError> {
         self.range = AddressRange::nonempty(self.range.start(), right.range.end().get() - self.range.start().get())?;
+        self.charge = match (self.charge, right.charge) {
+            (Some(left), Some(right)) => Some(AddressRange::nonempty(
+                left.start(),
+                right.end().get() - left.start().get(),
+            )?),
+            (Some(charge), None) | (None, Some(charge)) => Some(charge),
+            (None, None) => None,
+        };
         Ok(())
     }
 
@@ -133,6 +172,14 @@ impl Region {
             .ok_or(MemoryError::BackingOverflow)?;
         if self.backing_offset % GuestPageSize::LINUX.bytes() != 0 {
             return Err(MemoryError::Unaligned);
+        }
+        if self
+            .charge
+            .is_some_and(|charge| charge.start() < self.range.start() || charge.end() > self.range.end())
+            || self.charge.is_some() && !self.reserved
+            || (self.charge.is_some() || self.reserved) && !matches!(self.backing, Backing::Anonymous { .. })
+        {
+            return Err(MemoryError::InvariantViolation);
         }
         Ok(())
     }

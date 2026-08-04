@@ -9,7 +9,7 @@ use hl_memory::{
 use serde::{Deserialize, Serialize};
 
 const MAGIC: u32 = 0x4d45_4d48;
-const WIRE_VERSION: u32 = 1;
+const WIRE_VERSION: u32 = 2;
 const HEADER_LENGTH: usize = 24;
 
 struct BoundedBytes(Vec<u8>);
@@ -64,6 +64,9 @@ struct RegionWire {
     protection: u8,
     backing: BackingWire,
     offset: u64,
+    charge_start: u64,
+    charge_length: u64,
+    reserved: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -237,16 +240,22 @@ impl RegionWire {
             protection: value.protection().bits(),
             backing: BackingWire::from_value(value.backing()),
             offset: value.backing_offset(),
+            charge_start: value.charge().map_or(0, |range| range.start().get()),
+            charge_length: value.charge().map_or(0, |range| range.length()),
+            reserved: value.reserved(),
         }
     }
 
     fn into_value(self) -> Result<Region, ()> {
         let range = AddressRange::nonempty(GuestAddress::new(self.start), self.length).map_err(|_| ())?;
+        let charge = AddressRange::nonempty(GuestAddress::new(self.charge_start), self.charge_length).ok();
         Region::from_checkpoint(
             range,
             Protection::from_bits(self.protection).ok_or(())?,
             self.backing.into_value(),
             self.offset,
+            charge,
+            self.reserved,
         )
         .map_err(|_| ())
     }

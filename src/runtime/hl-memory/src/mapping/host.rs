@@ -200,24 +200,45 @@ impl<H: Host> Coordinator<H> {
     }
 
     pub fn map(&self, request: MapRequest) -> Result<GuestAddress, MemoryError> {
-        self.map_with(request, false)
+        self.map_with(request, 0, false, false)
+    }
+
+    pub fn map_charged(&self, request: MapRequest, charge: u64) -> Result<GuestAddress, MemoryError> {
+        self.map_with(request, charge, true, false)
     }
 
     pub fn map_inherited(&self, request: MapRequest) -> Result<GuestAddress, MemoryError> {
-        self.map_with(request, true)
+        self.map_with(request, 0, false, true)
     }
 
-    fn map_with(&self, request: MapRequest, inherited: bool) -> Result<GuestAddress, MemoryError> {
+    pub fn map_inherited_reserved(
+        &self,
+        request: MapRequest,
+        charge: u64,
+        reserved: bool,
+    ) -> Result<GuestAddress, MemoryError> {
+        self.map_with(request, charge, reserved, true)
+    }
+
+    fn map_with(
+        &self,
+        request: MapRequest,
+        charge: u64,
+        reserved: bool,
+        inherited: bool,
+    ) -> Result<GuestAddress, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         let _transaction = self.transaction.lock().unwrap_or_else(|e| e.into_inner());
         let mut transition = self.transition();
-        let result = self.ledger.map_transaction(request, |address, regions| {
-            let pins = self.prepare_pins_with(regions, inherited)?;
-            let reservation = self.host.stage_map(address, request)?;
-            self.finish(&[reservation])?;
-            self.publish_pins(regions, pins);
-            Ok(())
-        });
+        let result = self
+            .ledger
+            .map_transaction(request, charge, reserved, |address, regions| {
+                let pins = self.prepare_pins_with(regions, inherited)?;
+                let reservation = self.host.stage_map(address, request)?;
+                self.finish(&[reservation])?;
+                self.publish_pins(regions, pins);
+                Ok(())
+            });
         if result.is_ok() {
             transition.published(self.ledger.generation());
         }
@@ -633,9 +654,11 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         }
         prepared.committed = true;
         self.invalidate_exclusive(prepared.range)?;
-        self.host
-            .executable
-            .publish(self.executable_write_ranges(prepared.range.start(), resolution, prepared.range.length()));
+        self.host.executable.publish(self.executable_write_ranges(
+            prepared.range.start(),
+            resolution,
+            prepared.range.length(),
+        ));
         let epoch = self.host.epoch.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         Ok(epoch)
     }

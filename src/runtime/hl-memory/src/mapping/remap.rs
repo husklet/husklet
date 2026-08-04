@@ -12,10 +12,35 @@ impl<H: Host> Coordinator<H> {
         request: MapRequest,
         keep_source: bool,
     ) -> Result<GuestAddress, MemoryError> {
+        self.remap_with_charge(source, request, keep_source, 0, false)
+    }
+
+    pub fn remap_charged(
+        &self,
+        source: AddressRange,
+        request: MapRequest,
+        keep_source: bool,
+        charge: u64,
+    ) -> Result<GuestAddress, MemoryError> {
+        self.remap_with_charge(source, request, keep_source, charge, true)
+    }
+
+    fn remap_with_charge(
+        &self,
+        source: AddressRange,
+        request: MapRequest,
+        keep_source: bool,
+        charge: u64,
+        reserved: bool,
+    ) -> Result<GuestAddress, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
         let mut transition = self.transition();
-        let mut operations = vec![Operation::Replace(request)];
+        let mut operations = vec![if reserved {
+            Operation::ReplaceCharged(request, charge)
+        } else {
+            Operation::Replace(request)
+        }];
         if !keep_source {
             operations.push(Operation::Unmap(source));
         }

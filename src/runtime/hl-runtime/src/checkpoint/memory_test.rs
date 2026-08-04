@@ -315,17 +315,20 @@ fn private_codec_roundtrip() {
     let shared = Arc::new(SharedObjectStore::new(SharedLimits::default()).unwrap());
     let coordinator = MappingCoordinator::with_shared(TestMappingHost, shared.clone());
     coordinator
-        .map(MapRequest {
-            placement: Placement::Fixed(hl_isa::GuestAddress::new(0x4000)),
-            length: 4096,
-            alignment: 4096,
-            protection: Protection::READ.union(Protection::WRITE),
-            backing: Backing::Anonymous {
-                identity: 17,
-                shared: false,
+        .map_charged(
+            MapRequest {
+                placement: Placement::Fixed(hl_isa::GuestAddress::new(0x4000)),
+                length: 4096,
+                alignment: 4096,
+                protection: Protection::READ.union(Protection::WRITE),
+                backing: Backing::Anonymous {
+                    identity: 17,
+                    shared: false,
+                },
+                backing_offset: 0,
             },
-            backing_offset: 0,
-        })
+            17,
+        )
         .unwrap();
     coordinator.freeze_checkpoint();
     shared.freeze_checkpoint();
@@ -335,8 +338,11 @@ fn private_codec_roundtrip() {
 
     let codec = PortableMemoryCodec;
     let bytes = codec.encode(&image).unwrap();
+    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 2);
     let decoded = codec.decode(&bytes).unwrap();
     assert_eq!(decoded, image);
+    assert!(decoded.ledger.regions[0].reserved());
+    assert_eq!(decoded.ledger.regions[0].charge().unwrap().length(), 17);
     assert_eq!(decoded.mappings[0].bytes.len(), 4096);
     assert_eq!(&decoded.mappings[0].bytes[3..7], b"rust");
 
@@ -344,7 +350,7 @@ fn private_codec_roundtrip() {
     *corrupt.last_mut().unwrap() ^= 1;
     assert!(codec.decode(&corrupt).is_err());
     let mut version = bytes;
-    version[4..8].copy_from_slice(&2_u32.to_le_bytes());
+    version[4..8].copy_from_slice(&1_u32.to_le_bytes());
     assert!(codec.decode(&version).is_err());
 }
 

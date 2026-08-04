@@ -9,16 +9,21 @@ struct RegionSet {
 }
 
 impl RegionSet {
-    fn map(&mut self, request: MapRequest) -> Result<GuestAddress, MemoryError> {
+    fn map(&mut self, request: MapRequest, charge: u64, reserved: bool) -> Result<GuestAddress, MemoryError> {
         request.validate()?;
         let start = request.choose(&self.regions)?;
         let range = MappingRange::create(start, request.length)?;
         self.apply_placement(request.placement, range)?;
+        if charge > request.length {
+            return Err(MemoryError::InvariantViolation);
+        }
         self.regions.push(Region {
             range,
             protection: request.protection,
             backing: request.backing,
             backing_offset: request.backing_offset,
+            charge: AddressRange::nonempty(start, charge).ok(),
+            reserved,
         });
         self.finish()?;
         Ok(start)
@@ -80,6 +85,50 @@ impl RegionSet {
             self.protect_region(region, changed, protection, &mut protected)?;
         }
         self.regions = protected;
+        self.finish()
+    }
+
+    fn charge(&mut self, changed: AddressRange, charged: bool) -> Result<(), MemoryError> {
+        if !self.covers(changed) {
+            return Err(MemoryError::Unmapped);
+        }
+        for region in &mut self.regions {
+            if !region.overlaps(changed) {
+                continue;
+            }
+            if !region.reserved() || !matches!(region.backing(), Backing::Anonymous { .. }) {
+                return Err(MemoryError::InvariantViolation);
+            }
+            let first = region.range().start().max(changed.start());
+            let last = region.range().end().min(changed.end());
+            let middle = AddressRange::nonempty(first, last.get() - first.get())?;
+            region.charge = if charged {
+                match region.charge {
+                    Some(current) if middle.start() <= current.end() && current.start() <= middle.end() => {
+                        Some(AddressRange::nonempty(
+                            current.start().min(middle.start()),
+                            current.end().max(middle.end()).get() - current.start().min(middle.start()).get(),
+                        )?)
+                    }
+                    Some(_) => return Err(MemoryError::InvariantViolation),
+                    None => Some(middle),
+                }
+            } else {
+                match region.charge {
+                    None => None,
+                    Some(current) if middle.start() <= current.start() && middle.end() >= current.end() => None,
+                    Some(current) if middle.start() <= current.start() => Some(AddressRange::nonempty(
+                        middle.end(),
+                        current.end().get().saturating_sub(middle.end().get()),
+                    )?),
+                    Some(current) if middle.end() >= current.end() => Some(AddressRange::nonempty(
+                        current.start(),
+                        middle.start().get() - current.start().get(),
+                    )?),
+                    Some(_) => return Err(MemoryError::InvariantViolation),
+                }
+            };
+        }
         self.finish()
     }
 
@@ -281,17 +330,23 @@ impl MemoryLedger {
     }
 
     pub fn map(&self, request: MapRequest) -> Result<GuestAddress, MemoryError> {
-        self.map_transaction(request, |_, _| Ok(()))
+        self.map_transaction(request, 0, false, |_, _| Ok(()))
+    }
+
+    pub fn map_charged(&self, request: MapRequest, charge: u64) -> Result<GuestAddress, MemoryError> {
+        self.map_transaction(request, charge, true, |_, _| Ok(()))
     }
 
     pub(crate) fn map_transaction(
         &self,
         request: MapRequest,
+        charge: u64,
+        reserved: bool,
         commit: impl FnOnce(GuestAddress, &[Region]) -> Result<(), MemoryError>,
     ) -> Result<GuestAddress, MemoryError> {
         let mut live = self.state.write().unwrap_or_else(|error| error.into_inner());
         let mut staged = live.mappings.clone();
-        let address = staged.map(request)?;
+        let address = staged.map(request, charge, reserved)?;
         commit(address, &staged.regions)?;
         live.mappings = staged;
         live.generation = live.generation.wrapping_add(1);
@@ -337,7 +392,12 @@ impl MemoryLedger {
         for operation in operations {
             match *operation {
                 Operation::Map(request) | Operation::Replace(request) => {
-                    let address = staged.map(request)?;
+                    let address = staged.map(request, 0, false)?;
+                    plan.push(PlannedOperation::Map(address, request));
+                    addresses.push(address);
+                }
+                Operation::MapCharged(request, charge) | Operation::ReplaceCharged(request, charge) => {
+                    let address = staged.map(request, charge, true)?;
                     plan.push(PlannedOperation::Map(address, request));
                     addresses.push(address);
                 }
@@ -351,6 +411,8 @@ impl MemoryLedger {
                     staged.protect(range, protection)?;
                     plan.push(PlannedOperation::Protect(range, protection));
                 }
+                Operation::Charge(range) => staged.charge(range, true)?,
+                Operation::Uncharge(range) => staged.charge(range, false)?,
             }
         }
         staged.finish()?;

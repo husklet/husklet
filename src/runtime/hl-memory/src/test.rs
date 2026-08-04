@@ -61,6 +61,45 @@ fn fixed_map_replaces() {
 }
 
 #[test]
+fn anonymous_charge_provenance_tracks_fixed_replacement_and_unmap() {
+    let ledger = MemoryLedger::new();
+    let anonymous = MapRequest {
+        placement: Placement::Fixed(address(0x4000)),
+        length: PAGE * 2,
+        alignment: PAGE,
+        protection: Protection::READ.union(Protection::WRITE),
+        backing: Backing::Anonymous {
+            identity: 31,
+            shared: false,
+        },
+        backing_offset: 0,
+    };
+    ledger.map_charged(anonymous, 5000).unwrap();
+    assert!(ledger.regions()[0].reserved());
+    assert_eq!(ledger.regions()[0].charge().unwrap().length(), 5000);
+
+    ledger.map(request(0x5000, PAGE, 0, Protection::READ)).unwrap();
+    let regions = ledger.regions();
+    assert_eq!(regions.len(), 2);
+    assert_eq!(regions[0].charge().unwrap().length(), PAGE);
+    assert!(!regions[1].reserved());
+    assert_eq!(regions[1].charge(), None);
+
+    ledger.unmap(range(0x4000, PAGE)).unwrap();
+    assert!(ledger.regions().iter().all(|region| region.charge().is_none()));
+}
+
+#[test]
+fn charge_provenance_is_anonymous_only() {
+    let ledger = MemoryLedger::new();
+    assert_eq!(
+        ledger.map_charged(request(0x4000, PAGE, 0, Protection::READ), 1),
+        Err(MemoryError::InvariantViolation),
+    );
+    assert!(ledger.regions().is_empty());
+}
+
+#[test]
 fn protect_splits_exactly() {
     let ledger = MemoryLedger::new();
     let read_write = Protection::READ.union(Protection::WRITE);
