@@ -1,0 +1,23 @@
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact:
+  destination: /opt/husklet/runtime-epoll
+oracle:
+  arm64: qemu-aarch64
+  amd64: qemu-x86_64
+build:
+  source: main.c
+  output: runtime-epoll
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags:
+    - -nostdlib
+    - -static
+    - -fno-stack-protector
+    - -fno-asynchronous-unwind-tables
+    - -Wl,--build-id=none
+cases:
+  - id: runtime/epoll/lifecycle
+    run: [lifecycle]
+    expect: { exit: 0, stdout: golden/lifecycle.txt }

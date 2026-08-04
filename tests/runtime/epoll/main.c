@@ -1,4 +1,3 @@
-#include "abi.h"
 #include <stdint.h>
 
 #if defined(__aarch64__)
@@ -9,6 +8,8 @@
 #define GUEST_CLOSE 57
 #define GUEST_DUP 23
 #define GUEST_READ 63
+#define GUEST_WRITE 64
+#define GUEST_EXIT 93
 #define EPOLL_WAIT_ARGS 0, 8
 #elif defined(__x86_64__)
 #define GUEST_EPOLL_CREATE1 291
@@ -18,7 +19,11 @@
 #define GUEST_CLOSE 3
 #define GUEST_DUP 32
 #define GUEST_READ 0
+#define GUEST_WRITE 1
+#define GUEST_EXIT 60
 #define EPOLL_WAIT_ARGS 0, 0
+#else
+#error unsupported guest architecture
 #endif
 
 #define EPOLL_CTL_ADD 1
@@ -61,6 +66,11 @@ static long call6(long number, long first, long second, long third,
 #endif
 }
 
+__attribute__((noreturn)) static void guest_exit(long status) {
+    call6(GUEST_EXIT, status, 0, 0, 0, 0, 0);
+    __builtin_unreachable();
+}
+
 static long wait_event(long epoll, struct epoll_event *event) {
     return call6(GUEST_EPOLL_WAIT, epoll, (long)event, 1, 0,
                  EPOLL_WAIT_ARGS);
@@ -78,7 +88,7 @@ void _start(void) {
     if (event < 0) guest_exit(11);
     if (call6(GUEST_EPOLL_CTL, epoll, EPOLL_CTL_ADD, event,
               (long)&interest, 0, 0) != 0) guest_exit(12);
-    if (guest_call(GUEST_WRITE, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_WRITE, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(13);
     if (wait_event(epoll, (struct epoll_event *)1) != -14) guest_exit(14);
     long count = wait_event(epoll, &ready);
@@ -90,35 +100,34 @@ void _start(void) {
     ready.data = 0;
     if (wait_event(epoll, &ready) != 1 || ready.events != EPOLL_IN ||
         ready.data != interest.data) guest_exit(17);
-    if (guest_call(GUEST_READ, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_READ, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(18);
-    for (unsigned int index = 0; index < 256; ++index) {
+    for (unsigned int index = 0; index < 256; ++index)
         if (wait_event(epoll, &ready) != 0) guest_exit(19);
-    }
 
     interest.events = EPOLL_IN | EPOLL_EDGE;
     interest.data = 0x2233445566778899ULL;
     if (call6(GUEST_EPOLL_CTL, epoll, EPOLL_CTL_MOD, event,
               (long)&interest, 0, 0) != 0) guest_exit(20);
-    if (guest_call(GUEST_WRITE, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_WRITE, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(21);
     if (wait_event(epoll, &ready) != 1 || ready.data != interest.data)
         guest_exit(22);
     if (wait_event(epoll, &ready) != 0) guest_exit(23);
-    if (guest_call(GUEST_READ, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_READ, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(24);
-    if (guest_call(GUEST_WRITE, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_WRITE, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(25);
     if (wait_event(epoll, &ready) != 1 || ready.data != interest.data)
         guest_exit(26);
-    if (guest_call(GUEST_READ, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_READ, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(27);
 
     interest.events = EPOLL_IN | EPOLL_ONESHOT;
     interest.data = 0x33445566778899aaULL;
     if (call6(GUEST_EPOLL_CTL, epoll, EPOLL_CTL_MOD, event,
               (long)&interest, 0, 0) != 0) guest_exit(28);
-    if (guest_call(GUEST_WRITE, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_WRITE, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(29);
     if (wait_event(epoll, &ready) != 1 || ready.data != interest.data)
         guest_exit(30);
@@ -127,23 +136,23 @@ void _start(void) {
               (long)&interest, 0, 0) != 0) guest_exit(32);
     if (wait_event(epoll, &ready) != 1 || ready.data != interest.data)
         guest_exit(33);
-    if (guest_call(GUEST_READ, event, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_READ, event, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(34);
 
     long retained = call6(GUEST_EVENTFD2, 0, 0, 0, 0, 0, 0);
     if (retained < 0) guest_exit(35);
-    long alias = guest_call(GUEST_DUP, retained, 0, 0);
+    long alias = call6(GUEST_DUP, retained, 0, 0, 0, 0, 0);
     if (alias < 0) guest_exit(36);
     interest.events = EPOLL_IN;
     interest.data = 0x445566778899aabbULL;
     if (call6(GUEST_EPOLL_CTL, epoll, EPOLL_CTL_ADD, retained,
               (long)&interest, 0, 0) != 0) guest_exit(37);
-    if (guest_call(GUEST_CLOSE, retained, 0, 0) != 0) guest_exit(38);
-    if (guest_call(GUEST_WRITE, alias, (long)&value, sizeof(value)) !=
+    if (call6(GUEST_CLOSE, retained, 0, 0, 0, 0, 0) != 0) guest_exit(38);
+    if (call6(GUEST_WRITE, alias, (long)&value, sizeof(value), 0, 0, 0) !=
         (long)sizeof(value)) guest_exit(39);
     if (wait_event(epoll, &ready) != 1 || ready.events != EPOLL_IN ||
         ready.data != interest.data) guest_exit(40);
-    if (guest_call(GUEST_CLOSE, alias, 0, 0) != 0) guest_exit(41);
+    if (call6(GUEST_CLOSE, alias, 0, 0, 0, 0, 0) != 0) guest_exit(41);
     long final = wait_event(epoll, &ready);
     if (final != 0) {
         if (ready.data == interest.data) guest_exit(42);
@@ -151,6 +160,6 @@ void _start(void) {
         guest_exit(44);
     }
 
-    guest_write(success, sizeof(success) - 1);
+    call6(GUEST_WRITE, 1, (long)success, sizeof(success) - 1, 0, 0, 0);
     guest_exit(0);
 }

@@ -25,11 +25,6 @@ cases:
     isa: [aarch64, x86_64]
     recipe: freestanding-v1
     expect: { exit: 0, stdout: golden/empty.out }
-  - id: epoll
-    source: source/epoll.c
-    isa: [aarch64, x86_64]
-    recipe: freestanding-v1
-    expect: { exit: 0, stdout: golden/epoll.out }
   - id: namespace
     source: source/namespace.c
     isa: [aarch64, x86_64]
