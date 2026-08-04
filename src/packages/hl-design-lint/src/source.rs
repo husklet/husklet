@@ -4,7 +4,7 @@ use std::{
 };
 
 use proc_macro2::Span;
-use syn::{Attribute, Meta, Token, punctuated::Punctuated};
+use syn::{punctuated::Punctuated, Attribute, Meta, Token};
 
 use crate::{LintError, Result};
 
@@ -127,6 +127,17 @@ impl Workspace {
     /// Returns the roots explicitly requested by the lint invocation.
     pub fn paths(&self) -> &[PathBuf] {
         &self.paths
+    }
+
+    /// Returns repository-owned Rust, C, and C-header files below a `src` directory.
+    pub(crate) fn source_files(&self) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        for path in &self.paths {
+            source_files(path, &mut files)?;
+        }
+        files.sort();
+        files.dedup();
+        Ok(files)
     }
 }
 
@@ -262,6 +273,40 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io
         rust_files(&entry.path(), files, include_linter)?;
     }
     Ok(())
+}
+
+fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| LintError::io("inspect", path, error))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_file() {
+        let extension = path.extension().and_then(|value| value.to_str());
+        if matches!(extension, Some("rs" | "c" | "h")) && below_source(path) {
+            files.push(path.to_owned());
+        }
+        return Ok(());
+    }
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, ".git" | "target" | "vendor"))
+    {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| LintError::io("read source directory", path, error))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| LintError::io("read source directory", path, error))?;
+    entries.sort_by_key(|entry| entry.path());
+    for entry in entries {
+        source_files(&entry.path(), files)?;
+    }
+    Ok(())
+}
+
+fn below_source(path: &Path) -> bool {
+    path.components().any(|component| component.as_os_str() == "src")
 }
 
 fn directory_shapes(

@@ -48,6 +48,63 @@ fn filename_conventions_independent() {
 }
 
 #[test]
+fn filename_stem_policy() {
+    let root = fixture("filename-policy");
+    for extension in ["rs", "c", "h"] {
+        for stem in ["single", "short_name", "aaaaaaaaaaaaaaaa_bbbbbbbbbbbbbbb"] {
+            fs::write(root.join("src").join(format!("{stem}.{extension}")), "").unwrap();
+        }
+        for stem in ["dashed-name", "three_word_name", "abcdefghijklmnopqrstuvwxyzabcdefg"] {
+            fs::write(root.join("src").join(format!("{stem}.{extension}")), "").unwrap();
+        }
+    }
+    fs::create_dir_all(root.join("include")).unwrap();
+    fs::write(root.join("include/outside-name.h"), "").unwrap();
+    fs::create_dir_all(root.join("target/generated")).unwrap();
+    fs::write(root.join("target/generated/build-name.c"), "").unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+    let findings = FileName.check(&workspace).unwrap();
+
+    assert_eq!(findings.len(), 9);
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding.message.contains("contains a dash"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding.message.contains("maximum is 32"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|finding| finding.message.contains("semantic words"))
+            .count(),
+        3
+    );
+    assert!(findings.iter().all(|finding| finding.location.line == 1));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn explicit_header_path_is_checked() {
+    let root = fixture("explicit-header");
+    let header = root.join("src/invalid-header.h");
+    fs::write(&header, "").unwrap();
+    let workspace = Workspace::load([header]).unwrap();
+    let findings = FileName.check(&workspace).unwrap();
+
+    assert_eq!(findings.len(), 1);
+    assert!(findings[0].message.contains("contains a dash"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn numbered_fragments_fail() {
     let root = fixture("numbered-files");
     for name in ["part_1.rs", "chunk2.rs", "section_03.rs"] {

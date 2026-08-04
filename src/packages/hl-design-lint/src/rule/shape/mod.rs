@@ -17,8 +17,10 @@ use crate::{
 #[path = "test.rs"]
 mod tests;
 
-/// Rejects source filenames that encode more than two concepts.
+/// Enforces underscore-only, bounded, one- or two-concept Rust, C, and C-header filenames under `src/`.
 pub struct FileName;
+
+const MAXIMUM_FILE_STEM_LENGTH: usize = 32;
 
 impl Rule for FileName {
     fn id(&self) -> &'static str {
@@ -31,10 +33,25 @@ impl Rule for FileName {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         Ok(workspace
-            .sources()
-            .iter()
-            .filter_map(|source| {
-                let stem = source.path.file_stem()?.to_str()?;
+            .source_files()?
+            .into_iter()
+            .filter_map(|path| {
+                let stem = path.file_stem()?.to_str()?;
+                if stem.contains('-') {
+                    let mut finding = Finding::error(self.id(), stem, file_location(&path));
+                    finding.message = format!("Rust filename stem `{stem}` contains a dash");
+                    finding.help = "use Rust's underscore module convention so the source name maps directly to its module identifier".into();
+                    return Some(finding);
+                }
+                if stem.chars().count() > MAXIMUM_FILE_STEM_LENGTH {
+                    let mut finding = Finding::error(self.id(), stem, file_location(&path));
+                    finding.message = format!(
+                        "Rust filename stem `{stem}` contains {} characters; the maximum is {MAXIMUM_FILE_STEM_LENGTH}",
+                        stem.chars().count()
+                    );
+                    finding.help = "move context into a noun-owned directory and keep the child filename focused on its local concept".into();
+                    return Some(finding);
+                }
                 if conventional(stem) {
                     return None;
                 }
@@ -42,7 +59,7 @@ impl Rule for FileName {
                     let mut finding = Finding::error(
                         self.id(),
                         stem,
-                        file_location(&source.path),
+                        file_location(&path),
                     );
                     finding.message = format!(
                         "Rust filename `{stem}.rs` uses a numbered implementation fragment"
@@ -56,7 +73,7 @@ impl Rule for FileName {
                 let mut finding = Finding::error(
                     self.id(),
                     stem,
-                    file_location(&source.path),
+                    file_location(&path),
                 );
                 finding.message = format!(
                     "Rust filename `{stem}.rs` contains more than two semantic words"
