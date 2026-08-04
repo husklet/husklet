@@ -56,36 +56,16 @@ impl DescriptorTable {
 impl crate::OperationLease {
     /// Returns the asynchronous-I/O owner shared by every alias of this OFD.
     #[must_use]
-    pub fn signal_owner(&self) -> i32 {
+    pub fn signal_owner(&self) -> SignalOwner {
         self.description
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .owner
-            .legacy()
     }
 
     /// Changes the asynchronous-I/O owner for this OFD.
-    pub fn set_signal_owner(&self, owner: i32) {
-        self.description
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .owner = SignalOwner::from_legacy(owner);
-    }
-
-    /// Returns the typed asynchronous-I/O owner shared by every alias.
-    #[must_use]
-    pub fn typed_signal_owner(&self) -> SignalOwner {
-        self.description
-            .state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .owner
-    }
-
-    /// Changes the typed asynchronous-I/O owner for this OFD.
-    pub fn set_typed_signal_owner(&self, owner: SignalOwner) {
+    pub fn set_signal_owner(&self, owner: SignalOwner) {
         self.description
             .state
             .lock()

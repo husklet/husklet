@@ -80,6 +80,60 @@ non-UTF-8 names, directories larger than the snapshot bound, concurrent
 mutation, fork/checkpoint, permission identities, or directory notifications.
 Those remain separate focused cohorts; no completeness claim is inferred here.
 
+## Signal-owner fcntl API audit
+
+The typed Rust API consolidation for `F_SETOWN`, `F_GETOWN`, `F_SETOWN_EX`,
+and `F_GETOWN_EX` was checked against the retained implementation without
+changing its behavior. The read-only C sources and entry points studied were:
+
+- `../engine/src/linux_abi/syscall/io.c`, syscall case 25: the recognized
+  command table, the Darwin `F_SETOWN`/`F_GETOWN` command translation, and the
+  final host `fcntl` call for commands 8, 9, 15, and 16;
+- `../engine/src/linux_abi/syscall/binding.c`, typed syscall case 25: lookup of
+  the bound descriptor, `bound_attachment_borrow`, forwarding to the native
+  Linux open description, and immediate host-errno return;
+- `../engine/src/linux_abi/host_fd.h`: the cross-host Linux command-number
+  definitions used where the host headers do not provide them;
+- `../engine/src/linux_abi/syscall/nonpie_args.h` and
+  `../engine/src/linux_abi/sentry.c`: fcntl argument admission and syscall
+  redirection around the common case-25 implementation.
+
+The retained POSIX implementation leaves owner identity in the host kernel's
+open-file-description state. Descriptor aliases therefore observe the same
+owner, fork inherits the aliased description, and the host releases it with the
+last open-description reference. The C engine adds no owner lock or independent
+owner teardown. Ordinary descriptors translate commands 8 and 9 where Darwin
+numbers differ, recognize commands 15 and 16 as pointer-bearing owner requests,
+and return the host result or negated host errno. Bound descriptors borrow the
+same-number native attachment for the duration of the call and forward the
+Linux command verbatim. An invalid descriptor is consequently `EBADF`; invalid
+extended-owner storage or values retain the host command's `EFAULT`/`EINVAL`
+behavior. There is no blocking, cancellation, partial result, or signal wakeup
+transition in these four operations. Command semantics are architecture-neutral;
+only the surrounding AArch64/x86-64 syscall-number dispatch differs. Darwin
+needs the command translation for the legacy pair, Linux forwards directly,
+and hosts without a compatible `fcntl` mechanism do not acquire a separate
+emulated owner state in this path.
+
+Rust maps the shared owner to `hl-descriptor::SignalOwner` in the state behind
+`OperationLease`, whose open-description lock provides alias-coherent reads and
+writes and whose existing descriptor lifetime owns teardown. `hl-runtime`'s
+filesystem fcntl boundary owns Linux ABI conversion: the legacy signed integer
+form maps negative values to process groups, while the extended eight-byte form
+validates kind 0 through 2, nonnegative identity, and exact guest-memory copyin
+or copyout. Descriptor pinning preserves `EBADF`; malformed extended values are
+`EINVAL`; failed guest memory access is `EFAULT`. The API consolidation removes
+the duplicate legacy-valued lease accessors, but does not change storage,
+locking, command order, errno conversion, architecture dispatch, or lifetime.
+
+| Retained C capability | Rust owner | Mapping |
+|---|---|---|
+| host-OFD owner shared by aliases | `hl-descriptor::OperationLease` and `SignalOwner` | typed shared state under the open-description lock |
+| signed legacy owner encoding | `hl-runtime::filesystem::fcntl` | `SignalOwner::{from_legacy, legacy}` at the Linux boundary |
+| extended owner copyin, validation, and copyout | `hl-runtime::filesystem::fcntl` plus `GuestMemory` | exact eight-byte transfer with `EFAULT`/`EINVAL` |
+| descriptor validity and final lifetime | `hl-descriptor::DescriptorTable` | pinned operation lease and last-reference teardown |
+| host/architecture command dispatch | retained host adapters; Rust Linux personality | no owner-domain ISA branch |
+
 ## Positional I/O and pathname metadata cohort
 
 The same retained `fs.c` audit followed `openat`, `pread64`, `pwrite64`,

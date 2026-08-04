@@ -160,13 +160,13 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Ok(value) => value,
             Err(result) => return result,
         };
-        lease.set_signal_owner(owner as i32);
+        lease.set_signal_owner(hl_descriptor::SignalOwner::from_legacy(owner as i32));
         LinuxResult::Value(0)
     }
 
     fn get_owner(&self, descriptor: i32) -> LinuxResult {
         match self.pin_fcntl(descriptor) {
-            Ok(lease) => LinuxResult::Value(lease.signal_owner() as i64 as u64),
+            Ok(lease) => LinuxResult::Value(lease.signal_owner().legacy() as i64 as u64),
             Err(result) => result,
         }
     }
@@ -185,7 +185,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if !(0..=2).contains(&kind) || identity < 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        lease.set_typed_signal_owner(match kind {
+        lease.set_signal_owner(match kind {
             0 => hl_descriptor::SignalOwner::Thread(identity),
             1 => hl_descriptor::SignalOwner::Process(identity),
             2 => hl_descriptor::SignalOwner::Group(identity),
@@ -199,7 +199,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Ok(value) => value,
             Err(result) => return result,
         };
-        let owner = lease.typed_signal_owner();
+        let owner = lease.signal_owner();
         let mut raw = [0_u8; 8];
         let (kind, identity) = match owner {
             hl_descriptor::SignalOwner::Thread(identity) => (0_i32, identity),
