@@ -113,8 +113,7 @@ fn prctl_state_lifecycle() {
     assert_eq!(parent.personality, 0x40000);
     assert_eq!(parent.parent_death_signal, 12);
     assert!(!parent.credentials.keep_capabilities);
-    assert!(!parent.credentials.setid_permitted);
-    assert!(!parent.credentials.setid_effective);
+    assert_eq!(parent.credentials.setid_authority(), SetIdAuthority::None);
     assert_eq!(leader.name, *b"executed\0\0\0\0\0\0\0\0");
     exec.finish();
 }
