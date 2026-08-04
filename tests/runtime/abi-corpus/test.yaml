@@ -1,0 +1,1086 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+build:
+  compiler:
+    arm64: aarch64-linux-gnu-gcc
+    amd64: x86_64-linux-gnu-gcc
+  flags: []
+oracle:
+  provider: qemu
+  commands:
+    arm64: qemu-aarch64
+    amd64: qemu-x86_64
+cases:
+  - id: runtime/abi-corpus-alloca
+    targets: [arm64, amd64]
+    build: { source: alloca.c, output: alloca, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/alloca }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/alloca.out }
+  - id: runtime/abi-corpus-atomics_st
+    targets: [arm64, amd64]
+    build: { source: atomics_st.c, output: atomics_st, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/atomics_st }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/atomics_st.out }
+  - id: runtime/abi-corpus-bigswitch
+    targets: [arm64, amd64]
+    build: { source: bigswitch.c, output: bigswitch, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/bigswitch }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bigswitch.out }
+  - id: runtime/abi-corpus-boolconv
+    targets: [arm64, amd64]
+    build: { source: boolconv.c, output: boolconv, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/boolconv }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/boolconv.out }
+  - id: runtime/abi-corpus-bswap
+    targets: [arm64, amd64]
+    build: { source: bswap.c, output: bswap, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/bswap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bswap.out }
+  - id: runtime/abi-corpus-charmath
+    targets: [arm64, amd64]
+    build: { source: charmath.c, output: charmath, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/charmath }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/charmath.out }
+  - id: runtime/abi-corpus-clmul
+    targets: [arm64, amd64]
+    build: { source: clmul.c, output: clmul, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/clmul }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/clmul.out }
+  - id: runtime/abi-corpus-cmpchain
+    targets: [arm64, amd64]
+    build: { source: cmpchain.c, output: cmpchain, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/cmpchain }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/cmpchain.out }
+  - id: runtime/abi-corpus-computed_goto
+    targets: [arm64, amd64]
+    build: { source: computed_goto.c, output: computed_goto, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/computed_goto }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/computed_goto.out }
+  - id: runtime/abi-corpus-deep_recursion
+    targets: [arm64, amd64]
+    build: { source: deep_recursion.c, output: deep_recursion, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/deep_recursion }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/deep_recursion.out }
+  - id: runtime/abi-corpus-divmod
+    targets: [arm64, amd64]
+    build: { source: divmod.c, output: divmod, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/divmod }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/divmod.out }
+  - id: runtime/abi-corpus-endian
+    targets: [arm64, amd64]
+    build: { source: endian.c, output: endian, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/endian }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/endian.out }
+  - id: runtime/abi-corpus-float32
+    targets: [arm64, amd64]
+    build: { source: float32.c, output: float32, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/float32 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/float32.out }
+  - id: runtime/abi-corpus-fnptr_many
+    targets: [arm64, amd64]
+    build: { source: fnptr_many.c, output: fnptr_many, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fnptr_many }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fnptr_many.out }
+  - id: runtime/abi-corpus-fp_classify
+    targets: [arm64, amd64]
+    build: { source: fp_classify.c, output: fp_classify, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_classify }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_classify.out }
+  - id: runtime/abi-corpus-fp_cmp
+    targets: [arm64, amd64]
+    build: { source: fp_cmp.c, output: fp_cmp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_cmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_cmp.out }
+  - id: runtime/abi-corpus-fp_conv
+    targets: [arm64, amd64]
+    build: { source: fp_conv.c, output: fp_conv, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_conv }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_conv.out }
+  - id: runtime/abi-corpus-fp_fma
+    targets: [arm64, amd64]
+    build: { source: fp_fma.c, output: fp_fma, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_fma }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_fma.out }
+  - id: runtime/abi-corpus-fp_minmax
+    targets: [arm64, amd64]
+    build: { source: fp_minmax.c, output: fp_minmax, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_minmax }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_minmax.out }
+  - id: runtime/abi-corpus-fp_round
+    targets: [arm64, amd64]
+    build: { source: fp_round.c, output: fp_round, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_round }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_round.out }
+  - id: runtime/abi-corpus-fp_special
+    targets: [arm64, amd64]
+    build: { source: fp_special.c, output: fp_special, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_special }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_special.out }
+  - id: runtime/abi-corpus-globalinit
+    targets: [arm64, amd64]
+    build: { source: globalinit.c, output: globalinit, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/globalinit }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/globalinit.out }
+  - id: runtime/abi-corpus-hash
+    targets: [arm64, amd64]
+    build: { source: hash.c, output: hash, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/hash }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/hash.out }
+  - id: runtime/abi-corpus-int128
+    targets: [arm64, amd64]
+    build: { source: int128.c, output: int128, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/int128 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/int128.out }
+  - id: runtime/abi-corpus-intwrap
+    targets: [arm64, amd64]
+    build: { source: intwrap.c, output: intwrap, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/intwrap }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/intwrap.out }
+  - id: runtime/abi-corpus-longdouble
+    targets: [arm64, amd64]
+    build: { source: longdouble.c, output: longdouble, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/longdouble }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/longdouble.out }
+  - id: runtime/abi-corpus-manyargs
+    targets: [arm64, amd64]
+    build: { source: manyargs.c, output: manyargs, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/manyargs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/manyargs.out }
+  - id: runtime/abi-corpus-memops
+    targets: [arm64, amd64]
+    build: { source: memops.c, output: memops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/memops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/memops.out }
+  - id: runtime/abi-corpus-mixedargs
+    targets: [arm64, amd64]
+    build: { source: mixedargs.c, output: mixedargs, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/mixedargs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/mixedargs.out }
+  - id: runtime/abi-corpus-mul64
+    targets: [arm64, amd64]
+    build: { source: mul64.c, output: mul64, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/mul64 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/mul64.out }
+  - id: runtime/abi-corpus-nested_loops
+    targets: [arm64, amd64]
+    build: { source: nested_loops.c, output: nested_loops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/nested_loops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/nested_loops.out }
+  - id: runtime/abi-corpus-overflow_builtin
+    targets: [arm64, amd64]
+    build: { source: overflow_builtin.c, output: overflow_builtin, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/overflow_builtin }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/overflow_builtin.out }
+  - id: runtime/abi-corpus-popcnt
+    targets: [arm64, amd64]
+    build: { source: popcnt.c, output: popcnt, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/popcnt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/popcnt.out }
+  - id: runtime/abi-corpus-printf_formats
+    targets: [arm64, amd64]
+    build: { source: printf_formats.c, output: printf_formats, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/printf_formats }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/printf_formats.out }
+  - id: runtime/abi-corpus-ptr_arith
+    targets: [arm64, amd64]
+    build: { source: ptr_arith.c, output: ptr_arith, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/ptr_arith }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/ptr_arith.out }
+  - id: runtime/abi-corpus-qsort_cb
+    targets: [arm64, amd64]
+    build: { source: qsort_cb.c, output: qsort_cb, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/qsort_cb }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/qsort_cb.out }
+  - id: runtime/abi-corpus-rettypes
+    targets: [arm64, amd64]
+    build: { source: rettypes.c, output: rettypes, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/rettypes }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/rettypes.out }
+  - id: runtime/abi-corpus-rotate
+    targets: [arm64, amd64]
+    build: { source: rotate.c, output: rotate, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/rotate }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/rotate.out }
+  - id: runtime/abi-corpus-setjmp_longjmp
+    targets: [arm64, amd64]
+    build: { source: setjmp_longjmp.c, output: setjmp_longjmp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/setjmp_longjmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/setjmp_longjmp.out }
+  - id: runtime/abi-corpus-shifts
+    targets: [arm64, amd64]
+    build: { source: shifts.c, output: shifts, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/shifts }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/shifts.out }
+  - id: runtime/abi-corpus-signext
+    targets: [arm64, amd64]
+    build: { source: signext.c, output: signext, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/signext }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/signext.out }
+  - id: runtime/abi-corpus-simd_syscall
+    targets: [arm64, amd64]
+    build: { source: simd_syscall.c, output: simd_syscall, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/simd_syscall }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/simd_syscall.out }
+  - id: runtime/abi-corpus-simd_syscall_crypto
+    targets: [arm64, amd64]
+    build: { source: syscall_crypto.c, output: syscall_crypto, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/syscall_crypto }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/syscall_crypto.out }
+  - id: runtime/abi-corpus-struct_hfa
+    targets: [arm64, amd64]
+    build: { source: struct_hfa.c, output: struct_hfa, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/struct_hfa }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/struct_hfa.out }
+  - id: runtime/abi-corpus-struct_large
+    targets: [arm64, amd64]
+    build: { source: struct_large.c, output: struct_large, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/struct_large }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/struct_large.out }
+  - id: runtime/abi-corpus-struct_mixed
+    targets: [arm64, amd64]
+    build: { source: struct_mixed.c, output: struct_mixed, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/struct_mixed }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/struct_mixed.out }
+  - id: runtime/abi-corpus-struct_ret
+    targets: [arm64, amd64]
+    build: { source: struct_ret.c, output: struct_ret, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/struct_ret }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/struct_ret.out }
+  - id: runtime/abi-corpus-struct_small
+    targets: [arm64, amd64]
+    build: { source: struct_small.c, output: struct_small, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/struct_small }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/struct_small.out }
+  - id: runtime/abi-corpus-tailcall
+    targets: [arm64, amd64]
+    build: { source: tailcall.c, output: tailcall, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/tailcall }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/tailcall.out }
+  - id: runtime/abi-corpus-union_pun
+    targets: [arm64, amd64]
+    build: { source: union_pun.c, output: union_pun, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/union_pun }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/union_pun.out }
+  - id: runtime/abi-corpus-varargs_float
+    targets: [arm64, amd64]
+    build: { source: varargs_float.c, output: varargs_float, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/varargs_float }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/varargs_float.out }
+  - id: runtime/abi-corpus-varargs_mixed
+    targets: [arm64, amd64]
+    build: { source: varargs_mixed.c, output: varargs_mixed, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/varargs_mixed }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/varargs_mixed.out }
+  - id: runtime/abi-corpus-varargs_pairs
+    targets: [arm64, amd64]
+    build: { source: varargs_pairs.c, output: varargs_pairs, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/abi-corpus/varargs_pairs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/varargs_pairs.out }
+  - id: runtime/abi-corpus-vla
+    targets: [arm64, amd64]
+    build: { source: vla.c, output: vla, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vla }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vla.out }
+  - id: runtime/abi-corpus-vtable
+    targets: [arm64, amd64]
+    build: { source: vtable.c, output: vtable, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vtable }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vtable.out }
+  - id: runtime/abi-corpus-x_dshift
+    targets: [arm64, amd64]
+    build: { source: x_dshift.c, output: x_dshift, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_dshift }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_dshift.out }
+  - id: runtime/abi-corpus-x_adcsbb
+    targets: [arm64, amd64]
+    build: { source: x_adcsbb.c, output: x_adcsbb, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_adcsbb }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_adcsbb.out }
+  - id: runtime/abi-corpus-x_bitscan
+    targets: [arm64, amd64]
+    build: { source: x_bitscan.c, output: x_bitscan, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_bitscan }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_bitscan.out }
+  - id: runtime/abi-corpus-x_bittest
+    targets: [arm64, amd64]
+    build: { source: x_bittest.c, output: x_bittest, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_bittest }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_bittest.out }
+  - id: runtime/abi-corpus-x_setcc
+    targets: [arm64, amd64]
+    build: { source: x_setcc.c, output: x_setcc, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_setcc }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_setcc.out }
+  - id: runtime/abi-corpus-x_cmov
+    targets: [arm64, amd64]
+    build: { source: x_cmov.c, output: x_cmov, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_cmov }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_cmov.out }
+  - id: runtime/abi-corpus-x_div128
+    targets: [arm64, amd64]
+    build: { source: x_div128.c, output: x_div128, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_div128 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_div128.out }
+  - id: runtime/abi-corpus-x_mulhi
+    targets: [arm64, amd64]
+    build: { source: x_mulhi.c, output: x_mulhi, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_mulhi }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_mulhi.out }
+  - id: runtime/abi-corpus-x_rotate
+    targets: [arm64, amd64]
+    build: { source: x_rotate.c, output: x_rotate, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_rotate }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_rotate.out }
+  - id: runtime/abi-corpus-x_rclrcr
+    targets: [arm64, amd64]
+    build: { source: x_rclrcr.c, output: x_rclrcr, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_rclrcr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_rclrcr.out }
+  - id: runtime/abi-corpus-x_shiftedge
+    targets: [arm64, amd64]
+    build: { source: x_shiftedge.c, output: x_shiftedge, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_shiftedge }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_shiftedge.out }
+  - id: runtime/abi-corpus-x_bswapmov
+    targets: [arm64, amd64]
+    build: { source: x_bswapmov.c, output: x_bswapmov, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_bswapmov }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_bswapmov.out }
+  - id: runtime/abi-corpus-x_pextpdep
+    targets: [arm64, amd64]
+    build: { source: x_pextpdep.c, output: x_pextpdep, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_pextpdep }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_pextpdep.out }
+  - id: runtime/abi-corpus-x_strops
+    targets: [arm64, amd64]
+    build: { source: x_strops.c, output: x_strops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_strops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_strops.out }
+  - id: runtime/abi-corpus-x_atomicrmw
+    targets: [arm64, amd64]
+    build: { source: x_atomicrmw.c, output: x_atomicrmw, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_atomicrmw }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_atomicrmw.out }
+  - id: runtime/abi-corpus-x_leaidx
+    targets: [arm64, amd64]
+    build: { source: x_leaidx.c, output: x_leaidx, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_leaidx }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_leaidx.out }
+  - id: runtime/abi-corpus-x_flags_pf_af
+    targets: [arm64, amd64]
+    build: { source: flags_pfaf.c, output: flags_pfaf, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/flags_pfaf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/flags_pfaf.out }
+  - id: runtime/abi-corpus-x_sse2_packint
+    targets: [arm64, amd64]
+    build: { source: sse2_packint.c, output: sse2_packint, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse2_packint }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse2_packint.out }
+  - id: runtime/abi-corpus-x_sse_movmsk
+    targets: [arm64, amd64]
+    build: { source: sse_movmsk.c, output: sse_movmsk, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse_movmsk }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse_movmsk.out }
+  - id: runtime/abi-corpus-x_sse_shuffle
+    targets: [arm64, amd64]
+    build: { source: sse_shuffle.c, output: sse_shuffle, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse_shuffle }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse_shuffle.out }
+  - id: runtime/abi-corpus-x_sse_fmath
+    targets: [arm64, amd64]
+    build: { source: sse_fmath.c, output: sse_fmath, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse_fmath }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse_fmath.out }
+  - id: runtime/abi-corpus-x_lahf
+    targets: [arm64, amd64]
+    build: { source: x_lahf.c, output: x_lahf, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_lahf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_lahf.out }
+  - id: runtime/abi-corpus-x_xlat
+    targets: [arm64, amd64]
+    build: { source: x_xlat.c, output: x_xlat, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_xlat }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_xlat.out }
+  - id: runtime/abi-corpus-x_x87_exact
+    targets: [arm64, amd64]
+    build: { source: x87_exact.c, output: x87_exact, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x87_exact }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x87_exact.out }
+  - id: runtime/abi-corpus-x_signext
+    targets: [arm64, amd64]
+    build: { source: x_signext.c, output: x_signext, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_signext }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_signext.out }
+  - id: runtime/abi-corpus-x_sahf
+    targets: [arm64, amd64]
+    build: { source: x_sahf.c, output: x_sahf, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_sahf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_sahf.out }
+  - id: runtime/abi-corpus-x_arith_ext
+    targets: [arm64, amd64]
+    build: { source: arith_ext.c, output: arith_ext, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/arith_ext }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/arith_ext.out }
+  - id: runtime/abi-corpus-x_avx2_gather
+    targets: [arm64, amd64]
+    build: { source: avx2_gather.c, output: avx2_gather, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx2_gather }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx2_gather.out }
+  - id: runtime/abi-corpus-x_avx2_int
+    targets: [arm64, amd64]
+    build: { source: avx2_int.c, output: avx2_int, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx2_int }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx2_int.out }
+  - id: runtime/abi-corpus-x_avx2_shuf
+    targets: [arm64, amd64]
+    build: { source: avx2_shuf.c, output: avx2_shuf, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx2_shuf }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx2_shuf.out }
+  - id: runtime/abi-corpus-x_avx2_varshift
+    targets: [arm64, amd64]
+    build: { source: avx2_varshift.c, output: avx2_varshift, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx2_varshift }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx2_varshift.out }
+  - id: runtime/abi-corpus-x_avx_fma
+    targets: [arm64, amd64]
+    build: { source: avx_fma.c, output: avx_fma, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx_fma }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx_fma.out }
+  - id: runtime/abi-corpus-x_avx_fp
+    targets: [arm64, amd64]
+    build: { source: avx_fp.c, output: avx_fp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx_fp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx_fp.out }
+  - id: runtime/abi-corpus-x_bmi
+    targets: [arm64, amd64]
+    build: { source: x_bmi.c, output: x_bmi, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_bmi }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_bmi.out }
+  - id: runtime/abi-corpus-x_bt_mem
+    targets: [arm64, amd64]
+    build: { source: bt_mem.c, output: bt_mem, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/bt_mem }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/bt_mem.out }
+  - id: runtime/abi-corpus-x_mmx
+    targets: [arm64, amd64]
+    build: { source: x_mmx.c, output: x_mmx, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_mmx }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_mmx.out }
+  - id: runtime/abi-corpus-x_movbe
+    targets: [arm64, amd64]
+    build: { source: x_movbe.c, output: x_movbe, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_movbe }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_movbe.out }
+  - id: runtime/abi-corpus-x_partial_reg
+    targets: [arm64, amd64]
+    build: { source: partial_reg.c, output: partial_reg, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/partial_reg }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/partial_reg.out }
+  - id: runtime/abi-corpus-x_shiftrot
+    targets: [arm64, amd64]
+    build: { source: x_shiftrot.c, output: x_shiftrot, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_shiftrot }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_shiftrot.out }
+  - id: runtime/abi-corpus-x_sse3
+    targets: [arm64, amd64]
+    build: { source: x_sse3.c, output: x_sse3, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_sse3 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_sse3.out }
+  - id: runtime/abi-corpus-x_sse41_int
+    targets: [arm64, amd64]
+    build: { source: sse41_int.c, output: sse41_int, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse41_int }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse41_int.out }
+  - id: runtime/abi-corpus-x_sse41_misc
+    targets: [arm64, amd64]
+    build: { source: sse41_misc.c, output: sse41_misc, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse41_misc }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse41_misc.out }
+  - id: runtime/abi-corpus-x_sse41_round
+    targets: [arm64, amd64]
+    build: { source: sse41_round.c, output: sse41_round, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse41_round }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse41_round.out }
+  - id: runtime/abi-corpus-x_sse42_crc
+    targets: [arm64, amd64]
+    build: { source: sse42_crc.c, output: sse42_crc, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse42_crc }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse42_crc.out }
+  - id: runtime/abi-corpus-x_ssse3
+    targets: [arm64, amd64]
+    build: { source: x_ssse3.c, output: x_ssse3, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_ssse3 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_ssse3.out }
+  - id: runtime/abi-corpus-x_x87_cmp
+    targets: [arm64, amd64]
+    build: { source: x87_cmp.c, output: x87_cmp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x87_cmp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x87_cmp.out }
+  - id: runtime/abi-corpus-x_x87_prem
+    targets: [arm64, amd64]
+    build: { source: x87_prem.c, output: x87_prem, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x87_prem }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x87_prem.out }
+  - id: runtime/abi-corpus-x_xadd
+    targets: [arm64, amd64]
+    build: { source: x_xadd.c, output: x_xadd, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_xadd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_xadd.out }
+  - id: runtime/abi-corpus-x_cwd
+    targets: [arm64, amd64]
+    build: { source: x_cwd.c, output: x_cwd, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_cwd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_cwd.out }
+  - id: runtime/abi-corpus-x_movpart16
+    targets: [arm64, amd64]
+    build: { source: x_movpart16.c, output: x_movpart16, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_movpart16 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_movpart16.out }
+  - id: runtime/abi-corpus-x_roundpd
+    targets: [arm64, amd64]
+    build: { source: x_roundpd.c, output: x_roundpd, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_roundpd }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_roundpd.out }
+  - id: runtime/abi-corpus-x_cmpxchg8b
+    targets: [arm64, amd64]
+    build: { source: x_cmpxchg8b.c, output: x_cmpxchg8b, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_cmpxchg8b }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_cmpxchg8b.out }
+  - id: runtime/abi-corpus-x_tls
+    targets: [arm64, amd64]
+    build: { source: x_tls.c, output: x_tls, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_tls }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_tls.out }
+  - id: runtime/abi-corpus-x_strsearch
+    targets: [arm64, amd64]
+    build: { source: x_strsearch.c, output: x_strsearch, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_strsearch }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_strsearch.out }
+  - id: runtime/abi-corpus-x_denorm
+    targets: [arm64, amd64]
+    build: { source: x_denorm.c, output: x_denorm, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_denorm }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_denorm.out }
+  - id: runtime/abi-corpus-x_wcs
+    targets: [arm64, amd64]
+    build: { source: x_wcs.c, output: x_wcs, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_wcs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_wcs.out }
+  - id: runtime/abi-corpus-x_pcmpistr
+    targets: [arm64, amd64]
+    build: { source: x_pcmpistr.c, output: x_pcmpistr, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_pcmpistr }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_pcmpistr.out }
+  - id: runtime/abi-corpus-x_aesni
+    targets: [arm64, amd64]
+    build: { source: x_aesni.c, output: x_aesni, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_aesni }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_aesni.out }
+  - id: runtime/abi-corpus-x_sse41_extra
+    targets: [arm64, amd64]
+    build: { source: sse41_extra.c, output: sse41_extra, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/sse41_extra }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/sse41_extra.out }
+  - id: runtime/abi-corpus-x_f16c
+    targets: [arm64, amd64]
+    build: { source: x_f16c.c, output: x_f16c, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x_f16c }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x_f16c.out }
+  - id: runtime/abi-corpus-x_avx_lanes
+    targets: [arm64, amd64]
+    build: { source: avx_lanes.c, output: avx_lanes, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx_lanes }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx_lanes.out }
+  - id: runtime/abi-corpus-x_avx_fpops
+    targets: [arm64, amd64]
+    build: { source: avx_fpops.c, output: avx_fpops, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/avx_fpops }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/avx_fpops.out }
+  - id: runtime/abi-corpus-x_vex_sse2int
+    targets: [arm64, amd64]
+    build: { source: vex_sse2int.c, output: vex_sse2int, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_sse2int }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_sse2int.out }
+  - id: runtime/abi-corpus-x_vex_ssse3
+    targets: [arm64, amd64]
+    build: { source: vex_ssse3.c, output: vex_ssse3, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_ssse3 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_ssse3.out }
+  - id: runtime/abi-corpus-x_vex_sse41int
+    targets: [arm64, amd64]
+    build: { source: vex_sse41int.c, output: vex_sse41int, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_sse41int }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_sse41int.out }
+  - id: runtime/abi-corpus-x_vex_fp
+    targets: [arm64, amd64]
+    build: { source: vex_fp.c, output: vex_fp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_fp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_fp.out }
+  - id: runtime/abi-corpus-x_vex_crypto
+    targets: [arm64, amd64]
+    build: { source: vex_crypto.c, output: vex_crypto, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_crypto }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_crypto.out }
+  - id: runtime/abi-corpus-x_vex_maskmov
+    targets: [arm64, amd64]
+    build: { source: vex_maskmov.c, output: vex_maskmov, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_maskmov }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_maskmov.out }
+  - id: runtime/abi-corpus-x_vex_cvt
+    targets: [arm64, amd64]
+    build: { source: vex_cvt.c, output: vex_cvt, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_cvt }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_cvt.out }
+  - id: runtime/abi-corpus-x_vex_movdp
+    targets: [arm64, amd64]
+    build: { source: vex_movdp.c, output: vex_movdp, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_movdp }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_movdp.out }
+  - id: runtime/abi-corpus-x_vex_fma2
+    targets: [arm64, amd64]
+    build: { source: vex_fma2.c, output: vex_fma2, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/vex_fma2 }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/vex_fma2.out }
+  - id: runtime/abi-corpus-a_lse_rs
+    targets: [arm64]
+    build: { source: lse_rs.c, output: lse_rs, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/lse_rs }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/lse_rs.out }
+  - id: runtime/abi-corpus-a_casp_stolen
+    targets: [arm64]
+    build: { source: casp_stolen.c, output: casp_stolen, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/casp_stolen }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/casp_stolen.out }
+  - id: runtime/abi-corpus-a_ldst_struct_rm
+    targets: [arm64]
+    build: { source: ldst_structrm.c, output: ldst_structrm, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/ldst_structrm }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/ldst_structrm.out }
+  - id: runtime/abi-corpus-a_stxp_status
+    targets: [arm64]
+    build: { source: stxp_status.c, output: stxp_status, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/stxp_status }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/stxp_status.out }
+  - id: runtime/abi-corpus-a_madd_ra
+    targets: [arm64]
+    build: { source: madd_ra.c, output: madd_ra, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/madd_ra }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/madd_ra.out }
+  - id: runtime/abi-corpus-fp_ctlflush
+    targets: [arm64, amd64]
+    build: { source: fp_ctlflush.c, output: fp_ctlflush, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fp_ctlflush }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fp_ctlflush.out }
+  - id: runtime/abi-corpus-fp_fma_dnan
+    targets: [arm64, amd64]
+    build: { source: fma_dnan.c, output: fma_dnan, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/fma_dnan }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/fma_dnan.out }
+  - id: runtime/abi-corpus-x_x87_fsw
+    targets: [arm64, amd64]
+    build: { source: x87_fsw.c, output: x87_fsw, flags: [-static, -O2, -std=gnu11, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-corpus/x87_fsw }
+    run: []
+    status: active
+    compat: { class: compatibility }
+    expect: { exit: 0, stdout: golden/x87_fsw.out }
