@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn guard_removes_only_the_socket_identity_it_owns() {
+    fn socket_guard_ownership() {
         let temporary = tempfile::tempdir().unwrap();
         let owned = temporary.path().join("owned.sock");
         let listener = std::os::unix::net::UnixListener::bind(&owned).unwrap();

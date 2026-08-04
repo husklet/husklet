@@ -1,8 +1,8 @@
+use super::MountPoint;
 #[cfg(feature = "runtime")]
 use super::format::{ImageName, Ports};
 #[cfg(feature = "runtime")]
 use super::lifecycle::State as LifecycleState;
-use super::MountPoint;
 #[cfg(feature = "runtime")]
 use hl_container::{ContainerState as RuntimeState, ExitStatus};
 use serde::{Deserialize, Serialize};
@@ -162,9 +162,7 @@ impl Lifecycle {
                 }
             }
             RuntimeState::Restarting {
-                result,
-                finished_at_ms,
-                ..
+                result, finished_at_ms, ..
             } => {
                 let code = match result {
                     ExitStatus::Code(code) => *code,
@@ -176,10 +174,7 @@ impl Lifecycle {
                     status: format!("Restarting ({code}) {} ago", Age::since(*finished_at_ms)),
                 }
             }
-            RuntimeState::Exited {
-                result,
-                finished_at_ms,
-            } => {
+            RuntimeState::Exited { result, finished_at_ms } => {
                 let code = match result {
                     ExitStatus::Code(code) => *code,
                     ExitStatus::Signal(signal) => 128 + signal,
@@ -232,11 +227,7 @@ mod tests {
         Container::default()
     }
 
-    fn port(
-        private_port: u16,
-        public_port: Option<u16>,
-        protocol: &str,
-    ) -> crate::api::PortSummary {
+    fn port(private_port: u16, public_port: Option<u16>, protocol: &str) -> crate::api::PortSummary {
         crate::api::PortSummary {
             ip: None,
             private_port,
@@ -299,18 +290,13 @@ mod tests {
 
     #[test]
     fn container_summary_is_owned_wire_model_without_inspect_exit_code() {
-        let container: Container = serde_json::from_value(
-            serde_json::json!({"Id":"abcdef012345","Image":"alpine:latest"}),
-        )
-        .unwrap();
+        let container: Container =
+            serde_json::from_value(serde_json::json!({"Id":"abcdef012345","Image":"alpine:latest"})).unwrap();
         assert_eq!(container.metadata.id, "abcdef012345");
         assert_eq!(container.metadata.image, "alpine:latest");
         assert!(container.names.is_empty());
         assert!(container.ports.is_empty());
-        assert!(serde_json::to_value(container)
-            .unwrap()
-            .get("ExitCode")
-            .is_none());
+        assert!(serde_json::to_value(container).unwrap().get("ExitCode").is_none());
     }
 
     #[cfg(feature = "runtime")]
@@ -360,25 +346,29 @@ mod tests {
             .status,
             "Exited (2) 5 seconds ago"
         );
-        assert!(super::Lifecycle::from_runtime(
-            &hl_container::ContainerState::Restarting {
-                result: hl_container::ExitStatus::Code(1),
-                finished_at_ms: now_ms.saturating_sub(5_000),
-                ready_at_ms: now_ms,
-            },
-            now_ms.saturating_sub(100_000),
-        )
-        .status
-        .starts_with("Restarting (1) "));
-        assert!(super::Lifecycle::from_runtime(
-            &hl_container::ContainerState::Paused {
-                process_id: 7,
-                started_at_ms: now_ms.saturating_sub(90_000),
-                paused_at_ms: now_ms,
-            },
-            now_ms.saturating_sub(100_000),
-        )
-        .status
-        .ends_with(" (Paused)"));
+        assert!(
+            super::Lifecycle::from_runtime(
+                &hl_container::ContainerState::Restarting {
+                    result: hl_container::ExitStatus::Code(1),
+                    finished_at_ms: now_ms.saturating_sub(5_000),
+                    ready_at_ms: now_ms,
+                },
+                now_ms.saturating_sub(100_000),
+            )
+            .status
+            .starts_with("Restarting (1) ")
+        );
+        assert!(
+            super::Lifecycle::from_runtime(
+                &hl_container::ContainerState::Paused {
+                    process_id: 7,
+                    started_at_ms: now_ms.saturating_sub(90_000),
+                    paused_at_ms: now_ms,
+                },
+                now_ms.saturating_sub(100_000),
+            )
+            .status
+            .ends_with(" (Paused)")
+        );
     }
 }
