@@ -56,12 +56,19 @@ pub(super) async fn create(
     Json(request): Json<NetworkCreate>,
 ) -> ApiResult<(StatusCode, Json<NetworkCreated>)> {
     let spec = request.spec()?;
+    let null_driver = spec.driver == NetworkDriver::None;
     let network = state
         .containers
         .networks()
         .create(spec)
         .await
-        .map_err(ApiError::container)?;
+        .map_err(|error| match error {
+            hl_container::Error::NetworkConflict(_) if null_driver => ApiError::new(
+                StatusCode::FORBIDDEN,
+                "only one instance of the \"null\" network is allowed",
+            ),
+            error => ApiError::container(error),
+        })?;
     let mut attributes = network.labels.clone();
     attributes.insert("name".into(), network.name.clone());
     attributes.insert(

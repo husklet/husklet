@@ -65,11 +65,21 @@ impl Networks {
         let _guard = self.operation.lock().await;
         if let Some(existing) = self.storage.get(&spec.name).await? {
             if existing.compatible(&spec) {
+                if spec.driver == NetworkDriver::None {
+                    return Err(Error::NetworkConflict(spec.name));
+                }
                 return Ok(existing);
             }
             return Err(Error::NetworkConflict(spec.name));
         }
         let existing = self.storage.list().await?;
+        if spec.driver == NetworkDriver::None
+            && existing
+                .iter()
+                .any(|network| network.driver == NetworkDriver::None)
+        {
+            return Err(Error::NetworkConflict(spec.name));
+        }
         let pool = Pool::from(existing.as_slice());
         if spec.driver == NetworkDriver::Bridge && spec.subnet.is_none() {
             spec.subnet = Some(pool.allocate()?);

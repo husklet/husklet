@@ -127,10 +127,9 @@ async fn empty_mode_selects_default_bridge_and_explicit_none_stays_isolated() {
     assert_eq!(bridge.driver, hl_container::NetworkDriver::Bridge);
     assert_eq!(bridge.driver, NetworkDriver::Bridge);
 
-    containers.networks().create(NetworkSpec::none("airgap")).await.unwrap();
     let custom = NetworkPlan::from_request(
         Some(&HostConfig {
-            network_mode: "airgap".into(),
+            network_mode: "none".into(),
             ..HostConfig::default()
         }),
         None,

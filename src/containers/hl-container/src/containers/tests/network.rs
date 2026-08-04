@@ -6,11 +6,6 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
     let containers = service(Arc::clone(&runtime)).await;
     containers
         .networks()
-        .create(NetworkSpec::none("isolated"))
-        .await
-        .unwrap();
-    containers
-        .networks()
         .create(NetworkSpec::bridge(
             "bridge-test",
             Subnet::new("10.90.0.0".parse().unwrap(), 24).unwrap(),
@@ -34,7 +29,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
         .unwrap();
     containers
         .networks()
-        .connect("isolated", "none-owner", EndpointSpec::default())
+        .connect("none", "none-owner", EndpointSpec::default())
         .await
         .unwrap();
     containers
@@ -44,7 +39,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
         .unwrap();
     containers
         .networks()
-        .connect("isolated", "conflict", EndpointSpec::default())
+        .connect("none", "conflict", EndpointSpec::default())
         .await
         .unwrap();
 
@@ -52,7 +47,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
     assert!(matches!(
         containers
             .networks()
-            .disconnect("isolated", "none-owner")
+            .disconnect("none", "none-owner")
             .await,
         Err(Error::InvalidState { .. })
     ));

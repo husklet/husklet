@@ -116,10 +116,7 @@ async fn forced_removal_drops_durable_endpoint_attachments() {
         .await
         .unwrap();
     let networks = containers.networks();
-    networks
-        .create(NetworkSpec::none("temporary"))
-        .await
-        .unwrap();
+    networks.create(NetworkSpec::bridge_auto("temporary")).await.unwrap();
     networks
         .connect("temporary", "attached", EndpointSpec::default())
         .await
@@ -193,7 +190,7 @@ async fn network_validation_rejects_overlap_conflicts_and_duplicate_addresses() 
         )
         .await
         .unwrap();
-    networks.create(NetworkSpec::none("second")).await.unwrap();
+    networks.create(NetworkSpec::bridge_auto("second")).await.unwrap();
     networks
         .connect("second", "one", EndpointSpec::default())
         .await
@@ -293,14 +290,9 @@ async fn none_network_has_no_ipam() {
         .create(container(root.path(), "isolated"))
         .await
         .unwrap();
-    containers
-        .networks()
-        .create(NetworkSpec::none("none-net"))
-        .await
-        .unwrap();
     let endpoint = containers
         .networks()
-        .connect("none-net", "isolated", EndpointSpec::default())
+        .connect("none", "isolated", EndpointSpec::default())
         .await
         .unwrap();
     assert_eq!(endpoint.address, None);
@@ -308,7 +300,7 @@ async fn none_network_has_no_ipam() {
         containers
             .networks()
             .connect(
-                "none-net",
+                "none",
                 "isolated",
                 EndpointSpec::default().address(Ipv4Addr::LOCALHOST)
             )
@@ -352,6 +344,32 @@ async fn automatic_bridge_subnets_are_atomic_deterministic_and_idempotent() {
 }
 
 #[tokio::test]
+async fn null_driver_is_singleton_and_internal_state_survives_reopen() {
+    let root = tempfile::tempdir().unwrap();
+    let config = Config::new(root.path());
+    let containers = Containers::builder(config.clone()).build().await.unwrap();
+    assert!(matches!(
+        containers.networks().create(NetworkSpec::none("airgap")).await,
+        Err(Error::NetworkConflict(name)) if name == "airgap"
+    ));
+    assert!(matches!(
+        containers.networks().create(NetworkSpec::none("none")).await,
+        Err(Error::NetworkConflict(name)) if name == "none"
+    ));
+    let internal = containers
+        .networks()
+        .create(NetworkSpec::bridge_auto("internal").internal(true))
+        .await
+        .unwrap();
+    assert!(internal.internal);
+
+    drop(containers);
+    let reopened = Containers::builder(config).build().await.unwrap();
+    assert!(reopened.networks().inspect("internal").await.unwrap().internal);
+    assert!(!reopened.networks().inspect("none").await.unwrap().internal);
+}
+
+#[tokio::test]
 async fn predefined_networks_survive_headless_remove_and_prune() {
     let root = tempfile::tempdir().unwrap();
     let containers = Containers::builder(Config::new(root.path()))
@@ -359,7 +377,7 @@ async fn predefined_networks_survive_headless_remove_and_prune() {
         .await
         .unwrap();
     let networks = containers.networks();
-    networks.create(NetworkSpec::none("unused")).await.unwrap();
+    networks.create(NetworkSpec::bridge_auto("unused")).await.unwrap();
 
     assert!(matches!(
         networks.remove("none").await,

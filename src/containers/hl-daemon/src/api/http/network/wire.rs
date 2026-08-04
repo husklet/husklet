@@ -48,19 +48,19 @@ impl NetworkCreate {
             &self.driver
         };
         let mut spec = match driver {
-            "none" => {
+            "null" => {
                 if !self.ipam.config.is_empty() {
                     return Err(ApiError::new(
                         StatusCode::BAD_REQUEST,
                         "none networks cannot configure IPAM",
                     ));
                 }
-                NetworkSpec::none(self.name)
+                NetworkSpec::none(self.name).internal(self.internal)
             }
             "bridge" => {
                 let pool = match self.ipam.config.as_slice() {
                     [] => {
-                        let mut value = NetworkSpec::bridge_auto(self.name);
+                        let mut value = NetworkSpec::bridge_auto(self.name).internal(self.internal);
                         value.labels = self.labels;
                         return Ok(value);
                     }
@@ -84,7 +84,7 @@ impl NetworkCreate {
                     ));
                 }
                 let subnet = pool.subnet()?;
-                let mut value = NetworkSpec::bridge(self.name, subnet);
+                let mut value = NetworkSpec::bridge(self.name, subnet).internal(self.internal);
                 if !pool.gateway.is_empty() {
                     value = value.gateway(pool.gateway.parse().map_err(|_| {
                         ApiError::new(StatusCode::BAD_REQUEST, "invalid IPv4 gateway")
@@ -213,7 +213,7 @@ impl From<hl_container::Network> for Network {
                 config,
                 ..Ipam::default()
             },
-            internal: value.driver == NetworkDriver::None,
+            internal: value.internal,
             attachable: false,
             ingress: false,
             config_from: ConfigFrom::default(),
@@ -280,5 +280,25 @@ mod tests {
         }))
         .unwrap();
         assert!(format!("{:?}", endpoint.spec().unwrap_err()).contains("FutureRoute"));
+    }
+
+    #[test]
+    fn null_is_the_driver_token_and_internal_is_preserved() {
+        let request: NetworkCreate = serde_json::from_value(serde_json::json!({
+            "Name": "airgap",
+            "Driver": "null",
+            "Internal": true
+        }))
+        .unwrap();
+        let spec = request.spec().unwrap();
+        assert_eq!(spec.driver, hl_container::NetworkDriver::None);
+        assert!(spec.internal);
+
+        let request: NetworkCreate = serde_json::from_value(serde_json::json!({
+            "Name": "airgap",
+            "Driver": "none"
+        }))
+        .unwrap();
+        assert_eq!(request.spec().unwrap_err().status, StatusCode::NOT_IMPLEMENTED);
     }
 }
