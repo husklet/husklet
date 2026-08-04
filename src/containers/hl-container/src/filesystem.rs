@@ -273,43 +273,11 @@ impl Filesystem {
         if kind.is_dir() {
             path.ensure_dir(root)?;
         } else if kind.is_file() {
-            path.replace(root)?;
-            if let Some(parent) = output.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            let mut file = OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .write(true)
-                .open(&output)?;
-            std::io::copy(&mut *entry, &mut file)?;
-            file.flush()?;
+            Self::extract_file(root, &path, &output, entry)?;
         } else if kind.is_symlink() {
-            let target = entry
-                .link_name()?
-                .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;
-            path.validate_link(&target)?;
-            path.replace(root)?;
-            if let Some(parent) = output.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(target, &output)?;
-            #[cfg(not(unix))]
-            return Err(Error::InvalidSpec("symlink archives are unsupported".into()));
+            Self::extract_symlink(root, &path, &output, entry)?;
         } else if kind.is_hard_link() {
-            let target = entry
-                .link_name()?
-                .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
-            let canonical = fs::canonicalize(Path::entry(&target)?.output(root))?;
-            if !canonical.starts_with(root) || !canonical.is_file() {
-                return Err(Error::InvalidSpec("archive hard-link target is unsafe".into()));
-            }
-            path.replace(root)?;
-            if let Some(parent) = output.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::hard_link(canonical, &output)?;
+            Self::extract_hard_link(root, &path, &output, entry)?;
         } else {
             return Err(Error::InvalidSpec("special archive entries are unsupported".into()));
         }
@@ -319,6 +287,72 @@ impl Filesystem {
                 fs::set_permissions(&output, fs::Permissions::from_mode(mode & 0o7777))?;
             }
         }
+        Ok(())
+    }
+
+    fn extract_file<R: Read>(
+        root: &FsPath,
+        path: &Path,
+        output: &FsPath,
+        entry: &mut tar::Entry<'_, R>,
+    ) -> Result<()> {
+        path.replace(root)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(output)?;
+        std::io::copy(entry, &mut file)?;
+        file.flush()?;
+        Ok(())
+    }
+
+    fn extract_symlink<R: Read>(
+        root: &FsPath,
+        path: &Path,
+        output: &FsPath,
+        entry: &tar::Entry<'_, R>,
+    ) -> Result<()> {
+        let target = entry
+            .link_name()?
+            .ok_or_else(|| Error::InvalidSpec("symlink entry has no target".into()))?;
+        path.validate_link(&target)?;
+        path.replace(root)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, output)?;
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(Error::InvalidSpec("symlink archives are unsupported".into()))
+        }
+    }
+
+    fn extract_hard_link<R: Read>(
+        root: &FsPath,
+        path: &Path,
+        output: &FsPath,
+        entry: &tar::Entry<'_, R>,
+    ) -> Result<()> {
+        let target = entry
+            .link_name()?
+            .ok_or_else(|| Error::InvalidSpec("hard-link entry has no target".into()))?;
+        let canonical = fs::canonicalize(Path::entry(&target)?.output(root))?;
+        if !canonical.starts_with(root) || !canonical.is_file() {
+            return Err(Error::InvalidSpec("archive hard-link target is unsafe".into()));
+        }
+        path.replace(root)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::hard_link(canonical, output)?;
         Ok(())
     }
 
