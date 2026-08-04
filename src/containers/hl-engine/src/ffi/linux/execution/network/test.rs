@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -10,7 +10,7 @@ use hl_network::{
     AddressFamily, BindRoute, EgressInterface, EgressRoute, SocketAddress, SocketConnectError, SocketConnectStatus,
     SocketHostError, SocketHostIo, SocketProtocol, SocketType,
 };
-use hl_runtime::{HostSend, RuntimeNetworkHost};
+use hl_runtime::{HostControl, HostSend, RuntimeNetworkHost};
 
 use super::Native;
 
@@ -611,6 +611,7 @@ fn selected_interface_datagrams_preserve_source_and_connected_peer() {
     let messaged = host
         .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)
         .unwrap();
+    let attachment: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
     let sent = host
         .send_message(
             messaged.token,
@@ -620,17 +621,21 @@ fn selected_interface_datagrams_preserve_source_and_connected_peer() {
                     address: server_address.clone(),
                     interface: Some(interface.clone()),
                 }),
-                controls: Vec::new(),
+                controls: vec![HostControl::Rights(vec![attachment])],
                 nonblocking: true,
                 record: true,
             },
         )
         .unwrap();
     assert_eq!(sent.count, 3);
-    assert!(!sent.rights_consumed);
-    let message = receive(server.token, &mut input);
-    assert_eq!(&input[..message.count], b"msg");
-    assert_eq!(message.source, host.local_address(messaged.token).unwrap());
+    assert!(sent.rights_consumed);
+    let message = host.receive_message(server.token, 3, 1024, false, false).unwrap();
+    assert_eq!(message.payload, b"msg");
+    assert_eq!(message.source, Some(host.local_address(messaged.token).unwrap()));
+    let HostControl::Rights(rights) = &message.controls[0] else {
+        panic!("routed SCM_RIGHTS missing");
+    };
+    assert_eq!(rights.len(), 1);
 
     let connected = host
         .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)

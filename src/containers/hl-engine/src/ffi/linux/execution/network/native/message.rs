@@ -1,7 +1,8 @@
 use std::mem::{size_of, zeroed};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
-use hl_runtime::{HostControl, HostReceive, HostSend, HostSendResult, RuntimeNetworkError};
+use hl_network::{BindRoute, SocketAddress};
+use hl_runtime::{HostControl, HostReceive, HostSend, HostSendResult, RuntimeNetworkError, RuntimeNetworkHost};
 
 use super::Native;
 
@@ -54,8 +55,41 @@ impl Native {
         let mut header = unsafe { zeroed::<libc::msghdr>() };
         header.msg_iov = &mut vector;
         header.msg_iovlen = 1;
-        if let Some(address) = &message.address {
-            let (storage, length) = Self::socket_address(address)?;
+        if let Some(route) = message.route {
+            let address = if let Some(interface) = route.interface {
+                let SocketAddress::Inet4 { address, port } = route.address else {
+                    return Err(RuntimeNetworkError::Invalid);
+                };
+                if port == 0 || self.socket_type(token)? != libc::SOCK_DGRAM {
+                    return Err(RuntimeNetworkError::Invalid);
+                }
+                let needs_source = self
+                    .shared
+                    .sockets
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .get(&token)
+                    .is_none_or(|entry| entry.guest_local.is_none());
+                if needs_source {
+                    <Self as RuntimeNetworkHost>::bind_route(
+                        self,
+                        token,
+                        BindRoute {
+                            address: SocketAddress::Inet4 {
+                                address: interface.ipv4,
+                                port: 0,
+                            },
+                            interface: Some(interface.clone()),
+                            aliases: Vec::new(),
+                        },
+                    )?;
+                }
+                let (_, path) = Self::switch_path(&interface, address, port)?;
+                SocketAddress::Unix(path)
+            } else {
+                route.address
+            };
+            let (storage, length) = Self::socket_address(&address)?;
             header.msg_name = std::ptr::from_ref(&storage).cast_mut().cast();
             header.msg_namelen = length;
             return self.send_header(
@@ -165,7 +199,11 @@ impl Native {
         let source = if header.msg_namelen == 0 {
             None
         } else {
-            Self::decode_address(&source, header.msg_namelen).ok()
+            let source = Self::decode_address(&source, header.msg_namelen)?;
+            Some(match source {
+                SocketAddress::Unix(path) => Self::switch_source(&path).ok_or(RuntimeNetworkError::Invalid)?,
+                source => source,
+            })
         };
         Ok(HostReceive {
             payload,
@@ -290,7 +328,7 @@ mod test {
                 sender,
                 HostSend {
                     payload: vec![7],
-                    address: None,
+                    route: None,
                     controls: vec![HostControl::Rights(vec![attachment])],
                     nonblocking: true,
                     record: false,

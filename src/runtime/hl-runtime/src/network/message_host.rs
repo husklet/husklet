@@ -135,9 +135,6 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let Some(host) = &self.host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let Some(transfer) = &self.transfer else {
-            return LinuxResult::Error(Errno::EOPNOTSUPP);
-        };
         let address = match address.map(Self::host_address).transpose() {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
@@ -147,6 +144,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 return LinuxResult::Error(error);
             }
         }
+        let route = address.map(|address| self.connect_route(address));
         let record = socket
             .snapshot
             .lock()
@@ -154,13 +152,13 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             .socket_type
             != hl_network::SocketType::Stream;
         loop {
-            let (host_controls, has_rights) = match self.export_controls(&controls, transfer.as_ref()) {
+            let (host_controls, has_rights) = match self.export_controls(&controls, self.transfer.as_deref()) {
                 Ok(controls) => controls,
                 Err(error) => return LinuxResult::Error(error),
             };
             let request = HostSend {
                 payload: payload.clone(),
-                address: address.clone(),
+                route: route.clone(),
                 controls: host_controls,
                 nonblocking: true,
                 record,
@@ -190,7 +188,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     fn export_controls(
         &self,
         controls: &[hl_network::ControlMessage],
-        transfer: &dyn crate::DescriptorTransfer<H::Attachment>,
+        transfer: Option<&dyn crate::DescriptorTransfer<H::Attachment>>,
     ) -> Result<(Vec<HostControl<H::Attachment>>, bool), Errno> {
         let mut output = Vec::with_capacity(controls.len());
         let mut has_rights = false;
@@ -205,7 +203,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     fn export_control(
         &self,
         control: &hl_network::ControlMessage,
-        transfer: &dyn crate::DescriptorTransfer<H::Attachment>,
+        transfer: Option<&dyn crate::DescriptorTransfer<H::Attachment>>,
     ) -> Result<HostControl<H::Attachment>, Errno> {
         match control {
             hl_network::ControlMessage::Rights(numbers) => self.export_rights(numbers, transfer),
@@ -227,8 +225,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     fn export_rights(
         &self,
         numbers: &[i32],
-        transfer: &dyn crate::DescriptorTransfer<H::Attachment>,
+        transfer: Option<&dyn crate::DescriptorTransfer<H::Attachment>>,
     ) -> Result<HostControl<H::Attachment>, Errno> {
+        let Some(transfer) = transfer else {
+            return Err(Errno::EOPNOTSUPP);
+        };
         let mut attachments = Vec::with_capacity(numbers.len());
         for number in numbers {
             attachments.push(self.export_reference(*number, transfer)?);

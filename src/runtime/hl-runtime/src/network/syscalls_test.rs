@@ -82,6 +82,7 @@ struct HostState {
     peer: Option<SocketAddress>,
     routes: Vec<(&'static str, hl_network::EgressRoute)>,
     bind_routes: Vec<hl_network::BindRoute>,
+    message_routes: Vec<Option<hl_network::EgressRoute>>,
     closed: Vec<u64>,
     sent_to: Vec<(u64, Vec<u8>, SocketAddress, bool)>,
     send_to_result: Option<Result<usize, crate::RuntimeNetworkError>>,
@@ -265,6 +266,19 @@ impl RuntimeNetworkHost for Host {
             },
         }))
     }
+
+    fn send_message(
+        &self,
+        _: u64,
+        message: crate::HostSend<Self::Attachment>,
+    ) -> Result<crate::HostSendResult, crate::RuntimeNetworkError> {
+        let count = message.payload.len();
+        self.state.lock().unwrap().message_routes.push(message.route);
+        Ok(crate::HostSendResult {
+            count,
+            rights_consumed: false,
+        })
+    }
     fn receive_message(
         &self,
         token: u64,
@@ -408,7 +422,12 @@ fn interface_routes_reach_host_bind_connect_and_datagram_send() {
     let mut runtime = fixture
         .runtime(GuestArchitecture::X86_64)
         .with_network_policy(policy)
-        .with_host_projection(true);
+        .with_host_projection(true)
+        .with_credentials(hl_network::SenderCredentials {
+            process: 41,
+            user: 42,
+            group: 43,
+        });
     let sockaddr = |address: [u8; 4], port: u16| {
         let mut value = [0_u8; 16];
         value[..2].copy_from_slice(&2_u16.to_le_bytes());
@@ -443,6 +462,27 @@ fn interface_routes_reach_host_bind_connect_and_datagram_send() {
         runtime.handle(Fixture::operation("sendto"), [datagram, 96, 4, 0, 64, 16]),
         LinuxResult::Value(4)
     );
+    fixture.memory.put(112, &Fixture::iovec(96, 4));
+    let control = ControlCodec::encode(
+        &[ControlMessage::Credentials {
+            process: 41,
+            user: 42,
+            group: 43,
+        }],
+        ControlWord::Eight,
+        32,
+    )
+    .unwrap()
+    .bytes;
+    fixture.memory.put(200, &control);
+    let mut header = Fixture::message_header(112, 200, control.len());
+    header[..8].copy_from_slice(&64_u64.to_le_bytes());
+    header[8..12].copy_from_slice(&16_u32.to_le_bytes());
+    fixture.memory.put(128, &header);
+    assert_eq!(
+        runtime.handle(Fixture::operation("sendmsg"), [datagram, 128, 0, 0, 0, 0]),
+        LinuxResult::Value(4)
+    );
 
     let state = fixture.host.state.lock().unwrap();
     assert_eq!(state.bind_routes.len(), 1);
@@ -452,6 +492,17 @@ fn interface_routes_reach_host_bind_connect_and_datagram_send() {
     assert_eq!(state.routes[0].1.interface.as_ref().unwrap().bridge, b"wide");
     assert_eq!(state.routes[1].0, "send");
     assert_eq!(state.routes[1].1.interface.as_ref().unwrap().bridge, b"wide");
+    assert_eq!(state.message_routes.len(), 1);
+    assert_eq!(
+        state.message_routes[0]
+            .as_ref()
+            .unwrap()
+            .interface
+            .as_ref()
+            .unwrap()
+            .bridge,
+        b"wide"
+    );
 }
 
 #[test]

@@ -74,7 +74,7 @@ pub enum HostControl<A> {
 #[derive(Debug)]
 pub struct HostSend<A> {
     pub payload: Vec<u8>,
-    pub address: Option<SocketAddress>,
+    pub route: Option<EgressRoute>,
     pub controls: Vec<HostControl<A>>,
     pub nonblocking: bool,
     /// Whether the socket preserves message boundaries.

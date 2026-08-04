@@ -119,7 +119,7 @@ fn copyout_rolls_back() {
 fn record_zero_rights() {
     let request = HostSend {
         payload: Vec::new(),
-        address: None,
+        route: None,
         controls: vec![HostControl::Rights(vec![7_u8])],
         nonblocking: false,
         record: true,
