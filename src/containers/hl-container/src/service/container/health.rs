@@ -178,7 +178,7 @@ impl Service {
             Check::Command(command) => {
                 process.program.clone_from(&command.program);
                 process.args.clone_from(&command.args);
-                process.env.extend(command.env.clone());
+                process.env.overlay(&command.env);
                 if command.uid.is_some() {
                     process.uid = command.uid;
                 }

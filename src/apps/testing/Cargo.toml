@@ -15,6 +15,7 @@ clap.workspace = true
 hl-container = { path = "../../containers/hl-container" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }
+hl-process = { path = "../../packages/hl-process" }
 hl-engine = { path = "../../containers/hl-engine" }
 libc = "0.2"
 ring = "0.17.14"

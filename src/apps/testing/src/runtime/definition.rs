@@ -10,8 +10,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::Command as StdCommand,
+    sync::atomic::AtomicBool,
+    time::Duration,
 };
+
+const ORACLE_CAPTURE_LIMIT: u64 = 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,10 +85,93 @@ struct RawCase {
     soak: Option<scheduler::Plan>,
     run: Vec<String>,
     #[serde(default)]
-    environment: BTreeMap<String, String>,
+    #[serde(deserialize_with = "environment")]
+    environment: Vec<EnvironmentEntry>,
     #[serde(default = "timeout")]
     timeout: u64,
     expect: Expect,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EnvironmentEntry {
+    name: Vec<u8>,
+    value: Vec<u8>,
+}
+
+impl EnvironmentEntry {
+    pub(crate) fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    pub(crate) fn value(&self) -> &[u8] {
+        &self.value
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawEnvironment {
+    Text(BTreeMap<String, String>),
+    Ordered(Vec<RawEnvironmentEntry>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawEnvironmentEntry {
+    name: RawEnvironmentValue,
+    value: RawEnvironmentValue,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawEnvironmentValue {
+    Text(String),
+    Bytes { bytes: Vec<u8> },
+}
+
+fn environment<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<EnvironmentEntry>, D::Error> {
+    let raw = Option::<RawEnvironment>::deserialize(deserializer)?;
+    let values = match raw {
+        None => Vec::new(),
+        Some(RawEnvironment::Text(values)) => values
+            .into_iter()
+            .map(|(name, value)| EnvironmentEntry {
+                name: name.into_bytes(),
+                value: value.into_bytes(),
+            })
+            .collect(),
+        Some(RawEnvironment::Ordered(values)) => values
+            .into_iter()
+            .map(|entry| EnvironmentEntry {
+                name: entry.name.into_bytes(),
+                value: entry.value.into_bytes(),
+            })
+            .collect(),
+    };
+    let bytes = values.iter().try_fold(0_usize, |total, entry| {
+        total
+            .checked_add(entry.name.len())?
+            .checked_add(entry.value.len())?
+            .checked_add(2)
+    });
+    if values.len() > 4096
+        || bytes.is_none_or(|bytes| bytes > 64 * 1024 * 1024)
+        || values.iter().any(|entry| {
+            entry.name.is_empty() || entry.name.contains(&b'=') || entry.name.contains(&0) || entry.value.contains(&0)
+        })
+    {
+        return Err(serde::de::Error::custom("invalid or oversized process environment"));
+    }
+    Ok(values)
+}
+
+impl RawEnvironmentValue {
+    fn into_bytes(self) -> Vec<u8> {
+        match self {
+            Self::Text(value) => value.into_bytes(),
+            Self::Bytes { bytes } => bytes,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -133,7 +220,7 @@ const fn timeout() -> u64 {
 pub struct RuntimeCase {
     pub id: String,
     pub arguments: Vec<String>,
-    pub environment: BTreeMap<String, String>,
+    pub environment: Vec<EnvironmentEntry>,
     pub timeout: u64,
     pub exit: i32,
     pub golden: PathBuf,
@@ -194,14 +281,6 @@ impl App {
                 if !ids.insert(case.id.clone())
                     || !case.id.starts_with("runtime/")
                     || !(1..=3600).contains(&case.timeout)
-                    || case
-                        .environment
-                        .keys()
-                        .any(|name| name.is_empty() || name.contains('='))
-                    || case
-                        .environment
-                        .iter()
-                        .any(|(name, value)| name.contains('\0') || value.contains('\0'))
                 {
                     return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
                 }
@@ -277,7 +356,7 @@ impl App {
             .join(&case.output);
         fs::create_dir_all(output.parent().ok_or("runtime output has no parent")?)?;
         let compiler = self.compiler.for_target(target);
-        let status = Command::new(compiler)
+        let status = StdCommand::new(compiler)
             .arg("-o")
             .arg(&output)
             .arg(self.directory.join(case.source.native()))
@@ -303,17 +382,46 @@ impl App {
                 continue;
             }
             let artifact = self.build(case, target)?;
-            let mut command = Command::new(self.command(commands, target));
-            command
-                .env_clear()
-                .envs(&case.environment)
-                .arg(&artifact)
-                .args(&case.arguments);
-            let output = command.output()?;
-            let status = output.status.code().ok_or("oracle terminated without an exit code")?;
+            let directory = tempfile::tempdir()?;
+            let capture = hl_process::Capture {
+                stdout: directory.path().join("stdout"),
+                stderr: directory.path().join("stderr"),
+                stdout_limit: ORACLE_CAPTURE_LIMIT,
+                stderr_limit: ORACLE_CAPTURE_LIMIT,
+            };
+            let environment = case
+                .environment
+                .iter()
+                .map(|entry| hl_process::EnvironmentEntry::new(entry.name(), entry.value()))
+                .collect::<std::io::Result<Vec<_>>>()?;
+            let mut command = hl_process::Command::new(self.command(commands, target));
+            command.exact_environment(environment)?;
+            command.arg(&artifact).args(&case.arguments);
+            let outcome = hl_process::run(
+                &command,
+                &capture,
+                Duration::from_secs(case.timeout),
+                &AtomicBool::new(false),
+            )?;
+            let stdout = fs::read(&capture.stdout)?;
+            let stderr = fs::read(&capture.stderr)?;
+            let status = match outcome {
+                hl_process::Outcome::Exited(Some(status)) => status,
+                hl_process::Outcome::Exited(None) => return Err("oracle exited without a status".into()),
+                hl_process::Outcome::Signaled(signal) => {
+                    return Err(format!("oracle terminated by signal {signal}; stderr={stderr:?}").into());
+                }
+                hl_process::Outcome::TimedOut => {
+                    return Err(format!("oracle timed out after {} seconds; stderr={stderr:?}", case.timeout).into());
+                }
+                hl_process::Outcome::Cancelled => return Err("oracle was cancelled".into()),
+                hl_process::Outcome::OutputLimit => {
+                    return Err(format!("oracle exceeded the 1 MiB capture limit; stderr={stderr:?}").into());
+                }
+            };
             if status != case.exit {
                 return Err(format!(
-                    "oracle {} {} exited {status}, expected {}",
+                    "oracle {} {} exited {status}, expected {}; stderr={stderr:?}",
                     case.id,
                     target.name(),
                     case.exit
@@ -322,9 +430,9 @@ impl App {
             }
             if update {
                 let temporary = case.golden.with_extension("tmp");
-                fs::write(&temporary, &output.stdout)?;
+                fs::write(&temporary, &stdout)?;
                 fs::rename(temporary, &case.golden)?;
-            } else if fs::read(&case.golden)? != output.stdout {
+            } else if fs::read(&case.golden)? != stdout {
                 return Err(format!("oracle output differs for {} {}", case.id, target.name()).into());
             }
             println!("ORACLE {} {}", case.id, target.name());
@@ -541,4 +649,29 @@ mod tests {
         assert!(category_at(directory.path(), &row("[missing.h]")).is_err());
         assert!(category_at(directory.path(), &row("[header.h, header.h]")).is_err());
     }
+
+    #[test]
+    fn ordered_environment_preserves_raw_values_and_rejects_nul() {
+        let app = category(
+            "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    environment:\n      - { name: TZ, value: { bytes: [85, 84, 67, 255] } }\n      - { name: EMPTY, value: \"\" }\n    expect: { exit: 0, stdout: golden/one.out }\n",
+        )
+        .unwrap();
+        assert_eq!(app.cases[0].environment[0].name(), b"TZ");
+        assert_eq!(app.cases[0].environment[0].value(), b"UTC\xff");
+        assert_eq!(app.cases[0].environment[1].name(), b"EMPTY");
+        assert_eq!(app.cases[0].environment[1].value(), b"");
+
+        let raw_name = category(
+            "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    environment: [{ name: { bytes: [78, 255] }, value: raw }]\n    expect: { exit: 0, stdout: golden/one.out }\n",
+        )
+        .unwrap();
+        assert_eq!(raw_name.cases[0].environment[0].name(), b"N\xff");
+        assert_eq!(raw_name.cases[0].environment[0].value(), b"raw");
+
+        let invalid = category(
+            "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    environment: [{ name: BAD, value: { bytes: [0] } }]\n    expect: { exit: 0, stdout: golden/one.out }\n",
+        );
+        assert!(invalid.is_err());
+    }
+
 }

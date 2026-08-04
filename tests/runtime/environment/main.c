@@ -16,25 +16,6 @@ static void finish(long status) {
 #error unsupported guest architecture
 #endif
 
-static long write_result(void) {
-    static const char result[] = "environment-ok\n";
-#if defined(__x86_64__)
-    long written;
-    __asm__ volatile("syscall"
-                     : "=a"(written)
-                     : "a"(1L), "D"(1L), "S"(result), "d"(sizeof(result) - 1)
-                     : "rcx", "r11", "memory");
-    return written;
-#else
-    register long x0 __asm__("x0") = 1;
-    register const char *x1 __asm__("x1") = result;
-    register long x2 __asm__("x2") = sizeof(result) - 1;
-    register long x8 __asm__("x8") = 64;
-    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x8) : "memory");
-    return x0;
-#endif
-}
-
 static int equal(const unsigned char *left, const unsigned char *right) {
     while (*left == *right) {
         if (*left == 0)
@@ -48,14 +29,18 @@ static int equal(const unsigned char *left, const unsigned char *right) {
 void entry(uintptr_t *stack) {
     uintptr_t count = *stack;
     unsigned char **environment = (unsigned char **)(stack + count + 2);
-    static const unsigned char first[] = {'E', 'M', 'P', 'T', 'Y', '=', 0};
-    static const unsigned char second[] = {'T', 'Z', '=', 'U', 'T', 'C', 0};
-    if (!environment[0] || !environment[1] || environment[2])
+    static const unsigned char first[] = {'T', 'Z', '=', 'U', 'T', 'C', 0xff, 0};
+    static const unsigned char second[] = {'E', 'M', 'P', 'T', 'Y', '=', 0};
+    static const unsigned char third[] = "PATH=/usr/bin:/bin";
+    static const unsigned char fourth[] = "HOME=/root";
+    static const unsigned char fifth[] = "TERM=dumb";
+    static const unsigned char sixth[] = "LANG=C";
+    if (!environment[0] || !environment[1] || !environment[2] || !environment[3] || !environment[4] ||
+        !environment[5] || environment[6])
         finish(1);
-    if (!equal(environment[0], first) || !equal(environment[1], second))
+    if (!equal(environment[0], first) || !equal(environment[1], second) || !equal(environment[2], third) ||
+        !equal(environment[3], fourth) || !equal(environment[4], fifth) || !equal(environment[5], sixth))
         finish(2);
-    if (write_result() != 15)
-        finish(3);
     finish(0);
 }
 

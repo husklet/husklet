@@ -26,6 +26,16 @@ cases:
     compat: { class: compatibility }
     run: [initial-stack]
     environment:
-      TZ: UTC
-      EMPTY: ""
+      - name: TZ
+        value: { bytes: [85, 84, 67, 255] }
+      - name: EMPTY
+        value: ""
+      - name: PATH
+        value: /usr/bin:/bin
+      - name: HOME
+        value: /root
+      - name: TERM
+        value: dumb
+      - name: LANG
+        value: C
     expect: { exit: 0, stdout: golden/initial-stack.txt }

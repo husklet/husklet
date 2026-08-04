@@ -6,9 +6,7 @@ use crate::service::CheckpointConfig;
 
 impl Service {
     pub(crate) async fn create_exec(&self, reference: &str, mut spec: ExecSpec) -> Result<Exec> {
-        if spec.process.program.is_empty() {
-            return Err(Error::InvalidSpec("exec program must not be empty".into()));
-        }
+        spec.process.validate()?;
         if spec.privileged {
             return Err(Error::InvalidSpec(
                 "privileged exec is not implemented by the engine".into(),

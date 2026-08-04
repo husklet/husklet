@@ -232,14 +232,9 @@ impl ContainerSpec {
                 return Err(Error::InvalidSpec("host network mode cannot publish ports".into()));
             }
         }
-        if self.process.program.is_empty() {
-            return Err(Error::InvalidSpec("process program must not be empty".into()));
-        }
+        self.process.validate()?;
         if matches!(&self.rootfs, Rootfs::Directory(path) if !path.is_absolute()) {
             return Err(Error::InvalidSpec("rootfs must be an absolute path".into()));
-        }
-        if !self.process.working_dir.is_absolute() {
-            return Err(Error::InvalidSpec("working directory must be absolute".into()));
         }
         if let Some(name) = self.name.as_deref() {
             let mut characters = name.chars();
@@ -251,21 +246,6 @@ impl ContainerSpec {
                         .into(),
                 ));
             }
-        }
-        if self.process.env.keys().any(|key| key.is_empty() || key.contains('=')) {
-            return Err(Error::InvalidSpec(
-                "environment names must be non-empty and exclude '='".into(),
-            ));
-        }
-        if self.process.program.contains('\0')
-            || self.process.args.iter().any(|value| value.contains('\0'))
-            || self
-                .process
-                .env
-                .iter()
-                .any(|(key, value)| key.contains('\0') || value.contains('\0'))
-        {
-            return Err(Error::InvalidSpec("process strings must not contain NUL".into()));
         }
         if self.hostname.as_deref().is_some_and(str::is_empty) {
             return Err(Error::InvalidSpec("hostname must not be empty".into()));
@@ -365,6 +345,22 @@ mod tests {
         stored.as_object_mut().unwrap().remove("stop_timeout_seconds");
         let legacy: ContainerSpec = serde_json::from_value(stored).unwrap();
         assert_eq!(legacy.stop_timeout_seconds, 10);
+    }
+
+    #[test]
+    fn exact_environment_uses_the_process_admission_limits() {
+        let root = tempfile::tempdir().unwrap();
+        let valid =
+            ContainerSpec::from_directory(root.path(), Process::new("/bin/true").env_bytes(b"RAW", b"value\xff"));
+        assert!(valid.validate().is_ok());
+
+        for invalid in [
+            Process::new("/bin/true").env_bytes(b"", b"value"),
+            Process::new("/bin/true").env_bytes(b"BAD=NAME", b"value"),
+            Process::new("/bin/true").env_bytes(b"NAME", b"bad\0value"),
+        ] {
+            assert!(ContainerSpec::from_directory(root.path(), invalid).validate().is_err());
+        }
     }
 
     #[test]

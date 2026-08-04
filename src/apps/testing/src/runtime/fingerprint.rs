@@ -13,13 +13,17 @@ pub(super) async fn calculate(work: &[Work]) -> Result<String, Error> {
                 source: case.source.clone(),
                 build_inputs: case.inputs.clone(),
                 golden: case.golden.clone(),
+                environment: case
+                    .environment
+                    .iter()
+                    .map(|entry| (entry.name().to_vec(), entry.value().to_vec()))
+                    .collect(),
                 metadata: format!(
-                    "{}\0{}\0{:?}\0{:?}\0{:?}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{:?}",
+                    "{}\0{}\0{:?}\0{:?}\0{}\0{}\0{:?}\0{:?}\0{:?}\0{:?}",
                     item.app.image,
                     item.app.compiler_name(item.target),
                     item.app.execution,
                     case.arguments,
-                    case.environment,
                     case.timeout,
                     case.exit,
                     case.flags,
@@ -41,6 +45,7 @@ struct FingerprintInput {
     source: ManifestPath,
     build_inputs: Vec<ManifestPath>,
     golden: PathBuf,
+    environment: Vec<(Vec<u8>, Vec<u8>)>,
     metadata: String,
 }
 
@@ -48,12 +53,21 @@ fn fingerprint_files(inputs: &[FingerprintInput]) -> Result<String, String> {
     use sha2::{Digest, Sha256};
 
     let mut digest = Sha256::new();
-    digest.update(b"husklet-runtime-fingerprint-v2");
+    digest.update(b"husklet-runtime-fingerprint-v3");
     for input in inputs {
         hash_field(&mut digest, b"case")?;
         hash_field(&mut digest, input.key.id.as_bytes())?;
         hash_field(&mut digest, input.key.target.name().as_bytes())?;
         hash_field(&mut digest, input.metadata.as_bytes())?;
+        hash_field(&mut digest, b"environment")?;
+        let environment_count = u64::try_from(input.environment.len())
+            .map_err(|_| "too many environment records")?
+            .to_be_bytes();
+        hash_field(&mut digest, &environment_count)?;
+        for (name, value) in &input.environment {
+            hash_field(&mut digest, name)?;
+            hash_field(&mut digest, value)?;
+        }
         hash_file(
             &mut digest,
             b"source",
@@ -134,6 +148,7 @@ mod tests {
                 .map(|value| serde_yaml::from_str::<ManifestPath>(value).unwrap())
                 .collect(),
             golden: directory.join("golden.out"),
+            environment: Vec::new(),
             metadata: "metadata".to_owned(),
         }
     }
@@ -173,7 +188,37 @@ mod tests {
         let value = fingerprint_files(&[fingerprint_input(directory.path(), &["link.ld"])]).unwrap();
         assert_eq!(
             value,
-            "f87de28bf588ca618c962384c59dd8cd0092b9917d7c67ddbc8a138002f4f7ee"
+            "b06ef4331fed1b2dbc8b9155d07b5aafab3b2d25ab7fe99e335e8fbfd6086e74"
         );
+    }
+
+    #[test]
+    fn fingerprint_preserves_environment_order_duplicates_and_raw_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("source.c"), b"source").unwrap();
+        fs::write(directory.path().join("golden.out"), b"").unwrap();
+        let mut input = fingerprint_input(directory.path(), &[]);
+        input.environment = vec![
+            (b"NAME".to_vec(), b"first".to_vec()),
+            (b"RAW".to_vec(), b"value\xff".to_vec()),
+            (b"NAME".to_vec(), b"second".to_vec()),
+        ];
+        let ordered = fingerprint_files(&[input]).unwrap();
+
+        let mut reordered = fingerprint_input(directory.path(), &[]);
+        reordered.environment = vec![
+            (b"NAME".to_vec(), b"second".to_vec()),
+            (b"RAW".to_vec(), b"value\xff".to_vec()),
+            (b"NAME".to_vec(), b"first".to_vec()),
+        ];
+        assert_ne!(ordered, fingerprint_files(&[reordered]).unwrap());
+
+        let mut changed = fingerprint_input(directory.path(), &[]);
+        changed.environment = vec![
+            (b"NAME".to_vec(), b"first".to_vec()),
+            (b"RAW".to_vec(), b"value\xfe".to_vec()),
+            (b"NAME".to_vec(), b"second".to_vec()),
+        ];
+        assert_ne!(ordered, fingerprint_files(&[changed]).unwrap());
     }
 }

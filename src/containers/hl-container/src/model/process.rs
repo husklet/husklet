@@ -2,6 +2,319 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, num::NonZeroU16, path::PathBuf};
 
+/// Linux process environment, either OCI text or exact ordered byte records.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Environment {
+    Text(BTreeMap<String, String>),
+    Exact(Vec<EnvironmentRecord>),
+}
+
+/// One exact Linux environment record without its `=` separator.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentRecord {
+    name: Vec<u8>,
+    value: Vec<u8>,
+}
+
+impl EnvironmentRecord {
+    /// Creates one exact environment record.
+    ///
+    /// Full engine-limit validation is performed when the containing process
+    /// specification is admitted.
+    #[must_use]
+    pub fn new(name: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &[u8] {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn value(&self) -> &[u8] {
+        &self.value
+    }
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self::Text(BTreeMap::new())
+    }
+}
+
+impl Environment {
+    fn insert_text(&mut self, name: String, value: String) {
+        match self {
+            Self::Text(values) => {
+                values.insert(name, value);
+            }
+            Self::Exact(values) => {
+                let name = name.into_bytes();
+                let value = value.into_bytes();
+                Self::replace_exact(values, &name, &value);
+            }
+        }
+    }
+
+    fn push_exact(&mut self, name: Vec<u8>, value: Vec<u8>) {
+        self.promote_exact();
+        let Self::Exact(values) = self else { unreachable!() };
+        values.push(EnvironmentRecord { name, value });
+    }
+
+    fn promote_exact(&mut self) {
+        if let Self::Text(values) = self {
+            let exact = std::mem::take(values)
+                .into_iter()
+                .map(|(name, value)| EnvironmentRecord {
+                    name: name.into_bytes(),
+                    value: value.into_bytes(),
+                })
+                .collect();
+            *self = Self::Exact(exact);
+        }
+    }
+
+    fn replace_exact(records: &mut Vec<EnvironmentRecord>, name: &[u8], value: &[u8]) {
+        if let Some(index) = records.iter().position(|record| record.name == name) {
+            records[index].value = value.to_vec();
+            let mut candidate = index + 1;
+            while candidate < records.len() {
+                if records[candidate].name == name {
+                    records.remove(candidate);
+                } else {
+                    candidate += 1;
+                }
+            }
+        } else {
+            records.push(EnvironmentRecord {
+                name: name.to_vec(),
+                value: value.to_vec(),
+            });
+        }
+    }
+
+    pub(crate) fn records(&self) -> Vec<(&[u8], &[u8])> {
+        match self {
+            Self::Text(values) => values
+                .iter()
+                .map(|(name, value)| (name.as_bytes(), value.as_bytes()))
+                .collect(),
+            Self::Exact(values) => values
+                .iter()
+                .map(|record| (record.name.as_slice(), record.value.as_slice()))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn text(&self) -> Result<BTreeMap<String, String>> {
+        let Self::Text(values) = self else {
+            return Err(Error::InvalidSpec(
+                "exact ordered process environments cannot be represented in OCI image metadata".into(),
+            ));
+        };
+        Ok(values.clone())
+    }
+
+    pub fn get_text(&self, name: &str) -> Option<&str> {
+        match self {
+            Self::Text(values) => values.get(name).map(String::as_str),
+            Self::Exact(values) => values
+                .iter()
+                .find(|record| record.name == name.as_bytes())
+                .and_then(|record| std::str::from_utf8(&record.value).ok()),
+        }
+    }
+
+    /// Returns a UTF-8 value by name, preserving the former text-map API.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.get_text(name)
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.records()
+            .iter()
+            .any(|(candidate, _)| *candidate == name.as_bytes())
+    }
+
+    pub(crate) fn overlay(&mut self, values: &Self) {
+        if matches!(self, Self::Exact(_)) || matches!(values, Self::Exact(_)) {
+            self.promote_exact();
+        }
+        match self {
+            Self::Text(current) => {
+                let Self::Text(values) = values else { unreachable!() };
+                current.extend(values.clone());
+            }
+            Self::Exact(current) => {
+                let additions = values
+                    .records()
+                    .into_iter()
+                    .map(|(name, value)| EnvironmentRecord::new(name, value))
+                    .collect::<Vec<_>>();
+                current.retain(|record| !additions.iter().any(|addition| addition.name == record.name));
+                current.extend(additions);
+            }
+        }
+    }
+}
+
+impl Extend<(String, String)> for Environment {
+    fn extend<T: IntoIterator<Item = (String, String)>>(&mut self, iter: T) {
+        for (name, value) in iter {
+            self.insert_text(name, value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::{Environment, EnvironmentRecord};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn legacy_text_map_and_exact_records_round_trip_without_losing_identity() {
+        let legacy: Environment = serde_json::from_str(r#"{"B":"two","A":"one"}"#).unwrap();
+        assert_eq!(
+            legacy.records(),
+            vec![
+                (b"A".as_slice(), b"one".as_slice()),
+                (b"B".as_slice(), b"two".as_slice())
+            ]
+        );
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), r#"{"A":"one","B":"two"}"#);
+
+        let exact = Environment::Exact(vec![
+            EnvironmentRecord::new(b"NAME", b"first"),
+            EnvironmentRecord::new(b"RAW", b"value\xff"),
+            EnvironmentRecord::new(b"NAME", b"second"),
+        ]);
+        let encoded = serde_json::to_vec(&exact).unwrap();
+        let decoded: Environment = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, exact);
+        assert_eq!(decoded.records()[1], (b"RAW".as_slice(), b"value\xff".as_slice()));
+    }
+
+    #[test]
+    fn oci_text_conversion_rejects_every_exact_environment() {
+        let raw = Environment::Exact(vec![EnvironmentRecord::new(b"RAW", b"value\xff")]);
+        assert!(raw.text().is_err());
+
+        let representable = Environment::Exact(vec![EnvironmentRecord::new(b"NAME", b"value")]);
+        assert!(representable.text().is_err());
+
+        let text = Environment::Text(BTreeMap::from([("NAME".to_owned(), "value".to_owned())]));
+        assert_eq!(
+            text.text().unwrap(),
+            BTreeMap::from([("NAME".to_owned(), "value".to_owned())])
+        );
+    }
+
+    #[test]
+    fn exact_records_preserve_order_bytes_and_duplicate_names() {
+        let environment = Environment::Exact(vec![
+            super::EnvironmentRecord {
+                name: b"TZ".to_vec(),
+                value: b"UTC\xff".to_vec(),
+            },
+            super::EnvironmentRecord {
+                name: b"EMPTY".to_vec(),
+                value: Vec::new(),
+            },
+            super::EnvironmentRecord {
+                name: b"TZ".to_vec(),
+                value: b"later".to_vec(),
+            },
+        ]);
+        assert_eq!(
+            environment.records(),
+            vec![
+                (b"TZ".as_slice(), b"UTC\xff".as_slice()),
+                (b"EMPTY".as_slice(), b"".as_slice()),
+                (b"TZ".as_slice(), b"later".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_removes_base_duplicates_and_preserves_override_duplicates() {
+        let mut environment = Environment::default();
+        environment.push_exact(b"FIRST".to_vec(), b"one".to_vec());
+        environment.push_exact(b"REPLACE".to_vec(), b"old".to_vec());
+        environment.push_exact(b"LAST".to_vec(), b"three".to_vec());
+        environment.push_exact(b"REPLACE".to_vec(), b"duplicate".to_vec());
+        let overlay = Environment::Exact(vec![
+            EnvironmentRecord::new(b"REPLACE", b"new"),
+            EnvironmentRecord::new(b"REPLACE", b"newer"),
+        ]);
+
+        environment.overlay(&overlay);
+
+        assert_eq!(
+            environment.records(),
+            vec![
+                (b"FIRST".as_slice(), b"one".as_slice()),
+                (b"LAST".as_slice(), b"three".as_slice()),
+                (b"REPLACE".as_slice(), b"new".as_slice()),
+                (b"REPLACE".as_slice(), b"newer".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn exact_overlay_keeps_base_then_overlay_declaration_order() {
+        let mut environment = Environment::default();
+        environment.insert_text("B".to_owned(), "base-b".to_owned());
+        environment.insert_text("Z".to_owned(), "base-z".to_owned());
+        let overlay = Environment::Exact(vec![
+            super::EnvironmentRecord::new(b"A", b"text"),
+            super::EnvironmentRecord::new(b"RAW", b"value\xff"),
+            super::EnvironmentRecord::new(b"C", b"last"),
+        ]);
+
+        environment.overlay(&overlay);
+
+        assert_eq!(
+            environment.records(),
+            vec![
+                (b"B".as_slice(), b"base-b".as_slice()),
+                (b"Z".as_slice(), b"base-z".as_slice()),
+                (b"A".as_slice(), b"text".as_slice()),
+                (b"RAW".as_slice(), b"value\xff".as_slice()),
+                (b"C".as_slice(), b"last".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_insert_collapses_duplicate_exact_names() {
+        let mut environment = Environment::Exact(vec![
+            super::EnvironmentRecord::new(b"KEEP", b"first"),
+            super::EnvironmentRecord::new(b"NAME", b"old"),
+            super::EnvironmentRecord::new(b"NAME", b"duplicate"),
+            super::EnvironmentRecord::new(b"TAIL", b"last"),
+        ]);
+
+        environment.insert_text("NAME".to_owned(), "new".to_owned());
+
+        assert_eq!(
+            environment.records(),
+            vec![
+                (b"KEEP".as_slice(), b"first".as_slice()),
+                (b"NAME".as_slice(), b"new".as_slice()),
+                (b"TAIL".as_slice(), b"last".as_slice()),
+            ]
+        );
+    }
+}
+
 /// Durable root filesystem ownership used by a container.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -82,7 +395,7 @@ impl Console {
 pub struct Process {
     pub program: String,
     pub args: Vec<String>,
-    pub env: BTreeMap<String, String>,
+    pub env: Environment,
     pub working_dir: PathBuf,
     pub uid: Option<i32>,
     pub gid: Option<i32>,
@@ -170,12 +483,42 @@ impl Process {
         }
         Ok((uid, gid))
     }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.program.is_empty() {
+            return Err(Error::InvalidSpec("process program must not be empty".into()));
+        }
+        if !self.working_dir.is_absolute() {
+            return Err(Error::InvalidSpec("working directory must be absolute".into()));
+        }
+        let environment = self.env.records();
+        if environment
+            .iter()
+            .any(|(name, _)| name.is_empty() || name.contains(&b'='))
+        {
+            return Err(Error::InvalidSpec(
+                "environment names must be non-empty and exclude '='".into(),
+            ));
+        }
+
+        for value in std::iter::once(self.program.as_bytes()).chain(self.args.iter().map(String::as_bytes)) {
+            if value.contains(&0) {
+                return Err(Error::InvalidSpec("process strings must not contain NUL".into()));
+            }
+        }
+        for (name, value) in environment {
+            if name.contains(&0) || value.contains(&0) {
+                return Err(Error::InvalidSpec("process strings must not contain NUL".into()));
+            }
+        }
+        Ok(())
+    }
     #[must_use]
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
             args: Vec::new(),
-            env: BTreeMap::new(),
+            env: Environment::default(),
             working_dir: Self::default_working_dir(),
             uid: None,
             gid: None,
@@ -191,7 +534,14 @@ impl Process {
 
     #[must_use]
     pub fn env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.insert(name.into(), value.into());
+        self.env.insert_text(name.into(), value.into());
+        self
+    }
+
+    /// Appends one exact ordered Linux environment record.
+    #[must_use]
+    pub fn env_bytes(mut self, name: impl Into<Vec<u8>>, value: impl Into<Vec<u8>>) -> Self {
+        self.env.push_exact(name.into(), value.into());
         self
     }
 

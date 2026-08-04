@@ -56,7 +56,7 @@ impl Containers {
         let runtime = hl_images::RuntimeConfig {
             entrypoint: vec![process.program.clone()],
             command: process.args.clone(),
-            environment: process.env.clone(),
+            environment: process.env.text()?,
             working_directory: process.working_dir.to_string_lossy().into_owned(),
             user: process.uid.map_or_else(String::new, |uid| {
                 process

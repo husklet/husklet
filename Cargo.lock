@@ -2820,6 +2820,7 @@ dependencies = [
  "hl-images",
  "hl-log",
  "hl-network",
+ "hl-process",
  "hl-provider",
  "hl-runtime",
  "libc",

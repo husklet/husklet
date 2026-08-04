@@ -18,17 +18,20 @@ pub enum Check {
 impl Check {
     fn validate(&self) -> Result<()> {
         match self {
-            Self::Command(process) if process.program.is_empty() => {
-                Err(Error::InvalidSpec("health command program must not be empty".into()))
+            Self::Command(process) => {
+                process.validate()?;
+                if process.console.terminal.is_some() {
+                    return Err(Error::InvalidSpec("health commands cannot allocate a terminal".into()));
+                }
             }
-            Self::Command(process) if process.console.terminal.is_some() => {
-                Err(Error::InvalidSpec("health commands cannot allocate a terminal".into()))
+            Self::Shell(command) => {
+                if command.is_empty() {
+                    return Err(Error::InvalidSpec("health shell command must not be empty".into()));
+                }
+                Process::new("/bin/sh").args(["-c", command.as_str()]).validate()?;
             }
-            Self::Shell(command) if command.is_empty() => {
-                Err(Error::InvalidSpec("health shell command must not be empty".into()))
-            }
-            _ => Ok(()),
         }
+        Ok(())
     }
 }
 

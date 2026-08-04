@@ -129,8 +129,8 @@ impl<'a> CaseExecution<'a> {
             self.case.id.replace('/', "-")
         );
         let mut process = Process::new(&self.case.destination).args(self.case.arguments.iter().map(String::as_str));
-        for (name, value) in &self.case.environment {
-            process = process.env(name, value);
+        for entry in &self.case.environment {
+            process = process.env_bytes(entry.name().to_vec(), entry.value().to_vec());
         }
         let spec = ContainerSpec::from_directory(self.fixture, process)
             .name(&name)

@@ -36,8 +36,15 @@ impl TryFrom<&ProcessConfig> for Spec {
         let environment = launch
             .process
             .env
-            .iter()
-            .map(|(name, value)| format!("{name}={value}").into_bytes())
+            .records()
+            .into_iter()
+            .map(|(name, value)| {
+                let mut record = Vec::with_capacity(name.len() + value.len() + 1);
+                record.extend_from_slice(name);
+                record.push(b'=');
+                record.extend_from_slice(value);
+                record
+            })
             .collect();
 
         Ok(Self {

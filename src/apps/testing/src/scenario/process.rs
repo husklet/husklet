@@ -89,17 +89,17 @@ mod tests {
         );
         assert_eq!(terminal.console.terminal.unwrap().rows(), 24);
         assert_eq!(terminal.console.terminal.unwrap().columns(), 80);
-        assert_eq!(terminal.env.get("TERM").map(String::as_str), Some("xterm"));
+        assert_eq!(terminal.env.get_text("TERM"), Some("xterm"));
 
         let explicit = for_case(&scenario(
             vec![Resource::Pty],
             BTreeMap::from([("TERM".to_owned(), "screen".to_owned())]),
         ))
         .unwrap();
-        assert_eq!(explicit.env.get("TERM").map(String::as_str), Some("screen"));
+        assert_eq!(explicit.env.get_text("TERM"), Some("screen"));
 
         let plain = for_case(&scenario(Vec::new(), BTreeMap::new())).unwrap();
         assert_eq!(plain.console, Console::default());
-        assert!(!plain.env.contains_key("TERM"));
+        assert!(!plain.env.contains("TERM"));
     }
 }
