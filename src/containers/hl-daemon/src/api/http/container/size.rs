@@ -11,7 +11,14 @@ pub(in super::super) async fn summaries(
     include_size: bool,
 ) -> ApiResult<Vec<Container>> {
     if !include_size {
-        return Ok(values.into_iter().map(Container::from).collect());
+        let mut summaries = Vec::with_capacity(values.len());
+        for value in values {
+            let mounts = super::mount::points(containers, &value.spec.mounts).await?;
+            let mut summary = Container::from(value);
+            summary.metadata.mounts = mounts;
+            summaries.push(summary);
+        }
+        return Ok(summaries);
     }
     let parallelism = std::thread::available_parallelism()
         .map_or(1, std::num::NonZeroUsize::get)
@@ -24,14 +31,15 @@ pub(in super::super) async fn summaries(
     }
     let mut summaries = Vec::with_capacity(capacity);
     let mut error = None;
-    while let Some((index, value, usage)) = pending.next().await {
-        match usage {
-            Ok(usage) => {
+    while let Some((index, value, result)) = pending.next().await {
+        match result {
+            Ok((usage, mounts)) => {
                 let mut summary = Container::from(value);
                 summary.size(usage);
+                summary.metadata.mounts = mounts;
                 summaries.push((index, summary));
             }
-            Err(failure) if error.is_none() => error = Some(ApiError::container(failure)),
+            Err(failure) if error.is_none() => error = Some(failure),
             Err(_) => {}
         }
         if error.is_none()
@@ -54,8 +62,16 @@ async fn scan_summary(
 ) -> (
     usize,
     hl_container::Container,
-    hl_container::Result<hl_container::FilesystemUsage>,
+    ApiResult<(hl_container::FilesystemUsage, Vec<crate::api::MountPoint>)>,
 ) {
-    let usage = containers.filesystem_usage(value.id.as_str()).await;
-    (index, value, usage)
+    let result = async {
+        let usage = containers
+            .filesystem_usage(value.id.as_str())
+            .await
+            .map_err(ApiError::container)?;
+        let mounts = super::mount::points(containers, &value.spec.mounts).await?;
+        Ok((usage, mounts))
+    }
+    .await;
+    (index, value, result)
 }

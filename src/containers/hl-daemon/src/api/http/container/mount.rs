@@ -1,5 +1,67 @@
 use super::*;
 
+pub(super) async fn points(containers: &hl_container::Containers, mounts: &[Mount]) -> ApiResult<Vec<MountPoint>> {
+    let mut points = Vec::with_capacity(mounts.len());
+    for mount in mounts {
+        let (kind, name, source, driver, mode, propagation) = match &mount.source {
+            hl_container::MountSource::Bind(source) => (
+                "bind",
+                String::new(),
+                source.to_string_lossy().into_owned(),
+                String::new(),
+                access_mode(mount.access),
+                bind_propagation(mount.propagation),
+            ),
+            hl_container::MountSource::Volume(name) | hl_container::MountSource::Anonymous(name) => {
+                let volume = containers.volumes().inspect(name).await.map_err(ApiError::container)?;
+                (
+                    "volume",
+                    name.clone(),
+                    volume.path.to_string_lossy().into_owned(),
+                    "local".into(),
+                    access_mode(mount.access),
+                    String::new(),
+                )
+            }
+            hl_container::MountSource::Tmpfs(_) => (
+                "tmpfs",
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+        };
+        points.push(MountPoint {
+            kind: kind.into(),
+            name,
+            source,
+            destination: mount.target.to_string_lossy().into_owned(),
+            driver,
+            mode,
+            read_write: mount.access == hl_container::Access::ReadWrite,
+            propagation,
+        });
+    }
+    Ok(points)
+}
+
+fn access_mode(access: hl_container::Access) -> String {
+    match access {
+        hl_container::Access::ReadOnly => "ro",
+        hl_container::Access::ReadWrite => "rw",
+    }
+    .into()
+}
+
+fn bind_propagation(propagation: hl_container::BindPropagation) -> String {
+    match propagation {
+        hl_container::BindPropagation::Private => "private",
+        hl_container::BindPropagation::RecursivePrivate => "rprivate",
+    }
+    .into()
+}
+
 pub(super) struct LegacyBind<'a>(&'a str);
 
 impl<'a> From<&'a str> for LegacyBind<'a> {

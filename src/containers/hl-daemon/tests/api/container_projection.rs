@@ -29,19 +29,32 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }));
     wait_for_path(&socket).await?;
 
-    let result = exercise(&socket).await;
+    let bind_source = work.path().join("bind-source");
+    std::fs::create_dir(&bind_source)?;
+    let result = exercise(&socket, &bind_source).await;
     let _ = remove(&socket).await;
     let _ = shutdown.send(());
     server.await??;
     result
 }
 
-async fn exercise(socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
+async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let request = json!({
         "Image": "scenario/process:v1",
         "Entrypoint": ["/bin/process"],
         "Cmd": ["alpha", "two words"],
-        "Labels": {"contract": "projection"}
+        "Labels": {"contract": "projection"},
+        "HostConfig": {"Mounts": [
+            {
+                "Type": "bind",
+                "Source": bind_source,
+                "Target": "/bind",
+                "ReadOnly": true,
+                "BindOptions": {"Propagation": "private"}
+            },
+            {"Type": "volume", "Source": "projected-data", "Target": "/data"},
+            {"Type": "tmpfs", "Target": "/scratch"}
+        ]}
     });
     let created = exchange(
         socket,
@@ -106,11 +119,66 @@ async fn exercise(socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
     require(state["Paused"] == false, "inspect State.Paused was fabricated")?;
     require(state["Restarting"] == false, "inspect State.Restarting was fabricated")?;
     require(state["Pid"] == 0, "inspect State.Pid was fabricated")?;
-    require(state["ExitCode"] == 0, "inspect State.ExitCode was fabricated")
+    require(state["ExitCode"] == 0, "inspect State.ExitCode was fabricated")?;
+
+    let mounts = &summary["Mounts"];
+    require(
+        mounts == &inspected.1["Mounts"],
+        "container list and inspect projected different mounts",
+    )?;
+    let mounts = mounts.as_array().ok_or("container Mounts was not an array")?;
+    require(mounts.len() == 3, "container omitted a configured mount")?;
+    require(
+        mounts[0]
+            == json!({
+                "Type": "bind", "Name": "", "Source": bind_source,
+                "Destination": "/bind", "Driver": "", "Mode": "ro",
+                "RW": false, "Propagation": "private"
+            }),
+        "bind mount projection changed durable fields",
+    )?;
+    require(mounts[1]["Type"] == "volume", "managed mount type changed")?;
+    require(mounts[1]["Name"] == "projected-data", "managed mount name changed")?;
+    require(mounts[1]["Driver"] == "local", "managed mount driver changed")?;
+    require(mounts[1]["Destination"] == "/data", "managed mount target changed")?;
+    require(mounts[1]["Mode"] == "rw", "managed mount mode changed")?;
+    require(mounts[1]["RW"] == true, "managed mount access changed")?;
+    require(mounts[1]["Propagation"] == "", "managed mount invented propagation")?;
+    require(
+        mounts[1]["Source"]
+            .as_str()
+            .is_some_and(|source| source.ends_with("/_data")),
+        "managed mount omitted its resolved source",
+    )?;
+    require(
+        mounts[2]
+            == json!({
+                "Type": "tmpfs", "Name": "", "Source": "",
+                "Destination": "/scratch", "Driver": "", "Mode": "",
+                "RW": true, "Propagation": ""
+            }),
+        "tmpfs mount leaked internal backing state",
+    )?;
+
+    let sized = exchange(socket, "GET", "/v1.43/containers/json?all=true&size=true", None).await?;
+    require(
+        sized.0.starts_with("HTTP/1.1 200"),
+        "sized container list was not HTTP 200",
+    )?;
+    require(
+        sized.1[0]["Mounts"] == inspected.1["Mounts"],
+        "sized container list projected different mounts",
+    )
 }
 
 async fn remove(socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let response = exchange(socket, "DELETE", "/v1.43/containers/truthful-process?force=true", None).await?;
+    let response = exchange(
+        socket,
+        "DELETE",
+        "/v1.43/containers/truthful-process?force=true&v=true",
+        None,
+    )
+    .await?;
     require(
         response.0.starts_with("HTTP/1.1 204"),
         "container cleanup was not HTTP 204",

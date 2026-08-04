@@ -23,59 +23,7 @@ pub(in super::super) async fn inspect(
             .map_err(ApiError::container)?;
         inspect.size(usage);
     }
-    for mount in container.spec.mounts {
-        let (kind, name, source, driver) = match mount.source {
-            hl_container::MountSource::Bind(source) => (
-                "bind",
-                String::new(),
-                source.to_string_lossy().into_owned(),
-                String::new(),
-            ),
-            hl_container::MountSource::Volume(name) | hl_container::MountSource::Anonymous(name) => {
-                let volume = state
-                    .containers
-                    .volumes()
-                    .inspect(&name)
-                    .await
-                    .map_err(ApiError::container)?;
-                (
-                    "volume",
-                    name,
-                    volume.path.to_string_lossy().into_owned(),
-                    "local".into(),
-                )
-            }
-            hl_container::MountSource::Tmpfs(name) => {
-                let volume = state
-                    .containers
-                    .volumes()
-                    .inspect(&name)
-                    .await
-                    .map_err(ApiError::container)?;
-                (
-                    "tmpfs",
-                    String::new(),
-                    volume.path.to_string_lossy().into_owned(),
-                    String::new(),
-                )
-            }
-        };
-        let read_write = mount.access == hl_container::Access::ReadWrite;
-        inspect.metadata.mounts.push(MountPoint {
-            kind: kind.into(),
-            name,
-            source,
-            destination: mount.target.to_string_lossy().into_owned(),
-            driver,
-            mode: if read_write { "rw" } else { "ro" }.into(),
-            read_write,
-            propagation: match mount.propagation {
-                hl_container::BindPropagation::Private => "private",
-                hl_container::BindPropagation::RecursivePrivate => "rprivate",
-            }
-            .into(),
-        });
-    }
+    inspect.metadata.mounts = super::mount::points(&state.containers, &container.spec.mounts).await?;
     if network_mode != hl_container::NetworkMode::Host {
         for network in state.containers.networks().list().await.map_err(ApiError::container)? {
             let Some(endpoint) = network.endpoints.get(&container_id) else {
