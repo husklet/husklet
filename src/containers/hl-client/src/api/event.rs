@@ -16,7 +16,11 @@ impl<'a> Events<'a> {
         Self { transport }
     }
 
-    /// Subscribe to replayed and live daemon events.
+    /// Subscribe to daemon events.
+    ///
+    /// A query without `since` receives only events published after the
+    /// subscription is established. Set `since` to request retained replay
+    /// before the live stream, matching Docker's `/events` contract.
     ///
     /// # Errors
     /// Returns query serialization, transport, HTTP, or response decoding errors.

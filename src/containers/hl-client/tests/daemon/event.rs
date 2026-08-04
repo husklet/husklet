@@ -41,7 +41,12 @@ async fn typed_event_stream_replays_create_and_destroy_from_real_handlers() {
     .expect("event source remove timed out")
     .unwrap();
 
-    let query = EventQuery::default().filters(EventFilter::default().container(&created.id).label("tier=api"));
+    // Docker replays retained events only when the request supplies a `since`
+    // bound. Without it, `/events` starts at subscription time and these two
+    // already-completed lifecycle transitions are intentionally absent.
+    let query = EventQuery::default()
+        .since(0)
+        .filters(EventFilter::default().container(&created.id).label("tier=api"));
     let mut stream = tokio::time::timeout(std::time::Duration::from_secs(2), client.events().subscribe(&query))
         .await
         .expect("event subscription response timed out")
