@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 pub struct InspectContainer {
     #[serde(flatten)]
     pub metadata: ContainerMetadata,
+    pub path: String,
+    pub args: Vec<String>,
     pub name: String,
     pub created: String,
     pub state: ContainerState,
@@ -190,6 +192,8 @@ impl From<hl_container::Container> for InspectContainer {
                 image,
                 mounts: Vec::new(),
             },
+            path: value.spec.process.program.clone(),
+            args: value.spec.process.args.clone(),
             name: value
                 .spec
                 .name

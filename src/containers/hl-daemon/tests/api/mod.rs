@@ -4,6 +4,7 @@ pub(crate) mod support;
 
 pub(crate) mod concurrent_clients;
 pub(crate) mod container_copy;
+pub(crate) mod container_projection;
 pub(crate) mod daemon_runtime;
 pub(crate) mod descendant_cleanup;
 pub(crate) mod headless_lifecycle;

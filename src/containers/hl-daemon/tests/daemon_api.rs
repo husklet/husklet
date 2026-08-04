@@ -19,6 +19,7 @@ macro_rules! api_test {
 
 api_test!(concurrent_clients, concurrent_clients);
 api_test!(container_copy, container_copy);
+api_test!(container_raw_projection, container_projection);
 api_test!(headless_lifecycle, headless_lifecycle);
 api_test!(http_errors, http_errors);
 api_test!(image_archive, image_archive);
