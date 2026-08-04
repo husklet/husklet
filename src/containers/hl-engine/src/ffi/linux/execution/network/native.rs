@@ -32,6 +32,22 @@ pub(super) struct Entry {
     pub(super) icmp_packets: VecDeque<(Vec<u8>, SocketAddress)>,
     pub(super) icmp_bytes: usize,
     pub(super) guest_local: Option<SocketAddress>,
+    pub(super) guest_peer: Option<SocketAddress>,
+    pub(super) switch_path: Option<Arc<SwitchPath>>,
+    pub(super) switched: bool,
+}
+
+pub(super) struct SwitchPath(Vec<u8>);
+
+impl Drop for SwitchPath {
+    fn drop(&mut self) {
+        if let Ok(path) = std::ffi::CString::new(self.0.clone()) {
+            // SAFETY: path is a live NUL-terminated pathname and unlink retains no pointer.
+            unsafe {
+                libc::unlink(path.as_ptr());
+            }
+        }
+    }
 }
 
 pub(crate) struct Native {
@@ -44,6 +60,7 @@ pub(super) struct Reactor {
     pub(super) sockets: Mutex<BTreeMap<u64, Entry>>,
     pub(super) observers: Mutex<BTreeMap<u64, Weak<dyn ReadinessObserver>>>,
     pub(super) bindings: Mutex<Vec<(SocketAddress, SocketAddress)>>,
+    pub(super) switch_paths: Mutex<BTreeMap<Vec<u8>, Weak<SwitchPath>>>,
     pub(super) wake_read: i32,
     pub(super) wake_write: i32,
 }
@@ -81,6 +98,7 @@ impl Native {
             sockets: Mutex::new(BTreeMap::new()),
             observers: Mutex::new(BTreeMap::new()),
             bindings: Mutex::new(Vec::new()),
+            switch_paths: Mutex::new(BTreeMap::new()),
             wake_read: wake[0],
             wake_write: wake[1],
         });
@@ -109,6 +127,14 @@ impl Native {
             }
             return Err(RuntimeNetworkError::NoMemory);
         }
+        let switch_path = Self::descriptor_unix_path(descriptor).and_then(|path| {
+            self.shared
+                .switch_paths
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&path)
+                .and_then(Weak::upgrade)
+        });
         sockets.insert(
             token,
             Entry {
@@ -125,11 +151,30 @@ impl Native {
                 icmp_packets: VecDeque::new(),
                 icmp_bytes: 0,
                 guest_local: None,
+                guest_peer: None,
+                switch_path,
+                switched: false,
             },
         );
         drop(sockets);
         self.wake();
         Ok(token)
+    }
+
+    fn descriptor_unix_path(descriptor: i32) -> Option<Vec<u8>> {
+        // SAFETY: zero is valid sockaddr_storage initialization.
+        let mut storage = unsafe { zeroed::<libc::sockaddr_storage>() };
+        let mut length = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        // SAFETY: storage and length are writable and descriptor is live for this non-mutating query.
+        if unsafe { libc::getsockname(descriptor, &mut storage as *mut _ as *mut _, &mut length) } != 0
+            || i32::from(storage.ss_family) != libc::AF_UNIX
+        {
+            return None;
+        }
+        let SocketAddress::Unix(path) = Self::decode_address(&storage, length).ok()? else {
+            return None;
+        };
+        (!path.is_empty()).then_some(path)
     }
 
     pub(super) fn descriptor(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
@@ -232,9 +277,16 @@ impl Native {
     }
 
     fn address_of(&self, token: u64, peer: bool) -> Result<SocketAddress, RuntimeNetworkError> {
-        if !peer {
+        {
             let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(address) = sockets.get(&token).and_then(|entry| entry.guest_local.clone()) {
+            let projected = sockets.get(&token).and_then(|entry| {
+                if peer {
+                    entry.guest_peer.clone()
+                } else {
+                    entry.guest_local.clone()
+                }
+            });
+            if let Some(address) = projected {
                 return Ok(address);
             }
         }
@@ -255,6 +307,101 @@ impl Native {
         } else {
             Err(Self::runtime_error())
         }
+    }
+
+    fn switch_path(
+        interface: &hl_network::EgressInterface,
+        address: [u8; 4],
+        port: u16,
+    ) -> Result<(Vec<u8>, Vec<u8>), RuntimeNetworkError> {
+        if interface.bridge.is_empty()
+            || interface.bridge.len() > 40
+            || interface
+                .bridge
+                .iter()
+                .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        let bridge = std::str::from_utf8(&interface.bridge).map_err(|_| RuntimeNetworkError::Invalid)?;
+        let directory = format!("/tmp/.hl-bridge-{bridge}").into_bytes();
+        let path = format!(
+            "/tmp/.hl-bridge-{bridge}/{}.{}.{}.{}:{port}",
+            address[0], address[1], address[2], address[3]
+        )
+        .into_bytes();
+        if path.contains(&0)
+            || path.len() >= size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path)
+        {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        Ok((directory, path))
+    }
+
+    fn mkdir_switch(directory: &[u8]) -> Result<(), RuntimeNetworkError> {
+        let path = std::ffi::CString::new(directory).map_err(|_| RuntimeNetworkError::Invalid)?;
+        // SAFETY: path is a live NUL-terminated pathname and mkdir retains no pointer.
+        if unsafe { libc::mkdir(path.as_ptr(), 0o700) } == 0 {
+            return Ok(());
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::EEXIST) => Ok(()),
+            _ => Err(Self::runtime_error()),
+        }
+    }
+
+    fn switch_stream(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+        if entry.switched {
+            return Ok(entry.descriptor);
+        }
+        let mut kind = 0_i32;
+        let mut kind_length = size_of::<i32>() as libc::socklen_t;
+        // SAFETY: kind is writable and entry retains the live descriptor throughout the call.
+        if unsafe {
+            libc::getsockopt(
+                entry.descriptor,
+                libc::SOL_SOCKET,
+                libc::SO_TYPE,
+                (&mut kind as *mut i32).cast(),
+                &mut kind_length,
+            )
+        } != 0
+        {
+            return Err(Self::runtime_error());
+        }
+        if kind != libc::SOCK_STREAM {
+            return Err(RuntimeNetworkError::OperationNotSupported);
+        }
+        // SAFETY: socket returns a newly owned descriptor or a negative errno result.
+        let replacement = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+        if replacement < 0 {
+            return Err(Self::runtime_error());
+        }
+        // SAFETY: fcntl observes flags on live owned descriptors; dup2 atomically replaces entry.descriptor.
+        let flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFL) };
+        let descriptor_flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFD) };
+        let replaced = unsafe { libc::dup2(replacement, entry.descriptor) };
+        // SAFETY: replacement remains solely owned here regardless of dup2's result.
+        unsafe { libc::close(replacement) };
+        if replaced < 0 {
+            return Err(Self::runtime_error());
+        }
+        // SAFETY: entry.descriptor is the newly installed socket and remains table-owned.
+        unsafe {
+            if flags >= 0 {
+                libc::fcntl(entry.descriptor, libc::F_SETFL, flags);
+            }
+            if descriptor_flags >= 0 {
+                libc::fcntl(entry.descriptor, libc::F_SETFD, descriptor_flags);
+            }
+        }
+        entry.switched = true;
+        let descriptor = entry.descriptor;
+        drop(sockets);
+        self.wake();
+        Ok(descriptor)
     }
 
     fn binding(&self, address: &SocketAddress) -> Option<SocketAddress> {

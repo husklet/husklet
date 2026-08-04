@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use hl_descriptor::ReadinessObserver;
 use hl_network::{
-    AddressFamily, SocketAddress, SocketConnectStatus, SocketHostError, SocketHostIo, SocketProtocol, SocketType,
+    AddressFamily, EgressInterface, EgressRoute, SocketAddress, SocketConnectStatus, SocketHostError, SocketHostIo,
+    SocketProtocol, SocketType,
 };
 use hl_runtime::RuntimeNetworkHost;
 
@@ -138,6 +139,134 @@ fn loopback_fixed_bind_preserves_guest_port() {
             port: 47_251,
         }
     );
+    host.close(socket.token);
+}
+
+#[test]
+fn selected_interface_streams_rendezvous_and_release_their_path() {
+    let bridge = format!("adapter-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 93, 0, 2],
+    };
+    let port = 35_000 + (std::process::id() % 20_000) as u16;
+    let address = SocketAddress::Inet4 {
+        address: interface.ipv4,
+        port,
+    };
+    let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.93.0.2:{port}"));
+    let host = Native::new();
+    let listener = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    assert_eq!(
+        host.bind_route(
+            listener.token,
+            EgressRoute {
+                address: SocketAddress::Inet4 { address: [0; 4], port },
+                interface: Some(interface.clone()),
+            },
+        )
+        .unwrap(),
+        address
+    );
+    host.listen(listener.token, 4).unwrap();
+    assert!(path.exists());
+    // SAFETY: descriptor is live and dup returns an independently owned reference to the same socket.
+    let duplicated = unsafe { libc::dup(host.descriptor(listener.token).unwrap()) };
+    assert!(duplicated >= 0);
+    let duplicate_token = host.insert(duplicated).unwrap();
+
+    let client = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.prepare_connect_route(
+        client.token,
+        EgressRoute {
+            address: address.clone(),
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    let started = host.start_connect(client.token, false);
+    assert!(matches!(
+        started,
+        SocketConnectStatus::Connected | SocketConnectStatus::Pending
+    ));
+    assert_eq!(await_connect(&host, client.token), SocketConnectStatus::Connected);
+    assert_eq!(host.peer_address(client.token), Ok(address.clone()));
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let accepted = loop {
+        match host.accept(listener.token) {
+            Ok(value) => break value,
+            Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => std::thread::yield_now(),
+            Err(error) => panic!("switch accept failed: {error:?}"),
+        }
+    };
+    assert_eq!(accepted.local, address);
+    assert_eq!(accepted.peer, address);
+    assert_eq!(host.local_address(accepted.token), Ok(address.clone()));
+    assert_eq!(host.peer_address(accepted.token), Ok(address.clone()));
+    assert_eq!(host.write(client.token, b"switch", false), Ok(6));
+    let mut input = [0_u8; 6];
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match host.read(accepted.token, &mut input, false) {
+            Ok(6) => break,
+            Err(SocketHostError::WouldBlock) if Instant::now() < deadline => std::thread::yield_now(),
+            result => panic!("switch read failed: {result:?}"),
+        }
+    }
+    assert_eq!(&input, b"switch");
+    host.close(accepted.token);
+    assert!(path.exists());
+    host.close(client.token);
+    assert!(path.exists());
+    host.close(listener.token);
+    assert!(path.exists());
+    host.close(duplicate_token);
+    assert!(!path.exists());
+}
+
+#[test]
+fn invalid_switch_identity_is_transactional_and_direct_route_falls_back() {
+    let host = Native::new();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    let loopback = SocketAddress::Inet4 {
+        address: Ipv4Addr::LOCALHOST.octets(),
+        port: 0,
+    };
+    assert_eq!(
+        host.bind_route(
+            socket.token,
+            EgressRoute {
+                address: loopback.clone(),
+                interface: Some(EgressInterface {
+                    bridge: b"../escape".to_vec(),
+                    index: 2,
+                    ipv4: [10, 0, 0, 2],
+                }),
+            },
+        ),
+        Err(hl_runtime::RuntimeNetworkError::Invalid)
+    );
+    assert!(matches!(
+        host.bind_route(
+            socket.token,
+            EgressRoute {
+                address: loopback,
+                interface: None,
+            },
+        ),
+        Ok(SocketAddress::Inet4 {
+            address: [127, 0, 0, 1],
+            port: 1..
+        })
+    ));
     host.close(socket.token);
 }
 

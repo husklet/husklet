@@ -1,5 +1,5 @@
 use std::mem::size_of;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use hl_descriptor::ReadinessObserver;
 use hl_network::{SocketConnectError, SocketConnectStatus, SocketHostError, SocketHostIo, SocketHostReadiness};
@@ -290,7 +290,17 @@ impl SocketHostIo for Native {
                     .unwrap_or_else(|error| error.into_inner())
                     .retain(|(address, _)| address != guest);
             }
-            // SAFETY: removal transfers the sole descriptor ownership to this call.
+            if let Some(path) = &entry.switch_path
+                && Arc::strong_count(path) == 1
+            {
+                self.shared
+                    .switch_paths
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .remove(&path.0);
+            }
+            // SAFETY: removal transfers the sole descriptor ownership to this call. Dropping the
+            // final switch_path lease after close unlinks its rendezvous pathname.
             unsafe {
                 libc::close(entry.descriptor);
             }

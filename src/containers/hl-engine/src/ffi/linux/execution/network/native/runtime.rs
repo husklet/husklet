@@ -2,13 +2,15 @@ use std::mem::{size_of, zeroed};
 use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
-use hl_network::{AddressFamily, NetworkResourceKey, SocketAddress, SocketHostIo, SocketProtocol, SocketType};
+use hl_network::{
+    AddressFamily, EgressRoute, NetworkResourceKey, SocketAddress, SocketHostIo, SocketProtocol, SocketType,
+};
 use hl_runtime::{
     AcceptedSocket, CreatedSocket, HostReceive, HostSend, HostSendResult, ReceivedDatagram, RuntimeNetworkError,
     RuntimeNetworkHost,
 };
 
-use super::Native;
+use super::{Native, SwitchPath};
 
 impl RuntimeNetworkHost for Native {
     type Attachment = OwnedFd;
@@ -147,10 +149,83 @@ impl RuntimeNetworkHost for Native {
         Ok(actual)
     }
 
+    fn bind_route(&self, token: u64, route: EgressRoute) -> Result<SocketAddress, RuntimeNetworkError> {
+        let Some(interface) = route.interface else {
+            return self.bind(token, route.address);
+        };
+        let SocketAddress::Inet4 { port, .. } = route.address else {
+            return Err(RuntimeNetworkError::Invalid);
+        };
+        let first = if port == 0 {
+            20_000_u16.wrapping_add((token as u16) & 0x3fff)
+        } else {
+            port
+        };
+        let attempts = if port == 0 { 45_000 } else { 1 };
+        let mut descriptor = None;
+        for offset in 0..attempts {
+            let candidate = first.wrapping_add(offset as u16).max(1024);
+            let (directory, path) = Self::switch_path(&interface, interface.ipv4, candidate)?;
+            Self::mkdir_switch(&directory)?;
+            let (storage, length) = Self::socket_address(&SocketAddress::Unix(path.clone()))?;
+            let descriptor = match descriptor {
+                Some(descriptor) => descriptor,
+                None => {
+                    let value = self.switch_stream(token)?;
+                    descriptor = Some(value);
+                    value
+                }
+            };
+            // SAFETY: storage contains a bounded sockaddr_un and descriptor remains table-owned.
+            if unsafe { libc::bind(descriptor, &storage as *const _ as *const _, length) } == 0 {
+                let local = SocketAddress::Inet4 {
+                    address: interface.ipv4,
+                    port: candidate,
+                };
+                let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+                let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+                entry.guest_local = Some(local.clone());
+                let ownership = Arc::new(SwitchPath(path.clone()));
+                self.shared
+                    .switch_paths
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(path, Arc::downgrade(&ownership));
+                entry.switch_path = Some(ownership);
+                return Ok(local);
+            }
+            if port != 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EADDRINUSE) {
+                return Err(Self::runtime_error());
+            }
+        }
+        Err(RuntimeNetworkError::AddressInUse)
+    }
+
     fn prepare_connect(&self, token: u64, address: SocketAddress) -> Result<(), RuntimeNetworkError> {
         let address = self.binding(&address).unwrap_or(address);
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?.pending = Some(address);
+        Ok(())
+    }
+
+    fn prepare_connect_route(&self, token: u64, route: EgressRoute) -> Result<(), RuntimeNetworkError> {
+        let Some(interface) = route.interface else {
+            return self.prepare_connect(token, route.address);
+        };
+        let SocketAddress::Inet4 { address, port } = route.address else {
+            return Err(RuntimeNetworkError::Invalid);
+        };
+        if port == 0 {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        let (directory, path) = Self::switch_path(&interface, address, port)?;
+        Self::mkdir_switch(&directory)?;
+        self.switch_stream(token)?;
+        let peer = SocketAddress::Inet4 { address, port };
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+        entry.pending = Some(SocketAddress::Unix(path));
+        entry.guest_peer = Some(peer);
         Ok(())
     }
 
@@ -166,6 +241,14 @@ impl RuntimeNetworkHost for Native {
 
     fn accept(&self, token: u64) -> Result<AcceptedSocket<u64>, RuntimeNetworkError> {
         let descriptor = self.descriptor(token)?;
+        let projected = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&token)
+            .filter(|entry| entry.switched)
+            .and_then(|entry| entry.guest_local.clone());
         // SAFETY: zero is valid initialization for sockaddr storage.
         let mut peer = unsafe { zeroed::<libc::sockaddr_storage>() };
         let mut length = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
@@ -188,8 +271,23 @@ impl RuntimeNetworkHost for Native {
             return Err(Self::runtime_error());
         }
         let accepted_token = self.insert(accepted)?;
+        let projected_peer = projected.is_some();
+        if let Some(address) = projected {
+            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let entry = sockets.get_mut(&accepted_token).ok_or(RuntimeNetworkError::Invalid)?;
+            entry.guest_local = Some(address.clone());
+            // The retained switch deliberately reports the listening virtual
+            // endpoint as the accepted peer because an unbound AF_UNIX client
+            // has no guest-visible pathname identity.
+            entry.guest_peer = Some(address.clone());
+            entry.switched = true;
+        }
         let local = self.local_address(accepted_token);
-        let peer = Self::decode_address(&peer, length);
+        let peer = if projected_peer {
+            self.peer_address(accepted_token)
+        } else {
+            Self::decode_address(&peer, length)
+        };
         match (local, peer) {
             (Ok(local), Ok(peer)) => Ok(AcceptedSocket {
                 token: accepted_token,
