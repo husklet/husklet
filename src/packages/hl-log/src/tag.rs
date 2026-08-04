@@ -85,6 +85,59 @@ impl Tags {
     }
 }
 
+/// One configured tag list, including names ignored for forward compatibility.
+///
+/// Keeping both results together ensures diagnostics use the same tokenization and name lookup as the
+/// mask itself instead of parsing the environment value a second time with subtly different rules.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TagList<'a> {
+    tags: Tags,
+    unrecognised: Vec<&'a str>,
+}
+
+impl TagList<'_> {
+    /// The enabled tag mask represented by this list.
+    pub const fn tags(&self) -> Tags {
+        self.tags
+    }
+
+    /// Names ignored while constructing the mask.
+    pub fn unrecognised(&self) -> &[&str] {
+        &self.unrecognised
+    }
+}
+
+impl<'a> From<&'a str> for TagList<'a> {
+    fn from(value: &'a str) -> Self {
+        let trimmed = value.trim();
+        if trimmed.eq_ignore_ascii_case("all") {
+            return Self {
+                tags: Tags::ALL,
+                unrecognised: Vec::new(),
+            };
+        }
+        if trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("off")
+            || trimmed.eq_ignore_ascii_case("none")
+        {
+            return Self {
+                tags: Tags::NONE,
+                unrecognised: Vec::new(),
+            };
+        }
+
+        let mut tags = Tags::NONE;
+        let mut unrecognised = Vec::new();
+        for name in trimmed.split([',', '|', ' ']).filter(|name| !name.is_empty()) {
+            match name.parse::<Tag>() {
+                Ok(tag) => tags |= tag,
+                Err(_) => unrecognised.push(name),
+            }
+        }
+        Self { tags, unrecognised }
+    }
+}
+
 impl From<Tag> for Tags {
     fn from(tag: Tag) -> Self {
         Self(tag.bits)
@@ -161,53 +214,12 @@ impl Display for Tags {
     }
 }
 
-/// The names in an environment tag list that [`Tags::from_str`] will ignore.
-///
-/// `from_str` drops unknown names on purpose, so an older binary reading a newer configuration does not
-/// die over a tag it has not heard of. The cost is that a typo — or a LEVEL name written into the TAG
-/// variable, which is the mistake that actually happens — is indistinguishable from a closed mask at the
-/// point of use. This lets the caller that owns the environment tell the operator what was dropped
-/// without changing what the parser accepts.
-///
-/// Empty for `all`, `off`, `none` and the empty string, which are meanings rather than tag lists.
-pub fn unrecognised(value: &str) -> Vec<&str> {
-    let trimmed = value.trim();
-    if trimmed.is_empty()
-        || trimmed.eq_ignore_ascii_case("all")
-        || trimmed.eq_ignore_ascii_case("off")
-        || trimmed.eq_ignore_ascii_case("none")
-    {
-        return Vec::new();
-    }
-    trimmed
-        .split([',', '|', ' '])
-        .filter(|name| !name.is_empty() && name.parse::<Tag>().is_err())
-        .collect()
-}
-
 /// Environment tag lists intentionally ignore unknown names for compatibility.
 impl FromStr for Tags {
     type Err = Infallible;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let value = value.trim();
-        if value.eq_ignore_ascii_case("all") {
-            return Ok(Self::ALL);
-        }
-        if value.is_empty()
-            || value.eq_ignore_ascii_case("off")
-            || value.eq_ignore_ascii_case("none")
-        {
-            return Ok(Self::NONE);
-        }
-
-        let mut tags = Self::NONE;
-        for name in value.split([',', '|', ' ']) {
-            if let Ok(tag) = name.parse::<Tag>() {
-                tags |= tag;
-            }
-        }
-        Ok(tags)
+        Ok(TagList::from(value).tags())
     }
 }
 
@@ -275,15 +287,15 @@ mod unrecognised_tests {
 
     #[test]
     fn a_level_name_is_reported_as_unrecognised() {
-        assert_eq!(unrecognised("debug"), vec!["debug"]);
-        assert_eq!(unrecognised("gl,debug,present"), vec!["debug"]);
+        assert_eq!(TagList::from("debug").unrecognised(), &["debug"]);
+        assert_eq!(TagList::from("gl,debug,present").unrecognised(), &["debug"]);
     }
 
     #[test]
     fn a_valid_list_and_the_meanings_report_nothing() {
-        assert!(unrecognised("gl,egl,present").is_empty());
-        assert!(unrecognised("all").is_empty());
-        assert!(unrecognised("off").is_empty());
-        assert!(unrecognised("").is_empty());
+        assert!(TagList::from("gl,egl,present").unrecognised().is_empty());
+        assert!(TagList::from("all").unrecognised().is_empty());
+        assert!(TagList::from("off").unrecognised().is_empty());
+        assert!(TagList::from("").unrecognised().is_empty());
     }
 }

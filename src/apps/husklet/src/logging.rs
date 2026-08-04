@@ -1,4 +1,4 @@
-use hl_log::{Config, Level, Tags};
+use hl_log::{Config, Level, TagList, Tags};
 
 /// Apply Husklet's logging configuration at the composition boundary.
 pub fn configure() {
@@ -48,16 +48,15 @@ fn tags(variable: &str) -> Tags {
     let Ok(value) = std::env::var(variable) else {
         return Tags::NONE;
     };
-    let parsed: Tags = value.parse().unwrap_or(Tags::NONE);
-    if parsed.bits() == 0 {
-        let dropped = hl_log::tag::unrecognised(&value);
-        if !dropped.is_empty() {
+    let list = TagList::from(value.as_str());
+    if list.tags().bits() == 0 {
+        if !list.unrecognised().is_empty() {
             eprintln!(
                 "husklet: {variable}={value:?} opened no logging: {} is not a tag name. \
                  Tag lists go in {variable}; a severity goes in {variable}_LEVEL.",
-                dropped.join(", ")
+                list.unrecognised().join(", ")
             );
         }
     }
-    parsed
+    list.tags()
 }

@@ -52,7 +52,31 @@
 use crate::level::Level;
 use crate::sink;
 use crate::tag::Tags;
-use std::fmt::Write as _;
+use std::fmt::{self, Display, Formatter, Write as _};
+
+/// A string rendered with JSON quoting and escaping.
+///
+/// This stays private to the event wire format: it is a formatting view over borrowed text, not a
+/// separately owned string value or a general serialization framework.
+struct JsonString<'a>(&'a str);
+
+impl Display for JsonString<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("\"")?;
+        for character in self.0.chars() {
+            match character {
+                '"' => formatter.write_str("\\\"")?,
+                '\\' => formatter.write_str("\\\\")?,
+                '\n' => formatter.write_str("\\n")?,
+                '\r' => formatter.write_str("\\r")?,
+                '\t' => formatter.write_str("\\t")?,
+                c if (c as u32) < 0x20 => write!(formatter, "\\u{:04x}", c as u32)?,
+                c => formatter.write_char(c)?,
+            }
+        }
+        formatter.write_str("\"")
+    }
+}
 
 /// One field value, typed so a consumer reads a number as a number.
 ///
@@ -88,7 +112,9 @@ impl Value {
                 let _ = write!(out, "{v}");
             }
             Value::Bool(v) => out.push_str(if *v { "true" } else { "false" }),
-            Value::Text(v) => write_json_string(out, v),
+            Value::Text(v) => {
+                let _ = write!(out, "{}", JsonString(v));
+            }
         }
     }
 }
@@ -159,29 +185,6 @@ impl From<&String> for Value {
     }
 }
 
-/// Escape into a JSON string literal, quotes included.
-///
-/// A reason field carries a driver error, and driver errors contain quotes, backslashes and newlines.
-/// One unescaped newline turns a record into two unparseable halves — a machine-readable channel that is
-/// only readable when the payload happens to be tame is the same trap as a grep.
-fn write_json_string(out: &mut String, value: &str) {
-    out.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-}
-
 /// Format and dispatch one structured record. Reached only when the caller's gate passed.
 ///
 /// Not `inline`: the cold formatting path stays out of the call site, exactly as [`crate::emit`] does.
@@ -195,15 +198,15 @@ pub fn emit_event(
 ) {
     let mut out = String::with_capacity(128);
     out.push_str("{\"event\":");
-    write_json_string(&mut out, event);
+    let _ = write!(out, "{}", JsonString(event));
     out.push_str(",\"tag\":");
-    write_json_string(&mut out, &tags.to_string());
+    let _ = write!(out, "{}", JsonString(&tags.to_string()));
     out.push_str(",\"level\":");
-    write_json_string(&mut out, level.name());
+    let _ = write!(out, "{}", JsonString(level.name()));
     out.push_str(",\"at\":");
     let mut at = String::with_capacity(module.len() + 8);
     let _ = write!(at, "{module}:{line}");
-    write_json_string(&mut out, &at);
+    let _ = write!(out, "{}", JsonString(&at));
     let _ = write!(
         out,
         ",\"ms\":{},\"thread\":{}",
@@ -212,7 +215,7 @@ pub fn emit_event(
     );
     for (key, value) in fields {
         out.push(',');
-        write_json_string(&mut out, key);
+        let _ = write!(out, "{}", JsonString(key));
         out.push(':');
         value.write(&mut out);
     }

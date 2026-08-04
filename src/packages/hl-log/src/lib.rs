@@ -55,7 +55,7 @@ pub use event::{emit_event, emit_verdict, emit_verdict_with, Value};
 pub use level::Level;
 pub use sink::{DiscardSink, Events, Output, Sink, StderrSink};
 pub use state::{Logging, Profiling};
-pub use tag::{Tag, Tags};
+pub use tag::{Tag, TagList, Tags};
 pub use timing::{Span, TimingStat, Timings};
 
 /// Flush all profiling to the active sink: counters table followed by timing table.
