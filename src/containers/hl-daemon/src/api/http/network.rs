@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn endpoint_state_conflicts_use_docker_forbidden_status() {
-        let container = "00000000000000000000000000000000".parse().unwrap();
+        let container: hl_container::ContainerId = "00000000000000000000000000000000".parse().unwrap();
         let connected = endpoint_error(Error::AlreadyConnected {
             container: container.clone(),
             network: "frontend".into(),
