@@ -1,5 +1,5 @@
 use proc_macro2::Span;
-use syn::{BinOp, ImplItemFn, ItemFn, Lit, spanned::Spanned, visit::Visit};
+use syn::{BinOp, Expr, ExprCall, FnArg, ImplItemFn, ItemFn, Lit, Pat, Signature, spanned::Spanned, visit::Visit};
 
 use crate::{
     Result,
@@ -45,13 +45,22 @@ struct Functions<'a> {
 }
 
 impl Functions<'_> {
-    fn inspect(&mut self, name: String, span: Span, block: &syn::Block) {
+    fn inspect(&mut self, name: String, span: Span, signature: &Signature, block: &syn::Block) {
+        let mut input = CliInput::default();
+        input.visit_block(block);
+        input.present |= signature.inputs.iter().any(|argument| {
+            let FnArg::Typed(argument) = argument else { return false };
+            let Pat::Ident(argument) = argument.pat.as_ref() else {
+                return false;
+            };
+            matches!(argument.ident.to_string().as_str(), "args" | "arguments")
+        });
+        if !input.present {
+            return;
+        }
         let mut dispatch = Dispatch::default();
         dispatch.visit_block(block);
         let Some(flag) = dispatch.flag else { return };
-        if !dispatch.looped || !dispatch.cursor_advanced {
-            return;
-        }
         let mut finding = Finding::error("manual-cli-dispatch", name, self.source.location(flag));
         finding.message =
             "manual long-option dispatch couples argument traversal, index mutation, and flag policy".into();
@@ -66,25 +75,66 @@ impl Functions<'_> {
 
 impl<'ast> Visit<'ast> for Functions<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
-        self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
+        self.inspect(
+            function.sig.ident.to_string(),
+            function.span(),
+            &function.sig,
+            &function.block,
+        );
         syn::visit::visit_item_fn(self, function);
     }
 
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
-        self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
+        self.inspect(
+            function.sig.ident.to_string(),
+            function.span(),
+            &function.sig,
+            &function.block,
+        );
         syn::visit::visit_impl_item_fn(self, function);
     }
 }
 
 #[derive(Default)]
 struct Dispatch {
+    flag: Option<Span>,
+}
+
+impl<'ast> Visit<'ast> for Dispatch {
+    fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
+        self.inspect_loop(&expression.body);
+        syn::visit::visit_expr_for_loop(self, expression);
+    }
+
+    fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
+        self.inspect_loop(&expression.body);
+        syn::visit::visit_expr_while(self, expression);
+    }
+
+    fn visit_expr_loop(&mut self, expression: &'ast syn::ExprLoop) {
+        self.inspect_loop(&expression.body);
+        syn::visit::visit_expr_loop(self, expression);
+    }
+}
+
+impl Dispatch {
+    fn inspect_loop(&mut self, block: &syn::Block) {
+        let mut region = Region::default();
+        region.visit_block(block);
+        if region.cursor_advanced {
+            self.flag = self.flag.or(region.flag);
+        }
+    }
+}
+
+#[derive(Default)]
+struct Region {
     branch_depth: usize,
-    looped: bool,
     cursor_advanced: bool,
     flag: Option<Span>,
 }
 
-impl Dispatch {
+impl Region {
     fn branch(&mut self, visit: impl FnOnce(&mut Self)) {
         self.branch_depth += 1;
         visit(self);
@@ -92,22 +142,7 @@ impl Dispatch {
     }
 }
 
-impl<'ast> Visit<'ast> for Dispatch {
-    fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
-        self.looped = true;
-        syn::visit::visit_expr_for_loop(self, expression);
-    }
-
-    fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
-        self.looped = true;
-        syn::visit::visit_expr_while(self, expression);
-    }
-
-    fn visit_expr_loop(&mut self, expression: &'ast syn::ExprLoop) {
-        self.looped = true;
-        syn::visit::visit_expr_loop(self, expression);
-    }
-
+impl<'ast> Visit<'ast> for Region {
     fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
         self.branch(|visitor| syn::visit::visit_expr_if(visitor, expression));
     }
@@ -127,21 +162,45 @@ impl<'ast> Visit<'ast> for Dispatch {
     }
 
     fn visit_expr_binary(&mut self, expression: &'ast syn::ExprBinary) {
-        self.cursor_advanced |= matches!(
-            expression.op,
-            BinOp::AddAssign(_) | BinOp::SubAssign(_) | BinOp::MulAssign(_) | BinOp::DivAssign(_)
-        );
+        self.cursor_advanced |= matches!(expression.op, BinOp::AddAssign(_) | BinOp::SubAssign(_))
+            && expression_name(&expression.left)
+                .is_some_and(|name| matches!(name.as_str(), "index" | "cursor" | "position"));
         syn::visit::visit_expr_binary(self, expression);
     }
 
-    fn visit_expr_assign(&mut self, expression: &'ast syn::ExprAssign) {
-        self.cursor_advanced = true;
-        syn::visit::visit_expr_assign(self, expression);
-    }
-
     fn visit_expr_method_call(&mut self, expression: &'ast syn::ExprMethodCall) {
-        self.cursor_advanced |= expression.method == "next";
+        self.cursor_advanced |= expression.method == "next"
+            && expression_name(&expression.receiver)
+                .is_some_and(|name| matches!(name.as_str(), "args" | "arguments" | "iterator"));
         syn::visit::visit_expr_method_call(self, expression);
+    }
+}
+
+fn expression_name(expression: &Expr) -> Option<String> {
+    let Expr::Path(expression) = expression else {
+        return None;
+    };
+    expression.path.get_ident().map(ToString::to_string)
+}
+
+#[derive(Default)]
+struct CliInput {
+    present: bool,
+}
+
+impl<'ast> Visit<'ast> for CliInput {
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(function) = call.func.as_ref() {
+            let segments = function
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            self.present |= segments.ends_with(&["env".into(), "args".into()])
+                || segments.ends_with(&["env".into(), "args_os".into()]);
+        }
+        syn::visit::visit_expr_call(self, call);
     }
 }
 
@@ -200,6 +259,39 @@ mod tests {
             r#"#[derive(clap::Parser)]
 struct Options { #[arg(long)] isa: String }
 fn parse() -> Options { <Options as clap::Parser>::parse() }"#,
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_unrelated_domain_loop_and_configuration_flag() {
+        let findings = findings(
+            r#"fn render(arguments: &[String], rows: &mut [String]) {
+    for row in rows { *row = row.to_uppercase(); }
+    if arguments.is_empty() { println!("--theme"); }
+}"#,
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_guest_argument_passthrough() {
+        let findings = findings(
+            r#"fn launch(arguments: &[String], command: &mut Command) {
+    for argument in arguments { command.arg(argument); }
+}"#,
+        );
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_typed_bootstrap_descriptor() {
+        let findings = findings(
+            r#"struct Bootstrap { descriptor: i32 }
+fn launch(arguments: &[String], bootstrap: Bootstrap) {
+    for argument in arguments { println!("{argument}"); }
+    if bootstrap.descriptor < 0 { println!("--invalid-bootstrap"); }
+}"#,
         );
         assert!(findings.is_empty());
     }

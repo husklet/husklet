@@ -1,11 +1,11 @@
 use proc_macro2::Span;
-use syn::{Expr, ImplItemFn, ItemFn, spanned::Spanned, visit::Visit};
+use syn::{Expr, ImplItemFn, ItemFn, ItemMod, spanned::Spanned, visit::Visit};
 
 use crate::{
     Result,
     model::{Finding, Severity},
     rule::Rule,
-    source::{Source, Workspace},
+    source::{Source, Workspace, requires_test},
 };
 
 const MAXIMUM_NESTING: usize = 2;
@@ -28,6 +28,7 @@ impl Rule for MaximumNesting {
             let mut functions = Functions {
                 source,
                 findings: &mut findings,
+                test_depth: usize::from(source.test),
             };
             functions.visit_file(&source.syntax);
         }
@@ -38,6 +39,7 @@ impl Rule for MaximumNesting {
 struct Functions<'a> {
     source: &'a Source,
     findings: &'a mut Vec<Finding>,
+    test_depth: usize,
 }
 
 impl Functions<'_> {
@@ -64,13 +66,28 @@ impl Functions<'_> {
 
 impl<'ast> Visit<'ast> for Functions<'_> {
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
-        self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
+        let test =
+            requires_test(&function.attrs) || function.attrs.iter().any(|attribute| attribute.path().is_ident("test"));
+        if self.test_depth == 0 && !test {
+            self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
+        }
         syn::visit::visit_item_fn(self, function);
     }
 
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
-        self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
+        let test =
+            requires_test(&function.attrs) || function.attrs.iter().any(|attribute| attribute.path().is_ident("test"));
+        if self.test_depth == 0 && !test {
+            self.inspect(function.sig.ident.to_string(), function.span(), &function.block);
+        }
         syn::visit::visit_impl_item_fn(self, function);
+    }
+
+    fn visit_item_mod(&mut self, module: &'ast ItemMod) {
+        let test = requires_test(&module.attrs);
+        self.test_depth += usize::from(test);
+        syn::visit::visit_item_mod(self, module);
+        self.test_depth -= usize::from(test);
     }
 }
 
@@ -212,6 +229,18 @@ fn summarize(row: &ResultRow) {
 }"#,
         );
 
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn ignores_inline_test_harness_nesting() {
+        let findings = findings(
+            r#"#[cfg(test)] mod tests {
+    #[test] fn exhaustive_fixture() {
+        for a in 0..2 { for b in 0..2 { match (a, b) { _ => {} } } }
+    }
+}"#,
+        );
         assert!(findings.is_empty());
     }
 }
