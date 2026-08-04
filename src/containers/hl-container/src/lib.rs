@@ -25,7 +25,7 @@ pub use containers::{
 };
 pub use error::{Error, Result};
 pub use executions::Executions;
-pub use filesystem::{Change, ChangeKind, Changes, Filesystem, Limits, Stat};
+pub use filesystem::{Change, ChangeKind, Changes, Extraction, Filesystem, Limits, Stat};
 pub use model::{
     Access, BindPropagation, Check, Checkpoint, Console, Container, ContainerId, ContainerSpec, ContainerState,
     Endpoint, EndpointSpec, Entry, Exec, ExecId, ExecSpec, ExecState, Execution, ExitStatus, Guest, Health,

@@ -10,14 +10,11 @@ pub(in super::super) struct ArchiveQuery {
 }
 
 impl ArchiveQuery {
-    pub(super) fn extract_ownership(&self) -> ApiResult<bool> {
-        if self.no_overwrite_dir_non_dir {
-            return Err(ApiError::new(
-                StatusCode::NOT_IMPLEMENTED,
-                "noOverwriteDirNonDir is not implemented",
-            ));
+    pub(super) fn extraction(&self) -> hl_container::Extraction {
+        hl_container::Extraction {
+            copy_uid_gid: self.copy_uid_gid,
+            no_overwrite_dir_non_dir: self.no_overwrite_dir_non_dir,
         }
-        Ok(self.copy_uid_gid)
     }
 }
 
@@ -26,11 +23,7 @@ pub(in super::super) async fn stat(
     Path(id): Path<String>,
     Query(query): Query<ArchiveQuery>,
 ) -> ApiResult<Response> {
-    let filesystem = state
-        .containers
-        .filesystem(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let filesystem = state.containers.filesystem(&id).await.map_err(ApiError::container)?;
     let stat = tokio::task::spawn_blocking(move || filesystem.stat(query.path))
         .await
         .map_err(ApiError::task)?
@@ -46,11 +39,7 @@ pub(in super::super) async fn archive(
     Path(id): Path<String>,
     Query(query): Query<ArchiveQuery>,
 ) -> ApiResult<Response> {
-    let filesystem = state
-        .containers
-        .filesystem(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let filesystem = state.containers.filesystem(&id).await.map_err(ApiError::container)?;
     let stat = filesystem.stat(&query.path).map_err(ApiError::container)?;
     let header = PathStat::from(stat)
         .header()
@@ -66,16 +55,11 @@ pub(in super::super) async fn archive(
     .await
     .map_err(ApiError::task)?
     .map_err(ApiError::container)?;
-    let body = Body::from_stream(tokio_util::io::ReaderStream::new(
-        tokio::fs::File::from_std(file),
-    ));
+    let body = Body::from_stream(tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(file)));
     Ok((
         StatusCode::OK,
         [
-            (
-                axum::http::header::CONTENT_TYPE.as_str(),
-                "application/x-tar".into(),
-            ),
+            (axum::http::header::CONTENT_TYPE.as_str(), "application/x-tar".into()),
             ("X-Docker-Container-Path-Stat", header),
         ],
         body,
@@ -84,10 +68,7 @@ pub(in super::super) async fn archive(
 }
 
 #[hl_design::adapter]
-pub(in super::super) async fn export(
-    state: State<DockerState>,
-    id: Path<String>,
-) -> ApiResult<Response> {
+pub(in super::super) async fn export(state: State<DockerState>, id: Path<String>) -> ApiResult<Response> {
     archive(
         state,
         id,
@@ -106,17 +87,12 @@ pub(in super::super) async fn extract(
     Query(query): Query<ArchiveQuery>,
     mut body: Body,
 ) -> ApiResult<StatusCode> {
-    let copy_uid_gid = query.extract_ownership()?;
-    let filesystem = state
-        .containers
-        .filesystem(&id)
-        .await
-        .map_err(ApiError::container)?;
+    let extraction = query.extraction();
+    let filesystem = state.containers.filesystem(&id).await.map_err(ApiError::container)?;
     let mut file = tokio::fs::File::from_std(tempfile::tempfile().map_err(ApiError::io)?);
     let mut received = 0_u64;
     while let Some(frame) = body.frame().await {
-        let frame =
-            frame.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
+        let frame = frame.map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?;
         if let Ok(data) = frame.into_data() {
             received = received.saturating_add(data.len() as u64);
             if received > ARCHIVE_LIMIT {
@@ -132,14 +108,14 @@ pub(in super::super) async fn extract(
     file.seek(SeekFrom::Start(0)).await.map_err(ApiError::io)?;
     let file = file.into_std().await;
     tokio::task::spawn_blocking(move || {
-        filesystem.extract_owned(
+        filesystem.extract_with(
             query.path,
             file,
             hl_container::Limits {
                 entries: 100_000,
                 bytes: ARCHIVE_LIMIT,
             },
-            copy_uid_gid,
+            extraction,
         )
     })
     .await

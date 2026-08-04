@@ -1,7 +1,9 @@
+mod extraction;
 mod inventory;
 mod overlay;
 mod path;
 
+pub use extraction::{Extraction, Limits};
 pub use inventory::{Change, ChangeKind, Changes};
 pub use path::Path;
 
@@ -14,22 +16,6 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-
-/// Bounds applied while importing a container filesystem archive.
-#[derive(Clone, Copy, Debug)]
-pub struct Limits {
-    pub entries: u64,
-    pub bytes: u64,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            entries: 100_000,
-            bytes: 128 * 1024 * 1024 * 1024,
-        }
-    }
-}
 
 /// Filesystem metadata independent from Docker's wire encoding.
 #[derive(Clone, Debug)]
@@ -169,7 +155,7 @@ impl Filesystem {
     /// # Errors
     /// Returns an error for read-only mounts, unsafe/special entries, exceeded limits, or I/O failures.
     pub fn extract(&self, path: impl AsRef<FsPath>, reader: impl Read, limits: Limits) -> Result<()> {
-        self.extract_owned(path, reader, limits, false)
+        self.extract_with(path, reader, limits, Extraction::default())
     }
 
     /// Extract a tar archive, optionally preserving its guest uid/gid metadata.
@@ -179,9 +165,31 @@ impl Filesystem {
     pub fn extract_owned(
         &self,
         path: impl AsRef<FsPath>,
-        mut reader: impl Read,
+        reader: impl Read,
         limits: Limits,
         copy_uid_gid: bool,
+    ) -> Result<()> {
+        self.extract_with(
+            path,
+            reader,
+            limits,
+            Extraction {
+                copy_uid_gid,
+                ..Extraction::default()
+            },
+        )
+    }
+
+    /// Extracts a tar archive under the supplied ownership and replacement policy.
+    ///
+    /// # Errors
+    /// Returns the same validation and filesystem failures as [`Self::extract`].
+    pub fn extract_with(
+        &self,
+        path: impl AsRef<FsPath>,
+        mut reader: impl Read,
+        limits: Limits,
+        extraction: Extraction,
     ) -> Result<()> {
         let _span = hl_log::hl_span!(hl_log::tag::CONTAINER, "filesystem.extract");
         let destination = self.resolve(path.as_ref(), true)?;
@@ -205,7 +213,7 @@ impl Filesystem {
             hl_log::tag::CONTAINER,
             "filesystem archive received bytes={} preserve_owner={}",
             received,
-            copy_uid_gid
+            extraction.copy_uid_gid
         );
         staged.seek(SeekFrom::Start(0))?;
         Self::preflight(&mut staged, limits)?;
@@ -228,13 +236,14 @@ impl Filesystem {
                 destination_relative.as_deref(),
                 ownership.as_deref(),
                 &mut entry,
-                copy_uid_gid,
+                extraction,
             )
         });
+        extracted?;
         if let Some(generation) = &self.generation {
             generation.bump()?;
         }
-        extracted
+        Ok(())
     }
 
     fn extract_owned_entry<R: Read>(
@@ -242,10 +251,15 @@ impl Filesystem {
         destination_relative: Option<&FsPath>,
         ownership: Option<&Mutex<hl_images::snapshot::Ownerships>>,
         entry: &mut tar::Entry<'_, R>,
-        copy_uid_gid: bool,
+        extraction: Extraction,
     ) -> Result<()> {
-        let relative = Path::entry(&entry.path()?)?.as_path().to_owned();
-        let owner = if copy_uid_gid {
+        let path = Path::entry(&entry.path()?)?;
+        let relative = path.as_path().to_owned();
+        let output = path.output(root);
+        path.prepare(root)?;
+        let kind = entry.header().entry_type();
+        Self::validate_replacement(&output, kind, extraction)?;
+        let owner = if extraction.copy_uid_gid {
             hl_images::snapshot::Ownership {
                 uid: u32::try_from(entry.header().uid()?)
                     .map_err(|_| Error::InvalidSpec("archive uid exceeds u32".into()))?,
@@ -255,7 +269,7 @@ impl Filesystem {
         } else {
             hl_images::snapshot::Ownership { uid: 0, gid: 0 }
         };
-        Self::extract_entry(root, entry)?;
+        Self::extract_entry(root, &path, &output, kind, entry)?;
         if let (Some(base), Some(ownership)) = (destination_relative, ownership) {
             ownership
                 .lock()
@@ -265,29 +279,53 @@ impl Filesystem {
         Ok(())
     }
 
-    fn extract_entry<R: Read>(root: &FsPath, entry: &mut tar::Entry<'_, R>) -> Result<()> {
-        let path = Path::entry(&entry.path()?)?;
-        let output = path.output(root);
-        path.prepare(root)?;
-        let kind = entry.header().entry_type();
+    fn extract_entry<R: Read>(
+        root: &FsPath,
+        path: &Path,
+        output: &FsPath,
+        kind: tar::EntryType,
+        entry: &mut tar::Entry<'_, R>,
+    ) -> Result<()> {
         if kind.is_dir() {
             path.ensure_dir(root)?;
         } else if kind.is_file() {
-            Self::extract_file(root, &path, &output, entry)?;
+            Self::extract_file(root, path, output, entry)?;
         } else if kind.is_symlink() {
-            Self::extract_symlink(root, &path, &output, entry)?;
+            Self::extract_symlink(root, path, output, entry)?;
         } else if kind.is_hard_link() {
-            Self::extract_hard_link(root, &path, &output, entry)?;
+            Self::extract_hard_link(root, path, output, entry)?;
         } else {
             return Err(Error::InvalidSpec("special archive entries are unsupported".into()));
         }
         #[cfg(unix)]
         if !kind.is_symlink() {
             if let Ok(mode) = entry.header().mode() {
-                fs::set_permissions(&output, fs::Permissions::from_mode(mode & 0o7777))?;
+                fs::set_permissions(output, fs::Permissions::from_mode(mode & 0o7777))?;
             }
         }
         Ok(())
+    }
+
+    fn validate_replacement(output: &FsPath, kind: tar::EntryType, extraction: Extraction) -> Result<()> {
+        if !extraction.no_overwrite_dir_non_dir {
+            return Ok(());
+        }
+        let existing = match fs::symlink_metadata(output) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        match (existing.is_dir(), kind.is_dir()) {
+            (true, false) => Err(Error::InvalidSpec(format!(
+                "cannot overwrite directory {:?} with a non-directory",
+                output.file_name().unwrap_or(output.as_os_str())
+            ))),
+            (false, true) => Err(Error::InvalidSpec(format!(
+                "cannot overwrite non-directory {:?} with a directory",
+                output.file_name().unwrap_or(output.as_os_str())
+            ))),
+            _ => Ok(()),
+        }
     }
 
     fn extract_file<R: Read>(

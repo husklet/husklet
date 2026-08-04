@@ -359,6 +359,58 @@ fn malformed_late_entry_does_not_partially_mutate() {
 }
 
 #[test]
+fn replacement_kinds() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    let target = root.join("target");
+    fs::create_dir_all(target.join("directory")).unwrap();
+    fs::write(target.join("file"), b"original").unwrap();
+    fs::write(target.join("directory/keep"), b"keep").unwrap();
+    let filesystem = Filesystem::new(root, Vec::new());
+    let guarded = Extraction {
+        no_overwrite_dir_non_dir: true,
+        ..Extraction::default()
+    };
+
+    assert!(matches!(
+        filesystem.extract_with(
+            "/target",
+            &tar_with_directory("file", "file/new", b"new")[..],
+            Limits::default(),
+            guarded,
+        ),
+        Err(Error::InvalidSpec(message)) if message.contains("cannot overwrite non-directory")
+    ));
+    assert_eq!(fs::read(target.join("file")).unwrap(), b"original");
+
+    assert!(matches!(
+        filesystem.extract_with(
+            "/target",
+            &tar(&[("directory", b"replacement")])[..],
+            Limits::default(),
+            guarded,
+        ),
+        Err(Error::InvalidSpec(message)) if message.contains("cannot overwrite directory")
+    ));
+    assert_eq!(fs::read(target.join("directory/keep")).unwrap(), b"keep");
+
+    filesystem
+        .extract_with("/target", &tar(&[("file", b"updated")])[..], Limits::default(), guarded)
+        .unwrap();
+    filesystem
+        .extract_with(
+            "/target",
+            &tar_with_directory("directory", "directory/new", b"new")[..],
+            Limits::default(),
+            guarded,
+        )
+        .unwrap();
+    assert_eq!(fs::read(target.join("file")).unwrap(), b"updated");
+    assert_eq!(fs::read(target.join("directory/keep")).unwrap(), b"keep");
+    assert_eq!(fs::read(target.join("directory/new")).unwrap(), b"new");
+}
+
+#[test]
 fn successful_external_write_advances_the_shared_epoch() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("root");

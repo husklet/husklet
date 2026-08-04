@@ -19,21 +19,30 @@ fn parses_docker_signal_names_and_numbers() {
 }
 
 #[test]
-fn archive_copy_ownership_is_explicit_and_unsupported_overwrite_fails() {
+fn archive_policy() {
     let query = ArchiveQuery {
         path: "/tmp".into(),
         copy_uid_gid: true,
         no_overwrite_dir_non_dir: false,
     };
-    assert!(query.extract_ownership().unwrap());
+    assert_eq!(
+        query.extraction(),
+        hl_container::Extraction {
+            copy_uid_gid: true,
+            no_overwrite_dir_non_dir: false,
+        }
+    );
     let query = ArchiveQuery {
         path: "/tmp".into(),
         copy_uid_gid: false,
         no_overwrite_dir_non_dir: true,
     };
     assert_eq!(
-        query.extract_ownership().unwrap_err().status,
-        axum::http::StatusCode::NOT_IMPLEMENTED
+        query.extraction(),
+        hl_container::Extraction {
+            copy_uid_gid: false,
+            no_overwrite_dir_non_dir: true,
+        }
     );
 }
 
