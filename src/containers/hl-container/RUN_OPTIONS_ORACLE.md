@@ -1,8 +1,8 @@
 # Run-option compatibility oracle
 
-The retired repository scenario implementation was inspected in
-`tests/scenarios/groups/runflags.rs`, at `Case::run`, `Case::command`,
-`Case::detached`, and `Case::name`. The process-option cohort owns no engine
+The retired repository scenario implementation was inspected before its
+deletion, including the former `Case::run`, `Case::command`, `Case::detached`,
+and `Case::name` paths. The process-option cohort owns no engine
 state: each case constructs an independent `ContainerSpec`, `Containers` owns
 the resulting container identity and lifetime, and every migrated test removes
 its container before returning.

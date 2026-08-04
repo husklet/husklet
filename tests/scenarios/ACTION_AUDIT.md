@@ -10,20 +10,20 @@ artifacts remain available through repository history.
 
 | Legacy prefix | Actions | Cases | Owner after migration | Legacy implementation | Expected evidence |
 |---|---:|---:|---|---|---|
-| `cpcoherence` | API | 8 | `hl-container` public filesystem contract | `groups/coherence.rs`, duplicated in `groups/copy.rs` | Rust assertions over exit status and captured output |
-| `execcmd` | API | 7 | `hl-container` execution contract | `groups/execcmd.rs` | Rust assertions over execution state, streams, user, workdir, and stdin |
+| `cpcoherence` | API | 8 | `hl-container` public filesystem contract | deleted; package mapping in `API_GROUP_AUDIT.md` | Rust assertions over exit status and captured output |
+| `execcmd` | API | 7 | `hl-container` execution contract | deleted; package mapping in `API_GROUP_AUDIT.md` | Rust assertions over execution state, streams, user, workdir, and stdin |
 | `lifecycle` | API | 17 | `hl-container` lifecycle contract | `groups/lifecycle.rs` | Rust assertions over state, signals, restart, health, rename, wait, and removal |
-| `netcontainer` | API | 5 | `hl-container` network/runtime contract | `groups/netcontainer.rs` | Rust assertions over endpoints, reachability, and isolation |
+| `netcontainer` | API | 5 | `hl-container` network/runtime contract | deleted; package mapping in `API_GROUP_AUDIT.md` | Rust assertions over endpoints, reachability, and isolation |
 | `process` | API | 15 | `hl-container` process contract | `groups/process.rs` | Rust assertions over process configuration, exit, signals, streams, and exec |
-| `runflags` direct | API | 15 | `hl-container` specification/runtime contracts | `groups/runflags.rs` | Rust assertions over the public headless API |
-| `runflags` daemon | API | 5 | repository Docker E2E | `groups/runflags_docker.rs` | folder-owned YAML and golden output through daemon/client |
+| `runflags` direct | API | 15 | `hl-container` specification/runtime contracts | deleted; package mapping in `API_GROUP_AUDIT.md` | Rust assertions over the public headless API |
+| `runflags` daemon | API | 5 | repository Docker E2E | deleted; package mapping in `API_GROUP_AUDIT.md` | folder-owned YAML and golden output through daemon/client |
 | `buildcmd` | host | 2 | repository Docker CLI E2E | `registry/build.rs`, `workflows/build.rs` | folder-owned YAML, source context, and golden output |
-| `cpcmd` | host | 4 | repository Docker CLI E2E | `registry/copy.rs`, `groups/copy.rs` | folder-owned YAML, source archive/input, and golden output |
-| `dockernet` | host | 8 | repository Docker CLI E2E | `registry/dockernet.rs`, `groups/network.rs` | folder-owned YAML and golden output |
-| `dockervol` | host | 17 | repository Docker CLI E2E | `registry/dockervol.rs`, `groups/volume/` | folder-owned YAML, input trees, and golden output |
-| `imagescmd` | host | 5 | repository Docker CLI E2E | `registry/images.rs`, `groups/imagescmd.rs` | folder-owned YAML, image archive/source, and golden output |
+| `cpcmd` | host | 4 | repository Docker CLI E2E | `tests/scenarios/copy/test.yaml` | folder-owned YAML, source archive/input, and golden output |
+| `dockernet` | host | 8 | repository Docker CLI E2E | deleted; package mapping in `API_GROUP_AUDIT.md` | folder-owned YAML and golden output |
+| `dockervol` | host | 17 | repository Docker CLI E2E | deleted; package mapping in `API_GROUP_AUDIT.md` | folder-owned YAML, input trees, and golden output |
+| `imagescmd` | host | 5 | repository Docker CLI E2E | deleted; package mapping in `API_GROUP_AUDIT.md` | folder-owned YAML, image archive/source, and golden output |
 | `observe` | host | 16 | repository Docker CLI E2E | `registry/observe.rs`, `groups/observe.rs` | folder-owned YAML and golden output |
-| `volumes` | host | 16 | repository Docker CLI E2E | `registry/volume.rs`, `groups/volume/` | folder-owned YAML, input trees, and golden output |
+| `volumes` | host | 16 | repository Docker CLI E2E | deleted; package mapping in `API_GROUP_AUDIT.md` | folder-owned YAML, input trees, and golden output |
 | **Total** |  | **140** | **67 package / 73 E2E** |  |  |
 
 The five daemon-owned `runflags` IDs are `publish-p`, `rm`, `user-name`,
