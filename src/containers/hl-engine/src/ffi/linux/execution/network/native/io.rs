@@ -2,9 +2,13 @@ use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
 use hl_descriptor::ReadinessObserver;
-use hl_network::{SocketConnectError, SocketConnectStatus, SocketHostError, SocketHostIo, SocketHostReadiness};
+use hl_network::{
+    SocketAddress, SocketConnectError, SocketConnectStatus, SocketHostError, SocketHostIo, SocketHostReadiness,
+};
 
 use super::Native;
+
+const SWITCH_CONNECT_ATTEMPTS: usize = 60;
 
 impl SocketHostIo for Native {
     type Token = u64;
@@ -90,6 +94,29 @@ impl SocketHostIo for Native {
                 self.notify(token);
                 return Ok(input.len());
             }
+            if let Some(entry) = sockets.get(&token).filter(|entry| entry.datagram_peer.is_some()) {
+                let peer = entry.datagram_peer.clone().expect("filtered datagram peer");
+                let descriptor = entry.descriptor;
+                drop(sockets);
+                let (storage, length) = Self::socket_address(&SocketAddress::Unix(peer))
+                    .map_err(|_| SocketHostError::DestinationRequired)?;
+                // SAFETY: input and bounded sockaddr_un remain live while the table retains descriptor.
+                let result = unsafe {
+                    libc::sendto(
+                        descriptor,
+                        input.as_ptr().cast(),
+                        input.len(),
+                        0,
+                        &storage as *const _ as *const _,
+                        length,
+                    )
+                };
+                return if result >= 0 {
+                    Ok(result as usize)
+                } else {
+                    Err(Self::host_error())
+                };
+            }
         }
         let descriptor = self.descriptor(token).map_err(|_| SocketHostError::Canceled)?;
         #[cfg(target_os = "linux")]
@@ -155,7 +182,7 @@ impl SocketHostIo for Native {
         }
     }
 
-    fn start_connect(&self, token: u64, _: bool) -> SocketConnectStatus {
+    fn start_connect(&self, token: u64, nonblocking: bool) -> SocketConnectStatus {
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         let Some(entry) = sockets.get_mut(&token) else {
             return SocketConnectStatus::Failed(SocketConnectError::Canceled);
@@ -163,6 +190,12 @@ impl SocketHostIo for Native {
         let Some(address) = entry.pending.take() else {
             return SocketConnectStatus::Failed(SocketConnectError::Io);
         };
+        if entry.datagram_peer.is_some() {
+            entry.connecting = false;
+            drop(sockets);
+            self.notify(token);
+            return SocketConnectStatus::Connected;
+        }
         if super::resolver::Resolver::accepts(&address) {
             entry.resolver = true;
             entry.connecting = false;
@@ -177,23 +210,76 @@ impl SocketHostIo for Native {
             self.notify(token);
             return SocketConnectStatus::Connected;
         }
+        let retry_switch = entry.switched && matches!(address, SocketAddress::Unix(_));
+        drop(sockets);
         let Ok((storage, length)) = Self::socket_address(&address) else {
             return SocketConnectStatus::Failed(SocketConnectError::Io);
         };
-        // SAFETY: storage contains a sockaddr matching length and descriptor remains table-owned.
-        let result = unsafe { libc::connect(entry.descriptor, &storage as *const _ as *const _, length) };
-        let status = if result == 0 {
-            SocketConnectStatus::Connected
+        let mut status = SocketConnectStatus::Failed(SocketConnectError::Io);
+        let mut connect_failure = None;
+        for attempt in 0..SWITCH_CONNECT_ATTEMPTS {
+            if attempt != 0 && self.reset_switch_socket(token, libc::SOCK_STREAM).is_err() {
+                break;
+            }
+            let Ok(descriptor) = self.duplicate_descriptor(token) else {
+                status = SocketConnectStatus::Failed(SocketConnectError::Canceled);
+                break;
+            };
+            // SAFETY: storage is immutable and descriptor is an independently owned duplicate.
+            let result = unsafe { libc::connect(descriptor, &storage as *const _ as *const _, length) };
+            let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            // SAFETY: this call solely owns the duplicated descriptor.
+            unsafe { libc::close(descriptor) };
+            if result == 0 {
+                status = SocketConnectStatus::Connected;
+                break;
+            }
+            if error == libc::EINPROGRESS {
+                status = SocketConnectStatus::Pending;
+                break;
+            }
+            if retry_switch && nonblocking && matches!(error, libc::ENOENT | libc::ECONNREFUSED) {
+                status = SocketConnectStatus::Pending;
+                connect_failure = Some(SocketConnectError::Refused);
+                break;
+            }
+            if retry_switch && !nonblocking && matches!(error, libc::ENOENT | libc::ECONNREFUSED) {
+                status = SocketConnectStatus::Failed(SocketConnectError::Refused);
+                if attempt + 1 != SWITCH_CONNECT_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
+            } else {
+                status = Self::connect_error(error);
+            }
+            break;
+        }
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(entry) = sockets.get_mut(&token) {
+            entry.connecting = status == SocketConnectStatus::Pending;
+            entry.connect_failure = connect_failure;
         } else {
-            Self::connect_error(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
-        };
-        entry.connecting = status == SocketConnectStatus::Pending;
+            status = SocketConnectStatus::Failed(SocketConnectError::Canceled);
+        }
         drop(sockets);
         self.wake();
         status
     }
 
     fn poll_connect(&self, token: u64) -> SocketConnectStatus {
+        let failure = {
+            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            sockets.get_mut(&token).and_then(|entry| entry.connect_failure.take())
+        };
+        if let Some(error) = failure {
+            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|poison| poison.into_inner());
+            if let Some(entry) = sockets.get_mut(&token) {
+                entry.connecting = false;
+            }
+            drop(sockets);
+            self.wake();
+            return SocketConnectStatus::Failed(error);
+        }
         let Ok(descriptor) = self.descriptor(token) else {
             return SocketConnectStatus::Failed(SocketConnectError::Canceled);
         };

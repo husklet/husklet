@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use hl_descriptor::ReadinessObserver;
 use hl_network::{
-    AddressFamily, EgressInterface, EgressRoute, SocketAddress, SocketConnectStatus, SocketHostError, SocketHostIo,
-    SocketProtocol, SocketType,
+    AddressFamily, EgressInterface, EgressRoute, SocketAddress, SocketConnectError, SocketConnectStatus,
+    SocketHostError, SocketHostIo, SocketProtocol, SocketType,
 };
 use hl_runtime::RuntimeNetworkHost;
 
@@ -231,6 +231,116 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
 }
 
 #[test]
+fn selected_interface_stream_connect_retries_until_listener_arrives() {
+    let bridge = format!("retry-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 3,
+        ipv4: [10, 94, 0, 3],
+    };
+    let port = 36_000 + (std::process::id() % 20_000) as u16;
+    let address = SocketAddress::Inet4 {
+        address: interface.ipv4,
+        port,
+    };
+    let host = Arc::new(Native::new());
+    let client = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.prepare_connect_route(
+        client.token,
+        EgressRoute {
+            address: address.clone(),
+            interface: Some(interface.clone()),
+        },
+    )
+    .unwrap();
+    let connecting_host = Arc::clone(&host);
+    let started_at = Instant::now();
+    let connecting = std::thread::spawn(move || connecting_host.start_connect(client.token, false));
+    std::thread::sleep(Duration::from_millis(80));
+    let listener = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.bind_route(
+        listener.token,
+        EgressRoute {
+            address: SocketAddress::Inet4 { address: [0; 4], port },
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    host.listen(listener.token, 4).unwrap();
+    let status = connecting.join().unwrap();
+    assert!(matches!(
+        status,
+        SocketConnectStatus::Connected | SocketConnectStatus::Pending
+    ));
+    assert_eq!(await_connect(&host, client.token), SocketConnectStatus::Connected);
+    assert!(started_at.elapsed() >= Duration::from_millis(60));
+    assert!(started_at.elapsed() < Duration::from_secs(2));
+    host.close(client.token);
+    host.close(listener.token);
+}
+
+#[test]
+fn selected_interface_stream_connect_exhaustion_is_bounded_and_nonblocking_is_deferred() {
+    let bridge = format!("refused-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 4,
+        ipv4: [10, 95, 0, 4],
+    };
+    let address = SocketAddress::Inet4 {
+        address: interface.ipv4,
+        port: 37_000 + (std::process::id() % 20_000) as u16,
+    };
+    let host = Native::new();
+    let blocking = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.prepare_connect_route(
+        blocking.token,
+        EgressRoute {
+            address: address.clone(),
+            interface: Some(interface.clone()),
+        },
+    )
+    .unwrap();
+    let started_at = Instant::now();
+    assert_eq!(
+        host.start_connect(blocking.token, false),
+        SocketConnectStatus::Failed(SocketConnectError::Refused)
+    );
+    assert!(started_at.elapsed() >= Duration::from_millis(1_000));
+    assert!(started_at.elapsed() < Duration::from_millis(2_500));
+
+    let nonblocking = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.prepare_connect_route(
+        nonblocking.token,
+        EgressRoute {
+            address,
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    let started_at = Instant::now();
+    assert_eq!(
+        host.start_connect(nonblocking.token, true),
+        SocketConnectStatus::Pending
+    );
+    assert!(started_at.elapsed() < Duration::from_millis(100));
+    assert_eq!(
+        host.poll_connect(nonblocking.token),
+        SocketConnectStatus::Failed(SocketConnectError::Refused)
+    );
+    host.close(nonblocking.token);
+    host.close(blocking.token);
+}
+
+#[test]
 fn invalid_switch_identity_is_transactional_and_direct_route_falls_back() {
     let host = Native::new();
     let socket = host
@@ -268,6 +378,107 @@ fn invalid_switch_identity_is_transactional_and_direct_route_falls_back() {
         })
     ));
     host.close(socket.token);
+}
+
+#[test]
+fn selected_interface_datagrams_preserve_source_and_connected_peer() {
+    let interface = EgressInterface {
+        bridge: format!("udp-adapter-{}", std::process::id()).into_bytes(),
+        index: 2,
+        ipv4: [10, 94, 0, 2],
+    };
+    let server_address = SocketAddress::Inet4 {
+        address: interface.ipv4,
+        port: 36_000 + (std::process::id() % 20_000) as u16,
+    };
+    let host = Native::new();
+    let server = host
+        .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)
+        .unwrap();
+    assert_eq!(
+        host.bind_route(
+            server.token,
+            EgressRoute {
+                address: server_address.clone(),
+                interface: Some(interface.clone()),
+            },
+        ),
+        Ok(server_address.clone())
+    );
+    let client = host
+        .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)
+        .unwrap();
+    assert_eq!(
+        host.send_to_route(
+            client.token,
+            b"one",
+            EgressRoute {
+                address: server_address.clone(),
+                interface: Some(interface.clone()),
+            },
+            false,
+        ),
+        Ok(3)
+    );
+    let receive = |token, output: &mut [u8]| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match host.receive_from(token, output, false, false) {
+                Ok(value) => break value,
+                Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::yield_now()
+                }
+                result => panic!("switch datagram receive failed: {result:?}"),
+            }
+        }
+    };
+    let mut input = [0_u8; 8];
+    let first = receive(server.token, &mut input);
+    assert_eq!(&input[..first.count], b"one");
+    let SocketAddress::Inet4 { address, port } = first.source.clone() else {
+        panic!("switch source was not IPv4")
+    };
+    assert_eq!(address, interface.ipv4);
+    assert!(port > 0);
+    assert_eq!(
+        host.send_to_route(
+            server.token,
+            b"reply",
+            EgressRoute {
+                address: first.source,
+                interface: Some(interface.clone()),
+            },
+            false,
+        ),
+        Ok(5)
+    );
+    let reply = receive(client.token, &mut input);
+    assert_eq!(&input[..reply.count], b"reply");
+    assert_eq!(reply.source, server_address);
+
+    let connected = host
+        .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)
+        .unwrap();
+    host.prepare_connect_route(
+        connected.token,
+        EgressRoute {
+            address: server_address.clone(),
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        host.start_connect(connected.token, false),
+        SocketConnectStatus::Connected
+    );
+    assert_eq!(host.peer_address(connected.token), Ok(server_address));
+    assert_eq!(host.write(connected.token, b"two", false), Ok(3));
+    let second = receive(server.token, &mut input);
+    assert_eq!(&input[..second.count], b"two");
+
+    host.close(connected.token);
+    host.close(client.token);
+    host.close(server.token);
 }
 
 #[test]

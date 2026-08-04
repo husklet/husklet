@@ -156,6 +156,10 @@ impl RuntimeNetworkHost for Native {
         let SocketAddress::Inet4 { port, .. } = route.address else {
             return Err(RuntimeNetworkError::Invalid);
         };
+        let kind = self.socket_type(token)?;
+        if !matches!(kind, libc::SOCK_STREAM | libc::SOCK_DGRAM) {
+            return Err(RuntimeNetworkError::OperationNotSupported);
+        }
         let first = if port == 0 {
             20_000_u16.wrapping_add((token as u16) & 0x3fff)
         } else {
@@ -171,7 +175,7 @@ impl RuntimeNetworkHost for Native {
             let descriptor = match descriptor {
                 Some(descriptor) => descriptor,
                 None => {
-                    let value = self.switch_stream(token)?;
+                    let value = self.switch_socket(token, kind)?;
                     descriptor = Some(value);
                     value
                 }
@@ -185,6 +189,7 @@ impl RuntimeNetworkHost for Native {
                 let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
                 let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
                 entry.guest_local = Some(local.clone());
+                entry.switch_interface = Some(interface.clone());
                 let ownership = Arc::new(SwitchPath(path.clone()));
                 self.shared
                     .switch_paths
@@ -218,10 +223,41 @@ impl RuntimeNetworkHost for Native {
         if port == 0 {
             return Err(RuntimeNetworkError::Invalid);
         }
+        let kind = self.socket_type(token)?;
         let (directory, path) = Self::switch_path(&interface, address, port)?;
         Self::mkdir_switch(&directory)?;
-        self.switch_stream(token)?;
         let peer = SocketAddress::Inet4 { address, port };
+        if kind == libc::SOCK_DGRAM {
+            let needs_source = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&token)
+                .is_none_or(|entry| entry.guest_local.is_none());
+            if needs_source {
+                self.bind_route(
+                    token,
+                    EgressRoute {
+                        address: SocketAddress::Inet4 {
+                            address: interface.ipv4,
+                            port: 0,
+                        },
+                        interface: Some(interface.clone()),
+                    },
+                )?;
+            }
+            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+            entry.pending = Some(peer.clone());
+            entry.guest_peer = Some(peer);
+            entry.datagram_peer = Some(path);
+            return Ok(());
+        }
+        if kind != libc::SOCK_STREAM {
+            return Err(RuntimeNetworkError::OperationNotSupported);
+        }
+        self.switch_socket(token, libc::SOCK_STREAM)?;
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         entry.pending = Some(SocketAddress::Unix(path));
@@ -360,6 +396,67 @@ impl RuntimeNetworkHost for Native {
         }
     }
 
+    fn send_to_route(
+        &self,
+        token: u64,
+        input: &[u8],
+        route: EgressRoute,
+        nonblocking: bool,
+    ) -> Result<usize, RuntimeNetworkError> {
+        let Some(interface) = route.interface else {
+            return self.send_to(token, input, route.address, nonblocking);
+        };
+        let SocketAddress::Inet4 { address, port } = route.address else {
+            return Err(RuntimeNetworkError::Invalid);
+        };
+        if port == 0 || self.socket_type(token)? != libc::SOCK_DGRAM {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        let needs_source = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&token)
+            .is_none_or(|entry| entry.guest_local.is_none());
+        if needs_source {
+            self.bind_route(
+                token,
+                EgressRoute {
+                    address: SocketAddress::Inet4 {
+                        address: interface.ipv4,
+                        port: 0,
+                    },
+                    interface: Some(interface.clone()),
+                },
+            )?;
+        }
+        let (_, path) = Self::switch_path(&interface, address, port)?;
+        let (storage, length) = Self::socket_address(&SocketAddress::Unix(path))?;
+        let descriptor = self.descriptor(token)?;
+        // SAFETY: input and bounded sockaddr_un remain live while the table retains descriptor.
+        let result = unsafe {
+            libc::sendto(
+                descriptor,
+                input.as_ptr().cast(),
+                input.len(),
+                0,
+                &storage as *const _ as *const _,
+                length,
+            )
+        };
+        if result >= 0 {
+            Ok(result as usize)
+        } else if matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(error) if error == libc::ENOENT || error == libc::ECONNREFUSED
+        ) {
+            Ok(input.len())
+        } else {
+            Err(Self::runtime_error())
+        }
+    }
+
     fn receive_from(
         &self,
         token: u64,
@@ -435,10 +532,15 @@ impl RuntimeNetworkHost for Native {
         if result < 0 {
             return Err(Self::runtime_error());
         }
+        let source = Self::decode_address(&source, length)?;
+        let source = match source {
+            SocketAddress::Unix(path) => Self::switch_source(&path).ok_or(RuntimeNetworkError::Invalid)?,
+            source => source,
+        };
         Ok(ReceivedDatagram {
             count: (result as usize).min(output.len()),
             full_length: result as usize,
-            source: Self::decode_address(&source, length)?,
+            source,
         })
     }
 

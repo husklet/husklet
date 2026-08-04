@@ -23,6 +23,7 @@ pub(super) struct Entry {
     pub(super) pending: Option<SocketAddress>,
     pub(super) wants_read: bool,
     pub(super) connecting: bool,
+    pub(super) connect_failure: Option<SocketConnectError>,
     pub(super) wants_write: bool,
     pub(super) resolver: bool,
     pub(super) resolver_packets: VecDeque<Vec<u8>>,
@@ -34,6 +35,8 @@ pub(super) struct Entry {
     pub(super) guest_local: Option<SocketAddress>,
     pub(super) guest_peer: Option<SocketAddress>,
     pub(super) switch_path: Option<Arc<SwitchPath>>,
+    pub(super) switch_interface: Option<hl_network::EgressInterface>,
+    pub(super) datagram_peer: Option<Vec<u8>>,
     pub(super) switched: bool,
 }
 
@@ -142,6 +145,7 @@ impl Native {
                 pending: None,
                 wants_read: true,
                 connecting: false,
+                connect_failure: None,
                 wants_write: false,
                 resolver: false,
                 resolver_packets: VecDeque::new(),
@@ -153,6 +157,8 @@ impl Native {
                 guest_local: None,
                 guest_peer: None,
                 switch_path,
+                switch_interface: None,
+                datagram_peer: None,
                 switched: false,
             },
         );
@@ -350,7 +356,28 @@ impl Native {
         }
     }
 
-    fn switch_stream(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
+    fn socket_type(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
+        let descriptor = self.descriptor(token)?;
+        let mut kind = 0_i32;
+        let mut kind_length = size_of::<i32>() as libc::socklen_t;
+        // SAFETY: kind is writable and the table retains the live descriptor.
+        if unsafe {
+            libc::getsockopt(
+                descriptor,
+                libc::SOL_SOCKET,
+                libc::SO_TYPE,
+                (&mut kind as *mut i32).cast(),
+                &mut kind_length,
+            )
+        } == 0
+        {
+            Ok(kind)
+        } else {
+            Err(Self::runtime_error())
+        }
+    }
+
+    fn switch_socket(&self, token: u64, expected: i32) -> Result<i32, RuntimeNetworkError> {
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if entry.switched {
@@ -371,11 +398,11 @@ impl Native {
         {
             return Err(Self::runtime_error());
         }
-        if kind != libc::SOCK_STREAM {
+        if kind != expected {
             return Err(RuntimeNetworkError::OperationNotSupported);
         }
         // SAFETY: socket returns a newly owned descriptor or a negative errno result.
-        let replacement = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+        let replacement = unsafe { libc::socket(libc::AF_UNIX, expected, 0) };
         if replacement < 0 {
             return Err(Self::runtime_error());
         }
@@ -402,6 +429,68 @@ impl Native {
         drop(sockets);
         self.wake();
         Ok(descriptor)
+    }
+
+    fn reset_switch_socket(&self, token: u64, expected: i32) -> Result<(), RuntimeNetworkError> {
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+        if !entry.switched {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        // SAFETY: socket returns a newly owned descriptor or a negative errno result.
+        let replacement = unsafe { libc::socket(libc::AF_UNIX, expected, 0) };
+        if replacement < 0 {
+            return Err(Self::runtime_error());
+        }
+        // SAFETY: fcntl observes live descriptor flags and dup2 atomically replaces the table-owned socket.
+        let flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFL) };
+        let descriptor_flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFD) };
+        let replaced = unsafe { libc::dup2(replacement, entry.descriptor) };
+        // SAFETY: replacement is solely owned here after dup2 duplicates it when successful.
+        unsafe { libc::close(replacement) };
+        if replaced < 0 {
+            return Err(Self::runtime_error());
+        }
+        // SAFETY: entry.descriptor is the newly installed socket and remains table-owned.
+        unsafe {
+            if flags >= 0 {
+                libc::fcntl(entry.descriptor, libc::F_SETFL, flags);
+            }
+            if descriptor_flags >= 0 {
+                libc::fcntl(entry.descriptor, libc::F_SETFD, descriptor_flags);
+            }
+        }
+        drop(sockets);
+        self.wake();
+        Ok(())
+    }
+
+    fn duplicate_descriptor(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
+        let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let descriptor = sockets.get(&token).ok_or(RuntimeNetworkError::Invalid)?.descriptor;
+        // SAFETY: descriptor remains live under the table lock and dup returns independent ownership.
+        let duplicate = unsafe { libc::dup(descriptor) };
+        if duplicate < 0 {
+            Err(Self::runtime_error())
+        } else {
+            Ok(duplicate)
+        }
+    }
+
+    fn switch_source(path: &[u8]) -> Option<SocketAddress> {
+        let name = path.rsplit(|byte| *byte == b'/').next()?;
+        let colon = name.iter().rposition(|byte| *byte == b':')?;
+        let address = &name[..colon];
+        let port = std::str::from_utf8(&name[colon + 1..]).ok()?.parse().ok()?;
+        let mut ipv4 = [0_u8; 4];
+        let mut octets = address.split(|byte| *byte == b'.');
+        for octet in &mut ipv4 {
+            *octet = std::str::from_utf8(octets.next()?).ok()?.parse().ok()?;
+        }
+        if octets.next().is_some() {
+            return None;
+        }
+        Some(SocketAddress::Inet4 { address: ipv4, port })
     }
 
     fn binding(&self, address: &SocketAddress) -> Option<SocketAddress> {
