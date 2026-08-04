@@ -14,3 +14,6 @@ The repository-level suites are grouped by the behavior they prove:
 artifact, and execution inventories may remain TSV where a tabular join is the
 actual contract; those files must be checked against the YAML definitions and
 must not become a second hand-maintained case catalog.
+
+[`PIPELINE.md`](PIPELINE.md) specifies the target compile, oracle observation,
+execution, comparison, cache, timing, and CI architecture.
