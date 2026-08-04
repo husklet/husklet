@@ -1,6 +1,6 @@
 use super::provider::ProjectedBackend;
 use crate::engine::EngineError;
-use hl_session::{FrameKind, Limits, Secret, accept};
+use crate::session::{FrameKind, Limits, Secret, accept};
 
 pub struct Child;
 struct Services {

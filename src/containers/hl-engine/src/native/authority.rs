@@ -18,7 +18,7 @@ use crate::engine::EngineError;
 #[cfg(unix)]
 pub use child::Child;
 #[cfg(unix)]
-use hl_session::{FrameKind, Limits, Secret, Session, connect};
+use crate::session::{FrameKind, Limits, Secret, Session, connect};
 #[cfg(unix)]
 use std::collections::BTreeMap;
 #[cfg(unix)]

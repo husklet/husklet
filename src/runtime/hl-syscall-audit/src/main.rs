@@ -60,7 +60,7 @@ impl Audit {
             .map_err(|error| format!("read C number oracle: {error}"))?;
         let rust = fs::read_to_string(self.root.join("src/runtime/hl-linux/src/syscall/table.rs"))
             .map_err(|error| format!("read Rust router table: {error}"))?;
-        let app = fs::read_to_string(self.root.join("src/app/hl-engine/src/ffi/linux/execution/ports.rs"))
+        let app = fs::read_to_string(self.root.join("src/containers/hl-engine/src/ffi/linux/execution/ports.rs"))
             .map_err(|error| format!("read production inventory: {error}"))?;
         let router = self.rust_routes(&rust);
         let supported = self.supported_names(&app);

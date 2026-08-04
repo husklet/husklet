@@ -13,7 +13,7 @@ const X86_64: u32 = 2;
 
 #[allow(dead_code)]
 mod schema {
-    include!("../../../../schema/cpu/rust/layout.rs");
+    include!("../../../../native/cpu/rust/layout.rs");
 }
 
 #[repr(C)]

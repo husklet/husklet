@@ -306,17 +306,12 @@ impl Graph {
 fn allowed_edge(source: &str, target: &str) -> bool {
     matches!(
         (source, target),
-        // Transferable mechanisms.
-        ("hl-fs", "hl-io")
-            | ("hl-codec", "hl-io")
-            // Runtime foundations and domains.
-            | ("hl-descriptor", "hl-io")
-            | ("hl-vfs", "hl-descriptor")
+        // Runtime foundations and domains.
+        ("hl-vfs", "hl-descriptor")
             | ("hl-vfs", "hl-fs")
             | ("hl-terminal", "hl-descriptor")
             | ("hl-event", "hl-descriptor")
             | ("hl-event", "hl-time")
-            | ("hl-memory", "hl-io")
             | ("hl-memory", "hl-isa")
             | ("hl-sync", "hl-memory")
             | ("hl-sync", "hl-time")
@@ -336,7 +331,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-execution", "hl-isa")
             | ("hl-execution", "hl-memory")
             | ("hl-execution", "hl-softfloat")
-            | ("hl-provider", "hl-io")
             | ("hl-provider", "hl-descriptor")
             // Linux personality.
             | ("hl-linux", "hl-isa")
@@ -350,7 +344,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-linux", "hl-ipc")
             | ("hl-linux", "hl-task")
             // Aggregate checkpoint coordination.
-            | ("hl-checkpoint", "hl-codec")
             | ("hl-checkpoint", "hl-descriptor")
             | ("hl-checkpoint", "hl-vfs")
             | ("hl-checkpoint", "hl-event")
@@ -403,7 +396,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-engine", "hl-task")
             | ("hl-engine", "hl-time")
             | ("hl-engine", "hl-log")
-            | ("hl-engine", "hl-session")
             | ("hl-engine", "hl-provider")
     )
 }
