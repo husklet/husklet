@@ -4,5 +4,6 @@
 #include "cpu.h"
 
 void hl_native_x86_64_enter(hl_native_x86_64_cpu *, void *);
+void hl_native_x86_64_return_clean(void);
 
 #endif
