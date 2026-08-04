@@ -70,6 +70,7 @@ pub struct NetworkSettings {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct EndpointSettings {
+    pub aliases: Vec<String>,
     #[serde(rename = "NetworkID")]
     pub network_id: String,
     #[serde(rename = "EndpointID")]
@@ -84,9 +85,19 @@ pub struct EndpointSettings {
 #[cfg(feature = "runtime")]
 impl From<(&hl_container::Network, &hl_container::Endpoint)> for EndpointSettings {
     fn from((network, endpoint): (&hl_container::Network, &hl_container::Endpoint)) -> Self {
+        let mut aliases = Vec::with_capacity(endpoint.aliases.len() + 1);
+        aliases.push(endpoint.name.clone());
+        aliases.extend(
+            endpoint
+                .aliases
+                .iter()
+                .filter(|alias| *alias != &endpoint.name)
+                .cloned(),
+        );
         Self {
+            aliases,
             network_id: network.id.to_string(),
-            endpoint_id: String::new(),
+            endpoint_id: endpoint.container.to_string(),
             gateway: network.gateway.map_or_else(String::new, |value| value.to_string()),
             ip_address: endpoint.address.map_or_else(String::new, |value| value.to_string()),
             ip_prefix_len: network.subnet.map_or(0, |subnet| subnet.prefix),
@@ -385,7 +396,40 @@ impl From<&ExitStatus> for Exit {
 
 #[cfg(all(test, feature = "runtime"))]
 mod tests {
-    use super::{HealthState, InspectContainer};
+    use super::{EndpointSettings, HealthState, InspectContainer};
+
+    #[test]
+    fn endpoint_inspect_identity_and_aliases_match_network_projection() {
+        let network: hl_container::Network = serde_json::from_value(serde_json::json!({
+            "id": "01234567-89ab-cdef-0123-456789abcdef",
+            "name": "application",
+            "driver": "bridge",
+            "subnet": {"address": "172.30.0.0", "prefix": 24},
+            "gateway": "172.30.0.1",
+            "labels": {},
+            "endpoints": {},
+            "created_at_ms": 0
+        }))
+        .unwrap();
+        let endpoint = hl_container::Endpoint {
+            container: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .parse()
+                .unwrap(),
+            address: Some("172.30.0.2".parse().unwrap()),
+            name: "renamed".into(),
+            generated_name: true,
+            aliases: vec!["api".into(), "renamed".into()],
+        };
+        let settings = EndpointSettings::from((&network, &endpoint));
+        assert_eq!(settings.endpoint_id, endpoint.container.to_string());
+        assert_eq!(settings.aliases, ["renamed", "api"]);
+        assert_eq!(settings.ip_address, "172.30.0.2");
+        assert_eq!(settings.ip_prefix_len, 24);
+        let wire = serde_json::to_value(&settings).unwrap();
+        assert_eq!(wire["Aliases"], serde_json::json!(["renamed", "api"]));
+        assert_eq!(wire["EndpointID"], endpoint.container.to_string());
+        assert!(wire.get("aliases").is_none());
+    }
 
     #[test]
     fn health_uses_docker_status_streak_and_bounded_log_shape() {
