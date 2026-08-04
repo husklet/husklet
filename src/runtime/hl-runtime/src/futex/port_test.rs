@@ -432,7 +432,14 @@ fn safe_other_keys() {
 
 #[test]
 fn interruption_slot_generation() {
-    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let tasks = TaskRegistry::new(RegistryConfig {
+        // Reserve slot zero for the process leader and force the only
+        // nonleader slot to be reused after exit. The production allocator
+        // deliberately prefers unused slots while any remain.
+        max_threads: 2,
+        ..RegistryConfig::default()
+    })
+    .unwrap();
     let (_, leader) = tasks
         .create_init(
             ProcessCredentials::new(0, 0, &[], 65_536).unwrap(),

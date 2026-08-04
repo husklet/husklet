@@ -394,7 +394,14 @@ fn execution_weakening_transfer() {
 }
 
 fn task_registry() -> (Arc<TaskRegistry>, hl_task::ThreadId) {
-    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_processes: 2,
+            max_threads: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
     let credentials = ProcessCredentials::new(1000, 1000, &[], 8).unwrap();
     let (_, thread) = tasks.create_init(credentials, ProcessLimits::empty()).unwrap();
     (tasks, thread)

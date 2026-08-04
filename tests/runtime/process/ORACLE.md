@@ -65,3 +65,28 @@ Typed broken entries record remaining clone shared-VM, bound-fd teardown,
 blocked ptrace attach, and concurrent-spawn divergences. Typed unsupported
 entries preserve macOS-only host gaps and the two-program forkserver protocol
 that the current canonical runner cannot yet express.
+
+### Fork rollback transaction
+
+The rollback expectation was checked against the retained process-fork domain
+in `../engine/src/linux_abi/syscall/proc.c` (`bound_fork_prepare`,
+`bound_fork_complete`, clone case 220, and clone3 case 435) and
+`../engine/src/linux_abi/linux_abi.c` (`hl_linux_abi_fork_prepare`,
+`hl_linux_abi_fork_parent`, `hl_linux_abi_fork_child`,
+`hl_linux_fork_unpin`, and `hl_linux_fork_discard_children`). Preparation pins
+each live OFD, clones resources outside the table lock, and then verifies the
+generation and handle topology before arming the fork. A partial clone failure
+closes every child clone already produced and releases every snapshot pin.
+Failure after the host fork kills and reaps the child in the parent; child-side
+repair failure exits the child. The original `errno` or the boundary's typed
+`EAGAIN`, `ENOMEM`, or `EIO` mapping is returned without publishing a child.
+
+The corresponding Rust owners are `hl-runtime/src/fork/control.rs` for ordered
+prepare, reverse commit, and reverse rollback; `fork/task.rs` and
+`hl-task::TaskRegistry` for staged process identity; and the descriptor,
+memory, provider, execution, network, event, and IPC fork participants for
+their resources. A rolled-back Rust task reservation must disappear and its
+generation must become stale. It need not be the next slot allocated: the Rust
+registry deliberately prefers a never-used PID slot while one remains, matching
+Linux's delayed PID-reuse behavior. Tests that specifically prove generation
+advance therefore use a capacity with no alternate free process slot.
