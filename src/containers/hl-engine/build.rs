@@ -51,6 +51,16 @@ fn main() {
     let root = Path::new("../../native/exec");
     let inputs = NativeInputs::discover(root);
     let mut build = cc::Build::new();
+    // Hardened libc headers reject `_FORTIFY_SOURCE` at `-O0`, where it cannot
+    // provide fortification. Preserve Cargo's debug semantics and warning
+    // strictness by removing only that unusable definition before libc headers.
+    if std::env::var("OPT_LEVEL").as_deref() == Ok("0")
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
+    {
+        build
+            .flag("-include")
+            .flag(root.join("include/toolchain.h").to_str().expect("native include path"));
+    }
     build
         .files(&inputs.sources)
         .include(root.join("include"))
