@@ -10,7 +10,7 @@ use hl_network::{
     AddressFamily, BindRoute, EgressInterface, EgressRoute, SocketAddress, SocketConnectError, SocketConnectStatus,
     SocketHostError, SocketHostIo, SocketProtocol, SocketType,
 };
-use hl_runtime::RuntimeNetworkHost;
+use hl_runtime::{HostSend, RuntimeNetworkHost};
 
 use super::Native;
 
@@ -336,7 +336,7 @@ fn selected_interface_stream_connect_retries_a_dead_on_arrival_listener() {
                     Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => {
                         std::thread::yield_now()
                     }
-                    result => panic!("switch accept failed: {result:?}"),
+                    Err(error) => panic!("switch accept failed: {error:?}"),
                 }
             }
         };
@@ -608,6 +608,30 @@ fn selected_interface_datagrams_preserve_source_and_connected_peer() {
     assert_eq!(&input[..reply.count], b"reply");
     assert_eq!(reply.source, server_address);
 
+    let messaged = host
+        .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)
+        .unwrap();
+    let sent = host
+        .send_message(
+            messaged.token,
+            HostSend {
+                payload: b"msg".to_vec(),
+                route: Some(EgressRoute {
+                    address: server_address.clone(),
+                    interface: Some(interface.clone()),
+                }),
+                controls: Vec::new(),
+                nonblocking: true,
+                record: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(sent.count, 3);
+    assert!(!sent.rights_consumed);
+    let message = receive(server.token, &mut input);
+    assert_eq!(&input[..message.count], b"msg");
+    assert_eq!(message.source, host.local_address(messaged.token).unwrap());
+
     let connected = host
         .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Udp)
         .unwrap();
@@ -629,6 +653,7 @@ fn selected_interface_datagrams_preserve_source_and_connected_peer() {
     assert_eq!(&input[..second.count], b"two");
 
     host.close(connected.token);
+    host.close(messaged.token);
     host.close(client.token);
     host.close(server.token);
 }

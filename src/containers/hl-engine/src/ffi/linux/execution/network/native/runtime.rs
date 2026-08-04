@@ -466,7 +466,7 @@ impl RuntimeNetworkHost for Native {
                 },
             )?;
         }
-        let (_, path) = Self::switch_path(&interface, address, port)?;
+        let path = Self::switch_destination_path(&interface, address, port)?;
         let (storage, length) = Self::socket_address(&SocketAddress::Unix(path))?;
         let descriptor = self.descriptor(token)?;
         // SAFETY: input and bounded sockaddr_un remain live while the table retains descriptor.

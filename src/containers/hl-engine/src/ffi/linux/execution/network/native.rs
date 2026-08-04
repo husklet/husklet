@@ -20,6 +20,7 @@ const SOCKET_LIMIT: usize = 4096;
 
 pub(super) struct Entry {
     pub(super) descriptor: i32,
+    pub(super) kind: Option<i32>,
     pub(super) pending: Option<SocketAddress>,
     pub(super) wants_read: bool,
     pub(super) connecting: bool,
@@ -116,6 +117,7 @@ impl Native {
     }
 
     pub(super) fn insert(&self, descriptor: i32) -> Result<u64, RuntimeNetworkError> {
+        let kind = Self::descriptor_type(descriptor).ok();
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         if sockets.len() >= SOCKET_LIMIT {
             // SAFETY: descriptor is newly owned here and no other owner can close it.
@@ -144,6 +146,7 @@ impl Native {
             token,
             Entry {
                 descriptor,
+                kind,
                 pending: None,
                 wants_read: true,
                 connecting: false,
@@ -322,6 +325,22 @@ impl Native {
         address: [u8; 4],
         port: u16,
     ) -> Result<(Vec<u8>, Vec<u8>), RuntimeNetworkError> {
+        let bridge = Self::switch_bridge(interface)?;
+        let directory = format!("/tmp/.hl-bridge-{bridge}").into_bytes();
+        let path = Self::switch_destination_path_for_bridge(bridge, address, port)?;
+        Ok((directory, path))
+    }
+
+    fn switch_destination_path(
+        interface: &hl_network::EgressInterface,
+        address: [u8; 4],
+        port: u16,
+    ) -> Result<Vec<u8>, RuntimeNetworkError> {
+        let bridge = Self::switch_bridge(interface)?;
+        Self::switch_destination_path_for_bridge(bridge, address, port)
+    }
+
+    fn switch_bridge(interface: &hl_network::EgressInterface) -> Result<&str, RuntimeNetworkError> {
         if interface.bridge.is_empty()
             || interface.bridge.len() > 40
             || interface
@@ -331,8 +350,14 @@ impl Native {
         {
             return Err(RuntimeNetworkError::Invalid);
         }
-        let bridge = std::str::from_utf8(&interface.bridge).map_err(|_| RuntimeNetworkError::Invalid)?;
-        let directory = format!("/tmp/.hl-bridge-{bridge}").into_bytes();
+        std::str::from_utf8(&interface.bridge).map_err(|_| RuntimeNetworkError::Invalid)
+    }
+
+    fn switch_destination_path_for_bridge(
+        bridge: &str,
+        address: [u8; 4],
+        port: u16,
+    ) -> Result<Vec<u8>, RuntimeNetworkError> {
         let path = format!(
             "/tmp/.hl-bridge-{bridge}/{}.{}.{}.{}:{port}",
             address[0], address[1], address[2], address[3]
@@ -343,7 +368,7 @@ impl Native {
         {
             return Err(RuntimeNetworkError::Invalid);
         }
-        Ok((directory, path))
+        Ok(path)
     }
 
     fn mkdir_switch(directory: &[u8]) -> Result<(), RuntimeNetworkError> {
@@ -359,7 +384,22 @@ impl Native {
     }
 
     fn socket_type(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
-        let descriptor = self.descriptor(token)?;
+        let descriptor = {
+            let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let entry = sockets.get(&token).ok_or(RuntimeNetworkError::Invalid)?;
+            if let Some(kind) = entry.kind {
+                return Ok(kind);
+            }
+            entry.descriptor
+        };
+        let kind = Self::descriptor_type(descriptor)?;
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+        entry.kind = Some(kind);
+        Ok(kind)
+    }
+
+    fn descriptor_type(descriptor: i32) -> Result<i32, RuntimeNetworkError> {
         let mut kind = 0_i32;
         let mut kind_length = size_of::<i32>() as libc::socklen_t;
         // SAFETY: kind is writable and the table retains the live descriptor.
@@ -385,24 +425,14 @@ impl Native {
         if entry.switched {
             return Ok(entry.descriptor);
         }
-        let mut kind = 0_i32;
-        let mut kind_length = size_of::<i32>() as libc::socklen_t;
-        // SAFETY: kind is writable and entry retains the live descriptor throughout the call.
-        if unsafe {
-            libc::getsockopt(
-                entry.descriptor,
-                libc::SOL_SOCKET,
-                libc::SO_TYPE,
-                (&mut kind as *mut i32).cast(),
-                &mut kind_length,
-            )
-        } != 0
-        {
-            return Err(Self::runtime_error());
-        }
+        let kind = match entry.kind {
+            Some(kind) => kind,
+            None => Self::descriptor_type(entry.descriptor)?,
+        };
         if kind != expected {
             return Err(RuntimeNetworkError::OperationNotSupported);
         }
+        entry.kind = Some(kind);
         // SAFETY: socket returns a newly owned descriptor or a negative errno result.
         let replacement = unsafe { libc::socket(libc::AF_UNIX, expected, 0) };
         if replacement < 0 {
@@ -602,6 +632,39 @@ impl Native {
             observer.readiness_changed();
         }
         self.wake();
+    }
+}
+
+#[cfg(test)]
+mod kind_cache_test {
+    use super::Native;
+
+    #[test]
+    fn socket_kind_is_sampled_once_when_descriptor_enters_the_table() {
+        let host = Native::new();
+        // SAFETY: socket returns a newly owned descriptor which insert consumes.
+        let descriptor = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0) };
+        assert!(descriptor >= 0);
+        let token = host.insert(descriptor).unwrap();
+        let sockets = host.shared.sockets.lock().unwrap();
+        assert_eq!(sockets.get(&token).unwrap().kind, Some(libc::SOCK_DGRAM));
+        drop(sockets);
+        for _ in 0..1_024 {
+            assert_eq!(host.socket_type(token), Ok(libc::SOCK_DGRAM));
+        }
+        hl_network::SocketHostIo::close(&host, token);
+    }
+
+    #[test]
+    fn destination_only_path_matches_binding_path() {
+        let interface = hl_network::EgressInterface {
+            bridge: b"allocation-check".to_vec(),
+            index: 2,
+            ipv4: [10, 0, 0, 2],
+        };
+        let (_, binding_path) = Native::switch_path(&interface, [10, 0, 0, 9], 8080).unwrap();
+        let destination_path = Native::switch_destination_path(&interface, [10, 0, 0, 9], 8080).unwrap();
+        assert_eq!(destination_path, binding_path);
     }
 }
 
