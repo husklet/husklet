@@ -1,0 +1,423 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+oracle: { provider: qemu, commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 } }
+build:
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: []
+cases:
+  - id: runtime/procfs/sysctl
+    status: active
+    compat: { class: compatibility }
+    build: { source: sysctl.c, output: sysctl, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/sysctl }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/sysctl.out }
+  - id: runtime/procfs/meminfo
+    status: active
+    compat: { class: compatibility }
+    build: { source: meminfo.c, output: meminfo, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/meminfo }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/meminfo.out }
+  - id: runtime/procfs/stat
+    status: active
+    compat: { class: compatibility }
+    build: { source: pstat.c, output: pstat, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/pstat }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/pstat.out }
+  - id: runtime/procfs/selfstat
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfstat.c, output: selfstat, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfstat }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfstat.out }
+  - id: runtime/procfs/selfstatus
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfstatus.c, output: selfstatus, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfstatus }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfstatus.out }
+  - id: runtime/procfs/selfcaps
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfcaps.c, output: selfcaps, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfcaps }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfcaps.out }
+  - id: runtime/procfs/selfrss
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfrss.c, output: selfrss, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfrss }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfrss.out }
+  - id: runtime/procfs/procstate
+    status: active
+    compat: { class: compatibility }
+    build: { source: procstate.c, output: procstate, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/procstate }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/procstate.out }
+  - id: runtime/procfs/futexstate
+    status: active
+    compat: { class: compatibility }
+    build: { source: futexstate.c, output: futexstate, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/futexstate }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/futexstate.out }
+  - id: runtime/procfs/cpuinfo
+    status: active
+    compat: { class: compatibility }
+    build: { source: cpuinfo.c, output: cpuinfo, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/cpuinfo }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/cpuinfo.out }
+  - id: runtime/procfs/misc
+    status: active
+    compat: { class: compatibility }
+    build: { source: miscfiles.c, output: miscfiles, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/miscfiles }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/miscfiles.out }
+  - id: runtime/procfs/net
+    status: active
+    compat: { class: compatibility }
+    build: { source: netfiles.c, output: netfiles, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/netfiles }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/netfiles.out }
+  - id: runtime/procfs/net2
+    status: active
+    compat: { class: compatibility }
+    build: { source: netfiles2.c, output: netfiles2, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/netfiles2 }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/netfiles2.out }
+  - id: runtime/procfs/maps
+    status: active
+    compat: { class: compatibility }
+    build: { source: maps.c, output: maps, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/maps }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/maps.out }
+  - id: runtime/procfs/devnodes
+    status: active
+    compat: { class: compatibility }
+    build: { source: devnodes.c, output: devnodes, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/devnodes }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/devnodes.out }
+  - id: runtime/procfs/sysfs
+    status: active
+    compat: { class: compatibility }
+    build: { source: sysfs.c, output: sysfs, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/sysfs }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/sysfs.out }
+  - id: runtime/procfs/netnone-direct
+    status: active
+    compat: { class: compatibility }
+    build: { source: netnone.c, output: netnone, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/netnone }
+    environment: { HL_NET_ISOLATE: "1" }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/netnone.out }
+  - id: runtime/procfs/mountinfo-bind
+    status: active
+    compat: { class: compatibility }
+    build: { source: bindmount.c, output: bindmount, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/bindmount }
+    environment: { HL_VOLUMES: "/mnt:/tmp" }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/bindmount.out }
+  - id: runtime/procfs/peer-ns
+    status: active
+    compat: { class: compatibility }
+    build: { source: peerns.c, output: peerns, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/peerns }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/peerns.out }
+  - id: runtime/procfs/peer-fd
+    status: !broken
+      reason: "set/private/same green and fd-number reuse fixed (bound_relocate_lowest lowest-free fix). Residual is architectural: a bound-volume fd carries a /dev/null-ish native SHADOW at the guest number while the real object is a host_handle; the SELF view (/proc/self/fd) resolves via the engine's g_fdpath, but the PEER view (parent live-inspecting /proc/<child>/fd) reads the child's real shadow fd. Making them agree AND show the true path needs the bound shadow to back the real file, or the fd->path to live in the shared fdvis arena (cross-process). Carrying g_fdpath on bound dup fixes SELF but then diverges from PEER (regresses set). Deferred pending shared-path vfd identity."
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: peerfd.c, output: peerfd, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/peerfd }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/peerfd.out }
+  - id: runtime/procfs/fdvis-capacity
+    status: active
+    compat: { class: compatibility }
+    build: { source: fdvis_capacity.c, output: fdvis_capacity, flags: [-static, -O2, -std=gnu11] }
+    artifact: { destination: /opt/husklet/procfs/fdvis_capacity }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/fdvis_capacity.out }
+  - id: runtime/procfs/ttynonblock
+    status: active
+    compat: { class: compatibility }
+    build: { source: ttynonblock.c, output: ttynonblock, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/ttynonblock }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/ttynonblock.out }
+  - id: runtime/procfs/permbits
+    status: active
+    compat: { class: compatibility }
+    build: { source: permbits.c, output: permbits, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/permbits }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/permbits.out }
+  - id: runtime/procfs/selflink
+    status: active
+    compat: { class: compatibility }
+    build: { source: selflink.c, output: selflink, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selflink }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selflink.out }
+  - id: runtime/procfs/selfcmdline
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfcmdline.c, output: selfcmdline, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfcmdline }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfcmdline.out }
+  - id: runtime/procfs/selfexe
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfexe.c, output: selfexe, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfexe }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfexe.out }
+  - id: runtime/procfs/selfcwd
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfcwd.c, output: selfcwd, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfcwd }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfcwd.out }
+  - id: runtime/procfs/selfauxv
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfauxv.c, output: selfauxv, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfauxv }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfauxv.out }
+  - id: runtime/procfs/selflimits
+    status: active
+    compat: { class: compatibility }
+    build: { source: selflimits.c, output: selflimits, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selflimits }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selflimits.out }
+  - id: runtime/procfs/selfstatm
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfstatm.c, output: selfstatm, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfstatm }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfstatm.out }
+  - id: runtime/procfs/selftask
+    status: active
+    compat: { class: compatibility }
+    build: { source: selftask.c, output: selftask, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selftask }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selftask.out }
+  - id: runtime/procfs/selfenviron
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfenviron.c, output: selfenviron, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfenviron }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfenviron.out }
+  - id: runtime/procfs/selfoom
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfoom.c, output: selfoom, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfoom }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfoom.out }
+  - id: runtime/procfs/selfcgroup
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfcgroup.c, output: selfcgroup, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfcgroup }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfcgroup.out }
+  - id: runtime/procfs/unamehost
+    status: active
+    compat: { class: compatibility }
+    build: { source: unamehost.c, output: unamehost, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/unamehost }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/unamehost.out }
+  - id: runtime/procfs/selfsmaps
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfsmaps.c, output: selfsmaps, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfsmaps }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfsmaps.out }
+  - id: runtime/procfs/selfmounts
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfmounts.c, output: selfmounts, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfmounts }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfmounts.out }
+  - id: runtime/procfs/cpucount
+    status: active
+    compat: { class: compatibility }
+    build: { source: cpucount.c, output: cpucount, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/cpucount }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/cpucount.out }
+  - id: runtime/procfs/cpusysfs
+    status: active
+    compat: { class: compatibility }
+    build: { source: cpusysfs.c, output: cpusysfs, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/cpusysfs }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/cpusysfs.out }
+  - id: runtime/procfs/threadself
+    status: !broken
+      reason: "/proc/thread-self magic symlink resolving to /proc/<pid>/task/<tid> is missing in the engine"
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: threadself.c, output: threadself, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/threadself }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/threadself.out }
+  - id: runtime/procfs/selfcomm
+    status: !broken
+      reason: "/proc/self/comm ignores PR_SET_NAME and reports a stale name in the engine"
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: selfcomm.c, output: selfcomm, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfcomm }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfcomm.out }
+  - id: runtime/procfs/forkself
+    status: !unsupported
+      reason: "excluded-macos: child /proc/<pid>/stat comm surfacing is not emulated on the macOS engine. Linux engine still runs+passes this."
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: forkself.c, output: forkself, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/forkself }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/forkself.out }
+  - id: runtime/procfs/selfvm
+    status: !unsupported
+      reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: selfvm.c, output: selfvm, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfvm }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfvm.out }
+  - id: runtime/procfs/selffd
+    status: active
+    compat: { class: compatibility }
+    build: { source: selffd.c, output: selffd, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selffd }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selffd.out }
+  - id: runtime/procfs/selffd-link
+    status: active
+    compat: { class: compatibility }
+    build: { source: selffdlink.c, output: selffdlink, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selffdlink }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selffdlink.out }
+  - id: runtime/procfs/auxv-execfn
+    status: active
+    compat: { class: compatibility }
+    build: { source: auxv_execfn.c, output: auxv_execfn, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/auxv_execfn }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/auxv_execfn.out }
+  - id: runtime/procfs/umask
+    status: active
+    compat: { class: compatibility }
+    build: { source: selfumask.c, output: selfumask, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selfumask }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selfumask.out }
+  - id: runtime/procfs/nslinks
+    status: !unsupported
+      reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: nslinks.c, output: nslinks, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/nslinks }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/nslinks.out }
+  - id: runtime/procfs/peer-identity
+    status: !unsupported
+      reason: "excluded-macos: synthetic /proc backend gaps on the macOS engine; Linux engine still runs+enforces this."
+      evidence: "tests/runtime/procfs/ORACLE.md"
+    compat: { class: compatibility }
+    build: { source: peerid.c, output: peerid, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/peerid }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/peerid.out }
+  - id: runtime/procfs/cgroup-ro
+    status: active
+    compat: { class: compatibility }
+    build: { source: cgroupro.c, output: cgroupro, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/cgroupro }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/cgroupro.out }
+  - id: runtime/procfs/net-iso
+    status: active
+    compat: { class: compatibility }
+    build: { source: procnet_iso.c, output: procnet_iso, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/procnet_iso }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/procnet_iso.out }
+  - id: runtime/procfs/rng
+    status: active
+    compat: { class: compatibility }
+    build: { source: rng_procfs.c, output: rng_procfs, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/rng_procfs }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/rng_procfs.out }
+  - id: runtime/procfs/self-fd-links
+    status: active
+    compat: { class: compatibility }
+    build: { source: selffd_links.c, output: selffd_links, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/selffd_links }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/selffd_links.out }
+  - id: runtime/procfs/comm-status
+    status: active
+    compat: { class: compatibility }
+    build: { source: comm_status.c, output: comm_status, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/comm_status }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/comm_status.out }
+  - id: runtime/procfs/limits-view
+    status: active
+    compat: { class: compatibility }
+    build: { source: limits_view.c, output: limits_view, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/limits_view }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/limits_view.out }
+  - id: runtime/procfs/mapnames
+    status: active
+    compat: { class: compatibility }
+    build: { source: mapnames.c, output: mapnames, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/mapnames }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/mapnames.out }
+  - id: runtime/procfs/cpumodel
+    status: active
+    compat: { class: compatibility }
+    build: { source: cpumodel.c, output: cpumodel, flags: [-static, -O2, -std=gnu11, -I.] }
+    artifact: { destination: /opt/husklet/procfs/cpumodel }
+    run: []
+    expect: { exit: 0, stdout: golden/shared/cpumodel.out }
