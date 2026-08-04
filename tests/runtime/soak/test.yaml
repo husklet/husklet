@@ -1,0 +1,115 @@
+targets: [arm64, amd64]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+artifact: { destination: /opt/husklet/soak }
+oracle:
+  provider: qemu
+  commands: { arm64: qemu-aarch64, amd64: qemu-x86_64 }
+build:
+  source: atomic_churn.c
+  output: atomic_churn
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -std=gnu11, -pthread, -lm]
+cases:
+  - id: runtime/atomicchurn
+    status: active
+    compat: { class: soak }
+    soak: &bounded { duration_seconds: 240, repetitions: 1, resources: { cpu: 1, memory_mib: 1024, processes: 64 } }
+    expect: { exit: 0, stdout: golden/atomic_churn.out }
+  - id: runtime/bitchurn
+    status: active
+    compat: { class: soak }
+    build: { source: bit_churn.c, output: bit_churn }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/bit_churn.out }
+  - id: runtime/callgraph
+    status: active
+    compat: { class: soak }
+    build: { source: call_graph.c, output: call_graph }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/call_graph.out }
+  - id: runtime/divchurn
+    status: active
+    compat: { class: soak }
+    build: { source: div_churn.c, output: div_churn }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/div_churn.out }
+  - id: runtime/forkpipe
+    status: active
+    compat: { class: soak }
+    build: { source: fork_pipe.c, output: fork_pipe }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/fork_pipe.out }
+  - id: runtime/fpaccum
+    status: active
+    compat: { class: soak }
+    build: { source: fp_accum.c, output: fp_accum }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/fp_accum.out }
+  - id: runtime/longjmp
+    status: active
+    compat: { class: soak }
+    build: { source: long_jump.c, output: long_jump }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/long_jump.out }
+  - id: runtime/manyblocks
+    status: active
+    compat: { class: soak }
+    build: { source: many_blocks.c, output: many_blocks }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/many_blocks.out }
+  - id: runtime/mmapchurn
+    status: active
+    compat: { class: soak }
+    build: { source: mmap_churn.c, output: mmap_churn }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/mmap_churn.out }
+  - id: runtime/pagefault
+    status: active
+    compat: { class: soak }
+    build: { source: page_fault.c, output: page_fault }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/page_fault.out }
+  - id: runtime/reallocchurn
+    status: active
+    compat: { class: soak }
+    build: { source: realloc_churn.c, output: realloc_churn }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/realloc_churn.out }
+  - id: runtime/recursion
+    status: active
+    compat: { class: soak }
+    build: { source: recursion.c, output: recursion }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/recursion.out }
+  - id: runtime/signalload
+    status: active
+    compat: { class: soak }
+    build: { source: signal_load.c, output: signal_load }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/signal_load.out }
+  - id: runtime/smc2
+    status: active
+    targets: [arm64]
+    compat: { class: soak }
+    build: { source: smc2.c, output: smc2 }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/smc2.out }
+  - id: runtime/threadpool
+    status: active
+    compat: { class: soak }
+    build: { source: thread_pool.c, output: thread_pool }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/thread_pool.out }
+  - id: runtime/vtable
+    status: active
+    compat: { class: soak }
+    build: { source: vtable.c, output: vtable }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/vtable.out }
+  - id: runtime/workingset
+    status: active
+    compat: { class: soak }
+    build: { source: working_set.c, output: working_set }
+    soak: *bounded
+    expect: { exit: 0, stdout: golden/working_set.out }
