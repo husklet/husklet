@@ -16,6 +16,16 @@ pub(super) struct X86Diagnostics {
     pub(super) syscall_vector_dirty: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct CausalDiagnostics {
+    pub(super) relocation_cold_targets: u64,
+    pub(super) relocation_cycles: u64,
+    pub(super) relocation_capacity: u64,
+    pub(super) relocation_invalidations: u64,
+    pub(super) ibtc_site_misses: u64,
+    pub(super) ibtc_shared_misses: u64,
+}
+
 impl X86Diagnostics {
     pub(super) fn dirty_share_ppm(self) -> Option<u64> {
         (self.public_syscalls != 0)
@@ -108,11 +118,13 @@ impl Process {
             .map(str::to_owned)
             .collect();
         let x86_diagnostics = Self::x86_diagnostics(&diagnostics_text)?;
+        let causal_diagnostics = Self::causal_diagnostics(&diagnostics_text)?;
         Ok(Sample {
             phases,
             wall,
             diagnostics,
             x86_diagnostics,
+            causal_diagnostics,
         })
     }
 
@@ -171,6 +183,75 @@ impl Process {
                 .syscall_vector_dirty
                 .checked_add(syscall_vector_dirty)
                 .ok_or_else(|| "native x86 vector-dirty diagnostics overflow".to_owned())?;
+        }
+        Ok(total)
+    }
+
+    fn causal_diagnostics(diagnostics: &str) -> Result<Option<CausalDiagnostics>, String> {
+        const NAMES: [&str; 6] = [
+            "relocation_cold_targets",
+            "relocation_cycles",
+            "relocation_capacity",
+            "relocation_invalidations",
+            "ibtc_site_misses",
+            "ibtc_shared_misses",
+        ];
+        let mut total = None::<CausalDiagnostics>;
+        for line in diagnostics
+            .lines()
+            .filter_map(|line| line.strip_prefix("hl-native-detail: "))
+        {
+            let mut values = [None; 6];
+            for (name, value) in line.split_whitespace().filter_map(|field| field.split_once('=')) {
+                let Some(index) = NAMES.iter().position(|candidate| *candidate == name) else {
+                    continue;
+                };
+                values[index] = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid native causal diagnostic {name}"))?,
+                );
+            }
+            let observed = values.iter().filter(|value| value.is_some()).count();
+            if observed == 0 {
+                continue;
+            }
+            if observed != values.len() {
+                return Ok(None);
+            }
+            let current = CausalDiagnostics {
+                relocation_cold_targets: values[0].unwrap_or_default(),
+                relocation_cycles: values[1].unwrap_or_default(),
+                relocation_capacity: values[2].unwrap_or_default(),
+                relocation_invalidations: values[3].unwrap_or_default(),
+                ibtc_site_misses: values[4].unwrap_or_default(),
+                ibtc_shared_misses: values[5].unwrap_or_default(),
+            };
+            let accumulated = total.get_or_insert_with(CausalDiagnostics::default);
+            accumulated.relocation_cold_targets = accumulated
+                .relocation_cold_targets
+                .checked_add(current.relocation_cold_targets)
+                .ok_or_else(|| "native relocation cold-target diagnostics overflow".to_owned())?;
+            accumulated.relocation_cycles = accumulated
+                .relocation_cycles
+                .checked_add(current.relocation_cycles)
+                .ok_or_else(|| "native relocation cycle diagnostics overflow".to_owned())?;
+            accumulated.relocation_capacity = accumulated
+                .relocation_capacity
+                .checked_add(current.relocation_capacity)
+                .ok_or_else(|| "native relocation capacity diagnostics overflow".to_owned())?;
+            accumulated.relocation_invalidations = accumulated
+                .relocation_invalidations
+                .checked_add(current.relocation_invalidations)
+                .ok_or_else(|| "native relocation invalidation diagnostics overflow".to_owned())?;
+            accumulated.ibtc_site_misses = accumulated
+                .ibtc_site_misses
+                .checked_add(current.ibtc_site_misses)
+                .ok_or_else(|| "native IBTC site-miss diagnostics overflow".to_owned())?;
+            accumulated.ibtc_shared_misses = accumulated
+                .ibtc_shared_misses
+                .checked_add(current.ibtc_shared_misses)
+                .ok_or_else(|| "native IBTC shared-miss diagnostics overflow".to_owned())?;
         }
         Ok(total)
     }
@@ -260,7 +341,7 @@ impl Process {
 
 #[cfg(test)]
 mod test {
-    use super::{Process, X86Diagnostics};
+    use super::{CausalDiagnostics, Process, X86Diagnostics};
 
     #[test]
     fn native_diagnostics() {
@@ -345,5 +426,31 @@ mod test {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn causal_diagnostics_are_named_and_optional() {
+        assert_eq!(Process::causal_diagnostics("hl-native-detail: branch=1").unwrap(), None);
+        let line = "hl-native-detail: ibtc_shared_misses=6 relocation_cycles=2 relocation_cold_targets=1 relocation_capacity=3 ibtc_site_misses=5 relocation_invalidations=4";
+        assert_eq!(
+            Process::causal_diagnostics(line).unwrap(),
+            Some(CausalDiagnostics {
+                relocation_cold_targets: 1,
+                relocation_cycles: 2,
+                relocation_capacity: 3,
+                relocation_invalidations: 4,
+                ibtc_site_misses: 5,
+                ibtc_shared_misses: 6,
+            })
+        );
+        assert_eq!(
+            Process::causal_diagnostics("hl-native-detail: relocation_cold_targets=1 relocation_cycles=2")
+                .unwrap(),
+            None
+        );
+        assert!(Process::causal_diagnostics(
+            "hl-native-detail: relocation_cold_targets=no relocation_cycles=0 relocation_capacity=0 relocation_invalidations=0 ibtc_site_misses=0 ibtc_shared_misses=0"
+        )
+        .is_err());
     }
 }

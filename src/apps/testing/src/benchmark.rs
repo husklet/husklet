@@ -96,6 +96,7 @@ struct Sample {
     wall: u64,
     diagnostics: Vec<String>,
     x86_diagnostics: Option<adapter::X86Diagnostics>,
+    causal_diagnostics: Option<adapter::CausalDiagnostics>,
 }
 
 #[derive(Default)]
@@ -284,6 +285,18 @@ impl Run {
                     eprint!(" x86_syscall_vector_dirty_ppm={share}");
                 }
                 eprintln!();
+            }
+            if let Some(diagnostics) = sample.causal_diagnostics {
+                eprintln!(
+                    "diagnostic repeat={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={}",
+                    repetition + 1,
+                    diagnostics.relocation_cold_targets,
+                    diagnostics.relocation_cycles,
+                    diagnostics.relocation_capacity,
+                    diagnostics.relocation_invalidations,
+                    diagnostics.ibtc_site_misses,
+                    diagnostics.ibtc_shared_misses,
+                );
             }
             for line in sample.diagnostics {
                 eprintln!("diagnostic repeat={} {line}", repetition + 1);
