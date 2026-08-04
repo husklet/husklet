@@ -39,6 +39,13 @@ impl<S: Storage + 'static> Assembly<S> {
             volumes.operation(),
             self.runtime_root.clone(),
         );
+        let bridge = crate::Subnet::new(std::net::Ipv4Addr::new(172, 17, 0, 0), 16)?;
+        networks
+            .ensure_predefined(crate::NetworkSpec::bridge("bridge", bridge))
+            .await?;
+        networks
+            .ensure_predefined(crate::NetworkSpec::none("none"))
+            .await?;
         networks.reconcile().await?;
         let service = Arc::new(Service::new(Dependencies {
             storage: self.storage,

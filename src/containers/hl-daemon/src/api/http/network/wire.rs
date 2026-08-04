@@ -202,7 +202,7 @@ impl From<hl_container::Network> for Network {
             .to_rfc3339(),
             scope: "local".into(),
             driver: match value.driver {
-                NetworkDriver::None => "none",
+                NetworkDriver::None => "null",
                 NetworkDriver::Bridge => "bridge",
             }
             .into(),

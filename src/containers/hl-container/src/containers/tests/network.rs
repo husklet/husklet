@@ -12,7 +12,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
     containers
         .networks()
         .create(NetworkSpec::bridge(
-            "bridge",
+            "bridge-test",
             Subnet::new("10.90.0.0".parse().unwrap(), 24).unwrap(),
         ))
         .await
@@ -39,7 +39,7 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
         .unwrap();
     containers
         .networks()
-        .connect("bridge", "bridge-owner", EndpointSpec::default())
+        .connect("bridge-test", "bridge-owner", EndpointSpec::default())
         .await
         .unwrap();
     containers
@@ -103,6 +103,51 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
     let bridge = &launches[1][0];
     assert_ne!(bridge.namespace, bridge.bridge.as_ref().unwrap().as_str());
     assert_eq!(bridge.address, Some("10.90.0.2".parse().unwrap()));
+}
+
+#[tokio::test]
+async fn legacy_predefined_bridge_survives_reopen() {
+    let storage = Arc::new(Memory::default());
+    let legacy = Network::from_spec(
+        NetworkSpec::bridge(
+            "bridge",
+            Subnet::new("172.18.0.0".parse().unwrap(), 16).unwrap(),
+        ),
+        7,
+    );
+    crate::storage::NetworkStore::insert(storage.as_ref(), &legacy)
+        .await
+        .unwrap();
+
+    let containers = test_containers(storage, Arc::new(FakeRuntime::new(ExitStatus::Code(0))))
+        .await
+        .unwrap();
+    let reopened = containers.networks().inspect("bridge").await.unwrap();
+    assert_eq!(reopened.id, legacy.id);
+    assert_eq!(reopened.subnet, legacy.subnet);
+    assert_eq!(reopened.created_at_ms, 7);
+}
+
+#[tokio::test]
+async fn predefined_names_require_matching_drivers() {
+    let containers = service(Arc::new(FakeRuntime::new(ExitStatus::Code(0)))).await;
+    assert!(matches!(
+        containers
+            .networks()
+            .ensure_predefined(NetworkSpec::none("bridge"))
+            .await,
+        Err(Error::InvalidNetwork(_))
+    ));
+    assert!(matches!(
+        containers
+            .networks()
+            .ensure_predefined(NetworkSpec::bridge(
+                "none",
+                Subnet::new("172.31.0.0".parse().unwrap(), 16).unwrap(),
+            ))
+            .await,
+        Err(Error::InvalidNetwork(_))
+    ));
 }
 
 #[tokio::test]

@@ -34,6 +34,28 @@ impl Networks {
         }
     }
 
+    pub(crate) async fn ensure_predefined(&self, spec: NetworkSpec) -> Result<Network> {
+        spec.validate()?;
+        if !matches!(
+            (spec.name.as_str(), spec.driver),
+            ("bridge", NetworkDriver::Bridge) | ("none", NetworkDriver::None)
+        ) {
+            return Err(Error::InvalidNetwork(
+                "predefined network name and driver disagree".into(),
+            ));
+        }
+        if let Some(existing) = self.storage.get(&spec.name).await? {
+            if existing.driver != spec.driver
+                || existing.driver == NetworkDriver::Bridge && existing.subnet.is_none()
+            {
+                return Err(Error::NetworkConflict(spec.name));
+            }
+            existing.validate()?;
+            return Ok(existing);
+        }
+        self.create(spec).await
+    }
+
     /// Creates and durably records a virtual network.
     ///
     /// # Errors

@@ -359,18 +359,14 @@ async fn predefined_networks_survive_headless_remove_and_prune() {
         .await
         .unwrap();
     let networks = containers.networks();
-    networks.create(NetworkSpec::none("none")).await.unwrap();
-    networks
-        .create(NetworkSpec::bridge(
-            "bridge",
-            Subnet::new(Ipv4Addr::new(172, 17, 0, 0), 16).unwrap(),
-        ))
-        .await
-        .unwrap();
     networks.create(NetworkSpec::none("unused")).await.unwrap();
 
     assert!(matches!(
         networks.remove("none").await,
+        Err(Error::InvalidNetwork(message)) if message.contains("predefined")
+    ));
+    assert!(matches!(
+        networks.force_remove("bridge").await,
         Err(Error::InvalidNetwork(message)) if message.contains("predefined")
     ));
     assert_eq!(
