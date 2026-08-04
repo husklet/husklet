@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
-const HISTORY: usize = 4096;
+const HISTORY: usize = 256;
 const LIVE: usize = 256;
 
 #[derive(Clone)]
@@ -122,7 +122,11 @@ impl Events {
 
     pub(crate) fn subscribe(&self, query: EventQuery) -> Subscription {
         let history = self.inner.history.lock().unwrap();
-        let replay = history.iter().filter(|event| query.matches(event)).cloned().collect();
+        let replay = if query.since.is_some() || query.until.is_some() {
+            history.iter().filter(|event| query.matches(event)).cloned().collect()
+        } else {
+            VecDeque::new()
+        };
         let receiver = self.inner.sender.subscribe();
         drop(history);
         Subscription {
@@ -276,7 +280,9 @@ mod tests {
         let events = Events::new();
         events.publish(event("one", "create", 10));
         events.publish(event("two", "create", 11));
-        let query = EventQuery::default().filters(EventFilter::default().container("one").label("tier=api"));
+        let query = EventQuery::default()
+            .since(10)
+            .filters(EventFilter::default().container("one").label("tier=api"));
         let mut subscription = events.subscribe(query);
         assert_eq!(subscription.next().await.unwrap().actor.id, "one");
 
@@ -302,7 +308,7 @@ mod tests {
         for index in 0..=HISTORY {
             events.publish(event(&index.to_string(), "create", i64::try_from(index).unwrap()));
         }
-        let subscription = events.subscribe(EventQuery::default());
+        let subscription = events.subscribe(EventQuery::default().since(0));
         assert_eq!(subscription.replay.len(), HISTORY);
         assert_eq!(subscription.replay.front().unwrap().actor.id, "1");
     }
@@ -405,20 +411,22 @@ mod tests {
     }
 
     #[test]
-    fn publishing_without_subscribers_is_retained_for_replay() {
+    fn subscription_without_time_bounds_starts_with_live_events() {
         let events = Events::new();
         events.publish(event("before-subscribe", "create", 1));
 
-        let subscription = events.subscribe(EventQuery::default());
-        assert_eq!(subscription.replay.len(), 1);
-        assert_eq!(subscription.replay.front().unwrap().actor.id, "before-subscribe");
+        let mut subscription = events.subscribe(EventQuery::default());
+        assert!(subscription.replay.is_empty());
+
+        events.publish(event("after-subscribe", "start", 2));
+        assert_eq!(subscription.receiver.try_recv().unwrap().actor.id, "after-subscribe");
     }
 
     #[test]
     fn replay_to_live_handoff_is_ordered_without_duplicates() {
         let events = Events::new();
         events.publish(event("one", "create", 1));
-        let mut subscription = events.subscribe(EventQuery::default());
+        let mut subscription = events.subscribe(EventQuery::default().since(0));
         events.publish(event("two", "start", 2));
 
         assert_eq!(subscription.replay.pop_front().unwrap().actor.id, "one");
