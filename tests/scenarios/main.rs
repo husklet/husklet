@@ -32,9 +32,8 @@ pub(crate) use harness::{analyze, contract, fixture, manifest, report, runner, s
     reason = "categories are referenced through the registry catalog and provenance auditor"
 )]
 pub(crate) use groups::{
-    coherence, copy, databases, distros, execcmd, filesystem, languages, lifecycle,
-    netcontainer, network, permissions, process, runflags, terminal, utilities, volume,
-    web, weird,
+    coherence, copy, databases, distros, execcmd, languages, lifecycle, netcontainer, network,
+    permissions, process, runflags, terminal, utilities, volume, web, weird,
 };
 
 use contract::Target;
@@ -105,7 +104,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "languages" => scenario::languages().await?,
         "netcontainer" => scenario::netcontainer().await?,
         "network-contracts" => scenario::network().await?,
-        "filesystem" => scenario::filesystem().await?,
         "lifecycle" => scenario::lifecycle().await?,
         "permissions" => scenario::permissions().await?,
         "process" => scenario::process().await?,

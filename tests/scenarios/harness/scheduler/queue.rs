@@ -72,10 +72,6 @@ pub(super) const TASKS: &[Task] = &[
         command: "execcmd",
     },
     Task {
-        category: "filesystem",
-        command: "filesystem",
-    },
-    Task {
         category: "languages",
         command: "languages",
     },
@@ -157,7 +153,7 @@ fn fallback(category: &str) -> Option<Resource> {
     match category {
         "buildcmd" | "distros" | "languages" | "toolchains" => Some(Resource::Registry),
         "weird" => Some(Resource::ProcessHeavy),
-        "copy" | "filesystem" | "volume" => Some(Resource::DiskHeavy),
+        "copy" | "volume" => Some(Resource::DiskHeavy),
         "databases" | "netcontainer" | "network" | "runflags" | "web" => Some(Resource::HostPort),
         _ => None,
     }

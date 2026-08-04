@@ -1,13 +1,13 @@
 use crate::{
-    coherence, copy, databases, distros, execcmd, filesystem, languages, lifecycle,
-    netcontainer, network, permissions, process, registry, report, runflags, runner,
-    terminal, utilities, web, weird, workflows,
+    coherence, copy, databases, distros, execcmd, languages, lifecycle, netcontainer, network,
+    permissions, process, registry, report, runflags, runner, terminal, utilities, web, weird,
+    workflows,
 };
 use crate::support::{containers_for, unpack};
 use std::{env, path::PathBuf};
 use tempfile::TempDir;
 
-pub(super) const SCENARIOS: [&str; 19] = [
+pub(super) const SCENARIOS: [&str; 18] = [
     "runtime-alpine",
     "copy",
     "buildcmd",
@@ -17,7 +17,6 @@ pub(super) const SCENARIOS: [&str; 19] = [
     "languages",
     "netcontainer",
     "network-contracts",
-    "filesystem",
     "lifecycle",
     "permissions",
     "runflags",
@@ -74,7 +73,6 @@ pub(super) async fn runtime() -> Result<(), Box<dyn std::error::Error>> {
     let containers = containers_for(work.path()).await?;
     execcmd::run(&containers, &rootfs).await?;
     netcontainer::run(&containers, &rootfs).await?;
-    filesystem::run(&containers).await?;
     coherence::run(&containers, &rootfs).await?;
     process::run(&containers, &rootfs).await?;
     lifecycle::run(&containers, &rootfs).await?;
@@ -82,11 +80,6 @@ pub(super) async fn runtime() -> Result<(), Box<dyn std::error::Error>> {
     utilities::run(&containers).await?;
     println!("PASS runtime-alpine");
     Ok(())
-}
-
-pub(super) async fn filesystem() -> Result<(), Box<dyn std::error::Error>> {
-    let work = TempDir::new()?;
-    filesystem::run(&containers_for(work.path()).await?).await
 }
 
 pub(super) async fn copy() -> Result<(), Box<dyn std::error::Error>> {

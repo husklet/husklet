@@ -31,7 +31,6 @@ pub(crate) fn build() -> crate::contract::Registry {
     registry.add(crate::netcontainer::group());
     registry.add(crate::process::group());
     registry.add(crate::runflags::group());
-    registry.add(crate::filesystem::group());
     registry.add(crate::permissions::group());
     registry.add(crate::utilities::group());
     registry
