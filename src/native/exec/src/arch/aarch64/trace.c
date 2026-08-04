@@ -18,6 +18,7 @@
 #include "multiply.h"
 #include "memory.h"
 #include "ordered.h"
+#include "pair_arithmetic.h"
 #include "pcrel.h"
 #include "reverse.h"
 #include "pair.h"
@@ -117,6 +118,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_floating_body(assembler, word) ||
            hl_a64_pcrel_body(assembler, word, pc) || hl_a64_field_body(assembler, word) ||
            hl_a64_multiply_body(assembler, word) || hl_a64_divide_body(assembler, word) ||
+           hl_a64_pair_arithmetic_body(assembler, word) ||
            hl_a64_shift_body(assembler, word) || hl_a64_reverse_body(assembler, word) ||
            hl_a64_simd_compare_body(assembler, word) || hl_a64_compare_body(assembler, word) ||
            hl_a64_simd_fp_reduce_body(assembler, word) ||
