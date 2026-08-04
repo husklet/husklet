@@ -19,3 +19,4 @@ pub(crate) mod persistence_restart;
 pub(crate) mod port_publishing;
 pub(crate) mod removal_race;
 pub(crate) mod resources;
+pub(crate) mod volume;
