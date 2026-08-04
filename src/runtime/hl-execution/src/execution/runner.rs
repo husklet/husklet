@@ -315,11 +315,7 @@ impl ExecutionMachine {
                         };
                         match X86ScalarDecoder::decode(&bytes[..length], instruction) {
                             Ok(decoded) => decoded,
-                            Err(error) => {
-                                eprintln!(
-                                    "x86-decode-frontier pc={instruction:#x} error={error:?} bytes={:02x?}",
-                                    &bytes[..length.min(15)]
-                                );
+                            Err(_) => {
                                 return StepOutcome::Fault(ExecutionFault::Signal(SynchronousTrap {
                                     signal: TrapSignal::Illegal,
                                     code: 2,

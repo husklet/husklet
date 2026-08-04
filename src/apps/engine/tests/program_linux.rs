@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_FILE: AtomicU64 = AtomicU64::new(1);
 const LINK_BASE: u64 = 0x40_0000;
 const ENTRY_OFFSET: usize = 0x180;
+const LAUNCH_HEADER_SIZE: usize = 192;
 
 fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
@@ -212,20 +213,21 @@ fn launch_wire(executable: &[u8]) -> Vec<u8> {
 fn launch_wire_root(executable: &[u8], rootfs: Option<&[u8]>) -> Vec<u8> {
     let root_size = rootfs.map_or(0, |root| root.len() + 1);
     let pool_size = root_size + executable.len() + 3;
-    let mut wire = vec![0_u8; 184 + pool_size];
+    let mut wire = vec![0_u8; LAUNCH_HEADER_SIZE + pool_size];
     put_u32(&mut wire, 0, 0x484c_4346);
     put_u32(&mut wire, 4, pool_size as u32);
-    put_u32(&mut wire, 8, 184);
+    put_u32(&mut wire, 8, LAUNCH_HEADER_SIZE as u32);
     put_u32(&mut wire, 12, 1);
     let executable_offset = 1 + root_size;
     if let Some(root) = rootfs {
         put_u32(&mut wire, 56, 1);
-        wire[185..185 + root.len()].copy_from_slice(root);
+        let root_start = LAUNCH_HEADER_SIZE + 1;
+        wire[root_start..root_start + root.len()].copy_from_slice(root);
     }
     put_u32(&mut wire, 108, executable_offset as u32);
     put_u64(&mut wire, 152, 1);
     put_u32(&mut wire, 168, executable_offset as u32);
-    let executable_start = 184 + executable_offset;
+    let executable_start = LAUNCH_HEADER_SIZE + executable_offset;
     wire[executable_start..executable_start + executable.len()].copy_from_slice(executable);
     wire
 }
@@ -276,7 +278,7 @@ fn futex_routes_both() {
 }
 
 #[test]
-fn fault_report_optin() {
+fn signal_report_optin() {
     let identity = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("hl-engine-fault-{}-{identity}", std::process::id()));
     let mut image = static_x86(0);
@@ -291,11 +293,10 @@ fn fault_report_optin() {
         .output()
         .unwrap();
     fs::remove_file(path).unwrap();
-    assert_eq!(plain.status.code(), Some(125));
-    assert!(plain.stderr.is_empty());
+    assert_eq!(plain.status.code(), Some(128 + 4));
+    assert!(plain.stderr.is_empty(), "{}", String::from_utf8_lossy(&plain.stderr));
     let stderr = String::from_utf8(report.stderr).unwrap();
-    assert!(stderr.starts_with("[hl-exit]\tFault\t0\tX86_64\t0x400180\t0fff"));
-    assert!(stderr.ends_with("\tDecode\n"), "{stderr}");
+    assert_eq!(stderr, "[hl-exit]\tSignal\t4\t0x0\n");
 }
 
 #[test]
