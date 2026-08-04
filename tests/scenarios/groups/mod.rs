@@ -6,7 +6,6 @@ pub(crate) use crate::{contract, fixture, registry, runner};
 pub(crate) mod copy;
 pub(crate) mod execcmd;
 pub(crate) mod imagescmd;
-pub(crate) mod languages;
 pub(crate) mod netcontainer;
 pub(crate) mod network;
 pub(crate) mod observe;

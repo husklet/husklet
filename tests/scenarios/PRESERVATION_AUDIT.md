@@ -10,11 +10,10 @@ an executable owner.
 
 | Category | Legacy | Folder YAML | Old-only IDs | Blocking ownership gap |
 |---|---:|---:|---|---|
-| `languages` | 12 | 43 | `go-fib-123-alpine`, `go-sum-122-alpine`, `go-sum-122-bookworm`, `go-version-122-alpine`, `java-fib-21`, `java-sum-17`, `java-sum-temurin21`, `java-sum-temurin21-alpine`, `java-version-temurin17`, `rust-fib-1-slim`, `rust-sum-1-alpine`, `rust-version-1-slim` | The compiled Go, Java, and Rust cohort has no folder-owned stable-ID mapping. |
 | `utilities` | 302 | 301 | `hello-world` | Execution requires the image-configured entrypoint. |
 | `weird` | 54 | 53 | `static-nonpie-helloworld` | Execution requires the image-configured entrypoint. |
 
-The suffixes in the table are joined to their category with `/`. There are 14
+The suffixes in the table are joined to their category with `/`. There are 2
 old-only stable IDs in total. A larger but differently named workload is not a
 replacement: preservation requires the same ID, image, action semantics,
 targets, expected-failure metadata, timeout, and output oracle.
@@ -23,7 +22,6 @@ targets, expected-failure metadata, timeout, and output oracle.
 
 | Group | Non-manifest behavior | Required durable owner |
 |---|---|---|
-| `groups/languages.rs` | `registry_has_every_stable_id_once` asserts 12 unique compiled-language IDs; `run` owns isolated container state for that cohort. | A folder-owned compiled-language cohort plus repository-wide unique-ID validation. |
 | `groups/weird.rs` | `test_expected_failures` proves AMD64 alone expects `weird/dotnet-ryujit` to fail. | The folder YAML loader's target/xfail validation and a focused inventory assertion. |
 
 `groups/utilities.rs` adds no behavior beyond loading and running its manifest,

@@ -113,6 +113,37 @@ fn dotnet_folder_preserves_the_orphan_contract_ids() {
 }
 
 #[test]
+fn compiled_language_stable_ids_are_folder_owned_once() {
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    while !root.join("tests/scenarios/languages/test.yaml").is_file() {
+        root = root.parent().expect("workspace root contains language scenarios");
+    }
+    let directory = root.join("tests/scenarios/languages");
+    let scenario = Scenario::load(&directory, &directory.join("test.yaml")).unwrap();
+    let expected = BTreeSet::from([
+        "languages/go-fib-123-alpine",
+        "languages/go-sum-122-alpine",
+        "languages/go-sum-122-bookworm",
+        "languages/go-version-122-alpine",
+        "languages/java-fib-21",
+        "languages/java-sum-17",
+        "languages/java-sum-temurin21",
+        "languages/java-sum-temurin21-alpine",
+        "languages/java-version-temurin17",
+        "languages/rust-fib-1-slim",
+        "languages/rust-sum-1-alpine",
+        "languages/rust-version-1-slim",
+    ]);
+    let actual = scenario
+        .cases
+        .iter()
+        .map(|case| case.id.as_str())
+        .filter(|id| expected.contains(id))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn every_repository_definition_loads_with_globally_unique_ids() {
     let mut root = Path::new(env!("CARGO_MANIFEST_DIR"));
     while !root.join("tests/scenarios").is_dir() {

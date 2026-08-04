@@ -7,7 +7,8 @@ every stable case ID independently.
 
 The migration sources studied were the former `languages-dotnet/test.yaml`, the
 legacy `fixtures/languages-{node,perl,php,python,ruby}.yaml` manifests, the
-former language aggregation and uniqueness check in `groups/languages.rs`, and
+compiled Go/Java/Rust manifest, the former language aggregation and uniqueness
+check in `groups/languages.rs`, and
 the matching rows in the former generated contract and image snapshots. Those
 deleted artifacts remain available through repository history.
 Commands remain PATH-resolved by using `actions.argv`; output checks use local,
@@ -31,3 +32,9 @@ command, timeout, class, target set, expected-failure state, and output
 substring. Legacy rows removed from the worktree remain auditable through this
 report and repository history; do not claim a dual run when the old row is no
 longer executable from the exact tree.
+
+The final 12 compiled-language IDs now live in this same folder definition.
+Their compiler-heavy cases declare `process_heavy`, and a focused testing-unit
+inventory assertion replaces the legacy group's 12-ID uniqueness check. The
+repository runner already gives every case independent container state, so the
+old category wrapper's temporary state owner is no longer required.
