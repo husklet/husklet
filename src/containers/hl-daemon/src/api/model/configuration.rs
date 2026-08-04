@@ -53,7 +53,7 @@ impl Healthcheck {
                 .interval(duration("Interval", self.interval, std::time::Duration::from_secs(30))?)
                 .timeout(duration("Timeout", self.timeout, std::time::Duration::from_secs(30))?)
                 .retries(retries)
-                .start_period(duration("StartPeriod", self.start_period, std::time::Duration::ZERO)?),
+                .start_period(duration("StartPeriod", self.start_period, std::time::Duration::ZERO)?)
                 .start_interval(duration(
                     "StartInterval",
                     self.start_interval,
@@ -64,7 +64,7 @@ impl Healthcheck {
 }
 
 /// Docker automatic-restart wire representation.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct RestartPolicy {
     #[serde(default)]
