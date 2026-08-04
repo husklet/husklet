@@ -62,8 +62,8 @@ jobs:
             oci-smoke-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.target }}-${{
             hashFiles(
               'Cargo.lock',
-              'src/containers/hl-daemon/tests/scenarios/fixtures/distros-full.yaml',
-              'src/containers/hl-daemon/tests/scenarios/harness/fixture.rs',
+              'tests/scenarios/fixtures/distros-full.yaml',
+              'tests/scenarios/harness/fixture.rs',
               'src/containers/hl-images/src/**'
             ) }}-${{ matrix.case }}
 
