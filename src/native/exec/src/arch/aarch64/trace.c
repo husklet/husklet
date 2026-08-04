@@ -16,6 +16,7 @@
 #include "indirect.h"
 #include "move.h"
 #include "narrow_arithmetic.h"
+#include "saturating_narrow.h"
 #include "multiply.h"
 #include "memory.h"
 #include "ordered.h"
@@ -128,6 +129,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_simd_fp_reduce_body(assembler, word) ||
            hl_a64_simd_integer_body(assembler, word) ||
            hl_a64_narrow_arithmetic_body(assembler, word) ||
+           hl_a64_saturating_narrow_body(assembler, word) ||
            hl_a64_simd_narrow_body(assembler, word) ||
            hl_a64_simd_pairwise_body(assembler, word) ||
            hl_a64_simd_permute_body(assembler, word) ||
