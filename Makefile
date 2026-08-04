@@ -3,7 +3,8 @@
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
-NIX_DEV = nix --extra-experimental-features 'nix-command flakes' develop . --command
+NIX = nix --extra-experimental-features 'nix-command flakes'
+NIX_DEV = $(NIX) develop . --command
 
 all: test-ci
 
@@ -31,7 +32,8 @@ test: design-lint
 check:
 	cargo check --workspace --all-targets --locked
 
-test-ci: fmt-check design-lint check test
+test-ci:
+	$(NIX) flake check -L --option cores 0 --max-jobs auto
 
 containers:
 	cargo test -p hl-images -p hl-container -p hl-daemon -p hl-client -p dockerd

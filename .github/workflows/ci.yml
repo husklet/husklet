@@ -40,81 +40,22 @@ jobs:
           primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Check formatting
-        run: nix develop . --command cargo fmt --all -- --check
+      - name: Verify the pinned workspace
+        run: make test-ci
 
-      - name: Enforce Clippy warnings
-        run: |
-          set -o pipefail
-          log_file="$(mktemp)"
-          set +e
-          nix develop . --command \
-            cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tee "$log_file"
-          status="${PIPESTATUS[0]}"
-          set -e
-          if (( status != 0 )); then
-            diagnostic="$(tail -n 80 "$log_file" | awk '{ print substr($0, 1, 500) }')"
-            diagnostic="${diagnostic//'%'/'%25'}"
-            diagnostic="${diagnostic//$'\r'/'%0D'}"
-            diagnostic="${diagnostic//$'\n'/'%0A'}"
-            echo "::error title=Clippy failed (exit $status)::$diagnostic"
-          fi
-          exit "$status"
+      - name: Fetch locked application dependencies
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo fetch --locked
 
-      - name: Test deterministic workspace targets
-        run: |
-          nix develop . --command cargo test --workspace --exclude hl-daemon
-          nix develop . --command \
-            cargo test -p hl-daemon --lib --bin hl-daemon --test analyze --test report
+      - name: Lint the container-runtime application surface
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p husklet --all-targets --features runtime
+          --locked --offline -- -D warnings
 
-      - name: Build the complete workspace
-        run: nix develop . --command cargo build --workspace
-
-      - name: Build the runtime library
-        run: nix develop . --command cargo check -p husklet --features runtime --lib
-
-      - name: Build the macOS application
-        run: nix develop . --command cargo check -p husklet --bin husklet --features gui
-
-  mac-crates:
-    name: macOS-gated crates
-    runs-on: macos-26
-    timeout-minutes: 60
-    env:
-      # The live-socket compositor tests bind `$XDG_RUNTIME_DIR/wayland-N`; give them a private directory.
-      XDG_RUNTIME_DIR: ${{ github.workspace }}/.runtime
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Require an Apple Silicon host
-        run: |
-          architecture="$(uname -m)"
-          test "$architecture" = arm64 || {
-            echo "Husklet CI requires an arm64 macOS host, got: $architecture" >&2
-            exit 1
-          }
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 # v20
-        with:
-          diagnostic-endpoint: ""
-
-      - name: Cache the Nix development environment
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Prove every test target compiles
-        run: |
-          mkdir -p "$XDG_RUNTIME_DIR"
-          make test-compiles
-
-      - name: Test the Smithay adapter and the Metal presenter
-        run: make mac-crates
-
-      # Fact-finding, deliberately not a gate: the device-bound tests run on the self-hosted host, and this
-      # records whether a hosted runner could take them over.
-      - name: Record the hosted runner's Metal capability
-        if: always()
-        run: system_profiler SPDisplaysDataType | sed -n '1,40p'
+      - name: Lint the macOS application surface
+        run: >-
+          nix --extra-experimental-features 'nix-command flakes' develop . --command
+          cargo clippy -p husklet --all-targets --features gui
+          --locked --offline -- -D warnings
