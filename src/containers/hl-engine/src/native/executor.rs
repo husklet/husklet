@@ -2498,7 +2498,7 @@ const _: () = {
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
     assert!(std::mem::size_of::<Change>() == 40);
-    assert!(std::mem::size_of::<Diagnostics>() == 192);
+    assert!(std::mem::size_of::<Diagnostics>() == 216);
 };
 
 #[cfg(test)]
