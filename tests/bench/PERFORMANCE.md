@@ -59,3 +59,87 @@ the table uses individually selected phases with identical internal warmups.
 The largest measured hot-path gap is ARM64 float SIMD. Root-cause work must first
 identify its generic translation or fallback mechanism; this checkpoint does not
 justify an application-specific fast path.
+
+## Candidate evidence after the checkpoint
+
+The results below come from the shared dirty tree and are diagnostic candidate
+evidence, not evidence for `HEAD` or a stable revision.
+
+### ARM64 baseline SIMD admission
+
+Disassembly of `phase_float_simd` identified vector MOV/ORR and FMLA in the hot
+loop and vector SCVTF during setup. All three instruction families terminated
+the native trace. The scheduler then suppressed the failed entry and repeatedly
+executed the loop through lane-by-lane SoftFloat. Current diagnostics confirmed
+13 native fallbacks across 13 builds before the candidate.
+
+The candidate admits the complete baseline AdvSIMD logical family and the S/D
+vector FMLA/FMLS and SCVTF/UCVTF families. Optional FP16, BF16, and I8MM remain
+excluded pending explicit host/guest feature policy. A warning-strict trace test
+covering AND, MOV, FMLA 4S, FMLS 2D, SCVTF 4S, UCVTF 2D, and SVC failed before
+the change and passes afterward.
+
+One full `--divisor 20 --phase float_simd` candidate row completed
+`native-verified` with the same checksum at 14,251,204 us. This is 8.2% faster
+than the clean checkpoint's 15,526,078-us median but remains about 1,352 times
+the retained-C median. It proves SIMD admission helps without identifying it as
+the dominant remaining cost. Vector memory guards and remaining fallback
+boundaries are the next measured owners.
+
+### AMD64 REP bulk accounting
+
+The retained domain audit covered `lower/repstr.c` and `rep_runtime.c` for MOVS
+and STOS decoding, largest pinned-span selection, direct and indirect mappings,
+forward-overlap smear, backward DF order, partial faults, register publication,
+store observation, and pin release on every path. It also covered
+`guest_memory.c` for pin lifetime and `dispatch.c` for helper return ordering.
+The current Rust-owned comparison covered x86 `run.c`, `projection.c`, the Rust
+projection lease, and scheduler slice selection. The lease holds mapping
+identity for the synchronous run; native code owns only borrowed bounded views,
+and post-success dirty publication precedes any executable-write epoch exit.
+
+The checkpoint's AMD64 memory row was 46.476 times the retained-C median.
+Diagnostics isolated a deterministic amplification: one memory iteration made
+1,537 public exits and four made 2,305, exactly 256 additional exits for each
+additional 1 MiB copy. Projection already supplies a bounded contiguous 1 MiB
+view, but native REP charged every copied byte against the 4,096-instruction
+scheduler budget.
+
+A candidate charged one authenticated, at-most-1-MiB REP chunk as one guest
+instruction. Its five-repeat native-verified row had checksum 36,526 throughout
+and a 24,599-us median, 12.34 times faster than the checkpoint Rust median.
+Independent review rejected and reverted it: the established interpreter and
+native contract charges every REP element against the instruction budget. The
+experiment let budget one copy up to 1 MiB, changed `executed` semantics, and
+weakened interrupt/checkpoint latency by up to 1,048,576 times. Its timing is
+useful causal evidence for the exit amplification, not an acceptable product
+result.
+
+The accepted follow-up must either preserve per-element accounting while
+eliminating public exits, or explicitly redesign the common interpreter/native
+string-budget contract. It requires differential coverage for a greater-than-
+1-MiB partial chunk and resume, the next-view fault, interrupt/checkpoint
+latency, DF and overlap order, exact RCX/RSI/RDI, dirty publication, and
+executable-write epoch behavior before another benchmark.
+
+### AMD64 scalar SSE2 audit
+
+The compute loop's hot instruction sequence is MULSD, integer XOR/IMUL/ROL,
+ADDSD, COMISD, conditional SUBSD, and CVTTSD2SI. Current native lowering admits
+only scalar square root, addition, multiplication, and division. Retained C
+owns the coherent scalar SSE/SSE2 arithmetic, comparison, conversion, MXCSR,
+NaN, EFLAGS, and indefinite-result semantics. The missing family, rather than
+one benchmark opcode, was assigned to a separate implementation lane.
+
+That candidate implements SUBSD, COMISD/UCOMISD, and 32/64-bit CVTTSD2SI for
+register and guarded-memory forms, including ordered/unordered flags, signaling
+versus quiet NaNs, integer-indefinite overflow results, and preservation of the
+upper XMM lane. Its warning-strict focused structural and differential test
+passes. Five native-verified compute repeats produced a 616,183-us median and
+539,149--663,124-us range with checksum 7,097,455,804,780,747,230 throughout.
+That is 1.58 times faster than the checkpoint Rust median but still 123 times
+the retained-C median. The result confirms the coherent scalar family removes
+real fallback cost; packed and scalar-single SSE remain the larger gap. This is
+shared dirty-tree evidence. The observed post-build `HEAD` was
+`2114daca34f3790f0ce2c887dcaf3ad6551567eb`, and the candidate engine SHA-256
+was `a9a544aadfb9b7ec69c8c4c59036f24eed6fb60d60d8240396b37e7e8b2dbf92`.
