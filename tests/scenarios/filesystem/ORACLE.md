@@ -1,8 +1,8 @@
 # Filesystem scenario oracle
 
 These end-to-end cases preserve the images, commands, timeouts, and output
-contracts from `tests/scenarios/fixtures/filesystem-core.yaml`. Expected output
-is now owned by this category instead of embedded in a shared fixture.
+contracts formerly held in the shared filesystem fixture. The manifest and
+expected output are owned entirely by this category.
 
 This migration only changes test ownership and representation. It changes no
 runtime implementation, so the retained C engine was not used as an
