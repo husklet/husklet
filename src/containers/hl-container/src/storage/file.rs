@@ -1,7 +1,6 @@
 use super::{Containers, Execs, Logs, NetworkStore, VolumeStore};
 use crate::{
-    model::now_ms, Container, ContainerId, Entry, Error, Exec, ExecId, JournalId, Network, Result,
-    Stream, Volume,
+    Container, ContainerId, Entry, Error, Exec, ExecId, JournalId, Network, Result, Stream, Volume, model::now_ms,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -184,7 +183,7 @@ impl Logs for Disk {
         let repository = self.clone();
         let id = id.clone();
         let bytes = bytes.to_vec();
-        Self::blocking(move || repository.append_sync(&id, stream, &bytes)).await
+        Self::blocking(move || repository.append_sync(&id, stream, bytes)).await
     }
     async fn read(&self, id: &JournalId) -> Result<crate::Logs> {
         let repository = self.clone();

@@ -1,6 +1,6 @@
 use super::{
-    fs, now_ms, Disk, Entry, Error, File, JournalId, OpenOptions, Path, PathBuf, Read, Result,
-    Seek, Stream, Write, JOURNAL_HEADER, RECORD_LIMIT,
+    Disk, Entry, Error, File, JOURNAL_HEADER, JournalId, OpenOptions, Path, PathBuf, RECORD_LIMIT, Read, Result, Seek,
+    Stream, Write, fs, now_ms,
 };
 
 impl Disk {
@@ -12,18 +12,10 @@ impl Disk {
         directory.join(format!("{}.journal", id.as_str()))
     }
 
-    pub(super) fn append_sync(
-        &self,
-        id: &JournalId,
-        stream: Stream,
-        bytes: &[u8],
-    ) -> Result<Entry> {
-        let length = u64::try_from(bytes.len())
-            .map_err(|_| Error::Corrupt("log record length exceeds u64".into()))?;
+    pub(super) fn append_sync(&self, id: &JournalId, stream: Stream, bytes: Vec<u8>) -> Result<Entry> {
+        let length = u64::try_from(bytes.len()).map_err(|_| Error::Corrupt("log record length exceeds u64".into()))?;
         if length > RECORD_LIMIT {
-            return Err(Error::Corrupt(format!(
-                "log record exceeds {RECORD_LIMIT} bytes"
-            )));
+            return Err(Error::Corrupt(format!("log record exceeds {RECORD_LIMIT} bytes")));
         }
         let _guard = self
             .transaction
@@ -38,26 +30,25 @@ impl Disk {
             .map_err(|_| Error::Corrupt("log index exceeds u64".into()))?
             .checked_add(1)
             .ok_or_else(|| Error::Corrupt("log sequence exhausted".into()))?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.log_path(id))?;
+        let mut file = OpenOptions::new().create(true).append(true).open(self.log_path(id))?;
         let offset = file.metadata()?.len();
         let timestamp_ms = now_ms();
-        file.write_all(&sequence.to_le_bytes())?;
-        file.write_all(&[match stream {
+        let mut header = [0_u8; JOURNAL_HEADER];
+        header[..8].copy_from_slice(&sequence.to_le_bytes());
+        header[8] = match stream {
             Stream::Stdout => 1,
             Stream::Stderr => 2,
-        }])?;
-        file.write_all(&timestamp_ms.to_le_bytes())?;
-        file.write_all(&length.to_le_bytes())?;
-        file.write_all(bytes)?;
+        };
+        header[9..17].copy_from_slice(&timestamp_ms.to_le_bytes());
+        header[17..].copy_from_slice(&length.to_le_bytes());
+        file.write_all(&header)?;
+        file.write_all(&bytes)?;
         index.push(offset);
         Ok(Entry {
             sequence,
             timestamp_ms,
             stream,
-            bytes: bytes.to_vec(),
+            bytes,
         })
     }
 
@@ -69,12 +60,7 @@ impl Disk {
         Self::read_journal(&self.log_path(id))
     }
 
-    pub(super) fn after_sync(
-        &self,
-        id: &JournalId,
-        sequence: u64,
-        limit: usize,
-    ) -> Result<Vec<Entry>> {
+    pub(super) fn after_sync(&self, id: &JournalId, sequence: u64, limit: usize) -> Result<Vec<Entry>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -87,8 +73,7 @@ impl Disk {
             .lock()
             .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?;
         let index = indexes.get(id).map(Vec::as_slice).unwrap_or_default();
-        let position = usize::try_from(sequence)
-            .map_err(|_| Error::Corrupt("log cursor exceeds host range".into()))?;
+        let position = usize::try_from(sequence).map_err(|_| Error::Corrupt("log cursor exceeds host range".into()))?;
         if position > index.len() {
             return Err(Error::Corrupt(format!(
                 "log cursor {sequence} exceeds journal length {}",
@@ -132,12 +117,7 @@ impl Disk {
         Self::read_journal_at(path, 0, 1, usize::MAX)
     }
 
-    pub(super) fn read_journal_at(
-        path: &Path,
-        offset: u64,
-        mut expected: u64,
-        limit: usize,
-    ) -> Result<Vec<Entry>> {
+    pub(super) fn read_journal_at(path: &Path, offset: u64, mut expected: u64, limit: usize) -> Result<Vec<Entry>> {
         let mut file = match File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -157,10 +137,7 @@ impl Disk {
                     if start == file.metadata()?.len() {
                         return Ok(entries);
                     }
-                    return Err(Error::Corrupt(format!(
-                        "truncated log journal {}",
-                        path.display()
-                    )));
+                    return Err(Error::Corrupt(format!("truncated log journal {}", path.display())));
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -187,10 +164,7 @@ impl Disk {
             let timestamp_ms = u64::from_le_bytes(header[9..17].try_into().expect("fixed header"));
             let length = u64::from_le_bytes(header[17..].try_into().expect("fixed header"));
             if length > RECORD_LIMIT {
-                return Err(Error::Corrupt(format!(
-                    "oversized log record in {}",
-                    path.display()
-                )));
+                return Err(Error::Corrupt(format!("oversized log record in {}", path.display())));
             }
             let mut bytes = vec![0; usize::try_from(length).expect("record limit fits usize")];
             file.read_exact(&mut bytes).map_err(|error| {
@@ -256,13 +230,17 @@ pub(super) fn index_journals(
             .and_then(|value| value.to_str())
             .ok_or_else(|| Error::Corrupt(format!("invalid journal path {}", path.display())))?;
         let id = if execution {
-            JournalId::exec(value.parse().map_err(|error| {
-                Error::Corrupt(format!("invalid exec journal identity: {error}"))
-            })?)
+            JournalId::exec(
+                value
+                    .parse()
+                    .map_err(|error| Error::Corrupt(format!("invalid exec journal identity: {error}")))?,
+            )
         } else {
-            JournalId::container(value.parse().map_err(|error| {
-                Error::Corrupt(format!("invalid container journal identity: {error}"))
-            })?)
+            JournalId::container(
+                value
+                    .parse()
+                    .map_err(|error| Error::Corrupt(format!("invalid container journal identity: {error}")))?,
+            )
         };
         let entries = Disk::read_journal(&path)?;
         let mut offset = 0_u64;
