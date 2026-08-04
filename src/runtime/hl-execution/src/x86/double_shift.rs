@@ -73,10 +73,6 @@ impl DoubleShift {
                 ExecutionExit::Continue
             }
             (ScalarOperand::Memory(_), Some(address)) => {
-                if arithmetic.flags.preserved(crate::Flag::Carry) {
-                    *cpu = staged;
-                    return ExecutionExit::Continue;
-                }
                 let bytes = Self::bytes(width);
                 let reservation = match memory.reserve_write(address, bytes) {
                     Ok(value) => value,

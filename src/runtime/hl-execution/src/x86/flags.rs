@@ -334,7 +334,7 @@ impl Arithmetic {
             | Flag::Parity.mask()
             | Flag::Zero.mask()
             | Flag::Sign.mask()
-            | if masked == 1 { Flag::Overflow.mask() } else { 0 };
+            | Flag::Overflow.mask();
         let values = Self::common(width, result)
             | if carry { Flag::Carry.mask() } else { 0 }
             | if overflow {
@@ -456,6 +456,14 @@ mod test {
         let original = FlagState::from_bits(Flag::Carry.mask() | Flag::Overflow.mask());
         let shifted = original.apply(Arithmetic::shift_left(IntegerWidth::Byte, 0x80, 31).flags);
         assert!(!shifted.contains(Flag::Carry));
+        assert!(!shifted.contains(Flag::Overflow));
+
+        let shifted = FlagState::default().apply(Arithmetic::shift_right(IntegerWidth::Byte, 0x80, 31).flags);
+        assert!(!shifted.contains(Flag::Carry));
+        assert!(shifted.contains(Flag::Overflow));
+
+        let shifted = original.apply(Arithmetic::shift_arithmetic_right(IntegerWidth::Byte, 0x80, 31).flags);
+        assert!(shifted.contains(Flag::Carry));
         assert!(!shifted.contains(Flag::Overflow));
     }
 

@@ -507,7 +507,7 @@ fn x86_cpuid_retains() {
             eax: 0x000206c2,
             ebx: 0,
             ecx: 0x02982203,
-            edx: 0x07808911
+            edx: 0x0788a911
         }
     );
     assert_eq!(policy.cpuid(7, 1), CpuidRegisters::default());
@@ -554,15 +554,15 @@ fn x86_cpuid_capabilities() {
 
     let scalar = GuestFeaturePolicy::interpreter();
     let leaf_one = scalar.cpuid(1, 0);
-    assert_eq!(leaf_one.edx, 0x0780_8911);
+    assert_eq!(leaf_one.edx, 0x0788_a911);
     let baseline = (1 << 0) | (1 << 8) | (1 << 15) | (1 << 23) | (1 << 24) | (1 << 25) | (1 << 26);
     assert_eq!(leaf_one.edx & baseline, baseline);
-    assert_eq!(leaf_one.ecx, 1 << 23);
-    for incomplete in [0, 9, 13, 19, 20] {
+    assert_eq!(leaf_one.ecx, 0x0298_2203);
+    for incomplete in [3, 12, 22, 26, 27, 28] {
         assert_eq!(leaf_one.ecx & (1 << incomplete), 0);
     }
     let leaf_seven = scalar.cpuid(7, 0);
-    assert_eq!(leaf_seven.ebx, (1 << 3) | (1 << 8) | (1 << 9));
+    assert_eq!(leaf_seven.ebx, (1 << 3) | (1 << 8) | (1 << 9) | (1 << 29));
     assert_eq!(leaf_seven.edx, 1 << 4);
     assert_eq!(scalar.cpuid(0xb, 0), CpuidRegisters::default());
     assert_eq!(scalar.xgetbv(0), Err(XgetbvError::UndefinedInstruction));

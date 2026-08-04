@@ -5288,6 +5288,17 @@ fn double_shift_memory() {
     memory.fail_write = true;
     memory.fail_read = false;
     cpu.registers[1] = 0;
+    let original = cpu.clone();
+    let zero = X86ScalarDecoder::decode(&[0x4d, 0x0f, 0xad, 0x53, 0x01], cpu.rip).unwrap();
+    assert!(matches!(
+        ScalarInterpreter::execute(&mut cpu, &mut memory, zero),
+        ExecutionExit::OperandFault(access) if access.length() == 8
+    ));
+    assert_eq!(cpu, original);
+    assert_eq!(memory.bytes, before);
+
+    memory.fail_write = false;
+    let commits = memory.commits;
     let flags = cpu.flags;
     let zero = X86ScalarDecoder::decode(&[0x4d, 0x0f, 0xad, 0x53, 0x01], cpu.rip).unwrap();
     assert_eq!(
@@ -5295,7 +5306,40 @@ fn double_shift_memory() {
         ExecutionExit::Continue
     );
     assert_eq!(memory.bytes, before);
+    assert_eq!(memory.commits, commits + 1);
     assert_eq!(cpu.flags, flags);
+
+    for (encoded, cl) in [
+        (&[0x66, 0x45, 0x0f, 0xa4, 0x53, 0x01, 17][..], None),
+        (&[0x66, 0x45, 0x0f, 0xad, 0x53, 0x01][..], Some(31_u64)),
+    ] {
+        cpu.rip = cpu.rip.wrapping_add(0x100);
+        if let Some(count) = cl {
+            cpu.registers[1] = count;
+        }
+        let original = cpu.clone();
+        let before = memory.bytes.clone();
+        memory.fail_write = true;
+        let preserved = X86ScalarDecoder::decode(encoded, cpu.rip).unwrap();
+        assert!(matches!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, preserved),
+            ExecutionExit::OperandFault(access) if access.length() == 2
+        ));
+        assert_eq!(cpu, original);
+        assert_eq!(memory.bytes, before);
+
+        memory.fail_write = false;
+        let commits = memory.commits;
+        let flags = cpu.flags;
+        let preserved = X86ScalarDecoder::decode(encoded, cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, preserved),
+            ExecutionExit::Continue
+        );
+        assert_eq!(memory.bytes, before);
+        assert_eq!(memory.commits, commits + 1);
+        assert_eq!(cpu.flags, flags);
+    }
     assert!(X86ScalarDecoder::decode(&[0xf0, 0x48, 0x0f, 0xa4, 0xc8, 1], 0).is_err());
     assert!(X86ScalarDecoder::decode(&[0xf2, 0x48, 0x0f, 0xa4, 0xc8, 1], 0).is_err());
 }
