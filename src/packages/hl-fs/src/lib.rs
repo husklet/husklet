@@ -8,6 +8,58 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static ANONYMOUS_FILE_ID: AtomicU64 = AtomicU64::new(0);
 static REPLACEMENT_FILE_ID: AtomicU64 = AtomicU64::new(0);
 
+/// A staged sibling whose directory entry is owned until atomic publication.
+struct ReplacementFile {
+    path: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl ReplacementFile {
+    fn create(path: PathBuf) -> io::Result<Self> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file: Some(file),
+        })
+    }
+
+    fn publish(
+        mut self,
+        target: &Path,
+        parent: &Path,
+        bytes: &[u8],
+        permissions: Option<&std::fs::Permissions>,
+    ) -> io::Result<()> {
+        let prepared = self.prepare(bytes, permissions);
+        drop(self.file.take());
+        prepared?;
+        std::fs::rename(&self.path, target)?;
+        Directory::from(parent).sync()
+    }
+
+    fn prepare(&mut self, bytes: &[u8], permissions: Option<&std::fs::Permissions>) -> io::Result<()> {
+        let file = self
+            .file
+            .as_mut()
+            .expect("replacement handle exists until publication");
+        file.write_all(bytes)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions.clone())?;
+        }
+        file.sync_all()
+    }
+}
+
+impl Drop for ReplacementFile {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// A durable filesystem value replaced atomically as one complete byte sequence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct File(PathBuf);
@@ -34,28 +86,12 @@ impl File {
         for _ in 0..128 {
             let id = REPLACEMENT_FILE_ID.fetch_add(1, Ordering::Relaxed);
             let temporary = parent.join(format!(".{name}.replace-{}-{id}", std::process::id()));
-            let mut file = match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
-            {
-                Ok(file) => file,
+            let replacement = match ReplacementFile::create(temporary) {
+                Ok(replacement) => replacement,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error),
             };
-            let result = (|| {
-                file.write_all(bytes.as_ref())?;
-                if let Some(permissions) = permissions.clone() {
-                    file.set_permissions(permissions)?;
-                }
-                file.sync_all()?;
-                std::fs::rename(&temporary, &self.0)?;
-                Directory::from(parent).sync()
-            })();
-            if result.is_err() {
-                let _ = std::fs::remove_file(&temporary);
-            }
-            return result;
+            return replacement.publish(&self.0, parent, bytes.as_ref(), permissions.as_ref());
         }
         Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -293,6 +329,13 @@ mod tests {
 
         assert!(File::from(target).replace(b"value").is_err());
         assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 1);
+        assert!(std::fs::read_dir(temporary.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".replace-")
+        }));
     }
 
     #[cfg(unix)]
