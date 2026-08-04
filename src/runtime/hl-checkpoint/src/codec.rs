@@ -90,16 +90,6 @@ pub enum LimitKind {
     Collection,
 }
 
-/// Values that have a stable generic binary representation.
-pub trait Encode {
-    fn encode<W: Write>(&self, output: &mut Encoder<W>) -> Result<(), EncodeError>;
-}
-
-/// Values decoded with explicit resource bounds.
-pub trait Decode: Sized {
-    fn decode<R: Read>(input: &mut Decoder<R>) -> Result<Self, DecodeError>;
-}
-
 /// Explicit little-endian encoder.
 #[derive(Debug)]
 pub struct Encoder<W> {
