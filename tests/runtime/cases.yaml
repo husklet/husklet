@@ -1,0 +1,37 @@
+version: 1
+cases:
+  - id: exit
+    source: source/exit.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 42, stdout: golden/empty.out }
+  - id: status
+    source: source/status.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 17, stdout: golden/status.out }
+  - id: write
+    source: source/write.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 0, stdout: golden/write.out }
+  - id: syscall
+    source: source/syscall.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 0, stdout: golden/syscall.out }
+  - id: signal
+    source: source/signal.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 0, stdout: golden/empty.out }
+  - id: epoll
+    source: source/epoll.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 0, stdout: golden/epoll.out }
+  - id: namespace
+    source: source/namespace.c
+    isa: [aarch64, x86_64]
+    recipe: freestanding-v1
+    expect: { exit: 0, stdout: golden/namespace.out }
