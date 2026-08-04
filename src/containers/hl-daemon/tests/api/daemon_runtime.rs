@@ -208,6 +208,8 @@ async fn exec(client: &Client, rootfs: &Path) -> Result<(), Box<dyn std::error::
         .executions()
         .start(&exec.id, &ExecStart::default())
         .await?;
+    let running_pid = client.executions().inspect(&exec.id).await?.pid;
+    require(running_pid > 0, "running daemon exec did not expose its process ID")?;
     execution.write(b"value\n").await?;
     execution.close().await?;
     let exec_stdout = execution.next().await?.ok_or("exec stdout missing")?;
@@ -223,8 +225,8 @@ async fn exec(client: &Client, rootfs: &Path) -> Result<(), Box<dyn std::error::
     )?;
     let exec_inspect = client.executions().inspect(&exec.id).await?;
     require(
-        !exec_inspect.running && exec_inspect.exit_code == 29 && exec_inspect.pid == 0,
-        "daemon exec inspection did not preserve the nonzero exit",
+        !exec_inspect.running && exec_inspect.exit_code == 29 && exec_inspect.pid == running_pid,
+        "daemon exec inspection did not preserve the nonzero exit and process ID",
     )?;
     require(
         std::fs::read(rootfs.join("tmp/exec-shared"))? == b"shared",
