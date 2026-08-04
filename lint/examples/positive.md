@@ -2181,3 +2181,59 @@ to move mechanically onto `DockerState`. Moving it to `DockerState::info()` woul
 with application state. The handler may coordinate calls needed for one response, but domain calculations
 and reusable operations still belong to their entities or services. `#[hl_design::adapter]` records the
 reviewed framework boundary; it is not a provisional classification.
+
+## Keep orchestration shallow and let result owners report themselves
+
+```rust
+fn run(benchmarks: &[Benchmark], targets: &[Target], report: &mut Report) {
+    for benchmark in benchmarks {
+        for target in targets {
+            benchmark.execute(target).report(report);
+        }
+    }
+    report.finish();
+}
+```
+
+Two levels of orchestration express the product being traversed. Sampling, outcome interpretation, and
+printing belong to the values that own those contracts:
+
+```rust
+impl BenchmarkResult {
+    fn report(self, report: &mut Report) {
+        match self {
+            Self::Passed(result) => result.report(report),
+            Self::Failed(error) => report.fail(error),
+        }
+    }
+}
+```
+
+A flat `match` inside an owned operation is not excessive nesting. Declarative result tables and match arms
+also do not add syntactic control-flow depth. Extract behavior by ownership; do not create cosmetic free
+functions merely to satisfy the nesting limit.
+
+## Parse application arguments into typed commands and options
+
+```rust
+#[derive(clap::Parser)]
+struct Arguments {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    Bench(BenchmarkOptions),
+    Runtime(RuntimeOptions),
+}
+
+fn main() -> Result<(), Error> {
+    Arguments::parse().command.execute()
+}
+```
+
+The parser owns option spelling, required values, duplicates, help, and unknown-option behavior. Each typed
+command owns its validation and execution. Guest argv pass-through and exact launcher-owned bootstrap ABIs
+are different contracts, but their boundaries must be structurally explicit rather than hidden behind a
+lint suppression.

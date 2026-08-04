@@ -8,16 +8,18 @@ use crate::{
     source::{Source, Workspace},
 };
 
-/// Reports functions whose structural control-flow depth reaches three.
-pub struct DeepControlFlow;
+const MAXIMUM_NESTING: usize = 2;
 
-impl Rule for DeepControlFlow {
+/// Rejects functions whose syntactic control-flow nesting exceeds two levels.
+pub struct MaximumNesting;
+
+impl Rule for MaximumNesting {
     fn id(&self) -> &'static str {
-        "deep-control-flow"
+        "maximum-nesting"
     }
 
     fn severity(&self) -> Severity {
-        Severity::Warning
+        Severity::Error
     }
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
@@ -42,14 +44,14 @@ impl Functions<'_> {
     fn inspect(&mut self, name: String, span: Span, block: &syn::Block) {
         let mut depth = Depth::default();
         depth.visit_block(block);
-        if depth.maximum < 3 {
+        if depth.maximum <= MAXIMUM_NESTING {
             return;
         }
         let deepest = depth.span.expect("maximum depth has a span");
-        let mut finding = Finding::warning("deep-control-flow", name.clone(), self.source.location(deepest));
+        let mut finding = Finding::error("maximum-nesting", name.clone(), self.source.location(deepest));
         finding.message = format!(
-            "`{name}` reaches control-flow depth {} at {}",
-            depth.maximum, depth.construct
+            "`{name}` reaches syntactic nesting depth {} at {}; the maximum is {MAXIMUM_NESTING}",
+            depth.maximum, depth.construct,
         );
         finding.help = "use early returns, extract receiver behavior, or model the nested state".to_owned();
         finding.related.push(crate::model::Related {
@@ -142,5 +144,74 @@ impl<'ast> Visit<'ast> for Depth {
         self.enter("async block", expression.async_token.span, |visitor| {
             syn::visit::visit_expr_async(visitor, expression)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MaximumNesting, Rule};
+    use crate::source::Workspace;
+    use std::{
+        fs,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    fn findings(source: &str) -> Vec<crate::model::Finding> {
+        let root = std::env::temp_dir().join(format!(
+            "hl-design-lint-nesting-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='nesting-fixture'\nversion='0.0.0'\n",
+        )
+        .unwrap();
+        let path = root.join("src/lib.rs");
+        fs::write(&path, source).unwrap();
+        let workspace = Workspace::load([path]).unwrap();
+        let findings = MaximumNesting.check(&workspace).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        findings
+    }
+
+    #[test]
+    fn reports_nested_benchmark_orchestration_at_the_deepest_construct() {
+        let findings = findings(
+            r#"fn report(cases: &[u8]) {
+    for case in cases {
+        for sample in 0..5 {
+            match sample {
+                0 => println!("{case}"),
+                _ => println!("{sample}"),
+            }
+        }
+    }
+}"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].subject, "report");
+        assert_eq!(findings[0].location.line, 4);
+        assert!(findings[0].message.contains("maximum is 2"));
+        assert!(findings[0].message.contains("depth 3"));
+    }
+
+    #[test]
+    fn accepts_flat_match_arms_and_declarative_result_data() {
+        let findings = findings(
+            r#"struct ResultRow { name: &'static str, samples: &'static [u64] }
+fn summarize(row: &ResultRow) {
+    match row.samples.first() {
+        Some(value) => println!("{} {value}", row.name),
+        None => println!("{} has no samples", row.name),
+    }
+}"#,
+        );
+
+        assert!(findings.is_empty());
     }
 }

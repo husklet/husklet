@@ -14,10 +14,10 @@ pub use error::{LintError, Result};
 pub use model::{Finding, Location, Related, Review, ReviewState, Severity, Summary};
 pub use report::{Cases, Diagnostic, Markdown, Reporter};
 pub use rule::{
-    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DeepControlFlow,
-    DependencyDirection, DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString,
-    FolderNoun, FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ModelDuplication,
-    ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, Rule,
+    AccessorBloat, AsyncBlocking, BooleanState, BroadTrait, CatchAllModule, CeremonialStructure, DependencyDirection,
+    DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
+    FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
+    ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry, Rule,
     SingleFileDirectory, SingleUse, StructNaming, SuffixRole, SymbolName, TestDependency, TestDirectory, TestName,
     UnsafeBoundary,
 };
@@ -45,6 +45,7 @@ impl Linter {
                 .register(rule::BooleanState)
                 .register(rule::BroadTrait)
                 .register(rule::EnvironmentAccess)
+                .register(rule::ManualDispatch)
                 .register(rule::PlatformCommand)
                 .register(rule::IgnoredResult)
                 .register(rule::AsyncBlocking)
@@ -55,7 +56,7 @@ impl Linter {
                 .register(rule::AccessorBloat)
                 .register(rule::ModelDuplication)
                 .register(rule::SingleUse)
-                .register(rule::DeepControlFlow)
+                .register(rule::MaximumNesting)
                 .register(rule::FileLength)
                 .register(rule::FileName)
                 .register(rule::TestName)
@@ -163,10 +164,10 @@ mod tests {
         );
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
-        assert_eq!(summaries.len(), 35);
+        assert_eq!(summaries.len(), 36);
         assert_eq!(reporter.0.len(), 2);
         assert_eq!(reporter.0[0].rule, "environment-variable-access");
-        assert_eq!(reporter.0[1].rule, "deep-control-flow");
+        assert_eq!(reporter.0[1].rule, "maximum-nesting");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -197,7 +198,7 @@ fn caller() {
         let mut reporter = Memory(Vec::new());
         let summaries = Linter::standard().run([source], &mut reporter).unwrap();
 
-        assert_eq!(summaries.len(), 35);
+        assert_eq!(summaries.len(), 36);
         assert!(
             reporter
                 .0
@@ -219,7 +220,7 @@ fn caller() {
             "struct-noun-naming",
             "environment-variable-access",
             "single-use-free-function",
-            "deep-control-flow",
+            "maximum-nesting",
         ] {
             assert!(reporter.0.iter().any(|finding| finding.rule == rule), "missing {rule}");
         }
@@ -566,7 +567,7 @@ fn deep(value: bool) {
     if value { for _ in 0..1 { match value { true => {}, false => {} } } }
 }
 "#,
-            "deep-control-flow",
+            "maximum-nesting",
         );
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].subject, "deep");

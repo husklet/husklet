@@ -225,3 +225,53 @@ let arguments = command.resolve(&shell)?;
 A wrapper becomes justified only when it prevents meaningful value mixing, validates a stable contract,
 owns several cohesive operations, or forms a real architectural boundary. Domain-driven naming is not a
 reason to wrap every primitive or collection.
+
+## Do not combine traversal, outcome interpretation, and printing in nested control flow
+
+```rust
+fn run(benchmarks: &[Benchmark], targets: &[Target]) {
+    for benchmark in benchmarks {
+        for target in targets {
+            match benchmark.execute(target) {
+                Ok(samples) => {
+                    for sample in samples {
+                        println!("{} {} {sample}", benchmark.name(), target.name());
+                    }
+                }
+                Err(error) => println!("failed: {error}"),
+            }
+        }
+    }
+}
+```
+
+The `match` reaches syntactic nesting depth three, beyond the maximum of two, and its success arm nests a
+fourth traversal. The function simultaneously owns benchmark traversal, target traversal, outcome policy,
+sample traversal, formatting, and output. Move execution and reporting behavior onto the benchmark result
+and report entities so the top-level operation remains shallow. Do not silence the diagnostic, flatten the
+source cosmetically, or replace the blocks with closures that retain the same nested control flow.
+
+## Do not dispatch long options with a mutable argument cursor
+
+```rust
+fn parse(arguments: &[String]) -> Result<Options, Error> {
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--isa" => {
+                index += 1;
+                target = Some(Target::parse(&arguments[index])?);
+            }
+            "--repeat" => repeats += 1,
+            value => return Err(format!("unknown option {value}")),
+        }
+        index += 1;
+    }
+    Ok(Options { target, repeats })
+}
+```
+
+This manually couples traversal, option spelling, value consumption, validation, and error policy. Edge
+cases such as missing values, duplicate flags, `--help`, and unknown options drift between commands. Use a
+typed derive parser at the executable boundary and pass owned option values inward. Do not replace the index
+with a mutable iterator while retaining the same string-literal dispatch.
