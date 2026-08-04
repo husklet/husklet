@@ -23,6 +23,7 @@ enum operation {
     OP_IMUL,
     OP_ROTATE,
     OP_SHIFT,
+    OP_DOUBLE_SHIFT,
     OP_ADDRESS,
     OP_LOAD,
     OP_CMOV,
@@ -89,6 +90,7 @@ typedef struct instruction {
     uint8_t shift_kind;
     uint8_t shift_count;
     uint8_t variable_count;
+    uint8_t shift_right;
     uint8_t conditional;
     uint8_t load_width;
     uint8_t memory_operand;

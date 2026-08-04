@@ -758,6 +758,12 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 }
                 item->flags_only = item->alu_kind == 7u;
             }
+        } else if (semantic_prefix == 0u && opcode == 0x0fu && cursor < request->guest_size &&
+                   (request->guest_bytes[cursor] == 0xa4u || request->guest_bytes[cursor] == 0xa5u ||
+                    request->guest_bytes[cursor] == 0xacu || request->guest_bytes[cursor] == 0xadu)) {
+            uint8_t extension = request->guest_bytes[cursor++];
+            if (!hl_x86_decode_double_shift(request, block, item, extension, rex, operand_16,
+                                            address_32, start, &cursor)) break;
         } else if (hl_x86_test_opcode(opcode)) {
             if (!hl_x86_decode_test(request, block, item, opcode, rex, operand_16, address_32,
                                     semantic_prefix == 0xf0u, start, &cursor)) break;
@@ -1021,6 +1027,10 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (block.instructions[index].operation == OP_SHIFT) {
             words += hl_x86_shift_words(&block.instructions[index]);
             dirty |= UINT32_C(1) << block.instructions[index].destination;
+        } else if (block.instructions[index].operation == OP_DOUBLE_SHIFT) {
+            words += hl_x86_double_shift_words(&block.instructions[index]);
+            if (block.instructions[index].memory_operand == 0u)
+                dirty |= UINT32_C(1) << block.instructions[index].destination;
         } else if (block.instructions[index].operation == OP_ROTATE) {
             words += hl_x86_rotate_words(&block.instructions[index]);
             if (block.instructions[index].memory_operand == 0u)
@@ -1196,6 +1206,9 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
         } else if (item->operation == OP_SHIFT) {
             hl_x86_emit_shift(request->host_words, &words, item);
             dirty |= UINT32_C(1) << item->destination;
+        } else if (item->operation == OP_DOUBLE_SHIFT) {
+            hl_x86_emit_double_shift(request->host_words, &words, item);
+            if (item->memory_operand == 0u) dirty |= UINT32_C(1) << item->destination;
         } else if (item->operation == OP_ROTATE) {
             hl_x86_emit_rotate(request->host_words, &words, item);
             if (item->memory_operand == 0u) dirty |= UINT32_C(1) << item->destination;
