@@ -51,6 +51,12 @@ fn main() {
     let root = Path::new("../../native/exec");
     let inputs = NativeInputs::discover(root);
     let mut build = cc::Build::new();
+    // Hardened libc headers reject `_FORTIFY_SOURCE` at `-O0`. Keep the host's
+    // fortification policy and warnings intact by giving only the native C
+    // boundary the minimum optimization it requires in Cargo debug profiles.
+    if std::env::var("OPT_LEVEL").as_deref() == Ok("0") {
+        build.opt_level(1);
+    }
     build
         .files(&inputs.sources)
         .include(root.join("include"))
