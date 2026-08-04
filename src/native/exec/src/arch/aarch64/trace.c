@@ -6,6 +6,7 @@
 #include "broadcast.h"
 #include "compare.h"
 #include "conditional.h"
+#include "crypto.h"
 #include "direct.h"
 #include "divide.h"
 #include "field.h"
@@ -103,6 +104,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
     return hint_body(assembler, word) || hl_a64_move_body(assembler, word) || hl_a64_add_body(assembler, word) ||
            hl_a64_logical_body(assembler, word) || hl_a64_select_body(assembler, word) ||
            hl_a64_arithmetic_body(assembler, word) || hl_a64_bitwise_body(assembler, word) ||
+           hl_a64_crypto_body(assembler, word) ||
            hl_a64_broadcast_body(assembler, word) ||
            hl_a64_fp_move_body(assembler, word) ||
            hl_a64_floating_body(assembler, word) ||
