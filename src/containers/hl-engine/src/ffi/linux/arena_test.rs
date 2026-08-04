@@ -29,6 +29,20 @@ fn request(protection: Protection) -> MapRequest {
     }
 }
 
+fn fixed_request(address: u64, length: u64, backing_offset: u64, protection: Protection) -> MapRequest {
+    MapRequest {
+        placement: Placement::Fixed(GuestAddress::new(address)),
+        length,
+        alignment: PAGE,
+        protection,
+        backing: Backing::Anonymous {
+            identity: address + 1,
+            shared: false,
+        },
+        backing_offset,
+    }
+}
+
 #[test]
 fn ledger_offsets_survive() {
     let reference = hl_memory::SharedBackingRef {
@@ -54,6 +68,156 @@ fn ledger_offsets_survive() {
 
     ledger.apply(Operation::Unmap(0, PAGE)).unwrap();
     assert_eq!(ledger.reservation(PAGE * 2 + 64).unwrap().0, before);
+}
+
+#[test]
+fn hole_unmap_succeeds() {
+    let arena = VirtualMemory::reserve((PAGE * 3) as usize).unwrap();
+    let token = arena.stage(Operation::Unmap(PAGE, PAGE)).unwrap();
+    arena.commit(&[token]).unwrap();
+    assert!(arena.state.lock().unwrap().mappings.reservation(PAGE).is_err());
+}
+
+#[test]
+fn middle_unmap_splits() {
+    let arena = VirtualMemory::reserve((PAGE * 3) as usize).unwrap();
+    let mapping = fixed_request(0, PAGE * 3, PAGE * 4, Protection::READ);
+    let map = arena.stage(Operation::Map(0, mapping)).unwrap();
+    arena.commit(&[map]).unwrap();
+    let left = arena.state.lock().unwrap().mappings.reservation(64).unwrap().0;
+    let right = arena
+        .state
+        .lock()
+        .unwrap()
+        .mappings
+        .reservation(PAGE * 2 + 64)
+        .unwrap()
+        .0;
+
+    let unmap = arena.stage(Operation::Unmap(PAGE, PAGE)).unwrap();
+    arena.commit(&[unmap]).unwrap();
+    let ledger = &arena.state.lock().unwrap().mappings;
+    assert_eq!(ledger.reservation(64).unwrap().0, left);
+    assert!(ledger.reservation(PAGE).is_err());
+    assert_eq!(ledger.reservation(PAGE * 2 + 64).unwrap().0, right);
+}
+
+#[test]
+fn mixed_holes_unmap() {
+    let arena = VirtualMemory::reserve((PAGE * 5) as usize).unwrap();
+    for address in [PAGE, PAGE * 3] {
+        let map = arena
+            .stage(Operation::Map(
+                address,
+                fixed_request(address, PAGE, address, Protection::READ),
+            ))
+            .unwrap();
+        arena.commit(&[map]).unwrap();
+    }
+
+    let unmap = arena.stage(Operation::Unmap(0, PAGE * 5)).unwrap();
+    arena.commit(&[unmap]).unwrap();
+    let ledger = &arena.state.lock().unwrap().mappings;
+    for address in [0, PAGE, PAGE * 2, PAGE * 3, PAGE * 4] {
+        assert!(ledger.reservation(address).is_err());
+    }
+}
+
+#[test]
+fn unmap_rollback_exact() {
+    let path = std::path::PathBuf::from(format!("/tmp/hl-unmap-rollback-{}", process::id()));
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
+    file.set_len(PAGE * 6).unwrap();
+    let identity = FileIdentity { device: 31, object: 47 };
+    let arena = VirtualMemory::reserve((PAGE * 6) as usize).unwrap();
+    arena.register_file(identity, &file).unwrap();
+    let mappings = [
+        (PAGE, PAGE, Protection::READ.union(Protection::WRITE)),
+        (PAGE * 3, PAGE * 4, Protection::READ),
+    ];
+    for (address, backing_offset, protection) in mappings {
+        let request = MapRequest {
+            backing: Backing::File { identity, shared: true },
+            backing_offset,
+            ..fixed_request(address, PAGE, backing_offset, protection)
+        };
+        let map = arena.stage(Operation::Map(address, request)).unwrap();
+        arena.commit(&[map]).unwrap();
+    }
+    arena.write(PAGE, b"before").unwrap();
+    let before = mappings.map(|(address, _, _)| {
+        arena
+            .state
+            .lock()
+            .unwrap()
+            .mappings
+            .reservation(address + 64)
+            .unwrap()
+            .0
+    });
+
+    let unmap = arena.stage(Operation::Unmap(0, PAGE * 5)).unwrap();
+    let later = arena
+        .stage(Operation::Map(
+            PAGE * 5,
+            fixed_request(PAGE * 5, PAGE, 0, Protection::READ),
+        ))
+        .unwrap();
+    arena.inject_failures(&[2]);
+    assert!(arena.commit(&[unmap, later]).is_err());
+    arena.inject_failures(&[]);
+
+    {
+        let state = arena.state.lock().unwrap();
+        assert_eq!(state.mappings.reservation(PAGE + 64).unwrap().0, before[0]);
+        assert_eq!(state.mappings.reservation(PAGE * 3 + 64).unwrap().0, before[1]);
+        for address in [0, PAGE * 2, PAGE * 4, PAGE * 5] {
+            assert!(state.mappings.reservation(address).is_err());
+        }
+    }
+    let mut observed = [0; 6];
+    arena.read(PAGE, &mut observed).unwrap();
+    assert_eq!(&observed, b"before");
+    assert!(arena.write(PAGE * 3, b"x").is_err());
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn protect_hole_fails() {
+    let arena = VirtualMemory::reserve((PAGE * 3) as usize).unwrap();
+    for address in [0, PAGE * 2] {
+        let map = arena
+            .stage(Operation::Map(
+                address,
+                fixed_request(address, PAGE, address, Protection::READ),
+            ))
+            .unwrap();
+        arena.commit(&[map]).unwrap();
+    }
+    let before = [0, PAGE * 2].map(|address| {
+        arena
+            .state
+            .lock()
+            .unwrap()
+            .mappings
+            .reservation(address + 64)
+            .unwrap()
+            .0
+    });
+
+    let protect = arena
+        .stage(Operation::Protect(0, PAGE * 3, Protection::WRITE))
+        .unwrap();
+    assert!(arena.commit(&[protect]).is_err());
+    let ledger = &arena.state.lock().unwrap().mappings;
+    assert_eq!(ledger.reservation(64).unwrap().0, before[0]);
+    assert!(ledger.reservation(PAGE).is_err());
+    assert_eq!(ledger.reservation(PAGE * 2 + 64).unwrap().0, before[1]);
 }
 
 #[test]

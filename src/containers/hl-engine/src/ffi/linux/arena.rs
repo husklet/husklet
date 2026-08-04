@@ -87,9 +87,9 @@ impl Ledger {
                     self.apply(Operation::Unmap(source.start().get(), source.length()))?;
                 }
             }
-            Operation::Unmap(offset, length) => self.replace(offset, length, None)?,
+            Operation::Unmap(offset, length) => self.replace(offset, length, None, false)?,
             Operation::Protect(offset, length, protection) => {
-                self.replace(offset, length, Some(protection))?;
+                self.replace(offset, length, Some(protection), true)?;
             }
         }
         Ok(())
@@ -144,7 +144,12 @@ impl Ledger {
             Operation::Backing(_) => Ok(Vec::new()),
             Operation::Map(offset, request) => Ok(vec![Operation::Unmap(offset, request.length)]),
             Operation::Remap(_, _, _, _) => Ok(Vec::new()),
-            Operation::Unmap(offset, length) | Operation::Protect(offset, length, _) => Ok(self
+            Operation::Unmap(offset, length) => Ok(self
+                .intersections(offset, length)?
+                .into_iter()
+                .map(|(start, mapping)| Operation::Protect(start, mapping.length, mapping.protection))
+                .collect()),
+            Operation::Protect(offset, length, _) => Ok(self
                 .prior(offset, length)?
                 .into_iter()
                 .map(|(start, mapping)| Operation::Protect(start, mapping.length, mapping.protection))
@@ -152,9 +157,19 @@ impl Ledger {
         }
     }
 
-    fn replace(&mut self, offset: u64, length: u64, protection: Option<Protection>) -> Result<(), MemoryError> {
+    fn replace(
+        &mut self,
+        offset: u64,
+        length: u64,
+        protection: Option<Protection>,
+        require_coverage: bool,
+    ) -> Result<(), MemoryError> {
         let end = offset.checked_add(length).ok_or(MemoryError::InvalidRange)?;
-        self.prior(offset, length)?;
+        if require_coverage {
+            self.prior(offset, length)?;
+        } else {
+            self.intersections(offset, length)?;
+        }
         let affected = self
             .0
             .range(..end)
@@ -243,6 +258,40 @@ impl Ledger {
             cursor = range_end;
         }
         Ok(ranges)
+    }
+
+    fn intersections(&self, offset: u64, length: u64) -> Result<Vec<(u64, Mapping)>, MemoryError> {
+        let end = offset.checked_add(length).ok_or(MemoryError::InvalidRange)?;
+        if length == 0 {
+            return Err(MemoryError::InvalidRange);
+        }
+        self.0
+            .range(..end)
+            .filter_map(|(start, mapping)| {
+                let mapping_end = match start.checked_add(mapping.length) {
+                    Some(value) => value,
+                    None => return Some(Err(MemoryError::InvalidRange)),
+                };
+                if mapping_end <= offset {
+                    return None;
+                }
+                let intersection_start = (*start).max(offset);
+                let intersection_end = mapping_end.min(end);
+                let backing_offset = match mapping.backing_offset.checked_add(intersection_start - start) {
+                    Some(value) => value,
+                    None => return Some(Err(MemoryError::InvalidRange)),
+                };
+                Some(Ok((
+                    intersection_start,
+                    Mapping {
+                        length: intersection_end - intersection_start,
+                        protection: mapping.protection,
+                        backing: mapping.backing,
+                        backing_offset,
+                    },
+                )))
+            })
+            .collect()
     }
 
     fn overlaps(&self, offset: u64, length: u64) -> bool {
