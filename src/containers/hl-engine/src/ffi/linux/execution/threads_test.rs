@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use hl_execution::{Aarch64CpuState, EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionSnapshot};
 use hl_runtime::{PreparedThread, RuntimeThreadError, RuntimeThreadPort};
@@ -1138,4 +1139,94 @@ fn scheduler_continuation_denies_peer_resume_signal_cancel_control_and_retire() 
     let retire_token = retired.continuation(&run).unwrap();
     retired.terminate(first).unwrap();
     assert!(!retire_token.is_current());
+}
+
+#[test]
+fn queued_scheduler_transition_denies_continuation_before_taking_set_lock() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let threads = Arc::new(ThreadSet::new(1).unwrap());
+    publish(&threads, process, first, 0x1000, space());
+    let run = threads.next().unwrap();
+    let continuation = threads.continuation(&run).unwrap();
+    let contender = Arc::clone(&threads);
+    let transition = threads.with_state_lock_for_test(|| {
+        let transition = std::thread::spawn(move || contender.release(&run));
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while continuation.is_current() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(!continuation.is_current());
+        transition
+    });
+    transition.join().unwrap().unwrap();
+}
+
+#[test]
+fn saturated_scheduler_epoch_permanently_denies_continuation() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let threads = ThreadSet::new(1).unwrap();
+    publish(&threads, process, first, 0x1000, space());
+    let run = threads.next().unwrap();
+    threads.saturate_continuation_for_test();
+
+    assert!(threads.continuation(&run).is_none());
+    assert!(threads.continuation(&run).is_none());
+}
+
+#[test]
+fn scheduler_continuation_rejects_wrong_process_identity() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let (other_process, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(1).unwrap();
+    publish(&threads, process, first, 0x1000, space());
+    let mut run = threads.next().unwrap();
+    run.process = other_process;
+
+    assert!(threads.continuation(&run).is_none());
+}
+
+#[test]
+fn image_generation_replacement_invalidates_scheduler_continuation() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    publish(&threads, process, first, 0x1000, space());
+    let run = threads.next().unwrap();
+    let continuation = threads.continuation(&run).unwrap();
+    let (router, cancellation) = context();
+    let mut image = threads
+        .prepare_image(first, first, router, cancellation, space(), snapshot(0x2000))
+        .unwrap();
+
+    image.publish().unwrap();
+    assert!(!continuation.is_current());
+    let replacement = threads.next().unwrap();
+    assert_ne!(replacement.generation, run.generation);
+    assert!(threads.continuation(&run).is_none());
+    image.finish();
 }

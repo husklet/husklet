@@ -151,6 +151,18 @@ pub(super) struct PreparedImage {
 }
 
 impl ThreadSet {
+    #[cfg(test)]
+    pub(super) fn with_state_lock_for_test<T>(&self, operation: impl FnOnce() -> T) -> T {
+        let _state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        operation()
+    }
+
+    #[cfg(test)]
+    pub(super) fn saturate_continuation_for_test(&self) {
+        self.continuation.pending.store(u64::MAX, Ordering::Release);
+        drop(self.continuation.request());
+    }
+
     fn continuation_request(&self) -> ContinuationRequest<'_> {
         self.continuation.request()
     }

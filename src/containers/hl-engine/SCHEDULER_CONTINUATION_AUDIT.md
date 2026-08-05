@@ -27,6 +27,7 @@ confined to the signal implementation.
 | Exact thread/process/generation ownership | `ThreadRun`, `SetState::ownership` | implemented |
 | Sole-runnable admission under the scheduler lock | `ThreadSet::continuation` | implemented |
 | Lock-free continuation check | `SchedulerContinuation::is_current` | implemented |
+| Production extended-activation consumer | `scheduler::advance` solo native budget and inline-service admission | implemented |
 | A queued state change denies admission before waiting for the set lock | `ContinuationEpoch::request` pending counter | implemented |
 | Peer runnable, control, retirement, and replacement invalidation | `ThreadSet`, `ThreadStage`, `PreparedImage` transitions | implemented conservatively |
 | Signal and cancellation invalidation | epoch requests plus interrupt/cancellation atomics | implemented |
@@ -40,5 +41,14 @@ that request remains queued. Saturation fails closed. Completion advances the
 epoch before releasing the pending marker, so an activation can never be
 revived by a completed or overlapping state transition.
 
-Focused tests cover exact sole-runnable issuance and invalidation by peer
-publication/resume, interrupt, cancellation, process control, and retirement.
+`scheduler::advance` captures the token while the exact `ThreadRun` still owns
+the scheduler slot. Only a current token selects the larger solo native budget,
+and the same token must remain current before the scheduler services a dispatch
+inline. The next turn captures a fresh token, so syscall-side state changes do
+not inherit an earlier grant. This consumes the scheduler prerequisite without
+claiming that the still-missing borrowed native refill callback exists.
+
+Focused tests cover exact sole-runnable issuance, a mutation queued behind the
+set lock, fail-closed counter saturation, wrong-process identity, generation
+replacement, and invalidation by peer publication/resume, interrupt,
+cancellation, process control, and retirement.

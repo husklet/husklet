@@ -648,7 +648,15 @@ impl GuestExecutor {
         // ownership, and parked peers; the fixed bound restores the ordinary
         // signal, CPU-timer, cancellation, accounting, and scheduling boundary.
         loop {
-            let native_budget = Self::native_budget(threads.is_only_runnable(run.thread));
+            // Capture one generation-qualified scheduler grant before extending
+            // this activation. A queued state transition publishes against the
+            // grant before waiting for the scheduler lock, so neither the solo
+            // native budget nor the following inline service can race past it.
+            let continuation = threads.continuation(&run);
+            let may_extend = continuation
+                .as_ref()
+                .is_some_and(threads::SchedulerContinuation::is_current);
+            let native_budget = Self::native_budget(may_extend);
             let result = Self::execute_turn(isa, run, native, native_budget);
             run = result.run;
             if matches!(result.action, TurnAction::Dispatch) && Self::observes_cpu_accounting(isa, &run.machine) {
@@ -666,8 +674,9 @@ impl GuestExecutor {
                 && serviced < INLINE_SERVICE_LIMIT
                 && matches!(trace_entry, Ok(TraceBoundary::Continue))
                 && !native.boundary_sensitive.contains(&run.process)
-                && !run.interrupt.is_set()
-                && threads.is_only_runnable(run.thread)
+                && continuation
+                    .as_ref()
+                    .is_some_and(threads::SchedulerContinuation::is_current)
                 && !threads.has_parked()
                 && matches!(Self::blocks(isa, &run.machine, &run.router, true), Ok(false));
             if may_inline {
