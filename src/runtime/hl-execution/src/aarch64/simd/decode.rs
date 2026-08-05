@@ -247,9 +247,9 @@ impl Aarch64SimdDecoder {
         Ok(Aarch64Instruction::SimdPermute {
             operation,
             lane_bits: 8 << size,
-            left: (word >> 5 & 31) as u8,
-            right: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            left: Self::register(word, 5),
+            right: Self::register(word, 16),
+            destination: Self::register(word, 0),
             wide,
         })
     }
@@ -264,7 +264,7 @@ impl Aarch64SimdDecoder {
             Self::expand_immediate(operation, cmode, o2, wide, immediate).ok_or(Aarch64DecodeError::Reserved)?;
         let read_modify = cmode & 1 != 0 && (cmode >> 2 & 3) != 3;
         Ok(Aarch64Instruction::SimdImmediate {
-            destination: (word & 31) as u8,
+            destination: Self::register(word, 0),
             pattern,
             invert: !read_modify && operation != 0 && (cmode >> 1 & 7) != 7,
             modify: read_modify.then_some(if operation == 0 {
@@ -293,9 +293,9 @@ impl Aarch64SimdDecoder {
             };
             return Ok(Aarch64Instruction::SimdLogic {
                 operation,
-                left: (word >> 5 & 31) as u8,
-                right: (word >> 16 & 31) as u8,
-                destination: (word & 31) as u8,
+                left: Self::register(word, 5),
+                right: Self::register(word, 16),
+                destination: Self::register(word, 0),
                 wide,
             });
         }
@@ -335,9 +335,9 @@ impl Aarch64SimdDecoder {
             return Ok(Aarch64Instruction::SimdLane {
                 operation,
                 lane_bits: 8 << size,
-                left: (word >> 5 & 31) as u8,
-                right: (word >> 16 & 31) as u8,
-                destination: (word & 31) as u8,
+                left: Self::register(word, 5),
+                right: Self::register(word, 16),
+                destination: Self::register(word, 0),
                 wide,
             });
         }
@@ -356,9 +356,9 @@ impl Aarch64SimdDecoder {
             saturating: opcode != 0x10,
             unsigned: opcode != 0x10 && word >> 29 & 1 != 0,
             lane_bits: 8 << size,
-            left: (word >> 5 & 31) as u8,
-            right: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            left: Self::register(word, 5),
+            right: Self::register(word, 16),
+            destination: Self::register(word, 0),
             wide,
         })
     }
@@ -376,9 +376,9 @@ impl Aarch64SimdDecoder {
                 operation: SimdWideOperation::PairAddLong,
                 signed: !unsigned,
                 lane_bits: 8 << size,
-                left: (word >> 5 & 31) as u8,
+                left: Self::register(word, 5),
                 right: 0,
-                destination: (word & 31) as u8,
+                destination: Self::register(word, 0),
                 high: wide,
             });
         }
@@ -390,9 +390,9 @@ impl Aarch64SimdDecoder {
                 operation: SimdWideOperation::ShiftLong { amount: 8 << size },
                 signed: false,
                 lane_bits: 8 << size,
-                left: (word >> 5 & 31) as u8,
+                left: Self::register(word, 5),
                 right: 0,
-                destination: (word & 31) as u8,
+                destination: Self::register(word, 0),
                 high: wide,
             });
         }
@@ -420,9 +420,9 @@ impl Aarch64SimdDecoder {
                 operation,
                 signed: !unsigned,
                 lane_bits: 8 << size,
-                left: (word >> 5 & 31) as u8,
+                left: Self::register(word, 5),
                 right: 0,
-                destination: (word & 31) as u8,
+                destination: Self::register(word, 0),
                 high: wide,
             });
         }
@@ -456,8 +456,8 @@ impl Aarch64SimdDecoder {
             } else {
                 8 << size
             },
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::register(word, 5),
+            destination: Self::register(word, 0),
             wide,
         })
     }
@@ -482,9 +482,9 @@ impl Aarch64SimdDecoder {
                 },
                 signed: !unsigned,
                 lane_bits,
-                left: (word >> 5 & 31) as u8,
+                left: Self::register(word, 5),
                 right: 0,
-                destination: (word & 31) as u8,
+                destination: Self::register(word, 0),
                 high: word >> 30 & 1 != 0,
             });
         }
@@ -512,9 +512,9 @@ impl Aarch64SimdDecoder {
                 },
                 signed: false,
                 lane_bits,
-                left: (word >> 5 & 31) as u8,
+                left: Self::register(word, 5),
                 right: 0,
-                destination: (word & 31) as u8,
+                destination: Self::register(word, 0),
                 high: word >> 30 & 1 != 0,
             });
         }
@@ -548,8 +548,8 @@ impl Aarch64SimdDecoder {
             operation,
             amount,
             lane_bits,
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::register(word, 5),
+            destination: Self::register(word, 0),
             wide,
         })
     }
@@ -577,9 +577,9 @@ impl Aarch64SimdDecoder {
             operation,
             signed: !rounding,
             lane_bits: 8 << size,
-            left: (word >> 5 & 31) as u8,
-            right: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            left: Self::register(word, 5),
+            right: Self::register(word, 16),
+            destination: Self::register(word, 0),
             high: word >> 30 & 1 != 0,
         })
     }
@@ -601,8 +601,8 @@ impl Aarch64SimdDecoder {
         Ok(Aarch64Instruction::SimdReduce {
             operation,
             lane_bits: 8 << size,
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::register(word, 5),
+            destination: Self::register(word, 0),
             wide,
         })
     }
