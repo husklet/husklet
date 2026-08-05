@@ -160,6 +160,9 @@ impl ReadinessRegistry {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the object cannot create the readiness subscription.
     pub fn subscribe(
         &self,
         observer: Arc<dyn ReadinessObserver>,

@@ -55,11 +55,17 @@ impl Readiness {
 
 pub trait PreparedAtomicRead: Send {
     fn bytes(&self) -> &[u8];
+    ///
+    /// # Errors
+    /// Returns an error if the prepared operation cannot be completed.
     fn commit(self: Box<Self>) -> Result<(), ObjectError>;
 
     /// Commits an accessible prefix when this object has byte-stream partial
     /// read semantics. Record-oriented objects retain the default and leave
     /// the transaction untouched unless the complete record was copied.
+    ///
+    /// # Errors
+    /// Returns an error if the prepared operation cannot be completed.
     fn commit_prefix(self: Box<Self>, count: usize) -> Result<bool, ObjectError> {
         if count != self.bytes().len() {
             return Ok(false);
@@ -71,6 +77,9 @@ pub trait PreparedAtomicRead: Send {
 
 pub trait PreparedSpliceRead: Send {
     fn bytes(&self) -> &[u8];
+    ///
+    /// # Errors
+    /// Returns an error if the prepared operation cannot be completed.
     fn commit(self: Box<Self>, count: usize) -> Result<(), ObjectError>;
 }
 

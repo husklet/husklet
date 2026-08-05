@@ -58,8 +58,14 @@ pub enum DescriptorCheckpointError {
 }
 
 pub trait DescriptorObjectCheckpoint: Send + Sync {
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError>;
 
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     fn rebind(
         &self,
         description: &OpenDescriptionImage,
@@ -71,6 +77,9 @@ impl DescriptorTable {
     ///
     /// The pin retains ownership but is not an active guest operation, so a
     /// durable epoll watch does not prevent later checkpoint quiescence.
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     pub fn pin_checkpoint(&self, number: i32) -> Result<crate::OperationLease, crate::DescriptorError> {
         if !self.checkpoint.frozen() {
             return Err(crate::DescriptorError::Corrupt);
@@ -79,6 +88,9 @@ impl DescriptorTable {
     }
 
     /// Exports an OFD by durable identity while a replacement table is frozen.
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     pub fn export_checkpoint_identity(&self, identity: u64) -> Result<crate::DescriptionRef, crate::DescriptorError> {
         if !self.checkpoint.frozen() {
             return Err(crate::DescriptorError::Corrupt);
@@ -104,6 +116,9 @@ impl DescriptorTable {
             .clear();
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     pub fn checkpoint_image(
         &self,
         objects: &dyn DescriptorObjectCheckpoint,
@@ -185,6 +200,9 @@ impl DescriptorTable {
         Ok(image)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     pub fn restore_checkpoint(
         image: &DescriptorTableImage,
         objects: &dyn DescriptorObjectCheckpoint,
@@ -255,6 +273,9 @@ impl DescriptorTable {
 }
 
 impl DescriptorTableImage {
+    ///
+    /// # Errors
+    /// Returns an error if descriptor state is invalid or object checkpointing fails.
     pub fn validate(&self) -> Result<(), DescriptorCheckpointError> {
         if self.version != DESCRIPTOR_CHECKPOINT_VERSION {
             return Err(DescriptorCheckpointError::Version);

@@ -87,11 +87,16 @@ impl DescriptorTable {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .limit;
-        self.admission_limit
-            .store(limit.min(capacity as u64) as i32, Ordering::Release);
+        let capacity_limit = u64::try_from(capacity).unwrap_or_default();
+        let bounded = limit.min(capacity_limit);
+        let admission_limit = i32::try_from(bounded).unwrap_or(capacity);
+        self.admission_limit.store(admission_limit, Ordering::Release);
     }
 
     /// Reserves the lowest free descriptor at or above `minimum`.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn reserve(&self, minimum: i32) -> Result<Reservation<'_>, DescriptorError> {
         let admission = self.checkpoint.operation()?;
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -108,6 +113,9 @@ impl DescriptorTable {
     }
 
     /// Reserves one exact descriptor number without replacing a live entry.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn reserve_exact(&self, number: i32) -> Result<Reservation<'_>, DescriptorError> {
         let admission = self.checkpoint.operation()?;
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -130,6 +138,9 @@ impl DescriptorTable {
     }
 
     /// Publishes a new open file description through a reservation.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn commit(
         &self,
         mut reservation: Reservation<'_>,
@@ -159,6 +170,9 @@ impl DescriptorTable {
     ///
     /// This implements the allocation rule shared by open, `dup`, and
     /// `F_DUPFD`.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn install(
         &self,
         minimum: i32,
@@ -206,6 +220,9 @@ impl DescriptorTable {
     }
 
     /// Pins an admitted operation independently of descriptor lifetime.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn pin(&self, number: i32) -> Result<OperationLease, DescriptorError> {
         self.checkpoint.admit()?;
         self.pin_entry(number, true)
@@ -217,9 +234,7 @@ impl DescriptorTable {
 
     fn pin_entry(&self, number: i32, admitted: bool) -> Result<OperationLease, DescriptorError> {
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let descriptor = if let Some(descriptor) = state.entries.get(&number) {
-            descriptor
-        } else {
+        let Some(descriptor) = state.entries.get(&number) else {
             if admitted {
                 self.checkpoint.release();
             }
@@ -238,6 +253,9 @@ impl DescriptorTable {
     }
 
     /// Updates only the descriptor-local flags.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn set_flags(&self, number: i32, flags: DescriptorFlags) -> Result<(), DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -247,6 +265,9 @@ impl DescriptorTable {
     }
 
     /// Reads descriptor-local flags without exposing the table entry.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn flags(&self, number: i32) -> Result<DescriptorFlags, DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -258,6 +279,9 @@ impl DescriptorTable {
     }
 
     /// Closes one descriptor number.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn close(&self, number: i32) -> Result<(), DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -273,6 +297,9 @@ impl DescriptorTable {
     ///
     /// The new descriptor always starts with the supplied local flags. Plain
     /// `dup` and `F_DUPFD` pass [`DescriptorFlags::default`].
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn duplicate(&self, source: i32, minimum: i32, flags: DescriptorFlags) -> Result<i32, DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
         let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -294,6 +321,9 @@ impl DescriptorTable {
     }
 
     /// Implements the atomic descriptor-table portion of `dup2` and `dup3`.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn duplicate_exact(
         &self,
         source: i32,
@@ -384,6 +414,9 @@ impl DescriptorTable {
 
     /// Verifies reference counts, generation publication, and reservation
     /// exclusion. This is intended for debug gates and differential tests.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid, unavailable, or outside the table limit.
     pub fn validate(&self) -> Result<(), DescriptorError> {
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state

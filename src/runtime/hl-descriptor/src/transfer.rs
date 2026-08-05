@@ -73,6 +73,9 @@ impl DescriptionInstallTransaction<'_, '_> {
         self.numbers.iter().map(|(number, _)| *number).collect()
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn commit(mut self) -> Result<Vec<i32>, DescriptorError> {
         let mut state = self
             .table
@@ -124,6 +127,9 @@ impl DescriptorTable {
     /// Exports a non-forgeable description capability for SCM or fork transfer.
     /// A weak durable-root registration lets checkpoint discover queue-only
     /// references without extending their ordinary lifetime.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn export_description(&self, number: i32) -> Result<DescriptionRef, DescriptorError> {
         let descriptor = self.lookup(number)?;
         self.state
@@ -135,6 +141,9 @@ impl DescriptorTable {
     }
 
     /// Installs a transferred description under a newly allocated descriptor.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn install_description(
         &self,
         minimum: i32,
@@ -158,6 +167,9 @@ impl DescriptorTable {
         Ok(number)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn prepare_descriptions<'table, 'rights>(
         &'table self,
         minimum: i32,
@@ -193,6 +205,9 @@ impl DescriptorTable {
     ///
     /// Capacity and target generations are determined before any description
     /// reference becomes visible.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn install_descriptions(
         &self,
         minimum: i32,
@@ -334,6 +349,9 @@ impl Drop for PreparedInstallBatch<'_> {
 impl DescriptorTable {
     /// Attaches an object to a descriptor number reserved before external open
     /// side effects begin.
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn prepare_reserved(
         &self,
         mut reservation: crate::Reservation<'_>,
@@ -365,6 +383,9 @@ impl DescriptorTable {
         })
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn prepare_open(
         &self,
         minimum: i32,
@@ -392,6 +413,9 @@ impl DescriptorTable {
         })
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if a descriptor is invalid or the requested installation cannot be reserved.
     pub fn prepare_open_batch(
         &self,
         minimum: i32,

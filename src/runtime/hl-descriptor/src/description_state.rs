@@ -4,6 +4,9 @@ use crate::{DescriptorError, DescriptorSnapshot, DescriptorTable, LeaseKind, Sig
 
 impl DescriptorTable {
     /// Returns a pointer-free snapshot of descriptor and shared OFD state.
+    ///
+    /// # Errors
+    /// Returns an error if the descriptor is absent or its state cannot be updated.
     pub fn snapshot(&self, number: i32) -> Result<DescriptorSnapshot, DescriptorError> {
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptor = state.entries.get(&number).ok_or(DescriptorError::BadDescriptor)?;
@@ -27,6 +30,9 @@ impl DescriptorTable {
     }
 
     /// Updates OFD-local status flags shared by all aliases.
+    ///
+    /// # Errors
+    /// Returns an error if the descriptor is absent or its state cannot be updated.
     pub fn set_status(&self, number: i32, status: StatusFlags) -> Result<(), DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
         let descriptor = self.lookup(number)?;
@@ -40,6 +46,9 @@ impl DescriptorTable {
     }
 
     /// Updates the shared OFD offset.
+    ///
+    /// # Errors
+    /// Returns an error if the descriptor is absent or its state cannot be updated.
     pub fn set_offset(&self, number: i32, offset: u64) -> Result<(), DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
         let descriptor = self.lookup(number)?;

@@ -105,10 +105,16 @@ impl OperationLease {
             .status
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
         self.description.object.read(output)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read_with_cancellation(
         &self,
         output: &mut [u8],
@@ -117,22 +123,37 @@ impl OperationLease {
         self.description.object.read_with_cancellation(output, cancellation)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read_context(&self, output: &mut [u8], context: crate::OperationContext<'_>) -> Result<usize, ObjectError> {
         self.description.object.read_context(output, context)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn probe_read(&self, maximum: usize) -> Result<Option<usize>, ObjectError> {
         self.description.object.probe_read(maximum)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn probe_write(&self, maximum: usize) -> Result<Option<usize>, ObjectError> {
         self.description.object.probe_write(maximum)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn prepare_atomic_read(&self, maximum: usize) -> Result<Option<Box<dyn PreparedAtomicRead>>, ObjectError> {
         self.description.object.prepare_atomic_read(maximum)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn prepare_atomic_context(
         &self,
         maximum: usize,
@@ -141,6 +162,9 @@ impl OperationLease {
         self.description.object.prepare_atomic_context(maximum, context)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn prepare_splice_read(
         &self,
         offset: Option<u64>,
@@ -152,6 +176,9 @@ impl OperationLease {
             .object
             .prepare_splice_read(offset, maximum, nonblocking, cancellation)
     }
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn copy_file_range(
         &self,
         target: &Self,
@@ -171,10 +198,16 @@ impl OperationLease {
         )
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn write(&self, input: &[u8]) -> Result<usize, ObjectError> {
         self.description.object.write(input)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn write_with_cancellation(
         &self,
         input: &[u8],
@@ -183,10 +216,16 @@ impl OperationLease {
         self.description.object.write_with_cancellation(input, cancellation)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn write_context(&self, input: &[u8], context: crate::OperationContext<'_>) -> Result<usize, ObjectError> {
         self.description.object.write_context(input, context)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read_vector_context(
         &self,
         output: &mut [IoSliceMut<'_>],
@@ -195,6 +234,9 @@ impl OperationLease {
         self.description.object.read_vector_context(output, context)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn write_vector_context(
         &self,
         input: &[IoSlice<'_>],
@@ -203,54 +245,93 @@ impl OperationLease {
         self.description.object.write_vector_context(input, context)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read_vector_at(&self, offset: u64, output: &mut [IoSliceMut<'_>]) -> Result<usize, ObjectError> {
         self.description.object.read_vector_at(offset, output)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn write_vector_at(&self, offset: u64, input: &[IoSlice<'_>]) -> Result<usize, ObjectError> {
         self.description.object.write_vector_at(offset, input)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read_at(&self, offset: u64, output: &mut [u8]) -> Result<usize, ObjectError> {
         self.description.object.read_at(offset, output)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn write_at(&self, offset: u64, input: &[u8]) -> Result<usize, ObjectError> {
         self.description.object.write_at(offset, input)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
         self.description.object.seek(position)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
         self.description.object.metadata()
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn truncate(&self, size: u64) -> Result<(), ObjectError> {
         self.description.object.truncate(size)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn allocate(&self, request: crate::AllocationRequest) -> Result<(), ObjectError> {
         self.description.object.allocate(request)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn flock(&self, operation: u32, cancellation: &dyn crate::OperationCancellation) -> Result<(), ObjectError> {
         self.description.object.flock(operation, cancellation)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn synchronize(&self, data_only: bool) -> Result<(), ObjectError> {
         self.description.object.synchronize(data_only)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn read_directory(&self, maximum: usize) -> Result<DirectoryBatch, ObjectError> {
         self.description.object.read_directory(maximum)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn commit_directory(&self, token: DirectoryBatchToken, count: usize) -> Result<(), ObjectError> {
         self.description.object.commit_directory(token, count)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn set_status(&self, status: StatusFlags) -> Result<(), ObjectError> {
         self.description.object.set_status_flags(status)?;
         self.description
@@ -261,6 +342,9 @@ impl OperationLease {
         Ok(())
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn pipe_capacity(&self) -> Result<usize, ObjectError> {
         self.description.object.pipe_capacity()
     }
@@ -270,14 +354,23 @@ impl OperationLease {
         self.description.object.atomic_write_limit()
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn set_pipe_capacity(&self, requested: usize) -> Result<usize, ObjectError> {
         self.description.object.set_pipe_capacity(requested)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn add_seals(&self, seals: u8) -> Result<u8, ObjectError> {
         self.description.object.add_seals(seals)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn seals(&self) -> Result<u8, ObjectError> {
         self.description.object.seals()
     }
@@ -292,6 +385,9 @@ impl OperationLease {
         self.description.object.readiness(interests)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn subscribe_readiness(
         &self,
         observer: Arc<dyn ReadinessObserver>,
@@ -306,6 +402,9 @@ impl OperationLease {
     }
 
     /// Replaces the one signal-driven readiness registration owned by this OFD.
+    ///
+    /// # Errors
+    /// Returns an error reported by the leased open-file description.
     pub fn set_async_observer(&self, observer: Option<Arc<dyn ReadinessObserver>>) -> Result<(), ObjectError> {
         let replacement = match observer {
             Some(observer) => Some(self.subscribe_readiness(observer)?),
