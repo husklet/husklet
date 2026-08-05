@@ -17,7 +17,16 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let registry = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+        // Keep one leader slot and one peer slot. The release tests below then
+        // prove that exec actually returns the retired peer's capacity without
+        // depending on the allocator's normal delayed-reuse policy.
+        let registry = Arc::new(
+            TaskRegistry::new(RegistryConfig {
+                max_threads: 2,
+                ..RegistryConfig::default()
+            })
+            .unwrap(),
+        );
         let credentials = ProcessCredentials::new(10, 20, &[], 8).unwrap();
         let (process, thread) = registry.create_init(credentials, ProcessLimits::empty()).unwrap();
         let handled = SignalNumber::new(10).unwrap();

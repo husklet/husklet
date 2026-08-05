@@ -550,10 +550,20 @@ fn clone_plan_is() {
     let committed = registry.begin_clone_thread(source).unwrap();
     let current = committed.thread();
     assert_ne!(stale, current);
-    assert_eq!(stale.number(), current.number());
+    assert_ne!(stale.number(), current.number());
     registry.commit_clone_thread(committed).unwrap();
     assert_eq!(registry.request_cancellation(stale), Err(TaskError::InvalidThread));
-    assert_eq!(registry.snapshot().threads[1].lifecycle, ThreadLifecycle::Runnable);
+    let snapshot = registry.snapshot();
+    assert!(!snapshot.threads.iter().any(|thread| thread.id == stale));
+    assert_eq!(
+        snapshot
+            .threads
+            .iter()
+            .find(|thread| thread.id == current)
+            .unwrap()
+            .lifecycle,
+        ThreadLifecycle::Runnable,
+    );
 }
 
 #[test]
