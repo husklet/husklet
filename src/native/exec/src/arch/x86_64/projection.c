@@ -100,6 +100,7 @@ int hl_x86_projection_resolve(const hl_native_projection *projection, hl_native_
     while (cursor < last) {
         view = containing(projection, cursor);
         if (view == NULL || (view->permissions & required) != required ||
+            view->permissions != permissions ||
             view->host_first - view->guest_first != delta)
             goto fault;
         cursor = view->guest_last < last ? view->guest_last : last;
