@@ -74,7 +74,10 @@ static int continuation_contract(void) {
     hl_native_x86_64_cpu state;
     hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
     hl_native_projection_view view = {
-        0x9000, 0x9010, (uint64_t)(uintptr_t)one, 7, HL_NATIVE_ACCESS_READ, 0,
+        .guest_first = 0x9000, .guest_last = 0x9010,
+        .host_first = (uint64_t)(uintptr_t)one, .mapping_incarnation = 7,
+        .permissions = HL_NATIVE_ACCESS_READ,
+        .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 0,
     };
     hl_native_projection projection = {&view, 1, 7, 0};
 
@@ -130,10 +133,14 @@ static int projected_return_progress(void) {
     uint64_t destination = 0;
     uint64_t return_targets[64];
     hl_native_projection_view views[] = {
-        {0x9000, 0x9008, (uint64_t)(uintptr_t)&destination, 7,
-         HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0},
-        {0xa000, 0xa200, (uint64_t)(uintptr_t)return_targets, 7,
-         HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0},
+        {.guest_first = 0x9000, .guest_last = 0x9008,
+         .host_first = (uint64_t)(uintptr_t)&destination, .mapping_incarnation = 7,
+         .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+         .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 0},
+        {.guest_first = 0xa000, .guest_last = 0xa200,
+         .host_first = (uint64_t)(uintptr_t)return_targets, .mapping_incarnation = 7,
+         .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+         .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 1},
     };
     hl_native_projection projection = {views, 2, 7, 0};
     hl_native_source_span span = {0x8200, tail, sizeof tail, 7, 16};
@@ -223,7 +230,7 @@ static int alternating_writable_views_stay_native(void) {
     CHECK(state.fault_access == 0 && state.fault_size == 0);
     CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK);
     CHECK(diagnostic.operand_cache_hits == 0 && diagnostic.operand_callbacks == 0 &&
-          diagnostic.boundary_fallback == 1);
+          diagnostic.x86_public_exits == 1);
     hl_native_destroy(executor);
     return 0;
 }
