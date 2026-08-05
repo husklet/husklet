@@ -1,7 +1,10 @@
-build:
-  source: main.c
-  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
-  flags: [-static-pie, -O2, -std=c11]
+image: alpine:3.20
+execution: { native: true, diagnostics: true }
+workload:
+  rootfs: { executable: /bin/true }
+phases: [create, attach, start, wait-and-drain, output-read]
 cases:
   - id: lifecycle
-    repetitions: 11
+    warmups: 1
+    samples: 11
+    expect: { stdout_contains: golden/empty.txt }

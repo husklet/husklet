@@ -1,6 +1,6 @@
 use super::{
     Error,
-    definition::{Benchmark, BenchmarkCase},
+    definition::{Benchmark, BenchmarkCase, LifecyclePhase},
 };
 use crate::{runtime::image::TestImage, suite::Target};
 use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
@@ -44,8 +44,8 @@ pub struct Provenance {
 }
 
 pub struct Prepared {
-    artifact: std::path::PathBuf,
-    artifact_identity: String,
+    artifact: Option<std::path::PathBuf>,
+    artifact_identity: Option<String>,
     image_identity: String,
     pub identity: String,
     setup: BTreeMap<String, u128>,
@@ -70,21 +70,34 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     let case = &benchmark.cases[case_index];
     let mut setup = BTreeMap::new();
     let started = Instant::now();
-    let artifact = benchmark.build(case, target).await?;
+    let artifact = if benchmark.rootfs_executable.is_some() {
+        None
+    } else {
+        Some(benchmark.build(case, target).await?)
+    };
     setup.insert("provenance_build".into(), elapsed_us(started));
     let started = Instant::now();
-    let artifact_identity = file_identity(&artifact)?;
+    let artifact_identity = artifact.as_deref().map(file_identity).transpose()?;
     setup.insert("provenance_artifact_identity".into(), elapsed_us(started));
-    let compiler = benchmark.compiler_name(target);
+    let compiler = benchmark
+        .rootfs_executable
+        .as_deref()
+        .map_or_else(|| benchmark.compiler_name(target), |_| "rootfs");
     let started = Instant::now();
-    let compiler_version = tokio::process::Command::new(compiler)
-        .arg("--version")
-        .kill_on_drop(true)
-        .output()
-        .await?;
-    if !compiler_version.status.success() || compiler_version.stdout.len() > 64 * 1024 {
-        return Err(format!("{compiler} did not provide bounded compiler provenance").into());
-    }
+    let compiler_version = if artifact.is_some() {
+        let compiler = benchmark.compiler_name(target);
+        let output = tokio::process::Command::new(compiler)
+            .arg("--version")
+            .kill_on_drop(true)
+            .output()
+            .await?;
+        if !output.status.success() || output.stdout.len() > 64 * 1024 {
+            return Err(format!("{compiler} did not provide bounded compiler provenance").into());
+        }
+        output.stdout
+    } else {
+        b"rootfs-workload-v1".to_vec()
+    };
     setup.insert("provenance_compiler_identity".into(), elapsed_us(started));
     let started = Instant::now();
     let image_identity = TestImage::resolve_identity(&benchmark.image, &target.platform()).await?;
@@ -93,7 +106,10 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     let runner = std::env::current_exe()?;
     let runner_identity = file_identity(&runner)?;
     let definition = fs::read(benchmark.directory.join("test.yaml"))?;
-    let source = fs::read(benchmark.source_path())?;
+    let source = artifact.as_ref().map_or_else(
+        || Ok(benchmark.rootfs_executable.as_deref().unwrap_or_default().as_bytes().to_vec()),
+        |_| fs::read(benchmark.source_path()),
+    )?;
     let golden = fs::read(&case.stdout_contains)?;
     let execution = format!("{:?}", benchmark.execution);
     let identity = provenance_identity(&[
@@ -101,8 +117,8 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
         target.name().as_bytes(),
         execution.as_bytes(),
         compiler.as_bytes(),
-        compiler_version.stdout.as_slice(),
-        artifact_identity.as_bytes(),
+        compiler_version.as_slice(),
+        artifact_identity.as_deref().unwrap_or("rootfs").as_bytes(),
         image_identity.as_bytes(),
         runner_identity.as_bytes(),
         definition.as_slice(),
@@ -176,9 +192,11 @@ async fn execute(
         image.release()?;
         return Err("benchmark image identity changed after resume admission".into());
     }
-    if file_identity(&prepared.artifact)? != prepared.artifact_identity {
-        image.release()?;
-        return Err("benchmark artifact identity changed after resume admission".into());
+    if let (Some(artifact), Some(identity)) = (&prepared.artifact, &prepared.artifact_identity) {
+        if file_identity(artifact)? != *identity {
+            image.release()?;
+            return Err("benchmark artifact identity changed after resume admission".into());
+        }
     }
     let image_us = elapsed_us(image_started);
     let outcome = execute_with_image(
@@ -186,7 +204,7 @@ async fn execute(
         case_index,
         target,
         image.path(),
-        &prepared.artifact,
+        prepared.artifact.as_deref(),
         deadline,
     )
     .await
@@ -220,7 +238,7 @@ async fn execute_with_image(
     case_index: usize,
     target: Target,
     image: &std::path::Path,
-    artifact: &std::path::Path,
+    artifact: Option<&std::path::Path>,
     deadline: tokio::time::Instant,
 ) -> std::result::Result<Measurement, Error> {
     let service_started = Instant::now();
@@ -233,19 +251,24 @@ async fn execute_with_image(
     .map_err(|_| "benchmark container setup exceeded the total row deadline")??;
     let service_us = elapsed_us(service_started);
     let case = &benchmark.cases[case_index];
-    let guest_program = format!("/opt/husklet/bench-{}", case.id);
-    let staging_artifact = artifact.to_path_buf();
-    let staging_image = image.to_path_buf();
-    let staging_program = guest_program.clone();
+    let guest_program = benchmark
+        .rootfs_executable
+        .clone()
+        .unwrap_or_else(|| format!("/opt/husklet/bench-{}", case.id));
     let stage_started = Instant::now();
-    tokio::time::timeout_at(
-        deadline,
-        tokio::task::spawn_blocking(move || {
-            stage(&staging_artifact, &staging_image, &staging_program).map_err(|error| error.to_string())
-        }),
-    )
-    .await
-    .map_err(|_| "benchmark staging exceeded the total row deadline")???;
+    if let Some(artifact) = artifact {
+        let staging_artifact = artifact.to_path_buf();
+        let staging_image = image.to_path_buf();
+        let staging_program = guest_program.clone();
+        tokio::time::timeout_at(
+            deadline,
+            tokio::task::spawn_blocking(move || {
+                stage(&staging_artifact, &staging_image, &staging_program).map_err(|error| error.to_string())
+            }),
+        )
+        .await
+        .map_err(|_| "benchmark staging exceeded the total row deadline")???;
+    }
     let stage_us = elapsed_us(stage_started);
     let mut measurement = run_case(&containers, &benchmark, case, target, image, &guest_program, deadline).await?;
     measurement.setup.insert("container_service".into(), service_us);
@@ -330,6 +353,7 @@ async fn run_case(
 struct Invocation<'a> {
     containers: &'a hl_container::Containers,
     case: &'a BenchmarkCase,
+    phases: &'a [LifecyclePhase],
     name: String,
     spec: ContainerSpec,
 }
@@ -337,7 +361,7 @@ struct Invocation<'a> {
 impl<'a> Invocation<'a> {
     fn new(
         containers: &'a hl_container::Containers,
-        benchmark: &Benchmark,
+        benchmark: &'a Benchmark,
         case: &'a BenchmarkCase,
         target: Target,
         image: &std::path::Path,
@@ -364,6 +388,7 @@ impl<'a> Invocation<'a> {
         Ok(Self {
             containers,
             case,
+            phases: &benchmark.phases,
             name,
             spec,
         })
@@ -408,14 +433,25 @@ impl<'a> Invocation<'a> {
         if !logs.stderr.is_empty() {
             return Err(format!("unexpected stderr: {}", output_excerpt(&logs.stderr)).into());
         }
-        let lifecycle = vec![
-            ("create".into(), create_us),
-            ("attach".into(), attach_us),
-            ("start".into(), start_us),
-            ("wait_and_drain".into(), execution_us),
-            ("output_read".into(), logs_us),
+        let values = [create_us, attach_us, start_us, execution_us, logs_us];
+        let all = [
+            LifecyclePhase::Create,
+            LifecyclePhase::Attach,
+            LifecyclePhase::Start,
+            LifecyclePhase::WaitAndDrain,
+            LifecyclePhase::OutputRead,
         ];
+        let lifecycle = all
+            .into_iter()
+            .zip(values)
+            .filter(|(phase, _)| self.benchmark_phases().contains(phase))
+            .map(|(phase, time)| (phase.name().into(), time))
+            .collect();
         Ok((elapsed, parse_phases(&logs.stdout)?, lifecycle))
+    }
+
+    fn benchmark_phases(&self) -> &[LifecyclePhase] {
+        self.phases
     }
 }
 

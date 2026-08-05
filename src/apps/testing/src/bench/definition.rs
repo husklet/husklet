@@ -1,5 +1,6 @@
 use crate::suite::{Commands, Error, Execution, Target};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
@@ -12,8 +13,55 @@ struct Document {
     image: String,
     #[serde(default)]
     execution: Execution,
-    build: Build,
+    build: Option<Build>,
+    workload: Option<Workload>,
+    #[serde(default = "lifecycle_phases")]
+    phases: Vec<LifecyclePhase>,
     cases: Vec<Case>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Workload {
+    rootfs: RootfsWorkload,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootfsWorkload {
+    executable: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
+#[serde(rename_all = "kebab-case")]
+pub enum LifecyclePhase {
+    Create,
+    Attach,
+    Start,
+    WaitAndDrain,
+    OutputRead,
+}
+
+impl LifecyclePhase {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Attach => "attach",
+            Self::Start => "start",
+            Self::WaitAndDrain => "wait_and_drain",
+            Self::OutputRead => "output_read",
+        }
+    }
+}
+
+fn lifecycle_phases() -> Vec<LifecyclePhase> {
+    vec![
+        LifecyclePhase::Create,
+        LifecyclePhase::Attach,
+        LifecyclePhase::Start,
+        LifecyclePhase::WaitAndDrain,
+        LifecyclePhase::OutputRead,
+    ]
 }
 
 #[derive(Deserialize)]
@@ -65,7 +113,9 @@ pub struct Benchmark {
     pub directory: PathBuf,
     pub image: String,
     pub execution: Execution,
-    build: Build,
+    build: Option<Build>,
+    pub rootfs_executable: Option<String>,
+    pub phases: Vec<LifecyclePhase>,
     pub cases: Vec<BenchmarkCase>,
 }
 pub struct BenchmarkCase {
@@ -81,18 +131,38 @@ pub struct BenchmarkCase {
 
 impl Benchmark {
     pub fn source_path(&self) -> PathBuf {
-        self.directory.join(&self.build.source)
+        self.directory.join(&self.build.as_ref().expect("compiled benchmark has a build").source)
     }
 
     pub fn compiler_name(&self, target: Target) -> &str {
-        self.build.compiler.for_target(target)
+        self.build
+            .as_ref()
+            .expect("compiled benchmark has a compiler")
+            .compiler
+            .for_target(target)
     }
 
     pub fn load(directory: &Path, definition: &Path) -> Result<Self, Error> {
         let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
-        safe_relative(&document.build.source)?;
-        let source = directory.join(&document.build.source);
-        if document.image.trim().is_empty() || !source.is_file() || document.cases.is_empty() {
+        let rootfs_executable = document.workload.map(|workload| workload.rootfs.executable);
+        if document.build.is_some() == rootfs_executable.is_some() {
+            return Err(format!("{} must define exactly one of build or workload.rootfs", definition.display()).into());
+        }
+        if let Some(build) = &document.build {
+            safe_relative(&build.source)?;
+            if !directory.join(&build.source).is_file() {
+                return Err(format!("{} has a missing benchmark source", definition.display()).into());
+            }
+        }
+        if rootfs_executable.as_deref().is_some_and(|value| !value.starts_with('/') || value == "/") {
+            return Err(format!("{} has an invalid rootfs executable", definition.display()).into());
+        }
+        let phase_count = document.phases.len();
+        let phases = document.phases.into_iter().collect::<BTreeSet<_>>();
+        if phases.is_empty() || phases.len() != phase_count {
+            return Err(format!("{} has an empty or duplicate lifecycle phase list", definition.display()).into());
+        }
+        if document.image.trim().is_empty() || document.cases.is_empty() {
             return Err(format!("{} has an invalid image, source, or case list", definition.display()).into());
         }
         let name = directory
@@ -137,20 +207,23 @@ impl Benchmark {
             image: document.image,
             execution: document.execution,
             build: document.build,
+            rootfs_executable,
+            phases: phases.into_iter().collect(),
             cases,
         })
     }
 
     pub async fn build(&self, case: &BenchmarkCase, target: Target) -> Result<PathBuf, Error> {
+        let build = self.build.as_ref().ok_or("rootfs workload has no build artifact")?;
         let output = crate::runtime::workspace()?
             .join("target/testing/bench")
             .join(&self.name)
             .join(target.name())
             .join(&case.id);
         fs::create_dir_all(output.parent().ok_or("benchmark output has no parent")?)?;
-        let compiler = self.build.compiler.for_target(target);
+        let compiler = build.compiler.for_target(target);
         let status = tokio::process::Command::new(compiler)
-            .args(&self.build.flags)
+            .args(&build.flags)
             .args(&case.build_flags)
             .arg(self.source_path())
             .arg("-o")
@@ -161,7 +234,22 @@ impl Benchmark {
         if !status.success() {
             return Err(format!("{compiler} failed building {}/{} with {status}", self.name, case.id).into());
         }
-        Ok(output)
+        let identity = Sha256::digest(fs::read(&output)?);
+        let identity = identity.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let cache = crate::runtime::workspace()?
+            .join("target/testing/bench/cache/artifacts/sha256")
+            .join(identity);
+        if !cache.is_file() {
+            fs::create_dir_all(cache.parent().ok_or("artifact cache has no parent")?)?;
+            let temporary = tempfile::NamedTempFile::new_in(cache.parent().ok_or("artifact cache has no parent")?)?;
+            fs::copy(&output, temporary.path())?;
+            match temporary.persist_noclobber(&cache) {
+                Ok(_) => {}
+                Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.error.into()),
+            }
+        }
+        Ok(cache)
     }
 }
 
@@ -175,7 +263,7 @@ fn safe_relative(path: &Path) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::Document;
+    use super::{Benchmark, Document, LifecyclePhase};
 
     #[test]
     fn legacy_repetitions_maps_to_measured_samples() {
@@ -185,5 +273,26 @@ mod tests {
         .unwrap();
         assert_eq!(document.cases[0].warmups, 1);
         assert_eq!(document.cases[0].samples, 7);
+    }
+
+    #[test]
+    fn rootfs_workload_and_lifecycle_phases_are_typed() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("empty"), []).unwrap();
+        std::fs::write(
+            directory.path().join("test.yaml"),
+            "image: alpine:3.20\nworkload: { rootfs: { executable: /bin/true } }\nphases: [create, start, wait-and-drain]\ncases:\n  - id: launch\n    warmups: 0\n    samples: 3\n    expect: { stdout_contains: empty }\n",
+        )
+        .unwrap();
+        let benchmark = Benchmark::load(directory.path(), &directory.path().join("test.yaml")).unwrap();
+        assert_eq!(benchmark.rootfs_executable.as_deref(), Some("/bin/true"));
+        assert_eq!(benchmark.phases, vec![LifecyclePhase::Create, LifecyclePhase::Start, LifecyclePhase::WaitAndDrain]);
+    }
+
+    #[test]
+    fn rootfs_workload_rejects_an_ambiguous_build() {
+        let yaml = "image: alpine\nworkload: { rootfs: { executable: /bin/true } }\nbuild: { source: main.c, compiler: { arm64: cc, amd64: cc } }\ncases: []\n";
+        let document: Document = serde_yaml::from_str(yaml).unwrap();
+        assert!(document.build.is_some() && document.workload.is_some());
     }
 }
