@@ -71,6 +71,8 @@ impl Reactor {
     }
 
     fn pollset(shared: &Self, tokens: &[Token]) -> Vec<libc::pollfd> {
+        #[cfg(test)]
+        shared.pollset_builds.fetch_add(1, Ordering::Relaxed);
         let mut polls = Vec::with_capacity(tokens.len() + 1);
         polls.push(libc::pollfd {
             fd: shared.wake_read,

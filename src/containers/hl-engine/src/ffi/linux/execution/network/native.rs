@@ -89,6 +89,10 @@ pub(super) struct Reactor {
     pub(super) switch_paths: Mutex<BTreeMap<Vec<u8>, Weak<SwitchPath>>>,
     pub(super) wake_read: i32,
     pub(super) wake_write: i32,
+    #[cfg(test)]
+    pub(super) wake_writes: AtomicU64,
+    #[cfg(test)]
+    pub(super) pollset_builds: AtomicU64,
 }
 
 impl std::fmt::Debug for Native {
@@ -128,6 +132,10 @@ impl Native {
             switch_paths: Mutex::new(BTreeMap::new()),
             wake_read: wake[0],
             wake_write: wake[1],
+            #[cfg(test)]
+            wake_writes: AtomicU64::new(0),
+            #[cfg(test)]
+            pollset_builds: AtomicU64::new(0),
         });
         Self { shared, authority }
     }
@@ -697,6 +705,8 @@ impl Native {
     }
 
     fn wake(&self) {
+        #[cfg(test)]
+        self.shared.wake_writes.fetch_add(1, Ordering::Relaxed);
         let byte = [1_u8];
         // SAFETY: wake_write remains owned by Shared and byte is readable for one byte.
         unsafe {
@@ -722,7 +732,59 @@ impl Native {
 #[cfg(test)]
 mod kind_cache_test {
     use super::{Native, arm_interest};
+    use hl_network::SocketHostIo;
     use std::sync::atomic::Ordering;
+
+    #[derive(Debug)]
+    struct LoopbackMeasurement {
+        kind: i32,
+        iterations: u64,
+        elapsed_ns: u128,
+        wake_writes: u64,
+        pollset_builds: u64,
+        checksum: u64,
+    }
+
+    fn measure_loopback(kind: i32) -> LoopbackMeasurement {
+        const ITERATIONS: u64 = 20_000;
+        let host = Native::new();
+        let mut descriptors = [-1_i32; 2];
+        // SAFETY: descriptors names two writable integers and successful
+        // socketpair transfers unique ownership of both descriptors.
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, descriptors.as_mut_ptr()) },
+            0
+        );
+        let sender = host.insert(descriptors[0]).expect("insert sender");
+        let receiver = host.insert(descriptors[1]).expect("insert receiver");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let wake_before = host.shared.wake_writes.load(Ordering::Relaxed);
+        let poll_before = host.shared.pollset_builds.load(Ordering::Relaxed);
+        let input = [0x5a_u8; 64];
+        let mut output = [0_u8; 64];
+        let mut checksum = 0_u64;
+        let started = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            assert_eq!(SocketHostIo::write(&host, sender, &input, false), Ok(input.len()));
+            assert_eq!(
+                SocketHostIo::read(&host, receiver, &mut output, false),
+                Ok(output.len())
+            );
+            checksum = checksum.wrapping_add(u64::from(output[0]));
+        }
+        let elapsed_ns = started.elapsed().as_nanos();
+        let measurement = LoopbackMeasurement {
+            kind,
+            iterations: ITERATIONS,
+            elapsed_ns,
+            wake_writes: host.shared.wake_writes.load(Ordering::Relaxed) - wake_before,
+            pollset_builds: host.shared.pollset_builds.load(Ordering::Relaxed) - poll_before,
+            checksum,
+        };
+        SocketHostIo::close(&host, sender);
+        SocketHostIo::close(&host, receiver);
+        measurement
+    }
 
     #[test]
     fn readiness_interest_wakes_only_on_disarmed_to_armed_transition() {
@@ -731,6 +793,22 @@ mod kind_cache_test {
         assert!(!arm_interest(&mut armed));
         armed = false;
         assert!(arm_interest(&mut armed));
+    }
+
+    #[test]
+    #[ignore = "performance diagnostic; run pinned in the coordinated quiet window"]
+    fn loopback_stream_and_datagram_data_path() {
+        let stream = measure_loopback(libc::SOCK_STREAM);
+        let datagram = measure_loopback(libc::SOCK_DGRAM);
+        assert_eq!(stream.checksum, stream.iterations * 0x5a);
+        assert_eq!(datagram.checksum, datagram.iterations * 0x5a);
+        assert_eq!(stream.kind, libc::SOCK_STREAM);
+        assert_eq!(datagram.kind, libc::SOCK_DGRAM);
+        assert!(stream.elapsed_ns > 0 && datagram.elapsed_ns > 0);
+        assert!(stream.wake_writes <= stream.iterations + 2);
+        assert!(datagram.wake_writes <= datagram.iterations + 2);
+        assert!(stream.pollset_builds > 0 && datagram.pollset_builds > 0);
+        eprintln!("network-loopback stream={stream:?} datagram={datagram:?}");
     }
 
     #[test]
