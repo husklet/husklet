@@ -297,7 +297,18 @@ struct Diagnostics {
     a64_fallback_form_memory: u64,
     a64_fallback_form_other: u64,
     x86_public_epochs: u64,
+    a64_branch_exhaustion: u64,
+    a64_branch_cold_relocation: u64,
+    a64_branch_nonrelocatable: u64,
+    a64_branch_unidentified: u64,
+    a64_branch_sample_pc: u64,
+    a64_branch_sample_source_first: u64,
+    a64_branch_sample_source_last: u64,
+    a64_branch_sample_form: u64,
 }
+
+#[cfg(test)]
+const A64_BRANCH_FORM_EXHAUSTION: u64 = 1;
 
 #[derive(Clone, Copy)]
 pub(crate) struct BorrowedSource<'a> {
@@ -1981,6 +1992,14 @@ impl Executor {
             a64_fallback_form_memory: 0,
             a64_fallback_form_other: 0,
             x86_public_epochs: 0,
+            a64_branch_exhaustion: 0,
+            a64_branch_cold_relocation: 0,
+            a64_branch_nonrelocatable: 0,
+            a64_branch_unidentified: 0,
+            a64_branch_sample_pc: 0,
+            a64_branch_sample_source_first: 0,
+            a64_branch_sample_source_last: 0,
+            a64_branch_sample_form: 0,
         };
         (unsafe { hl_native_diagnose(self.handle.as_ptr(), &raw mut output) } == 0)
             .then_some(output)
@@ -2628,7 +2647,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} a64_slim_exits=0",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} a64_slim_exits=0 a64_branch_exhaustion={} a64_branch_cold_relocation={} a64_branch_nonrelocatable={} a64_branch_unidentified={} a64_branch_sample_pc={:#x} a64_branch_sample_source_first={:#x} a64_branch_sample_source_last={:#x} a64_branch_sample_form={}",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -2672,6 +2691,14 @@ impl Drop for Executor {
                 value.a64_fallback_system,
                 value.a64_fallback_form_memory,
                 value.a64_fallback_form_other,
+                value.a64_branch_exhaustion,
+                value.a64_branch_cold_relocation,
+                value.a64_branch_nonrelocatable,
+                value.a64_branch_unidentified,
+                value.a64_branch_sample_pc,
+                value.a64_branch_sample_source_first,
+                value.a64_branch_sample_source_last,
+                value.a64_branch_sample_form,
             );
         }
         // SAFETY: construction transfers unique ownership of the live handle;
@@ -2725,7 +2752,7 @@ const _: () = {
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
     assert!(std::mem::size_of::<Change>() == 40);
-    assert!(std::mem::size_of::<Diagnostics>() == 456);
+    assert!(std::mem::size_of::<Diagnostics>() == 520);
 };
 
 #[cfg(test)]
@@ -5031,6 +5058,53 @@ mod test {
             assert_eq!(cpu.registers[4], 0x7030);
             assert_eq!(storage, before);
         }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn aarch64_branch_diagnostics_classify_source_exhaustion_without_changing_exit() {
+        let words = [0xd503201f_u32; 32];
+        let bytes = unsafe {
+            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
+        };
+        let span = SourceSpan {
+            guest_first: 0x3000,
+            bytes: bytes.as_ptr(),
+            size: bytes.len(),
+            mapping_incarnation: 1,
+            instruction_epoch: 2,
+        };
+        let source = Source {
+            spans: &raw const span,
+            span_count: 1,
+            mapping_incarnation: 1,
+            instruction_epoch: 2,
+        };
+        let executor = Executor::create_diagnostics(true).expect("diagnostic executor");
+        executor.reset(1).expect("initial epoch");
+        let mut cpu = Aarch64CpuState {
+            pc: 0x3000,
+            ..Aarch64CpuState::default()
+        };
+        let outcome = executor
+            .run_aarch64(&mut cpu, &source, None, 1, 33, None, None)
+            .expect("bounded exhaustion");
+        assert_eq!(outcome.0, Exit::Fallback);
+        assert_eq!((outcome.4, outcome.5, cpu.pc), (1, 32, 0x3080));
+        let diagnostics = executor.diagnostics().expect("diagnostics");
+        assert_eq!(diagnostics.a64_branch_exhaustion, 1);
+        assert_eq!(diagnostics.a64_branch_cold_relocation, 0);
+        assert_eq!(diagnostics.a64_branch_nonrelocatable, 0);
+        assert_eq!(diagnostics.a64_branch_unidentified, 0);
+        assert_eq!(
+            (
+                diagnostics.a64_branch_sample_pc,
+                diagnostics.a64_branch_sample_source_first,
+                diagnostics.a64_branch_sample_source_last,
+                diagnostics.a64_branch_sample_form,
+            ),
+            (0x3080, 0x3000, 0x3080, A64_BRANCH_FORM_EXHAUSTION),
+        );
     }
 
     #[cfg(target_arch = "aarch64")]

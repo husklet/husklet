@@ -517,7 +517,7 @@ static int guard_modes(void) {
     return 0;
 }
 
-static int static_density_accounting(void) {
+static int diagnostics_off_byte_identity_and_density(void) {
     const uint32_t words[] = {
         UINT32_C(0xad428420), /* ldp q0,q1,[x1,#80] */
         UINT32_C(0xad008460), /* stp q0,q1,[x3,#16] */
@@ -569,7 +569,7 @@ int main(void) {
     if (loop_planning() != 0) return 1;
     if (certificate_authentication() != 0) return 1;
     if (guard_modes() != 0) return 1;
-    if (static_density_accounting() != 0) return 1;
+    if (diagnostics_off_byte_identity_and_density() != 0) return 1;
 #if !defined(__aarch64__)
     return 0;
 #else

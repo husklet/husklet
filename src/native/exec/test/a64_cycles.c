@@ -63,15 +63,19 @@ static hl_native_status write_end(void *opaque) {
         ? HL_NATIVE_OK : HL_NATIVE_PLATFORM;
 }
 
-static hl_native_executor *create(executable_memory *host) {
+static hl_native_executor *create_flags(executable_memory *host, uint32_t flags) {
     const hl_native_memory memory = {.abi = HL_NATIVE_ABI, .size = sizeof(memory), .context = host,
         .reserve = reserve, .release = release, .publish = publish, .repair = repair,
         .write_begin = write_begin, .write_end = write_end};
     const hl_native_config config = {.abi = HL_NATIVE_ABI, .size = sizeof(config),
-        .capacity = 64u << 20, .alignment = 4096, .flags = HL_NATIVE_DIAGNOSTICS,
+        .capacity = 64u << 20, .alignment = 4096, .flags = flags,
         .memory = &memory};
     hl_native_executor *executor = NULL;
     return hl_native_create(&config, &executor) == HL_NATIVE_OK ? executor : NULL;
+}
+
+static hl_native_executor *create(executable_memory *host) {
+    return create_flags(host, HL_NATIVE_DIAGNOSTICS);
 }
 
 static int publication(void) {
@@ -248,6 +252,139 @@ static int execution(void) {
 #endif
 }
 
+static int branch_diagnostics(void) {
+#if !defined(__aarch64__)
+    return 0;
+#else
+    executable_memory host = {0};
+    hl_native_executor *executor = create(&host);
+    CHECK(executor != NULL);
+    const hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 21};
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    static _Alignas(16) uint8_t stack[4096];
+    uint32_t sequential_words[33];
+    for (size_t index = 0; index < 33; index++) sequential_words[index] = UINT32_C(0xd503201f);
+    const hl_native_source_span sequential_span = {
+        0x5000, (const uint8_t *)sequential_words, sizeof(sequential_words), 21, 7};
+    const hl_native_source sequential_source = {&sequential_span, 1, 21, 7};
+    hl_native_aarch64_cpu state = {.program = 0x5000,
+        .stack = (uint64_t)(uintptr_t)(stack + sizeof(stack))};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 21,
+        .budget = 33, .source = &sequential_source};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    hl_native_diagnostics before = {.abi = HL_NATIVE_ABI, .size = sizeof(before)};
+    hl_native_diagnostics after = before;
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 33);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.a64_branch_exhaustion - before.a64_branch_exhaustion == 2 &&
+          after.a64_branch_cold_relocation - before.a64_branch_cold_relocation == 0 &&
+          after.a64_branch_nonrelocatable - before.a64_branch_nonrelocatable == 0 &&
+          after.a64_branch_unidentified - before.a64_branch_unidentified == 0);
+    CHECK(after.a64_branch_sample_pc == 0x5080 &&
+          after.a64_branch_sample_source_first == 0x5000 &&
+          after.a64_branch_sample_source_last == 0x5080 &&
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION);
+
+    const uint32_t branch_words[] = {UINT32_C(0x14000001), UINT32_C(0xd503201f)};
+    const hl_native_source_span branch_span = {
+        0x6000, (const uint8_t *)branch_words, sizeof(branch_words), 22, 8};
+    const hl_native_source branch_source = {&branch_span, 1, 22, 8};
+    const hl_native_change next = {.abi = HL_NATIVE_ABI, .size = sizeof(next),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 22};
+    CHECK(hl_native_changed(executor, &next, 1) == HL_NATIVE_OK);
+    before = after;
+    state.program = 0x6000;
+    request.mapping_epoch = 22;
+    request.budget = 2;
+    request.source = &branch_source;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 2);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.a64_branch_exhaustion - before.a64_branch_exhaustion == 1 &&
+          after.a64_branch_cold_relocation - before.a64_branch_cold_relocation == 1 &&
+          after.a64_branch_nonrelocatable - before.a64_branch_nonrelocatable == 0 &&
+          after.a64_branch_unidentified - before.a64_branch_unidentified == 0);
+    CHECK(after.a64_branch_sample_pc == 0x5080 &&
+          after.a64_branch_sample_source_first == 0x5000 &&
+          after.a64_branch_sample_source_last == 0x5080 &&
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION);
+    CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
+    CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK &&
+          after.a64_branch_sample_pc == 0x5080 &&
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION);
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+
+    executable_memory cold_host = {0};
+    executor = create(&cold_host);
+    CHECK(executor != NULL);
+    const hl_native_change cold_replace = {.abi = HL_NATIVE_ABI, .size = sizeof(cold_replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 22};
+    CHECK(hl_native_changed(executor, &cold_replace, 1) == HL_NATIVE_OK);
+    state.program = 0x6000;
+    request.mapping_epoch = 22;
+    request.budget = 2;
+    request.source = &branch_source;
+    before = (hl_native_diagnostics){.abi = HL_NATIVE_ABI, .size = sizeof(before)};
+    after = before;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 2);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.a64_branch_cold_relocation == 1 &&
+          after.a64_branch_sample_pc == 0x6004 &&
+          after.a64_branch_sample_source_first == 0x6000 &&
+          after.a64_branch_sample_source_last == 0x6004 &&
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION);
+    state.program = 0x6000;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    const hl_native_change cold_reset = {.abi = HL_NATIVE_ABI, .size = sizeof(cold_reset),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 23};
+    CHECK(hl_native_changed(executor, &cold_reset, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
+    CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK &&
+          after.a64_branch_sample_pc == 0x6004 &&
+          after.a64_branch_sample_source_first == 0x6000 &&
+          after.a64_branch_sample_source_last == 0x6004 &&
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION);
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && cold_host.address == NULL);
+    return 0;
+#endif
+}
+
+static int diagnostics_off_cycle_closure(void) {
+#if !defined(__aarch64__)
+    return 0;
+#else
+    executable_memory host = {0};
+    hl_native_executor *executor = create_flags(&host, 0);
+    CHECK(executor != NULL);
+    const hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
+        .kind = HL_NATIVE_REPLACE, .mapping_epoch = 31};
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    const uint32_t word = UINT32_C(0x14000000);
+    const hl_native_source_span span = {0x7000, (const uint8_t *)&word, sizeof(word), 31, 9};
+    const hl_native_source source = {&span, 1, 31, 9};
+    hl_native_aarch64_cpu state = {.program = 0x7000};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_AARCH64, .mapping_epoch = 31, .budget = 3, .source = &source};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.program == 0x7000 && state.executed == 3);
+    CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
+    return 0;
+#endif
+}
+
 int main(void) {
-    return publication() != 0 || execution() != 0;
+    return branch_diagnostics() != 0 || diagnostics_off_cycle_closure() != 0 ||
+           publication() != 0 || execution() != 0;
 }

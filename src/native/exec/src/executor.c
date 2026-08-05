@@ -497,6 +497,12 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->a64_fallback_system, 0);
     atomic_init(&executor->a64_fallback_form_memory, 0);
     atomic_init(&executor->a64_fallback_form_other, 0);
+    atomic_init(&executor->a64_branch_exhaustion, 0);
+    atomic_init(&executor->a64_branch_cold_relocation, 0);
+    atomic_init(&executor->a64_branch_nonrelocatable, 0);
+    atomic_init(&executor->a64_branch_unidentified, 0);
+    atomic_init(&executor->a64_branch_sample_claim, 0);
+    atomic_init(&executor->a64_branch_sample_form, 0);
     status = hl_native_arena_create(&executor->arena, config);
     if (status != HL_NATIVE_OK) {
         free(executor);
@@ -643,8 +649,21 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->a64_fallback_form_memory = atomic_load_explicit(&executor->a64_fallback_form_memory, memory_order_relaxed);
         output->a64_fallback_form_other = atomic_load_explicit(&executor->a64_fallback_form_other, memory_order_relaxed);
     }
-    if (output->size >= sizeof(*output)) {
+    if (output->size >= offsetof(hl_native_diagnostics, a64_branch_exhaustion)) {
         output->x86_public_epochs = executor->x86_public_epochs;
+    }
+    if (output->size >= sizeof(*output)) {
+        output->a64_branch_exhaustion = atomic_load_explicit(&executor->a64_branch_exhaustion, memory_order_relaxed);
+        output->a64_branch_cold_relocation = atomic_load_explicit(&executor->a64_branch_cold_relocation, memory_order_relaxed);
+        output->a64_branch_nonrelocatable = atomic_load_explicit(&executor->a64_branch_nonrelocatable, memory_order_relaxed);
+        output->a64_branch_unidentified = atomic_load_explicit(&executor->a64_branch_unidentified, memory_order_relaxed);
+        uint64_t sample_form = atomic_load_explicit(&executor->a64_branch_sample_form, memory_order_acquire);
+        if (sample_form != 0) {
+            output->a64_branch_sample_pc = executor->a64_branch_sample_pc;
+            output->a64_branch_sample_source_first = executor->a64_branch_sample_source_first;
+            output->a64_branch_sample_source_last = executor->a64_branch_sample_source_last;
+        }
+        output->a64_branch_sample_form = sample_form;
     }
     return HL_NATIVE_OK;
 }
@@ -1115,7 +1134,37 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         if (executor->diagnostics) {
             executor->completed += cpu->executed - executed_before;
             switch (cpu->reason) {
-                case HL_NATIVE_EXIT_BRANCH: executor->boundary_branch++; break;
+                case HL_NATIVE_EXIT_BRANCH: {
+                    uint64_t form;
+                    executor->boundary_branch++;
+                    if (!executed_identity) {
+                        atomic_fetch_add_explicit(&executor->a64_branch_unidentified, 1, memory_order_relaxed);
+                        form = HL_NATIVE_A64_BRANCH_FORM_UNIDENTIFIED;
+                    } else if (executed_code.relocation_count != 0) {
+                        atomic_fetch_add_explicit(&executor->a64_branch_cold_relocation, 1, memory_order_relaxed);
+                        form = HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION;
+                    } else if (cpu->program == executed_code.source_last) {
+                        atomic_fetch_add_explicit(&executor->a64_branch_exhaustion, 1, memory_order_relaxed);
+                        form = HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION;
+                    } else {
+                        atomic_fetch_add_explicit(&executor->a64_branch_nonrelocatable, 1, memory_order_relaxed);
+                        form = HL_NATIVE_A64_BRANCH_FORM_NONRELOCATABLE;
+                    }
+                    /* This tuple is a lifetime latch, not pending-relocation
+                     * state. Resolution may change later exits, but never
+                     * rewrites the first observed return. */
+                    uint64_t unclaimed = 0;
+                    if (atomic_compare_exchange_strong_explicit(&executor->a64_branch_sample_claim,
+                            &unclaimed, 1, memory_order_relaxed, memory_order_relaxed)) {
+                        executor->a64_branch_sample_pc = cpu->program;
+                        executor->a64_branch_sample_source_first =
+                            executed_identity ? executed_code.source_first : instruction;
+                        executor->a64_branch_sample_source_last =
+                            executed_identity ? executed_code.source_last : instruction;
+                        atomic_store_explicit(&executor->a64_branch_sample_form, form, memory_order_release);
+                    }
+                    break;
+                }
                 case HL_NATIVE_EXIT_SYSCALL: executor->boundary_syscall++; break;
                 case HL_NATIVE_EXIT_FALLBACK: executor->boundary_fallback++; break;
                 case HL_NATIVE_EXIT_YIELD: executor->boundary_yield++; break;

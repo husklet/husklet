@@ -50,6 +50,7 @@ hl_native_status hl_native_translation_publish(hl_native_executor *executor, con
     if (status == HL_NATIVE_OK) memcpy(writable, emission->bytes, emission->size);
     if (status == HL_NATIVE_OK) {
         block.instruction_count = emission->instruction_count != 0 ? emission->instruction_count : 1u;
+        block.relocation_count = emission->relocation_count;
         block.admitted_offset = block.code_offset + emission->admitted_offset;
         block.conditional_self_loop = emission->conditional_self_loop;
         block.cycle_safe = emission->cycle_safe;

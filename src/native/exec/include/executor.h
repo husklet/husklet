@@ -10,6 +10,10 @@
 #define HL_NATIVE_DUAL_PREFERRED 1u
 #define HL_NATIVE_DUAL_REQUIRED 2u
 #define HL_NATIVE_DIAGNOSTICS 4u
+#define HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION UINT64_C(1)
+#define HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION UINT64_C(2)
+#define HL_NATIVE_A64_BRANCH_FORM_NONRELOCATABLE UINT64_C(4)
+#define HL_NATIVE_A64_BRANCH_FORM_UNIDENTIFIED UINT64_C(8)
 #define HL_NATIVE_WRITE_EXACT 1u
 
 typedef uint64_t hl_native_handle;
@@ -118,6 +122,18 @@ typedef struct hl_native_diagnostics {
     uint64_t a64_fallback_form_memory;
     uint64_t a64_fallback_form_other;
     uint64_t x86_public_epochs;
+    uint64_t a64_branch_exhaustion;
+    uint64_t a64_branch_cold_relocation;
+    uint64_t a64_branch_nonrelocatable;
+    uint64_t a64_branch_unidentified;
+    /* First observed AArch64 branch return since executor creation. `pc` is
+     * the current guest PC at return; source_first/source_last are the
+     * half-open interval of the generated block that returned. Form zero
+     * means no sample. Reset, invalidation, and fork repair do not relatch it. */
+    uint64_t a64_branch_sample_pc;
+    uint64_t a64_branch_sample_source_first;
+    uint64_t a64_branch_sample_source_last;
+    uint64_t a64_branch_sample_form;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -396,7 +412,7 @@ _Static_assert(offsetof(hl_native_diagnostics, a64_fallback_entry_rejection) == 
                "native diagnostics fallback-form extension drifted");
 _Static_assert(offsetof(hl_native_diagnostics, x86_public_epochs) == 448,
                "native diagnostics epoch extension drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 456, "native diagnostics ABI drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 520, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

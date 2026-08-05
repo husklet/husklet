@@ -141,6 +141,7 @@ hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *cache, uint64_t gue
     output->source_first = entry->source_first;
     output->source_last = entry->source_last;
     output->instruction_count = entry->instruction_count;
+    output->relocation_count = entry->relocation_count;
     output->conditional_self_loop = entry->conditional_self_loop;
     output->cycle_safe = entry->cycle_safe;
     output->loop_pc = entry->loop_pc;
@@ -302,6 +303,7 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     entry->body_offset = block->code_offset + body_offset;
     entry->admitted_offset = block->admitted_offset;
     entry->instruction_count = block->instruction_count != 0 ? block->instruction_count : 1u;
+    entry->relocation_count = block->relocation_count;
     entry->conditional_self_loop = block->conditional_self_loop;
     entry->cycle_safe = block->cycle_safe;
     entry->loop_pc = block->loop_pc;
@@ -379,6 +381,7 @@ int hl_native_cache_execution(const hl_native_cache *cache, uint64_t identity, h
         output->source_first = entry->source_first;
         output->source_last = entry->source_last;
         output->instruction_count = entry->instruction_count;
+        output->relocation_count = entry->relocation_count;
         output->conditional_self_loop = entry->conditional_self_loop;
         output->cycle_safe = entry->cycle_safe;
         output->loop_pc = entry->loop_pc;

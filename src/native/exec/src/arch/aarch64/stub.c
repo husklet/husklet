@@ -72,6 +72,10 @@ static void spill(hl_a64_assembler *assembler) {
 }
 
 void hl_a64_stub_exit(hl_a64_assembler *assembler, uint32_t kind, uint64_t pc) {
+    if (assembler->diagnostics && kind == HL_NATIVE_EXIT_BRANCH &&
+        !assembler->execution_identity_pending)
+        hl_a64_stub_publish_execution_identity(assembler);
+    assembler->execution_identity_pending = 0;
     spill(assembler);
     hl_a64_movconst(assembler, 9, pc);
     hl_a64_str(assembler, 9, 0, OFFSET_PROGRAM);
@@ -87,12 +91,22 @@ void hl_a64_stub_exit(hl_a64_assembler *assembler, uint32_t kind, uint64_t pc) {
 
 uint32_t *hl_a64_stub_edge_reserve(hl_a64_assembler *assembler) {
     uint32_t *span = assembler == NULL ? NULL : (uint32_t *)assembler->cursor;
-    for (uint32_t index = 0; index < HL_A64_EDGE_SPAN_WORDS; index++)
+    uint32_t index = 0;
+    if (assembler != NULL && assembler->diagnostics) {
+        hl_a64_stub_publish_execution_identity(assembler);
+        assembler->execution_identity_pending = 1;
+        index = 3;
+    }
+    for (; index < HL_A64_EDGE_SPAN_WORDS; index++)
         hl_a64_emit32(assembler, UINT32_C(0xd503201f));
     return span;
 }
 
 void hl_a64_stub_exit_register(hl_a64_assembler *assembler, uint32_t kind, int target) {
+    if (assembler->diagnostics && kind == HL_NATIVE_EXIT_BRANCH &&
+        !assembler->execution_identity_pending)
+        hl_a64_stub_publish_execution_identity(assembler);
+    assembler->execution_identity_pending = 0;
     spill(assembler);
     hl_a64_str(assembler, target, 0, OFFSET_PROGRAM);
     hl_a64_movconst(assembler, 9, kind);

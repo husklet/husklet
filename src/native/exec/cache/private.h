@@ -12,7 +12,7 @@ typedef struct cache_entry {
     uint64_t mapping_epoch, instruction_epoch, token;
     uint64_t memory_mode, authority_generation;
     uint64_t loop_pc;
-    uint32_t instruction_count, conditional_self_loop, cycle_safe, generation, state;
+    uint32_t instruction_count, relocation_count, conditional_self_loop, cycle_safe, generation, state;
 } cache_entry;
 
 typedef struct provenance_entry {

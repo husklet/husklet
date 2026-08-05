@@ -1,5 +1,39 @@
 # Native memory performance
 
+## 2026-08-05 AArch64 dynamic branch-return discriminator
+
+The retained read-only termination audit covered `../engine/src/core/dispatch.c`
+(`run_guest` and `run_block`), `../engine/src/translator/cache.c` (pending-edge
+publication, invalidation, stop-the-world rotation, and fork repair), and
+`../engine/src/translator/guest/aarch64/{translate.c,stubs.c}` (trace-region
+termination, conditional stitching, direct exits, indirect probes, IRQ polls,
+and cache-full boundaries). Retained translated control reaches the dispatcher
+only for an unresolved/cold edge, indirect miss, service, interrupt, or explicit
+translation boundary; published direct edges retain generation and poll rules.
+
+The Rust owners are the AArch64 trace builder, executor run loop, translation
+publication, and cache relocation lifecycle. To classify existing returns
+without changing them, each cache entry now retains its already-validated
+relocation count. Diagnostics classify a returned branch as a cold edge from a
+relocation-bearing trace, source-window exhaustion (`next == source_last` on a
+trace without relocations),
+a non-relocatable terminator, or missing execution identity. One bounded sample
+latches the first observed branch return for the executor lifetime: `pc` is the
+current guest PC at return, `source_first..source_last` is the half-open source
+interval of the returning block, and `form` classifies that same return. Form
+zero means no sample. The public disjoint-bit constants are
+`HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION` (1),
+`HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION` (2),
+`HL_NATIVE_A64_BRANCH_FORM_NONRELOCATABLE` (4), and
+`HL_NATIVE_A64_BRANCH_FORM_UNIDENTIFIED` (8). Cache reset, invalidation,
+relocation resolution, and fork
+repair neither clear nor rewrite the tuple; executor destruction ends its
+lifetime. Publication uses a release/acquire latch so concurrent diagnosis never
+observes a form paired with a partial or different tuple. The appended ABI fields and
+existing structured diagnostic line contain no host pointers; diagnostics-off
+execution performs no new classification. Budget, interrupt, W^X, epoch,
+invalidation, and fork behavior are unchanged.
+
 ## 2026-08-05 bounded AArch64 trace admission
 
 The retained oracle audit covered
