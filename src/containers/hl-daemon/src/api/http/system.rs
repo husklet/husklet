@@ -22,6 +22,10 @@ pub(super) async fn ping() -> impl IntoResponse {
 pub(super) async fn ping_head() -> impl IntoResponse {
     let mut headers = ping_headers();
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
     (headers, StatusCode::OK)
 }
 
