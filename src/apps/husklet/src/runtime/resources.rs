@@ -81,7 +81,7 @@ impl Daemon {
         if !bin.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("hl-daemon binary not found at {} (set HL_DAEMON_BIN)", bin.display()),
+                format!("dockerd binary not found at {} (set HL_DOCKERD_BIN)", bin.display()),
             ));
         }
 
@@ -169,7 +169,7 @@ impl Daemon {
             }
             if let Some(status) = child.try_wait()? {
                 return Err(std::io::Error::other(format!(
-                    "hl-daemon exited before publishing its API ({status}); see {}",
+                    "dockerd exited before publishing its API ({status}); see {}",
                     self.directory.join("daemon.log").display()
                 )));
             }
@@ -177,7 +177,7 @@ impl Daemon {
         }
         Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
-            format!("hl-daemon did not publish {}", self.socket().display()),
+            format!("dockerd did not publish {}", self.socket().display()),
         ))
     }
 
@@ -187,9 +187,9 @@ impl Daemon {
     }
 }
 
-/// Resolve the hl-daemon binary: `HL_DAEMON_BIN`, else the installed bundle path.
+/// Resolve the dockerd binary: `HL_DOCKERD_BIN`, else the installed bundle path.
 fn daemon_bin() -> PathBuf {
-    if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
+    if let Some(p) = std::env::var_os("HL_DOCKERD_BIN") {
         return PathBuf::from(p);
     }
     paths::daemon_bin()

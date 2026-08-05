@@ -31,7 +31,7 @@ struct DaemonBinary;
 
 impl DaemonBinary {
     fn resolve() -> PathBuf {
-        if let Some(p) = std::env::var_os("HL_DAEMON_BIN") {
+        if let Some(p) = std::env::var_os("HL_DOCKERD_BIN") {
             return PathBuf::from(p);
         }
         if let Some(binary) = Self::bundle() {
@@ -40,12 +40,12 @@ impl DaemonBinary {
         if let Some(sibling) = Self::sibling() {
             return sibling;
         }
-        hl_root().join("hl-daemon")
+        hl_root().join("dockerd")
     }
 
     fn sibling() -> Option<PathBuf> {
         let executable = std::env::current_exe().ok()?;
-        let sibling = executable.parent()?.join("hl-daemon");
+        let sibling = executable.parent()?.join("dockerd");
         sibling.exists().then_some(sibling)
     }
 
@@ -55,7 +55,7 @@ impl DaemonBinary {
         if macos.file_name()? != "MacOS" {
             return None;
         }
-        let binary = macos.parent()?.join("Resources/hl-daemon");
+        let binary = macos.parent()?.join("Resources/dockerd");
         binary.exists().then_some(binary)
     }
 }

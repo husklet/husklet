@@ -7,7 +7,7 @@
 #
 # Produces Husklet.app with:
 #   Contents/MacOS/husklet                    the workspace application
-#   Contents/Resources/hl-daemon              the container daemon with its engine linked in
+#   Contents/Resources/dockerd                the container daemon with its engine linked in
 #   Contents/Frameworks/*.dylib               the relocated GTK dylib graph (dylibbundler)
 #   Contents/Frameworks/gdk-pixbuf-.../       svg+png loaders with a relative loaders.cache
 #   Contents/Resources/glib-2.0/schemas/      compiled gschemas
@@ -50,7 +50,7 @@ SOURCE_CHANGES="$(source_changes)"
 
 # 1. Release product binaries. Cargo links the native archive shipped by the selected `hl-engine` crate,
 # keeping the Rust API and native ABI on one published version.
-log "building release husklet and hl-daemon"
+log "building release husklet and dockerd"
 ( cd "$ROOT" && cargo build --release -p dockerd && \
     cargo build --release -p husklet --features gui,profile --bin husklet )
 [ "$(git -C "$ROOT" rev-parse HEAD)" = "$SOURCE_REVISION" ] \
@@ -65,7 +65,7 @@ chmod -R u+w "$APP" 2>/dev/null || true
 rm -rf "$APP"
 mkdir -p "$MACOS" "$RES" "$FW"
 cp "$BUILD_TARGET/release/husklet" "$MACOS/husklet"
-cp "$BUILD_TARGET/release/hl-daemon" "$RES/hl-daemon"
+cp "$BUILD_TARGET/release/dockerd" "$RES/dockerd"
 printf 'APPL????' > "$C/PkgInfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@REVISION@/$SOURCE_REVISION/g" -e "s/@CHANGES@/$SOURCE_CHANGES/g" \
   "$ROOT/src/apps/husklet/package/Info.plist.in" > "$C/Info.plist"
@@ -103,7 +103,7 @@ fi
 
 # 4. Relocate the application dylib graph into Contents/Frameworks.
 log "relocating dylibs (dylibbundler)"
-XARGS=( -x "$MACOS/husklet" -x "$RES/hl-daemon" )
+XARGS=( -x "$MACOS/husklet" -x "$RES/dockerd" )
 for so in "${LOADER_SOS[@]}"; do XARGS+=( -x "$so" ); done
 dylibbundler -of -cd -b -d "$FW" -p '@executable_path/../Frameworks' "${XARGS[@]}" >/dev/null
 
@@ -201,7 +201,7 @@ find "$FW" "$RES/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0 2>/d
   /usr/bin/strip -x "$f" 2>/dev/null || true
   codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$f" >/dev/null 2>&1 || true
 done
-for b in hl-daemon; do
+for b in dockerd; do
   [ -f "$RES/$b" ] && codesign -s "$SIGN_ID" $SIGN_FLAGS -f --entitlements "$ENT" "$RES/$b" >/dev/null 2>&1 || true
 done
 codesign -s "$SIGN_ID" $SIGN_FLAGS -f "$MACOS/husklet" >/dev/null 2>&1 || true

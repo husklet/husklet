@@ -11,7 +11,7 @@ async fn process_serves_the_docker_api() {
     let work = tempfile::tempdir().unwrap();
     let root = work.path().join("state");
     let socket = work.path().join("daemon.sock");
-    let mut daemon = Command::new(env!("CARGO_BIN_EXE_hl-daemon"))
+    let mut daemon = Command::new(env!("CARGO_BIN_EXE_dockerd"))
         .arg("--root")
         .arg(&root)
         .arg("--socket")
@@ -61,7 +61,7 @@ async fn process_restart_preserves_container_state() {
         .to_string();
 
     for _ in 0..2 {
-        let mut daemon = Command::new(env!("CARGO_BIN_EXE_hl-daemon"))
+        let mut daemon = Command::new(env!("CARGO_BIN_EXE_dockerd"))
             .args(["--root", root.to_str().unwrap(), "--socket", socket.to_str().unwrap()])
             .kill_on_drop(true)
             .spawn()

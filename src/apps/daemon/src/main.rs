@@ -178,15 +178,15 @@ impl Shutdown {
 
 #[tokio::main]
 async fn main() {
-    let logging = Logging::try_parse_from(["hl-daemon"])
+    let logging = Logging::try_parse_from(["dockerd"])
         .expect("daemon logging environment contains valid Unicode values")
         .configuration();
     for warning in logging.warnings() {
-        eprintln!("hl-daemon: {warning}");
+        eprintln!("dockerd: {warning}");
     }
     logging.apply();
     if let Err(error) = Arguments::parse().run().await {
-        eprintln!("hl-daemon: {error}");
+        eprintln!("dockerd: {error}");
         std::process::exit(1);
     }
 }
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn legacy_flags_preserve_the_installed_process_contract() {
         let arguments = Arguments::try_parse_from([
-            "hl-daemon",
+            "dockerd",
             "--root",
             "/data",
             "--socket",
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn platform_selects_the_guest_image_and_execution_architecture() {
         let arguments = Arguments::try_parse_from([
-            "hl-daemon",
+            "dockerd",
             "--root",
             "/data",
             "--socket",
@@ -285,12 +285,12 @@ mod tests {
     #[test]
     fn invalid_arguments_fail_before_runtime_construction() {
         assert_eq!(
-            Arguments::try_parse_from(["hl-daemon", "--root"]).unwrap_err().kind(),
+            Arguments::try_parse_from(["dockerd", "--root"]).unwrap_err().kind(),
             ErrorKind::InvalidValue
         );
         assert_eq!(
             Arguments::try_parse_from([
-                "hl-daemon",
+                "dockerd",
                 "--root",
                 "/data",
                 "--socket",
@@ -304,7 +304,7 @@ mod tests {
         );
         assert_eq!(
             Arguments::try_parse_from([
-                "hl-daemon",
+                "dockerd",
                 "--root",
                 "/data",
                 "--socket",
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn logging_routes() {
         let logging = Logging::try_parse_from([
-            "hl-daemon",
+            "dockerd",
             "--log",
             "daemon",
             "--log-level",

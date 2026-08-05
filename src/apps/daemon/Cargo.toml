@@ -10,7 +10,7 @@ description = "Husklet Docker-compatible daemon application"
 publish = false
 
 [[bin]]
-name = "hl-daemon"
+name = "dockerd"
 path = "src/main.rs"
 
 [dependencies]
