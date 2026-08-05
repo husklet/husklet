@@ -1,6 +1,6 @@
 # Retained core ABI oracle audit
 
-This flat category ports the 30 genuinely absent cases from
+This flat category ports all 35 cases from
 `../engine/tests/compat/core/abi/manifest.tsv`. The retained tree was used
 read-only; no retained file was edited. The fixtures remain independent even
 where a transformed or differently scoped test with a similar name exists in
@@ -124,7 +124,7 @@ VFS, task, signal, time, or Linux ABI invariant above.
 
 ## Preserved fixture contract
 
-`test.yaml` contains exactly 30 cases and 52 target rows. IDs are stable
+`test.yaml` contains exactly 35 cases and 62 target rows. IDs are stable
 `runtime/abi-core/<legacy-case>` values. Every source and golden is copied from
 the corresponding retained manifest row; target membership, optimized
 static-PIE/pthread/math flags, empty argv/environment, exit code, 120-second
@@ -134,6 +134,10 @@ dependency field:
 
 | Cases | Retained dependencies |
 |---|---|
+| `hello`, `longjmp` | `linux-libc` |
+| `recursion` | `codegen,stack` |
+| `pipe` | `linux-libc,pipe` |
+| `regex` | `linux-libc,regex` |
 | `strings` | `linux-libc` |
 | `math` | `linux-libc,libm` |
 | `bitops` | `codegen` |
@@ -164,8 +168,8 @@ dependency field:
 There are no argv, environment, or auxiliary fixture dependencies in this
 cohort. All declared outputs are category-local goldens.
 
-The five source-name collisions that made in-place migration unsafe are
+Source-name collisions that make merging this category into a different owner unsafe include
 `fnptr.c`, `qsort.c`, `mmapanon` versus the transformed `mmap_anon.c`, the
-cross-category `ibtc_dispatch.c`, and `hello.c` in the ISA category.
-The separate category keeps the retained bytes and IDs unambiguous without
+cross-category `ibtc_dispatch.c`, and `hello.c` in the ISA category. The
+complete category keeps the retained bytes and IDs unambiguous without
 overwriting those owners. There are no prebuilt binaries or result captures.

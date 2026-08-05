@@ -105,6 +105,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/heap.out }
+  - id: runtime/abi-core/hello
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: hello.c, output: hello, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-hello }
+    run: []
+    timeout: 120
+    expect: { exit: 42, stdout: golden/hello.out }
   - id: runtime/abi-core/ibtc-dispatch
     targets: [arm64, amd64]
     status: active
@@ -123,6 +132,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/jumptable.out }
+  - id: runtime/abi-core/longjmp
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: longjmp.c, output: longjmp, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-longjmp }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/longjmp.out }
   - id: runtime/abi-core/math
     targets: [arm64, amd64]
     status: active
@@ -159,6 +177,15 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/munmap_partial.out }
+  - id: runtime/abi-core/pipe
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: pipe.c, output: pipe, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-pipe }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/pipe.out }
   - id: runtime/abi-core/qsort
     targets: [arm64, amd64]
     status: active
@@ -177,6 +204,24 @@ cases:
     run: []
     timeout: 120
     expect: { exit: 0, stdout: golden/repmovsdf.out }
+  - id: runtime/abi-core/recursion
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: recursion.c, output: recursion, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-recursion }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/recursion.out }
+  - id: runtime/abi-core/regex
+    targets: [arm64, amd64]
+    status: active
+    compat: { class: compatibility }
+    build: { source: regex.c, output: regex, flags: [-static-pie, -O2, -pthread, -lm] }
+    artifact: { destination: /opt/husklet/abi-core-regex }
+    run: []
+    timeout: 120
+    expect: { exit: 0, stdout: golden/regex.out }
   - id: runtime/abi-core/shldflags
     targets: [amd64]
     status: active

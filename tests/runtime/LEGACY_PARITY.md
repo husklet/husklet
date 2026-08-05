@@ -32,20 +32,20 @@ reported separately because they are not the same execution policy.
 
 | Retained disposition | YAML result | Rows |
 |---|---|---:|
-| active | active, same identity and ISA | 690 |
+| active | active, same identity and ISA | 700 |
 | active | `!broken`, same identity and ISA | 74 |
-| active | no same suite/case/ISA identity | 42 |
+| active | no same suite/case/ISA identity | 32 |
 | excluded only on macOS | typed `!host-excluded [macos]` | 40 |
 | **total** | | **846** |
 
-Of the 804 identity-matched rows, 712 retain byte-identical sources. Another
+Of the 814 identity-matched rows, 722 retain byte-identical sources. Another
 86 use deliberately changed source: 82 network rows (41 cases on both ISAs)
 replace the retained `net_util.h` include with category-owned
 `socket_util.h`; `epoll-reblock-fin` and `pidfd-signal` in `syscalls` are
 changed adapters on both ISAs. The remaining six bootstrap rows have no
 retained source in the build plan.
 
-All 798 non-bootstrap, identity-matched rows retain byte-identical golden
+All 808 non-bootstrap, identity-matched rows retain byte-identical golden
 output. The six bootstrap inventory goldens were deleted with the old seed
 tree, so their provenance is not mechanically comparable even though the YAML
 rows have checked-in replacements. No identity-matched row changes its
@@ -53,11 +53,10 @@ expected exit status.
 
 ## Lost or renamed identities
 
-These 42 active inventory rows have no same suite/case/ISA identity:
+These 32 active inventory rows have no same suite/case/ISA identity:
 
 | Retained family | Cases | Rows | Current evidence |
 |---|---|---:|---|
-| `core/abi` | `hello`, `longjmp`, `pipe`, `recursion`, `regex` | 10 | no byte-identical retained source exists in a YAML build row |
 | `core/syscall` | `mmapshared`, `epoll`, `epoll-highfd`, `epoll-edge`, `epoll-dup-lifetime`, `epoll-fork-inherit`, `eventfd`, `eventfd-sema`, `signalfd-multi`, `inotify`, `timerfd`, `madvise`, `fallocate`, `statx-agree`, `clockelapsed` | 30 | `mmapshared`, `inotify`, `timerfd`, and `clockelapsed` have byte-identical sources under `syscalls`; the other eleven are absent or source-divergent |
 | `soak` | `threadpool-aarch64`, `threadpool-x86` | 2 | intentionally folded into target-specific rows of `runtime/threadpool` |
 
@@ -109,8 +108,8 @@ carry only the category helper-include change described above.
 2. Restore the 15-case syscall failure cohort as a domain, starting from the
    retained syscall implementation and its complete call graph rather than
    fixture-by-fixture patches.
-3. Resolve the 20 `core/abi` and `core/syscall` case identities. Represent the
-   four proven moves explicitly, then migrate or deliberately supersede the
+3. Resolve the remaining `core/syscall` case identities. Represent the four
+   proven moves explicitly, then migrate or deliberately supersede the
    remaining sources and goldens.
 4. Add the mechanical comparison as a typed repository gate before deleting
    the centralized inventory. YAML parsing alone cannot detect any divergence

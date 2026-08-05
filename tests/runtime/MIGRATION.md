@@ -7,11 +7,11 @@ tree on 2026-08-04. The retained `../engine` tree was read only.
 ## Current inventory
 
 The runtime runner discovers only direct children of `tests/runtime` containing
-`test.yaml`. There are currently 36 such category manifests containing 1,608
-case definitions: 1,429 unconditionally active, 20 active except on macOS, 119
+`test.yaml`. There are currently 36 such category manifests containing 1,613
+case definitions: 1,434 unconditionally active, 20 active except on macOS, 119
 explicitly broken, and 40 unsupported. The 20 host-conditional cases account
 for 40 ISA rows and no longer lose Linux and Windows coverage. Every manifest
-loaded successfully through `testing runtime` and all 1,608 declared stdout
+loaded successfully through `testing runtime` and all 1,613 declared stdout
 paths exist inside the category that names them.
 
 This does not yet make `tests/runtime/legacy` removable. Three other direct
