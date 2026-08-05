@@ -1,6 +1,44 @@
 //! Private operating-system boundary for the Husklet application.
 
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
+
+/// RAII raw mode for a terminal descriptor; restores the saved attributes on drop.
+pub(crate) struct RawMode {
+    descriptor: RawFd,
+    saved: Option<libc::termios>,
+}
+
+impl RawMode {
+    pub(crate) fn enter(descriptor: RawFd) -> Self {
+        // SAFETY: `termios` is an initialized C value before either kernel call can read it. The
+        // inherited descriptor remains open for this value's lifetime; these calls retain no
+        // pointer, alias no Rust storage, invoke no callback, and cannot unwind across the ABI.
+        unsafe {
+            let mut attributes: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(descriptor, &mut attributes) != 0 {
+                return Self { descriptor, saved: None };
+            }
+            let saved = attributes;
+            libc::cfmakeraw(&mut attributes);
+            libc::tcsetattr(descriptor, libc::TCSANOW, &attributes);
+            Self { descriptor, saved: Some(saved) }
+        }
+    }
+}
+
+impl Drop for RawMode {
+    fn drop(&mut self) {
+        let Some(saved) = self.saved else {
+            return;
+        };
+        // SAFETY: this owner keeps the inherited descriptor and initialized attributes alive for
+        // the complete call. The kernel retains no pointer, accesses no aliased mutable Rust
+        // storage, invokes no callback, and cannot unwind across the ABI.
+        unsafe {
+            libc::tcsetattr(self.descriptor, libc::TCSANOW, &saved);
+        }
+    }
+}
 
 /// An exclusively locked file whose descriptor owns the lock lifetime.
 pub(crate) struct ExclusiveFileLock(std::fs::File);

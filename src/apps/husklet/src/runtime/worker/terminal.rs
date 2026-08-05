@@ -1,6 +1,6 @@
 use super::{on_winch, Ordering, WINCH};
+use crate::ffi::RawMode;
 use std::io::Write;
-use std::os::unix::io::RawFd;
 
 /// Establishes the terminal contract inherited by an engine-backed session.
 ///
@@ -291,35 +291,6 @@ impl Descriptors {
             .collect();
         descriptors.sort_by_key(|(descriptor, _)| *descriptor);
         descriptors.into_iter().map(|(_, value)| value).collect()
-    }
-}
-
-/// RAII raw-mode for a tty fd; restores the saved termios on drop.
-struct RawMode {
-    fd: RawFd,
-    saved: Option<libc::termios>,
-}
-impl RawMode {
-    fn enter(fd: RawFd) -> RawMode {
-        unsafe {
-            let mut t: libc::termios = std::mem::zeroed();
-            if libc::tcgetattr(fd, &mut t) != 0 {
-                return RawMode { fd, saved: None }; // not a tty (e.g. piped) — leave as-is
-            }
-            let saved = t;
-            libc::cfmakeraw(&mut t);
-            libc::tcsetattr(fd, libc::TCSANOW, &t);
-            RawMode { fd, saved: Some(saved) }
-        }
-    }
-}
-impl Drop for RawMode {
-    fn drop(&mut self) {
-        if let Some(saved) = self.saved {
-            unsafe {
-                libc::tcsetattr(self.fd, libc::TCSANOW, &saved);
-            }
-        }
     }
 }
 
