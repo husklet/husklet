@@ -93,9 +93,6 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         {
             return Err(AbiError::Invalid);
         }
-        if mode != 0 && flags & 0x40 == 0 && flags & temporary != temporary {
-            return Err(AbiError::Invalid);
-        }
         let mut intent = match access {
             0 => OpenIntent::READ,
             1 => OpenIntent::WRITE,

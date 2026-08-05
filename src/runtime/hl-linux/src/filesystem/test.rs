@@ -203,6 +203,7 @@ fn open_flags_vary() {
         assert_eq!(plan.intent.bits() & OpenIntent::TEMPORARY, 0);
         let plan = abi.openat(-100, BASE, 0x100, 0).unwrap();
         assert!(plan.no_controlling_terminal);
+        assert_eq!(abi.openat(-100, BASE, 0, 0o600).unwrap().mode, 0o600);
         let plan = abi.openat(-100, BASE, temporary | 1, 0o600).unwrap();
         assert_ne!(plan.intent.bits() & OpenIntent::TEMPORARY, 0);
         assert_eq!(
