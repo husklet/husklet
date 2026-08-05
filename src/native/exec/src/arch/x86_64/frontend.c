@@ -319,6 +319,29 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 if (!hl_x86_decode_address(request, block, item, rex, 0u, 0u, start, &cursor)) break;
                 item->operation = OP_VECTOR; item->memory_operand = 1u; item->source = 16u;
             }
+        } else if (vex != 0u && vex_map == 2u && vex_pp == 1u &&
+                   (opcode == 0x01u || opcode == 0x02u || opcode == 0x03u ||
+                    opcode == 0x05u || opcode == 0x06u || opcode == 0x07u)) {
+            uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR; item->vector_vex = 1u;
+            item->width = vex_l != 0u ? 32u : 16u; item->vector_memory_width = item->width;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_source_one = vex_vvvv;
+            item->vector_lane = opcode == 0x02u || opcode == 0x06u ? 4u : 2u;
+            item->condition = opcode >= 0x05u;
+            item->vector_kind = opcode == 0x03u || opcode == 0x07u ? VECTOR_HORIZONTAL_SATURATING :
+                                opcode >= 0x05u ? VECTOR_HORIZONTAL_SUBTRACT : VECTOR_HORIZONTAL_ADD;
+            if ((modrm >> 6) == 3u) ++cursor;
+            else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0u, 0u, start, &cursor)) break;
+                item->operation = OP_VECTOR; item->memory_operand = 1u; item->source = 16u;
+            }
         } else if (vex != 0u && vex_pp == 1u &&
                    ((vex_map == 1u &&
                      (opcode == 0xdau || opcode == 0xdeu || opcode == 0xeau || opcode == 0xeeu)) ||

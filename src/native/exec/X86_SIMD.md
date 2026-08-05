@@ -563,3 +563,55 @@ replace upper halves because they are never hosted in live vector registers.
 The ABI field is appended after all established native fields. Existing baked
 emitter, trampoline, polling, dirty-publication, and fault offsets therefore do
 not move. The generated C and Rust size/offset assertions cover the new tail.
+
+### VEX packed horizontal add and subtract
+
+The retained oracle audit covered
+`../engine/src/translator/guest/x86_64/avx.c::hl_x86_avx_run`, `do_avx`
+(map two opcodes `01/02/03/05/06/07`), `avx_get`, `avx_get_rm`, `avx_put`,
+`avx_ea`, and `avx_try_read`, together with the `R_AVX` handoff in
+`dispatch.h`/`interp_dispatch.h` and the generic VEX fallback in
+`translate.c`. It also checked the legacy SSSE3 sibling in
+`avx.c::do_sse3b` and the retained corpus model in
+`tests/compat/abi/corpus/x_vex_ssse3.c`.
+
+The six admitted instructions are VEX.128/256 `VPHADDW`, `VPHADDD`,
+`VPHADDSW`, `VPHSUBW`, `VPHSUBD`, and `VPHSUBSW`, with `66` mandatory prefix
+and register or full-width memory operand. Within each independent 128-bit
+lane, adjacent pairs from vvvv precede adjacent pairs from r/m. Word and dword
+non-saturating forms wrap; only opcodes `03/07` saturate signed word results.
+They change neither integer flags nor MXCSR. Both sources are staged before the
+destination, so either source may alias it. The current emitter maps wrapping
+add directly to AArch64 `ADDP`; subtract and signed-saturating forms pair even
+and odd elements with `UZP1/UZP2` before `SUB`, `SQADD`, or `SQSUB`.
+
+Retained vector state is CPU-instance-owned (`v` low halves and `vhi` upper
+halves), lives through the CPU/task lifetime, and is published only by
+`avx_put`; this family allocates, blocks, cancels, and locks nowhere. The
+dispatcher owns fallback and teardown. `avx_get_rm` validates a complete 16- or
+32-byte read before `avx_put`, so a fault produces no partial destination. The
+Rust owner is the x86 frontend decode plus vector memory guard/emitter: it keeps
+the same fault-before-publication order, VEX.128 upper-zeroing, per-lane YMM
+ordering, and architecture-independent guest result. Host differences are only
+the retained C soft path versus AArch64 native lowering; no errno, signal,
+checkpoint, or floating-point special case belongs to these operations.
+
+| Retained capability | Rust-native owner | Status |
+|---|---|---|
+| Exact six map-two/`66` opcode forms | VEX frontend admission | implemented |
+| 128/256 register and memory widths | vector decode and whole-span read guard | implemented |
+| Per-128-lane vvvv-then-r/m ordering | horizontal vector emitter | implemented |
+| Wrapping word/dword add/sub | `ADDP` or `UZP1/UZP2` plus `SUB` | implemented |
+| Signed-word saturation for `03/07` only | `SQADD` / `SQSUB` | implemented |
+| vvvv/rm destination aliases | scratch-first emitter ordering | implemented |
+| Flags and MXCSR preservation | no status-state publication | implemented |
+| Memory fault before destination publication | `hl_x86_emit_vector` read guard | implemented |
+| VEX.128 upper zero and VEX.256 upper result | `emit_vex_completion` | implemented |
+
+`test/x86_translation.c::vex_horizontal_add_sub_contract` covers all 24
+opcode/width/register-memory combinations, both destination alias directions,
+rejected map/prefix/opcode forms, exact-capacity byte/provenance equivalence,
+required-minus-one atomic capacity failure, and all six 256-bit operations on
+an AArch64 execution path with wrapping, saturation, lane ordering, and flags/
+MXCSR preservation checks. The full warning-strict native translation test is
+the lane gate.

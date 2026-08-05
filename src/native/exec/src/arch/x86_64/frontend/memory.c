@@ -841,6 +841,8 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_SHUFFLE_WORD: return 6u;
     case VECTOR_SHUFFLE_DOUBLE: return 3u;
     case VECTOR_MULTIPLY_EVEN_SIGNED_DWORD: return 3u;
+    case VECTOR_HORIZONTAL_SUBTRACT:
+    case VECTOR_HORIZONTAL_SATURATING: return 3u;
     case VECTOR_SIGNED_DWORD_TO_FLOAT: return 1u;
     case VECTOR_PACK_SIGNED:
     case VECTOR_PACK_UNSIGNED: return 3u;
@@ -878,13 +880,25 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_PACK_SIGNED ||
                               item->vector_kind == VECTOR_PACK_UNSIGNED ||
                               item->vector_kind == VECTOR_AVERAGE_UNSIGNED ||
-                              item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE;
+                              item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE ||
+                              item->vector_kind == VECTOR_HORIZONTAL_ADD ||
+                              item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ||
+                              item->vector_kind == VECTOR_HORIZONTAL_SATURATING;
         operation += item->width == 32u ? vector_operation_words(item) + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
     }
     if (item->vector_memory_width == 32u && item->memory_operand != 0u &&
         (item->vector_kind == VECTOR_PACK_SIGNED || item->vector_kind == VECTOR_PACK_UNSIGNED))
         operation += 2u;
+    if (item->memory_operand != 0u &&
+        (item->vector_kind == VECTOR_HORIZONTAL_ADD ||
+         item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ||
+         item->vector_kind == VECTOR_HORIZONTAL_SATURATING)) {
+        if (item->vector_memory_width == 16u)
+            operation += item->vector_kind == VECTOR_HORIZONTAL_ADD ? 5u : 7u;
+        else if (item->vector_kind != VECTOR_HORIZONTAL_ADD)
+            operation += 2u;
+    }
     uint32_t width = item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
     uint32_t aligned = item->vector_aligned == 0u ? 0u :
                        6u + constant_words(item->pc) + (item->live_chain != 0u ? 19u : 0u);
@@ -1240,6 +1254,19 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0x6e202800) | destination << 5 | destination;
         words[(*cursor)++] = UINT32_C(0x6e602800) | destination << 5 | destination;
         words[(*cursor)++] = UINT32_C(0x6ea02800) | destination << 5 | destination;
+    } else if (item->vector_kind == VECTOR_HORIZONTAL_ADD) {
+        uint32_t base = lane == 2u ? UINT32_C(0x4e60bc00) : UINT32_C(0x4ea0bc00);
+        words[(*cursor)++] = base | source << 16 | first << 5 | destination;
+    } else if (item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ||
+               item->vector_kind == VECTOR_HORIZONTAL_SATURATING) {
+        uint32_t arrangement = lane == 2u ? UINT32_C(0x00400000) : UINT32_C(0x00800000);
+        uint32_t base = item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ? UINT32_C(0x6e208400) :
+                        item->condition != 0u ? UINT32_C(0x4e202c00) : UINT32_C(0x4e200c00);
+        words[(*cursor)++] = UINT32_C(0x4e001800) | arrangement |
+                             source << 16 | first << 5 | 17u; /* uzp1: adjacent even lanes */
+        words[(*cursor)++] = UINT32_C(0x4e005800) | arrangement |
+                             source << 16 | first << 5 | 18u; /* uzp2: adjacent odd lanes */
+        words[(*cursor)++] = base | arrangement | 18u << 16 | 17u << 5 | destination;
     } else if (item->vector_kind == VECTOR_BYTE_MASK) {
         words[(*cursor)++] = UINT32_C(0x6f090400) | source << 5 | 17u; /* ushr v17.16b,source,#7 */
         words[(*cursor)++] = UINT32_C(0x6f001400) | 25u << 16 | 17u << 5 | 17u;
@@ -1269,6 +1296,9 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
         item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD ||
         item->vector_kind == VECTOR_PACK_SIGNED || item->vector_kind == VECTOR_PACK_UNSIGNED ||
+        item->vector_kind == VECTOR_HORIZONTAL_ADD ||
+        item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ||
+        item->vector_kind == VECTOR_HORIZONTAL_SATURATING ||
         item->vector_kind == VECTOR_COMPARE_EQUAL ||
         item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED ||
         item->vector_kind == VECTOR_MINIMUM_SIGNED || item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
