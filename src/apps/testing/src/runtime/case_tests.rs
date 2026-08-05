@@ -22,6 +22,11 @@ fn app() -> App {
     fs::write(directory.path().join("exact.c"), "exact").unwrap();
     fs::write(directory.path().join("excluded.c"), "excluded").unwrap();
     fs::write(directory.path().join("inactive.c"), "inactive").unwrap();
+    let golden = directory.path().join("golden");
+    fs::create_dir(&golden).unwrap();
+    for output in ["exact.out", "excluded.out", "inactive.out"] {
+        fs::write(golden.join(output), []).unwrap();
+    }
     fs::write(
         &definition,
         r#"targets: [arm64, amd64]
