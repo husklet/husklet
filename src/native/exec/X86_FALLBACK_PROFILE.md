@@ -7,7 +7,7 @@ contains `cc4845ca8` (`native: cache x86 writable projections`). The retained
 C oracle was inspected read-only at
 `/Users/x/dd/engine` (`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`). The complete
 corresponding domain and entry points are recorded in
-`X86_WRITE_CACHE_AUDIT.md`; this follow-up mechanically checked the hot-path
+`WRITE_PUBLICATION.md`; this follow-up mechanically checked the hot-path
 ownership and fallback behavior against:
 
 - `src/translator/guest/x86_64/emit.c`: `emit_memory_guard`,

@@ -158,3 +158,66 @@ provides equivalent global evidence. A future publication classifier must read
 the evidence while already holding the projection lease transaction, retain the
 recorded generation, and fall back to exact publication if either condition is
 not satisfied.
+
+## x86 writable-view cache contract
+
+The 2026-08-05 audit inspected retained C
+`translator/guest/x86_64/{emit.c,translate.c,rep_runtime.c}`,
+`translator/guest_memory.c`, `linux_abi/logical_vma.c`, and
+`core/target/x86_64.c`. The retained logical-VMA table owns mapping identity and
+backing lifetime under its mutex; pins retain backing while host bytes are used,
+without holding the lock across copying. Permission and span checks precede a
+store, successful stores are observed afterward, faults report the first
+incomplete address, and REP preserves partial progress. Resolver errors cross
+the dispatcher boundary; emitted code owns no cancellation or errno conversion.
+
+| Capability | Rust owner | Status |
+| --- | --- | --- |
+| Mapping lifetime and generation | `ProjectionLease` and x86 `view_publish` | Implemented |
+| Bounded direct view lookup | `read_views` publication in `run.c` | Implemented for reads and writes |
+| Permission/span proof before mutation | `frontend/memory.c` guards | Implemented |
+| Exact dirty owner/range journal | x86 CPU dirty fields and records | Implemented |
+| Archive before projection-owner change | x86 writable-view cache | Implemented |
+| Capacity rejection before mutation | x86 writable-view cache and dispatcher | Implemented |
+| Successful-store publication | scalar, vector, and RMW emitters | Implemented |
+| Executable-write sticky latch | scalar, vector, and RMW emitters | Implemented |
+| REP partial completion | `run.c::rep_execute` | Implemented separately |
+
+Writes now consume the four run-authenticated views without a callback. Before
+changing the active dirty owner, the emitter archives its exact record; a full
+journal exits before mutation. Dirty bounds and executable-write state publish
+only after a successful host mutation. This covers scalar widths 1/2/4/8,
+write-qualified arithmetic loads, XCHG, XADD, CMPXCHG, and vector stores. REP
+retains its separately preflighted projection and exact post-success publication.
+
+## Executable-write precision contract
+
+The 2026-08-05 executable-alias audit additionally inspected retained C
+`core/target/x86_64.c::{jit86_store_alias_range,jit86_store_alias_changed,jit86_smc_commit}`,
+`translator/guest/x86_64/translate.c::jit86_drop_range_translations`,
+`translator/cache.c::map_invalidate_source_ranges`, and the `G_SMC_UNMAP` and
+`G_SMC_COPYOUT` paths in `translator/guest/x86_64/abi.h`. The retained engine
+separates writable bytes, executable aliases, mapping identity, and cache
+lifetime. Its file-map lock protects backing identity, CPU-local store and SMC
+ranges drive writeback and invalidation, and overflow may retire all translations
+but never expands writeback to a whole view. Commit occurs within mapping
+stop-the-world coordination and clears both journals before resume.
+
+The x86 native resolver must keep each cached window permission-homogeneous.
+Host-contiguous guest views with different complete permissions cannot coalesce:
+otherwise a store through an adjacent RW view can inherit an executable bit and
+force a spurious epoch exit. Cross-boundary operations use the existing operand
+resolver/interpreter path, admitting no partial native store.
+
+| Capability | Retained C | Rust contract |
+| --- | --- | --- |
+| Actual written bytes | per-CPU `store_ranges` | bounded native dirty journal |
+| Executable alias discovery | logical VMA/file-backing overlap | `executable_write_ranges` backing overlap |
+| Translation retirement | source-range invalidation | executable page tokens/ranges |
+| Permission transitions | mapping STW plus range drop | ledger generation plus projection exclusion |
+| Shared writeback | store journal, never SMC overflow | reservation commit plus exact reconciliation |
+| Fork/checkpoint | cache-generation repair and STW image | fresh coordinator/projection lifetime |
+| Mixed-permission host-contiguous views | distinct logical VMAs | distinct native cached windows |
+
+Exact dirty publication, shared-alias projection, mprotect generation changes,
+fault ordering, fork, and checkpoint ownership remain unchanged by this rule.

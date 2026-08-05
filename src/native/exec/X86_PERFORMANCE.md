@@ -1,5 +1,14 @@
 # AMD64 native performance audit
 
+## Write projection publication, 2026-08-05
+
+The writable-view cache now admits scalar, vector, and RMW stores against the
+four authenticated run views while preserving exact post-success publication.
+Permission-homogeneous cache windows prevent adjacent RW and executable views
+from contaminating executable-write state. The durable oracle, ownership
+matrices, and coarse-publication blocker are recorded in `WRITE_PUBLICATION.md`;
+no standalone performance result was claimed for these correctness changes.
+
 ## Scalar SSE/SSE2, 2026-08-04
 
 The retained implementation was inspected read-only at
