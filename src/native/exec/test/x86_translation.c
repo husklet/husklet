@@ -5689,6 +5689,121 @@ static int memory_cmpxchg_differential(void) {
 #endif
 }
 
+static int vex_blend_family_contract(void) {
+    static const uint8_t opcodes[] = {0x02u, 0x0cu, 0x0du, 0x0eu, 0x4au, 0x4bu, 0x4cu};
+    unsigned operation;
+    unsigned wide;
+    unsigned memory;
+    for (operation = 0u; operation < sizeof opcodes; ++operation) {
+        for (wide = 0u; wide < 2u; ++wide) {
+            for (memory = 0u; memory < 2u; ++memory) {
+                uint8_t guest[] = {0xc4u, 0xe3u, (uint8_t)(0x69u | (wide << 2)),
+                                   opcodes[operation], (uint8_t)(memory ? 0x4bu : 0xcbu),
+                                   memory ? 0x10u : 0xa0u, 0xa0u};
+                size_t size = memory != 0u ? 7u : 6u;
+                uint32_t host[256] = {0};
+                hl_x86_a64_provenance provenance[2] = {0};
+                hl_x86_a64_request request = request_for(guest, size, host, provenance);
+                hl_x86_a64_result emitted;
+                uint32_t required;
+                CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+                CHECK(emitted.instruction_count == 1u && emitted.exit == HL_X86_A64_FALLTHROUGH);
+                CHECK(provenance[0].guest_size == size && provenance[0].word_end > provenance[0].word_start);
+                if (memory <= 1u) {
+                    for (required = 0u; required < 256u; ++required) {
+                        request.host_capacity = required;
+                        if (hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK) break;
+                    }
+                    CHECK(required < 256u);
+                    memset(host, 0xa5, sizeof host); memset(provenance, 0xa5, sizeof provenance);
+                    request.host_capacity = required - 1u;
+                    CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_CAPACITY);
+                    CHECK(host[0] == UINT32_C(0xa5a5a5a5));
+                    CHECK(provenance[0].guest_pc == UINT64_C(0xa5a5a5a5a5a5a5a5));
+#if defined(__aarch64__)
+                    {
+                        long page = sysconf(_SC_PAGESIZE);
+                        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                        hl_native_x86_64_cpu cpu = {0};
+                        hl_native_x86_64_cpu initial;
+                        uint8_t left[32], right[32], mask[32], expected[32];
+                        unsigned byte;
+                        unsigned lane = opcodes[operation] == 0x0eu ? 2u :
+                                        (opcodes[operation] == 0x0du || opcodes[operation] == 0x4bu) ? 8u :
+                                        opcodes[operation] == 0x4cu ? 1u : 4u;
+                        CHECK(code != MAP_FAILED);
+                        for (byte = 0u; byte < 32u; ++byte) {
+                            left[byte] = (uint8_t)(0x10u + byte);
+                            right[byte] = (uint8_t)(0xe0u - byte);
+                            mask[byte] = (uint8_t)(((byte / lane) & 1u) != 0u ? 0x80u : 0x7fu);
+                        }
+                        for (byte = 0u; byte < (wide != 0u ? 32u : 16u); byte += lane) {
+                            unsigned element = byte / lane;
+                            unsigned selected;
+                            if (opcodes[operation] >= 0x4au)
+                                selected = (mask[byte + lane - 1u] & 0x80u) != 0u;
+                            else {
+                                unsigned bit = opcodes[operation] == 0x0eu ? element & 7u : element;
+                                selected = (0xa0u >> bit) & 1u;
+                            }
+                            memcpy(expected + byte, selected != 0u ? right + byte : left + byte, lane);
+                        }
+                        memcpy(&cpu.vectors[4], left, 16u); memcpy(&cpu.vector_upper[4], left + 16u, 16u);
+                        memcpy(&cpu.vectors[6], right, 16u); memcpy(&cpu.vector_upper[6], right + 16u, 16u);
+                        memcpy(&cpu.vectors[20], mask, 16u); memcpy(&cpu.vector_upper[20], mask + 16u, 16u);
+                        memset(&cpu.vector_upper[2], 0x5au, 16u);
+                        if (memory != 0u) {
+                            cpu.registers[3] = UINT64_C(0x3ff0);
+                            cpu.memory_first = UINT64_C(0x4000);
+                            cpu.memory_last = wide != 0u ? UINT64_C(0x4020) : UINT64_C(0x4010);
+                            cpu.memory_delta = (uint64_t)(uintptr_t)right - UINT64_C(0x4000);
+                            cpu.memory_permissions = 1u;
+                        }
+                        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+                        initial = cpu;
+                        request.host_capacity = sizeof host / sizeof host[0];
+                        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+                        memcpy(code, host, emitted.word_count * sizeof(uint32_t));
+                        ((uint32_t *)code)[emitted.word_count] = UINT32_C(0xd65f03c0);
+                        __builtin___clear_cache((char *)code, (char *)code + (emitted.word_count + 1u) * 4u);
+                        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+                        hl_native_x86_64_enter(&cpu, code);
+                        if (memcmp(&cpu.vectors[2], expected, 16u) != 0) {
+                            fprintf(stderr, "blend semantic op=%02x wide=%u mem=%u reason=%llu fault=%llx got=%02x exp=%02x\n", opcodes[operation], wide, memory, (unsigned long long)cpu.reason, (unsigned long long)cpu.fault_address, ((uint8_t *)&cpu.vectors[2])[0], expected[0]);
+                            return 1;
+                        }
+                        if (wide != 0u) CHECK(memcmp(&cpu.vector_upper[2], expected + 16u, 16u) == 0);
+                        else { uint8_t zero[16] = {0}; CHECK(memcmp(&cpu.vector_upper[2], zero, 16u) == 0); }
+                        CHECK(memcmp(&cpu.vectors[4], left, 16u) == 0 && memcmp(&cpu.vectors[6], right, 16u) == 0);
+                        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+                        if (memory != 0u) {
+                            hl_native_x86_64_cpu fault = initial;
+                            fault.memory_last--;
+                            hl_native_x86_64_enter(&fault, code);
+                            CHECK(fault.reason == 3u && fault.fault_address == UINT64_C(0x4000));
+                            CHECK(memcmp(&fault.vectors[2], &initial.vectors[2], 16u) == 0);
+                            CHECK(memcmp(&fault.vector_upper[2], &initial.vector_upper[2], 16u) == 0);
+                        }
+                        CHECK(munmap(code, (size_t)page) == 0);
+                    }
+#endif
+                }
+            }
+        }
+    }
+    { /* W1 is outside the retained W0 family; a missing immediate is truncated. */
+        static const uint8_t invalid[] = {0xc4u, 0xe3u, 0xe9u, 0x0eu, 0xcbu, 0xffu};
+        static const uint8_t truncated[] = {0xc4u, 0xe3u, 0x69u, 0x4cu, 0xcbu};
+        uint32_t host[64] = {0}; hl_x86_a64_provenance provenance[2] = {0}; hl_x86_a64_result emitted;
+        hl_x86_a64_request request = request_for(invalid, sizeof invalid, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_UNSUPPORTED);
+        request = request_for(truncated, sizeof truncated, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_TRUNCATED);
+    }
+    return 0;
+}
+
 int main(void) {
     int status = incdec_differential();
     if (status != 0) return status;
@@ -5810,6 +5925,8 @@ int main(void) {
     status = vex_packed_average_sad_contract();
     if (status != 0) return status;
     status = vex_packed_saturating_contract();
+    if (status != 0) return status;
+    status = vex_blend_family_contract();
     if (status != 0) return status;
     status = immediate_differential();
     if (status != 0) return status;

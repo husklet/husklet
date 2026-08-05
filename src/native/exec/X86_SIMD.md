@@ -223,6 +223,40 @@ layout. Both multiply families, register aliases, both widths, and atomic
 32-byte memory failure are implemented; legacy multiply families remain owned
 by their existing SSE path.
 
+## VEX integer blend/select slice
+
+The retained read-only audit covered
+`../engine/src/translator/guest/x86_64/decode.c::hl_x86_decode`,
+`avx.c::do_avx` and its `avx_get`, `avx_get_rm`, and `avx_put` operand
+staging, plus `translate.c::translate_avx_inline` at map-three opcodes
+`02/0c/0d/0e/4a/4b/4c`. The coherent W0, mandatory-66 family comprises
+VPBLENDD, VBLENDPS, VBLENDPD, VPBLENDW, VBLENDVPS, VBLENDVPD, and
+VPBLENDVB. Immediate selectors choose r/m when their bit is set; the word
+selector repeats in each 128-bit lane, while dword and qword controls span
+the encoded vector width. Variable forms take their mask register from
+is4 bits 7:4 and select by each byte/dword/qword sign bit.
+
+The per-CPU vector image owns XMM and YMM-high identity until task teardown;
+these operations allocate nothing, lock nothing, cannot block, and have no
+errno, cancellation, flag, or MXCSR effect. Register aliases are staged before
+destination publication. A memory operand is validated and loaded across the
+complete 16- or 32-byte span before either destination half changes. VEX.128
+clears the destination upper half; VEX.256 applies the operation independently
+to both stored halves. `frontend.c` owns bounded C4 decode and operand fields,
+while `frontend/memory.c` owns AArch64 INS or SSHR/BSL lowering, guarded loads,
+exact register-form capacity, and architectural publication. W1 and other
+map/prefix spellings remain interpreter fallbacks. The focused matrix covers
+all seven operations, both widths, register and memory sources, truncation,
+invalid W, provenance, and exact/required-minus-one register capacity.
+
+Memory address decoding temporarily owns scalar address-operation width, so the
+blend decoder restores the preserved vector width before vector sizing and VEX
+completion. Without that restoration, VEX.128 memory forms take the wide upper
+operation instead of clearing YMM-high. Live AArch64 coverage seeds YMM-high
+immediately before entry for every form, executes register and guarded memory
+sources, and verifies that a one-byte-short mapping faults before either
+destination half is published.
+
 ## VEX packed saturating narrow slice
 
 The retained oracle is `../engine/src/translator/guest/x86_64/avx.c::do_avx`

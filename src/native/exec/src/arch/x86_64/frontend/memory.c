@@ -840,6 +840,15 @@ static uint32_t vector_operation_words(const instruction *item) {
         return 5u;
     case VECTOR_SHUFFLE_WORD: return 6u;
     case VECTOR_SHUFFLE_DOUBLE: return 3u;
+    case VECTOR_BLEND_IMMEDIATE: {
+        uint32_t count = 16u / item->vector_lane;
+        uint32_t selected = 0u;
+        uint32_t index;
+        for (index = 0u; index < count; ++index)
+            selected += (item->vector_immediate >> index) & 1u;
+        return 2u + selected;
+    }
+    case VECTOR_BLEND_VARIABLE: return 3u;
     case VECTOR_MULTIPLY_EVEN_SIGNED_DWORD: return 3u;
     case VECTOR_HORIZONTAL_SUBTRACT:
     case VECTOR_HORIZONTAL_SATURATING: return 3u;
@@ -864,6 +873,7 @@ static uint32_t vector_operation_words(const instruction *item) {
 uint32_t hl_x86_vector_words(const instruction *item) {
     uint32_t operation = vector_operation_words(item);
     if (item->vector_vex != 0u) {
+        uint32_t upper_operation = vector_operation_words(item);
         uint32_t two_source = item->vector_kind == VECTOR_SHUFFLE_FLOAT ||
                               item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
                               item->vector_kind == VECTOR_ADD ||
@@ -887,8 +897,17 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_HORIZONTAL_ADD ||
                               item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ||
                               item->vector_kind == VECTOR_HORIZONTAL_SATURATING;
-        operation += item->width == 32u ? vector_operation_words(item) + 2u +
+        two_source = two_source || item->vector_kind == VECTOR_BLEND_IMMEDIATE ||
+                     item->vector_kind == VECTOR_BLEND_VARIABLE;
+        if (item->width == 32u && item->vector_kind == VECTOR_BLEND_IMMEDIATE &&
+            item->condition == 0u) {
+            instruction upper = *item;
+            upper.vector_immediate = (uint8_t)(item->vector_immediate >> (16u / item->vector_lane));
+            upper_operation = vector_operation_words(&upper);
+        }
+        operation += item->width == 32u ? upper_operation + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
+        if (item->width == 32u && item->vector_kind == VECTOR_BLEND_VARIABLE) operation += 2u;
     }
     if (item->vector_memory_width == 32u && item->memory_operand != 0u &&
         (item->vector_kind == VECTOR_PACK_SIGNED || item->vector_kind == VECTOR_PACK_UNSIGNED))
@@ -1162,6 +1181,26 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0x6e000400) | ((1u << 4) | 8u) << 16 |
                              (high << 3) << 11 | source << 5 | scratch;
         words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
+    } else if (item->vector_kind == VECTOR_BLEND_IMMEDIATE) {
+        unsigned output;
+        unsigned count = 16u / lane;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | first << 16 | first << 5 | scratch;
+        for (output = 0; output < count; ++output) {
+            if (((item->vector_immediate >> output) & 1u) != 0u) {
+                unsigned imm5 = (output * lane * 2u) | lane;
+                unsigned imm4 = output * lane;
+                words[(*cursor)++] = UINT32_C(0x6e000400) | imm5 << 16 |
+                                     imm4 << 11 | source << 5 | scratch;
+            }
+        }
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
+    } else if (item->vector_kind == VECTOR_BLEND_VARIABLE) {
+        unsigned element_bits = lane * 8u;
+        unsigned immhb = element_bits + 1u;
+        words[(*cursor)++] = UINT32_C(0x4f000400) | immhb << 16 |
+                             (uint32_t)item->vector_subopcode << 5 | scratch;
+        words[(*cursor)++] = UINT32_C(0x6e601c00) | first << 16 | source << 5 | scratch;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
     } else if (item->vector_kind == VECTOR_FROM_INTEGER)
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9e670000) : UINT32_C(0x1e270000)) |
                                source << 5 | destination;
@@ -1323,10 +1362,18 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD ||
         item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD ||
         item->vector_kind == VECTOR_AVERAGE_UNSIGNED ||
-        item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE) {
+        item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE ||
+        item->vector_kind == VECTOR_BLEND_IMMEDIATE ||
+        item->vector_kind == VECTOR_BLEND_VARIABLE) {
         hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
         upper.vector_source_one = 19u;
     } else upper.vector_source_one = upper.source;
+    if (item->vector_kind == VECTOR_BLEND_VARIABLE) {
+        hl_x86_emit_vector_upper_load(words, cursor, 21u, item->vector_subopcode);
+        upper.vector_subopcode = 21u;
+    } else if (item->vector_kind == VECTOR_BLEND_IMMEDIATE && item->condition == 0u) {
+        upper.vector_immediate = (uint8_t)(item->vector_immediate >> (16u / item->vector_lane));
+    }
     emit_vector_operation(words, cursor, &upper);
     hl_x86_emit_vector_upper_store(words, cursor, 20u, item->destination);
 }
