@@ -339,3 +339,32 @@ is too large for an accepted timing claim. The exact engine SHA-256 was
 `1baf1ab38e73bfe91c4514b2793d963671f18b368d805efb9f30456641c6c3e8` and
 the exact testing binary was
 `91e12bbb0dc3e4488d69d35dab5656696a2662b32cf14d83c94793f09a30b6c6`.
+
+### Benchmark rootfs startup audit
+
+The retained benchmark oracle was inspected at
+`../engine/tools/matrix_runner.c`: `stage_rootfs`, `open_case_workspace`,
+`run_case`, and `remove_rootfs`. It creates one private root per case, stages
+the guest and optional loader/libc once, runs it, then removes exactly those
+owned paths. It has no image-store snapshot, cross-process lease, or durable
+publication contract comparable to `hl-images`.
+
+The Rust path was inspected from `TestImage::materialize` through
+`Images::rootfs`, `Roots::fork`, `Snapshots::prepare`, `Tree::copy_to`, and
+`Draft::commit_with`. The image-store operation lock spans a full root fork.
+The fork recursively traverses the immutable parent, temporarily makes each
+directory traversable and each file readable, reflinks or copies regular
+files, preserves hard-link identity, forks ownership/name sidecars, recursively
+syncs the new tree, atomically renames it, syncs committed directories, and
+publishes the snapshot before creating its lease. Release owns lease deletion
+and private snapshot removal. These durability and isolation transitions must
+not be weakened for benchmark speed.
+
+Before this correction, provenance preparation called `materialize` only to
+read the immutable manifest digest, then released that complete private root;
+execution immediately repeated the same durable fork. One uncontended ARM64
+syscall row at base `fbfe10df8` measured that discarded provenance root at
+284,747 us plus 28,498 us release, while the execution root cost 122,545 us
+plus 45,515 us release. The correction resolves and platform-validates the
+same image metadata for provenance without creating a writable root. Execution
+still performs exactly one isolated durable fork and release.

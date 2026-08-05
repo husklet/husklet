@@ -20,21 +20,18 @@ pub struct TestImage {
 }
 
 impl TestImage {
+    /// Resolve the immutable image identity without creating a writable root filesystem.
+    ///
+    /// # Errors
+    /// Returns image lookup, pull, or platform validation failures.
+    pub async fn resolve_identity(name: &str, platform: &Platform) -> Result<String, Error> {
+        let (images, image) = resolve(name, platform).await?;
+        images.details(&image, platform)?;
+        Ok(image.target.digest().to_string())
+    }
+
     pub async fn materialize(name: &str, platform: &Platform) -> Result<Self, Error> {
-        let cache = cache_root(platform)?;
-        let images = Images::open(cache)?;
-        let reference: Reference = name.parse()?;
-        let image = match images.resolve(&reference)? {
-            Some(image) if images.details(&image, platform).is_ok() => image,
-            _ if offline() => {
-                return Err(format!(
-                    "image materialization unavailable offline: {name} is absent from the prefetched {} cache",
-                    platform.architecture
-                )
-                .into());
-            }
-            _ => pull(&images, reference, platform).await?,
-        };
+        let (images, image) = resolve(name, platform).await?;
         Self::from_image(images, &image, platform)
     }
 
@@ -69,6 +66,23 @@ impl TestImage {
         self.images.roots().release(&self.reference)?;
         Ok(())
     }
+}
+
+async fn resolve(name: &str, platform: &Platform) -> Result<(Images, Image), Error> {
+    let images = Images::open(cache_root(platform)?)?;
+    let reference: Reference = name.parse()?;
+    let image = match images.resolve(&reference)? {
+        Some(image) if images.details(&image, platform).is_ok() => image,
+        _ if offline() => {
+            return Err(format!(
+                "image materialization unavailable offline: {name} is absent from the prefetched {} cache",
+                platform.architecture
+            )
+            .into());
+        }
+        _ => pull(&images, reference, platform).await?,
+    };
+    Ok((images, image))
 }
 
 async fn pull(images: &Images, reference: Reference, platform: &Platform) -> Result<Image, Error> {

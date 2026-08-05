@@ -87,12 +87,8 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     }
     setup.insert("provenance_compiler_identity".into(), elapsed_us(started));
     let started = Instant::now();
-    let image = TestImage::materialize(&benchmark.image, &target.platform()).await?;
-    setup.insert("provenance_image_materialize".into(), elapsed_us(started));
-    let image_identity = image.identity().to_owned();
-    let started = Instant::now();
-    image.release()?;
-    setup.insert("provenance_image_release".into(), elapsed_us(started));
+    let image_identity = TestImage::resolve_identity(&benchmark.image, &target.platform()).await?;
+    setup.insert("provenance_image_identity".into(), elapsed_us(started));
     let started = Instant::now();
     let runner = std::env::current_exe()?;
     let runner_identity = file_identity(&runner)?;
