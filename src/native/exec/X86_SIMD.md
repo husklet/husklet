@@ -173,6 +173,29 @@ unaligned guarded-memory legacy form plus all four VEX operations at 128 and
 sources, EFLAGS/MXCSR preservation and VEX upper-lane rules, and rejects the MMX
 spelling.
 
+## VEX map-two packed dword multiply extension
+
+The retained read-only audit covered `../engine/src/translator/guest/x86_64/decode.c`
+(`hl_x86_decode`, C4/C5 map, `pp`, `W`, `L`, inverted register fields, and
+bounded ModRM/SIB ownership), `../engine/src/translator/guest/x86_64/avx.c`
+(`do_avx`, map-two `0x28` and `0x40`, `avx_get`, `avx_get_rm`, and `avx_put`),
+and `../engine/src/translator/guest/x86_64/translate.c` (`emit_avx`, the
+map-two `VPMULLD` AArch64 lowering). The CPU owns both halves of each vector
+until task teardown; these operations allocate no state, acquire no locks, and
+publish the destination only after a complete register or guarded 16/32-byte
+memory read. Retained `VPMULDQ` sign-extends even dwords before producing two
+qwords per 128-bit lane; `VPMULLD` keeps every dword's wrapping low half.
+Neither changes EFLAGS or MXCSR. C4 map two with `66` is required, `W` is
+ignored, `vvvv` names the independent first source, `L` selects one or two
+128-bit lanes, and VEX.128 zeros the CPU-owned YMM high half.
+
+Rust ownership maps decoding and operand identity to `frontend.c`, operation
+identity to `decode.h`, guarded memory access and lane lowering to
+`frontend/memory.c`, and architectural vector lifetime to the generated CPU
+layout. Both multiply families, register aliases, both widths, and atomic
+32-byte memory failure are implemented; legacy multiply families remain owned
+by their existing SSE path.
+
 ## VEX packed integer compare slice
 
 The retained read-only audit covered

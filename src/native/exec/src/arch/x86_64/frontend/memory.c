@@ -840,6 +840,7 @@ static uint32_t vector_operation_words(const instruction *item) {
         return 5u;
     case VECTOR_SHUFFLE_WORD: return 6u;
     case VECTOR_SHUFFLE_DOUBLE: return 3u;
+    case VECTOR_MULTIPLY_EVEN_SIGNED_DWORD: return 3u;
     case VECTOR_SIGNED_DWORD_TO_FLOAT: return 1u;
     case VECTOR_FLOAT_TO_SIGNED_DWORD:
     case VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD:
@@ -866,7 +867,9 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_MAXIMUM_UNSIGNED ||
                               item->vector_kind == VECTOR_MULTIPLY_LOW_WORD ||
                               item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD ||
-                              item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD;
+                              item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD ||
+                              item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
+                              item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD;
         operation += item->width == 32u ? vector_operation_words(item) + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
     }
@@ -1193,6 +1196,15 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0x4e801800) | source << 16 |
                              source << 5 | 18u; /* uzp1 even source lanes */
         words[(*cursor)++] = UINT32_C(0x2ea0c000) | 18u << 16 | 17u << 5 | destination;
+    } else if (item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD) {
+        words[(*cursor)++] = UINT32_C(0x4e801800) | first << 16 |
+                             first << 5 | 17u; /* uzp1 even first-source lanes */
+        words[(*cursor)++] = UINT32_C(0x4e801800) | source << 16 |
+                             source << 5 | 18u; /* uzp1 even second-source lanes */
+        words[(*cursor)++] = UINT32_C(0x0ea0c000) | 18u << 16 | 17u << 5 | destination;
+    } else if (item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD) {
+        words[(*cursor)++] = UINT32_C(0x4ea09c00) | source << 16 |
+                             first << 5 | destination; /* mul vd.4s,vn.4s,vm.4s */
     } else if (item->vector_kind == VECTOR_BYTE_MASK) {
         words[(*cursor)++] = UINT32_C(0x6f090400) | source << 5 | 17u; /* ushr v17.16b,source,#7 */
         words[(*cursor)++] = UINT32_C(0x6f001400) | 25u << 16 | 17u << 5 | 17u;
@@ -1219,6 +1231,8 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
     else { hl_x86_emit_vector_upper_load(words, cursor, 18u, item->source); upper.source = 18u; }
     if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
         item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT ||
+        item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
+        item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD ||
         item->vector_kind == VECTOR_COMPARE_EQUAL ||
         item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED ||
         item->vector_kind == VECTOR_MINIMUM_SIGNED || item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||

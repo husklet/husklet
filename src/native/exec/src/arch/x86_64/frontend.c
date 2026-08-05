@@ -298,7 +298,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                    ((vex_map == 1u &&
                      ((opcode >= 0x64u && opcode <= 0x66u) ||
                       (opcode >= 0x74u && opcode <= 0x76u))) ||
-                    (vex_map == 2u && (opcode == 0x29u || opcode == 0x37u)))) {
+                    (vex_map == 2u && (opcode == 0x28u || opcode == 0x29u ||
+                                      opcode == 0x37u || opcode == 0x40u)))) {
             uint8_t modrm;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
                 cursor = start; block->status = HL_X86_A64_TRUNCATED;
@@ -311,10 +312,13 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
             item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
             item->vector_source_one = vex_vvvv;
-            item->vector_kind = opcode == 0x64u || opcode == 0x65u || opcode == 0x66u ||
+            item->vector_kind = opcode == 0x28u ? VECTOR_MULTIPLY_EVEN_SIGNED_DWORD :
+                                opcode == 0x40u ? VECTOR_MULTIPLY_LOW_DWORD :
+                                opcode == 0x64u || opcode == 0x65u || opcode == 0x66u ||
                                 opcode == 0x37u ? VECTOR_COMPARE_GREATER_SIGNED :
                                                   VECTOR_COMPARE_EQUAL;
-            item->vector_lane = vex_map == 2u ? 8u :
+            item->vector_lane = opcode == 0x28u || opcode == 0x40u ? 4u :
+                                vex_map == 2u ? 8u :
                                 opcode == 0x64u || opcode == 0x74u ? 1u :
                                 opcode == 0x65u || opcode == 0x75u ? 2u : 4u;
             if ((modrm >> 6) == 3u) ++cursor;
