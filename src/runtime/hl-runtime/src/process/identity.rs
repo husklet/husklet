@@ -5,12 +5,7 @@ use crate::RuntimeProcessSyscalls;
 
 impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     pub(crate) fn snapshot(&self) -> Result<ProcessSnapshot, Errno> {
-        self.tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|process| process.id == self.process)
-            .ok_or(Errno::ESRCH)
+        self.tasks.process_snapshot(self.process).map_err(|_| Errno::ESRCH)
     }
 
     pub(crate) fn getppid(&self) -> LinuxResult {

@@ -5,6 +5,14 @@ use crate::{
 };
 
 impl TaskRegistry {
+    /// Captures one generation-qualified process without scanning or cloning
+    /// unrelated registry slots.
+    pub fn process_snapshot(&self, id: ProcessId) -> Result<ProcessSnapshot, crate::TaskError> {
+        let state = self.lock();
+        let process = Self::process(&state, id)?;
+        Ok(Self::snapshot_process(id, process))
+    }
+
     pub fn snapshot(&self) -> RegistrySnapshot {
         let state = self.lock();
         self.snapshot_locked(&state)
@@ -35,48 +43,7 @@ impl TaskRegistry {
             .filter_map(|(slot, entry)| {
                 let process = entry.value.as_ref()?;
                 let id = ProcessId::new(slot as u32, entry.generation);
-                Some(ProcessSnapshot {
-                    id,
-                    generation: entry.generation,
-                    lifecycle: process.lifecycle,
-                    parent: process.parent,
-                    children: process.children.iter().copied().collect(),
-                    threads: process.threads.iter().copied().collect(),
-                    leader: process.leader,
-                    session: process.session,
-                    process_group: process.process_group,
-                    terminal_detached: process.terminal_detached,
-                    child_class: process.child_class,
-                    execed: process.execed,
-                    arguments: process.arguments.clone(),
-                    name: process.name,
-                    credentials: process.credentials.clone(),
-                    limits: process.limits.entries(),
-                    exit_status: process.exit_status,
-                    signals: SignalProcessSnapshot {
-                        actions: process
-                            .signals
-                            .actions
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, action)| {
-                                (*action != SignalAction::DEFAULT)
-                                    .then_some((SignalNumber::new((index + 1) as u8).ok()?, *action))
-                            })
-                            .collect(),
-                        pending: process.signals.pending.snapshot(),
-                    },
-                    namespaces: process.namespaces,
-                    parent_death_signal: process.parent_death_signal,
-                    child_subreaper: process.child_subreaper,
-                    cpu_usage: process.cpu_usage,
-                    dumpable: process.dumpable,
-                    oom_score_adj: process.oom_score_adj,
-                    timer_slack: process.timer_slack,
-                    thp_disabled: process.thp_disabled,
-                    mce_policy: process.mce_policy,
-                    personality: process.personality,
-                })
+                Some(Self::snapshot_process(id, process))
             })
             .collect();
         let threads = state
@@ -164,6 +131,51 @@ impl TaskRegistry {
                 .iter()
                 .map(|(id, identity)| (*id, identity.clone()))
                 .collect(),
+        }
+    }
+
+    fn snapshot_process(id: ProcessId, process: &super::Process) -> ProcessSnapshot {
+        ProcessSnapshot {
+            id,
+            generation: id.wire_parts().1,
+            lifecycle: process.lifecycle,
+            parent: process.parent,
+            children: process.children.iter().copied().collect(),
+            threads: process.threads.iter().copied().collect(),
+            leader: process.leader,
+            session: process.session,
+            process_group: process.process_group,
+            terminal_detached: process.terminal_detached,
+            child_class: process.child_class,
+            execed: process.execed,
+            arguments: process.arguments.clone(),
+            name: process.name,
+            credentials: process.credentials.clone(),
+            limits: process.limits.entries(),
+            exit_status: process.exit_status,
+            signals: SignalProcessSnapshot {
+                actions: process
+                    .signals
+                    .actions
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, action)| {
+                        (*action != SignalAction::DEFAULT)
+                            .then_some((SignalNumber::new((index + 1) as u8).ok()?, *action))
+                    })
+                    .collect(),
+                pending: process.signals.pending.snapshot(),
+            },
+            namespaces: process.namespaces,
+            parent_death_signal: process.parent_death_signal,
+            child_subreaper: process.child_subreaper,
+            cpu_usage: process.cpu_usage,
+            dumpable: process.dumpable,
+            oom_score_adj: process.oom_score_adj,
+            timer_slack: process.timer_slack,
+            thp_disabled: process.thp_disabled,
+            mce_policy: process.mce_policy,
+            personality: process.personality,
         }
     }
 }
