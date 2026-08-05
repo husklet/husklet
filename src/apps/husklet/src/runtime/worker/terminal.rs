@@ -63,7 +63,18 @@ impl OpenFiles {
 
 /// Private Unix resource-limit boundary implemented by its existing owner.
 mod ffi {
-    use super::OpenFiles;
+    use super::{on_winch, OpenFiles, TerminalSession};
+
+    impl TerminalSession<'_> {
+        pub(super) fn install_resize_handler() {
+            // SAFETY: `on_winch` has the C signal-handler ABI, retains no borrowed storage, and
+            // accesses only a process-lifetime atomic. `signal` retains only that function pointer,
+            // aliases no Rust storage, and neither side can unwind across the ABI.
+            unsafe {
+                libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t);
+            }
+        }
+    }
 
     impl OpenFiles {
         pub(super) fn read_limit() -> std::io::Result<libc::rlimit> {
@@ -114,9 +125,7 @@ impl<'a> TerminalSession<'a> {
 
     fn new(pty: &'a mut dyn hl_ws_term::PtyBackend) -> Self {
         let raw = RawMode::enter(libc::STDIN_FILENO);
-        unsafe {
-            libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t);
-        }
+        Self::install_resize_handler();
         let last_size = size();
         if let Some((columns, rows)) = last_size {
             pty.resize(columns, rows);
