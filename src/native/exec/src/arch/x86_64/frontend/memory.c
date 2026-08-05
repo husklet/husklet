@@ -840,6 +840,7 @@ static uint32_t vector_operation_words(const instruction *item) {
         return 5u;
     case VECTOR_SHUFFLE_WORD: return 6u;
     case VECTOR_SHUFFLE_DOUBLE: return 3u;
+    case VECTOR_SIGNED_DWORD_TO_FLOAT: return 1u;
     case VECTOR_STRING_EQUAL_EACH: return 96u;
     case VECTOR_INSERT_WORD: return 1u;
     default: return 1u;
@@ -1052,6 +1053,8 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         emit_constant(words, cursor, 20u, indefinite);
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9a800000) : UINT32_C(0x1a800000)) |
                              destination << 16 | 2u << 12 | 20u << 5 | destination; /* csel result,indef,result,cs */
+    } else if (item->vector_kind == VECTOR_SIGNED_DWORD_TO_FLOAT) {
+        words[(*cursor)++] = UINT32_C(0x4e21d800) | source << 5 | destination; /* scvtf .4s */
     } else if (item->vector_kind == VECTOR_SHUFFLE_DWORD) {
         unsigned output;
         for (output = 0; output < 4u; ++output) {

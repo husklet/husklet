@@ -218,6 +218,53 @@ shuffled upper lane for VEX.256 only after a full memory operand is available.
 Focused translation tests cover C4/C5, WIG, all five operations, register and
 memory sources, both widths, and invalid map/pp/vvvv admission.
 
+### VEX signed-dword conversion extension
+
+The read-only oracle audit for VCVTDQ2PS covered
+`../engine/src/translator/guest/x86_64/decode.c` (`hl_x86_decode`, VEX C4/C5
+field inversion, and `R_AVX` dispatch), `avx.c` (`hl_x86_avx_run`, `do_avx`,
+the map-one `5B` arm, `avx_get_rm`, and `avx_put`), `translate.c`
+(`translate_avx_inline` and both legacy/native `CVTDQ2PS` arms), and `interp.c`
+(`interp_step_sse` and its packed-conversion width classification). The audit
+also traced the AArch64 `SCVTF .4S` emission in `translate.c` and the CPU-owned
+FPCR/FPSR save and restore path in `emit.c`.
+
+VCVTDQ2PS is map one, opcode `5B`, `pp=00`; its encoded `vvvv` field is
+reserved and must decode to zero, W is ignored, and L selects four or eight
+signed-dword lanes. It reads only ModRM r/m, so destination/source overlap is
+non-destructive by construction. A VEX.128 write zeros YMM bits 128..255; a
+VEX.256 operation converts both independent 128-bit halves. The retained
+dispatcher owns the CPU, XMM/YMM, MXCSR-derived FP control, and translated
+block lifetime. The instruction allocates and locks nothing and has no
+blocking, cancellation, signal, errno, or teardown behavior. A register form
+cannot fault. A memory form validates the complete 16/32-byte read before any
+destination lane is published; a rejection retains both destination halves
+and reports the original instruction PC, address, access kind, and full width.
+
+Rust native ownership maps field validation and ModRM decoding to `frontend.c`,
+the operation identity to `decode.h`, guarded atomic memory acquisition and
+lane emission to `frontend/memory.c`, and XMM/YMM/FPCR/FPSR storage to the
+generated CPU layout plus `entry.S`. AArch64 `SCVTF .4S` observes the guest
+rounding mode already projected into FPCR and accumulates inexact status in
+FPSR; the existing projection boundary maps those controls and status bits to
+MXCSR. The same emitter is applied once per 128-bit half, and the existing VEX
+completion path provides upper-zero or upper-store semantics.
+
+| Retained capability | Rust native status |
+|---|---|
+| C4 and C5, WIG, XMM and YMM register sources | implemented |
+| 16/32-byte unaligned memory source with full-span fault-before-commit | implemented by the shared guarded vector-load owner |
+| MXCSR rounding and accumulated precision exception | implemented through FPCR/FPSR projection and `SCVTF` |
+| reserved-vvvv, wrong map, and nonzero-pp rejection for this family | implemented |
+| `VCVTPS2DQ` and `VCVTTPS2DQ` sharing opcode `5B` under other pp values | remaining separate conversion families |
+
+`test/x86_translation.c::vex_signed_dword_to_float_contract` checks C4/C5,
+WIG, both vector lengths, register and memory admission, wrong-map/pp/vvvv
+rejection, all eight signed lanes, source preservation, YMM-high publication,
+unchanged integer flags, and accumulated inexact status. The shared vector
+memory tests remain the authoritative exact fault-state and whole-span atomicity
+coverage used by this operation.
+
 ### 256-bit vector memory
 
 The read-only oracle was `../engine/src/translator/guest/x86_64/avx.c`, entry
