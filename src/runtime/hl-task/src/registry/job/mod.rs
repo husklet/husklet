@@ -342,9 +342,12 @@ impl TaskRegistry {
     }
 
     pub fn wait_change(&self, observed: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.wait_epoch == observed {
-            state = self.child_ready.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self
+                .child_ready
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -355,7 +358,7 @@ impl TaskRegistry {
         options: ChildWaitOptions,
     ) -> Result<crate::PreparedChildWait<'_>, TaskError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             Self::ensure_process_unreserved(&state, parent)?;
             let eligible = Self::eligible_children(&state, parent, selector, options.class)?;
@@ -386,7 +389,10 @@ impl TaskRegistry {
             if options.no_hang {
                 return Ok(crate::PreparedChildWait::NoChange);
             }
-            state = self.child_ready.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self
+                .child_ready
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 

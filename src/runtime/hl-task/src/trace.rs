@@ -136,7 +136,7 @@ impl Registry {
         if tracer == tracee {
             return Err(TraceError::Denied);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.tracees.contains_key(&tracee) {
             return Err(TraceError::AlreadyTraced);
         }
@@ -172,7 +172,7 @@ impl Registry {
     }
 
     pub(crate) fn stop(&self, tracee: ProcessId, stop: TraceStop) -> Result<TraceEvent, TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = *state.tracees.get(&tracee).ok_or(TraceError::InvalidLink)?;
         let tracer = {
             let link = Self::link_mut(&mut state, id)?;
@@ -207,7 +207,7 @@ impl Registry {
     }
 
     pub(crate) fn peek(&self, tracer: ProcessId, tracee: Option<ProcessId>) -> Result<TraceWait, TraceError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(state
             .events
             .iter()
@@ -217,7 +217,7 @@ impl Registry {
     }
 
     pub(crate) fn commit_wait(&self, tracer: ProcessId, selected: TraceEvent) -> Result<(), TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let position = state.events.iter().position(|event| {
             event.tracer == tracer && event.link == selected.link && event.sequence == selected.sequence
         });
@@ -238,7 +238,7 @@ impl Registry {
         tracee: ProcessId,
         require_stop: bool,
     ) -> Result<TraceLinkId, TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = *state.tracees.get(&tracee).ok_or(TraceError::InvalidLink)?;
         let link = Self::link_mut(&mut state, id)?;
         if link.tracer != tracer {
@@ -251,7 +251,7 @@ impl Registry {
     }
 
     pub(crate) fn resume(&self, tracer: ProcessId, id: TraceLinkId, command: TraceResume) -> Result<(), TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let tracee = {
             let link = Self::link_mut(&mut state, id)?;
             if link.tracer != tracer {
@@ -276,7 +276,7 @@ impl Registry {
 
     pub(crate) fn syscall_stop(&self, tracee: ProcessId, exit: bool) -> Result<Option<TraceEvent>, TraceError> {
         let stop = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let id = *state.tracees.get(&tracee).ok_or(TraceError::InvalidLink)?;
             let link = Self::link_mut(&mut state, id)?;
             if link.pending_attach {
@@ -296,7 +296,7 @@ impl Registry {
     }
 
     pub(crate) fn await_resume(&self, tracee: ProcessId, id: TraceLinkId) -> Result<TraceResume, TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(command) = state.commands.remove(&id) {
                 return Ok(command);
@@ -312,7 +312,7 @@ impl Registry {
     }
 
     pub(crate) fn take_resume(&self, tracee: ProcessId, id: TraceLinkId) -> Result<Option<TraceResume>, TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(command) = state.commands.remove(&id) {
             return Ok(Some(command));
         }
@@ -334,7 +334,7 @@ impl Registry {
     }
 
     pub(crate) fn exit(&self, process: ProcessId) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let removed: Vec<_> = state
             .slots
             .iter()
@@ -359,7 +359,7 @@ impl Registry {
     }
 
     pub(crate) fn image(&self) -> TraceImage {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let links = state
             .slots
             .iter()
@@ -389,7 +389,12 @@ impl Registry {
         if image.version != 1 || image.sequence == 0 {
             return Err(TraceError::InvalidSnapshot);
         }
-        let capacity = self.state.lock().unwrap_or_else(|error| error.into_inner()).slots.len();
+        let capacity = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .slots
+            .len();
         let mut restored = State {
             slots: Self::slots(capacity),
             tracees: BTreeMap::new(),
@@ -427,7 +432,7 @@ impl Registry {
                 restored.sequence = restored.sequence.wrapping_add(1).max(1);
             }
         }
-        *self.state.lock().unwrap_or_else(|error| error.into_inner()) = restored;
+        *self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = restored;
         self.ready.notify_all();
         Ok(())
     }

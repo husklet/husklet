@@ -429,7 +429,7 @@ impl TaskRegistry {
             .signals
             .reservations
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let process = Self::thread(&state, thread)?.process;
         let thread_signal = Self::thread(&state, thread)?.signals.pending.peek_selected(selected);
         let process_signal = Self::process(&state, process)?.signals.pending.peek_selected(selected);

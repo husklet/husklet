@@ -59,13 +59,13 @@ pub(crate) struct SignalActivity {
 
 impl SignalActivity {
     pub(crate) fn observation(&self) -> u64 {
-        *self.sequence.lock().unwrap_or_else(|error| error.into_inner())
+        *self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub(crate) fn subscribe(self: &Arc<Self>, observer: Arc<dyn SignalActivityWake>) -> SignalActivitySubscription {
         self.observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(Arc::downgrade(&observer));
         SignalActivitySubscription {
             activity: self.clone(),
@@ -75,7 +75,7 @@ impl SignalActivity {
 
     pub(crate) fn notify(&self, kind: SignalActivityKind, control_epoch: Option<u64>) {
         let generation = {
-            let mut sequence = self.sequence.lock().unwrap_or_else(|error| error.into_inner());
+            let mut sequence = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             *sequence = sequence.wrapping_add(1);
             *sequence
         };
@@ -84,7 +84,7 @@ impl SignalActivity {
             kind,
         };
         let observers = {
-            let mut entries = self.observers.lock().unwrap_or_else(|error| error.into_inner());
+            let mut entries = self.observers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut live = Vec::new();
             entries.retain(|entry| {
                 let Some(observer) = entry.upgrade() else {
@@ -115,7 +115,7 @@ impl Drop for SignalActivitySubscription {
         self.activity
             .observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|entry| !Weak::ptr_eq(entry, &observer) && entry.strong_count() != 0);
     }
 }

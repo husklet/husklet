@@ -416,7 +416,7 @@ impl TaskRegistry {
 
     pub(super) fn lock(&self) -> Guard<'_> {
         let admission = self.activity.admit();
-        let state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Guard {
             state,
             _admission: admission,

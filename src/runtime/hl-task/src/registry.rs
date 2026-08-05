@@ -493,7 +493,7 @@ impl TaskRegistry {
         if let Some(sink) = &sink {
             self.interrupts
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(plan.thread, Arc::downgrade(sink));
             sink.set_interrupted(interrupted.expect("interrupt state computed for sink"));
         }

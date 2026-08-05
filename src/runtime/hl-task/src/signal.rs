@@ -185,7 +185,7 @@ impl Drop for PreparedForcedDelivery {
         };
         self.forced
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(self.thread, prepared);
     }
 }
@@ -215,7 +215,7 @@ impl Drop for SignalReservation {
     fn drop(&mut self) {
         self.reservations
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.key);
     }
 }

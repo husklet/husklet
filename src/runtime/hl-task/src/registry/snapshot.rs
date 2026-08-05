@@ -43,12 +43,12 @@ impl TaskRegistry {
             .signals
             .reservations
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
         {
             return Err(crate::TaskError::InvalidLifecycle);
         }
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(self.snapshot_locked(&state))
     }
 

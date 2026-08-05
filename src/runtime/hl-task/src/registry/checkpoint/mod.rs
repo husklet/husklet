@@ -21,7 +21,7 @@ pub const TASK_CHECKPOINT_VERSION: u32 = 17;
 impl TaskRegistry {
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
-        drop(self.state.lock().unwrap_or_else(|error| error.into_inner()));
+        drop(self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
 
     pub fn thaw_checkpoint(&self) {

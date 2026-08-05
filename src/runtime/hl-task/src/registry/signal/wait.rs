@@ -12,7 +12,7 @@ impl TaskRegistry {
             .signals
             .reservations
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let process = Self::thread(&state, thread)?.process;
         let signals = &Self::thread(&state, thread)?.signals;
         let blocked = SignalMask::from_bits(signals.mask.bits() | signals.deferred.bits());
@@ -60,7 +60,11 @@ impl TaskRegistry {
 
     pub fn force_signal_delivery(&self, prepared: PreparedSignalWait) -> Result<(), TaskError> {
         let thread = prepared.thread;
-        let mut forced = self.signals.forced.lock().unwrap_or_else(|error| error.into_inner());
+        let mut forced = self
+            .signals
+            .forced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if forced.contains_key(&thread) {
             return Err(TaskError::InvalidLifecycle);
         }
@@ -73,7 +77,7 @@ impl TaskRegistry {
             .signals
             .forced
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&thread)?;
         Some(PreparedForcedDelivery {
             thread,

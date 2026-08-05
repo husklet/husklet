@@ -16,7 +16,7 @@ impl TaskRegistry {
         let interrupted = Self::interrupt_pending(&state, thread)?;
         self.interrupts
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(thread, Arc::downgrade(&sink));
         sink.set_interrupted(interrupted);
         Ok(())
@@ -25,7 +25,7 @@ impl TaskRegistry {
     pub fn unregister_interrupt(&self, thread: ThreadId) {
         self.interrupts
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&thread);
     }
 
@@ -33,7 +33,10 @@ impl TaskRegistry {
         if source == target {
             return;
         }
-        let mut interrupts = self.interrupts.lock().unwrap_or_else(|error| error.into_inner());
+        let mut interrupts = self
+            .interrupts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let source = interrupts.remove(&source);
         interrupts.remove(&target);
         if let Some(source) = source {
@@ -49,7 +52,10 @@ impl TaskRegistry {
     }
 
     pub(crate) fn publish_interrupt(&self, thread: ThreadId, interrupted: bool) {
-        let mut sinks = self.interrupts.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sinks = self
+            .interrupts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(sink) = sinks.get(&thread).and_then(std::sync::Weak::upgrade) else {
             sinks.remove(&thread);
             return;
