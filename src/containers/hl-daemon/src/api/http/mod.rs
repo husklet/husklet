@@ -75,8 +75,6 @@ pub(crate) fn router(
         .route("/containers/:id/attach/ws", get(container::websocket_attach))
         .route("/containers/:id/start", post(container::start))
         .route("/containers/:id/resize", post(container::resize))
-        .route("/containers/:id/stop", post(container::stop))
-        .route("/containers/:id/restart", post(container::restart))
         .route("/containers/:id/kill", post(container::kill))
         .route("/containers/:id/rename", post(container::rename))
         .route("/containers/:id/wait", post(container::wait))
@@ -115,9 +113,19 @@ pub(crate) fn router(
         .route("/volumes/create", post(volume::create))
         .route("/volumes/prune", post(volume::prune))
         .route("/volumes/:name", get(volume::inspect).delete(volume::remove));
-    let mut router = Router::new().merge(api.clone());
-    for minor in 24..=43 {
-        router = router.nest(&format!("/v1.{minor}"), api.clone());
+    let legacy_api = api
+        .clone()
+        .route("/containers/:id/stop", post(container::legacy_stop))
+        .route("/containers/:id/restart", post(container::legacy_restart));
+    let current_api = api
+        .route("/containers/:id/stop", post(container::stop))
+        .route("/containers/:id/restart", post(container::restart));
+    let mut router = Router::new().merge(current_api.clone());
+    for minor in 24..=41 {
+        router = router.nest(&format!("/v1.{minor}"), legacy_api.clone());
+    }
+    for minor in 42..=43 {
+        router = router.nest(&format!("/v1.{minor}"), current_api.clone());
     }
     router.with_state(state)
 }

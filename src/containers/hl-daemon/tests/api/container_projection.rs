@@ -70,6 +70,78 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )?;
     let id = created.1["Id"].as_str().ok_or("container create omitted Id")?;
 
+    let legacy_stop = exchange(
+        socket,
+        "POST",
+        &format!("/v1.41/containers/{id}/stop?signal=KILL"),
+        None,
+    )
+    .await?;
+    require(
+        legacy_stop.0.starts_with("HTTP/1.1 204"),
+        "legacy container stop did not ignore the newer signal query",
+    )?;
+    let malformed_stop = exchange(
+        socket,
+        "POST",
+        &format!("/v1.43/containers/{id}/stop?signal=SIGBOGUS"),
+        None,
+    )
+    .await?;
+    require(
+        malformed_stop.0.starts_with("HTTP/1.1 400"),
+        "container stop accepted a malformed signal override",
+    )?;
+    let unsupported_stop = exchange(
+        socket,
+        "POST",
+        &format!("/v1.43/containers/{id}/stop?signal=KILL"),
+        None,
+    )
+    .await?;
+    require(
+        unsupported_stop.0.starts_with("HTTP/1.1 501"),
+        "container stop silently ignored a custom signal override",
+    )?;
+    let unsupported_restart = exchange(
+        socket,
+        "POST",
+        &format!("/v1.42/containers/{id}/restart?signal=KILL"),
+        None,
+    )
+    .await?;
+    require(
+        unsupported_restart.0.starts_with("HTTP/1.1 501"),
+        "container restart silently ignored a custom signal override",
+    )?;
+    let malformed_restart = exchange(
+        socket,
+        "POST",
+        &format!("/containers/{id}/restart?signal=SIGBOGUS"),
+        None,
+    )
+    .await?;
+    require(
+        malformed_restart.0.starts_with("HTTP/1.1 400"),
+        "unversioned container restart accepted a malformed signal override",
+    )?;
+    let empty_stop = exchange(socket, "POST", &format!("/v1.42/containers/{id}/stop?signal="), None).await?;
+    require(
+        empty_stop.0.starts_with("HTTP/1.1 204"),
+        "container stop rejected an empty signal query",
+    )?;
+    let configured_stop = exchange(
+        socket,
+        "POST",
+        &format!("/v1.43/containers/{id}/stop?signal=TERM"),
+        None,
+    )
+    .await?;
+    require(
+        configured_stop.0.starts_with("HTTP/1.1 204"),
+        "container stop rejected its configured signal",
+    )?;
+
     let websocket = exchange(
         socket,
         "GET",
