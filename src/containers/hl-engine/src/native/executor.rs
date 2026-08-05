@@ -12,6 +12,14 @@ const WRITE_EXACT: u16 = 1;
 const AARCH64: u32 = 1;
 const X86_64: u32 = 2;
 
+fn projection_permissions(authority: Protection, mapped: Protection) -> Protection {
+    authority.union(if mapped.contains(Protection::EXECUTE) {
+        Protection::EXECUTE
+    } else {
+        Protection::NONE
+    })
+}
+
 #[allow(dead_code)]
 mod schema {
     include!("../../../../native/cpu/rust/layout.rs");
@@ -1973,7 +1981,7 @@ impl Executor {
             guest_last: range.end().get(),
             host_first: lease.storage_address(),
             mapping_incarnation: generation.incarnation,
-            permissions: u32::from(lease.protection().bits()),
+            permissions: u32::from(projection_permissions(lease.authority(), lease.protection()).bits()),
             write_policy: WRITE_EXACT,
             write_index: 0,
         };
@@ -2338,7 +2346,7 @@ impl Executor {
             guest_last: range.end().get(),
             host_first: lease.storage_address(),
             mapping_incarnation: generation.incarnation,
-            permissions: u32::from(lease.protection().bits()),
+            permissions: u32::from(projection_permissions(lease.authority(), lease.protection()).bits()),
             write_policy: WRITE_EXACT,
             write_index: 0,
         };
@@ -2666,6 +2674,21 @@ const _: () = {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn projection_permissions_narrow_data_authority_but_retain_execute_identity() {
+        let read_execute = Protection::READ.union(Protection::EXECUTE);
+        let read_write_execute = read_execute.union(Protection::WRITE);
+        assert_eq!(projection_permissions(Protection::READ, read_execute), read_execute);
+        assert_eq!(
+            projection_permissions(Protection::READ.union(Protection::WRITE), read_write_execute),
+            read_write_execute,
+        );
+        assert_eq!(
+            projection_permissions(Protection::READ, Protection::READ.union(Protection::WRITE)),
+            Protection::READ,
+        );
+    }
 
     #[test]
     fn direct_literal_requires_complete_static_read_interval() {
@@ -4659,7 +4682,7 @@ mod test {
             guest_first: 0x5000,
             bytes: &bytes,
         }];
-        let executor = Executor::create().unwrap();
+        let executor = Executor::create_diagnostics(true).unwrap();
         let mut storage = [0_u8; 16];
         let view = ProjectionView {
             guest_first: 0x7000,
@@ -4682,10 +4705,13 @@ mod test {
         };
         cpu.registers[4] = 0x7000;
         let mut resolve = |_: u64, _: &mut [u8]| None;
+        let before = executor.diagnostics().unwrap();
         let (outcome, _, written) = executor
             .run_x86(&mut cpu, &source, 13, 1, 2, false, Some(&projection), &mut resolve)
             .unwrap();
+        let after = executor.diagnostics().unwrap();
         assert_eq!(outcome.exit, Exit::Epoch);
+        assert_eq!(after.x86_public_epochs - before.x86_public_epochs, 1);
         assert_eq!(cpu.rip, 0x500a);
         assert_eq!(u64::from_le_bytes(storage[..8].try_into().unwrap()), 42);
         assert!(written);

@@ -364,15 +364,34 @@ fn existing_projection_converts_to_narrow_read_authority_and_returns() {
             23,
         )
         .unwrap();
+    assert_eq!(projection.protection(), Protection::READ.union(Protection::WRITE));
+    assert_eq!(projection.authority(), Protection::READ.union(Protection::WRITE));
     let authority = projection.into_direct(Protection::READ).unwrap();
     assert_eq!(authority.protection(), Protection::READ);
     assert_eq!(authority.generation().incarnation, 23);
     let projection = authority.into_projection();
     assert_eq!(projection.protection(), Protection::READ.union(Protection::WRITE));
+    assert_eq!(projection.authority(), Protection::READ.union(Protection::WRITE));
     assert!(matches!(
         projection.into_direct(Protection::EXECUTE),
         Err(MemoryError::InvariantViolation),
     ));
+}
+
+#[test]
+fn read_projection_keeps_mapped_execute_separate_from_invocation_authority() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut mapped = request();
+    mapped.protection = Protection::READ.union(Protection::EXECUTE);
+    coordinator.map(mapped).unwrap();
+
+    let projection = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 16, Protection::READ, 29)
+        .unwrap();
+
+    assert_eq!(projection.protection(), Protection::READ.union(Protection::EXECUTE));
+    assert_eq!(projection.authority(), Protection::READ);
+    assert!(!projection.allows(Protection::EXECUTE));
 }
 
 #[test]

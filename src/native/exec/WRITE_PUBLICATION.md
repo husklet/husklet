@@ -221,6 +221,66 @@ resolver/interpreter path, admitting no partial native store.
 
 Exact dirty publication, shared-alias projection, mprotect generation changes,
 fault ordering, fork, and checkpoint ownership remain unchanged by this rule.
+
+## Projection authority and executable identity audit (2026-08-05)
+
+This focused slice studied the retained C authority and SMC lifecycle in
+`/Users/x/dd/engine/src/translator/guest/aarch64/translate.c` at
+`aarch64_soft_tlb_miss`, `aarch64_soft_tlb_span`,
+`aarch64_soft_prepare_bounce`, `aarch64_soft_bounce_commit`, and
+`aarch64_smc_copyout`; `src/translator/guest/aarch64/cpu.h` at the soft-view
+and SMC fields; `src/translator/guest/aarch64/dispatch.h` at the soft-miss,
+span, and commit returns; `/Users/x/dd/engine/src/core/target/x86_64.c` at
+`soft_tlb_miss`, `jit86_store_alias_changed`, and `jit86_smc_commit`; and
+`src/translator/guest/x86_64/{emit.c,rep_runtime.c,dispatch.h}` at store
+permission checks, completed-store observation, partial REP progress, and SMC
+return handling.
+
+In the retained engine, a logical-VMA snapshot owns the complete mapped
+protection and backing identity. A CPU owns its cached view and bounded dirty
+and SMC ranges until dispatcher return. Snapshot publication supplies the
+lifetime of the cached host delta; mapping and JIT stop-the-world transitions
+exclude replacement and teardown while ranges are consumed. A miss checks the
+operation's requested READ or WRITE bits before mutation, while the complete
+mapped EXEC bit remains available to classify a successful write as
+self-modifying code. Cross-span stores validate all pieces before scatter;
+failed resolution faults without publication, completed writes survive the
+dispatcher exit, and x86 REP retains partial progress. AArch64 additionally
+blocks host signals around the validated bounce/scatter interval. Host-specific
+direct-map fallback is present on non-Apple AArch64 and the x86 span path has an
+Apple-specific adjacent-view check, but neither branch grants data access from
+the mapped permissions after the requested access check fails.
+
+The corresponding Rust owners are
+`hl_memory::MappingCoordinator::project_contiguous` for admission, mapping
+transaction exclusion, backing validation, requested authority, complete
+mapped protection, generation, write reservation, and lease teardown;
+`ProjectionLease::{allows,into_direct,publish_written_ranges}` for invocation
+authority and exactly-once publication; and the AArch64 and x86 lease runners
+in `hl-engine` for native view publication and dispatcher results. Additional
+views already publish `requested authority | mapped EXEC`; the primary view
+previously published complete mapped protection. The primary and additional
+paths are now semantically equivalent: publish only the requested data
+authority, retain EXEC solely when the resolved mapping is executable, keep
+the mapping incarnation, and leave exact dirty publication and SMC epoch exit
+unchanged. Thus a READ invocation on an RW mapping cannot acquire WRITE, while
+a READ or WRITE invocation on an executable mapping retains the executable
+identity needed for invalidation.
+
+| Capability | Retained C | Rust owner/status |
+| --- | --- | --- |
+| Requested data-access check | Resolver checks requested READ/WRITE | Projection `authority`; implemented |
+| Complete executable identity | Snapshot view protection | Mapped protection contributes EXEC only; implemented |
+| Mapping identity/lifetime | Snapshot plus mapping/JIT synchronization | Lease admission, transaction, and incarnation; implemented |
+| Failed or cross-span store | Validate before mutation/fault | Native guard plus exact publication; unchanged |
+| Completed executable write | CPU SMC range then dispatcher commit | Exact dirty range, token invalidation, epoch exit; unchanged |
+| Partial REP store | Completed elements retained | x86 REP exact publication; unchanged |
+| Teardown/fork/checkpoint | Mapping/JIT synchronization and repair | Lease lifetime and generation gates; unchanged |
+
+Measured performance epoch delta: **0**. This authority correction did not run
+or alter a performance benchmark and makes no performance claim. The focused
+diagnostic assertion only proves that an executable write still produces its
+single required public-epoch transition after permissions are narrowed.
 ## Consolidated AArch64 write-publication evidence (2026-08-05)
 
 ## AArch64 cached writable-view audit

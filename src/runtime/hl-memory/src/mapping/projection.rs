@@ -220,6 +220,15 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
     pub const fn protection(&self) -> Protection {
         self.protection
     }
+
+    /// Permission authority granted to this projection invocation.
+    ///
+    /// This can be narrower than the mapped region's complete protection and
+    /// is the only permission set a native consumer may publish for the
+    /// primary view.
+    pub const fn authority(&self) -> Protection {
+        self.authority
+    }
     pub const fn generation(&self) -> ProjectionGeneration {
         self.generation
     }
