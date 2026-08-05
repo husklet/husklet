@@ -1,6 +1,6 @@
 use super::{
     ApiError, ApiResult, BTreeMap, Deserialize, DockerState, Field, Fields, ImageDelete, ImageHistory, InspectImage,
-    Json, Path, Query, Reference, State, StatusCode,
+    Json, Path, Query, Reference, State, StatusCode, matches_docker_image_id,
 };
 
 #[hl_design::adapter]
@@ -224,7 +224,12 @@ pub(in super::super) async fn remove(
             (reference == image_id || aliases.contains(&reference)).then(|| container.state.is_active())
         })
     });
-    if removal_conflicts(force, name == image_id, aliases.len(), references) {
+    if removal_conflicts(
+        force,
+        matches_docker_image_id(&name, &image_id),
+        aliases.len(),
+        references,
+    ) {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
             format!("conflict: image {name} is being used by a container"),

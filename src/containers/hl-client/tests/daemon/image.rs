@@ -110,6 +110,16 @@ async fn image_archive_tag_save_remove_and_prune_share_wire_contracts() {
         .await
         .unwrap();
     assert_eq!(client.images().list().await.unwrap()[0].repo_tags.len(), 2);
+    let image_id = client.images().inspect("scenario/fixture:v1").await.unwrap().id;
+    let prefix_error = client.images().remove(&image_id[7..19]).await.unwrap_err();
+    assert!(matches!(
+        prefix_error,
+        hl_client::Error::Docker {
+            status: http::StatusCode::CONFLICT,
+            ..
+        }
+    ));
+    assert_eq!(client.images().list().await.unwrap()[0].repo_tags.len(), 2);
     for (error, status) in [
         (
             client

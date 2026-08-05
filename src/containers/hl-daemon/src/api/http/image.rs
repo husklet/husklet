@@ -194,10 +194,14 @@ fn docker_id_prefix(value: &str) -> Option<String> {
         .map(|encoded| format!("sha256:{}", encoded.to_ascii_lowercase()))
 }
 
+fn matches_docker_image_id(value: &str, image_id: &str) -> bool {
+    docker_id_prefix(value).is_some_and(|prefix| image_id.starts_with(&prefix))
+}
+
 fn unique_image_id<'a>(identities: impl IntoIterator<Item = &'a str>, prefix: &str) -> Result<Option<&'a str>, ()> {
     let mut matches = identities.into_iter().filter(|id| id.starts_with(prefix));
     let selected = matches.next();
-    if matches.next().is_some() {
+    if matches.any(|identity| Some(identity) != selected) {
         Err(())
     } else {
         Ok(selected)
