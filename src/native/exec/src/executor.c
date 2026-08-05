@@ -1009,6 +1009,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
         active_view_clear(cpu);
+        if (cpu->budget > request->budget) return run_fatal(&execution, output, 1);
+        cpu->executed = request->budget - cpu->budget;
         if (executor->diagnostics) {
             atomic_fetch_add_explicit(&executor->a64_guard_fast, cpu->diagnostic_guard_fast, memory_order_relaxed);
             atomic_fetch_add_explicit(&executor->a64_guard_full, cpu->diagnostic_guard_full, memory_order_relaxed);

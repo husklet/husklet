@@ -13,7 +13,6 @@ typedef struct hl_a64_budget_guard {
     uint32_t *budget_branch;
     uint32_t *compare;
     uint32_t *subtract;
-    uint32_t *add;
     uint64_t pc;
 } hl_a64_budget_guard;
 

@@ -19,7 +19,6 @@ enum {
 #define OFFSET_INTERRUPT ((int)offsetof(hl_native_aarch64_cpu, interrupt))
 #define OFFSET_INTERRUPT_TOKEN ((int)offsetof(hl_native_aarch64_cpu, interrupt_token))
 #define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
-#define OFFSET_EXECUTED ((int)offsetof(hl_native_aarch64_cpu, executed))
 
 static int stolen(int reg) {
     return reg == 16 || reg == 17 || reg == 18 || reg == 28 || reg == 30;
@@ -127,16 +126,11 @@ void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_b
     guard->subtract = (uint32_t *)assembler->cursor;
     hl_a64_subi(assembler, 16, 16, 0);
     hl_a64_str(assembler, 16, CPU, OFFSET_BUDGET);
-    hl_a64_ldr(assembler, 16, CPU, OFFSET_EXECUTED);
-    guard->add = (uint32_t *)assembler->cursor;
-    hl_a64_addi(assembler, 16, 16, 0);
-    hl_a64_str(assembler, 16, CPU, OFFSET_EXECUTED);
 }
 
 void hl_a64_stub_budget_finish(hl_a64_assembler *assembler, hl_a64_budget_guard *guard, uint32_t count) {
     *guard->compare |= count << 10;
     *guard->subtract |= count << 10;
-    *guard->add |= count << 10;
     patch_condition(guard->interrupt_branch, assembler->cursor);
     patch_condition(guard->token_interrupt_branch, assembler->cursor);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_INTERRUPT, guard->pc);
