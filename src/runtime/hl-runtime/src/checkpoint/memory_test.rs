@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
-use hl_checkpoint::{Section, SectionKind};
+use hl_checkpoint::{
+    CheckpointImage, CheckpointReader, CheckpointWriter, ImageLimits, MemorySink, MemorySource, Section, SectionKind,
+};
 use hl_linux::{FutexPlan, LinuxResult};
 use hl_memory::{
     Backing, MEMORY_CHECKPOINT_VERSION, MapRequest, MappingCoordinator, MemoryCheckpointHost, MemoryCheckpointImage,
@@ -75,6 +78,35 @@ impl MemoryCheckpointHost<TestMappingHost> for CaptureHost {
         let mut bytes = vec![0; region.range().length() as usize];
         bytes[3..7].copy_from_slice(b"rust");
         Ok(bytes)
+    }
+
+    fn stage(&self, image: &MemoryCheckpointImage) -> Result<MemoryHostStage<TestMappingHost>, MemoryError> {
+        let shared = Arc::new(
+            SharedObjectStore::restore(image.shared_limits, image.shared.clone()).map_err(MemoryError::Shared)?,
+        );
+        Ok(MemoryHostStage {
+            mapping: TestMappingHost,
+            shared,
+            restore: Box::new(HostRebind {
+                state: Arc::new(HostState::default()),
+            }),
+        })
+    }
+}
+
+struct BenchmarkHost;
+
+impl MemoryCheckpointHost<TestMappingHost> for BenchmarkHost {
+    fn address_limit(&self) -> u64 {
+        1 << 40
+    }
+
+    fn snapshot_mapping(
+        &self,
+        _: &hl_memory::FrozenSnapshotAuthority,
+        region: hl_memory::Region,
+    ) -> Result<Vec<u8>, MemoryError> {
+        Ok(vec![1; region.range().length() as usize])
     }
 
     fn stage(&self, image: &MemoryCheckpointImage) -> Result<MemoryHostStage<TestMappingHost>, MemoryError> {
@@ -172,6 +204,76 @@ fn fixture() -> (
     let participant =
         MemoryCheckpointParticipant::new(memory.clone(), Arc::new(Host { state: state.clone() }), codec.clone());
     (memory, state, codec, participant)
+}
+
+fn checkpoint_image(bytes: Vec<u8>) -> CheckpointImage {
+    let limits = ImageLimits::new(4, 4 * 1024 * 1024, 4 * 1024 * 1024 + 4096);
+    let mut writer = CheckpointWriter::new(limits);
+    writer
+        .push(Section::new(
+            SectionKind::new(3).unwrap(),
+            MEMORY_CHECKPOINT_VERSION,
+            bytes,
+        ))
+        .unwrap();
+    let mut sink = MemorySink::new();
+    writer.publish(&mut sink).unwrap();
+    let mut source = MemorySource::new(sink.committed().unwrap().to_vec());
+    CheckpointReader::new(limits).read(&mut source).unwrap()
+}
+
+fn benchmark_fixture(regions: usize, bytes_per_region: u64) -> (MemoryParticipant, CheckpointImage) {
+    let shared = Arc::new(SharedObjectStore::new(SharedLimits::default()).unwrap());
+    let coordinator = Arc::new(MappingCoordinator::with_shared(TestMappingHost, shared.clone()));
+    for index in 0..regions {
+        coordinator
+            .map(MapRequest {
+                placement: Placement::Fixed(hl_isa::GuestAddress::new(
+                    0x10_0000 + index as u64 * (bytes_per_region + 4096),
+                )),
+                length: bytes_per_region,
+                alignment: 4096,
+                protection: Protection::READ.union(Protection::WRITE),
+                backing: Backing::Anonymous {
+                    identity: index as u64 + 1,
+                    shared: false,
+                },
+                backing_offset: 0,
+            })
+            .unwrap();
+    }
+    let memory = Arc::new(CheckpointMemoryState::new(Arc::new(CheckpointMemory::new(
+        coordinator,
+        shared,
+    ))));
+    let participant =
+        MemoryCheckpointParticipant::new(memory, Arc::new(BenchmarkHost), Arc::new(PortableMemoryCodec));
+    participant.freeze().unwrap();
+    let bytes = participant.snapshot().unwrap();
+    participant.thaw().unwrap();
+    (participant, checkpoint_image(bytes))
+}
+
+#[test]
+#[ignore = "performance diagnostic"]
+fn validated_stage_benchmark() {
+    for (shape, regions, bytes_per_region, rounds) in
+        [("sparse", 256, 4096, 16), ("dense", 1, 1024 * 1024, 16)]
+    {
+        let (participant, image) = benchmark_fixture(regions, bytes_per_region);
+        let section = image.section(SectionKind::new(3).unwrap()).unwrap();
+        let started = Instant::now();
+        for _ in 0..rounds {
+            participant.validate(&image, section).unwrap();
+            let reservation = participant.stage_bound(image.digest(), section).unwrap();
+            participant.rollback(reservation);
+        }
+        println!(
+            "memory_checkpoint_shape={shape} bytes={} ns={}",
+            regions as u64 * bytes_per_region,
+            started.elapsed().as_nanos() / rounds as u128
+        );
+    }
 }
 
 #[test]
