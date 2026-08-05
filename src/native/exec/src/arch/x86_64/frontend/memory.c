@@ -19,7 +19,7 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
 }
 
 #define HL_X86_READ_VIEWS 4u
-#define HL_X86_WRITE_CACHE_WORDS 105u
+#define HL_X86_WRITE_CACHE_WORDS 109u
 
 static void jump(uint32_t *instruction, uint32_t *target) {
     int64_t distance = target - instruction;
@@ -689,7 +689,7 @@ uint32_t hl_x86_xadd_words(const instruction *item) {
 }
 
 uint32_t hl_x86_cmpxchg_words(const instruction *item) {
-    uint32_t scratch[256], cursor = 0;
+    uint32_t scratch[512], cursor = 0;
     hl_x86_emit_cmpxchg(scratch, &cursor, item);
     return cursor;
 }

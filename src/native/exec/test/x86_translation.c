@@ -1706,7 +1706,8 @@ static int rmw_projection_contract(void) {
 }
 
 #if defined(__aarch64__)
-static uint32_t vector_fragment(uint32_t *host, int write, unsigned vector);
+static uint32_t vector_fragment(uint32_t *host, size_t host_capacity, int write,
+                                unsigned vector);
 
 static int execute_fragment(const uint32_t *host, uint32_t count, hl_native_x86_64_cpu *cpu) {
     long page = sysconf(_SC_PAGESIZE);
@@ -1870,7 +1871,8 @@ static int read_cache_contract(void) {
     uint32_t vector[256] = {0};
     uint32_t control[256] = {0};
     uint32_t scalar_count = scalar_read_fragment(scalar);
-    uint32_t vector_count = vector_fragment(vector, 0, 9u);
+    uint32_t vector_count =
+        vector_fragment(vector, sizeof vector / sizeof vector[0], 0, 9u);
     hl_native_x86_64_cpu cpu;
     instruction item;
     uint32_t control_count = 0;
@@ -3021,7 +3023,7 @@ static int rotate_differential(void) {
                 uint64_t expected_register;
                 uint64_t expected_memory;
                 uint64_t backing = initial;
-                uint32_t host[256] = {0};
+                uint32_t host[512] = {0};
                 hl_x86_a64_provenance provenance[8] = {0};
                 hl_x86_a64_result emitted;
                 hl_native_x86_64_cpu cpu = {0};
@@ -3714,7 +3716,7 @@ static int control_family(void) {
         {(const uint8_t[]){0xff, 0xd0}, 2, 2},
         {(const uint8_t[]){0xff, 0x13}, 2, 2},
     };
-    uint32_t host[256];
+    uint32_t host[512];
     hl_x86_a64_provenance provenance[8];
     size_t index;
     for (index = 0; index < sizeof cases / sizeof cases[0]; ++index) {
@@ -3751,7 +3753,7 @@ static int indirect_control_differential(void) {
         size_t size = cases[index].size == 0u ? sizeof notrack : cases[index].size;
         uint64_t backing[514] = {0};
         uint64_t target = UINT64_C(0x5566778899aabbcc);
-        uint32_t host[256] = {0};
+        uint32_t host[512] = {0};
         hl_x86_a64_provenance provenance[8] = {0};
         hl_x86_a64_request request = request_for(guest, size, host, provenance);
         hl_x86_a64_result emitted;
@@ -3850,7 +3852,8 @@ static int leave_contract(void) {
     return 0;
 }
 
-static uint32_t vector_fragment(uint32_t *host, int write, unsigned vector) {
+static uint32_t vector_fragment(uint32_t *host, size_t host_capacity, int write,
+                                unsigned vector) {
     instruction item;
     uint32_t cursor = 0;
 
@@ -3864,7 +3867,7 @@ static uint32_t vector_fragment(uint32_t *host, int write, unsigned vector) {
     item.memory_write = (uint8_t)write;
     item.address_base = 3u;
     item.address_index = UINT8_MAX;
-    CHECK(hl_x86_vector_words(&item) < 128u);
+    CHECK(hl_x86_vector_words(&item) + 1u <= host_capacity);
     hl_x86_emit_vector(host, &cursor, &item);
     CHECK(cursor == hl_x86_vector_words(&item));
     host[cursor++] = UINT32_C(0xd65f03c0);
@@ -3892,7 +3895,7 @@ static int vector_projection(void) {
     memset(unchanged, 0x5a, sizeof unchanged);
     memset(storage, 0xa5, sizeof storage);
     memcpy(storage + 8, value, sizeof value);
-    count = vector_fragment(host, 0, 9u);
+    count = vector_fragment(host, sizeof host / sizeof host[0], 0, 9u);
     memcpy(code, host, count * sizeof(uint32_t));
     __builtin___clear_cache((char *)code, (char *)code + count * sizeof(uint32_t));
     CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
@@ -3935,7 +3938,7 @@ static int vector_projection(void) {
 
     CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
     memset(host, 0, sizeof host);
-    count = vector_fragment(host, 1, 8u);
+    count = vector_fragment(host, sizeof host / sizeof host[0], 1, 8u);
     memcpy(code, host, count * sizeof(uint32_t));
     __builtin___clear_cache((char *)code, (char *)code + count * sizeof(uint32_t));
     CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);

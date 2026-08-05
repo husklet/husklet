@@ -131,7 +131,7 @@ void hl_x86_emit_rotate(uint32_t *words, uint32_t *cursor, const instruction *it
 }
 
 uint32_t hl_x86_rotate_words(const instruction *item) {
-    uint32_t scratch[256];
+    uint32_t scratch[512];
     uint32_t cursor = 0;
     hl_x86_emit_rotate(scratch, &cursor, item);
     return cursor;

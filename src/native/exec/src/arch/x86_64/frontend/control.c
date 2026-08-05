@@ -73,7 +73,7 @@ uint32_t hl_x86_control_words(const instruction *item) {
                             .live_chain = item->live_chain};
         return hl_x86_load_words(&load) + 2u;
     }
-    return 96u + hl_x86_read_cache_words() + (item->live_chain != 0u ? 19u : 0u) +
+    return 130u + hl_x86_read_cache_words() + (item->live_chain != 0u ? 19u : 0u) +
            (item->source_high != 0u ? hl_x86_address_words(item) : 0u) +
            constant_words(item->pc) + constant_words(item->pc + item->length) + constant_words(item->immediate);
 }
