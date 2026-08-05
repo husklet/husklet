@@ -121,6 +121,7 @@ fn a_closed_tag_emits_no_event() {
 /// The same call site with the tag open emits one record carrying its fields — the positive control for
 /// the test above, which would otherwise pass against a macro that emits nothing ever.
 #[test]
+#[cfg(not(feature = "disabled"))]
 fn an_open_tag_emits_the_record() {
     let _turn = turn();
     let (lines, sink) = collector();
@@ -154,6 +155,7 @@ fn an_open_tag_emits_the_record() {
 /// It emits on BOTH channels: the human sentence so a person reading stderr needs no configuration, and
 /// the record for whoever is consuming one.
 #[test]
+#[cfg(not(feature = "disabled"))]
 fn a_verdict_is_not_maskable_and_reaches_both_channels() {
     let _turn = turn();
     let (records, event_sink) = collector();
@@ -192,6 +194,7 @@ fn a_verdict_is_not_maskable_and_reaches_both_channels() {
 /// throw away the reasoning the good ones carry — what the refusal costs and what to look at next — and
 /// the whole point of the second channel is to add a reader, not to replace one.
 #[test]
+#[cfg(not(feature = "disabled"))]
 fn a_verdict_keeps_its_human_sentence_and_its_fields() {
     let _turn = turn();
     let (records, event_sink) = collector();

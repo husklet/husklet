@@ -355,10 +355,49 @@ macro_rules! hl_verdict {
 #[cfg(feature = "disabled")]
 #[macro_export]
 macro_rules! hl_verdict {
-    ($tag:expr, $event:expr $(, $key:ident = $($sigil:tt)? $value:expr)* $(,)?) => {{
-        if false {
-            let _ = (&$tag, &$event $(, &$value)*);
-        }
+    ($tag:expr, $event:expr) => { $crate::hl_verdict!($tag, $event,) };
+    ($tag:expr, $event:expr, $($rest:tt)*) => {
+        $crate::__hl_verdict_disabled_go!($tag, $event, $($rest)*)
+    };
+}
+
+#[cfg(feature = "disabled")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __hl_verdict_disabled_go {
+    ($tag:expr, $event:expr, $key:ident = % $value:expr, $($rest:tt)*) => {{
+        if false { let _ = &$value; }
+        $crate::__hl_verdict_disabled_go!($tag, $event, $($rest)*)
+    }};
+    ($tag:expr, $event:expr, $key:ident = ? $value:expr, $($rest:tt)*) => {{
+        if false { let _ = &$value; }
+        $crate::__hl_verdict_disabled_go!($tag, $event, $($rest)*)
+    }};
+    ($tag:expr, $event:expr, $key:ident = $value:expr, $($rest:tt)*) => {{
+        if false { let _ = &$value; }
+        $crate::__hl_verdict_disabled_go!($tag, $event, $($rest)*)
+    }};
+    ($tag:expr, $event:expr, $key:ident = % $value:expr ; $($human:tt)+) => {{
+        if false { let _ = (&$tag, &$event, &$value, format_args!($($human)+)); }
+    }};
+    ($tag:expr, $event:expr, $key:ident = ? $value:expr ; $($human:tt)+) => {{
+        if false { let _ = (&$tag, &$event, &$value, format_args!($($human)+)); }
+    }};
+    ($tag:expr, $event:expr, $key:ident = $value:expr ; $($human:tt)+) => {{
+        if false { let _ = (&$tag, &$event, &$value, format_args!($($human)+)); }
+    }};
+    ($tag:expr, $event:expr, $key:ident = % $value:expr) => {{
+        if false { let _ = (&$tag, &$event, &$value); }
+    }};
+    ($tag:expr, $event:expr, $key:ident = ? $value:expr) => {{
+        if false { let _ = (&$tag, &$event, &$value); }
+    }};
+    ($tag:expr, $event:expr, $key:ident = $value:expr) => {{
+        if false { let _ = (&$tag, &$event, &$value); }
+    }};
+    ($tag:expr, $event:expr,) => {{ if false { let _ = (&$tag, &$event); } }};
+    ($tag:expr, $event:expr, ; $($human:tt)+) => {{
+        if false { let _ = (&$tag, &$event, format_args!($($human)+)); }
     }};
 }
 
