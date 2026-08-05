@@ -1,38 +1,5 @@
 # Engine lifecycle performance audit
 
-## 2026-08-04: lazy deadline worker
-
-The retained timer ownership was inspected read-only at C tree
-`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`.  The lifecycle path remains
-`src/core/target/aarch64.c` (`hl_run_linux_guest`, `container_init`,
-`engine_global_init`, `load_program`, and `run_loaded`) and
-`src/linux_abi/fork.c` (resident-parent initialization, child repair, wait, and
-teardown).  Timed waits in `src/linux_abi/syscall/time.c` execute in the calling
-guest thread.  Its process-timer owner (`gtimer_init`, `gtimer_loop`, and
-`gtimer_atfork_child`) creates the shared host-event set and background thread
-only on the first `timer_create`; forked children discard that inherited worker
-identity and lazily create their own.  Initialization of an Alpine process that
-does not request a timed operation therefore creates no C timer thread.
-
-Rust `routing::composition::create` constructs one deadline queue per process.
-Previously `readiness::deadline::Queue::new` immediately created an
-`hl-deadline` thread even when the guest never scheduled a deadline.  The queue
-owns its eventfd, monotonic origin, registrations, condition variables, and
-worker join handle.  The worker owns no independent registration state and is
-needed only after `schedule` or `schedule_callback`.  It is now started under
-the join-handle mutex by the first insertion.  Concurrent first insertions
-serialize there; the worker is published before registration, then observes
-the registration under the queue-state mutex and its condition notification.
-Drop still marks the state stopped, wakes both conditions, joins the worker when
-one exists, and closes the eventfd exactly once.  Schedule failure remains
-`ClockError::Failed`; cancellation, wake ordering, capacity, and callback-before-
-readiness publication are unchanged.
-
-This is a resource reduction rather than a claimed latency improvement until an
-exact committed-tree alternating measurement is recorded.  The focused
-deadline cohort includes construction-without-worker, first-schedule activation,
-capacity release, rescheduling, interruption, and callback publication.
-
 ## 2026-08-04: idle network readiness worker
 
 Exact baseline commit `3e039c86ce62bc800c29b6eb85d9c8e4b17114ae` and
