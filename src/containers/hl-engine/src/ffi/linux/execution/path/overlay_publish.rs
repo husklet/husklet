@@ -164,6 +164,7 @@ fn open_regular(parent: &impl AsRawFd, name: &CStr) -> io::Result<Option<File>> 
 }
 
 /// Materializes one already-validated upper ancestor without following links.
+#[cfg(test)]
 pub(super) fn materialize_parent(parent: &impl AsRawFd, name: &CStr, mode: u32) -> io::Result<()> {
     materialize_parent_created(parent, name, mode).map(|_| ())
 }
