@@ -28,7 +28,7 @@ selection.
 | MOVAPS/MOVUPS, MOVDQA/MOVDQU | aligned/unaligned 128-bit register and guarded memory load/store | implemented | aligned faults and store observation covered by existing projection tests |
 | MOVD/MOVQ, MOVSS/MOVSD | GPR transfer; scalar load merge and scalar register-copy upper-lane rules | partial: integer and broad 128-bit copy forms exist; scalar prefix semantics are incomplete | complete every scalar merge/zero rule |
 | PUNPCKL/H B/W/D/Q | all four widths, register/memory | implemented | retained memory fault-before-commit contract |
-| PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | legacy SSE forms implemented; VEX forms remain absent | implement VEX 128/256 non-destructive forms before claiming AVX coverage |
+| PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | legacy SSE and VEX 128/256 non-destructive forms implemented | broader AVX families remain separate |
 | PAND/PANDN/POR/PXOR | full 128-bit register/memory | implemented | none known |
 | PCMPEQB/W/D, PMOVMSKB | all lane widths; mask to GPR | implemented | PCMPEQQ and wider compare families remain absent |
 | PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | missing | coherent integer comparison/minmax slice |
@@ -179,13 +179,44 @@ host-specific branches beyond those two execution owners.
 | register, destructive alias, REX XMM identity | scratch-first vector emitter | implemented |
 | unaligned memory read and fault-before-commit | generic vector memory guard | implemented |
 | truncated ModRM/address/immediate | frontend bounded decoder | implemented |
-| VEX 128/256 non-destructive forms | no Rust native owner | remaining gap |
+| VEX 128/256 non-destructive forms | bounded C4/C5 frontend + lane-local vector emitter | implemented |
 
 Focused tests admit every legacy prefix and width, register and displaced
 memory forms, reject truncated immediates without advancing the guest PC, and
 execute a general self-independent PSHUFD permutation on AArch64 while checking
 source, flags, and MXCSR preservation. AMD64 quiet comparison is unavailable on
 this AArch64 host and is not represented as equivalent evidence.
+
+### VEX shuffle extension
+
+The VEX migration re-audited the retained read-only entry path
+`../engine/src/translator/guest/x86_64/decode.c:hl_x86_decode` through the
+`R_AVX` dispatch into `avx.c:hl_x86_avx_run` and `do_avx`, plus
+`translate.c:translate_avx_inline`, `interp.c`'s complete shuffle definitions,
+and `emit.c`'s insertion/copy primitives. C4 and C5 invert R/X/B and vvvv,
+select opcode map and mandatory-prefix identity, and carry L/W independently.
+Map-one opcode `70` admits pp 1/2/3 with reserved vvvv, while opcode `C6`
+admits pp 0/1 and uses vvvv as its non-destructive first source. W is ignored
+for this WIG family. Unsupported maps, pp values, and reserved-vvvv violations
+return to the interpreter at the original guest PC.
+
+The retained CPU owns XMM plus YMM-high storage for the dispatcher lifetime;
+`avx_get_rm` completes the entire 16/32-byte register or guarded memory read
+before `avx_put` commits. Each 256-bit operation applies the imm8 separately to
+the two 128-bit lanes. A 128-bit VEX write commits the low lane and zeros the
+destination's YMM high half; a 256-bit write commits both lanes. Temporary
+vectors make destination/source aliasing safe. There is no allocation, lock,
+blocking, cancellation, signal, errno, host-specific policy, or separate
+teardown in this family.
+
+Rust ownership maps C4/C5 admission to `frontend.c`, decoded non-destructive
+source and VEX-width state to `decode.h`, full-width guarded memory access to
+`frontend/memory.c`, and architectural YMM-high lifetime to the generated CPU
+layout and Rust executor projection. The AArch64 emitter uses scratch vectors
+for both lanes, zeros the upper half for VEX.128, and stores the independently
+shuffled upper lane for VEX.256 only after a full memory operand is available.
+Focused translation tests cover C4/C5, WIG, all five operations, register and
+memory sources, both widths, and invalid map/pp/vvvv admission.
 
 ### 256-bit vector memory
 
@@ -224,7 +255,7 @@ branch changes the x86 architectural result.
 | Fault-before-load commit | post-guard copy plus upper store | implemented |
 | Fault-before-store commit | full-width guard before both Q stores | implemented |
 | Exact dirty interval | `hl_x86_emit_dirty` with width-derived end | implemented |
-| VEX opcode admission and operation cases | VEX frontend | intentionally remaining |
+| VEX shuffle opcode admission and operation cases | VEX frontend | implemented for map-one `70` and `C6` shuffle forms |
 
 ### YMM state
 
@@ -262,7 +293,7 @@ replace upper halves because they are never hosted in live vector registers.
 | Linux signal save/restore | `hl-linux::X86SignalMachine` and engine signal-frame adapter | implemented |
 | native C/Rust ABI | generated `hl_native_x86_64_cpu.vector_upper` / `X86_64Cpu::vector_upper` | implemented |
 | native entry/exit transport | `NativeX86::capture` / `NativeX86::restore` | implemented |
-| VEX.128 destination upper-zero | future VEX instruction owner | schema ready; opcodes deliberately outside this lane |
+| VEX.128 destination upper-zero | VEX shuffle emitter | implemented for map-one `70` and `C6` shuffle forms |
 
 The ABI field is appended after all established native fields. Existing baked
 emitter, trampoline, polling, dirty-publication, and fault offsets therefore do

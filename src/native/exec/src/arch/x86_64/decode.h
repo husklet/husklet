@@ -124,6 +124,8 @@ typedef struct instruction {
     uint8_t vector_subopcode;
     uint8_t vector_immediate;
     uint8_t vector_memory_width;
+    uint8_t vector_source_one;
+    uint8_t vector_vex;
     uint8_t live_chain;
     uint8_t bit_index;
     uint8_t bit_memory_offset;

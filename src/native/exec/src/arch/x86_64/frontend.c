@@ -52,6 +52,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         uint8_t semantic_prefix = 0;
         uint8_t segment = 0;
         uint8_t rex = 0;
+        uint8_t vex = 0;
+        uint8_t vex_pp = 0;
+        uint8_t vex_l = 0;
+        uint8_t vex_vvvv = 0;
+        uint8_t vex_map = 0;
         uint8_t opcode;
         instruction *item = &block->instructions[block->count];
         for (;;) {
@@ -93,13 +98,45 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             break;
         }
         opcode = request->guest_bytes[cursor++];
+        if ((opcode == 0xc4u || opcode == 0xc5u) && rex == 0u && operand_16 == 0u &&
+            semantic_prefix == 0u && address_32 == 0u && segment == 0u) {
+            uint8_t vex_two;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            vex_two = request->guest_bytes[cursor++];
+            if (opcode == 0xc5u) {
+                vex = 1u; vex_map = 1u;
+                rex = (uint8_t)(((~vex_two >> 7) & 1u) << 2);
+                vex_vvvv = (uint8_t)((~vex_two >> 3) & 15u);
+                vex_l = (uint8_t)((vex_two >> 2) & 1u); vex_pp = (uint8_t)(vex_two & 3u);
+            } else {
+                uint8_t vex_three;
+                vex_map = (uint8_t)(vex_two & 31u);
+                rex = (uint8_t)((((~vex_two >> 7) & 1u) << 2) |
+                                (((~vex_two >> 6) & 1u) << 1) | ((~vex_two >> 5) & 1u));
+                if (cursor >= request->guest_size || cursor - start >= 15u) {
+                    cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                    block->exit = HL_X86_A64_INTERPRETER; break;
+                }
+                vex_three = request->guest_bytes[cursor++]; vex = 1u;
+                vex_vvvv = (uint8_t)((~vex_three >> 3) & 15u);
+                vex_l = (uint8_t)((vex_three >> 2) & 1u); vex_pp = (uint8_t)(vex_three & 3u);
+            }
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            opcode = request->guest_bytes[cursor++];
+        }
         if (cursor - start > 15u) {
             cursor = start;
             block->status = HL_X86_A64_UNSUPPORTED;
             block->exit = HL_X86_A64_INTERPRETER;
             break;
         }
-        if (semantic_prefix == 0xf0u && opcode != 0xf6u && opcode != 0xf7u &&
+        if (vex == 0u && semantic_prefix == 0xf0u && opcode != 0xf6u && opcode != 0xf7u &&
             opcode != 0x86u && opcode != 0x87u &&
             !(opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0xb0u || request->guest_bytes[cursor] == 0xb1u ||
@@ -109,7 +146,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             block->exit = HL_X86_A64_INTERPRETER;
             break;
         }
-        if (semantic_prefix != 0 && semantic_prefix != 0xf0u &&
+        if (vex == 0u && semantic_prefix != 0 && semantic_prefix != 0xf0u &&
             !((semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) &&
               (opcode == 0xa4u || opcode == 0xa5u || opcode == 0xaau || opcode == 0xabu ||
                opcode == 0xacu || opcode == 0xadu)) &&
@@ -139,7 +176,43 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         item->pc = block->next_pc;
         item->segment = segment;
         item->live_chain = (request->flags & HL_X86_A64_LIVE_CHAIN) != 0u;
-        if ((semantic_prefix == 0u || semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) &&
+        if (vex != 0u && vex_map == 1u &&
+            ((opcode == 0x70u && vex_pp >= 1u) ||
+             (opcode == 0xc6u && vex_pp <= 1u))) {
+            uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            if (opcode == 0x70u && vex_vvvv != 0u) {
+                cursor = start; block->status = HL_X86_A64_UNSUPPORTED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR; item->vector_vex = 1u;
+            item->width = vex_l != 0u ? 32u : 16u;
+            item->vector_memory_width = item->width;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_source_one = opcode == 0xc6u ? vex_vvvv : item->source;
+            item->vector_kind = opcode == 0xc6u ?
+                                    (vex_pp == 1u ? VECTOR_SHUFFLE_DOUBLE : VECTOR_SHUFFLE_FLOAT) :
+                                vex_pp == 1u ? VECTOR_SHUFFLE_DWORD : VECTOR_SHUFFLE_WORD;
+            item->condition = vex_pp == 3u;
+            if ((modrm >> 6) == 3u) ++cursor;
+            else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0u, 0u, start, &cursor)) break;
+                item->operation = OP_VECTOR; item->memory_operand = 1u; item->source = 16u;
+            }
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            item->vector_immediate = request->guest_bytes[cursor++];
+        } else if (vex != 0u) {
+            cursor = start; block->status = HL_X86_A64_UNSUPPORTED;
+            block->exit = HL_X86_A64_INTERPRETER; break;
+        } else if ((semantic_prefix == 0u || semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) &&
             (opcode == 0xa4u || opcode == 0xa5u || opcode == 0xaau || opcode == 0xabu ||
              opcode == 0xacu || opcode == 0xadu)) {
             uint64_t next;

@@ -2368,6 +2368,44 @@ static int shuffle_family_contract(void) {
     return 0;
 }
 
+static int vex_shuffle_family_contract(void) {
+    static const uint8_t forms[][6] = {
+        {0xc5, 0xf9, 0x70, 0xc1, 0x1b, 0}, /* vpshufd xmm0,xmm1,imm */
+        {0xc5, 0xfd, 0x70, 0xc1, 0x1b, 0}, /* vpshufd ymm0,ymm1,imm */
+        {0xc5, 0xfb, 0x70, 0xc1, 0x39, 0}, /* vpshuflw */
+        {0xc5, 0xfe, 0x70, 0xc1, 0x39, 0}, /* vpshufhw ymm */
+        {0xc5, 0xe8, 0xc6, 0xc1, 0x4e, 0}, /* vshufps xmm0,xmm2,xmm1,imm */
+        {0xc5, 0xed, 0xc6, 0xc1, 0x4e, 0}, /* vshufpd ymm0,ymm2,ymm1,imm */
+        {0xc4, 0xe1, 0xf9, 0x70, 0xc1, 0x1b}, /* C4 WIG vpshufd */
+        {0xc5, 0xfd, 0x70, 0x03, 0x1b, 0}, /* vpshufd ymm0,[rbx],imm */
+    };
+    static const size_t sizes[] = {5, 5, 5, 5, 5, 5, 6, 5};
+    static const uint8_t invalid[][6] = {
+        {0xc5, 0xf1, 0x70, 0xc1, 0, 0}, /* reserved vvvv */
+        {0xc5, 0xf8, 0x70, 0xc1, 0, 0}, /* invalid pp */
+        {0xc5, 0xea, 0xc6, 0xc1, 0, 0}, /* invalid pp */
+        {0xc4, 0xe2, 0x79, 0x70, 0xc1, 0}, /* invalid map */
+    };
+    unsigned index;
+    for (index = 0; index < sizeof forms / sizeof forms[0]; ++index) {
+        uint32_t host[512] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(forms[index], sizes[index], host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+        CHECK(provenance[0].guest_size == sizes[index]);
+    }
+    for (index = 0; index < sizeof invalid / sizeof invalid[0]; ++index) {
+        uint32_t host[64] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(invalid[index],
+                                                  index == 3u ? 6u : 5u, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        CHECK(result.instruction_count == 0 && result.exit_pc == request.guest_pc);
+    }
+    return 0;
+}
+
 static int alu_differential(void) {
 #if !defined(__aarch64__)
     return 0;
@@ -4647,6 +4685,8 @@ int main(void) {
     status = vector_immediate_staging_contract();
     if (status != 0) return status;
     status = shuffle_family_contract();
+    if (status != 0) return status;
+    status = vex_shuffle_family_contract();
     if (status != 0) return status;
     status = immediate_differential();
     if (status != 0) return status;

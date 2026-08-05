@@ -848,6 +848,12 @@ static uint32_t vector_operation_words(const instruction *item) {
 
 uint32_t hl_x86_vector_words(const instruction *item) {
     uint32_t operation = vector_operation_words(item);
+    if (item->vector_vex != 0u) {
+        uint32_t two_source = item->vector_kind == VECTOR_SHUFFLE_FLOAT ||
+                              item->vector_kind == VECTOR_SHUFFLE_DOUBLE;
+        operation += item->width == 32u ? vector_operation_words(item) + 2u +
+                         (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
+    }
     uint32_t width = item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
     uint32_t aligned = item->vector_aligned == 0u ? 0u :
                        6u + constant_words(item->pc) + (item->live_chain != 0u ? 19u : 0u);
@@ -863,6 +869,8 @@ uint32_t hl_x86_vector_words(const instruction *item) {
 static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instruction *item) {
     uint32_t destination = item->destination;
     uint32_t source = item->source;
+    uint32_t first = item->vector_vex != 0u ? item->vector_source_one : destination;
+    uint32_t scratch = item->vector_vex != 0u ? 20u : 17u;
     uint32_t lane = item->vector_lane;
 
     if (item->vector_kind == VECTOR_STRING_EQUAL_EACH) {
@@ -1049,36 +1057,36 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         for (output = 0; output < 4u; ++output) {
             unsigned input = (item->vector_immediate >> (2u * output)) & 3u;
             words[(*cursor)++] = UINT32_C(0x6e000400) | ((output << 3) | 4u) << 16 |
-                                 (input << 2) << 11 | source << 5 | 17u;
+                                 (input << 2) << 11 | source << 5 | scratch;
         }
-        words[(*cursor)++] = UINT32_C(0x4ea01c00) | 17u << 16 | 17u << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
     } else if (item->vector_kind == VECTOR_SHUFFLE_WORD) {
         unsigned output;
         unsigned high = item->condition != 0u ? 4u : 0u;
-        words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | source << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | source << 5 | scratch;
         for (output = 0; output < 4u; ++output) {
             unsigned input = high + ((item->vector_immediate >> (2u * output)) & 3u);
             words[(*cursor)++] = UINT32_C(0x6e000400) | (((high + output) << 2) | 2u) << 16 |
-                                 (input << 1) << 11 | source << 5 | 17u;
+                                 (input << 1) << 11 | source << 5 | scratch;
         }
-        words[(*cursor)++] = UINT32_C(0x4ea01c00) | 17u << 16 | 17u << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
     } else if (item->vector_kind == VECTOR_SHUFFLE_FLOAT) {
         unsigned output;
         for (output = 0; output < 4u; ++output) {
             unsigned input = (item->vector_immediate >> (2u * output)) & 3u;
-            unsigned vector = output < 2u ? destination : source;
+            unsigned vector = output < 2u ? first : source;
             words[(*cursor)++] = UINT32_C(0x6e000400) | ((output << 3) | 4u) << 16 |
-                                 (input << 2) << 11 | vector << 5 | 17u;
+                                 (input << 2) << 11 | vector << 5 | scratch;
         }
-        words[(*cursor)++] = UINT32_C(0x4ea01c00) | 17u << 16 | 17u << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
     } else if (item->vector_kind == VECTOR_SHUFFLE_DOUBLE) {
         unsigned low = item->vector_immediate & 1u;
         unsigned high = (item->vector_immediate >> 1) & 1u;
         words[(*cursor)++] = UINT32_C(0x6e000400) | ((0u << 4) | 8u) << 16 |
-                             (low << 3) << 11 | destination << 5 | 17u;
+                             (low << 3) << 11 | first << 5 | scratch;
         words[(*cursor)++] = UINT32_C(0x6e000400) | ((1u << 4) | 8u) << 16 |
-                             (high << 3) << 11 | source << 5 | 17u;
-        words[(*cursor)++] = UINT32_C(0x4ea01c00) | 17u << 16 | 17u << 5 | destination;
+                             (high << 3) << 11 | source << 5 | scratch;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
     } else if (item->vector_kind == VECTOR_FROM_INTEGER)
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9e670000) : UINT32_C(0x1e270000)) |
                                source << 5 | destination;
@@ -1141,6 +1149,26 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | source << 5 | destination;
 }
 
+static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruction *item,
+                                unsigned memory_upper) {
+    instruction upper;
+    if (item->vector_vex == 0u) return;
+    if (item->width == 16u) {
+        hl_x86_emit_vector_upper_zero(words, cursor, item->destination);
+        return;
+    }
+    upper = *item; upper.width = 16u; upper.vector_memory_width = 0u;
+    upper.memory_operand = 0u; upper.destination = 20u;
+    if (memory_upper != 0u) upper.source = 17u;
+    else { hl_x86_emit_vector_upper_load(words, cursor, 18u, item->source); upper.source = 18u; }
+    if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE) {
+        hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
+        upper.vector_source_one = 19u;
+    } else upper.vector_source_one = upper.source;
+    emit_vector_operation(words, cursor, &upper);
+    hl_x86_emit_vector_upper_store(words, cursor, 20u, item->destination);
+}
+
 void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *item) {
     uint32_t *below;
     uint32_t *overflow;
@@ -1155,6 +1183,7 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
 
     if (item->memory_operand == 0u) {
         emit_vector_operation(words, cursor, item);
+        emit_vex_completion(words, cursor, item, 0u);
         return;
     }
 
@@ -1215,6 +1244,7 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
         } else if (item->vector_kind != VECTOR_COPY) {
             loaded_operation = &words[*cursor];
             emit_vector_operation(words, cursor, item);
+            emit_vex_completion(words, cursor, item, width == 32u);
         }
     }
     skip = &words[(*cursor)++];
