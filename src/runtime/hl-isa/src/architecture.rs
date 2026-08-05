@@ -21,6 +21,7 @@ pub enum GuestArchitecture {
 
 impl GuestArchitecture {
     /// Linux ELF `e_machine` value accepted for this guest.
+    #[must_use]
     pub const fn elf_machine(self) -> u16 {
         match self {
             Self::Aarch64 => 183,
@@ -29,6 +30,7 @@ impl GuestArchitecture {
     }
 
     /// Size of the Linux guest `struct stat` encoded by the engine.
+    #[must_use]
     pub const fn linux_stat_size(self) -> usize {
         match self {
             Self::Aarch64 => 128,
@@ -37,6 +39,7 @@ impl GuestArchitecture {
     }
 
     /// Smallest aligned instruction address.
+    #[must_use]
     pub const fn instruction_alignment(self) -> u8 {
         match self {
             Self::Aarch64 => 4,
@@ -45,11 +48,13 @@ impl GuestArchitecture {
     }
 
     /// Guest byte order. Both currently supported Linux ABIs are little-endian.
+    #[must_use]
     pub const fn endianness(self) -> Endianness {
         Endianness::Little
     }
 
     /// Number of bits in an architectural integer word.
+    #[must_use]
     pub const fn word_bits(self) -> u8 {
         64
     }
@@ -104,21 +109,25 @@ pub struct ArchitecturePair {
 
 impl ArchitecturePair {
     /// Validates a host/guest pair against the compiled engine matrix.
+    #[must_use]
     pub const fn new(host: HostArchitecture, guest: GuestArchitecture) -> Self {
         Self { host, guest }
     }
 
     /// Host CPU architecture.
+    #[must_use]
     pub const fn host(self) -> HostArchitecture {
         self.host
     }
 
     /// Guest Linux architecture.
+    #[must_use]
     pub const fn guest(self) -> GuestArchitecture {
         self.guest
     }
 
     /// Whether host and guest use the same instruction set.
+    #[must_use]
     pub const fn is_same_architecture(self) -> bool {
         matches!(
             (self.host, self.guest),

@@ -12,6 +12,10 @@ impl GuestWordSize {
     pub const BITS_64: Self = Self(64);
 
     /// Accepts only the 64-bit word size implemented by the engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::UnsupportedWordSize`] when `bits` is not 64.
     pub const fn new(bits: u8) -> Result<Self, GeometryError> {
         if bits == 64 {
             Ok(Self(bits))
@@ -21,11 +25,13 @@ impl GuestWordSize {
     }
 
     /// Width in bits.
+    #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
 
     /// Width in bytes.
+    #[must_use]
     pub const fn bytes(self) -> u8 {
         self.0 / 8
     }
@@ -37,11 +43,13 @@ pub struct GuestWord(u64);
 
 impl GuestWord {
     /// Constructs a 64-bit guest word without host-width conversion.
+    #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
     /// Raw architectural bits.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -68,6 +76,10 @@ impl GuestPageSize {
     pub const LINUX: Self = Self(LINUX_GUEST_PAGE_BYTES);
 
     /// Accepts only the engine's fixed 4 KiB Linux guest page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::UnsupportedPageSize`] when `bytes` is not 4096.
     pub const fn new(bytes: u64) -> Result<Self, GeometryError> {
         if bytes == LINUX_GUEST_PAGE_BYTES {
             Ok(Self(bytes))
@@ -77,11 +89,13 @@ impl GuestPageSize {
     }
 
     /// Page size in bytes.
+    #[must_use]
     pub const fn bytes(self) -> u64 {
         self.0
     }
 
     /// Mask selecting the offset within a page.
+    #[must_use]
     pub const fn offset_mask(self) -> u64 {
         self.0 - 1
     }
@@ -96,16 +110,22 @@ impl GuestAddress {
     pub const ZERO: Self = Self(0);
 
     /// Constructs an address from its complete 64-bit representation.
+    #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
     /// Raw guest virtual address.
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 
     /// Adds a byte count, rejecting address-space wraparound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::AddressOverflow`] when the sum exceeds `u64`.
     pub const fn checked_add(self, bytes: u64) -> Result<Self, GeometryError> {
         match self.0.checked_add(bytes) {
             Some(value) => Ok(Self(value)),
@@ -114,6 +134,10 @@ impl GuestAddress {
     }
 
     /// Subtracts two addresses when ordered.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::AddressUnderflow`] when `base` exceeds this address.
     pub const fn checked_offset_from(self, base: Self) -> Result<u64, GeometryError> {
         match self.0.checked_sub(base.0) {
             Some(value) => Ok(value),
@@ -122,16 +146,19 @@ impl GuestAddress {
     }
 
     /// Whether this address begins a guest page.
+    #[must_use]
     pub const fn is_page_aligned(self, page: GuestPageSize) -> bool {
         self.0 & page.offset_mask() == 0
     }
 
     /// Page containing this address.
+    #[must_use]
     pub const fn page(self, page: GuestPageSize) -> GuestPage {
         GuestPage(self.0 / page.bytes())
     }
 
     /// Address rounded down to its containing guest page.
+    #[must_use]
     pub const fn page_base(self, page: GuestPageSize) -> Self {
         Self(self.0 & !page.offset_mask())
     }
@@ -165,11 +192,17 @@ pub struct GuestPage(u64);
 
 impl GuestPage {
     /// Page number.
+    #[must_use]
     pub const fn number(self) -> u64 {
         self.0
     }
 
     /// First address in this guest page.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::AddressOverflow`] when the page lies beyond the
+    /// 64-bit guest address space.
     pub const fn address(self, size: GuestPageSize) -> Result<GuestAddress, GeometryError> {
         match self.0.checked_mul(size.bytes()) {
             Some(value) => Ok(GuestAddress::new(value)),
@@ -187,6 +220,10 @@ pub struct AddressRange {
 
 impl AddressRange {
     /// Constructs a range after proving `start + length` does not wrap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::AddressOverflow`] when the end address exceeds `u64`.
     pub const fn new(start: GuestAddress, length: u64) -> Result<Self, GeometryError> {
         match start.checked_add(length) {
             Ok(end) => Ok(Self { start, end }),
@@ -195,6 +232,11 @@ impl AddressRange {
     }
 
     /// Constructs a nonempty range.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GeometryError::EmptyRange`] for zero length or
+    /// [`GeometryError::AddressOverflow`] when the end address exceeds `u64`.
     pub const fn nonempty(start: GuestAddress, length: u64) -> Result<Self, GeometryError> {
         if length == 0 {
             Err(GeometryError::EmptyRange)
@@ -204,31 +246,37 @@ impl AddressRange {
     }
 
     /// Inclusive first address.
+    #[must_use]
     pub const fn start(self) -> GuestAddress {
         self.start
     }
 
     /// Exclusive end address.
+    #[must_use]
     pub const fn end(self) -> GuestAddress {
         self.end
     }
 
     /// Length in bytes.
+    #[must_use]
     pub const fn length(self) -> u64 {
         self.end.0 - self.start.0
     }
 
     /// Whether the range is empty.
+    #[must_use]
     pub const fn is_empty(self) -> bool {
         self.start.0 == self.end.0
     }
 
     /// Whether both bounds are guest-page aligned.
+    #[must_use]
     pub const fn is_page_aligned(self, page: GuestPageSize) -> bool {
         self.start.is_page_aligned(page) && self.end.is_page_aligned(page)
     }
 
     /// Whether an address belongs to this half-open range.
+    #[must_use]
     pub const fn contains(self, address: GuestAddress) -> bool {
         address.0 >= self.start.0 && address.0 < self.end.0
     }

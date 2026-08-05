@@ -32,11 +32,13 @@ impl RegisterLayout {
     }
 
     /// Byte offset from the start of the architecture's CPU state.
+    #[must_use]
     pub const fn offset(self) -> u32 {
         self.offset
     }
 
     /// Stored width in bytes.
+    #[must_use]
     pub const fn size(self) -> u16 {
         self.size
     }
@@ -47,6 +49,7 @@ impl GuestArchitecture {
     ///
     /// Dynamic execution-only tails such as AVX-512 upper lanes and engine
     /// scratch state intentionally have no identifier here.
+    #[must_use]
     pub const fn register_layout(self, register: CoreRegister) -> Option<RegisterLayout> {
         match (self, register) {
             (Self::Aarch64, CoreRegister::GeneralPurpose(index)) if index < 31 => {
@@ -55,7 +58,6 @@ impl GuestArchitecture {
             (Self::Aarch64, CoreRegister::StackPointer) => Some(RegisterLayout::new(248, 8)),
             (Self::Aarch64, CoreRegister::ProgramCounter) => Some(RegisterLayout::new(256, 8)),
             (Self::Aarch64, CoreRegister::ThreadPointer) => Some(RegisterLayout::new(264, 8)),
-            (Self::Aarch64, CoreRegister::SecondaryThreadPointer) => None,
             (Self::Aarch64, CoreRegister::Flags) => Some(RegisterLayout::new(1024, 8)),
             (Self::Aarch64, CoreRegister::Vector(index)) if index < 32 => {
                 Some(RegisterLayout::new(384 + index as u32 * 16, 16))
