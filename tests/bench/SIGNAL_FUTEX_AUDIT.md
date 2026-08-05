@@ -92,17 +92,37 @@ compilation are excluded by the guest's own phase timer. Exact base, artifact
 hashes, before/after samples, and test commands are appended when the isolated
 run completes.
 
-The candidate was built from base
-`0f3927e8babd4520ed26559eee36dc49e74db47f` with only the source and this
-audit dirty. The release `testing` artifact was
-`fd1e4debe111f60ce7c13b0d943b3e29fe899a23800d92da8c4574800d2c00e7`; the
-ARM64 guest remained
-`b39066b2ae7468d8a57359f963515729f92cbfd7bc53fb7af68980909e3be08f`.
-Three native-verified signal samples were 1,614,977, 1,615,500, and 1,648,480
-microseconds (median 1,615,500), with identical nonzero native diagnostics and
-the expected checksum. This is 1.96 times faster than the pinned Rust median,
-while still 67.4 times the retained-C median; snapshot amplification was a
-large generic cost but signal frame and service-boundary work remain.
+Acceptance compared exact base
+`0f3927e8babd4520ed26559eee36dc49e74db47f` (A) with exact candidate
+`962ef79740ab736e04039e611fca5366ebc78df6` (B). The independently built
+release `testing` artifacts were:
+
+- A: `d3f136b0e426ec79fdebad693add78a9395bc993e01889630bf3a3dd20658867`;
+- B: `fd1e4debe111f60ce7c13b0d943b3e29fe899a23800d92da8c4574800d2c00e7`.
+
+Both used the identical ARM64 guest
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`.
+The host had no competing build or benchmark and load average was 1.55 before
+the run. Every process was pinned to logical CPU 17. Pair order alternated AB,
+BA, AB, BA, AB; each cell contained one warm-up, one cold observation, and
+three scored in-guest samples.
+
+| pair | order | A median us | B median us | reduction | speedup |
+|---:|:---:|---:|---:|---:|---:|
+| 1 | AB | 2,798,909 | 1,455,412 | 48.00% | 1.923x |
+| 2 | BA | 2,741,372 | 1,510,962 | 44.88% | 1.814x |
+| 3 | AB | 2,829,953 | 1,572,437 | 44.44% | 1.800x |
+| 4 | BA | 2,767,030 | 1,631,826 | 41.03% | 1.696x |
+| 5 | AB | 2,809,562 | 1,632,063 | 41.91% | 1.721x |
+
+The median of pair medians is 2,798,909 microseconds for A and 1,572,437 for
+B: a 43.82% reduction, or 1.78x speedup. B was faster in all five pairs.
+Every one of the 50 observed executions reported identical native counters:
+`runs=110006 builds=19 hits=110040 fallbacks=4 sites=4 services=17`, with
+`branch=11 syscall=110002 fallback=4 yield=0 completed=605052` and identical
+guard/dirty counters. All ten cells passed with the expected checksum.
+Snapshot amplification was therefore a large generic cost, while signal-frame
+and service-boundary work remain.
 
 Commands:
 
@@ -110,7 +130,7 @@ Commands:
 nix develop --command cargo test --locked --offline -p hl-task -p hl-runtime --lib --no-run
 nix develop --command cargo test --locked --offline -p hl-runtime --lib process_syscalls::tests::kill_exact_thread -- --exact
 nix develop --command cargo test --locked --offline -p hl-task --lib registry::test::signal_thread_target_is_generation_qualified -- --exact
-nix develop --command cargo run --locked --offline --release -p testing --bin testing -- bench combined --isa arm64
+taskset -c 17 timeout 45s <A-or-B-testing> bench combined --isa arm64 --jobs 1
 ```
 
 For the benchmark only, the folder argument list was temporarily narrowed to
