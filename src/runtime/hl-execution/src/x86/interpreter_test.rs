@@ -9382,6 +9382,102 @@ fn scalar_single_conversions() {
 }
 
 #[test]
+fn legacy_scalar_single_integer_conversion_contract() {
+    let upper = 0xfeed_face_dead_beef_cafe_babe_u128 << 32;
+    let flags = FlagState::from_bits(0x8d5);
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+
+    for (rounding, signed, expected) in [
+        (0, 16_777_217_i64, 16_777_216.0_f32),
+        (1, 16_777_217, 16_777_216.0),
+        (2, 16_777_217, 16_777_218.0),
+        (3, -16_777_217, -16_777_216.0),
+    ] {
+        let mut cpu = CpuState {
+            rip: 0x47840,
+            flags,
+            mxcsr: 0x1f80 | rounding << 13,
+            ..Default::default()
+        };
+        cpu.registers[9] = signed as u64;
+        cpu.vectors[8] = upper;
+        let convert = X86ScalarDecoder::decode(&[0xf3, 0x4d, 0x0f, 0x2a, 0xc1], cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, convert),
+            ExecutionExit::Continue
+        );
+        assert_eq!(cpu.vectors[8], upper | u128::from(expected.to_bits()));
+        assert_ne!(cpu.mxcsr & (1 << 5), 0, "rounding={rounding}");
+        assert_eq!(cpu.flags, flags);
+    }
+
+    for (wide, source, expected, invalid) in [
+        (false, 2.9_f32, 2_u64, false),
+        (false, f32::NAN, 0x8000_0000, true),
+        (true, 9_223_372_036_854_775_808.0_f32, 0x8000_0000_0000_0000, true),
+        (true, -9_223_372_036_854_775_808.0_f32, 0x8000_0000_0000_0000, false),
+    ] {
+        let mut cpu = CpuState {
+            rip: 0x47860,
+            flags,
+            ..Default::default()
+        };
+        cpu.registers[8] = u64::MAX;
+        cpu.vectors[9] = u128::from(source.to_bits());
+        let bytes = if wide {
+            &[0xf3, 0x4d, 0x0f, 0x2c, 0xc1][..]
+        } else {
+            &[0xf3, 0x45, 0x0f, 0x2c, 0xc1]
+        };
+        let convert = X86ScalarDecoder::decode(bytes, cpu.rip).unwrap();
+        let vectors = cpu.vectors;
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, convert),
+            ExecutionExit::Continue
+        );
+        assert_eq!(cpu.registers[8], expected);
+        assert_eq!(cpu.mxcsr & 1 != 0, invalid);
+        assert_eq!(cpu.flags, flags);
+        assert_eq!(cpu.vectors, vectors);
+    }
+
+    let mut cpu = CpuState {
+        rip: 0x47880,
+        flags,
+        ..Default::default()
+    };
+    cpu.registers[3] = 0x1000;
+    cpu.vectors[0] = upper;
+    let original = cpu.clone();
+    memory = ModelMemory {
+        base: 0x1000,
+        bytes: vec![0; 8],
+        fail_read: true,
+        fail_write: false,
+        commits: 0,
+    };
+    let from_memory = X86ScalarDecoder::decode(&[0xf3, 0x48, 0x0f, 0x2a, 0x03], cpu.rip).unwrap();
+    assert!(matches!(
+        ScalarInterpreter::execute(&mut cpu, &mut memory, from_memory),
+        ExecutionExit::OperandFault(access) if access.length() == 8
+    ));
+    assert_eq!(cpu, original);
+
+    let to_memory = X86ScalarDecoder::decode(&[0xf3, 0x48, 0x0f, 0x2c, 0x03], cpu.rip).unwrap();
+    assert!(matches!(
+        ScalarInterpreter::execute(&mut cpu, &mut memory, to_memory),
+        ExecutionExit::OperandFault(access) if access.length() == 4
+    ));
+    assert_eq!(cpu, original);
+}
+
+#[test]
 fn packed_width_conversions() {
     fn singles(values: [u32; 2]) -> u128 {
         u128::from(values[0]) | u128::from(values[1]) << 32
