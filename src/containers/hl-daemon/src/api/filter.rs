@@ -257,8 +257,13 @@ impl List {
             for value in list.filters.get("expose").into_iter().flatten() {
                 Self::exposed_port(value)?;
             }
+            let mut task = None;
             for value in list.filters.get("is-task").into_iter().flatten() {
-                Self::task_filter(value)?;
+                let value = Self::task_filter(value)?;
+                if task.is_some_and(|current| current != value) {
+                    return Err("conflicting is-task boolean values".into());
+                }
+                task = Some(value);
             }
             Ok(list)
         } else {
@@ -554,13 +559,14 @@ mod tests {
             let selected = List::parse(true, Some(&format!(r#"{{"is-task":["{value}"]}}"#))).unwrap();
             assert!(!matches(selected, &container, std::slice::from_ref(&container)));
         }
-        let alternatives = List::parse(true, Some(r#"{"is-task":["true","false"],"status":["exited"]}"#)).unwrap();
+        let alternatives = List::parse(true, Some(r#"{"is-task":["false","0"],"status":["exited"]}"#)).unwrap();
         assert!(matches(alternatives, &container, std::slice::from_ref(&container)));
         let map_set = List::parse(true, Some(r#"{"is-task":{"false":false}}"#)).unwrap();
         assert!(matches(map_set, &container, std::slice::from_ref(&container)));
         for value in ["", "yes", "False", "2"] {
             assert!(List::parse(true, Some(&format!(r#"{{"is-task":["{value}"]}}"#))).is_err());
         }
+        assert!(List::parse(true, Some(r#"{"is-task":["true","false"]}"#)).is_err());
     }
 
     #[test]

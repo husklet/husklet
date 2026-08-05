@@ -146,7 +146,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         (r#"{"is-task":["false"]}"#, 1),
         (r#"{"is-task":{"false":false}}"#, 1),
         (r#"{"is-task":["true"]}"#, 0),
-        (r#"{"is-task":["true","false"],"name":["truthful"]}"#, 1),
+        (r#"{"is-task":["false","0"],"name":["truthful"]}"#, 1),
         (r#"{"is-task":["false"],"name":["missing"]}"#, 0),
     ] {
         let encoded = filters.bytes().fold(String::new(), |mut encoded, byte| {
@@ -181,6 +181,17 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     require(
         malformed.0.starts_with("HTTP/1.1 400"),
         "malformed is-task filter was accepted",
+    )?;
+    let conflicting = exchange(
+        socket,
+        "GET",
+        "/v1.43/containers/json?all=true&filters=%7B%22is-task%22%3A%5B%22true%22%2C%22false%22%5D%7D",
+        None,
+    )
+    .await?;
+    require(
+        conflicting.0.starts_with("HTTP/1.1 400"),
+        "conflicting is-task filters were accepted",
     )?;
     let summary = &summaries[0];
     require(summary["Id"] == id, "container list changed Id")?;
