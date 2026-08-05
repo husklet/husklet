@@ -31,7 +31,7 @@ selection.
 | PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | legacy SSE and VEX 128/256 non-destructive forms implemented | broader AVX families remain separate |
 | PAND/PANDN/POR/PXOR | full 128-bit register/memory | implemented | none known |
 | PCMPEQB/W/D, PMOVMSKB | all lane widths; mask to GPR | implemented; VEX equal B/W/D/Q implemented | legacy PCMPEQQ remains absent |
-| PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | VEX signed B/W/D/Q implemented | legacy compare and min/max/average remain separate |
+| PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | VEX signed B/W/D/Q compare and VEX packed min/max implemented | legacy compare/min/max and average remain separate |
 | PADDB/W/D/Q, PSUBB/W/D/Q | wrapping lane arithmetic, no flags or exceptions | implemented by this lane | saturating forms remain separate |
 | PADDS/PADDUS/PSUBS/PSUBUS | signed/unsigned saturating byte/word arithmetic | missing | QC must not leak into guest-visible state |
 | PMULLW/PMULHW/PMULHUW/PMULUDQ | low/high and widening products with exact lane selection | missing | coherent packed multiply slice |
@@ -176,6 +176,20 @@ lengths; reject wrong map and mandatory-prefix encodings; execute signed values
 at the sign boundaries; check all-ones masks, non-destructive sources,
 unchanged flags/MXCSR, VEX.128 upper-zeroing, YMM results, and full-width memory
 fault-before-commit behavior.
+
+The retained packed-extrema audit additionally covered `avx.c::do_avx` and
+`lower/crypto.c`'s AArch64 SMIN/SMAX/UMIN/UMAX selection. It has the compare
+slice's dispatcher-owned lifetime, vvvv first source, full-width `avx_get_rm`
+before `avx_put`, VEX.128 upper clearing, and flags/MXCSR preservation.
+
+| Retained VEX extrema capability | Rust native owner | State |
+|---|---|---|
+| map-one `DA/DE/EA/EE`: unsigned byte and signed word min/max | frontend admission + vector emitter | implemented, 128/256-bit register/memory |
+| map-two `38..3F`: signed byte/dword and unsigned word/dword min/max | same | implemented, 128/256-bit register/memory |
+| complete read before destination publication; VEX.128 upper clearing | generic vector guard + VEX completion | implemented |
+
+Focused translation tests cover all twelve opcodes, register/memory sources,
+VEX.128/256, and both VEX prefix lengths where representable.
 
 ## Consolidated retained-oracle evidence (2026-08-05)
 

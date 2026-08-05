@@ -857,7 +857,11 @@ uint32_t hl_x86_vector_words(const instruction *item) {
         uint32_t two_source = item->vector_kind == VECTOR_SHUFFLE_FLOAT ||
                               item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
                               item->vector_kind == VECTOR_ADD ||
-                              item->vector_kind == VECTOR_SUBTRACT;
+                              item->vector_kind == VECTOR_SUBTRACT ||
+                              item->vector_kind == VECTOR_MINIMUM_SIGNED ||
+                              item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
+                              item->vector_kind == VECTOR_MAXIMUM_SIGNED ||
+                              item->vector_kind == VECTOR_MAXIMUM_UNSIGNED;
         operation += item->width == 32u ? vector_operation_words(item) + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
     }
@@ -1143,6 +1147,18 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
             base = lane == 1u ? UINT32_C(0x4e203400) : lane == 2u ? UINT32_C(0x4e603400) :
                    lane == 4u ? UINT32_C(0x4ea03400) : UINT32_C(0x4ee03400);
         words[(*cursor)++] = base | source << 16 | first << 5 | destination;
+    } else if (item->vector_kind == VECTOR_MINIMUM_SIGNED ||
+               item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
+               item->vector_kind == VECTOR_MAXIMUM_SIGNED ||
+               item->vector_kind == VECTOR_MAXIMUM_UNSIGNED) {
+        uint32_t is_unsigned = item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
+                               item->vector_kind == VECTOR_MAXIMUM_UNSIGNED;
+        uint32_t is_maximum = item->vector_kind == VECTOR_MAXIMUM_SIGNED ||
+                              item->vector_kind == VECTOR_MAXIMUM_UNSIGNED;
+        uint32_t base = (is_unsigned != 0u ? UINT32_C(0x6e206c00) : UINT32_C(0x4e206c00)) -
+                        (is_maximum != 0u ? UINT32_C(0x800) : 0u);
+        base |= lane == 1u ? 0u : lane == 2u ? UINT32_C(0x00400000) : UINT32_C(0x00800000);
+        words[(*cursor)++] = base | source << 16 | first << 5 | destination;
     } else if (item->vector_kind == VECTOR_XOR) {
         words[(*cursor)++] = UINT32_C(0x6e201c00) | source << 16 | destination << 5 | destination;
     } else if (item->vector_kind == VECTOR_AND) {
@@ -1199,7 +1215,9 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
     if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
         item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT ||
         item->vector_kind == VECTOR_COMPARE_EQUAL ||
-        item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED) {
+        item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED ||
+        item->vector_kind == VECTOR_MINIMUM_SIGNED || item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
+        item->vector_kind == VECTOR_MAXIMUM_SIGNED || item->vector_kind == VECTOR_MAXIMUM_UNSIGNED) {
         hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
         upper.vector_source_one = 19u;
     } else upper.vector_source_one = upper.source;

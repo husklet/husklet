@@ -260,6 +260,36 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             }
         } else if (vex != 0u && vex_pp == 1u &&
                    ((vex_map == 1u &&
+                     (opcode == 0xdau || opcode == 0xdeu || opcode == 0xeau || opcode == 0xeeu)) ||
+                    (vex_map == 2u && opcode >= 0x38u && opcode <= 0x3fu))) {
+            uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR; item->vector_vex = 1u;
+            item->width = vex_l != 0u ? 32u : 16u; item->vector_memory_width = item->width;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_source_one = vex_vvvv;
+            item->vector_lane = vex_map == 1u ? (opcode >= 0xeau ? 2u : 1u) :
+                                ((opcode & 3u) == 0u ? 1u : (opcode & 3u) == 2u ? 2u : 4u);
+            {
+                uint8_t maximum = vex_map == 1u ? (opcode == 0xdeu || opcode == 0xeeu) : opcode >= 0x3cu;
+                uint8_t unsigned_kind = vex_map == 1u ? opcode < 0xe0u :
+                    (opcode == 0x3au || opcode == 0x3bu || opcode == 0x3eu || opcode == 0x3fu);
+                item->vector_kind = maximum != 0u ?
+                    (unsigned_kind != 0u ? VECTOR_MAXIMUM_UNSIGNED : VECTOR_MAXIMUM_SIGNED) :
+                    (unsigned_kind != 0u ? VECTOR_MINIMUM_UNSIGNED : VECTOR_MINIMUM_SIGNED);
+            }
+            if ((modrm >> 6) == 3u) ++cursor;
+            else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0u, 0u, start, &cursor)) break;
+                item->operation = OP_VECTOR; item->memory_operand = 1u; item->source = 16u;
+            }
+        } else if (vex != 0u && vex_pp == 1u &&
+                   ((vex_map == 1u &&
                      ((opcode >= 0x64u && opcode <= 0x66u) ||
                       (opcode >= 0x74u && opcode <= 0x76u))) ||
                     (vex_map == 2u && (opcode == 0x29u || opcode == 0x37u)))) {

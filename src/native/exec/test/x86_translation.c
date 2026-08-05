@@ -2581,6 +2581,31 @@ static int vex_packed_compare_contract(void) {
     return 0;
 }
 
+static int vex_packed_extrema_contract(void) {
+    static const uint8_t map_one[] = {0xda, 0xde, 0xea, 0xee};
+    static const uint8_t map_two[] = {0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f};
+    unsigned wide, memory, index;
+    for (wide = 0; wide < 2; ++wide) for (memory = 0; memory < 2; ++memory) {
+        for (index = 0; index < sizeof map_one; ++index) {
+            uint8_t guest[] = {0xc5, (uint8_t)(0xe9u | wide * 4u), map_one[index],
+                               (uint8_t)(memory != 0u ? 0x03u : 0xc1u)};
+            uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0}; hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+            CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+        }
+        for (index = 0; index < sizeof map_two; ++index) {
+            uint8_t guest[] = {0xc4, 0xe2, (uint8_t)(0x69u | wide * 4u), map_two[index],
+                               (uint8_t)(memory != 0u ? 0x03u : 0xc1u)};
+            uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0}; hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+            CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+        }
+    }
+    return 0;
+}
+
 static int vex_packed_add_subtract_contract(void) {
     static const uint8_t opcodes[] = {0xfc, 0xfd, 0xfe, 0xd4, 0xf8, 0xf9, 0xfa, 0xfb};
     unsigned operation;
@@ -4946,6 +4971,8 @@ int main(void) {
     status = vex_signed_dword_to_float_contract();
     if (status != 0) return status;
     status = vex_packed_compare_contract();
+    if (status != 0) return status;
+    status = vex_packed_extrema_contract();
     if (status != 0) return status;
     status = vex_packed_add_subtract_contract();
     if (status != 0) return status;
