@@ -203,6 +203,52 @@ publication. Implementing only the native callback would therefore weaken
 required semantics and is blocked until the memory, task/time, and scheduler
 prerequisites land as coherent domain changes.
 
+## 2026-08-05 prerequisite re-audit at `cf15cdd33`
+
+Mechanical inspection of the pinned tree shows that one prerequisite has
+landed since the design above was written, but the complete mechanism remains
+blocked. `hl-memory::CheckpointActivity` now owns an `AtomicU64` request epoch;
+`freeze`, `begin_exit`, and `terminate` invalidate it before waiting, and an
+`ActivityAdmission` supplies a lock-free `CheckpointContinuation`. The focused
+tests cover freeze-before-wait ordering, exit/termination, and saturated epoch
+fail-closed behavior.
+
+| Required capability | Exact owner inspected | State at `cf15cdd33` |
+| --- | --- | --- |
+| Checkpoint request invalidates an admitted run before waiting | `src/runtime/hl-memory/src/checkpoint_activity.rs::{CheckpointActivity,ActivityAdmission,CheckpointContinuation}` | implemented |
+| Mapping request invalidates before waiting for the projection transaction | `src/runtime/hl-memory/src/mapping/{host,projection,change,external,remap,checkpoint}.rs` | missing; all mutation paths still acquire the plain `AddressSpace::transaction` mutex without a published request generation |
+| Only-runnable, generation-qualified scheduler continuation | `src/containers/hl-engine/src/ffi/linux/execution/{scheduler,threads}.rs` | missing; run generation is lock-owned and no atomic grant token spans a native activation |
+| Signal, cancellation, control, retirement, and peer-runnable invalidation | same scheduler/thread owners plus signal boundary | missing as one lock-free continuation contract |
+| CPU timer armed/deadline/generation publication | `src/runtime/hl-runtime/src/process/itimer.rs::AlarmRegistry` | missing; CPU timers remain in `Mutex<BTreeMap<(ProcessId, i32), TimerState>>` |
+| Per-quantum CPU accounting usable without task-registry locking | `src/runtime/hl-task/src/registry/state.rs::TaskRegistry::charge_cpu` and scheduler `charge_elapsed` | missing |
+| Optional borrowed native poll ABI and cumulative grants | `src/native/exec/include/executor.h`, `src/native/exec/src/arch/x86_64/run.c` | missing |
+| Existing bounded REP correctness across widths, DF, overlap, dirty and epoch exits | `run.c::{rep_decode,rep_span,rep_copy,rep_fill,rep_execute}` | implemented; must be preserved |
+
+The largest locally bounded prerequisite is the mapping-request generation,
+but it is not a one-file change: every map, unmap, protect, batch, remap,
+external-write, executable-publication, and checkpoint transaction ingress
+must invalidate before lock acquisition, while read-only projections capture
+the epoch after admission. Landing only selected mutation paths would make the
+token unsound. The scheduler and CPU-timer prerequisites cross additional
+owners. Therefore this lane does not add a callback or silently refill
+`request->budget`; either would admit work while a missing invalidator waits.
+
+### Quiet-baseline attempt
+
+An exact-tree release build completed with all 18 logical CPUs in 1 minute 52
+seconds (`CARGO_BUILD_JOBS=18 cargo build --release -p hl-engine -p testing`).
+The direct benchmark attempt was pinned to CPU 17 and supplied engine options
+only through `HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1'`. It could not be
+accepted as diagnostics-off evidence: the benchmark adapter re-enabled native
+diagnostics, then the full checked-in AMD64 combined workload ended in a typed
+fault after 7,895 public runs (609 builds, 3,054,416 hits, 81 fallbacks) instead
+of the expected exit zero. The matrix runner was also unavailable for AMD64 on
+this ARM64 host because it requires a configured host-native baseline. No
+timing from either rejected attempt is reported as a baseline. The last audited
+quiet diagnostics-off comparison remains the exact-clean `7ac681960` evidence
+in `/Users/x/dd/.performance/verify_x86_7ac/RESULTS.md`; it is useful historical
+evidence, not evidence for this commit.
+
 ## Acceptance tests
 
 Implementation requires fail-first tests for the complete mechanism:
