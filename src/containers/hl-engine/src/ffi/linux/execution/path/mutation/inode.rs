@@ -83,7 +83,13 @@ pub(in crate::ffi::linux::execution::path) fn prepare_inode_link(
         .map_err(|error| super::super::resolution::Policy::runtime_error(ResolveError::Host(error)))?;
     let name = CString::new(resolved.final_name().ok_or(RuntimePathError::Invalid)?.as_bytes())
         .map_err(|_| RuntimePathError::Invalid)?;
-    let path = pin::Host::path(&parent, &name)?;
+    let path = pin::Host::path(&parent, &name).or_else(|error| {
+        if error == RuntimePathError::NotFound {
+            pin::Host::mutation_path(&parent, &name)
+        } else {
+            Err(error)
+        }
+    })?;
     let guest =
         GuestPathBytes::new(host.guest_path(&path)?.as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
     if ordinary

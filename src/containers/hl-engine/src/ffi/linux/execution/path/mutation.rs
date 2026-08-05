@@ -305,7 +305,17 @@ fn pin_inode(
         .map_err(|error| super::resolution::Policy::runtime_error(ResolveError::Host(error)))?;
     let name = CString::new(resolved.final_name().ok_or(RuntimePathError::Invalid)?.as_bytes())
         .map_err(|_| RuntimePathError::Invalid)?;
-    let path = pin::Host::path(&parent, &name)?;
+    let path = if missing {
+        pin::Host::path(&parent, &name).or_else(|error| {
+            if error == RuntimePathError::NotFound {
+                pin::Host::mutation_path(&parent, &name)
+            } else {
+                Err(error)
+            }
+        })?
+    } else {
+        pin::Host::path(&parent, &name)?
+    };
     #[cfg(target_os = "linux")]
     let flags = libc::O_PATH | libc::O_CLOEXEC | if nofollow { libc::O_NOFOLLOW } else { 0 };
     #[cfg(target_os = "macos")]

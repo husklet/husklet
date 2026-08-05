@@ -201,8 +201,14 @@ impl Host {
     }
 
     pub(super) fn mutation_path(parent: &ParentLease, name: &CString) -> Result<PathBuf, RuntimePathError> {
-        let parent = parent.mutation()?;
-        let directory = Self::descriptor_path(parent.as_raw_fd()).map_err(super::HostError::map)?;
+        let directory = if let Ok(parent) = parent.mutation() {
+            Self::descriptor_path(parent.as_raw_fd()).map_err(super::HostError::map)?
+        } else {
+            let root = parent.upper_root().ok_or(RuntimePathError::NotFound)?;
+            let root = Self::descriptor_path(root.as_raw_fd()).map_err(super::HostError::map)?;
+            let guest = parent.guest().ok_or(RuntimePathError::Invalid)?;
+            root.join(OsStr::from_bytes(guest.as_bytes().strip_prefix(b"/").unwrap_or(guest.as_bytes())))
+        };
         Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
     }
 
@@ -246,11 +252,7 @@ impl Host {
                 return Err(super::HostError::map(error));
             }
         }
-        if parent.layer() == super::overlay_lease::SelectedLayer::Upper {
-            Ok(parent.selected())
-        } else {
-            Err(RuntimePathError::NotFound)
-        }
+        Err(RuntimePathError::NotFound)
     }
 
     fn whiteout_at(parent: RawFd, name: &CStr) -> Result<bool, RuntimePathError> {

@@ -681,7 +681,13 @@ impl RuntimePathHost for NativePath {
             .map_err(|error| resolution::Policy::runtime_error(ResolveError::Host(error)))?;
         let name = CString::new(resolved.final_name().map_or(b".".as_slice(), |name| name.as_bytes()))
             .map_err(|_| RuntimePathError::Invalid)?;
-        let path = pin::Host::path(&parent, &name)?;
+        let path = match pin::Host::path(&parent, &name) {
+            Ok(path) => path,
+            Err(RuntimePathError::NotFound) if plan.intent.bits() & OpenIntent::CREATE != 0 => {
+                pin::Host::mutation_path(&parent, &name)?
+            }
+            Err(error) => return Err(error),
+        };
         let guest_path = self.guest_path(&path)?;
         let guest = GuestPathBytes::new(guest_path.as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
         resolution::Policy::writable(
