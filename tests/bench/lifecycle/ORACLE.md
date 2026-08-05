@@ -1,5 +1,59 @@
 # Engine lifecycle performance audit
 
+## 2026-08-04: idle network readiness worker
+
+Exact baseline commit `3e039c86ce62bc800c29b6eb85d9c8e4b17114ae` and
+candidate commit `1209c005fcf01aac625b429ec90a0840f51edff5` were built
+warning-strict in separate release target directories.  Their `hl-engine`
+SHA-256 values were respectively
+`431b53ab1d83f970ee1d93eedc6c1cd4f12ca44b991954e6c9b5226d322aecfe`
+and `44b190f4c9350b425370af8b1e769752c0654f6ab38b5441579987a7ebac6e42`.
+The guest remained the static ARM64 lifecycle image with SHA-256
+`c98f0f9cd55c7576079fd5a5b266f8ee66c0cf31c0bbda903a56342c98324016`.
+
+Thirty-one alternating paired fresh-process samples pinned to CPU 17 produced
+these host-observed results:
+
+| tree | minimum (us) | median (us) | maximum (us) |
+|---|---:|---:|---:|
+| baseline | 5,044 | 5,287 | 7,341 |
+| candidate | 5,033 | 5,317 | 6,416 |
+
+The 30 us median difference is noise and is not claimed as a latency win.
+`strace -f -c`, however, records an exact resource change for the same guest:
+the baseline creates seven threads and the candidate creates six.  The omitted
+thread is the `hl-inet-ready` reactor; the candidate starts it transactionally
+when the first owned socket enters the native table.  Socket workloads retain
+the reactor and wake-pipe behaviour after that first insertion.  This removes
+one idle thread and its 2 MiB default stack reservation from every process that
+does no socket work without weakening network readiness.
+
+The retained C lifecycle ownership was rechecked in
+`../engine/src/core/target/aarch64.c` (`hl_run_linux_guest`, `container_init`,
+and `engine_global_init`), `../engine/src/linux_abi/fork.c` (resident parent,
+worker repair, wait, and teardown), and `../engine/src/linux_abi/syscall/net.c`
+(the socket entry points and direct host readiness operations).  The retained
+engine does not construct a per-guest network thread: socket state comes to
+life at the socket syscall and host `poll`/event operations own blocking and
+wakeup ordering.  Rust previously constructed `network::Native` from
+`routing::composition::create` for every guest, and `Native::with_authority`
+immediately spawned the readiness reactor even when no socket could reach it.
+The Rust owner remains process-local: `Native` owns the table and pipe,
+`Reactor` borrows it through `Weak`, first insertion publishes the socket
+before starting and waking the worker, and final `Native` drop wakes the worker
+so its failed upgrade terminates it.  Concurrent first insertions are serialized
+by an atomic start transition; all socket identities, error paths, polling,
+and teardown remain unchanged.
+
+Exact candidate verification used `RUSTFLAGS='-D warnings'`.  The focused
+network unit cohort passed 26/26, both public Linux socket integration tests
+passed, and the new admission test proves construction is idle and first socket
+insertion starts the worker.  The current baseline is already materially newer
+than the original 21.8 ms checkpoint: in the same timing window it ran at a
+5.287 ms median, versus 1.555 ms host-native and 16.116 ms for the retained C
+engine.  Rust therefore already beats the retained C fresh-process lifecycle
+by 3.05x on this exact checkpoint, while remaining 3.40x slower than native.
+
 ## Exact evidence
 
 The measured Husklet tree is `eb14c27367d4e38af339bd5567de799fe9a73b04`.
