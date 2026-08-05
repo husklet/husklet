@@ -66,3 +66,47 @@ epoch invalidation, and teardown. After that domain passes rootfs-write accounti
 and the pathname cohort, benchmark `fork_overlay` against the current 313 ms
 materialization baseline. Weakening recursive durability or sharing one writable
 root between cases is not an acceptable benchmark shortcut.
+
+## Ordinary mount activation after overlay support
+
+The retained C oracle remains revision
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. This follow-up read
+`tools/matrix_runner.c::{stage_rootfs,open_case_workspace,run_guest,remove_rootfs}`
+and
+`src/linux_abi/container/vfs/overlay.c::{overlay_lookup_raw,overlay_resolve,overlay_copyup,overlay_copyup_tree}`.
+The matrix runner creates and tears down one small private root per case. The C
+engine keeps bind mounts outside the overlay lookup, resolves upper before ordered
+lowers, and copies only a mutated lower inode or renamed subtree into the upper.
+It does not clone an immutable OCI root merely because a bind or volume route is
+present. Root, lower, bind, and copied-up inode ownership lasts for the process
+lineage; the namespace epoch invalidates cached paths after copy-up.
+
+Rust container creation at `8e1b220bd0fc0420ec8c03e8db15d8a1f2bee96b`
+now maps that division directly. `Containers::create_image` retains the empty
+private overlay upper for ordinary bind, tmpfs, named-volume, and anonymous-volume
+mounts. Only a mount with the explicit population contract falls back to a full
+materialized root, because population currently needs a host-visible merged source
+tree. Runtime mount validation and overlay bind exclusion remain unchanged.
+
+A warning-strict release probe used one immutable synthetic image containing 2,000
+4 KiB files in 40 directories and alternated full durable forks with empty overlay
+forks for 11 samples. The probe was measurement-only and is not retained in the
+test corpus. Raw create times in microseconds were:
+
+```text
+materialized: 40729 25688 29527 28402 29882 26209 28580 27065 22658 27892 28559
+overlay:         172   255   158   228   194   270   165   208   180   182   279
+```
+
+The medians were 28,402 us and 194 us respectively: the valid overlay path was
+146 times faster and removed 28,208 us from this synthetic mount-activation
+boundary. The earlier pinned Alpine measurement remains the representative large
+image bound: a full execution-root materialization cost 313,657 us. Native and C
+do not expose a comparable durable OCI snapshot/lease transaction, so presenting
+either as an A/B for that storage contract would be false equivalence.
+
+Exact committed-tree verification of `8e1b220bd0fc0420ec8c03e8db15d8a1f2bee96b`
+ran `cargo test -p hl-container containers::image::tests::` under the pinned Nix
+shell with `RUSTFLAGS=-D warnings`: 2 passed, 0 failed. The focused tests prove
+ordinary mounts select overlay retention and population still selects materialized
+fallback; the full daemon/container suite remains the integration gate.
