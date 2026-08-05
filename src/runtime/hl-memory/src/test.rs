@@ -229,6 +229,19 @@ fn anywhere_prefers_valid() {
 }
 
 #[test]
+#[ignore = "performance diagnostic"]
+fn generation_read_benchmark() {
+    let ledger = MemoryLedger::new();
+    let started = std::time::Instant::now();
+    let mut observed = 0_u64;
+    for _ in 0..20_000_000 {
+        observed ^= std::hint::black_box(ledger.generation());
+    }
+    println!("generation_read_ns={}", started.elapsed().as_nanos());
+    std::hint::black_box(observed);
+}
+
+#[test]
 fn anywhere_honors_large() {
     let ledger = MemoryLedger::new();
     let mut mapping = anonymous_request(None, 3);
