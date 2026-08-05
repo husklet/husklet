@@ -53,6 +53,12 @@ pub struct ContainerConfig {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct InspectHostConfig {
+    #[serde(default)]
+    pub memory: i64,
+    #[serde(default)]
+    pub nano_cpus: i64,
+    #[serde(default)]
+    pub pids_limit: Option<i64>,
     pub network_mode: String,
     #[serde(default)]
     pub extra_hosts: Vec<String>,
@@ -234,6 +240,10 @@ impl From<hl_container::Container> for InspectContainer {
                 stop_timeout: i64::try_from(value.spec.stop_timeout_seconds).unwrap_or(i64::MAX),
             },
             host_config: InspectHostConfig {
+                memory: i64::try_from(value.spec.resources.memory_bytes).unwrap_or(i64::MAX),
+                nano_cpus: i64::from(value.spec.resources.cpu_count).saturating_mul(1_000_000_000),
+                pids_limit: (value.spec.resources.process_count != 0)
+                    .then_some(i64::from(value.spec.resources.process_count)),
                 network_mode: match value.spec.network_mode {
                     hl_container::NetworkMode::Host => "host",
                     hl_container::NetworkMode::Automatic if value.spec.isolation.network_isolated => "none",
@@ -525,6 +535,9 @@ mod tests {
         }
         assert_eq!(inspect["Config"]["StopTimeout"], 10);
         assert_eq!(inspect["HostConfig"]["AutoRemove"], false);
+        assert_eq!(inspect["HostConfig"]["Memory"], 0);
+        assert_eq!(inspect["HostConfig"]["NanoCpus"], 0);
+        assert_eq!(inspect["HostConfig"]["PidsLimit"], serde_json::Value::Null);
         assert_eq!(inspect["HostConfig"]["RestartPolicy"]["Name"], "on-failure");
         assert_eq!(inspect["HostConfig"]["RestartPolicy"]["MaximumRetryCount"], 3);
         assert_eq!(inspect["HostConfig"]["Dns"], serde_json::json!(["192.0.2.53"]));
@@ -545,6 +558,28 @@ mod tests {
         ] {
             assert!(inspect["State"].get(key).is_some(), "missing State.{key}: {inspect}");
         }
+    }
+
+    #[test]
+    fn host_config_projects_durable_resource_limits() {
+        let spec = hl_container::ContainerSpec::from_directory("/rootfs", hl_container::Process::new("/bin/true"))
+            .resources(hl_container::Resources {
+                memory_bytes: 64 * 1024 * 1024,
+                process_count: 37,
+                cpu_count: 2,
+            });
+        let durable = hl_container::Container::new(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .parse()
+                .unwrap(),
+            spec,
+            hl_container::ContainerState::Created,
+            0,
+        );
+        let inspect = serde_json::to_value(InspectContainer::from(durable)).unwrap();
+        assert_eq!(inspect["HostConfig"]["Memory"], 64 * 1024 * 1024);
+        assert_eq!(inspect["HostConfig"]["NanoCpus"], 2_000_000_000_i64);
+        assert_eq!(inspect["HostConfig"]["PidsLimit"], 37);
     }
 
     #[test]

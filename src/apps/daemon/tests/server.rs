@@ -2,7 +2,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use hl_client::Client;
-use hl_container::{Config, ContainerSpec, Containers, Process};
+use hl_container::{Config, ContainerSpec, Containers, Process, Resources};
 use tokio::net::UnixStream;
 use tokio::process::Command;
 
@@ -54,7 +54,15 @@ async fn process_restart_preserves_container_state() {
         .build()
         .await
         .unwrap()
-        .create(ContainerSpec::from_directory(&rootfs, Process::new("/bin/true")).name("durable"))
+        .create(
+            ContainerSpec::from_directory(&rootfs, Process::new("/bin/true"))
+                .name("durable")
+                .resources(Resources {
+                    memory_bytes: 64 * 1024 * 1024,
+                    process_count: 23,
+                    cpu_count: 2,
+                }),
+        )
         .await
         .unwrap()
         .id
@@ -77,6 +85,15 @@ async fn process_restart_preserves_container_state() {
         let records = Client::unix(&socket).unwrap().containers().list(true).await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].metadata.id, identity);
+        let inspected = Client::unix(&socket)
+            .unwrap()
+            .containers()
+            .inspect(&identity)
+            .await
+            .unwrap();
+        assert_eq!(inspected.host_config.memory, 64 * 1024 * 1024);
+        assert_eq!(inspected.host_config.pids_limit, Some(23));
+        assert_eq!(inspected.host_config.nano_cpus, 2_000_000_000);
         daemon.kill().await.unwrap();
         daemon.wait().await.unwrap();
     }
