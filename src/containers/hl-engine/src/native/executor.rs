@@ -1265,6 +1265,7 @@ impl NativeAarch64 {
             certificate_run_generation: 0,
             certificate_view_index: 0,
             certificate_write_policy: 0,
+            certificate_cache_identity: 0,
             certificate_token: 0,
         })
     }
@@ -1472,6 +1473,7 @@ impl NativeX86 {
             certificate_run_generation: 0,
             certificate_view_index: 0,
             certificate_write_policy: 0,
+            certificate_cache_identity: 0,
             certificate_token: 0,
         })
     }
@@ -3069,8 +3071,16 @@ mod test {
     fn certificate_schema_is_dormant() {
         let aarch64 = NativeAarch64::capture(&Aarch64CpuState::default());
         let x86 = NativeX86::capture(&X86CpuState::default(), false);
+        assert_eq!(aarch64.0.certificate_cache_identity, 0);
         assert_eq!(aarch64.0.certificate_token, 0);
+        assert_eq!(x86.0.certificate_cache_identity, 0);
         assert_eq!(x86.0.certificate_token, 0);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, certificate_cache_identity), 2328);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, certificate_token), 2336);
+        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2344);
+        assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity), 1928);
+        assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_token), 1936);
+        assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 1944);
         assert_eq!(std::mem::size_of::<RunCertificate>(), 112);
         assert_eq!(std::mem::offset_of!(RunRequest, certificate), 160);
     }

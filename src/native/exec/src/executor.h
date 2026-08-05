@@ -24,6 +24,9 @@ struct hl_native_executor {
     /* Monotonic activation identity. Zero means certificate-ineligible. Once
      * exhausted it stays at UINT64_MAX and execution continues uncertified. */
     _Atomic uint64_t activation_generation;
+    /* Registration identity shared by a future CPU certificate and cache
+     * admission record. Zero is permanently ineligible after saturation. */
+    _Atomic uint64_t next_certificate_cache_identity;
     struct hl_native_direct_token *direct_authority;
     uint64_t direct_generation;
     uint64_t next_authority_identity;
@@ -85,5 +88,6 @@ int hl_native_direct_request_valid(const hl_native_executor *, const hl_native_d
 int hl_native_direct_request_snapshot(const hl_native_executor *, const hl_native_direct_token *,
                                       uint64_t, uint64_t, const hl_native_projection *,
                                       hl_native_direct_authority *);
+uint64_t hl_native_certificate_cache_identity_issue(hl_native_executor *);
 
 #endif

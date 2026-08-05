@@ -38,6 +38,19 @@ static void *issue_generations(void *opaque) {
     return NULL;
 }
 
+static void *issue_cache_identities(void *opaque) {
+    generation_worker *worker = opaque;
+    for (size_t index = 0; index < GENERATIONS_PER_THREAD; ++index) {
+        worker->values[index] =
+            hl_native_certificate_cache_identity_issue(worker->executor);
+        if (worker->values[index] == 0) {
+            worker->failed = 1;
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
 int main(void) {
     test_memory host = {0};
     hl_native_memory services = test_services(&host);
@@ -66,6 +79,7 @@ int main(void) {
     aarch64.certificate_token = UINT64_MAX;
     CHECK(hl_native_execution_bind_certificate(&first, &aarch64.certificate_token) == HL_NATIVE_OK);
     CHECK(aarch64.certificate_token == 0);
+    CHECK(aarch64.certificate_cache_identity == 0);
     aarch64.certificate_token = first_generation;
     CHECK(hl_native_execution_enter(executor, &first) == HL_NATIVE_ARGUMENT);
     CHECK(hl_native_execution_enter(executor, &second) == HL_NATIVE_OK);
@@ -76,6 +90,7 @@ int main(void) {
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_STATE);
     CHECK(hl_native_execution_leave(&first) == HL_NATIVE_OK);
     CHECK(aarch64.certificate_token == 0);
+    CHECK(aarch64.certificate_cache_identity == 0);
     CHECK(hl_native_execution_generation(&first) == 0);
     CHECK(hl_native_execution_leave(&first) == HL_NATIVE_ARGUMENT);
     CHECK(hl_native_execution_enter(executor, &first) == HL_NATIVE_OK);
@@ -109,6 +124,21 @@ int main(void) {
                      right < GENERATIONS_PER_THREAD; ++right)
                     CHECK(workers[left_thread].values[left] != workers[right_thread].values[right]);
 
+    memset(workers, 0, sizeof(workers));
+    for (size_t index = 0; index < GENERATION_THREADS; ++index) {
+        workers[index].executor = executor;
+        CHECK(pthread_create(&threads[index], NULL, issue_cache_identities,
+                             &workers[index]) == 0);
+    }
+    for (size_t index = 0; index < GENERATION_THREADS; ++index)
+        CHECK(pthread_join(threads[index], NULL) == 0 && !workers[index].failed);
+    for (size_t left_thread = 0; left_thread < GENERATION_THREADS; ++left_thread)
+        for (size_t left = 0; left < GENERATIONS_PER_THREAD; ++left)
+            for (size_t right_thread = left_thread; right_thread < GENERATION_THREADS; ++right_thread)
+                for (size_t right = right_thread == left_thread ? left + 1 : 0;
+                     right < GENERATIONS_PER_THREAD; ++right)
+                    CHECK(workers[left_thread].values[left] != workers[right_thread].values[right]);
+
     CHECK(hl_native_fault_scope_enter(executor, &cpu, &scope) == HL_NATIVE_OK);
     CHECK(scope.executor == executor && scope.cpu == &cpu);
     CHECK(!hl_native_fault_scope_contains(&scope, UINT64_C(0x1234)));
@@ -128,6 +158,13 @@ int main(void) {
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_STATE);
     CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
     CHECK(host.repair_calls == 1);
+    CHECK(aarch64.certificate_cache_identity == 0);
+    atomic_store_explicit(&executor->next_certificate_cache_identity,
+                          UINT64_MAX - 1, memory_order_relaxed);
+    CHECK(hl_native_certificate_cache_identity_issue(executor) == UINT64_MAX);
+    CHECK(hl_native_certificate_cache_identity_issue(executor) == 0);
+    CHECK(atomic_load_explicit(&executor->next_certificate_cache_identity,
+                               memory_order_relaxed) == UINT64_MAX);
     atomic_store_explicit(&executor->activation_generation, UINT64_MAX - 1,
                           memory_order_relaxed);
     CHECK(hl_native_execution_enter(executor, &first) == HL_NATIVE_OK);
@@ -139,6 +176,7 @@ int main(void) {
     CHECK(atomic_load_explicit(&executor->activation_generation,
                                memory_order_relaxed) == UINT64_MAX);
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    CHECK(aarch64.certificate_cache_identity == 0);
     CHECK(hl_native_executor_gate_enter(executor) == HL_NATIVE_OK);
     hl_native_executor_gate_leave(executor);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK);

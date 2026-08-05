@@ -97,6 +97,20 @@ static uint64_t authority_identity(hl_native_executor *executor) {
     return executor->next_authority_identity;
 }
 
+uint64_t hl_native_certificate_cache_identity_issue(hl_native_executor *executor) {
+    if (executor == NULL) return 0;
+    uint64_t current = atomic_load_explicit(&executor->next_certificate_cache_identity,
+                                            memory_order_relaxed);
+    for (;;) {
+        if (current == UINT64_MAX) return 0;
+        uint64_t desired = current + 1;
+        if (atomic_compare_exchange_weak_explicit(
+                &executor->next_certificate_cache_identity, &current, desired,
+                memory_order_relaxed, memory_order_relaxed))
+            return desired;
+    }
+}
+
 hl_native_status hl_native_direct_register(hl_native_executor *executor,
                                            const hl_native_direct_authority *authority,
                                            hl_native_direct_token **output) {
@@ -503,6 +517,7 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
      * its first operation; zeroed storage alone is not a C11 initializer. */
     atomic_init(&executor->admission, ADMISSION(MUTATION_OPEN, 0));
     atomic_init(&executor->activation_generation, 0);
+    atomic_init(&executor->next_certificate_cache_identity, 0);
     executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
     atomic_init(&executor->a64_guard_fast, 0);
     atomic_init(&executor->a64_guard_full, 0);

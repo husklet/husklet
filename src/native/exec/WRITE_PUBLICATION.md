@@ -394,6 +394,52 @@ closed. Diagnostics remain append-only.
 
 ### Evidence and go/no-go
 
+#### Dormant cache-certificate identity lifecycle audit
+
+The read-only retained oracle was `/Users/x/dd/engine` at
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. The lifecycle comparison covered
+`src/translator/cache.c::{stw_before_translated,stw_after_translated,
+stw_mapping_begin,stw_mapping_end,stw_checkpoint_arm,stw_checkpoint_wait,
+stw_checkpoint_end,stw_after_fork}` and AArch64
+`src/translator/guest/aarch64/translate.c::{emit_a64_soft_guard_begin,
+emit_a64_soft_guard_end,aarch64_soft_tlb_miss}`. Retained per-thread cached
+identity is cleared only while mapping exclusion has drained translated owners;
+checkpoint captures no live fast-path identity, and fork reconstructs the
+surviving thread registry before translated re-entry. The identifier is
+task/registry state, never guest architectural state or serialized metadata.
+
+The Rust/native prerequisite maps that ownership to one executor-local,
+lock-free, nonwrapping issuer. The issuer is private and remains unconsumed in
+production at this stage; direct tokens, cache entries, and CPU state receive no
+nonzero identity. Zero is absent. `UINT64_MAX` is issued once, then the atomic
+remains saturated and all later requests return zero without preventing ordinary
+execution. Its executor-wide namespace is shared by both ISAs, so identities
+cannot collide across architecture; the future immutable record must still
+include architecture and must never infer it from the number. Fork
+copies the monotonic counter but publishes no CPU identity; parent and child
+processes remain separate identity domains. Reset, invalidation, exec,
+checkpoint, and restore neither serialize nor reset it.
+
+`src/native/cpu/layout.tsv` remains the sole CPU-layout source. It appends
+`certificate_cache_identity` immediately before the release-publication token,
+keeping the token last. AArch64 grows from 2336 to 2344 bytes (identity 2328,
+token 2336); x86-64 grows from 1936 to 1944 bytes (identity 1928, token 1936).
+Construction leaves both words zero, and execution bind/leave never writes the
+dormant identity; token release-clear ordering is unchanged. This stage
+does not add the identity to a run request, cache entry, relocation, IBTC,
+generated instruction, guard, projection reader, diagnostic, or checkpoint.
+It allocates no record and enables no fast path.
+
+The current IBTC stores only target/body and therefore bypasses an admission
+record; this is inventory for the later cache stage, not changed here. A future
+identity may not reuse a slot within one cache generation, and rollover or fork
+must exhaustively invalidate cache entries, relocations, and IBTC before reuse.
+Both parent and child fork repair currently clear IBTC/cache reachability and
+publish no CPU carrier. The appended executor atomic adds eight fixed bytes to
+executor allocation; CPU objects add eight bytes each. No token allocation or
+run-path instruction is added, and activation generation remains a distinct
+admission-lifetime value.
+
 Differential tests compare retained C and Rust bytes, fault address/access/width,
 partial progress, and executable invalidation for scalar, pair/vector, ordered,
 structure, zeroing, x86 scalar/RMW/vector, and REP forms. Lifecycle tests cover

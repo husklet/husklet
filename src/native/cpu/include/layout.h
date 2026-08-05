@@ -82,6 +82,7 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t certificate_run_generation;
     uint64_t certificate_view_index;
     uint64_t certificate_write_policy;
+    uint64_t certificate_cache_identity;
     uint64_t certificate_token;
 } hl_native_aarch64_cpu;
 
@@ -145,6 +146,7 @@ typedef struct hl_native_x86_64_cpu {
     uint64_t certificate_run_generation;
     uint64_t certificate_view_index;
     uint64_t certificate_write_policy;
+    uint64_t certificate_cache_identity;
     uint64_t certificate_token;
 } hl_native_x86_64_cpu;
 
@@ -227,8 +229,9 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_authority_generation, 2296);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_run_generation, 2304);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_view_index, 2312);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_write_policy, 2320);
-HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_token, 2328);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2336, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_cache_identity, 2328);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_token, 2336);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2344, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 
@@ -291,8 +294,9 @@ HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_authority_generation, 1896);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_run_generation, 1904);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_view_index, 1912);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_write_policy, 1920);
-HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_token, 1928);
-_Static_assert(sizeof(hl_native_x86_64_cpu) == 1936, "x86_64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_cache_identity, 1928);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_token, 1936);
+_Static_assert(sizeof(hl_native_x86_64_cpu) == 1944, "x86_64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_x86_64_cpu) == 8, "x86_64 native CPU prefix alignment drifted");
 
