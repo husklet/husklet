@@ -121,6 +121,74 @@ async fn forced_removal_drops_durable_endpoint_attachments() {
 }
 
 #[tokio::test]
+async fn complete_topology_teardown_releases_every_endpoint_and_network() {
+    let root = tempfile::tempdir().unwrap();
+    let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
+    for name in ["server", "client", "other"] {
+        containers.create(container(root.path(), name)).await.unwrap();
+    }
+    let networks = containers.networks();
+    let primary = networks
+        .create(NetworkSpec::bridge(
+            "primary",
+            Subnet::new(Ipv4Addr::new(10, 45, 0, 0), 29).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let secondary = networks
+        .create(NetworkSpec::bridge(
+            "secondary",
+            Subnet::new(Ipv4Addr::new(10, 46, 0, 0), 29).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let server = networks
+        .connect("primary", "server", EndpointSpec::default().name("server"))
+        .await
+        .unwrap();
+    let client = networks
+        .connect("primary", "client", EndpointSpec::default().name("client"))
+        .await
+        .unwrap();
+    networks
+        .connect("secondary", "other", EndpointSpec::default().name("other"))
+        .await
+        .unwrap();
+
+    assert!(server.address.is_some());
+    assert!(client.address.is_some());
+    assert_ne!(server.address, client.address);
+    assert_eq!(networks.inspect("primary").await.unwrap().endpoints.len(), 2);
+    assert!(
+        networks
+            .inspect("secondary")
+            .await
+            .unwrap()
+            .endpoints
+            .values()
+            .all(|endpoint| endpoint.name != "server")
+    );
+
+    for name in ["server", "client", "other"] {
+        containers.remove_force(name).await.unwrap();
+    }
+    assert!(networks.inspect("primary").await.unwrap().endpoints.is_empty());
+    assert!(networks.inspect("secondary").await.unwrap().endpoints.is_empty());
+    networks.remove("primary").await.unwrap();
+    networks.remove("secondary").await.unwrap();
+    let names = networks
+        .list()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|network| network.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!names.contains(&primary.name));
+    assert!(!names.contains(&secondary.name));
+    assert!(containers.list().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn network_validation_rejects_overlap_conflicts_and_duplicate_addresses() {
     let root = tempfile::tempdir().unwrap();
     let containers = Containers::builder(Config::new(root.path())).build().await.unwrap();
