@@ -3,6 +3,7 @@ use crate::api::{
     DockerMount, EndpointConfig, EndpointIpam, EndpointsConfig, ExposedPorts, HostConfig, LogOptions, NetworkingConfig,
     PortBinding, PortBindings, RestartPolicy,
 };
+use axum::http::StatusCode;
 use hl_container::{Access, ContainerSpec, NetworkDriver, NetworkSpec, Process, Signal, Subnet};
 use std::collections::BTreeMap;
 
@@ -154,6 +155,105 @@ fn docker_default_endpoint_selects_the_builtin_bridge() {
     let plan = NetworkPlan::from_request(Some(&host), Some(&config)).unwrap();
     assert_eq!(plan.attachments.len(), 1);
     assert_eq!(plan.attachments[0].name, "bridge");
+}
+
+#[test]
+fn builtin_endpoint_aliases_are_unambiguous() {
+    for mode in ["", "default", "bridge"] {
+        let host = HostConfig {
+            network_mode: mode.into(),
+            ..HostConfig::default()
+        };
+        let config = NetworkingConfig {
+            endpoints_config: EndpointsConfig(BTreeMap::from([("default".into(), EndpointConfig::default())])),
+        };
+        let plan = NetworkPlan::from_request(Some(&host), Some(&config)).unwrap();
+        assert_eq!(plan.attachments[0].name, "bridge");
+    }
+
+    let ambiguous = NetworkingConfig {
+        endpoints_config: EndpointsConfig(BTreeMap::from([
+            ("default".into(), EndpointConfig::default()),
+            ("bridge".into(), EndpointConfig::default()),
+        ])),
+    };
+    assert_eq!(
+        NetworkPlan::from_request(Some(&HostConfig::default()), Some(&ambiguous))
+            .unwrap_err()
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+
+    let explicit = HostConfig {
+        network_mode: "unknown".into(),
+        ..HostConfig::default()
+    };
+    let plan = NetworkPlan::from_request(Some(&explicit), None).unwrap();
+    assert_eq!(plan.attachments[0].name, "unknown");
+}
+
+#[tokio::test]
+async fn builtin_network_preparation_is_complete_and_idempotent() {
+    let (_root, containers) = containers().await;
+    containers
+        .networks()
+        .create(NetworkSpec::none("default"))
+        .await
+        .unwrap();
+    let endpoints = NetworkingConfig {
+        endpoints_config: EndpointsConfig(BTreeMap::from([
+            ("bridge".into(), EndpointConfig::default()),
+            ("none".into(), EndpointConfig::default()),
+        ])),
+    };
+    let error = NetworkPlan::from_request(Some(&HostConfig::default()), Some(&endpoints))
+        .unwrap()
+        .prepare(&containers)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        containers.networks().inspect("bridge").await.unwrap().driver,
+        NetworkDriver::Bridge
+    );
+    assert_eq!(
+        containers.networks().inspect("none").await.unwrap().driver,
+        NetworkDriver::None
+    );
+    assert_eq!(
+        containers.networks().inspect("default").await.unwrap().driver,
+        NetworkDriver::None
+    );
+
+    NetworkPlan::from_request(Some(&HostConfig::default()), None)
+        .unwrap()
+        .prepare(&containers)
+        .await
+        .unwrap();
+    NetworkPlan::from_request(
+        Some(&HostConfig {
+            network_mode: "none".into(),
+            ..HostConfig::default()
+        }),
+        None,
+    )
+    .unwrap()
+    .prepare(&containers)
+    .await
+    .unwrap();
+
+    let unknown = NetworkPlan::from_request(
+        Some(&HostConfig {
+            network_mode: "unknown".into(),
+            ..HostConfig::default()
+        }),
+        None,
+    )
+    .unwrap()
+    .prepare(&containers)
+    .await
+    .unwrap_err();
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -59,7 +59,8 @@ pub(super) struct NetworkAttachment {
 #[derive(Clone, Debug)]
 pub(super) struct NetworkPlan {
     pub(super) attachments: Vec<NetworkAttachment>,
-    built_in: Option<NetworkDriver>,
+    prepare_bridge: bool,
+    prepare_none: bool,
     isolated: bool,
     mode: hl_container::NetworkMode,
 }
@@ -95,7 +96,8 @@ impl NetworkPlan {
             }
             return Ok(Self {
                 attachments: Vec::new(),
-                built_in: None,
+                prepare_bridge: false,
+                prepare_none: false,
                 isolated: false,
                 mode: hl_container::NetworkMode::Host,
             });
@@ -119,32 +121,26 @@ impl NetworkPlan {
                 "bridge NetworkMode requires the bridge endpoint",
             ));
         }
-        let (endpoints, built_in) = if endpoints.is_empty() {
+        let endpoints = if endpoints.is_empty() {
             let name = match mode {
                 "" | "default" | "bridge" => DEFAULT_NETWORK,
                 "none" => "none",
                 name => name,
             };
-            let built_in = match name {
-                DEFAULT_NETWORK => Some(NetworkDriver::Bridge),
-                "none" => Some(NetworkDriver::None),
-                _ => None,
-            };
-            (BTreeMap::from([(name.to_owned(), EndpointConfig::default())]), built_in)
+            BTreeMap::from([(name.to_owned(), EndpointConfig::default())])
         } else {
-            let built_in = endpoints
-                .contains_key(DEFAULT_NETWORK)
-                .then_some(NetworkDriver::Bridge)
-                .or_else(|| endpoints.contains_key("none").then_some(NetworkDriver::None));
-            (endpoints, built_in)
+            endpoints
         };
+        let prepare_bridge = endpoints.contains_key(DEFAULT_NETWORK);
+        let prepare_none = endpoints.contains_key("none");
         let attachments = endpoints
             .into_iter()
             .map(|(name, endpoint)| endpoint.spec().map(|endpoint| NetworkAttachment { name, endpoint }))
             .collect::<ApiResult<Vec<_>>>()?;
         Ok(Self {
             attachments,
-            built_in,
+            prepare_bridge,
+            prepare_none,
             isolated: false,
             mode: hl_container::NetworkMode::Automatic,
         })
@@ -162,10 +158,11 @@ impl NetworkPlan {
         if self.mode == hl_container::NetworkMode::Host {
             return Ok(self);
         }
-        match self.built_in {
-            Some(NetworkDriver::None) => Self::ensure_none(containers).await?,
-            Some(NetworkDriver::Bridge) => Self::ensure_bridge(containers).await?,
-            None => {}
+        if self.prepare_bridge {
+            Self::ensure_bridge(containers).await?;
+        }
+        if self.prepare_none {
+            Self::ensure_none(containers).await?;
         }
         let requests = self
             .attachments
@@ -213,12 +210,34 @@ impl NetworkPlan {
     }
 
     async fn ensure_none(containers: &hl_container::Containers) -> ApiResult<()> {
-        containers
-            .networks()
-            .create(NetworkSpec::none("none"))
-            .await
-            .map(|_| ())
-            .map_err(ApiError::container)
+        match containers.networks().inspect("none").await {
+            Ok(network) if network.driver == NetworkDriver::None => return Ok(()),
+            Ok(_) => {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "none network name belongs to another network driver",
+                ));
+            }
+            Err(ContainerError::NetworkNotFound(_)) => {}
+            Err(error) => return Err(ApiError::container(error)),
+        }
+        match containers.networks().create(NetworkSpec::none("none")).await {
+            Ok(_) => Ok(()),
+            Err(ContainerError::NetworkConflict(_)) => containers
+                .networks()
+                .inspect("none")
+                .await
+                .and_then(|network| {
+                    if network.driver == NetworkDriver::None {
+                        Ok(network)
+                    } else {
+                        Err(ContainerError::NetworkConflict("none".into()))
+                    }
+                })
+                .map(|_| ())
+                .map_err(ApiError::container),
+            Err(error) => Err(ApiError::container(error)),
+        }
     }
 
     pub(super) async fn ensure_bridge(containers: &hl_container::Containers) -> ApiResult<()> {
