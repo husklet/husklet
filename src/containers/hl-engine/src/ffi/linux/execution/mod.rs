@@ -124,14 +124,11 @@ impl GuestExecutor {
     ) -> Result<EngineExit, EngineError> {
         crate::runtime_machine::prepare_tasks(assembly).map_err(|_| EngineError::LaunchFailed)?;
         let guest_executable = routing::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
-        let path = if plan.rootfs.is_some() {
-            guest_executable.as_slice()
-        } else {
-            plan.executable_host
-                .as_deref()
-                .or_else(|| plan.arguments.first().map(Vec::as_slice))
-                .ok_or(EngineError::LaunchFailed)?
-        };
+        let path = plan
+            .executable_host
+            .as_deref()
+            .or_else(|| plan.arguments.first().map(Vec::as_slice))
+            .ok_or(EngineError::LaunchFailed)?;
         let architecture = match isa {
             GuestIsa::Aarch64 => GuestArchitecture::Aarch64,
             GuestIsa::X86_64 => GuestArchitecture::X86_64,
@@ -172,11 +169,16 @@ impl GuestExecutor {
                     let lowers = plan
                         .options
                         .get("HL_LOWER")
-                        .map(|records| records.lines().map(|lower| lower.as_bytes().to_vec()).collect::<Vec<_>>())
+                        .map(|records| {
+                            records
+                                .lines()
+                                .map(|lower| lower.as_bytes().to_vec())
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_default();
-                    source::FileSource::layered(rootfs, lowers)
+                    source::FileSource::authorized(rootfs, lowers)
                 }
-                Some(rootfs) => source::FileSource::rooted(Some(rootfs)),
+                Some(rootfs) => source::FileSource::new(Some(rootfs)),
                 None => source::FileSource::new(None),
             }),
         };

@@ -313,6 +313,28 @@ fn rooted_main_symlink_resolves() {
 }
 
 #[test]
+fn authorized_main_outside_root_preserves_interpreter_root() {
+    let root = source_root("authorized-root");
+    let main = source_root("authorized-main");
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::write(&main, b"main image").unwrap();
+    fs::write(root.join("lib/ld.so"), b"interpreter").unwrap();
+    let root_bytes = root.clone().into_os_string().into_vec();
+    let main_bytes = main.clone().into_os_string().into_vec();
+    let mut source = FileSource::new(Some(&root_bytes));
+    assert_eq!(
+        source.read_image(ImageRole::Main, &main_bytes, 64).unwrap(),
+        b"main image",
+    );
+    assert_eq!(
+        source.read_image(ImageRole::Interpreter, b"/lib/ld.so", 64).unwrap(),
+        b"interpreter",
+    );
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(main).unwrap();
+}
+
+#[test]
 fn exec_source_retains_overlay_lowers() {
     let upper = source_root("exec-upper");
     let lower = source_root("exec-lower");

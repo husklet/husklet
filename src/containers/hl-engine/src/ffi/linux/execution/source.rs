@@ -44,6 +44,14 @@ impl FileSource {
         }
     }
 
+    pub(super) fn authorized(rootfs: &[u8], lowers: impl Into<Arc<Vec<Vec<u8>>>>) -> Self {
+        Self {
+            rootfs: Some(rootfs.to_vec()),
+            lowers: lowers.into(),
+            root_primary: false,
+        }
+    }
+
     fn open(&self, role: ImageRole, path: &[u8]) -> Result<File, ImageSourceError> {
         if let Some(rootfs) = self.rootfs.as_deref() {
             if role == ImageRole::Interpreter || self.root_primary {
@@ -62,7 +70,17 @@ impl FileSource {
             if role == ImageRole::Main
                 && let Some(guest) = Self::inside_root(rootfs, path)
             {
-                return Self::open_rooted(rootfs, guest);
+                let primary = Self::open_rooted(rootfs, guest);
+                if !matches!(primary, Err(ImageSourceError::NotFound)) {
+                    return primary;
+                }
+                for lower in self.lowers.iter() {
+                    let candidate = Self::open_rooted(lower, guest);
+                    if !matches!(candidate, Err(ImageSourceError::NotFound)) {
+                        return candidate;
+                    }
+                }
+                return Err(ImageSourceError::NotFound);
             }
         }
         File::open(OsString::from_vec(path.to_vec())).map_err(Self::map_io)

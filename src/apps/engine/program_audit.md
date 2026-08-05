@@ -54,3 +54,35 @@ guest identity. `hl_engine::program::Program` remains the sole owner of launch,
 runtime, and Linux exit semantics, and the x86 diagnostic difference is retained
 exactly. No retained C runtime behavior is changed by this application-only
 deduplication.
+
+## Initial image authority and rooted lookup
+
+The initial-image ownership boundary was re-audited against:
+
+- `../engine/include/hl/engine.h`, `hl_engine_executable` and
+  `hl_engine_config::executable`;
+- `../engine/src/core/lifecycle.c`, `hl_production_entry` and
+  `hl_run_linux_guest` call sites;
+- `../engine/src/core/target/{aarch64,x86_64}.c`, `load_program`;
+- `../engine/src/linux_abi/elf.c`, `elf_interp`;
+- `../engine/src/linux_abi/container/vfs.c`, `xresolve_exec`; and
+- `../engine/src/linux_abi/container/vfs/overlay.c`, `xresolve_overlay`.
+
+The retained launcher owns a separately authorized initial-main handle/image.
+That authority is consumed only for the initial main image and is never reused
+for its `PT_INTERP`, later `exec`, or another process. Guest-path lookup remains
+root confined, follows absolute symlinks relative to the root, searches overlay
+layers in order, and reports lookup failure without falling through to the host.
+The per-launch image and source state outlive loader inspection and are released
+with the engine process; no table lock is held across a host open or image read.
+Both guest ISAs use the same ownership split. Host-specific launch transport may
+carry authorized bytes instead of a live handle, but does not change the split.
+
+Rust maps the authorized main to `RuntimePlan::executable_host` and
+`FileSource`'s non-root-primary mode. A main already located beneath the root is
+rebased to a guest path and opened with `openat2(RESOLVE_IN_ROOT)` so absolute
+symlinks remain confined; an external authorized main is opened directly.
+`PT_INTERP` is always opened beneath the root (and its ordered lowers), while
+the rooted source used by later `exec` never accepts host fallback. This restores
+the retained capability boundary without executable-name or fixture-specific
+policy.

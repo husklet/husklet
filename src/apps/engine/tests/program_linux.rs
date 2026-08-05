@@ -393,7 +393,12 @@ fn rooted_interpreter_runs() {
     fs::remove_file(main).unwrap();
     fs::remove_file(config).unwrap();
     fs::remove_dir_all(root).unwrap();
-    assert_eq!(output.status.code(), Some(47));
+    assert_eq!(
+        output.status.code(),
+        Some(47),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
