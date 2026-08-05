@@ -22,6 +22,24 @@ pub(super) struct QueryParameters {
     unsupported: BTreeMap<String, String>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FilterValues {
+    Current(BTreeMap<String, bool>),
+    Legacy(Vec<String>),
+}
+
+impl FilterValues {
+    fn terms(self) -> Vec<String> {
+        match self {
+            // Docker's current encoding is a string set. The boolean values are
+            // retained for compatibility but do not enable or disable keys.
+            Self::Current(values) => values.into_keys().collect(),
+            Self::Legacy(values) => values,
+        }
+    }
+}
+
 impl QueryParameters {
     fn event_query(self) -> ApiResult<EventQuery> {
         if let Some(key) = self.unsupported.keys().next() {
@@ -32,10 +50,13 @@ impl QueryParameters {
         }
         let filters = self
             .filters
-            .map(|value| serde_json::from_str::<BTreeMap<String, Vec<String>>>(&value))
+            .map(|value| serde_json::from_str::<BTreeMap<String, FilterValues>>(&value))
             .transpose()
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, values)| (name, values.terms()))
+            .collect::<BTreeMap<_, _>>();
         for key in filters.keys() {
             if !matches!(
                 key.as_str(),
@@ -218,6 +239,26 @@ mod tests {
             ..QueryParameters::default()
         };
         assert!(reversed.event_query().is_err());
+    }
+
+    #[test]
+    fn query_accepts_current_map_and_legacy_array_filter_encodings() {
+        let current = QueryParameters {
+            filters: Some(r#"{"type":{"volume":true},"event":{"create":false}}"#.into()),
+            ..QueryParameters::default()
+        }
+        .event_query()
+        .unwrap();
+        assert_eq!(current.filters.0["type"], ["volume"]);
+        assert_eq!(current.filters.0["event"], ["create"]);
+
+        let legacy = QueryParameters {
+            filters: Some(r#"{"type":["volume"],"event":["create"]}"#.into()),
+            ..QueryParameters::default()
+        }
+        .event_query()
+        .unwrap();
+        assert_eq!(legacy.filters, current.filters);
     }
 
     #[test]

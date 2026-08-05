@@ -37,6 +37,30 @@ container daemon's product boundary rather than silent compatibility claims.
 | volumes | list/create/inspect/remove/prune | external drivers and cluster volumes |
 | events and accounting | events, system disk usage, system prune | swarm-scoped event kinds and object classes |
 
+### Event filter wire encoding
+
+Docker CLI 29.1.3 encodes `docker events --filter type=volume` as a JSON
+string-set object (`{"type":{"volume":true}}`). The events adapter accepted
+only the legacy array form, so the real v1.43 client received HTTP 400 before
+the bounded event stream opened. Event filter admission now accepts both forms;
+as in Docker's other current filter encodings, object keys are the terms and
+their boolean values are not enable switches.
+
+The complete owner chain is `api::http::event` for query admission and time
+bounds, `api::EventFilter`/`EventQuery` for typed selection, and `events::Events`
+plus `Subscription` for the bounded 256-record history, broadcast receiver,
+matching, replay-before-live ordering, and `until` termination. No lock is held
+while waiting: publication briefly owns the history mutex, then sends through
+the bounded broadcast channel; subscription snapshots matching history before
+receiving live events. Lagged live records are skipped, closed publishers end
+the stream, and the HTTP body remains newline-delimited JSON.
+
+The retained C engine has no Docker event route, filter model, or HTTP stream.
+Its activation protocol audit in this inventory remains the relevant engine
+lifecycle comparison, but this correction does not change activation identity,
+partial-transfer, blocking, signal, teardown, host, or ISA behavior. The Rust
+daemon HTTP adapter is therefore the sole owner of this wire compatibility gap.
+
 ### System disk type projection
 
 Docker API 1.42 added repeatable `type` selection to `GET /system/df`. The
