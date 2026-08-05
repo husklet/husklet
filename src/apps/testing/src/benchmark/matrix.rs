@@ -159,6 +159,7 @@ impl Matrix {
             guest: self.guest.clone(),
             environment: self.environment.clone(),
             engine_options,
+            diagnostics_proven: true,
         }
     }
 
@@ -229,15 +230,35 @@ mod tests {
             engine_options: Vec::new(),
         };
         matrix.require_native_options().unwrap();
-        let rust = matrix.run(alternating::plan(1).unwrap()[0]).validate().unwrap();
-        assert_eq!(rust.execution_mode(), "native-verified");
-        for name in ["HL_NATIVE_EXECUTION", "HL_NATIVE_DIAGNOSTICS"] {
-            assert!(
-                rust.engine_options
-                    .iter()
-                    .any(|option| option == &(name.into(), "1".into()))
-            );
-        }
+        let plan = alternating::plan(1).unwrap();
+        let proof = matrix.run(plan[0]).validate().unwrap();
+        assert_eq!(proof.execution_mode(), "native-verified");
+        assert!(
+            proof
+                .engine_options
+                .contains(&("HL_NATIVE_EXECUTION".into(), "1".into()))
+        );
+        assert!(
+            proof
+                .engine_options
+                .contains(&("HL_NATIVE_DIAGNOSTICS".into(), "1".into()))
+        );
+        let timed = plan
+            .into_iter()
+            .find(|step| step.provider == alternating::Provider::Rust && step.mode == alternating::Mode::Timing)
+            .map(|step| matrix.run(step).validate().unwrap())
+            .unwrap();
+        assert!(
+            timed
+                .engine_options
+                .contains(&("HL_NATIVE_EXECUTION".into(), "1".into()))
+        );
+        assert!(
+            !timed
+                .engine_options
+                .iter()
+                .any(|(name, _)| name == "HL_NATIVE_DIAGNOSTICS")
+        );
     }
 
     #[test]

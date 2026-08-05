@@ -86,6 +86,9 @@ pub(crate) struct Run {
     environment: Vec<(String, String)>,
     #[arg(long = "engine-option", value_parser = parse_assignment)]
     engine_options: Vec<(String, String)>,
+    /// The owning matrix recorded a diagnostics-on proof before this row.
+    #[arg(skip)]
+    diagnostics_proven: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -244,6 +247,7 @@ impl Run {
             .iter()
             .any(|(name, value)| name == "HL_NATIVE_EXECUTION" && value == "1");
         if native
+            && !self.diagnostics_proven
             && !self
                 .engine_options
                 .iter()
@@ -529,6 +533,7 @@ mod test {
             guest: vec!["--phase".into(), "compute".into()],
             environment: vec![("BENCH_SEED".into(), "7".into())],
             engine_options: Vec::new(),
+            diagnostics_proven: false,
         }
     }
 
@@ -560,6 +565,7 @@ mod test {
             guest: Vec::new(),
             environment: Vec::new(),
             engine_options: vec![("HL_NATIVE_EXECUTION".into(), "1".into())],
+            diagnostics_proven: false,
         }
         .validate()
         .unwrap();
@@ -695,6 +701,7 @@ mod test {
             guest: vec!["-c".into(), "sleep 30 & echo 'PHASE wait us=1 ok=1'; wait".into()],
             environment: Vec::new(),
             engine_options: Vec::new(),
+            diagnostics_proven: false,
         };
         let started = Instant::now();
         assert!(adapter::Process::new(None).sample(&run).is_err());
