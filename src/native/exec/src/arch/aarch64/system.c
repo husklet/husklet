@@ -25,10 +25,17 @@ static int barrier(uint32_t word) {
     return (word & 0xfffff0ffu) == 0xd50330bfu; /* dmb <option> */
 }
 
+static int pointer_authentication_hint(uint32_t word) {
+    return (word & UINT32_C(0xffffff1f)) == UINT32_C(0xd503231f);
+}
+
 int hl_a64_system_body(hl_a64_assembler *assembler, uint32_t word) {
     unsigned reg = word & 31u;
-    if (assembler == NULL || (!read_tls(word) && !write_tls(word) && !barrier(word))) return 0;
-    if (barrier(word)) {
+    if (assembler == NULL ||
+        (!read_tls(word) && !write_tls(word) && !barrier(word) && !pointer_authentication_hint(word))) return 0;
+    if (pointer_authentication_hint(word)) {
+        hl_a64_emit32(assembler, UINT32_C(0xd503201f));
+    } else if (barrier(word)) {
         hl_a64_emit32(assembler, word);
     } else if (read_tls(word)) {
         unsigned native = reg != 31 && stolen(reg) ? 16u : reg;
@@ -48,7 +55,7 @@ int hl_a64_system_body(hl_a64_assembler *assembler, uint32_t word) {
 
 int hl_a64_system_emit(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
     if (assembler == NULL || hl_a64_assembler_remaining(assembler) < HL_A64_SYSTEM_MAX_BYTES ||
-        (!read_tls(word) && !write_tls(word) && !barrier(word))) return 0;
+        (!read_tls(word) && !write_tls(word) && !barrier(word) && !pointer_authentication_hint(word))) return 0;
     hl_a64_stub_prologue(assembler);
     if (!hl_a64_system_body(assembler, word)) return 0;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + 4);

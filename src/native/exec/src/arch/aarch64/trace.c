@@ -189,7 +189,8 @@ hl_a64_instruction_effect hl_a64_trace_effect(uint32_t word, uint64_t pc) {
     unsigned rd = word & 31u;
     int indirect_branch = (word & 0xfffffc1fu) == 0xd61f0000u;
     int indirect_call = (word & 0xfffffc1fu) == 0xd63f0000u;
-    int indirect_return = (word & 0xfffffc1fu) == 0xd65f0000u;
+    int indirect_return = (word & 0xfffffc1fu) == 0xd65f0000u ||
+                          (word & UINT32_C(0xfffffbff)) == UINT32_C(0xd65f0bff);
 
     /* All control transfers terminate a certifiable straight-line range. */
     if ((word & 0x7c000000u) == 0x14000000u) {

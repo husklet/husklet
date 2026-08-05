@@ -25,6 +25,8 @@ int main(void) {
         0xd65f03c0u, /* ret x30 */
         0xd63f03c0u, /* blr x30 */
         0xd63f0240u, /* blr x18 */
+        0xd65f0bffu, /* retaa */
+        0xd65f0fffu, /* retab */
     };
     long page = sysconf(_SC_PAGESIZE);
     size_t capacity = (size_t)page;
@@ -59,6 +61,12 @@ int main(void) {
     execute(&cpu, code + offsets[4]);
     CHECK(cpu.program == UINT64_C(0xbbbbbbbbbbbbbbbb));
     CHECK(cpu.registers[30] == 0x4014);
+    cpu.registers[30] = UINT64_C(0x3131313131313131);
+    execute(&cpu, code + offsets[5]);
+    CHECK(cpu.program == UINT64_C(0x3131313131313131));
+    cpu.registers[30] = UINT64_C(0x3232323232323232);
+    execute(&cpu, code + offsets[6]);
+    CHECK(cpu.program == UINT64_C(0x3232323232323232));
     CHECK(munmap(code, capacity) == 0);
 
     uint8_t short_buffer[HL_A64_INDIRECT_MAX_BYTES - 1];

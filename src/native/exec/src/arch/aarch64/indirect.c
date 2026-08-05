@@ -37,12 +37,16 @@ static void guest_register(hl_a64_assembler *assembler, int output, unsigned reg
 static int valid(uint32_t word) {
     uint32_t form = word & 0xFFFFFC1Fu;
     unsigned source = (word >> 5) & 31u;
-    return source != 31 && (form == 0xD61F0000u || form == 0xD63F0000u || form == 0xD65F0000u);
+    int authenticated_return = (word & UINT32_C(0xfffffbff)) == UINT32_C(0xd65f0bff);
+    return authenticated_return ||
+           (source != 31 && (form == 0xD61F0000u || form == 0xD63F0000u || form == 0xD65F0000u));
 }
 
 int hl_a64_indirect_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc, void *ibtc) {
     uint32_t form = word & 0xFFFFFC1Fu;
-    unsigned source = (word >> 5) & 31u;
+    unsigned source = (word & UINT32_C(0xfffffbff)) == UINT32_C(0xd65f0bff)
+        ? 30u
+        : (word >> 5) & 31u;
     int link;
     if (assembler == NULL || !valid(word)) return 0;
     link = form == 0xD63F0000u;
