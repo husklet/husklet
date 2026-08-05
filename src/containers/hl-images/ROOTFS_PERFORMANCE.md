@@ -1,5 +1,45 @@
 # Rootfs and image performance checkpoint
 
+## 2026-08-04 committed-snapshot reopen removal
+
+This lane started from Husklet `41166130ed628f5b2c910fd4920012c07dcb05ae`.
+The retained oracle was `../engine` at `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`.
+The source audit covered
+`tools/matrix_runner.c::{stage_rootfs,open_case_workspace,run_guest,run_case,remove_rootfs}`,
+`src/linux_abi/container/vfs.c::{container_init,secure_resolve_probe,jail_match}`,
+and
+`src/linux_abi/container/vfs/overlay.c::{overlay_lookup_raw,overlay_resolve,overlay_copyup,overlay_copyup_tree}`.
+The runner owns one disposable staged root per case and removes it after the
+guest exits. The engine pins the root and bind parents for the process lineage,
+keeps ordered upper-before-lower lookup outside bind routes, lazily copies a
+mutated lower inode or renamed subtree, and invalidates cached resolution after
+namespace and copy-up changes. Whiteouts and opaque directories hide lower
+entries. The retained implementation has no durable OCI snapshot publication,
+lease, or garbage-collection lifecycle to map.
+
+The Rust ownership mapping is `Snapshots::{prepare,Draft::commit,view}` for
+atomic filesystem and sidecar publication, `Roots::{fork,fork_overlay,pin}` for
+private-root construction and durable leases, `Roots::{open,open_overlay}` for
+lease-validated activation, and `Roots::release` for lease-first teardown.
+`Containers::create_image` selects an overlay upper when the runtime supports
+generic overlay lookup and falls back to a complete fork for population mounts.
+
+Source tracing found that both private-root constructors discarded the validated
+`View` returned by `Draft::commit` and immediately called `Roots::pin`, which
+reopened and decoded the same publication, ownership, and name sidecars before
+creating the lease. Newly committed snapshots now acquire their lease through a
+private `pin_committed` path while retaining the successful commit view through
+lease creation. `Roots::pin` remains unchanged for external identifiers and
+continues to validate all persisted metadata before creating ownership. Failure
+still removes the just-published private snapshot, and lease-first release order
+is unchanged.
+
+No new timing was run because the shared manager did not grant a quiet slot. The
+largest existing separated Alpine cost remains full durable execution-root
+materialization at 313,657 us, compared with 6,114 us cold start and 4,115 us
+warm start. This patch removes bounded redundant metadata I/O; it does not claim
+to remove the recursive materialization cost.
+
 ## 2026-08-04 exact-tree evidence
 
 The measured Husklet tree was `eb14c27367d4e38af339bd5567de799fe9a73b04`.

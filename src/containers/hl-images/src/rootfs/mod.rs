@@ -202,6 +202,15 @@ impl Roots {
     /// Returns an error when the snapshot is absent or durable lease creation fails.
     pub fn pin(&self, snapshot: &Id) -> Result<Reference> {
         self.snapshots.view(snapshot)?;
+        self.pin_committed(snapshot)
+    }
+
+    /// Pin a snapshot whose publication was completed by this operation.
+    ///
+    /// Callers must retain the successful `Draft::commit` result through this
+    /// call. External snapshot identifiers must use `pin`, which validates all
+    /// persisted metadata before creating ownership.
+    fn pin_committed(&self, snapshot: &Id) -> Result<Reference> {
         let resource = format!("snapshot:{}", snapshot.as_str());
         let lease = self.leases.create_with(
             BTreeMap::from([
@@ -228,9 +237,13 @@ impl Roots {
     pub fn fork(&self, parent: &Id) -> Result<Reference> {
         let id = Id::new(format!("container-{}", uuid::Uuid::new_v4().simple()))?;
         let draft = self.snapshots.prepare(id.clone(), Some(parent))?;
-        draft.commit(id.clone())?;
-        match self.pin(&id) {
+        let committed = draft.commit(id.clone())?;
+        match self.pin_committed(&id) {
             Ok(mut reference) => {
+                // Keep the commit's validated view alive until durable ownership
+                // has been established; reopening it here would only repeat the
+                // publication and sidecar reads performed by `commit`.
+                drop(committed);
                 reference.baseline = Some(parent.clone());
                 if let Err(error) = self
                     .leases
@@ -244,6 +257,7 @@ impl Roots {
                 Ok(reference)
             }
             Err(error) => {
+                drop(committed);
                 let _ = self.snapshots.remove(&id);
                 Err(error)
             }
@@ -258,8 +272,16 @@ impl Roots {
     pub fn fork_overlay(&self, parent: &Id) -> Result<Reference> {
         self.snapshots.view(parent)?;
         let upper = Id::new(format!("upper-{}", uuid::Uuid::new_v4().simple()))?;
-        self.snapshots.prepare(upper.clone(), None)?.commit(upper.clone())?;
-        let mut reference = self.pin(&upper)?;
+        let committed = self.snapshots.prepare(upper.clone(), None)?.commit(upper.clone())?;
+        let mut reference = match self.pin_committed(&upper) {
+            Ok(reference) => reference,
+            Err(error) => {
+                drop(committed);
+                let _ = self.snapshots.remove(&upper);
+                return Err(error);
+            }
+        };
+        drop(committed);
         let work = format!("work-{}", uuid::Uuid::new_v4().simple());
         reference.baseline = Some(parent.clone());
         reference.owned = true;
