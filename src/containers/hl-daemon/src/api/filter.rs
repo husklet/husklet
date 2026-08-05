@@ -381,8 +381,9 @@ impl PreparedList {
 
 #[cfg(all(test, feature = "runtime"))]
 mod tests {
-    use super::{List, PruneCutoff};
+    use super::{List, PruneCutoff, docker_filter_values};
     use hl_container::{Container, ContainerSpec, ContainerState, Process};
+    use std::collections::BTreeMap;
     use std::str::FromStr as _;
 
     fn container() -> Container {
@@ -472,6 +473,56 @@ mod tests {
     fn parser_bounds_filter_wire_input() {
         let oversized = format!(r#"{{"name":{{"{}":true}}}}"#, "x".repeat(64 * 1024));
         assert!(List::parse(true, Some(&oversized)).unwrap_err().contains("64 KiB"));
+    }
+
+    #[test]
+    fn docker_filter_parser_enforces_structural_bounds_and_duplicate_contract() {
+        let filters: BTreeMap<_, _> = (0..64)
+            .map(|index| (format!("f{index}"), Vec::<String>::new()))
+            .collect();
+        assert_eq!(
+            docker_filter_values(&serde_json::to_string(&filters).unwrap())
+                .unwrap()
+                .len(),
+            64
+        );
+        let filters: BTreeMap<_, _> = (0..65)
+            .map(|index| (format!("f{index}"), Vec::<String>::new()))
+            .collect();
+        assert!(
+            docker_filter_values(&serde_json::to_string(&filters).unwrap())
+                .unwrap_err()
+                .contains("64 names")
+        );
+
+        let values = vec!["x"; 1_024];
+        assert_eq!(
+            docker_filter_values(&serde_json::json!({"name": values}).to_string()).unwrap()["name"].len(),
+            1_024
+        );
+        let values = vec!["x"; 1_025];
+        assert!(
+            docker_filter_values(&serde_json::json!({"name": values}).to_string())
+                .unwrap_err()
+                .contains("1024")
+        );
+        assert!(
+            docker_filter_values(&serde_json::json!({"x".repeat(129): []}).to_string())
+                .unwrap_err()
+                .contains("128 bytes")
+        );
+        assert!(
+            docker_filter_values(&serde_json::json!({"name": ["x".repeat(4097)]}).to_string())
+                .unwrap_err()
+                .contains("4 KiB")
+        );
+
+        let duplicate_names = docker_filter_values(r#"{"name":["first"],"name":["last"]}"#).unwrap();
+        assert_eq!(duplicate_names["name"], ["last"]);
+        let duplicate_values = docker_filter_values(r#"{"name":["same","same"]}"#).unwrap();
+        assert_eq!(duplicate_values["name"], ["same", "same"]);
+        let map_set = docker_filter_values(r#"{"name":{"enabled":true,"disabled":false}}"#).unwrap();
+        assert_eq!(map_set["name"], ["disabled", "enabled"]);
     }
 
     #[test]
