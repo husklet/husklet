@@ -78,7 +78,7 @@ static void condition(hl_a64_assembler *assembler, uint32_t *instruction,
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
 
 void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc) {
-    uint32_t *empty, *contiguous, *above, *below, *overflow, *safe;
+    uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *overflow, *safe;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -90,11 +90,26 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     hl_a64_emit32(assembler, 0xEB09023Fu); /* cmp first,#UINT64_MAX */
     empty = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    /* Guest contiguity is insufficient: adjacent mappings can belong to
+     * distinct projection owners. Only the same bounded view can extend the
+     * live exact interval without archiving it first. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FIRST);
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_DIRTY_VIEW_FIRST);
+    hl_a64_emit32(assembler, 0xEB12023Fu);
+    different_view[0] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_LAST);
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_DIRTY_VIEW_LAST);
+    hl_a64_emit32(assembler, 0xEB12023Fu);
+    different_view[1] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
     hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_LAST);
     hl_a64_emit32(assembler, 0xEB09021Fu); /* cmp address,last */
-    /* Sequential stores extend the live interval and consume no journal slot. */
+    not_contiguous = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
     contiguous = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    uint8_t *noncontiguous = assembler->cursor;
     above = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     hl_a64_emit32(assembler, 0xEB11025Fu); /* cmp end,first */
@@ -104,6 +119,9 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     hl_a64_emit32(assembler, 0);
     uint8_t *disjoint = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, not_contiguous, noncontiguous, 1u);
+    condition(assembler, different_view[0], disjoint, 1u);
+    condition(assembler, different_view[1], disjoint, 1u);
     condition(assembler, above, disjoint, 8u);
     condition(assembler, below, disjoint, 3u);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
@@ -113,7 +131,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     uint8_t *safe_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, empty, safe_target, 0u);
-    condition(assembler, contiguous, safe_target, 0u);
+    branch(assembler, contiguous, safe_target);
     branch(assembler, safe, safe_target);
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_reserved));
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DELTA);
@@ -139,7 +157,8 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
 }
 
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
-    uint32_t *empty, *contiguous, *above, *below, *after_merge, *after_range;
+    uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *after_merge, *after_range,
+        *after_contiguous;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -151,11 +170,25 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_emit32(assembler, 0xEB09023Fu);
     empty = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    /* Commit this only after the host store above the emitted guard succeeds.
+     * Adjacent addresses merge only under the same projection-view owner. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FIRST);
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_DIRTY_VIEW_FIRST);
+    hl_a64_emit32(assembler, 0xEB12023Fu);
+    different_view[0] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_LAST);
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_DIRTY_VIEW_LAST);
+    hl_a64_emit32(assembler, 0xEB12023Fu);
+    different_view[1] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
     hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_LAST);
     hl_a64_emit32(assembler, 0xEB09021Fu);
-    /* Commit this only after the host store above the emitted guard succeeds. */
+    not_contiguous = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
     contiguous = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    uint8_t *noncontiguous = assembler->cursor;
     above = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     hl_a64_emit32(assembler, 0xEB11025Fu);
@@ -173,6 +206,9 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_emit32(assembler, 0);
     uint8_t *disjoint = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, not_contiguous, noncontiguous, 1u);
+    condition(assembler, different_view[0], disjoint, 1u);
+    condition(assembler, different_view[1], disjoint, 1u);
     condition(assembler, above, disjoint, 8u);
     condition(assembler, below, disjoint, 3u);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
@@ -200,11 +236,18 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_emit32(assembler, 0);
     uint8_t *contiguous_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
-    condition(assembler, contiguous, contiguous_target, 0u);
+    branch(assembler, contiguous, contiguous_target);
     /* An adjacent completed store extends the same live interval. */
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_merged));
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
     hl_a64_str(assembler, 18, CPU, OFFSET_DIRTY_LAST);
+    /* The interval's view owner, written bit, and executable bit were
+     * established by the first successful store. A contiguous continuation
+     * changes only the exact interval end. Preserve the completed-store
+     * diagnostic without rewriting that invariant metadata. */
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_committed));
+    after_contiguous = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
     uint8_t *range_done = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     branch(assembler, after_range, range_done);
@@ -219,6 +262,9 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_emit32(assembler, 0xAA120231u);
     hl_a64_str(assembler, 17, CPU, OFFSET_EXECUTABLE_WRITTEN);
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_committed));
+    uint8_t *restore = assembler->cursor;
+    if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, after_contiguous, restore);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);

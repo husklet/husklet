@@ -89,6 +89,71 @@ int main(void) {
         CHECK(cpu.reason == HL_NATIVE_EXIT_BRANCH && cpu.program == 0x4004 + index * 4);
     }
 
+    cpu.stack = base;
+    cpu.memory_first = (uint64_t)(uintptr_t)stack;
+    cpu.memory_last = (uint64_t)(uintptr_t)(stack + sizeof(stack));
+    cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE | HL_A64_PERMISSION_EXECUTE;
+    cpu.dirty_first = base;
+    cpu.dirty_last = base + 8;
+    cpu.dirty_view_first = cpu.memory_first;
+    cpu.dirty_view_last = cpu.memory_last;
+    cpu.memory_written = 1;
+    cpu.executable_written = 4;
+    cpu.registers[30] = UINT64_C(0x123456789abcdef0);
+    execute(&cpu, code + offsets[0]);
+    CHECK(cpu.dirty_first == base && cpu.dirty_last == base + 16);
+    CHECK(cpu.dirty_view_first == cpu.memory_first && cpu.dirty_view_last == cpu.memory_last);
+    CHECK(cpu.memory_written == 1 && cpu.executable_written == 4);
+    CHECK(*(uint64_t *)(uintptr_t)(base + 8) == UINT64_C(0x123456789abcdef0));
+
+    cpu.stack = base;
+    cpu.memory_first = base + 8;
+    cpu.memory_last = base + 16;
+    cpu.memory_permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE;
+    cpu.dirty_first = base;
+    cpu.dirty_last = base + 8;
+    cpu.dirty_view_first = base;
+    cpu.dirty_view_last = base + 8;
+    cpu.dirty_count = 0;
+    cpu.registers[30] = UINT64_C(0x0fedcba987654321);
+    execute(&cpu, code + offsets[0]);
+    CHECK(cpu.dirty_count == 1);
+    CHECK(cpu.dirty_records[0][0] == base && cpu.dirty_records[0][1] == base + 8);
+    CHECK(cpu.dirty_records[0][2] == base && cpu.dirty_records[0][3] == base + 8);
+    CHECK(cpu.dirty_first == base + 8 && cpu.dirty_last == base + 16);
+    CHECK(cpu.dirty_view_first == base + 8 && cpu.dirty_view_last == base + 16);
+    CHECK(*(uint64_t *)(uintptr_t)(base + 8) == UINT64_C(0x0fedcba987654321));
+
+    cpu.stack = base;
+    cpu.memory_first = base + 8;
+    cpu.memory_last = base + 16;
+    cpu.dirty_first = base + 16;
+    cpu.dirty_last = base + 24;
+    cpu.dirty_view_first = base + 16;
+    cpu.dirty_view_last = base + 24;
+    cpu.dirty_count = 0;
+    execute(&cpu, code + offsets[0]);
+    CHECK(cpu.dirty_count == 1);
+    CHECK(cpu.dirty_records[0][0] == base + 16 && cpu.dirty_records[0][1] == base + 24);
+    CHECK(cpu.dirty_records[0][2] == base + 16 && cpu.dirty_records[0][3] == base + 24);
+    CHECK(cpu.dirty_first == base + 8 && cpu.dirty_last == base + 16);
+    CHECK(cpu.dirty_view_first == base + 8 && cpu.dirty_view_last == base + 16);
+
+    cpu.stack = base;
+    cpu.memory_first = base + 8;
+    cpu.memory_last = base + 16;
+    cpu.dirty_first = base + 4;
+    cpu.dirty_last = base + 12;
+    cpu.dirty_view_first = base;
+    cpu.dirty_view_last = base + 12;
+    cpu.dirty_count = 0;
+    execute(&cpu, code + offsets[0]);
+    CHECK(cpu.dirty_count == 1);
+    CHECK(cpu.dirty_records[0][0] == base && cpu.dirty_records[0][1] == base + 12);
+    CHECK(cpu.dirty_records[0][2] == base + 4 && cpu.dirty_records[0][3] == base + 12);
+    CHECK(cpu.dirty_first == base + 8 && cpu.dirty_last == base + 16);
+    CHECK(cpu.dirty_view_first == base + 8 && cpu.dirty_view_last == base + 16);
+
     *(uint64_t *)(uintptr_t)(base + 8) = UINT64_C(0xaaaaaaaaaaaaaaaa);
     cpu.stack = base;
     cpu.memory_first = (uint64_t)(uintptr_t)stack;
