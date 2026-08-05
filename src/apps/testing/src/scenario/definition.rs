@@ -39,6 +39,10 @@ struct Case {
     readiness: Option<Readiness>,
     #[serde(default = "timeout")]
     timeout: u64,
+    #[serde(default)]
+    warmups: u16,
+    #[serde(default = "repetitions")]
+    repetitions: u16,
     expect: Expect,
 }
 
@@ -182,6 +186,10 @@ const fn timeout() -> u64 {
     180
 }
 
+const fn repetitions() -> u16 {
+    1
+}
+
 const MAX_CASES: usize = 1024;
 const MAX_ACTIONS: usize = 64;
 const MAX_FIXTURES: usize = 64;
@@ -215,6 +223,8 @@ pub struct ScenarioCase {
     pub fixtures: Vec<ScenarioFixture>,
     pub readiness: Option<ScenarioReadiness>,
     pub timeout: u64,
+    pub warmups: u16,
+    pub repetitions: u16,
     pub exit: i32,
     pub stdout_contains: Vec<PathBuf>,
     pub stdout_exact: Option<PathBuf>,
@@ -299,6 +309,8 @@ fn load_case(
         || case.image.len() > 512
         || case.image.contains('\0')
         || !(1..=3600).contains(&case.timeout)
+        || case.warmups > 100
+        || !(1..=100).contains(&case.repetitions)
     {
         return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
     }
@@ -382,6 +394,8 @@ fn load_case(
         fixtures,
         readiness,
         timeout: case.timeout,
+        warmups: case.warmups,
+        repetitions: case.repetitions,
         exit: case.expect.exit,
         stdout_contains,
         stdout_exact,

@@ -6,7 +6,8 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const HEADER: &str = "id\ttarget\tstatus\telapsed_ms\tdiagnostic\n";
+const HEADER: &str =
+    "id\ttarget\tsample\tstatus\telapsed_ms\tsetup_us\texecution_us\tpayload_us\tteardown_us\tdiagnostic\n";
 const ROW_LIMIT: usize = 16 * 1024;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -15,6 +16,7 @@ pub(super) struct Row {
     pub key: WorkKey,
     pub status: &'static str,
     pub elapsed_ms: u64,
+    pub timing: super::execution::PhaseTiming,
     pub diagnostic: String,
 }
 
@@ -140,7 +142,7 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
     for line in lines.filter(|line| !line.is_empty()) {
         require(line.len() <= ROW_LIMIT, "scenario resume row exceeds its byte bound")?;
         let fields = line.split('\t').collect::<Vec<_>>();
-        require(fields.len() == 5, "invalid scenario resume row")?;
+        require(fields.len() == 10, "invalid scenario resume row")?;
         let target = match fields[1] {
             "arm64" => Target::Arm64,
             "amd64" => Target::Amd64,
@@ -149,14 +151,16 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
         let key = WorkKey {
             id: fields[0].to_owned(),
             target,
+            sample: fields[2].parse()?,
         };
         require(keys.contains(&key), "stale scenario resume row")?;
         require(!rows.contains_key(&key), "duplicate scenario resume row")?;
-        let status = match fields[2] {
+        let status = match fields[3] {
             "pass" => "pass",
             "xfail" => "xfail",
             "fail" => "fail",
             "xpass" => "xpass",
+            "skip" => "skip",
             _ => return Err("invalid scenario resume status".into()),
         };
         rows.insert(
@@ -164,8 +168,14 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
             Row {
                 key,
                 status,
-                elapsed_ms: fields[3].parse()?,
-                diagnostic: fields[4].to_owned(),
+                elapsed_ms: fields[4].parse()?,
+                timing: super::execution::PhaseTiming {
+                    setup_us: fields[5].parse()?,
+                    execution_us: fields[6].parse()?,
+                    payload_us: (fields[7] != "unavailable").then(|| fields[7].parse()).transpose()?,
+                    teardown_us: fields[8].parse()?,
+                },
+                diagnostic: fields[9].to_owned(),
             },
         );
     }
@@ -178,11 +188,18 @@ fn format_row(row: &Row) -> Result<String, Error> {
         "scenario result contains an unsafe delimiter",
     )?;
     let text = format!(
-        "{}\t{}\t{}\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         row.key.id,
         row.key.target.name(),
+        row.key.sample,
         row.status,
         row.elapsed_ms,
+        row.timing.setup_us,
+        row.timing.execution_us,
+        row.timing
+            .payload_us
+            .map_or_else(|| "unavailable".to_owned(), |value| value.to_string()),
+        row.timing.teardown_us,
         row.diagnostic
     );
     require(text.len() <= ROW_LIMIT, "scenario result row exceeds its byte bound")?;
@@ -196,14 +213,20 @@ fn require(condition: bool, message: &'static str) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::{Ledger, Row, WorkKey};
+    use crate::scenario::execution::PhaseTiming;
     use crate::suite::Target;
     use std::collections::BTreeSet;
     use std::io::Write;
 
     fn key(id: &str) -> WorkKey {
+        sample_key(id, 1)
+    }
+
+    fn sample_key(id: &str, sample: u16) -> WorkKey {
         WorkKey {
             id: id.to_owned(),
             target: Target::Arm64,
+            sample,
         }
     }
 
@@ -220,6 +243,12 @@ mod tests {
                     key: key(id),
                     status: "pass",
                     elapsed_ms: 1,
+                    timing: PhaseTiming {
+                        setup_us: 2,
+                        execution_us: 3,
+                        payload_us: Some(1),
+                        teardown_us: 4,
+                    },
                     diagnostic: String::new(),
                 })
                 .unwrap();
@@ -227,6 +256,33 @@ mod tests {
         opened.ledger.finish().unwrap();
         let text = std::fs::read_to_string(report).unwrap();
         assert!(text.find("scenario/a").unwrap() < text.find("scenario/b").unwrap());
+        assert!(text.contains("\t2\t3\t1\t4\t"));
+    }
+
+    #[test]
+    fn sample_rows_are_sorted_and_independently_resumable() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("results.tsv");
+        let keys = BTreeSet::from([sample_key("scenario/a", 1), sample_key("scenario/a", 2)]);
+        let opened = Ledger::open(&report, "stamp", &keys, false).unwrap();
+        for sample in [2, 1] {
+            opened
+                .ledger
+                .record(Row {
+                    key: sample_key("scenario/a", sample),
+                    status: if sample == 2 { "skip" } else { "pass" },
+                    elapsed_ms: u64::from(sample),
+                    timing: PhaseTiming::default(),
+                    diagnostic: String::new(),
+                })
+                .unwrap();
+        }
+        drop(opened);
+        let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
+        assert_eq!(resumed.prior.len(), 2);
+        assert_eq!(resumed.prior[&sample_key("scenario/a", 1)].elapsed_ms, 1);
+        assert_eq!(resumed.prior[&sample_key("scenario/a", 2)].elapsed_ms, 2);
+        assert_eq!(resumed.prior[&sample_key("scenario/a", 2)].status, "skip");
     }
 
     #[test]
@@ -241,6 +297,7 @@ mod tests {
                 key: key("scenario/a"),
                 status: "xfail",
                 elapsed_ms: 3,
+                timing: PhaseTiming::default(),
                 diagnostic: "known gap".to_owned(),
             })
             .unwrap();

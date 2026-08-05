@@ -19,17 +19,18 @@ pub async fn run(options: Options) -> Result<(), Error> {
     if options.list {
         let work = scheduler::inventory(scenarios, &options)?;
         for key in &work {
-            println!("{}\t{}", key.id, key.target.name());
+            println!("{}\t{}\t{}", key.id, key.target.name(), key.sample);
         }
-        println!("scenarios: {} selected case/target pairs", work.len());
+        println!("scenarios: {} selected case/target/sample rows", work.len());
         return Ok(());
     }
     let report = workspace()?.join(&options.results);
     let summary = scheduler::run(scenarios, &options, &report).await?;
     println!(
-        "scenarios: {} passed; {} expected failures; {} failed",
+        "scenarios: {} passed; {} expected failures; {} skipped; {} failed",
         summary.passed,
         summary.expected_failures,
+        summary.skipped,
         summary.failed.len()
     );
     if summary.failed.is_empty() {

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore},
+    sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore},
     task::JoinSet,
 };
 
@@ -17,11 +17,12 @@ mod process_lifecycle;
 pub(super) struct Summary {
     pub passed: usize,
     pub expected_failures: usize,
+    pub skipped: usize,
     pub failed: Vec<String>,
 }
 
 pub(super) fn inventory(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<WorkKey>, Error> {
-    plan(scenarios, options).map(|work| work.into_iter().map(|item| item.key).collect())
+    plan(scenarios, options).map(|work| work.into_iter().flat_map(|item| item.keys).collect())
 }
 
 pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Path) -> Result<Summary, Error> {
@@ -29,8 +30,8 @@ pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Pa
     if work.is_empty() {
         return Err("no scenario cases support the selected target(s)".into());
     }
-    let stamp = fingerprint(&work).await?;
-    let keys = work.iter().map(|item| item.key.clone()).collect();
+    let stamp = fingerprint(&work, options.warm_provider).await?;
+    let keys = work.iter().flat_map(|item| item.keys.iter().cloned()).collect();
     let report = report.to_path_buf();
     let resume = options.resume;
     let opened = tokio::task::spawn_blocking(move || {
@@ -39,11 +40,23 @@ pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Pa
     .await??;
     let ledger = Arc::new(opened.ledger);
     let prior = opened.prior;
+    let completed_keys = Arc::new(prior.keys().cloned().collect::<BTreeSet<_>>());
     let semaphore = Arc::new(Semaphore::new(options.jobs));
     let resources = Arc::new(ResourcePool::new());
+    let providers = options.warm_provider.then(|| Arc::new(ProviderPool::new(options.jobs)));
     let mut running = JoinSet::new();
-    for item in work.into_iter().filter(|item| !prior.contains_key(&item.key)) {
-        spawn(&mut running, item, Arc::clone(&semaphore), Arc::clone(&resources));
+    for item in work
+        .into_iter()
+        .filter(|item| item.keys.iter().any(|key| !completed_keys.contains(key)))
+    {
+        spawn(
+            &mut running,
+            item,
+            Arc::clone(&semaphore),
+            Arc::clone(&resources),
+            providers.clone(),
+            Arc::clone(&completed_keys),
+        );
     }
     let mut completed = drain(&mut running, &ledger).await?;
     completed.sort_by(|left, right| left.key.cmp(&right.key));
@@ -53,21 +66,178 @@ pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Pa
 }
 
 fn spawn(
-    running: &mut JoinSet<Result<Completed, String>>,
+    running: &mut JoinSet<Result<Vec<Completed>, String>>,
     work: Work,
     semaphore: Arc<Semaphore>,
     resources: Arc<ResourcePool>,
+    providers: Option<Arc<ProviderPool>>,
+    prior: Arc<BTreeSet<WorkKey>>,
 ) {
     running.spawn(async move {
         let (_resources, _permit) = resources.admit(&work.resources, semaphore).await?;
-        let started = std::time::Instant::now();
-        let result = execution::run_case(work.scenario, work.case_index, work.target).await;
-        Ok(Completed {
-            key: work.key,
-            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            result,
-        })
+        let provider_slot = providers.as_ref().map(|pool| pool.next_slot());
+        let local = if providers.is_none() {
+            Some(execution::Provider::start().await.map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        let first_sample = work.keys.first().map_or(1, |key| key.sample);
+        for _ in 0..work.warmups {
+            let warmup = run_on_provider(
+                providers.as_deref(),
+                provider_slot,
+                local.as_ref(),
+                Arc::clone(&work.scenario),
+                work.case_index,
+                work.target,
+                first_sample,
+            )
+            .await;
+            if !matches!(warmup.result, execution::CaseResult::Passed) {
+                return Ok(work
+                    .keys
+                    .into_iter()
+                    .filter(|key| !prior.contains(key))
+                    .map(|key| Completed {
+                        key,
+                        elapsed_ms: 0,
+                        result: execution::CaseResult::Failed("scenario warmup did not pass".to_owned()),
+                        timing: warmup.timing,
+                    })
+                    .collect());
+            }
+        }
+        let mut completed = Vec::new();
+        let mut stopped = false;
+        for key in work.keys.into_iter().filter(|key| !prior.contains(key)) {
+            if stopped {
+                completed.push(Completed {
+                    key,
+                    elapsed_ms: 0,
+                    result: execution::CaseResult::NotRun("not run after preceding sample failed".to_owned()),
+                    timing: execution::PhaseTiming::default(),
+                });
+                continue;
+            }
+            let started = std::time::Instant::now();
+            let outcome = run_on_provider(
+                providers.as_deref(),
+                provider_slot,
+                local.as_ref(),
+                Arc::clone(&work.scenario),
+                work.case_index,
+                work.target,
+                key.sample,
+            )
+            .await;
+            stopped = !matches!(outcome.result, execution::CaseResult::Passed);
+            completed.push(Completed {
+                key,
+                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                result: outcome.result,
+                timing: outcome.timing,
+            });
+        }
+        drop(local);
+        Ok(completed)
     });
+}
+
+async fn run_on_provider(
+    pool: Option<&ProviderPool>,
+    slot: Option<usize>,
+    local: Option<&execution::Provider>,
+    scenario: Arc<Scenario>,
+    case_index: usize,
+    target: Target,
+    sample: u16,
+) -> execution::CaseOutcome {
+    match (pool, slot, local) {
+        (Some(pool), Some(slot), _) => pool.run(slot, scenario, case_index, target, sample).await,
+        (_, _, Some(provider)) => execution::run_case_on(provider, scenario, case_index, target, sample).await,
+        _ => execution::CaseOutcome {
+            result: execution::CaseResult::Failed("scenario provider is unavailable".to_owned()),
+            timing: execution::PhaseTiming::default(),
+        },
+    }
+}
+
+struct ProviderPool {
+    slots: Vec<AsyncMutex<ProviderState<execution::Provider>>>,
+    next: std::sync::atomic::AtomicUsize,
+}
+
+impl ProviderPool {
+    fn new(jobs: usize) -> Self {
+        Self {
+            slots: (0..jobs).map(|_| AsyncMutex::new(ProviderState::default())).collect(),
+            next: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn next_slot(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.next.fetch_add(1, Ordering::Relaxed) % self.slots.len()
+    }
+
+    async fn run(
+        &self,
+        index: usize,
+        scenario: Arc<Scenario>,
+        case_index: usize,
+        target: Target,
+        sample: u16,
+    ) -> execution::CaseOutcome {
+        let mut slot = self.slots[index].lock().await;
+        let mut provider_setup_us = 0;
+        if slot.value.is_none() {
+            let started = std::time::Instant::now();
+            match execution::Provider::start().await {
+                Ok(provider) => {
+                    provider_setup_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                    slot.value = Some(provider);
+                }
+                Err(error) => {
+                    return execution::CaseOutcome {
+                        result: execution::CaseResult::Failed(error.to_string()),
+                        timing: execution::PhaseTiming::default(),
+                    };
+                }
+            }
+        }
+        let Some(provider) = slot.value.as_ref() else {
+            return execution::CaseOutcome {
+                result: execution::CaseResult::Failed("provider slot was not initialized".to_owned()),
+                timing: execution::PhaseTiming::default(),
+            };
+        };
+        let mut outcome = execution::run_case_on(provider, scenario, case_index, target, sample).await;
+        outcome.timing.setup_us = outcome.timing.setup_us.saturating_add(provider_setup_us);
+        slot.finish(&outcome.result);
+        outcome
+    }
+}
+
+struct ProviderState<T> {
+    value: Option<T>,
+}
+
+impl<T> Default for ProviderState<T> {
+    fn default() -> Self {
+        Self { value: None }
+    }
+}
+
+impl<T> ProviderState<T> {
+    fn finish(&mut self, result: &execution::CaseResult) {
+        if !retains_provider(result) {
+            self.value = None;
+        }
+    }
+}
+
+fn retains_provider(result: &execution::CaseResult) -> bool {
+    matches!(result, execution::CaseResult::Passed)
 }
 
 async fn enter(semaphore: Arc<Semaphore>) -> Result<OwnedSemaphorePermit, String> {
@@ -78,16 +248,18 @@ async fn enter(semaphore: Arc<Semaphore>) -> Result<OwnedSemaphorePermit, String
 }
 
 async fn drain(
-    running: &mut JoinSet<Result<Completed, String>>,
+    running: &mut JoinSet<Result<Vec<Completed>, String>>,
     ledger: &Arc<ledger::Ledger>,
 ) -> Result<Vec<Completed>, Error> {
     let mut completed = Vec::new();
     while let Some(result) = running.join_next().await {
-        let result = result?.map_err(|error| -> Error { error.into() })?;
-        let row = result.row();
-        let recording = Arc::clone(ledger);
-        tokio::task::spawn_blocking(move || recording.record(row).map_err(|error| error.to_string())).await??;
-        completed.push(result);
+        let results = result?.map_err(|error| -> Error { error.into() })?;
+        for result in results {
+            let row = result.row();
+            let recording = Arc::clone(ledger);
+            tokio::task::spawn_blocking(move || recording.record(row).map_err(|error| error.to_string())).await??;
+            completed.push(result);
+        }
     }
     Ok(completed)
 }
@@ -96,20 +268,23 @@ async fn drain(
 pub(super) struct WorkKey {
     pub id: String,
     pub target: Target,
+    pub sample: u16,
 }
 
 struct Work {
-    key: WorkKey,
+    keys: Vec<WorkKey>,
     scenario: Arc<Scenario>,
     case_index: usize,
     target: Target,
     resources: Vec<Resource>,
+    warmups: u16,
 }
 
 struct Completed {
     key: WorkKey,
     elapsed_ms: u64,
     result: execution::CaseResult,
+    timing: execution::PhaseTiming,
 }
 
 impl Completed {
@@ -119,6 +294,7 @@ impl Completed {
             key: self.key.clone(),
             status,
             elapsed_ms: self.elapsed_ms,
+            timing: self.timing,
             diagnostic,
         }
     }
@@ -132,25 +308,36 @@ fn plan(scenarios: Vec<Scenario>, options: &Options) -> Result<Vec<Work>, Error>
         for target in options.targets() {
             for (case_index, case) in scenario.cases.iter().enumerate() {
                 if case.supports(target) && selected_class(options.class, case.class) {
-                    let key = WorkKey {
-                        id: case.id.clone(),
-                        target,
-                    };
-                    if !keys.insert(key.clone()) {
-                        return Err(format!("duplicate scenario case/target key {} {}", case.id, target.name()).into());
+                    let mut samples = Vec::with_capacity(usize::from(case.repetitions));
+                    for sample in 1..=case.repetitions {
+                        let key = WorkKey {
+                            id: case.id.clone(),
+                            target,
+                            sample,
+                        };
+                        if !keys.insert(key.clone()) {
+                            return Err(format!(
+                                "duplicate scenario case/target/sample key {} {} {sample}",
+                                case.id,
+                                target.name()
+                            )
+                            .into());
+                        }
+                        samples.push(key);
                     }
                     work.push(Work {
-                        key,
+                        keys: samples,
                         scenario: Arc::clone(&scenario),
                         case_index,
                         target,
                         resources: case.resources.clone(),
+                        warmups: case.warmups,
                     });
                 }
             }
         }
     }
-    work.sort_by(|left, right| left.key.cmp(&right.key));
+    work.sort_by(|left, right| left.keys.cmp(&right.keys));
     Ok(work)
 }
 
@@ -207,7 +394,7 @@ impl ResourcePool {
     }
 }
 
-async fn fingerprint(work: &[Work]) -> Result<String, Error> {
+async fn fingerprint(work: &[Work], warm_provider: bool) -> Result<String, Error> {
     let mut inputs = Vec::new();
     for item in work {
         let case = &item.scenario.cases[item.case_index];
@@ -221,6 +408,11 @@ async fn fingerprint(work: &[Work]) -> Result<String, Error> {
     tokio::task::spawn_blocking(move || {
         use sha2::{Digest, Sha256};
         let mut digest = Sha256::new();
+        digest.update(if warm_provider {
+            b"warm-provider".as_slice()
+        } else {
+            b"isolated-provider".as_slice()
+        });
         for path in inputs {
             digest.update(path.to_string_lossy().as_bytes());
             digest.update([0]);
@@ -236,26 +428,41 @@ fn summarize(prior: &BTreeMap<WorkKey, ledger::Row>, completed: Vec<Completed>) 
     let mut summary = Summary {
         passed: 0,
         expected_failures: 0,
+        skipped: 0,
         failed: Vec::new(),
     };
     for row in prior.values() {
         println!(
-            "RESUME {} {} {} elapsed_ms={}",
+            "RESUME {} {} {} sample={} elapsed_ms={} setup_us={} execution_us={} payload_us={} teardown_us={}",
             row.status,
             row.key.id,
             row.key.target.name(),
-            row.elapsed_ms
+            row.key.sample,
+            row.elapsed_ms,
+            row.timing.setup_us,
+            row.timing.execution_us,
+            row.timing
+                .payload_us
+                .map_or_else(|| "unavailable".to_owned(), |value| value.to_string()),
+            row.timing.teardown_us
         );
         count(row.status, &row.key, &row.diagnostic, &mut summary);
     }
     for item in completed {
         let (status, diagnostic) = item.result.evidence();
         println!(
-            "{} {} {} elapsed_ms={}: {}",
+            "{} {} {} sample={} elapsed_ms={} setup_us={} execution_us={} payload_us={} teardown_us={}: {}",
             status.to_uppercase(),
             item.key.id,
             item.key.target.name(),
+            item.key.sample,
             item.elapsed_ms,
+            item.timing.setup_us,
+            item.timing.execution_us,
+            item.timing
+                .payload_us
+                .map_or_else(|| "unavailable".to_owned(), |value| value.to_string()),
+            item.timing.teardown_us,
             diagnostic
         );
         count(status, &item.key, &diagnostic, &mut summary);
@@ -267,6 +474,7 @@ fn count(status: &str, key: &WorkKey, diagnostic: &str, summary: &mut Summary) {
     match status {
         "pass" => summary.passed += 1,
         "xfail" => summary.expected_failures += 1,
+        "skip" => summary.skipped += 1,
         _ => summary
             .failed
             .push(format!("{} {}: {diagnostic}", key.id, key.target.name())),
@@ -275,8 +483,9 @@ fn count(status: &str, key: &WorkKey, diagnostic: &str, summary: &mut Summary) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ResourcePool, enter, selected_class};
+    use super::{ProviderState, ResourcePool, Summary, WorkKey, count, enter, retains_provider, selected_class};
     use crate::scenario::definition::{Class, Resource};
+    use crate::scenario::execution::CaseResult;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -378,5 +587,74 @@ mod tests {
         assert!(selected_class(Some(Class::Quick), Class::Quick));
         assert!(!selected_class(Some(Class::Quick), Class::Long));
         assert!(selected_class(Some(Class::Long), Class::Long));
+    }
+
+    #[test]
+    fn only_a_passed_case_can_reuse_provider_state() {
+        assert!(retains_provider(&CaseResult::Passed));
+        assert!(!retains_provider(&CaseResult::Failed("failure".to_owned())));
+        assert!(!retains_provider(&CaseResult::ExpectedFailure("expected".to_owned())));
+        assert!(!retains_provider(&CaseResult::UnexpectedPass));
+        assert!(!retains_provider(&CaseResult::NotRun("not run".to_owned())));
+    }
+
+    #[test]
+    fn fake_provider_identity_is_stable_then_evicted_without_state_leakage() {
+        #[derive(Debug, Eq, PartialEq)]
+        struct FakeProvider {
+            identity: u64,
+            case_state: Vec<&'static str>,
+        }
+
+        let mut slot = ProviderState::default();
+        slot.value = Some(FakeProvider {
+            identity: 41,
+            case_state: Vec::new(),
+        });
+        let warmup_identity = slot.value.as_ref().unwrap().identity;
+        slot.value.as_mut().unwrap().case_state.push("warmup");
+        slot.finish(&CaseResult::Passed);
+        let first_sample_identity = slot.value.as_ref().unwrap().identity;
+        slot.value.as_mut().unwrap().case_state.push("sample-1");
+        slot.finish(&CaseResult::Passed);
+        let second_sample_identity = slot.value.as_ref().unwrap().identity;
+        assert_eq!(
+            (warmup_identity, first_sample_identity, second_sample_identity),
+            (41, 41, 41)
+        );
+        slot.finish(&CaseResult::UnexpectedPass);
+        assert!(slot.value.is_none(), "non-pass retained provider state");
+
+        slot.value = Some(FakeProvider {
+            identity: 42,
+            case_state: Vec::new(),
+        });
+        assert_eq!(slot.value.as_ref().unwrap().identity, 42);
+        assert!(
+            slot.value.as_ref().unwrap().case_state.is_empty(),
+            "next case observed prior state"
+        );
+    }
+
+    #[test]
+    fn skipped_samples_are_counted_without_becoming_failures() {
+        let mut summary = Summary {
+            passed: 0,
+            expected_failures: 0,
+            skipped: 0,
+            failed: Vec::new(),
+        };
+        count(
+            "skip",
+            &WorkKey {
+                id: "sample/skipped".to_owned(),
+                target: crate::suite::Target::Arm64,
+                sample: 2,
+            },
+            "preceding sample failed",
+            &mut summary,
+        );
+        assert_eq!(summary.skipped, 1);
+        assert!(summary.failed.is_empty());
     }
 }

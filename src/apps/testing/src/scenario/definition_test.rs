@@ -49,6 +49,8 @@ fn rich_contract_preserves_bounds_and_order() {
       - api: { operation: copy_to_container, source: payload.txt, destination: /tmp }
     readiness: { startup: "daemon --fork", probe: "daemon ping", attempts: 3, delay_ms: 10, logs: [/tmp/daemon.log] }
     timeout: 7
+    warmups: 2
+    repetitions: 3
     expect: { exit: 0, stdout_contains: [golden/contains.txt], stdout_exact: golden/exact.txt }
 "#,
     )
@@ -58,6 +60,7 @@ fn rich_contract_preserves_bounds_and_order() {
     assert_eq!(case.resources, [Resource::Network, Resource::ProcessHeavy]);
     assert_eq!(case.actions.len(), 4);
     assert_eq!(case.timeout, 7);
+    assert_eq!((case.warmups, case.repetitions), (2, 3));
     assert_eq!(case.readiness.as_ref().unwrap().attempts, 3);
 }
 
@@ -134,6 +137,7 @@ fn invalid_cross_target_and_path_contracts_are_rejected() {
         "cases:\n  - id: sample/both\n    image: alpine\n    run: { program: /bin/true }\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
         "cases:\n  - id: sample/resources\n    image: alpine\n    resources: [network, network]\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
         "cases:\n  - id: sample/fixtures\n    image: alpine\n    fixtures: [{ source: payload.txt, destination: /payload }, { source: payload.txt, destination: /payload }]\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
+        "cases:\n  - id: sample/samples\n    image: alpine\n    warmups: 101\n    repetitions: 0\n    actions: [{ shell: { script: true } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
     ] {
         assert!(load(document).is_err(), "accepted invalid document: {document}");
     }

@@ -5,7 +5,7 @@ use super::{
 use crate::{runtime::image::TestImage, suite::Target};
 use hl_container::{Config, ContainerSpec, ExecSpec, ExitStatus, Stream};
 use hl_images::RuntimeConfig;
-use std::{fs, sync::Arc, time::Duration};
+use std::{fmt::Display, fs, future::Future, sync::Arc, time::Duration};
 use tokio::time::Instant;
 
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -18,6 +18,41 @@ pub enum CaseResult {
     Failed(String),
     ExpectedFailure(String),
     UnexpectedPass,
+    NotRun(String),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PhaseTiming {
+    pub setup_us: u64,
+    pub execution_us: u64,
+    pub payload_us: Option<u64>,
+    pub teardown_us: u64,
+}
+
+pub struct CaseOutcome {
+    pub result: CaseResult,
+    pub timing: PhaseTiming,
+}
+
+/// A provider service may be reused only after the preceding container was
+/// force-removed. Each case still receives a fresh image view, container name,
+/// process tree, and writable state.
+pub(super) struct Provider {
+    _state: tempfile::TempDir,
+    containers: hl_container::Containers,
+}
+
+impl Provider {
+    pub(super) async fn start() -> Result<Self, Error> {
+        let state = tempfile::tempdir()?;
+        let containers = hl_container::Containers::builder(Config::new(state.path()))
+            .build()
+            .await?;
+        Ok(Self {
+            _state: state,
+            containers,
+        })
+    }
 }
 
 impl CaseResult {
@@ -27,14 +62,24 @@ impl CaseResult {
             Self::Failed(error) => ("fail", diagnostic(error)),
             Self::ExpectedFailure(error) => ("xfail", diagnostic(error)),
             Self::UnexpectedPass => ("xpass", "unexpected pass".to_owned()),
+            Self::NotRun(reason) => ("skip", diagnostic(reason)),
         }
     }
 }
 
-pub async fn run_case(scenario: Arc<Scenario>, case_index: usize, target: Target) -> CaseResult {
+pub(super) async fn run_case_on(
+    provider: &Provider,
+    scenario: Arc<Scenario>,
+    case_index: usize,
+    target: Target,
+    sample: u16,
+) -> CaseOutcome {
     let case = &scenario.cases[case_index];
-    let outcome = execute_case(&scenario, case, target).await;
-    classify(outcome, case.expects_failure(target))
+    let (outcome, timing) = execute_case(provider, &scenario, case, target, sample).await;
+    CaseOutcome {
+        result: classify(outcome, case.expects_failure(target)),
+        timing,
+    }
 }
 
 fn classify(outcome: Result<(), Error>, expected_failure: bool) -> CaseResult {
@@ -46,8 +91,32 @@ fn classify(outcome: Result<(), Error>, expected_failure: bool) -> CaseResult {
     }
 }
 
-async fn execute_case(scenario: &Scenario, case: &ScenarioCase, target: Target) -> Result<(), Error> {
+async fn execute_case(
+    provider: &Provider,
+    scenario: &Scenario,
+    case: &ScenarioCase,
+    target: Target,
+    sample: u16,
+) -> (Result<(), Error>, PhaseTiming) {
+    let setup = Instant::now();
+    let mut timing = PhaseTiming::default();
+    let result = execute_case_inner(provider, scenario, case, target, sample, &mut timing).await;
+    if timing.setup_us == 0 {
+        timing.setup_us = micros(setup.elapsed());
+    }
+    (result, timing)
+}
+
+async fn execute_case_inner(
+    provider: &Provider,
+    scenario: &Scenario,
+    case: &ScenarioCase,
+    target: Target,
+    sample: u16,
+    timing: &mut PhaseTiming,
+) -> Result<(), Error> {
     validate_supported(case)?;
+    let setup = Instant::now();
     let image = tokio::time::timeout(IMAGE_TIMEOUT, TestImage::materialize(&case.image, &target.platform()))
         .await
         .map_err(|_| {
@@ -57,8 +126,22 @@ async fn execute_case(scenario: &Scenario, case: &ScenarioCase, target: Target) 
                 IMAGE_TIMEOUT.as_secs()
             )
         })??;
-    let outcome = execute_image(scenario, case, target, image.path(), image.runtime()).await;
+    install_fixtures(case, image.path())?;
+    timing.setup_us = micros(setup.elapsed());
+    let outcome = execute_image(
+        &provider.containers,
+        scenario,
+        case,
+        target,
+        sample,
+        image.path(),
+        image.runtime(),
+        timing,
+    )
+    .await;
+    let teardown = Instant::now();
     let release = image.release();
+    timing.teardown_us = timing.teardown_us.saturating_add(micros(teardown.elapsed()));
     combine(
         outcome,
         release.map_err(|error| format!("image release failed: {error}")),
@@ -82,37 +165,86 @@ fn validate_supported(case: &ScenarioCase) -> Result<(), Error> {
 }
 
 async fn execute_image(
+    containers: &hl_container::Containers,
     scenario: &Scenario,
     case: &ScenarioCase,
     target: Target,
+    sample: u16,
     image: &std::path::Path,
     runtime: &RuntimeConfig,
+    timing: &mut PhaseTiming,
 ) -> Result<(), Error> {
-    install_fixtures(case, image)?;
-    let state = tempfile::tempdir()?;
-    let containers = hl_container::Containers::builder(Config::new(state.path()))
-        .build()
-        .await?;
     let name = format!(
-        "testing-{}-{}-{}",
+        "testing-{}-{}-{}-{sample}",
         scenario.name,
         target.name(),
         case.id.replace('/', "-")
     );
     let spec = specification(case, target, image, runtime, &name)?;
     let timeout = Duration::from_secs(case.timeout);
-    let outcome = tokio::time::timeout(timeout, execute(&containers, case, runtime, image, spec, &name))
-        .await
-        .map_err(|_| format!("timed out after {} milliseconds", timeout.as_millis()))
-        .and_then(|result| result.map_err(|error| error.to_string()));
-    let cleanup = tokio::time::timeout(CLEANUP_TIMEOUT, containers.remove_force(&name))
-        .await
-        .map_err(|_| format!("cleanup timed out after {} seconds", CLEANUP_TIMEOUT.as_secs()))
-        .and_then(|result| result.map_err(|error| error.to_string()));
+    let (action, cleanup) = execute_phases(
+        timing,
+        async {
+            containers.create(spec).await?;
+            containers.start(&name).await
+        },
+        || async {
+            tokio::time::timeout(timeout, execute_actions(containers, case, runtime, image, &name))
+                .await
+                .map_err(|_| format!("timed out after {} milliseconds", timeout.as_millis()))
+                .and_then(|result| result.map_err(|error| error.to_string()))
+        },
+        async {
+            tokio::time::timeout(CLEANUP_TIMEOUT, containers.remove_force(&name))
+                .await
+                .map_err(|_| format!("cleanup timed out after {} seconds", CLEANUP_TIMEOUT.as_secs()))
+                .and_then(|result| result.map(|_| ()).map_err(|error| error.to_string()))
+        },
+    )
+    .await;
+    let outcome = action.and_then(|output| {
+        verify(case, output.status, &output.stdout, &output.stderr).map_err(|error| error.to_string())
+    });
     combine(
         outcome.map_err(Into::into),
         cleanup.map(|_| ()).map_err(|error| format!("cleanup failed: {error}")),
     )
+}
+
+fn micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
+async fn measured<T>(slot: &mut u64, future: impl Future<Output = T>) -> T {
+    let started = Instant::now();
+    let output = future.await;
+    *slot = slot.saturating_add(micros(started.elapsed()));
+    output
+}
+
+async fn execute_phases<T, E, S, A, AF, C>(
+    timing: &mut PhaseTiming,
+    setup: S,
+    action: A,
+    cleanup: C,
+) -> (Result<T, String>, Result<(), String>)
+where
+    E: Display,
+    S: Future<Output = Result<(), E>>,
+    A: FnOnce() -> AF,
+    AF: Future<Output = Result<T, String>>,
+    C: Future<Output = Result<(), String>>,
+{
+    let prepared = measured(&mut timing.setup_us, setup).await;
+    let action = measured(&mut timing.execution_us, async {
+        match prepared {
+            Ok(()) => action().await,
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await;
+    let cleanup = measured(&mut timing.teardown_us, cleanup).await;
+    (action, cleanup)
 }
 
 fn install_fixtures(case: &ScenarioCase, image: &std::path::Path) -> Result<(), Error> {
@@ -141,16 +273,13 @@ fn specification(
         .isolation(super::isolation::for_case(case)))
 }
 
-async fn execute(
+async fn execute_actions(
     containers: &hl_container::Containers,
     case: &ScenarioCase,
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
-    spec: ContainerSpec,
     name: &str,
-) -> Result<(), Error> {
-    containers.create(spec).await?;
-    containers.start(name).await?;
+) -> Result<ActionOutput, Error> {
     if matches!(
         case.actions.first(),
         Some(super::definition::ScenarioAction::Entrypoint)
@@ -158,7 +287,11 @@ async fn execute(
         let status = wait(containers, name, Duration::from_secs(case.timeout)).await?;
         let logs = containers.logs(name).await?;
         bounded(&logs)?;
-        return verify(case, status, &logs.stdout, &logs.stderr);
+        return Ok(ActionOutput {
+            status,
+            stdout: logs.stdout,
+            stderr: logs.stderr,
+        });
     }
     if let Some(readiness) = &case.readiness {
         let startup = run_exec(
@@ -218,7 +351,13 @@ async fn execute(
             break;
         }
     }
-    verify(case, status, &stdout, &stderr)
+    Ok(ActionOutput { status, stdout, stderr })
+}
+
+struct ActionOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 async fn run_api(
@@ -453,13 +592,16 @@ fn diagnostic(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CAPTURE_LIMIT, CaseResult, bounded_size, classify, combine, diagnostic, verify};
+    use super::{
+        CAPTURE_LIMIT, CaseResult, PhaseTiming, bounded_size, classify, combine, diagnostic, execute_phases, verify,
+    };
     use crate::{
         scenario::definition::{Class, ScenarioAction, ScenarioCase},
         suite::{Execution, Target},
     };
     use hl_container::ExitStatus;
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc, time::Duration};
+    use tokio::sync::Mutex;
 
     #[test]
     fn expected_failures_remain_visible() {
@@ -503,6 +645,8 @@ mod tests {
             fixtures: Vec::new(),
             readiness: None,
             timeout: 1,
+            warmups: 0,
+            repetitions: 1,
             exit: 0,
             stdout_contains: vec![marker],
             stdout_exact: None,
@@ -516,5 +660,39 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("execution failed"));
         assert!(message.contains("cleanup failed"));
+    }
+
+    #[tokio::test]
+    async fn injected_provider_boundaries_are_ordered_and_isolated() {
+        let mut timing = PhaseTiming::default();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let setup_events = Arc::clone(&events);
+        let action_events = Arc::clone(&events);
+        let cleanup_events = Arc::clone(&events);
+        let (action, cleanup) = execute_phases(
+            &mut timing,
+            async move {
+                tokio::time::sleep(Duration::from_millis(12)).await;
+                setup_events.lock().await.push("create-start");
+                Ok::<(), &'static str>(())
+            },
+            || async move {
+                tokio::time::sleep(Duration::from_millis(24)).await;
+                action_events.lock().await.push("guest-action");
+                Ok::<_, String>(7)
+            },
+            async move {
+                tokio::time::sleep(Duration::from_millis(36)).await;
+                cleanup_events.lock().await.push("force-remove");
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(action.unwrap(), 7);
+        assert!(cleanup.is_ok());
+        assert_eq!(*events.lock().await, ["create-start", "guest-action", "force-remove"]);
+        assert!(timing.setup_us >= 10_000);
+        assert!(timing.execution_us >= 20_000);
+        assert!(timing.teardown_us >= 30_000);
     }
 }

@@ -142,6 +142,8 @@ mod tests {
             fixtures: Vec::new(),
             readiness: None,
             timeout: 1,
+            warmups: 0,
+            repetitions: 1,
             exit: 0,
             stdout_contains: Vec::new(),
             stdout_exact: None,

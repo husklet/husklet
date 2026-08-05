@@ -319,6 +319,16 @@ Reports include minimum, median, p90, p99, coefficient of variation, and setup
 separately. Docker container creation, QEMU boot, image materialization, and
 Husklet startup must not be included in steady-state execution time.
 
+The repository scenario runner records `setup_us`, `execution_us`,
+`payload_us`, and `teardown_us` as separate durable columns. `payload_us` is
+explicitly `unavailable` until a workload supplies an in-guest monotonic phase;
+the runner never substitutes host wall time. `--warm-provider` retains only the
+provider service. Every case still gets a fresh image view, container, process
+tree, and writable state, and force-removal completes before that service can be
+reused. Any failed, timed-out, or expected-failure row evicts the provider
+conservatively so uncertain state cannot leak into the next case. Without the
+flag, every row receives an independent provider service.
+
 ## Execution and isolation
 
 Runtime compatibility tests use warmed providers without placing the complete

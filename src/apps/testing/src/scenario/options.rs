@@ -25,6 +25,9 @@ pub(crate) struct Options {
     /// Resume completed case/target keys from the durable partial result.
     #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
     pub(super) resume: bool,
+    /// Reuse provider services while retaining a fresh image view and container per case.
+    #[arg(long, default_value_t = false)]
+    pub(super) warm_provider: bool,
     /// Relative durable result path beneath the repository workspace.
     #[arg(long, default_value = "target/testing/scenarios/results.tsv", value_parser = parse_results)]
     pub(super) results: PathBuf,
@@ -119,5 +122,7 @@ mod tests {
         assert_eq!(cli.options.scenario.as_deref(), Some("languages"));
         assert_eq!(cli.options.case.as_deref(), Some("languages/perl-sum-538"));
         assert!(TestCli::try_parse_from(["scenarios", "--class", "smoke"]).is_err());
+        let warm = TestCli::try_parse_from(["scenarios", "--warm-provider"]).unwrap();
+        assert!(warm.options.warm_provider);
     }
 }
