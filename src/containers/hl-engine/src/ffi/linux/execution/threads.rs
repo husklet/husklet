@@ -547,6 +547,29 @@ impl ThreadSet {
         }
     }
 
+    pub(super) fn deliver_process_signal(&self, signal: i32) -> Result<(), RuntimeThreadError> {
+        let signal = hl_task::SignalNumber::new(u8::try_from(signal).map_err(|_| RuntimeThreadError::Invalid)?)
+            .map_err(|_| RuntimeThreadError::Invalid)?;
+        let (tasks, process) = {
+            let tasks = self.tasks.clone().ok_or(RuntimeThreadError::Invalid)?;
+            let state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+            let process = state
+                .machines
+                .values()
+                .next()
+                .map(|run| run.process)
+                .ok_or(RuntimeThreadError::Missing)?;
+            (tasks, process)
+        };
+        tasks
+            .enqueue_signal(
+                hl_task::PendingTarget::Process(process),
+                hl_task::SignalInfo::bare(signal),
+            )
+            .map_err(|_| RuntimeThreadError::Invalid)?;
+        Ok(())
+    }
+
     pub(super) fn signal(&self) -> Option<(Arc<RuntimeSyscallRouter>, i32)> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.machines.values().find_map(|run| {

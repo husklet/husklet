@@ -239,7 +239,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             lifecycle.process = Some(process);
             lifecycle.start_in_progress = false;
             let pending = lifecycle.pending_stop;
-            lifecycle.phase = if pending.is_some() {
+            lifecycle.phase = if matches!(pending, Some(StopRequest::Force)) {
                 EnginePhase::Stopping
             } else {
                 EnginePhase::Running
@@ -257,19 +257,25 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
     }
 
     pub fn terminate(&self, request: StopRequest) -> Result<(), EngineError> {
+        let terminal = matches!(request, StopRequest::Force);
         let process = {
             let mut lifecycle = self.lock()?;
             match lifecycle.phase {
                 EnginePhase::Created | EnginePhase::Starting => {
                     lifecycle.pending_stop = Some(request);
-                    lifecycle.phase = EnginePhase::Stopping;
+                    if terminal {
+                        lifecycle.phase = EnginePhase::Stopping;
+                    }
                     return Ok(());
                 }
                 EnginePhase::Running => {
                     lifecycle.pending_stop = Some(request);
-                    lifecycle.phase = EnginePhase::Stopping;
+                    if terminal {
+                        lifecycle.phase = EnginePhase::Stopping;
+                    }
                     lifecycle.process
                 }
+                EnginePhase::Stopping if !terminal => lifecycle.process,
                 EnginePhase::Stopping => return Ok(()),
                 EnginePhase::Exited => return Err(EngineError::Busy),
                 EnginePhase::Destroyed => return Err(EngineError::Destroyed),

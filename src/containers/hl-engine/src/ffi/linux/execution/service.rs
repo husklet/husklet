@@ -60,7 +60,13 @@ impl GuestExecutionPort for GuestExecutor {
         let key = assembly as *const RuntimeAssembly as usize;
         let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
         if let Some(threads) = state.running.get(&key) {
-            threads.cancel_all(request.signal());
+            if matches!(request, StopRequest::Force) {
+                threads.cancel_all(request.signal());
+            } else {
+                threads
+                    .deliver_process_signal(request.signal())
+                    .map_err(|_| EngineError::StopFailed)?;
+            }
         } else {
             state.exits.entry(key).or_insert_with(|| Self::signal(request.signal()));
         }

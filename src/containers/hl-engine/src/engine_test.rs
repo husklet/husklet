@@ -172,6 +172,21 @@ fn stop_during_start() {
 }
 
 #[test]
+fn guest_signals_keep_the_engine_runnable_and_remain_ordered() {
+    let (engine, launcher, _) = Fixture::engine(GuestIsa::Aarch64);
+    launcher.release_launch();
+    engine.start().unwrap();
+    for request in [StopRequest::Signal(19), StopRequest::Signal(18), StopRequest::Signal(1)] {
+        engine.terminate(request).unwrap();
+        assert_eq!(engine.phase().unwrap(), EnginePhase::Running);
+    }
+    assert_eq!(
+        launcher.state.lock().unwrap().stops,
+        [StopRequest::Signal(19), StopRequest::Signal(18), StopRequest::Signal(1)]
+    );
+}
+
+#[test]
 fn wait_is_idempotent() {
     let (engine, launcher, workspaces) = Fixture::engine(GuestIsa::X86_64);
     launcher.release_launch();
