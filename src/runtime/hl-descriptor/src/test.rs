@@ -362,7 +362,7 @@ fn transferred_description_preserves() {
     let transferred = sender.export_description(source).unwrap();
 
     let receiver = DescriptorTable::new(8).unwrap();
-    let received = receiver
+    let installed = receiver
         .install_description(
             0,
             &transferred,
@@ -371,7 +371,7 @@ fn transferred_description_preserves() {
         .unwrap();
 
     let source_snapshot = sender.snapshot(source).unwrap();
-    let received_snapshot = receiver.snapshot(received).unwrap();
+    let received_snapshot = receiver.snapshot(installed).unwrap();
     assert_eq!(
         source_snapshot.description_identity,
         received_snapshot.description_identity
@@ -453,7 +453,8 @@ fn apply_model_operation(table: &DescriptorTable, model: &mut BTreeMap<i32, (u64
             assert_eq!(result.is_ok(), expected.is_some());
         }
         5 => {
-            let flags = DescriptorFlags::from_bits(((random >> 8) as u32) & DescriptorFlags::CLOSE_ON_EXEC);
+            let random_flags = (random >> 8) & u64::from(DescriptorFlags::CLOSE_ON_EXEC);
+            let flags = DescriptorFlags::from_bits(u32::try_from(random_flags).expect("masked flags fit in u32"));
             let result = table.set_flags(selected, flags);
             if let Some(entry) = model.get_mut(&selected) {
                 entry.1 = flags;

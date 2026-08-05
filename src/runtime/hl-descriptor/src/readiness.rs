@@ -76,7 +76,11 @@ struct CallbackAdmission<'a> {
 
 impl Drop for CallbackAdmission<'_> {
     fn drop(&mut self) {
-        let mut state = self.entry.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .entry
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.callbacks_in_flight -= 1;
         self.entry.quiescent.notify_all();
     }
@@ -85,7 +89,7 @@ impl Drop for CallbackAdmission<'_> {
 impl Entry {
     fn notify(&self) {
         {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.active {
                 return;
             }
@@ -100,10 +104,13 @@ impl Entry {
 
     fn quiesce(&self) {
         let local_callbacks = CallbackScope::depth(self);
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.active = false;
         while state.callbacks_in_flight > local_callbacks {
-            state = self.quiescent.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self
+                .quiescent
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -126,7 +133,11 @@ pub struct ReadinessRegistry {
 
 impl std::fmt::Debug for ReadinessRegistry {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         formatter
             .debug_struct("ReadinessRegistry")
             .field("subscriptions", &state.entries.len())
@@ -153,7 +164,11 @@ impl ReadinessRegistry {
         &self,
         observer: Arc<dyn ReadinessObserver>,
     ) -> Result<Box<dyn ReadinessSubscription>, ObjectError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(ObjectError::Retired);
         }
@@ -184,7 +199,7 @@ impl ReadinessRegistry {
             .inner
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entries
             .values()
             .cloned()
@@ -197,7 +212,11 @@ impl ReadinessRegistry {
     /// Rejects new registrations and synchronously quiesces existing callbacks.
     pub fn close(&self) {
         let entries = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.closed {
                 return;
             }
@@ -228,7 +247,7 @@ impl ReadinessSubscription for Registration {
             registry
                 .state
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .entries
                 .remove(&self.token);
         }

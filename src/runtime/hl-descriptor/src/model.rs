@@ -276,7 +276,10 @@ impl SignalSource {
         if description.retired.load(Ordering::Acquire) {
             return None;
         }
-        let state = description.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = description
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Some(SignalDelivery {
             owner: state.owner,
             signal: state.signal,
@@ -290,7 +293,10 @@ impl SignalSource {
         if description.retired.load(Ordering::Acquire) {
             return None;
         }
-        let state = description.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = description
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.status.contains(StatusFlags::ASYNC).then_some(SignalDelivery {
             owner: state.owner,
             signal: state.signal,
@@ -321,12 +327,12 @@ impl SignalOwner {
 #[repr(transparent)]
 pub struct StatusFlags(u32);
 impl StatusFlags {
-    pub const ACCESS_MODE_MASK: u32 = 0o00000003;
-    pub const APPEND: u32 = 0o00002000;
-    pub const NONBLOCKING: u32 = 0o00004000;
-    pub const DIRECT: u32 = 0o00040000;
-    pub const ASYNC: u32 = 0o00020000;
-    pub const PATH_ONLY: u32 = 0o10000000;
+    pub const ACCESS_MODE_MASK: u32 = 0o00_000_003;
+    pub const APPEND: u32 = 0o00_002_000;
+    pub const NONBLOCKING: u32 = 0o00_004_000;
+    pub const DIRECT: u32 = 0o00_040_000;
+    pub const ASYNC: u32 = 0o00_020_000;
+    pub const PATH_ONLY: u32 = 0o10_000_000;
     pub const SETTABLE_MASK: u32 = Self::APPEND | Self::NONBLOCKING | Self::DIRECT | Self::ASYNC;
     #[must_use]
     pub const fn from_bits(bits: u32) -> Self {
@@ -453,13 +459,13 @@ impl OpenDescription {
             let subscription = self
                 .async_subscription
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
             drop(subscription);
             let notification = self
                 .notify_subscription
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take();
             drop(notification);
             self.object.retire();

@@ -84,7 +84,7 @@ impl OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .offset
     }
 
@@ -92,7 +92,7 @@ impl OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .offset = offset;
     }
 
@@ -101,7 +101,7 @@ impl OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .status
     }
 
@@ -256,7 +256,7 @@ impl OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .status = status;
         Ok(())
     }
@@ -282,6 +282,7 @@ impl OperationLease {
         self.description.object.seals()
     }
 
+    #[must_use]
     pub fn pipe_transfer_endpoint(&self) -> Option<&dyn PipeTransferEndpoint> {
         self.description.object.pipe_transfer_endpoint()
     }
@@ -315,7 +316,7 @@ impl OperationLease {
                 .description
                 .async_subscription
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::replace(&mut *registration, replacement)
         };
         drop(previous);
@@ -329,7 +330,7 @@ impl OperationLease {
                 .description
                 .notify_subscription
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::replace(&mut *registration, replacement)
         };
         drop(previous);

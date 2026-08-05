@@ -83,7 +83,7 @@ impl DescriptorTable {
         if !self.checkpoint.frozen() {
             return Err(crate::DescriptorError::Corrupt);
         }
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let description = state
             .entries
             .values()
@@ -99,7 +99,7 @@ impl DescriptorTable {
     pub fn release_checkpoint_roots(&self) {
         self.state
             .write()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .checkpoint_roots
             .clear();
     }
@@ -111,7 +111,7 @@ impl DescriptorTable {
         if !self.checkpoint.frozen() {
             return Err(DescriptorCheckpointError::StaleGeneration);
         }
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.reservations.is_empty() {
             return Err(DescriptorCheckpointError::StaleGeneration);
         }
@@ -136,7 +136,10 @@ impl DescriptorTable {
             if descriptions.contains_key(&description.identity) {
                 continue;
             }
-            let description_state = description.state.lock().unwrap_or_else(|error| error.into_inner());
+            let description_state = description
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let object = objects.snapshot(description.identity, description.object.as_ref())?;
             descriptions.insert(
                 description.identity,
@@ -154,7 +157,10 @@ impl DescriptorTable {
             if descriptions.contains_key(&description.identity) {
                 continue;
             }
-            let description_state = description.state.lock().unwrap_or_else(|error| error.into_inner());
+            let description_state = description
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let object = objects.snapshot(description.identity, description.object.as_ref())?;
             descriptions.insert(
                 description.identity,

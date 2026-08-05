@@ -52,7 +52,7 @@ struct Objects {
 
 impl DescriptorObjectCheckpoint for Objects {
     fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        Ok(vec![identity as u8])
+        Ok(vec![u8::try_from(identity).expect("test identity fits in one byte")])
     }
 
     fn rebind(

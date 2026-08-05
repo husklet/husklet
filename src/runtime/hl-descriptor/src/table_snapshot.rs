@@ -6,7 +6,7 @@ impl DescriptorTable {
     /// Captures every active descriptor without changing table or OFD state.
     #[must_use]
     pub fn active_snapshots(&self) -> Vec<DescriptorSnapshot> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .entries
             .iter()
@@ -15,7 +15,7 @@ impl DescriptorTable {
                     .description
                     .state
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner());
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 DescriptorSnapshot {
                     number: *number,
                     description_identity: descriptor.description.identity,

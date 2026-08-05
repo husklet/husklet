@@ -74,7 +74,11 @@ impl DescriptionInstallTransaction<'_, '_> {
     }
 
     pub fn commit(mut self) -> Result<Vec<i32>, DescriptorError> {
-        let mut state = self.table.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .table
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (number, generation) in &self.numbers {
             if state.reservations.get(number) != Some(generation) {
                 return Err(DescriptorError::StaleReservation);
@@ -103,7 +107,11 @@ impl Drop for DescriptionInstallTransaction<'_, '_> {
         if self.committed {
             return;
         }
-        let mut state = self.table.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .table
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (number, generation) in &self.numbers {
             if state.reservations.get(number) == Some(generation) {
                 state.reservations.remove(number);
@@ -120,7 +128,7 @@ impl DescriptorTable {
         let descriptor = self.lookup(number)?;
         self.state
             .write()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .transfers
             .insert(descriptor.description.identity, Arc::downgrade(&descriptor.description));
         Ok(DescriptionRef::new(descriptor.description))
@@ -134,7 +142,7 @@ impl DescriptorTable {
         flags: DescriptorFlags,
     ) -> Result<i32, DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let number = state.lowest_free(minimum)?;
         let generation = state.advance_generation(number);
         transferred.description.retain_descriptor();
@@ -156,7 +164,7 @@ impl DescriptorTable {
         transferred: &'rights [DescriptionRef],
         flags: DescriptorFlags,
     ) -> Result<DescriptionInstallTransaction<'table, 'rights>, DescriptorError> {
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut selected = Vec::with_capacity(transferred.len());
         let mut candidate = minimum;
         for _ in transferred {
@@ -181,7 +189,7 @@ impl DescriptorTable {
         })
     }
 
-    /// Atomically installs a complete SCM_RIGHTS transfer set.
+    /// Atomically installs a complete `SCM_RIGHTS` transfer set.
     ///
     /// Capacity and target generations are determined before any description
     /// reference becomes visible.
@@ -224,8 +232,13 @@ impl PreparedDescriptorInstall<'_> {
     ///
     /// The retained checkpoint admission and private reservation make this
     /// final step infallible.
+    #[must_use]
     pub fn publish(mut self) -> i32 {
-        let mut state = self.table.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .table
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         debug_assert_eq!(state.reservations.get(&self.number), Some(&self.generation),);
         state.reservations.remove(&self.number);
         state.entries.insert(
@@ -242,7 +255,11 @@ impl Drop for PreparedDescriptorInstall<'_> {
         if self.published {
             return;
         }
-        let mut state = self.table.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .table
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.reservations.get(&self.number) == Some(&self.generation) {
             state.reservations.remove(&self.number);
         }
@@ -275,8 +292,13 @@ impl PreparedInstallBatch<'_> {
     }
 
     /// Publishes every descriptor atomically under one table write lock.
+    #[must_use]
     pub fn publish_all(mut self) -> Vec<i32> {
-        let mut state = self.table.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .table
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (number, generation, _, _) in &self.entries {
             debug_assert_eq!(state.reservations.get(number), Some(generation));
         }
@@ -296,7 +318,11 @@ impl Drop for PreparedInstallBatch<'_> {
         if self.published {
             return;
         }
-        let mut state = self.table.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .table
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for (number, generation, _, _) in &self.entries {
             if state.reservations.get(number) == Some(generation) {
                 state.reservations.remove(number);
@@ -318,7 +344,7 @@ impl DescriptorTable {
         if !std::ptr::eq(self, reservation.table) {
             return Err(DescriptorError::InvalidArgument);
         }
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.reservations.get(&reservation.number) != Some(&reservation.generation) {
             return Err(DescriptorError::StaleReservation);
         }
@@ -347,7 +373,7 @@ impl DescriptorTable {
         flags: DescriptorFlags,
     ) -> Result<PreparedDescriptorInstall<'_>, DescriptorError> {
         let admission = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let number = state.lowest_free(minimum)?;
         let generation = state.advance_generation(number);
         state.reservations.insert(number, generation);
@@ -372,7 +398,7 @@ impl DescriptorTable {
         objects: Vec<(Arc<dyn OpenFileDescription>, StatusFlags, DescriptorFlags)>,
     ) -> Result<PreparedInstallBatch<'_>, DescriptorError> {
         let admission = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut selected = Vec::with_capacity(objects.len());
         let mut candidate = minimum;
         for _ in &objects {

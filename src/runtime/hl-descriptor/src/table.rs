@@ -82,7 +82,11 @@ impl DescriptorTable {
     /// Updates the process-visible allocation ceiling while retaining the
     /// table's construction-time safety capacity.
     pub fn set_admission_limit(&self, limit: u64) {
-        let capacity = self.state.read().unwrap_or_else(|error| error.into_inner()).limit;
+        let capacity = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .limit;
         self.admission_limit
             .store(limit.min(capacity as u64) as i32, Ordering::Release);
     }
@@ -90,7 +94,7 @@ impl DescriptorTable {
     /// Reserves the lowest free descriptor at or above `minimum`.
     pub fn reserve(&self, minimum: i32) -> Result<Reservation<'_>, DescriptorError> {
         let admission = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let number = state.lowest_free_below(minimum, self.admission_limit.load(Ordering::Acquire))?;
         let generation = state.advance_generation(number);
         state.reservations.insert(number, generation);
@@ -106,7 +110,7 @@ impl DescriptorTable {
     /// Reserves one exact descriptor number without replacing a live entry.
     pub fn reserve_exact(&self, number: i32) -> Result<Reservation<'_>, DescriptorError> {
         let admission = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.validate_number(number)?;
         if number >= self.admission_limit.load(Ordering::Acquire) {
             return Err(DescriptorError::BadDescriptor);
@@ -138,7 +142,7 @@ impl DescriptorTable {
         }
         let identity = self.next_description_identity.fetch_add(1, Ordering::Relaxed);
         let description = Arc::new(OpenDescription::new(object, identity, status));
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.reservations.get(&reservation.number) != Some(&reservation.generation) {
             return Err(DescriptorError::StaleReservation);
         }
@@ -175,7 +179,7 @@ impl DescriptorTable {
         description: Arc<dyn OpenFileDescription>,
         flags: DescriptorFlags,
     ) -> Result<Option<Descriptor>, DescriptorError> {
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.validate_number(number)?;
         if state.reservations.contains_key(&number) {
             return Err(DescriptorError::AlreadyExists);
@@ -193,7 +197,7 @@ impl DescriptorTable {
 
     /// Returns a snapshot of one descriptor entry.
     pub(crate) fn lookup(&self, number: i32) -> Result<Descriptor, DescriptorError> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .entries
             .get(&number)
@@ -212,15 +216,14 @@ impl DescriptorTable {
     }
 
     fn pin_entry(&self, number: i32, admitted: bool) -> Result<OperationLease, DescriptorError> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
-        let descriptor = match state.entries.get(&number) {
-            Some(descriptor) => descriptor,
-            None => {
-                if admitted {
-                    self.checkpoint.release();
-                }
-                return Err(DescriptorError::BadDescriptor);
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let descriptor = if let Some(descriptor) = state.entries.get(&number) {
+            descriptor
+        } else {
+            if admitted {
+                self.checkpoint.release();
             }
+            return Err(DescriptorError::BadDescriptor);
         };
         let description = descriptor.description.clone();
         let descriptor_generation = descriptor.generation;
@@ -237,7 +240,7 @@ impl DescriptorTable {
     /// Updates only the descriptor-local flags.
     pub fn set_flags(&self, number: i32, flags: DescriptorFlags) -> Result<(), DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptor = state.entries.get_mut(&number).ok_or(DescriptorError::BadDescriptor)?;
         descriptor.flags = flags;
         Ok(())
@@ -246,7 +249,7 @@ impl DescriptorTable {
     /// Reads descriptor-local flags without exposing the table entry.
     pub fn flags(&self, number: i32) -> Result<DescriptorFlags, DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .entries
             .get(&number)
@@ -257,7 +260,7 @@ impl DescriptorTable {
     /// Closes one descriptor number.
     pub fn close(&self, number: i32) -> Result<(), DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptor = state.entries.remove(&number).ok_or(DescriptorError::BadDescriptor)?;
         state.advance_generation(number);
         drop(state);
@@ -272,7 +275,7 @@ impl DescriptorTable {
     /// `dup` and `F_DUPFD` pass [`DescriptorFlags::default`].
     pub fn duplicate(&self, source: i32, minimum: i32, flags: DescriptorFlags) -> Result<i32, DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let source = state.entries.get(&source).ok_or(DescriptorError::BadDescriptor)?;
         let description = source.description.clone();
         let transfer_dependencies = source.transfer_dependencies.clone();
@@ -298,7 +301,7 @@ impl DescriptorTable {
         operation: ExactDuplicate,
     ) -> Result<i32, DescriptorError> {
         let _checkpoint = self.checkpoint.operation()?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let source_descriptor = state.entries.get(&source).ok_or(DescriptorError::BadDescriptor)?;
         let description = source_descriptor.description.clone();
         let transfer_dependencies = source_descriptor.transfer_dependencies.clone();
@@ -334,7 +337,7 @@ impl DescriptorTable {
     /// Removes all close-on-exec descriptors and returns their former numbers.
     pub fn close_on_exec(&self) -> Vec<i32> {
         let _checkpoint = self.checkpoint.operation_wait();
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let closed: Vec<i32> = state
             .entries
             .iter()
@@ -359,7 +362,7 @@ impl DescriptorTable {
     #[must_use]
     pub fn fork(&self) -> Self {
         let _checkpoint = self.checkpoint.operation_wait();
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entries = state.entries.clone();
         for descriptor in entries.values() {
             descriptor.description.retain_descriptor();
@@ -382,7 +385,7 @@ impl DescriptorTable {
     /// Verifies reference counts, generation publication, and reservation
     /// exclusion. This is intended for debug gates and differential tests.
     pub fn validate(&self) -> Result<(), DescriptorError> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state
             .reservations
             .keys()
@@ -415,7 +418,7 @@ impl DescriptorTable {
     pub fn len(&self) -> usize {
         self.state
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entries
             .len()
     }
@@ -427,7 +430,7 @@ impl DescriptorTable {
     }
 
     fn cancel_reservation(&self, number: i32, generation: u32) {
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.reservations.get(&number) == Some(&generation) {
             state.reservations.remove(&number);
         }
@@ -436,7 +439,7 @@ impl DescriptorTable {
     /// Prevents new operations and waits for admitted operations to finish.
     pub fn freeze_checkpoint(&self) {
         self.checkpoint.freeze();
-        drop(self.state.write().unwrap_or_else(|error| error.into_inner()));
+        drop(self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
 
     /// Reopens a table after checkpoint capture or restore.

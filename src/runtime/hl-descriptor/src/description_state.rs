@@ -5,13 +5,13 @@ use crate::{DescriptorError, DescriptorSnapshot, DescriptorTable, LeaseKind, Sig
 impl DescriptorTable {
     /// Returns a pointer-free snapshot of descriptor and shared OFD state.
     pub fn snapshot(&self, number: i32) -> Result<DescriptorSnapshot, DescriptorError> {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptor = state.entries.get(&number).ok_or(DescriptorError::BadDescriptor)?;
         let description_state = descriptor
             .description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(DescriptorSnapshot {
             number,
             description_identity: descriptor.description.identity,
@@ -34,7 +34,7 @@ impl DescriptorTable {
             .description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .status = status;
         Ok(())
     }
@@ -47,7 +47,7 @@ impl DescriptorTable {
             .description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .offset = offset;
         Ok(())
     }
@@ -60,7 +60,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .owner
     }
 
@@ -69,7 +69,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .owner = owner;
     }
 
@@ -79,7 +79,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .signal
     }
 
@@ -88,7 +88,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .signal = signal;
     }
 
@@ -98,7 +98,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .lease
     }
 
@@ -107,7 +107,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .lease = lease;
     }
 
@@ -117,7 +117,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write_life_hint
     }
 
@@ -126,7 +126,7 @@ impl crate::OperationLease {
         self.description
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write_life_hint = hint;
     }
 }

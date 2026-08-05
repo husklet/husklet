@@ -38,13 +38,13 @@ fn queued_transfer_outlives() {
     assert_eq!(lifecycle.retired.load(Ordering::Relaxed), 0);
 
     let receiver = DescriptorTable::new(8).unwrap();
-    let received = receiver
+    let installed = receiver
         .install_description(0, &queued, DescriptorFlags::default())
         .unwrap();
     drop(queued);
     assert_eq!(lifecycle.retired.load(Ordering::Relaxed), 0);
 
-    receiver.close(received).unwrap();
+    receiver.close(installed).unwrap();
     assert_eq!(lifecycle.retired.load(Ordering::Relaxed), 1);
     assert_eq!(lifecycle.closed.load(Ordering::Relaxed), 1);
 }
