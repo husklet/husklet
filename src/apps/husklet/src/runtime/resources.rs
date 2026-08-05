@@ -3,32 +3,9 @@
 //! [`Daemon::ensure`] is idempotent: it returns the socket path, starting the daemon on first use.
 
 use crate::config::WorkspaceConfig;
+use crate::ffi::ExclusiveFileLock;
 use crate::paths;
 use std::path::PathBuf;
-
-struct Startup(std::fs::File);
-
-impl Startup {
-    fn acquire(path: &std::path::Path) -> std::io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path)?;
-        // SAFETY: `file` owns a valid descriptor. `flock` retains no pointer or Rust-managed state.
-        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(Self(file))
-    }
-}
-
-impl Drop for Startup {
-    fn drop(&mut self) {
-        // SAFETY: the lease owns this descriptor until after the unlock call.
-        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.0), libc::LOCK_UN) };
-    }
-}
 
 pub struct Daemon {
     directory: PathBuf,
@@ -69,7 +46,7 @@ impl Daemon {
         if let Some(parent) = self.socket.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let _startup = Startup::acquire(&dir.join("startup.lock"))?;
+        let _startup = ExclusiveFileLock::acquire(&dir.join("startup.lock"))?;
         let sock = self.socket();
 
         if self.is_up() {
@@ -204,7 +181,7 @@ fn daemon_bin() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{Daemon, Startup};
+    use super::Daemon;
 
     #[test]
     fn startup_reports_an_exited_daemon_without_waiting_for_timeout() {
@@ -259,21 +236,5 @@ mod tests {
 
         assert_eq!(arm.platform, hl_images::Platform::linux_arm64());
         assert_eq!(amd.platform, hl_images::Platform::linux_amd64());
-    }
-
-    #[test]
-    fn daemon_startup_is_serialized_across_callers() {
-        let temporary = tempfile::tempdir().unwrap();
-        let path = temporary.path().join("startup.lock");
-        let lease = Startup::acquire(&path).unwrap();
-        let waiter = std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            let _next = Startup::acquire(&path).unwrap();
-            started.elapsed()
-        });
-        std::thread::sleep(std::time::Duration::from_millis(60));
-        drop(lease);
-
-        assert!(waiter.join().unwrap() >= std::time::Duration::from_millis(40));
     }
 }

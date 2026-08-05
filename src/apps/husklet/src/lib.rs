@@ -5,4 +5,7 @@ pub mod logging;
 pub mod paths;
 
 #[cfg(feature = "runtime")]
+mod ffi;
+
+#[cfg(feature = "runtime")]
 pub mod runtime;
