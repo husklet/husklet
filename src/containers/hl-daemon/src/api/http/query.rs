@@ -10,8 +10,10 @@ where
 
 pub(super) fn parse_flag(value: &str) -> Option<bool> {
     match value {
-        "1" | "true" | "True" | "TRUE" => Some(true),
-        "0" | "false" | "False" | "FALSE" | "" => Some(false),
+        "1" => Some(true),
+        "0" | "" => Some(false),
+        value if value.eq_ignore_ascii_case("true") => Some(true),
+        value if value.eq_ignore_ascii_case("false") => Some(false),
         _ => None,
     }
 }
@@ -20,7 +22,14 @@ pub(super) fn parse_flag(value: &str) -> Option<bool> {
 mod tests {
     #[test]
     fn docker_boolean_spellings_are_explicit() {
-        for (raw, expected) in [("1", true), ("true", true), ("0", false), ("false", false)] {
+        for (raw, expected) in [
+            ("1", true),
+            ("true", true),
+            ("TrUe", true),
+            ("0", false),
+            ("false", false),
+            ("FaLsE", false),
+        ] {
             assert_eq!(super::parse_flag(raw), Some(expected));
         }
         assert_eq!(super::parse_flag("yes"), None);
