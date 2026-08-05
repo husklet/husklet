@@ -608,13 +608,15 @@ int main(void) {
             UINT32_C(0x4ee2cc20), /* fmls v0.2d,v1.2d,v2.2d */
             UINT32_C(0x4e21dbf9), /* scvtf v25.4s,v31.4s */
             UINT32_C(0x6e61d820), /* ucvtf v0.2d,v1.2d */
+            UINT32_C(0x1e22003c), /* scvtf s28,w1 */
+            UINT32_C(0x9e3903e5), /* fcvtzu x5,s31 */
             UINT32_C(0xd4000001), /* svc */
         };
         const hl_a64_source_span simd_span = {
             0x1f00, (const uint8_t *)simd_words, sizeof(simd_words), 3, 4};
         const hl_a64_source simd_source = {&simd_span, 1, 3, 4};
         CHECK(hl_a64_trace_build(&simd_source, 0x1f00, 7, code, capacity, &trace));
-        CHECK(trace.instruction_count == 7 && trace.source_last == 0x1f1c &&
+        CHECK(trace.instruction_count == 9 && trace.source_last == 0x1f24 &&
               trace.terminal == HL_NATIVE_EXIT_SYSCALL);
         const uint32_t invalid_words[] = {
             UINT32_C(0x6e3ecfbf), /* unallocated U=1 FMLA neighbor */

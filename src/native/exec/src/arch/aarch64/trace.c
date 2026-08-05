@@ -10,6 +10,7 @@
 #include "direct.h"
 #include "divide.h"
 #include "field.h"
+#include "fp_convert.h"
 #include "fp_move.h"
 #include "floating.h"
 #include "logical.h"
@@ -121,6 +122,7 @@ static int body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
            hl_a64_arithmetic_body(assembler, word) || hl_a64_bitwise_body(assembler, word) ||
            hl_a64_crypto_body(assembler, word) ||
            hl_a64_broadcast_body(assembler, word) ||
+           hl_a64_fp_convert_body(assembler, word) ||
            hl_a64_fp_move_body(assembler, word) ||
            hl_a64_floating_body(assembler, word) ||
            hl_a64_pcrel_body(assembler, word, pc) || hl_a64_field_body(assembler, word) ||

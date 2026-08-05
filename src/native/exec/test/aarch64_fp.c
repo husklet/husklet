@@ -1,4 +1,5 @@
 #include "../src/arch/aarch64/entry.h"
+#include "../src/arch/aarch64/fp_convert.h"
 #include "../src/arch/aarch64/fp_move.h"
 #include "../include/executor.h"
 
@@ -29,7 +30,14 @@ int main(void) {
         0x9eae005eu, /* fmov x30,v2.d[1] */
         0x9e6703e3u, /* fmov d3,xzr */
     };
+    const uint32_t conversions[] = {
+        0x1e22003cu, /* scvtf s28,w1 */
+        0x9e3903e5u, /* fcvtzu x5,s31 */
+        0x1e220380u, /* scvtf s0,w28 */
+        0x9e3903fcu, /* fcvtzu x28,s31 */
+    };
     size_t offsets[sizeof(words) / sizeof(words[0])];
+    size_t conversion_offsets[sizeof(conversions) / sizeof(conversions[0])];
     long page = sysconf(_SC_PAGESIZE);
     size_t capacity = (size_t)page * 2;
     uint8_t *code = mmap(NULL, capacity, PROT_READ | PROT_WRITE,
@@ -40,6 +48,10 @@ int main(void) {
     for (size_t index = 0; index < sizeof(words) / sizeof(words[0]); index++) {
         offsets[index] = hl_a64_assembler_size(&assembler);
         CHECK(hl_a64_fp_move_emit(&assembler, words[index], 0xc000 + index * 4));
+    }
+    for (size_t index = 0; index < sizeof(conversions) / sizeof(conversions[0]); index++) {
+        conversion_offsets[index] = hl_a64_assembler_size(&assembler);
+        CHECK(hl_a64_fp_convert_emit(&assembler, conversions[index], 0xc100 + index * 4));
     }
     CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
 
@@ -73,6 +85,18 @@ int main(void) {
     cpu.vectors[6] = cpu.vectors[7] = UINT64_MAX;
     execute(&cpu, code + offsets[7]);
     CHECK(cpu.vectors[6] == 0 && cpu.vectors[7] == 0);
+    cpu.registers[1] = 7;
+    execute(&cpu, code + conversion_offsets[0]);
+    CHECK((uint32_t)cpu.vectors[56] == UINT32_C(0x40e00000));
+    cpu.vectors[62] = UINT32_C(0x40fccccd); /* 7.9f */
+    execute(&cpu, code + conversion_offsets[1]);
+    CHECK(cpu.registers[5] == 7);
+    cpu.registers[28] = 9;
+    execute(&cpu, code + conversion_offsets[2]);
+    CHECK((uint32_t)cpu.vectors[0] == UINT32_C(0x41100000));
+    cpu.vectors[62] = UINT32_C(0x41180000); /* 9.5f */
+    execute(&cpu, code + conversion_offsets[3]);
+    CHECK(cpu.registers[28] == 9);
     CHECK(cpu.flags == UINT64_C(0xb0000000));
     CHECK(cpu.tls == UINT64_C(0x123456789abcdef0));
     CHECK(munmap(code, capacity) == 0);
@@ -87,6 +111,7 @@ int main(void) {
     CHECK(hl_a64_assembler_size(&assembler) == 0);
     CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
     CHECK(!hl_a64_fp_move_emit(&assembler, 0x9e780020u, 0xd000));
+    CHECK(!hl_a64_fp_convert_emit(&assembler, 0x1ee20020u, 0xd000));
     return 0;
 #endif
 }
