@@ -72,13 +72,9 @@ impl Queue {
             changed: Condvar::new(),
             scheduled: Condvar::new(),
         });
-        let worker_inner = Arc::clone(&inner);
-        let worker = std::thread::Builder::new()
-            .name(String::from("hl-deadline"))
-            .spawn(move || Self::serve(worker_inner))?;
         Ok(Arc::new(Self {
             inner,
-            worker: Mutex::new(Some(worker)),
+            worker: Mutex::new(None),
         }))
     }
 
@@ -103,6 +99,7 @@ impl Queue {
     }
 
     fn insert(&self, deadline: u64, callback: Option<Arc<dyn Fn() + Send + Sync>>) -> Result<u64, hl_time::ClockError> {
+        self.start_worker()?;
         let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
         if state.stopped || state.tokens.len() == DEADLINE_LIMIT {
             return Err(hl_time::ClockError::Failed);
@@ -116,6 +113,21 @@ impl Queue {
         state.deadlines.insert((deadline, token));
         self.inner.scheduled.notify_one();
         Ok(token)
+    }
+
+    fn start_worker(&self) -> Result<(), hl_time::ClockError> {
+        let mut worker = self.worker.lock().map_err(|_| hl_time::ClockError::Failed)?;
+        if worker.is_some() {
+            return Ok(());
+        }
+        let inner = Arc::clone(&self.inner);
+        *worker = Some(
+            std::thread::Builder::new()
+                .name(String::from("hl-deadline"))
+                .spawn(move || Self::serve(inner))
+                .map_err(|_| hl_time::ClockError::Failed)?,
+        );
+        Ok(())
     }
 
     pub(in crate::ffi::linux::execution) fn cancel(&self, token: u64) {
@@ -229,6 +241,15 @@ unsafe extern "C" {
 mod test {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn worker_starts_with_first_deadline() {
+        let queue = Queue::new().unwrap();
+        assert!(queue.worker.lock().unwrap().is_none());
+        let token = queue.schedule(u64::MAX).unwrap();
+        assert!(queue.worker.lock().unwrap().is_some());
+        queue.cancel(token);
+    }
 
     #[test]
     fn callback_completes_before_readiness_is_published() {
