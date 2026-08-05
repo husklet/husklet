@@ -40,8 +40,8 @@ pub use mapping::TransitionObserver as MappingTransitionObserver;
 pub use mapping::{
     ApertureLease, Batch as MappingBatch, Coordinator as MappingCoordinator, DIRTY_RANGE_MAXIMUM, DirectAuthorityLease,
     ExternalSpan, Host as MappingHost, HostAperture, HostProjection, LIVE_PROJECTION_MAXIMUM, MemoryAccessHost,
-    Operation as MappingOperation, ProjectionGeneration, ProjectionLease, ProjectionView, WriteSpanTransaction,
-    WriteTransaction,
+    Operation as MappingOperation, ProjectionGeneration, ProjectionLease, ProjectionView, WritePublication,
+    WriteSpanTransaction, WriteTransaction,
 };
 pub use mapping::{BackingChange, BackingChangeFlags, BackingChangeHost};
 pub use mapping::{ExitHost as ExitMappingHost, PreparedAddressExit, PreparedHostExit};

@@ -30,6 +30,7 @@ pub struct ProjectionLease<'a, H: MemoryAccessHost> {
     protection: Protection,
     authority: Protection,
     backing: Backing,
+    publication: WritePublication,
     generation: ProjectionGeneration,
     write_reservation: Option<u64>,
     additional: Vec<LiveProjection<H::Projection>>,
@@ -49,6 +50,12 @@ pub const LIVE_PROJECTION_MAXIMUM: usize = 64;
 pub const DIRTY_RANGE_MAXIMUM: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WritePublication {
+    Exact,
+    CoarsePrivate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectionView {
     pub range: AddressRange,
     pub storage_address: u64,
@@ -56,6 +63,7 @@ pub struct ProjectionView {
     /// Stable identity within this lease: primary is zero, additional views
     /// retain their insertion ordinal across native cache promotion.
     pub index: u16,
+    pub publication: WritePublication,
 }
 
 struct LiveProjection<P> {
@@ -107,6 +115,11 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         }
         let projection = self.host.host.project(range)?;
         let storage_address = projection.storage_address();
+        let publication = classify_publication(
+            required,
+            resolution.region,
+            self.ledger.executable_aliases(resolution.region.backing()),
+        );
         let write_reservation = required
             .contains(Protection::WRITE)
             .then(|| self.host.host.prepare_write(range))
@@ -121,6 +134,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             protection: resolution.region.protection(),
             authority: required,
             backing: resolution.region.backing(),
+            publication,
             generation: ProjectionGeneration {
                 incarnation,
                 mappings: self.ledger.generation(),
@@ -188,6 +202,16 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         1 + self.additional.len()
     }
 
+    pub const fn primary_view(&self) -> ProjectionView {
+        ProjectionView {
+            range: self.range,
+            storage_address: self.storage_address,
+            protection: self.authority,
+            index: 0,
+            publication: self.publication,
+        }
+    }
+
     /// Returns executable-alias evidence while this lease keeps mapping and
     /// checkpoint transitions excluded. The address must belong to one of the
     /// retained projection views.
@@ -218,12 +242,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         if required == Protection::NONE {
             return Err(MemoryError::InvariantViolation);
         }
-        let primary = ProjectionView {
-            range: self.range,
-            storage_address: self.storage_address,
-            protection: self.authority,
-            index: 0,
-        };
+        let primary = self.primary_view();
         if contains(primary, range, required) {
             return Ok(primary);
         }
@@ -253,6 +272,11 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         }
         let projection = self.coordinator.host.host.project(range)?;
         let storage_address = projection.storage_address();
+        let publication = classify_publication(
+            required,
+            resolution.region,
+            self.coordinator.ledger.executable_aliases(resolution.region.backing()),
+        );
         let write_reservation = required
             .contains(Protection::WRITE)
             .then(|| self.coordinator.host.host.prepare_write(range))
@@ -266,6 +290,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                 Protection::NONE
             }),
             index: u16::try_from(self.additional.len() + 1).map_err(|_| MemoryError::ResourceLimit)?,
+            publication,
         };
         self.additional.push(LiveProjection {
             view,
@@ -312,12 +337,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         if self.write_reservation.is_none() && self.additional.iter().all(|entry| entry.write_reservation.is_none()) {
             return Err(MemoryError::InvariantViolation);
         }
-        let primary = ProjectionView {
-            range: self.range,
-            storage_address: self.storage_address,
-            protection: self.authority,
-            index: 0,
-        };
+        let primary = self.primary_view();
         if self.write_reservation.is_some() {
             self.validate_writable(primary)?;
         }
@@ -366,30 +386,54 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
     /// lease. Reservations retain their original full-view authority, while
     /// shared reconciliation, executable invalidation, and exclusives are
     /// limited to the ranges proven dirty by the caller.
-    pub fn publish_written_ranges(mut self, dirty: &[AddressRange]) -> Result<(), MemoryError> {
+    pub fn publish_written_ranges(self, dirty: &[AddressRange]) -> Result<(), MemoryError> {
+        let generation = self.generation;
+        self.publish_native_writes(generation, dirty, &[])
+    }
+
+    /// Publishes exact dirty ranges and complete coarse-private views returned
+    /// by one generation-qualified native run.
+    pub fn publish_native_writes(
+        mut self,
+        generation: ProjectionGeneration,
+        dirty: &[AddressRange],
+        coarse: &[u16],
+    ) -> Result<(), MemoryError> {
+        if generation != self.generation {
+            return Err(MemoryError::InvariantViolation);
+        }
         if dirty.len() > DIRTY_RANGE_MAXIMUM {
             return Err(MemoryError::ResourceLimit);
         }
-        let primary = ProjectionView {
-            range: self.range,
-            storage_address: self.storage_address,
-            protection: self.authority,
-            index: 0,
-        };
+        let primary = self.primary_view();
         let views = std::iter::once(primary)
             .chain(self.additional.iter().map(|entry| entry.view))
             .collect::<Vec<_>>();
+        if coarse.len() > views.len()
+            || coarse.iter().enumerate().any(|(position, index)| {
+                coarse[..position].contains(index)
+                    || !views
+                        .iter()
+                        .any(|view| view.index == *index && view.publication == WritePublication::CoarsePrivate)
+            })
+        {
+            return Err(MemoryError::InvariantViolation);
+        }
         let mut journals = vec![Vec::new(); views.len()];
         for range in dirty {
             let index = views
                 .iter()
                 .position(|view| contains(*view, *range, Protection::WRITE))
                 .ok_or(MemoryError::NoAddressSpace)?;
+            if views[index].publication != WritePublication::Exact {
+                return Err(MemoryError::InvariantViolation);
+            }
             journals[index].push(*range);
         }
         let mut executable = Vec::new();
         if let Some(reservation) = self.write_reservation.take() {
-            if let Err(error) = self.publish_ranges(primary, reservation, &journals[0], &mut executable) {
+            let ranges = publication_ranges(primary, &journals[0], coarse);
+            if let Err(error) = self.publish_ranges(primary, reservation, ranges.as_ref(), &mut executable) {
                 self.coordinator.host.host.rollback_write(reservation);
                 self.coordinator.host.executable.publish(executable.iter().copied());
                 return Err(error);
@@ -400,7 +444,8 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         for index in 0..self.additional.len() {
             let view = self.additional[index].view;
             if let Some(reservation) = self.additional[index].write_reservation.take() {
-                if let Err(error) = self.publish_ranges(view, reservation, &journals[index + 1], &mut executable) {
+                let ranges = publication_ranges(view, &journals[index + 1], coarse);
+                if let Err(error) = self.publish_ranges(view, reservation, ranges.as_ref(), &mut executable) {
                     self.coordinator.host.host.rollback_write(reservation);
                     self.coordinator.host.executable.publish(executable.iter().copied());
                     return Err(error);
@@ -409,7 +454,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                 return Err(MemoryError::InvariantViolation);
             }
         }
-        if dirty.is_empty() {
+        if dirty.is_empty() && coarse.is_empty() {
             return Ok(());
         }
         self.coordinator.host.epoch.fetch_add(1, Ordering::AcqRel);
@@ -434,6 +479,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                 storage_address: view.storage_address + (range.start().get() - view.range.start().get()),
                 protection: Protection::WRITE,
                 index: view.index,
+                publication: view.publication,
             })?;
             if let Backing::Shared(_) = resolution.region.backing()
                 && !self.view_shared_backing_is_coherent(view)
@@ -515,4 +561,32 @@ impl<H: MemoryAccessHost> Drop for ProjectionLease<'_, H> {
 
 fn contains(view: ProjectionView, requested: AddressRange, required: Protection) -> bool {
     view.range.start() <= requested.start() && view.range.end() >= requested.end() && view.protection.contains(required)
+}
+
+fn classify_publication(
+    required: Protection,
+    region: crate::Region,
+    aliases: crate::ExecutableAliasEvidence,
+) -> WritePublication {
+    if required.contains(Protection::WRITE)
+        && matches!(region.backing(), Backing::Anonymous { shared: false, .. })
+        && !region.protection().contains(Protection::EXECUTE)
+        && !aliases.present
+    {
+        WritePublication::CoarsePrivate
+    } else {
+        WritePublication::Exact
+    }
+}
+
+fn publication_ranges<'a>(
+    view: ProjectionView,
+    exact: &'a [AddressRange],
+    coarse: &[u16],
+) -> std::borrow::Cow<'a, [AddressRange]> {
+    if !coarse.contains(&view.index) {
+        std::borrow::Cow::Borrowed(exact)
+    } else {
+        std::borrow::Cow::Owned(vec![view.range])
+    }
 }
