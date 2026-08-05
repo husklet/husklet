@@ -5,31 +5,34 @@ chains:
       - artifact:
           path: target/nested/host/hl-engine-linux-aarch64
           build:
-            package: hl-engine
-            target: aarch64-unknown-linux-musl
+            package: engine
+            target: aarch64-unknown-linux-gnu
             binary: hl-engine
+            rustflags: [-Ctarget-feature=+crt-static]
         guest_isa: arm64
       - artifact:
           path: target/nested/foreign/hl-engine-linux-x86_64
           source: foreign-build
           build:
-            package: hl-engine
-            target: x86_64-unknown-linux-musl
+            package: engine
+            target: x86_64-unknown-linux-gnu
             binary: hl-engine
+            rustflags: [-Ctarget-feature=+crt-static]
         guest_isa: amd64
       - artifact:
           path: target/nested/foreign/hl-engine-linux-aarch64
           source: foreign-build
           build:
-            package: hl-engine
-            target: aarch64-unknown-linux-musl
+            package: engine
+            target: aarch64-unknown-linux-gnu
             binary: hl-engine
+            rustflags: [-Ctarget-feature=+crt-static]
         guest_isa: arm64
         options:
           native_execution: true
           native_diagnostics: true
     guest:
-      path: target/testing/runtime/core/arm64/core
+      path: target/testing/runtime/abi_core/arm64/hello
     timeout_seconds: 120
     capture_limit_bytes: 1048576
     expect:

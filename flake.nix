@@ -121,6 +121,8 @@
                   "${upper guest}_LINUX_STATIC_CC" = "${ccFor guest} -L${guestPkgs.glibc.static}/lib";
                   "${upper guest}_DYNAMIC_LOADER" = "${guestPkgs.glibc}/lib/${guest.loader}";
                   "${upper guest}_DYNAMIC_LIBC" = "${guestPkgs.glibc}/lib/libc.so.6";
+                  "CARGO_TARGET_${lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] "${guest.isa}-unknown-linux-gnu")}_LINKER" =
+                    ccFor guest;
                 }
               )
               {

@@ -18,3 +18,12 @@ Linux targets with locked, offline Cargo, installs verified artifacts atomically
 and reuses only a content-bound cache entry. `testing nested run` prepares first,
 so an unavailable compiler or target is a build failure rather than a false test
 result.
+
+The artifact recipe uses the pinned GNU Rust targets with `+crt-static` applied
+only to the final `hl-engine` binary through `cargo rustc`; applying that feature
+workspace-wide prevents proc-macro construction, while the MUSL libc bindings do
+not expose Linux `statx` and socket ABI types used by the host adapter. The flake
+provides a target-specific linker for each GNU triple. Commit `07dcff6be` removed
+the former `runtime/core` fixture; the nested leaf is now the active
+`runtime/abi-core/hello` artifact, whose own manifest declares ARM64, exit 42, and
+the byte-exact `hi\n` output used by this gate.

@@ -61,6 +61,8 @@ struct Build {
     #[serde(default = "release_profile")]
     profile: String,
     binary: String,
+    #[serde(default)]
+    rustflags: Vec<String>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -307,6 +309,9 @@ fn build_key_with_environment(
     for value in [&build.package, &build.target, &build.profile, &build.binary] {
         hash_field(&mut digest, value.as_bytes())?;
     }
+    for value in &build.rustflags {
+        hash_field(&mut digest, value.as_bytes())?;
+    }
     for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
         let path = root.join(name);
         if path.is_file() {
@@ -434,7 +439,7 @@ fn build_artifact(
 ) -> Result<(), Error> {
     let arguments = vec![
         cargo.into(),
-        "build".into(),
+        "rustc".into(),
         "--locked".into(),
         "--offline".into(),
         "--manifest-path".into(),
@@ -448,6 +453,11 @@ fn build_artifact(
         "--bin".into(),
         build.binary.clone(),
     ];
+    let mut arguments = arguments;
+    if !build.rustflags.is_empty() {
+        arguments.push("--".into());
+        arguments.extend(build.rustflags.iter().cloned());
+    }
     let output = capture(&arguments, Duration::from_secs(3600), 16 * 1024 * 1024)
         .map_err(|error| format!("nested Cargo build failed: {error}"))?;
     if output.status != Some(0) {
