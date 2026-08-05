@@ -84,7 +84,8 @@ impl ForkWireSnapshot {
     }
 
     fn validate_reservation(previous: Option<u8>, role: u8, reservation: u64) -> Result<(), ForkModelError> {
-        if role >= MAX_FORK_PARTICIPANTS as u8 || reservation == 0 || previous.is_some_and(|value| value >= role) {
+        if usize::from(role) >= MAX_FORK_PARTICIPANTS || reservation == 0 || previous.is_some_and(|value| value >= role)
+        {
             return Err(ForkModelError::InvalidWire);
         }
         Ok(())

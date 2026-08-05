@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 
 use crate::{ProcessCredentials, ProcessId, ThreadId};
 
-pub const SIGNAL_COUNT: usize = 64;
+const SIGNAL_COUNT_U8: u8 = 64;
+pub const SIGNAL_COUNT: usize = SIGNAL_COUNT_U8 as usize;
 pub const SIGNAL_FRAME_MAXIMUM: usize = 32;
 const STANDARD_SIGNAL_MAX: u8 = 31;
 
@@ -17,7 +18,7 @@ impl SignalNumber {
     pub const STOP: Self = Self(19);
 
     pub const fn new(number: u8) -> Result<Self, SignalQueueError> {
-        if number >= 1 && number <= SIGNAL_COUNT as u8 {
+        if number >= 1 && number <= SIGNAL_COUNT_U8 {
             Ok(Self(number))
         } else {
             Err(SignalQueueError::InvalidSignal)
@@ -303,16 +304,26 @@ impl PendingSignals {
 
     pub(crate) fn peek_eligible(&self, blocked: SignalMask) -> Option<SignalNumber> {
         let eligible = self.occupied & !blocked.bits();
-        (eligible != 0).then(|| SignalNumber((u64::BITS - eligible.leading_zeros()) as u8))
+        (eligible != 0).then(|| {
+            let number = u8::try_from(u64::BITS - eligible.leading_zeros()).expect("u64 bit position fits in u8");
+            SignalNumber(number)
+        })
     }
 
     pub(crate) fn peek_synchronous(&self) -> Option<SignalNumber> {
-        (self.synchronous != 0).then(|| SignalNumber((u64::BITS - self.synchronous.leading_zeros()) as u8))
+        (self.synchronous != 0).then(|| {
+            let number =
+                u8::try_from(u64::BITS - self.synchronous.leading_zeros()).expect("u64 bit position fits in u8");
+            SignalNumber(number)
+        })
     }
 
     pub(crate) fn peek_selected(&self, selected: SignalMask) -> Option<SignalNumber> {
         let eligible = self.occupied & selected.bits();
-        (eligible != 0).then(|| SignalNumber((eligible.trailing_zeros() + 1) as u8))
+        (eligible != 0).then(|| {
+            let number = u8::try_from(eligible.trailing_zeros() + 1).expect("u64 bit position fits in u8");
+            SignalNumber(number)
+        })
     }
 
     pub(crate) fn pop(&mut self, signal: SignalNumber) -> Option<SignalInfo> {

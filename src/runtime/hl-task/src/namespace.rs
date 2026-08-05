@@ -198,6 +198,7 @@ impl UtsIdentity {
         })
     }
 
+    #[must_use]
     pub const fn owner(&self) -> NamespaceId {
         self.owner
     }
@@ -241,6 +242,7 @@ impl NamespaceSet {
         }
     }
 
+    #[must_use]
     pub fn get(self, kind: NamespaceKind) -> NamespaceId {
         match kind {
             NamespaceKind::Uts => self.uts,

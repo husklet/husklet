@@ -630,7 +630,8 @@ impl TaskRegistry {
             .iter()
             .enumerate()
             .filter_map(|(index, action)| {
-                (*action != SignalAction::DEFAULT).then_some((SignalNumber::new((index + 1) as u8).ok()?, *action))
+                let number = u8::try_from(index + 1).ok()?;
+                (*action != SignalAction::DEFAULT).then_some((SignalNumber::new(number).ok()?, *action))
             })
             .collect()
     }

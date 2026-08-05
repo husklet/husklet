@@ -54,6 +54,7 @@ impl CpuAffinity {
         Self(words)
     }
 
+    #[must_use]
     pub fn intersect(words: [u64; WORDS], online: Self) -> Option<Self> {
         let mut intersection = [0_u64; WORDS];
         for (index, word) in intersection.iter_mut().enumerate() {
@@ -62,6 +63,7 @@ impl CpuAffinity {
         intersection.iter().any(|word| *word != 0).then_some(Self(intersection))
     }
 
+    #[must_use]
     pub fn from_words(words: [u64; WORDS]) -> Option<Self> {
         words.iter().any(|word| *word != 0).then_some(Self(words))
     }

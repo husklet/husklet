@@ -53,6 +53,7 @@ impl SchedulingProfile {
         reset_on_fork: false,
     };
 
+    #[must_use]
     pub const fn non_realtime(policy: u32, reset_on_fork: bool) -> Option<Self> {
         match policy {
             0 | 3 | 5 | 6 => Some(Self {
@@ -65,6 +66,7 @@ impl SchedulingProfile {
         }
     }
 
+    #[must_use]
     pub const fn restore(policy: u32, priority: i32, reset_on_fork: bool) -> Option<Self> {
         let Some(profile) = Self::non_realtime(policy, reset_on_fork) else {
             return None;
@@ -72,19 +74,24 @@ impl SchedulingProfile {
         profile.with_priority(priority)
     }
 
+    #[must_use]
     pub const fn policy(self) -> u32 {
         self.policy
     }
+    #[must_use]
     pub const fn priority(self) -> i32 {
         self.priority
     }
+    #[must_use]
     pub const fn nice(self) -> i8 {
         self.nice
     }
+    #[must_use]
     pub const fn resets_on_fork(self) -> bool {
         self.reset_on_fork
     }
 
+    #[must_use]
     pub const fn with_priority(self, priority: i32) -> Option<Self> {
         if priority == 0 {
             Some(Self { priority, ..self })
@@ -93,6 +100,7 @@ impl SchedulingProfile {
         }
     }
 
+    #[must_use]
     pub const fn with_nice(self, nice: i32) -> Self {
         Self {
             nice: if nice < -20 {

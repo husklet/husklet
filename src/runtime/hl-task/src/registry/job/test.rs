@@ -325,7 +325,7 @@ fn nonleader_detach_clears_only_the_callers_terminal_association() {
         .unwrap();
     assert_eq!(prepared.effects().session, session);
     assert!(!prepared.effects().session_wide);
-    prepared.commit();
+    let _ = prepared.commit();
 
     assert_eq!(registry.terminal_session(worker).unwrap(), None);
     assert_eq!(registry.terminal_session(leader).unwrap(), Some(session));

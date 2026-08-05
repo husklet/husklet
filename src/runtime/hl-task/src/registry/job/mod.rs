@@ -617,6 +617,7 @@ impl PreparedTerminalTransition<'_> {
     }
 
     /// Publishes captured signals in Linux order after the terminal mutation.
+    #[must_use]
     pub fn commit(self) -> TerminalTransitionEffects {
         let mut state = self.registry.lock();
         if self.effects.session_wide {

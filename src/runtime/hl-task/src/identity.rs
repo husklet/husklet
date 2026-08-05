@@ -35,6 +35,7 @@ impl ProcessId {
         crate::ForkEntityId { slot, generation }
     }
 
+    #[must_use]
     pub fn from_fork_identity(identity: crate::ForkEntityId) -> Option<Self> {
         let generation = u16::try_from(identity.generation).ok()?;
         Some(Self::new(identity.slot, generation))
@@ -45,6 +46,7 @@ impl ProcessId {
         (self.0 as u32, (self.0 >> 32) as u16)
     }
 
+    #[must_use]
     pub const fn from_wire(slot: u32, generation: u16) -> Option<Self> {
         if generation == 0 {
             None
@@ -87,6 +89,7 @@ impl ThreadId {
         (self.0 as u32, (self.0 >> 32) as u16)
     }
 
+    #[must_use]
     pub const fn from_wire(slot: u32, generation: u16) -> Option<Self> {
         if generation == 0 {
             None
@@ -128,6 +131,7 @@ impl SessionId {
         (self.0 as u32, (self.0 >> 32) as u16)
     }
 
+    #[must_use]
     pub const fn from_wire(slot: u32, generation: u16) -> Option<Self> {
         if generation == 0 {
             None
@@ -169,6 +173,7 @@ impl ProcessGroupId {
         (self.0 as u32, (self.0 >> 32) as u16)
     }
 
+    #[must_use]
     pub const fn from_wire(slot: u32, generation: u16) -> Option<Self> {
         if generation == 0 {
             None
