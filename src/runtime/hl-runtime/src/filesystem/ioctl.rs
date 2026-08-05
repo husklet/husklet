@@ -534,7 +534,9 @@ pub(super) fn finish_terminal_detach(
     match detached {
         Ok(()) => {
             if let Some(prepared) = prepared {
-                prepared.commit();
+                let effects = prepared.effects();
+                let committed = prepared.commit();
+                debug_assert_eq!(committed, effects);
             }
             LinuxResult::Value(0)
         }
