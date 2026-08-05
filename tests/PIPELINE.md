@@ -93,6 +93,8 @@ reset
 stop
 ```
 
+Break this into traits and each engine should have implement some of the portation or all of them.
+
 Actions use existing repository packages and their public APIs. In particular:
 
 - OCI acquisition, selection, verification, unpacking, leases, and garbage
@@ -462,3 +464,89 @@ incomplete execution. Interrupted work retains a resumable record.
 7. Classify existing goldens as generated, authored, or temporarily legacy.
 8. Remove the legacy direct-golden-update and unconditional-recompile paths only
    after inventory and focused parity gates prove every case is represented.
+
+
+
+# Dead code eliminations
+
+We also need to understand profiles during execution, ideally if we can merge profiles during testing of engine.
+Once full tests runs ideally we gather all sourcecode that was executed and all files.
+We take src tree and compare againts what was executed. Result should be code that was never probed or executed.
+This should give us decent list of files that should be saved together with lines where code never went and we should
+investigate if that code is needed or not.
+
+
+For this Rust engine, I’d use four signals:
+
+  1. Compiler coverage instrumentation
+     Build with LLVM source coverage:
+
+  RUSTFLAGS="-C instrument-coverage" \
+  LLVM_PROFILE_FILE=".cache/coverage/engine-%p-%m.profraw" \
+  cargo build -p hl-engine
+
+  Run the actual engine workloads normally, then merge profiles and report with llvm-profdata and llvm-cov. The report gives execution counts by
+  source file, function, region, and line. Files with zero covered regions are the direct answer to “which compiled files were unused?”
+
+  cargo-llvm-cov makes this substantially easier and can include tests, subprocesses, and separate workload runs in one accumulated report.
+
+  2. Link-time dead-code evidence
+     Coverage only describes compiled code. Enable linker map or symbol reporting to identify functions and sections that were not even retained
+     in the final executable. Release builds with section garbage collection can expose which symbols were discarded. This catches statically
+     unreachable code before any engine run.
+
+  3. Cargo/package reachability
+     Use Cargo metadata plus tools such as cargo-udeps to identify unused dependencies and packages. Also inspect which features and targets
+     actually participate in the production hl-engine and dockerd compositions. A source file belonging only to an obsolete binary or feature may
+     never enter the executable, so runtime coverage alone will not mention it meaningfully.
+
+  4. A representative workload matrix
+     Accumulate coverage across distinct cohorts:
+
+  - ARM64 and AMD64 guests
+  - interpreter and native execution
+  - startup, exec, fork, signals, faults and exit
+  - filesystem, networking, terminal and Docker workflows
+  - checkpoint and restore
+  - failed construction and cleanup
+  - nested engine execution
+  - macOS, Linux and Windows host-specific builds
+
+  The useful output would be something like:
+
+  coverage/
+    compiled_and_executed.txt
+    compiled_but_unexecuted.txt
+    excluded_from_production_build.txt
+    unused_dependencies.txt
+    deletion_candidates.yaml
+
+  Each candidate should carry evidence:
+
+  path: src/runtime/hl_example/src/legacy.rs
+  production_build: true
+  covered_regions: 0
+  referenced_symbols: 0
+  host_targets_checked: [linux_aarch64, linux_x86_64, macos_aarch64]
+  workloads_checked: [runtime, docker, checkpoint, nested]
+  classification: deletion_candidate
+
+  The key distinction is:
+
+  - “Not compiled into the product” is strong evidence of obsolete composition.
+  - “Compiled but linker-discarded” is strong evidence of static dead code.
+  - “Compiled and retained but never executed” is only a review candidate.
+  - “Executed” proves the code is used by that workload.
+
+  So your proposed subtraction is viable:
+
+  all source files
+  − files executed by accumulated production workloads
+  = unobserved files
+
+  But I would then split the unobserved set into platform-specific, test-only, error/recovery-only, statically unreachable, and genuinely
+  obsolete. Only the last two groups should be deleted aggressively.
+
+  The cleanest implementation would be a testing coverage provider/stage that launches the real instrumented hl-engine, accumulates profiles
+  across YAML-selected workloads, and generates a machine-readable deletion-candidate inventory. That would make dead-code reduction repeatable in
+  CI rather than a one-time cleanup.
