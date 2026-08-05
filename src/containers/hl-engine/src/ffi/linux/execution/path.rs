@@ -53,6 +53,10 @@ mod native;
 mod open;
 #[path = "path/overlay_lease.rs"]
 mod overlay_lease;
+#[path = "path/overlay_entries.rs"]
+mod overlay_entries;
+#[path = "path/overlay_project.rs"]
+mod overlay_project;
 #[path = "path/overlay_publish.rs"]
 mod overlay_publish;
 #[path = "path/overlay_xattr.rs"]
