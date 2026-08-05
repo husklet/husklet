@@ -98,7 +98,7 @@
             pkgs.writeShellScriptBin (rustStaticLinkerName guest) ''
               static_search=
               for argument in "$@"; do
-                if [ "$argument" = -static ]; then
+                if [ "$argument" = -static ] || [ "$argument" = -static-pie ]; then
                   static_search=-L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"}
                   break
                 fi
