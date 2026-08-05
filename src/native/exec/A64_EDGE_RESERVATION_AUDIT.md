@@ -1,4 +1,4 @@
-# AArch64 cross-entry reservation blocker
+# AArch64 cross-entry reservation ownership
 
 ## Retained oracle
 
@@ -34,15 +34,15 @@ and CPU live for one native execution owner; cache mutation is admitted before
 the arena writable alias is used, and resolved relocations are returned to a
 typed cold exit before a removed target can be reclaimed.
 
-The prerequisite metadata is complete but deliberately unused:
+The prerequisite metadata now has an owned, behavior-preserving reservation:
 
 | Capability | Rust state | Result |
 |---|---|---|
 | Post-admission target identity | `cache_entry.admitted_offset` | implemented |
 | Exact destination charge | `resolved_relocation.relocation.target_instruction_count` | implemented |
 | Cold-edge reversibility | `expected` plus resolved-to-pending invalidation | implemented for one word |
-| Edge-local admission program | no reserved patch span or typed description | missing |
-| Atomic multiword patch/restore | relocation publishes one four-byte word | missing |
+| Edge-local admission program | sixteen-word typed cold span before every AArch64 chain exit | reserved, not yet consumed |
+| Atomic multiword patch/restore | cache validates, publishes, and restores the complete span | implemented |
 
 `hl_a64_stub_budget_begin` orders interrupt, asynchronous-token, and budget
 checks before subtracting the complete block charge. Its `admitted_offset`
@@ -53,31 +53,31 @@ can delay an already-visible interrupt or token indefinitely across an acyclic
 chain; branching to `body_offset` merely repeats the existing full guard and
 does not consume either new metadata field.
 
-Every direct and conditional relocation currently owns exactly one patchable
-instruction. `patch()` validates and replaces that word with `b body_offset`,
-publishes four bytes, and invalidation restores the same word. There is no safe
-indivisible one-word encoding for the required interrupt load/branch, optional
-token acquire/load/branch, budget compare/branch/subtract/store, and branch to
-`admitted_offset`. Adding a NOP reservation only in the emitters would expose a
-partially described span to current relocation and invalidation code; changing
-only relocation would overwrite ordinary cold-exit instructions. Either is an
-unsafe partial protocol.
+Direct, conditional fall, conditional taken, and stitched taken exits reserve
+sixteen NOP words before their unchanged cold dispatcher exit. The relocation
+owns that exact cold image. `patch()` validates the full image, replaces only
+its first word with the existing direct branch, and publishes the full range;
+the unused words remain unreachable on a hot edge and execute as NOPs on a cold
+edge. Invalidation and dynamic site rebinding validate the patched first word
+plus every cold tail word, restore the complete image, and publish the complete
+range before ownership changes. This preserves behavior until a later lane
+consumes the reservation with the admission program.
 
-## Required bounded mechanism
+## Delivered bounded mechanism
 
-The next implementation must be one atomic edge-reservation protocol spanning
-emission and cache ownership: a typed fixed-size patch span with its complete
-cold image, target admission metadata and reach checks, construction of the
-full interrupt/token/budget sequence off-line, one publication operation for
-the complete span, and exact full-span restoration before invalidation or
-retirement. Conditional fall and taken exits, cold target resolution, wildcard
-epoch rebinding, capacity rejection, cycle-retained edges, and fork/reset
-teardown must all use the same representation. Tests must prove zero guest
-progress on insufficient budget, interrupt and asynchronous-token precedence,
-exact target charging, both conditional successors, cold-to-hot resolution,
-target replacement with a different instruction count, invalidation restore,
-and a bounded cycle retaining progress.
+`hl_native_relocation_span` is fixed-size and allocation-free. Legacy producers
+with a zero span count retain the one-word contract; AArch64 trace emission
+always supplies the typed sixteen-word form, with a compile-time equality check
+between emitter and cache capacities. Existing cycle admission decides whether
+the reservation remains cold before any mutation. Pending cold and wildcard
+edges retain the same value-owned image, resolved invalidation returns it to
+pending ownership, and cache/fork reset drops the generation containing both
+pending and resolved values.
 
-That protocol is larger than the edge-emitter-only slice assigned to this
-lane. No production or test source was changed, and no compilation artifacts
-were created.
+`test/cache.c::relocation_span` exercises cold wildcard ownership, cold-to-hot
+resolution, preservation of the unused tail, complete invalidation restore, and
+reset retirement. Existing AArch64 trace and cycle tests continue to cover both
+conditional successors, direct edges, cycle retention, capacity paths, and
+source/target invalidation through the same relocation implementation. The
+interrupt/token/budget admission program and its behavioral tests remain the
+next consumer; this prerequisite deliberately does not synthesize that program.

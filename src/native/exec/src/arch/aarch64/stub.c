@@ -85,6 +85,13 @@ void hl_a64_stub_exit(hl_a64_assembler *assembler, uint32_t kind, uint64_t pc) {
     hl_a64_br(assembler, 9);
 }
 
+uint32_t *hl_a64_stub_edge_reserve(hl_a64_assembler *assembler) {
+    uint32_t *span = assembler == NULL ? NULL : (uint32_t *)assembler->cursor;
+    for (uint32_t index = 0; index < HL_A64_EDGE_SPAN_WORDS; index++)
+        hl_a64_emit32(assembler, UINT32_C(0xd503201f));
+    return span;
+}
+
 void hl_a64_stub_exit_register(hl_a64_assembler *assembler, uint32_t kind, int target) {
     spill(assembler);
     hl_a64_str(assembler, target, 0, OFFSET_PROGRAM);

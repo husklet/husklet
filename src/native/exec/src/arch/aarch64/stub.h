@@ -5,6 +5,7 @@
 #include "../../../include/executor.h"
 
 #define HL_A64_STUB_MAX_BYTES 416u
+#define HL_A64_EDGE_SPAN_WORDS 16u
 
 typedef struct hl_a64_budget_guard {
     uint32_t *interrupt_branch;
@@ -19,6 +20,7 @@ typedef struct hl_a64_budget_guard {
 int hl_a64_stub_emit(hl_a64_assembler *, uint32_t, uint64_t);
 void hl_a64_stub_prologue(hl_a64_assembler *);
 void hl_a64_stub_exit(hl_a64_assembler *, uint32_t, uint64_t);
+uint32_t *hl_a64_stub_edge_reserve(hl_a64_assembler *);
 void hl_a64_stub_exit_register(hl_a64_assembler *, uint32_t, int);
 void hl_a64_stub_budget_begin(hl_a64_assembler *, uint64_t, hl_a64_budget_guard *);
 void hl_a64_stub_budget_finish(hl_a64_assembler *, hl_a64_budget_guard *, uint32_t);

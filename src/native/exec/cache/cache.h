@@ -75,6 +75,17 @@ typedef struct hl_native_cache_stats {
     uint64_t mapping_epoch;
 } hl_native_cache_stats;
 
+/* A relocation owns the complete cold instruction image that may eventually
+ * become an edge-admission program.  A zero word_count is the legacy one-word
+ * form in `expected`; it keeps existing non-AArch64 producers ABI-compatible
+ * while AArch64 emission moves to the typed span. */
+enum { HL_NATIVE_RELOCATION_SPAN_WORDS = 16 };
+
+typedef struct hl_native_relocation_span {
+    uint32_t word_count;
+    uint32_t cold[HL_NATIVE_RELOCATION_SPAN_WORDS];
+} hl_native_relocation_span;
+
 typedef struct hl_native_relocation {
     uint64_t code_offset;
     uint64_t target_guest;
@@ -83,6 +94,7 @@ typedef struct hl_native_relocation {
     uint32_t expected;
     uint32_t target_instruction_count;
     uint32_t reserved;
+    hl_native_relocation_span span;
 } hl_native_relocation;
 
 hl_native_status hl_native_cache_create(hl_native_cache **, hl_native_arena *, uint32_t, uint32_t, uint32_t,

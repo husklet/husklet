@@ -27,7 +27,8 @@ int hl_a64_direct_chain(hl_a64_assembler *assembler, uint32_t word, uint64_t pc,
         hl_a64_movconst(assembler, 16, pc + 4);
         hl_a64_str(assembler, 16, CPU, 30 * 8);
     }
-    if (patch != NULL) *patch = (uint32_t *)assembler->cursor;
+    uint32_t *reservation = hl_a64_stub_edge_reserve(assembler);
+    if (patch != NULL) *patch = reservation;
     if (chain_target != NULL) *chain_target = target;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, target);
     return hl_a64_assembler_ok(assembler);

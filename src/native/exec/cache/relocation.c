@@ -9,6 +9,29 @@ enum { CYCLE_FRONTIER_CAPACITY = 64 };
 
 typedef struct cycle_node { uint64_t guest, epoch; } cycle_node;
 
+static uint32_t span_words(const hl_native_relocation *relocation) {
+    return relocation->span.word_count == 0 ? 1 : relocation->span.word_count;
+}
+
+static uint32_t cold_word(const hl_native_relocation *relocation, uint32_t index) {
+    return relocation->span.word_count == 0 ? relocation->expected : relocation->span.cold[index];
+}
+
+static int span_matches(const uint32_t *words, const hl_native_relocation *relocation,
+                        uint32_t first) {
+    uint32_t count = span_words(relocation);
+    for (uint32_t index = 0; index < count; index++) {
+        uint32_t expected = index == 0 ? first : cold_word(relocation, index);
+        if (words[index] != expected) return 0;
+    }
+    return 1;
+}
+
+static void span_restore(uint32_t *words, const hl_native_relocation *relocation) {
+    uint32_t count = span_words(relocation);
+    for (uint32_t index = 0; index < count; index++) words[index] = cold_word(relocation, index);
+}
+
 static int same_node(cycle_node left, cycle_node right) {
     return left.guest == right.guest && left.epoch == right.epoch;
 }
@@ -48,16 +71,18 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
     uint64_t source_offset;
     int64_t displacement;
     uint32_t *word;
+    uint32_t words = span_words(relocation);
     if (source->memory_mode != target->memory_mode ||
         source->authority_generation != target->authority_generation)
         return HL_NATIVE_STATE;
     if (relocation->reserved != 0 || relocation->target_instruction_count != 0 ||
-        relocation->target_epoch_known > 1 || source->code_size < 4 ||
-        relocation->code_offset > source->code_size - 4)
+        relocation->target_epoch_known > 1 || words == 0 ||
+        words > HL_NATIVE_RELOCATION_SPAN_WORDS || source->code_size < words * 4u ||
+        relocation->code_offset > source->code_size - words * 4u)
         return HL_NATIVE_ARGUMENT;
     source_offset = source->code_offset + relocation->code_offset;
     word = (uint32_t *)(cache->arena->writable + source_offset);
-    if (*word != relocation->expected) return HL_NATIVE_STATE;
+    if (!span_matches(word, relocation, cold_word(relocation, 0))) return HL_NATIVE_STATE;
     if ((target->body_offset | source_offset) % 4 != 0) return HL_NATIVE_ARGUMENT;
     displacement = target->body_offset >= source_offset
         ? (int64_t)((target->body_offset - source_offset) / 4)
@@ -69,7 +94,7 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
     *patched = UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
     *word = *patched;
     hl_native_status status = cache->arena->memory.publish(
-        cache->arena->memory.context, cache->arena->mapping.handle, source_offset, 4);
+        cache->arena->memory.context, cache->arena->mapping.handle, source_offset, words * 4u);
     if (status != HL_NATIVE_OK) cache->poisoned = 1;
     return status;
 }
@@ -136,10 +161,11 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
             old.relocation.code_offset != branch_offset - source->code_offset)
             continue;
         uint32_t *word = (uint32_t *)(cache->arena->writable + branch_offset);
-        if (*word != old.patched) return HL_NATIVE_STATE;
-        *word = old.relocation.expected;
+        if (!span_matches(word, &old.relocation, old.patched)) return HL_NATIVE_STATE;
+        span_restore(word, &old.relocation);
         hl_native_status status = cache->arena->memory.publish(
-            cache->arena->memory.context, cache->arena->mapping.handle, branch_offset, 4);
+            cache->arena->memory.context, cache->arena->mapping.handle, branch_offset,
+            span_words(&old.relocation) * 4u);
         if (status != HL_NATIVE_OK) return status;
         cache->resolved[index] = cache->resolved[--cache->resolved_count];
         break;
@@ -197,14 +223,16 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
             cache->resolved[retained++] = resolved;
             continue;
         }
-        if (source != NULL && source->code_size >= 4 &&
-            resolved.relocation.code_offset <= source->code_size - 4) {
+        uint32_t words = span_words(&resolved.relocation);
+        if (source != NULL && words <= HL_NATIVE_RELOCATION_SPAN_WORDS &&
+            source->code_size >= words * 4u &&
+            resolved.relocation.code_offset <= source->code_size - words * 4u) {
             uint64_t offset = source->code_offset + resolved.relocation.code_offset;
             uint32_t *word = (uint32_t *)(cache->arena->writable + offset);
-            if (*word != resolved.patched) return HL_NATIVE_STATE;
-            *word = resolved.relocation.expected;
+            if (!span_matches(word, &resolved.relocation, resolved.patched)) return HL_NATIVE_STATE;
+            span_restore(word, &resolved.relocation);
             hl_native_status status = cache->arena->memory.publish(
-                cache->arena->memory.context, cache->arena->mapping.handle, offset, 4);
+                cache->arena->memory.context, cache->arena->mapping.handle, offset, words * 4u);
             if (status != HL_NATIVE_OK) {
                 cache->poisoned = 1;
                 return status;

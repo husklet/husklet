@@ -67,11 +67,13 @@ int hl_a64_conditional_chain(hl_a64_assembler *assembler, uint32_t word, uint64_
         hl_a64_emit32(assembler, 0x14000000u);
     else
         hl_a64_emit32(assembler, 0);
-    if (fall_patch != NULL) *fall_patch = (uint32_t *)assembler->cursor;
+    uint32_t *fall_reservation = hl_a64_stub_edge_reserve(assembler);
+    if (fall_patch != NULL) *fall_patch = fall_reservation;
     if (fall_target != NULL) *fall_target = pc + 4;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + 4);
     patch(branch, assembler->cursor, word, kind);
-    if (taken_patch != NULL) *taken_patch = (uint32_t *)assembler->cursor;
+    uint32_t *taken_reservation = hl_a64_stub_edge_reserve(assembler);
+    if (taken_patch != NULL) *taken_patch = taken_reservation;
     if (taken_target != NULL) *taken_target = pc + (uint64_t)displacement;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + (uint64_t)displacement);
     return hl_a64_assembler_ok(assembler);
@@ -100,7 +102,8 @@ int hl_a64_conditional_stitch(hl_a64_assembler *assembler, uint32_t word, uint64
     if (refund_patch != NULL) *refund_patch = (uint32_t *)assembler->cursor;
     hl_a64_addi(assembler, 16, 16, 0);
     hl_a64_str(assembler, 16, CPU, (int)offsetof(hl_native_aarch64_cpu, budget));
-    if (taken_patch != NULL) *taken_patch = (uint32_t *)assembler->cursor;
+    uint32_t *taken_reservation = hl_a64_stub_edge_reserve(assembler);
+    if (taken_patch != NULL) *taken_patch = taken_reservation;
     if (taken_target != NULL) *taken_target = pc + (uint64_t)displacement;
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + (uint64_t)displacement);
     patch(branch, assembler->cursor, inverted, kind);

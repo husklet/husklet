@@ -250,9 +250,56 @@ static int relocation_observer(void) {
     return 0;
 }
 
+static uint32_t *writable_entry(fixture *fixture, uint64_t guest) {
+    hl_native_code code;
+    if (hl_native_cache_lookup(fixture->cache, guest, 5, &code) != HL_NATIVE_HIT) return NULL;
+    return (uint32_t *)(fixture->arena.writable +
+                        ((const uint8_t *)code.entry - fixture->arena.executable));
+}
+
+static int relocation_span(void) {
+    fixture fixture;
+    uint32_t *source_words;
+    const uint32_t cold = UINT32_C(0xa5a5a5a5);
+    hl_native_relocation relocation = {
+        .code_offset = 0,
+        .target_guest = 0x9000,
+        .span = {.word_count = 3, .cold = {cold, cold, cold}},
+    };
+    CHECK(fixture_create(&fixture, 8, 5) == 0);
+    CHECK(publish(&fixture, 0x8000, 5, 0x8000, 0x8004) == HL_NATIVE_OK);
+    source_words = writable_entry(&fixture, 0x8000);
+    CHECK(source_words != NULL);
+
+    /* A cold wildcard retains the entire reservation, then binds it when the
+     * target appears without disturbing the unconsumed admission words. */
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocate(fixture.cache, 0x8000, 0, &relocation, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(source_words[0] == cold && source_words[1] == cold && source_words[2] == cold);
+    CHECK(publish(&fixture, 0x9000, 5, 0x9000, 0x9004) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_resolve(fixture.cache, 0x9000, 0) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(source_words[0] != cold && source_words[1] == cold && source_words[2] == cold);
+
+    /* Target invalidation restores the full cold image before rebinding. */
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocations_invalidate(fixture.cache, 0x9000, 0x9004) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_invalidate(fixture.cache, 0x9000, 0x9004, NULL) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(source_words[0] == cold && source_words[1] == cold && source_words[2] == cold);
+
+    /* Reset retires both pending ownership and the source generation. */
+    CHECK(hl_native_cache_reset(fixture.cache, 6) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_resolve(fixture.cache, 0x9000, 0) == HL_NATIVE_STATE);
+    fixture_destroy(&fixture);
+    return 0;
+}
+
 int main(void) {
     if (reuse() != 0 || invalidation() != 0 || epoch() != 0 || capacity() != 0 || isolation() != 0 ||
         instruction_epoch() != 0 || execution_identity() != 0 || authority_identity() != 0 ||
-        relocation_observer() != 0) return 1;
+        relocation_observer() != 0 || relocation_span() != 0) return 1;
     return 0;
 }

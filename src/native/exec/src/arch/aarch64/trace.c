@@ -51,6 +51,9 @@
 
 #include <string.h>
 
+_Static_assert(HL_A64_EDGE_SPAN_WORDS == HL_NATIVE_RELOCATION_SPAN_WORDS,
+               "AArch64 edge reservation must fit cache relocation ownership");
+
 static void density_add(uint64_t *value, uint64_t add, hl_a64_trace_density *density) {
     if (UINT64_MAX - *value < add) {
         *value = UINT64_MAX;
@@ -592,6 +595,9 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                 .target_guest = taken_target,
                 .expected = *taken_patch,
             };
+            hl_native_relocation *relocation = &output->relocations[output->relocation_count - 1];
+            relocation->span.word_count = HL_A64_EDGE_SPAN_WORDS;
+            memcpy(relocation->span.cold, taken_patch, sizeof(relocation->span.cold));
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
             density_record(&density, HL_A64_DENSITY_CONTROL,
                            (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
@@ -614,6 +620,9 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                     .target_guest = direct_target,
                     .expected = *direct_patch,
                 };
+                hl_native_relocation *relocation = &output->relocations[output->relocation_count - 1];
+                relocation->span.word_count = HL_A64_EDGE_SPAN_WORDS;
+                memcpy(relocation->span.cold, direct_patch, sizeof(relocation->span.cold));
             }
             if (taken_patch != NULL) {
                 output->relocations[output->relocation_count++] = (hl_native_relocation){
@@ -621,6 +630,9 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                     .target_guest = taken_target,
                     .expected = *taken_patch,
                 };
+                hl_native_relocation *relocation = &output->relocations[output->relocation_count - 1];
+                relocation->span.word_count = HL_A64_EDGE_SPAN_WORDS;
+                memcpy(relocation->span.cold, taken_patch, sizeof(relocation->span.cold));
             }
             break;
         }

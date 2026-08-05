@@ -3,7 +3,7 @@
 
 #include "assembler.h"
 
-#define HL_A64_CONDITIONAL_MAX_BYTES 900u
+#define HL_A64_CONDITIONAL_MAX_BYTES 1028u
 
 int hl_a64_conditional_emit(hl_a64_assembler *, uint32_t, uint64_t);
 int hl_a64_conditional_body(hl_a64_assembler *, uint32_t, uint64_t);
