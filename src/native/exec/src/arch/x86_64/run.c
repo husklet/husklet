@@ -189,14 +189,6 @@ static void rep_fill(void *destination, uint64_t value, size_t count, size_t wid
     }
 }
 
-static int rep_dirty_full(const hl_native_x86_64_cpu *cpu,
-                          const hl_native_projection_view *view,
-                          uint64_t first, uint64_t bytes) {
-    uint64_t last = first + bytes;
-    return cpu->dirty_first != UINT64_MAX && cpu->dirty_count >= HL_X86_DIRTY_CAPACITY &&
-           (cpu->memory_first != view->guest_first || cpu->memory_last != last);
-}
-
 /* Executes only spans already authenticated by the projection lease. Missing
  * views fail closed to the ordinary scalar instruction, which owns resolver
  * callbacks and precise fault exits. */
@@ -238,7 +230,8 @@ static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache
                                        destination_view->mapping_incarnation, 0};
     size_t bytes = elements * rep->width;
     uint64_t first = backward ? destination - (bytes - rep->width) : destination;
-    if (rep_dirty_full(cpu, destination_view, first, bytes)) return X86_REP_EPOCH;
+    if (!hl_x86_projection_switch_writable(cpu, destination_view->guest_first, first + bytes))
+        return X86_REP_EPOCH;
     if (!hl_x86_projection_resolve(&projection, cpu, first, bytes, 2u)) return X86_REP_SCALAR;
     uint8_t *destination_host = (uint8_t *)(uintptr_t)
         (destination_view->host_first + destination - destination_view->guest_first);

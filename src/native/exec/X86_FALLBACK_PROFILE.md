@@ -153,3 +153,26 @@ Content identities were:
 
 Raw evidence is retained in the durable target's `evidence/diagnostics.csv`
 and `evidence/timing-direct-quiet-3/` directory.
+
+## REP reservation completion
+
+The retained REP path was rechecked before changing Husklet's preflight:
+`rep_runtime.c` pins the largest proven source and destination spans, caps work
+at both boundaries, updates RCX/RSI/RDI only for completed elements, and
+returns the first uncompleted element to the dispatcher. A permission failure
+before the first element changes neither bytes nor registers. The existing
+Husklet boundary test has the same partial-fault contract: it completes four
+bytes, advances RCX/RSI/RDI by four, then falls back at the first read-only
+destination byte.
+
+`hl_x86_projection_switch_writable` now performs the shared pre-mutation
+capacity decision used by REP. An unchanged active owner, an empty current
+interval, free capacity, or a same-owner overlapping/adjacent archived record
+authorizes the switch. Otherwise it refuses before `rep_copy` or `rep_fill`.
+The already-shared dispatcher flush performs the matching post-success merge;
+scalar/vector/RMW emitted code implements the identical bounded scan without
+a per-store C call. A new full-journal REP test proves that a mergeable prior
+range permits eight elements and preserves the 16-record bound. Its sibling
+nonmergeable full-journal test still exits epoch with registers and bytes
+unchanged. Existing budget-limited and permission-boundary cases preserve
+partial progress and the first-uncompleted-element contract.

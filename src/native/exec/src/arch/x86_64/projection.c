@@ -27,6 +27,22 @@ static void flush_dirty(hl_native_x86_64_cpu *cpu) {
     cpu->dirty_last = 0;
 }
 
+int hl_x86_projection_switch_writable(const hl_native_x86_64_cpu *cpu,
+                                      uint64_t memory_first, uint64_t memory_last) {
+    if (cpu == NULL || memory_first >= memory_last) return 0;
+    if (cpu->dirty_first == UINT64_MAX ||
+        (cpu->memory_first == memory_first && cpu->memory_last == memory_last) ||
+        cpu->dirty_count < HL_X86_DIRTY_CAPACITY)
+        return 1;
+    for (uint64_t index = 0; index < cpu->dirty_count; ++index) {
+        const uint64_t *record = cpu->dirty_records[index];
+        if (record[0] == cpu->dirty_view_first && record[1] == cpu->dirty_view_last &&
+            record[2] <= cpu->dirty_last && record[3] >= cpu->dirty_first)
+            return 1;
+    }
+    return 0;
+}
+
 static const hl_native_projection_view *containing(const hl_native_projection *projection,
                                                    uint64_t address) {
     size_t index;
