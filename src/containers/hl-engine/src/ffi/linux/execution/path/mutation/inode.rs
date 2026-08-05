@@ -141,6 +141,7 @@ impl PendingInodeLink {
             )
         };
         if result == 0 {
+            parent.publish();
             return Ok(());
         }
         Self::copy_publish(source, parent, name)
@@ -164,6 +165,8 @@ impl PendingInodeLink {
         if descriptor < 0 {
             return Err(HostError::map(std::io::Error::last_os_error()));
         }
+        // The exclusive target name is visible before copying can fail.
+        parent.publish();
         // SAFETY: openat returned one new owned descriptor.
         let target = unsafe { std::fs::File::from_raw_fd(descriptor) };
         let result = Self::copy_contents(source, &target);
@@ -171,8 +174,8 @@ impl PendingInodeLink {
         if let Err(error) = result {
             // SAFETY: the parent and name remain live; the exclusive create
             // proves this transaction owns the partial target.
-            unsafe {
-                libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0);
+            if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0 {
+                parent.publish();
             }
             return Err(error);
         }
