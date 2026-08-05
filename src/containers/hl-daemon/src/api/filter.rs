@@ -156,6 +156,7 @@ pub struct List {
 pub(crate) struct PreparedList {
     selection: List,
     temporal: BTreeMap<String, Vec<Option<(u64, hl_container::ContainerId)>>>,
+    ids: Option<std::collections::BTreeSet<hl_container::ContainerId>>,
 }
 
 impl List {
@@ -293,9 +294,21 @@ impl List {
                 .collect();
             temporal.insert(key.into(), ordering);
         }
+        let ids = self.filters.get("id").filter(|values| !values.is_empty()).map(|values| {
+            values
+                .iter()
+                .filter(|value| !value.is_empty())
+                .filter_map(|value| {
+                    let mut matches = containers.iter().filter(|container| container.id.as_str().starts_with(value));
+                    let first = matches.next()?;
+                    matches.next().is_none().then(|| first.id.clone())
+                })
+                .collect()
+        });
         PreparedList {
             selection: self,
             temporal,
+            ids,
         }
     }
 
@@ -446,6 +459,7 @@ impl PreparedList {
                         .flatten()
                         .any(|reference| &List::ordering_key(container) > reference)
             }
+            "id" => self.ids.as_ref().is_none_or(|ids| ids.contains(&container.id)),
             "label" => values.iter().all(|value| List::matches_label(container, value)),
             "label!" => values.iter().all(|value| !List::matches_label(container, value)),
             _ => {
@@ -591,6 +605,33 @@ mod tests {
             let selected = List::parse(true, Some(filters)).unwrap();
             assert!(!matches(selected, &container, std::slice::from_ref(&container)), "{filters}");
         }
+    }
+
+    #[test]
+    fn id_filter_resolves_only_exact_or_unique_case_sensitive_prefixes() {
+        let first = container();
+        let mut second = container();
+        second.id = "67ea0000-0000-0000-0000-000000000000".parse().unwrap();
+        second.spec.name = Some("second".into());
+        let containers = [first.clone(), second.clone()];
+        for value in [first.id.as_str(), "67ea8", "67ea0"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap();
+            assert!(matches(selected, &first, &containers) || matches(
+                List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap(),
+                &second,
+                &containers
+            ));
+        }
+        for value in ["", "67ea", "67EA8", "not-an-id"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap();
+            assert!(!matches(selected, &first, &containers));
+            let selected = List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap();
+            assert!(!matches(selected, &second, &containers));
+        }
+        let alternatives = List::parse(true, Some(r#"{"id":{"missing":false,"67ea8":true}}"#)).unwrap();
+        assert!(matches(alternatives, &first, &containers));
+        let conjunction = List::parse(true, Some(r#"{"id":["67ea8"],"name":["missing"]}"#)).unwrap();
+        assert!(!matches(conjunction, &first, &containers));
     }
 
     #[test]
