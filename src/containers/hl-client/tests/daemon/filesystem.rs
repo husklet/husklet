@@ -226,6 +226,7 @@ async fn explicit_rw_local_bind_volume_persists_executed_writes() {
 async fn legacy_host_config_tmpfs_executes_and_is_reclaimed() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;
+    let volumes = containers.volumes();
     Archive::load(
         &runnable_archive()[..],
         &containers.images().unwrap(),
@@ -277,7 +278,10 @@ async fn legacy_host_config_tmpfs_executes_and_is_reclaimed() {
     let inspect = client.containers().inspect(&created.id).await.unwrap();
     assert_eq!(inspect.metadata.mounts[0].kind, "tmpfs");
     assert_eq!(inspect.metadata.mounts[0].destination, "/scratch");
-    let mountpoint = std::path::PathBuf::from(&inspect.metadata.mounts[0].source);
+    assert_eq!(inspect.metadata.mounts[0].source, "");
+    let inventory = volumes.list().await.unwrap();
+    assert_eq!(inventory.len(), 1);
+    let mountpoint = inventory[0].path.clone();
     assert!(mountpoint.join("value").exists());
 
     client.containers().remove(&created.id, false, false).await.unwrap();
