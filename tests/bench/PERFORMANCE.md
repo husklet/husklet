@@ -1,5 +1,77 @@
 # Engine performance checkpoint
 
+## 2026-08-05: periodic exact-tree checkpoint
+
+Clean detached commit `a94efb2ff42cfb95ffb5258a8f179893d590166d`
+was built in release mode and measured on Linux ARM64 CPU 17. The host exposed
+18 logical CPUs; admission reported 21 GiB available RAM, 22 GiB free swap,
+160 GiB free disk, and load 3.73. Five samples per cell used the same static
+ARM64 guest and its internal warmup. The fast cadence uses `--divisor 1000` and
+the historically comparable cadence uses `--divisor 20`; each phase is selected
+separately. The matrix applied 60- and 120-second row deadlines respectively,
+bounded output, fresh process groups, checksum admission, and content-bound
+resumable ledgers. No row failed or timed out. Syscall checksums contain the
+provider TID and are intentionally not compared.
+
+Rust native selection was supplied only through the typed option set
+`HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1`, with the supervisor setting
+`HL_COMPAT_ENGINE_OPTIONS` to that exact set. Before timing, a one-repeat compute
+proof reported `native-verified`, seven native runs, 16 builds, 39,490 hits, two
+fallbacks, and 341,397 completed instructions. Timed native rows were quiet only
+after that content-bound proof. Interpreter rows supplied no native option.
+
+Times are five-sample medians in microseconds. `C throughput` is
+`C median / Rust median * 100`; `C latency gap` is
+`(Rust median / C median - 1) * 100`.
+
+| cadence | phase | host | C | Rust native | C throughput | C latency gap | Rust interpreter | C throughput | C latency gap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| fast | compute | 47 | 47 | 46,352 | 0.101% | +98,521.3% | 8,131 | 0.578% | +17,200.0% |
+| fast | float SIMD | 124 | 125 | 207,207 | 0.060% | +165,665.6% | 296,800 | 0.042% | +237,340.0% |
+| fast | memory | 173 | 169 | 30,908 | 0.547% | +18,188.8% | 114,268 | 0.148% | +67,514.2% |
+| fast | syscall | 844 | 849 | 2,513 | 33.784% | +196.0% | 5,511 | 15.406% | +549.1% |
+| fast | pipe | 339 | 332 | 5,447 | 6.095% | +1,540.7% | 10,278 | 3.230% | +2,995.8% |
+| historical | compute | 2,383 | 2,339 | 1,456,966 | 0.161% | +62,190.1% | 303,323 | 0.771% | +12,868.1% |
+| historical | float SIMD | 6,574 | 6,613 | 22,644,923 | 0.029% | +342,330.4% | 13,710,632 | 0.048% | +207,228.5% |
+| historical | memory | 5,697 | 6,650 | 4,997,335 | 0.133% | +75,047.9% | 4,925,238 | 0.135% | +73,963.7% |
+| historical | syscall | 45,043 | 44,163 | 167,557 | 26.357% | +279.4% | 237,210 | 18.618% | +437.1% |
+| historical | pipe | 17,648 | 17,018 | 323,283 | 5.264% | +1,799.7% | 340,751 | 4.994% | +1,902.3% |
+
+The fast native compute samples ranged from 8,696 to 61,459 microseconds, so
+its surprising interpreter advantage is an exact observation but not a stable
+optimization claim. Float SIMD and memory remain dominated by full guarded
+accesses. Historical native proof recorded 87,859,588 full guards for float
+SIMD and 28,991,955 for memory, with zero fast guards in both rows. Guest,
+Rust engine, matrix runner, and retained-C runner SHA-256 values were
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`,
+`15799909895b8b97a0f01c83013a53780fcb496fc47132f0c80942504e225e8c`,
+`6d5f8ba128c981e81733473207d11188d1f50145d3bff2bc6c63e2bb68b6761a`,
+and `0633ed0f914f666f2127ca1b86a4def69eea65c59f7942f8afd66d2b7a6ebc62`.
+
+The retained audit covered `../engine/tools/bench_runner.c` (`native_build`,
+`qemu_build`, `hl_build`, `run_once`, `cmd_run`, `umedian`, and `cmd_report`),
+`../engine/tests/perf/combined_bench.c` (`timer_count`, `timer_freq`, each
+selected phase, its warmup, and `main`), `../engine/src/core/dispatch.c`
+(`run_block`, `block_return`, and `run_guest`), and AArch64
+`stubs.c`/`translate.c` (`emit_prologue`, `emit_spill`,
+`emit_chain_exit_from`, and `translate_block`). One invocation owns provider
+arguments and setup until teardown; every repeat is a fresh child; phase clocks
+exclude startup; medians admit only stable phase sets and checksums. CPU state
+is engine-local for its lifetime, translated blocks borrow it synchronously,
+and slow exits fully publish it before dispatch, signal selection, or teardown.
+Direct chains retain live registers; publication and invalidation remain under
+the translator lock. The same-ISA AArch64 path is the host branch measured here.
+
+The Rust owners are `benchmark::{matrix,alternating,adapter}` for immutable
+content identity, typed options, bounded child lifecycle, resume, parsing, and
+median evidence; `src/native/exec` cache, AArch64 trace/stub/fault code for
+translated-state lifetime and publication; and `hl-engine` for selected backend
+composition. No implementation changed in this checkpoint. The repeatable fast
+cadence is the README matrix command with five repeats, 60-second timeout,
+`--divisor 1000`, and one selected phase; the historical checkpoint changes
+only divisor to 20 and timeout to 120. Preserve the output directory and use
+`--resume` only with the exact content identity already recorded there.
+
 ## 2026-08-04: exact-head float-SIMD attribution
 
 Clean detached commit `fbfe10df8dc21b1c4827580a624da54c67416585`
