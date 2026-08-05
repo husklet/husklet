@@ -276,7 +276,9 @@ impl Runtime {
         context.publish_procfs();
         self.process.observe_fork();
         if let Some((install, _)) = pidfd {
-            install.publish();
+            let number = install.number();
+            let published = install.publish();
+            debug_assert_eq!(published, number);
         }
         Box::new(runnable).publish();
         Ok(process.number())

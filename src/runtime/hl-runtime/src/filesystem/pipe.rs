@@ -70,7 +70,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 if let Some(publication) = publication {
                     publication.publish();
                 }
-                prepared.publish_all();
+                let published = prepared.publish_all();
+                debug_assert_eq!(published, numbers);
                 LinuxResult::Value(0)
             }
             Ok(_) | Err(_) => LinuxResult::Error(Errno::EFAULT),

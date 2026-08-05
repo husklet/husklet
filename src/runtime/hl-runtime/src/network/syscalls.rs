@@ -925,7 +925,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             objects[1].close();
             return LinuxResult::Error(Errno::EFAULT);
         }
-        batch.publish_all();
+        let published = batch.publish_all();
+        debug_assert_eq!(published, numbers);
         LinuxResult::Value(0)
     }
 }
