@@ -1,7 +1,9 @@
 //! Concrete foundational Rust runtime factory with injected host/execution edges.
 
 use crate::activation::GuestIsa;
-use crate::composition::{CompositionError, GuestMachine, RuntimeConstruction, RuntimeFactory, RuntimeServices};
+use crate::composition::{
+    CompositionError, ConstructionError, GuestMachine, RuntimeConstruction, RuntimeFactory, RuntimeServices,
+};
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::launch_plan::RuntimeLaunchPlan;
 use hl_runtime::{
@@ -201,6 +203,10 @@ impl<E: GuestExecutionPort> GuestMachine for RustRuntimeMachine<E> {
     fn start(&self) -> Result<(), EngineError> {
         self.execution
             .start(self.isa, &self.plan, &self.assembly, &self.services)
+            .map_err(|error| match error {
+                EngineError::LaunchFailed => EngineError::Construction(ConstructionError::Start),
+                error => error,
+            })
     }
 
     fn wait(&self) -> Result<EngineExit, EngineError> {
@@ -242,17 +248,17 @@ where
 
     fn construct(&self, request: RuntimeConstruction<'_>) -> Result<Self::Machine, CompositionError> {
         let (config, topology) = self.assembly_config(request.plan)?;
-        let mut assembly =
-            RuntimeAssembly::with_topology(config, topology).map_err(|_| CompositionError::RuntimeConstruction)?;
+        let mut assembly = RuntimeAssembly::with_topology(config, topology)
+            .map_err(|_| CompositionError::construction(ConstructionError::Assembly))?;
         if let Some(fork) = self.host.fork_port(&assembly)? {
             assembly
                 .install_fork(fork)
-                .map_err(|_| CompositionError::RuntimeConstruction)?;
+                .map_err(|_| CompositionError::construction(ConstructionError::Task))?;
         }
         if let Some(exec) = self.host.exec_port(&assembly)? {
             assembly
                 .install_exec(exec)
-                .map_err(|_| CompositionError::RuntimeConstruction)?;
+                .map_err(|_| CompositionError::construction(ConstructionError::Task))?;
         }
         prepare_tasks(&assembly)?;
         self.host.validate(&assembly)?;

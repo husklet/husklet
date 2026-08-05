@@ -91,6 +91,7 @@ struct ExecutionState {
 #[derive(Default)]
 struct Execution {
     state: Mutex<ExecutionState>,
+    fail_start: bool,
 }
 
 impl GuestExecutionPort for Execution {
@@ -101,6 +102,9 @@ impl GuestExecutionPort for Execution {
         assembly: &RuntimeAssembly,
         _: &RuntimeServices,
     ) -> Result<(), EngineError> {
+        if self.fail_start {
+            return Err(EngineError::LaunchFailed);
+        }
         let task_identity = Arc::as_ptr(&assembly.tasks()) as usize;
         self.state
             .lock()
@@ -130,6 +134,29 @@ impl GuestExecutionPort for Execution {
         self.state.lock().unwrap().stops.push(request);
         Ok(())
     }
+}
+
+#[test]
+fn start_failure_has_bounded_construction_cause() {
+    let factory = RustRuntimeFactory::new(
+        Arc::new(Execution {
+            fail_start: true,
+            ..Execution::default()
+        }),
+        Arc::new(Host::default()),
+        RuntimeAssemblyConfig::default(),
+    );
+    let machine = factory
+        .construct(RuntimeConstruction {
+            isa: GuestIsa::Aarch64,
+            plan: &Fixture::plan(b"guest", None),
+            services: &Fixture::services(),
+        })
+        .unwrap();
+    assert_eq!(
+        machine.start(),
+        Err(EngineError::Construction(ConstructionError::Start))
+    );
 }
 
 #[derive(Clone, Copy)]

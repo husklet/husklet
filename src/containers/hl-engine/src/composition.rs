@@ -11,10 +11,28 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstructionError {
+    Assembly,
+    Memory,
+    Task,
+    Ipc,
+    Descriptor,
+    Host,
+    Start,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompositionError {
     MissingCheckpointSink,
     MissingCheckpointSource,
     RuntimeConstruction,
+    Construction(ConstructionError),
+}
+
+impl CompositionError {
+    pub const fn construction(cause: ConstructionError) -> Self {
+        Self::Construction(cause)
+    }
 }
 
 /// Safe activation transport presented to a constructed runtime.

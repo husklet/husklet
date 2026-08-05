@@ -82,6 +82,7 @@ pub enum EngineError {
     Busy,
     Destroyed,
     LaunchFailed,
+    Construction(crate::composition::ConstructionError),
     WorkspaceFailed,
     WaitFailed,
     StopFailed,

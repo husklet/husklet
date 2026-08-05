@@ -243,8 +243,12 @@ pub(in crate::ffi::linux::execution) fn create(
         )
         .map_err(|_| EngineError::LaunchFailed)?,
     );
-    let ipc_catalog = assembly.ipc().ok_or(EngineError::LaunchFailed)?;
-    let ipc_pipes = assembly.ipc_pipes().ok_or(EngineError::LaunchFailed)?;
+    let ipc_catalog = assembly
+        .ipc()
+        .ok_or(EngineError::Construction(crate::composition::ConstructionError::Ipc))?;
+    let ipc_pipes = assembly
+        .ipc_pipes()
+        .ok_or(EngineError::Construction(crate::composition::ConstructionError::Ipc))?;
     let ipc = Arc::new(hl_runtime::MemoryMappings::new(Arc::clone(&mappings)));
     let vfork = Arc::new(OnceLock::new());
     let space = super::super::space::AddressSpace::new(Arc::clone(&arena), Arc::clone(&mappings));
@@ -292,13 +296,13 @@ pub(in crate::ffi::linux::execution) fn create(
         return Err(EngineError::LaunchFailed);
     }
     let descriptors = Arc::new(match streams.terminal() {
-        Some(terminal) => path_host.as_ref().ok_or(EngineError::LaunchFailed)?.initial_terminal(
-            Arc::clone(&table),
-            &tasks,
-            child.0,
-            child.1,
-            &terminal,
-        )?,
+        Some(terminal) => path_host
+            .as_ref()
+            .ok_or(EngineError::Construction(
+                crate::composition::ConstructionError::Descriptor,
+            ))?
+            .initial_terminal(Arc::clone(&table), &tasks, child.0, child.1, &terminal)
+            .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Descriptor))?,
         None => {
             descriptor_table::Set::with_table(Arc::clone(&table), streams).expect("valid standard descriptor table")
         }

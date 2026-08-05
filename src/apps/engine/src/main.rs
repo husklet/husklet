@@ -90,7 +90,11 @@ impl ExitReport {
     }
 
     fn error(isa: &str, error: hl_engine::program::ProgramError) {
-        eprintln!("[hl-exit]\tError\t0\t{isa}\t0x0\t-\t{error:?}");
+        eprintln!("{}", Self::error_line(isa, error));
+    }
+
+    fn error_line(isa: &str, error: hl_engine::program::ProgramError) -> String {
+        format!("[hl-exit]\tError\t0\t{isa}\t0x0\t-\t{error:?}")
     }
 
     fn write(exit: hl_engine::engine::EngineExit) {
@@ -117,7 +121,7 @@ impl ExitReport {
 
 #[cfg(test)]
 mod tests {
-    use super::Environment;
+    use super::{Environment, ExitReport};
     use clap::Parser;
 
     #[test]
@@ -154,6 +158,17 @@ mod tests {
         assert_eq!(
             bootstrap.take_authority_health(),
             hl_engine::environment::AuthorityDescriptor::Present(13)
+        );
+    }
+
+    #[test]
+    fn exit_report_renders_bounded_construction_cause() {
+        let error = hl_engine::program::ProgramError::Engine(hl_engine::engine::EngineError::Construction(
+            hl_engine::composition::ConstructionError::Memory,
+        ));
+        assert_eq!(
+            ExitReport::error_line("aarch64", error),
+            "[hl-exit]\tError\t0\taarch64\t0x0\t-\tEngine(Construction(Memory))",
         );
     }
 }

@@ -122,7 +122,8 @@ impl GuestExecutor {
         cancellation: Arc<readiness::Cancellation>,
         threads: Arc<threads::ThreadSet>,
     ) -> Result<EngineExit, EngineError> {
-        crate::runtime_machine::prepare_tasks(assembly).map_err(|_| EngineError::LaunchFailed)?;
+        crate::runtime_machine::prepare_tasks(assembly)
+            .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Task))?;
         let guest_executable = routing::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
         let path = plan
             .executable_host
@@ -134,13 +135,13 @@ impl GuestExecutor {
             GuestIsa::X86_64 => GuestArchitecture::X86_64,
         };
         let (shared, shared_backings) = super::shared_backing::Factory::store(hl_memory::SharedLimits::default())
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Ipc))?;
         assembly
             .install_ipc(Arc::clone(&shared))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Ipc))?;
         let arena = Arc::new(
             VirtualMemory::reserve_in(Arc::clone(&self.resources), arena::Capacity::DEFAULT)
-                .map_err(|_| EngineError::LaunchFailed)?
+                .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Memory))?
                 .with_shared_store(Arc::clone(&shared))
                 .with_shared_backings(shared_backings),
         );
@@ -160,7 +161,7 @@ impl GuestExecutor {
         ));
         assembly
             .install_memory(Arc::new(hl_runtime::MemoryExit::new(Arc::clone(&mappings))))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Memory))?;
         let image_space = space::AddressSpace::new(Arc::clone(&arena), Arc::clone(&mappings));
         let source = match self.authority.as_ref() {
             Some(authority) => source::Source::Projected(source::ProjectedSource::new(Arc::clone(authority))),
