@@ -239,12 +239,35 @@ pub enum SignalQueueError {
 #[derive(Clone)]
 pub(crate) struct PendingSignals {
     queues: [VecDeque<SignalInfo>; SIGNAL_COUNT],
+    occupied: u64,
+    synchronous: u64,
 }
 
 impl PendingSignals {
     pub(crate) fn new() -> Self {
         Self {
             queues: array::from_fn(|_| VecDeque::new()),
+            occupied: 0,
+            synchronous: 0,
+        }
+    }
+
+    const fn bit(signal: SignalNumber) -> u64 {
+        1_u64 << signal.index()
+    }
+
+    fn refresh_front(&mut self, signal: SignalNumber) {
+        let bit = Self::bit(signal);
+        let Some(front) = self.queues[signal.index()].front() else {
+            self.occupied &= !bit;
+            self.synchronous &= !bit;
+            return;
+        };
+        self.occupied |= bit;
+        if front.is_synchronous() {
+            self.synchronous |= bit;
+        } else {
+            self.synchronous &= !bit;
         }
     }
 
@@ -257,6 +280,7 @@ impl PendingSignals {
             return Err(SignalQueueError::QueueFull);
         }
         queue.push_back(info);
+        self.refresh_front(info.signal);
         Ok(true)
     }
 
@@ -272,35 +296,28 @@ impl PendingSignals {
         let queue = &mut self.queues[signal.index()];
         let before = queue.len();
         queue.retain(|info| info.source_tag != source_tag);
-        queue.len() != before
+        let removed = queue.len() != before;
+        self.refresh_front(signal);
+        removed
     }
 
     pub(crate) fn peek_eligible(&self, blocked: SignalMask) -> Option<SignalNumber> {
-        self.queues
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(index, queue)| !queue.is_empty() && !blocked.contains(SignalNumber((*index + 1) as u8)))
-            .map(|(index, _)| SignalNumber((index + 1) as u8))
+        let eligible = self.occupied & !blocked.bits();
+        (eligible != 0).then(|| SignalNumber((u64::BITS - eligible.leading_zeros()) as u8))
     }
 
     pub(crate) fn peek_synchronous(&self) -> Option<SignalNumber> {
-        self.queues.iter().enumerate().rev().find_map(|(index, queue)| {
-            queue.front().copied().filter(|info| info.is_synchronous())?;
-            Some(SignalNumber((index + 1) as u8))
-        })
+        (self.synchronous != 0).then(|| SignalNumber((u64::BITS - self.synchronous.leading_zeros()) as u8))
     }
 
     pub(crate) fn peek_selected(&self, selected: SignalMask) -> Option<SignalNumber> {
-        self.queues
-            .iter()
-            .enumerate()
-            .find(|(index, queue)| !queue.is_empty() && selected.contains(SignalNumber((*index + 1) as u8)))
-            .map(|(index, _)| SignalNumber((index + 1) as u8))
+        let eligible = self.occupied & selected.bits();
+        (eligible != 0).then(|| SignalNumber((eligible.trailing_zeros() + 1) as u8))
     }
 
     pub(crate) fn pop(&mut self, signal: SignalNumber) -> Option<SignalInfo> {
         let info = self.queues[signal.index()].pop_front()?;
+        self.refresh_front(signal);
         Some(info)
     }
 
@@ -310,10 +327,19 @@ impl PendingSignals {
 
     pub(crate) fn flush(&mut self, signal: SignalNumber) {
         self.queues[signal.index()].clear();
+        self.refresh_front(signal);
+    }
+
+    pub(crate) const fn mask(&self) -> SignalMask {
+        SignalMask::from_bits(self.occupied)
     }
 
     pub(crate) fn snapshot(&self) -> Vec<SignalInfo> {
         self.queues.iter().flat_map(|queue| queue.iter().copied()).collect()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = SignalInfo> + '_ {
+        self.queues.iter().flat_map(|queue| queue.iter().copied())
     }
 
     pub(crate) fn restore(values: &[SignalInfo], limit: usize) -> Result<Self, SignalQueueError> {

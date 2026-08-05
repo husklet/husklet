@@ -83,14 +83,9 @@ impl TaskRegistry {
         let state = self.lock();
         let thread_state = Self::thread(&state, thread)?;
         let process_state = Self::process(&state, thread_state.process)?;
-        let bits = thread_state
-            .signals
-            .pending
-            .snapshot()
-            .into_iter()
-            .chain(process_state.signals.pending.snapshot())
-            .fold(0_u64, |bits, info| bits | (1_u64 << (info.signal.get() - 1)));
-        Ok(SignalMask::from_bits(bits))
+        Ok(SignalMask::from_bits(
+            thread_state.signals.pending.mask().bits() | process_state.signals.pending.mask().bits(),
+        ))
     }
 
     /// Reports whether every currently deliverable handled signal requests
@@ -108,9 +103,8 @@ impl TaskRegistry {
         for info in thread_state
             .signals
             .pending
-            .snapshot()
-            .into_iter()
-            .chain(process.signals.pending.snapshot())
+            .iter()
+            .chain(process.signals.pending.iter())
         {
             let blocked =
                 SignalMask::from_bits(thread_state.signals.mask.bits() | thread_state.signals.deferred.bits());

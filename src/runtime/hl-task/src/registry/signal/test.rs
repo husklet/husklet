@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::thread;
+use std::time::Instant;
 
 use crate::*;
 
@@ -862,4 +863,38 @@ fn zero_signal_capacity() {
         }),
         Err(TaskError::InvalidCapacity)
     ));
+}
+
+#[test]
+#[ignore = "performance diagnostic"]
+fn blocked_pending_signal_poll_benchmark() {
+    const POLLS: usize = 2_000_000;
+    let (registry, process, thread) = Fixture::registry(8);
+    let signal = Fixture::number(1);
+    registry
+        .set_signal_mask(thread, SignalMask::from_bits(0).with(signal))
+        .unwrap();
+    registry
+        .set_action(
+            process,
+            signal,
+            SignalAction {
+                disposition: SignalDisposition::Handler(0x1000),
+                ..SignalAction::DEFAULT
+            },
+        )
+        .unwrap();
+    registry
+        .enqueue_signal(PendingTarget::Process(process), SignalInfo::bare(signal))
+        .unwrap();
+    let started = Instant::now();
+    for _ in 0..POLLS {
+        assert!(!std::hint::black_box(
+            registry.has_interrupting_signal(thread, None).unwrap()
+        ));
+    }
+    println!(
+        "blocked_signal_poll_ns={}",
+        started.elapsed().as_nanos() / POLLS as u128
+    );
 }
