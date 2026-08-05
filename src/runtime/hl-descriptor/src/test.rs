@@ -1,12 +1,55 @@
-use crate::{DescriptorError, DescriptorFlags, DescriptorTable, ExactDuplicate, OpenFileDescription, StatusFlags};
+use crate::{
+    DescriptorError, DescriptorFlags, DescriptorTable, ExactDuplicate, ObjectError, OpenFileDescription,
+    OperationContext, StatusFlags,
+};
 use std::collections::BTreeMap;
+use std::io::IoSlice;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
 struct TestDescription;
 
 impl OpenFileDescription for TestDescription {}
+
+#[derive(Debug, Default)]
+struct ScalarWriter(Mutex<Vec<u8>>);
+
+impl OpenFileDescription for ScalarWriter {
+    fn write(&self, input: &[u8]) -> Result<usize, ObjectError> {
+        self.0.lock().unwrap().extend_from_slice(input);
+        Ok(input.len())
+    }
+}
+
+#[test]
+fn scalar_writers_accept_vectored_output() {
+    let output = Arc::new(ScalarWriter::default());
+    let table = DescriptorTable::new(2).unwrap();
+    let descriptor = table
+        .commit(
+            table.reserve_exact(1).unwrap(),
+            output.clone(),
+            StatusFlags::from_bits(1),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    let lease = table.pin(descriptor).unwrap();
+    let vectors = [IoSlice::new(b""), IoSlice::new(b"external grep output\n")];
+
+    assert_eq!(
+        lease.write_vector_context(
+            &vectors,
+            OperationContext {
+                actor: None,
+                cancellation: None,
+            },
+        ),
+        Ok(vectors[1].len()),
+    );
+    assert_eq!(&*output.0.lock().unwrap(), b"external grep output\n");
+}
 
 #[derive(Debug, Default)]
 struct LifecycleDescription {

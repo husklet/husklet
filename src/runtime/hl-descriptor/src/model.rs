@@ -125,18 +125,20 @@ pub trait OpenFileDescription: Debug + Send + Sync + 'static {
     ) -> Result<usize, ObjectError> {
         Err(ObjectError::NotSupported)
     }
-    fn write_vector_context(
-        &self,
-        _input: &[IoSlice<'_>],
-        _context: OperationContext<'_>,
-    ) -> Result<usize, ObjectError> {
-        Err(ObjectError::NotSupported)
+    fn write_vector_context(&self, input: &[IoSlice<'_>], context: OperationContext<'_>) -> Result<usize, ObjectError> {
+        let Some(input) = input.iter().find(|input| !input.is_empty()) else {
+            return Ok(0);
+        };
+        self.write_context(input, context)
     }
     fn read_vector_at(&self, _offset: u64, _output: &mut [IoSliceMut<'_>]) -> Result<usize, ObjectError> {
         Err(ObjectError::NotSupported)
     }
-    fn write_vector_at(&self, _offset: u64, _input: &[IoSlice<'_>]) -> Result<usize, ObjectError> {
-        Err(ObjectError::NotSupported)
+    fn write_vector_at(&self, offset: u64, input: &[IoSlice<'_>]) -> Result<usize, ObjectError> {
+        let Some(input) = input.iter().find(|input| !input.is_empty()) else {
+            return Ok(0);
+        };
+        self.write_at(offset, input)
     }
     fn read_at(&self, _offset: u64, _output: &mut [u8]) -> Result<usize, ObjectError> {
         Err(ObjectError::NotSupported)
