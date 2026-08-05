@@ -252,13 +252,13 @@ impl List {
             })
             .cloned()
             .collect::<Vec<_>>();
-        if !unsupported.is_empty() {
-            Err(format!("unsupported container filters: {}", unsupported.join(", ")))
-        } else {
+        if unsupported.is_empty() {
             for value in list.filters.get("expose").into_iter().flatten() {
                 Self::exposed_port(value)?;
             }
             Ok(list)
+        } else {
+            Err(format!("unsupported container filters: {}", unsupported.join(", ")))
         }
     }
 
@@ -502,26 +502,26 @@ mod tests {
 
     #[test]
     fn expose_filter_matches_declared_tcp_ports_and_validates_ranges() {
-        let mut container = container();
-        container.spec = container
+        let mut exposed = container();
+        exposed.spec = exposed
             .spec
             .clone()
             .expose(hl_container::Port::tcp(80).unwrap())
             .expose(hl_container::Port::tcp(443).unwrap());
         for value in ["80", "80/tcp", "79-80", "443-444/tcp"] {
             let selected = List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).unwrap();
-            assert!(matches(selected, &container, std::slice::from_ref(&container)));
+            assert!(matches(selected, &exposed, std::slice::from_ref(&exposed)));
         }
         for value in ["81", "80/udp", "80/sctp"] {
             let selected = List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).unwrap();
-            assert!(!matches(selected, &container, std::slice::from_ref(&container)));
+            assert!(!matches(selected, &exposed, std::slice::from_ref(&exposed)));
         }
         let alternatives = List::parse(
             true,
             Some(r#"{"expose":{"81":false,"443":true},"status":["exited"]}"#),
         )
         .unwrap();
-        assert!(matches(alternatives, &container, std::slice::from_ref(&container)));
+        assert!(matches(alternatives, &exposed, std::slice::from_ref(&exposed)));
         for value in ["", "0", "65536", "90-80", "80-", "-80", "80/icmp", "80/tcp/extra"] {
             assert!(List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).is_err());
         }
