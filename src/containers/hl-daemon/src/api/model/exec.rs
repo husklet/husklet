@@ -122,7 +122,11 @@ impl ExecStart {
         if let Some(name) = CompatibilityFields::from(&self.unsupported).first_meaningful() {
             return Err(format!("unsupported exec start field {name}"));
         }
-        console_size(self.console_size)
+        let size = console_size(self.console_size)?;
+        if size.is_some() && !self.tty {
+            return Err("ConsoleSize requires Tty=true".into());
+        }
+        Ok(size)
     }
 }
 
@@ -333,6 +337,16 @@ mod tests {
             }
             .size()
             .is_err()
+        );
+        assert_eq!(
+            ExecStart {
+                tty: false,
+                console_size: Some([41, 109]),
+                ..Default::default()
+            }
+            .size()
+            .unwrap_err(),
+            "ConsoleSize requires Tty=true"
         );
     }
 }
