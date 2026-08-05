@@ -168,7 +168,7 @@ impl GuestExecutor {
         let source = match self.authority.as_ref() {
             Some(authority) => source::Source::Projected(source::ProjectedSource::new(Arc::clone(authority))),
             None => source::Source::File(match plan.rootfs.as_deref() {
-                Some(rootfs) if plan.options.contains_key("HL_OVERLAY_UPPER") => {
+                Some(rootfs) if plan.options.get("HL_OVERLAY_UPPER").is_some() => {
                     let lowers = plan
                         .options
                         .get("HL_LOWER")
