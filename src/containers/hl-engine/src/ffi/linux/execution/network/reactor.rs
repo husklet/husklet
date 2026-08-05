@@ -1,12 +1,28 @@
 #![allow(unsafe_code)]
 
-use std::sync::Weak;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 
 use super::native::Reactor;
 
 type Token = (u64, i32, bool, bool);
 
 impl Reactor {
+    pub(super) fn start(source: &Arc<Self>) {
+        if source
+            .started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let weak = Arc::downgrade(source);
+        std::thread::Builder::new()
+            .name("hl-inet-ready".into())
+            .spawn(move || Self::run(weak))
+            .expect("native network reactor creation failed");
+    }
+
     pub(super) fn run(source: Weak<Self>) {
         loop {
             let Some(shared) = source.upgrade() else { return };

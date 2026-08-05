@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::mem::{size_of, zeroed};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use hl_descriptor::ReadinessObserver;
@@ -65,6 +65,7 @@ pub(crate) struct Native {
 }
 
 pub(super) struct Reactor {
+    pub(super) started: AtomicBool,
     pub(super) next: AtomicU64,
     pub(super) sockets: Mutex<BTreeMap<u64, Entry>>,
     pub(super) observers: Mutex<BTreeMap<u64, Weak<dyn ReadinessObserver>>>,
@@ -103,6 +104,7 @@ impl Native {
             libc::fcntl(wake[1], libc::F_SETFD, libc::FD_CLOEXEC);
         }
         let shared = Arc::new(Reactor {
+            started: AtomicBool::new(false),
             next: AtomicU64::new(1),
             sockets: Mutex::new(BTreeMap::new()),
             observers: Mutex::new(BTreeMap::new()),
@@ -111,11 +113,6 @@ impl Native {
             wake_read: wake[0],
             wake_write: wake[1],
         });
-        let weak = Arc::downgrade(&shared);
-        std::thread::Builder::new()
-            .name("hl-inet-ready".into())
-            .spawn(move || Reactor::run(weak))
-            .expect("native network reactor creation failed");
         Self { shared, authority }
     }
 
@@ -174,6 +171,7 @@ impl Native {
             },
         );
         drop(sockets);
+        Reactor::start(&self.shared);
         self.wake();
         Ok(token)
     }
@@ -708,6 +706,19 @@ impl Native {
 #[cfg(test)]
 mod kind_cache_test {
     use super::Native;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn readiness_worker_starts_with_first_socket() {
+        let host = Native::new();
+        assert!(!host.shared.started.load(Ordering::Acquire));
+        // SAFETY: socket returns a newly owned descriptor which insert consumes.
+        let descriptor = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0) };
+        assert!(descriptor >= 0);
+        let token = host.insert(descriptor).unwrap();
+        assert!(host.shared.started.load(Ordering::Acquire));
+        hl_network::SocketHostIo::close(&host, token);
+    }
 
     #[test]
     fn socket_kind_is_sampled_once_when_descriptor_enters_the_table() {
