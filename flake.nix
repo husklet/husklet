@@ -89,6 +89,22 @@
               "${guestPkgs.stdenv.cc}/bin/${guestPkgs.stdenv.cc.targetPrefix}cc";
           ccPackageFor = guest: if isNative guest then pkgs.gcc else (pkgsFor guest).stdenv.cc;
           upper = guest: lib.toUpper guest.isa;
+          rustStaticLinkerName = guest: "${guest.isa}-linux-gnu-rust-static-linker";
+          rustStaticLinkerFor =
+            guest:
+            let
+              guestPkgs = pkgsFor guest;
+            in
+            pkgs.writeShellScriptBin (rustStaticLinkerName guest) ''
+              static_search=
+              for argument in "$@"; do
+                if [ "$argument" = -static ]; then
+                  static_search=-L${lib.escapeShellArg "${guestPkgs.glibc.static}/lib"}
+                  break
+                fi
+              done
+              exec ${lib.escapeShellArg (ccFor guest)} $static_search "$@"
+            '';
           compilerAliasFor =
             guest:
             let
@@ -106,6 +122,7 @@
               "x86_64"
             ];
           crossCompilers = map ccPackageFor guestISAs;
+          rustStaticLinkers = map rustStaticLinkerFor guestISAs;
           compilerAliases = map compilerAliasFor guestISAs;
           emulators = lib.optional (host.isLinux && hostCpu == "x86_64") pkgs.qemu-user;
           env =
@@ -121,8 +138,11 @@
                   "${upper guest}_LINUX_STATIC_CC" = "${ccFor guest} -L${guestPkgs.glibc.static}/lib";
                   "${upper guest}_DYNAMIC_LOADER" = "${guestPkgs.glibc}/lib/${guest.loader}";
                   "${upper guest}_DYNAMIC_LIBC" = "${guestPkgs.glibc}/lib/libc.so.6";
-                  "CARGO_TARGET_${lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] "${guest.isa}-unknown-linux-gnu")}_LINKER" =
-                    ccFor guest;
+                  "CARGO_TARGET_${
+                    lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] "${guest.isa}-unknown-linux-gnu")
+                  }_LINKER" =
+                    "${rustStaticLinkerFor guest}/bin/${rustStaticLinkerName guest}";
+                  "CC_${lib.replaceStrings [ "-" ] [ "_" ] "${guest.isa}-unknown-linux-gnu"}" = ccFor guest;
                 }
               )
               {
@@ -378,7 +398,10 @@
                 (rustFor pkgs)
               ]
               ++ lib.optionals toolchain.canBuildGuests (
-                toolchain.crossCompilers ++ toolchain.compilerAliases ++ toolchain.emulators
+                toolchain.crossCompilers
+                ++ toolchain.rustStaticLinkers
+                ++ toolchain.compilerAliases
+                ++ toolchain.emulators
               );
               shellHook = ''
                 export CC="${toolchain.env.CC}"

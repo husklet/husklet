@@ -24,6 +24,7 @@ extern int madvise(void *, size_t, int);
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "executor admission requires lock-free uint64 atomics");
 
+#if defined(__aarch64__)
 static void a64_fallback_word(hl_native_executor *executor, uint32_t word) {
     _Atomic uint64_t *counter;
     if (!executor->diagnostics) return;
@@ -38,6 +39,7 @@ static void a64_fallback_word(hl_native_executor *executor, uint32_t word) {
         counter = &executor->a64_fallback_other;
     atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
 }
+#endif
 
 enum mutation_state {
     MUTATION_OPEN,
@@ -253,6 +255,7 @@ void hl_native_ibtc_fill_shared(hl_native_executor *executor, uint64_t target, v
     ibtc_publish(&executor->ibtc[(target >> 2) & (HL_NATIVE_IBTC_COUNT - 1)], target, body);
 }
 
+#if defined(__aarch64__)
 static hl_native_status ibtc_fill(hl_native_executor *executor, hl_native_aarch64_cpu *cpu,
                                   uint64_t target, const hl_native_code *code) {
     uintptr_t site = (uintptr_t)cpu->indirect_site;
@@ -305,6 +308,7 @@ static hl_native_status ibtc_fill(hl_native_executor *executor, hl_native_aarch6
     cpu->indirect_site = 0;
     return HL_NATIVE_OK;
 }
+#endif
 
 hl_native_status hl_native_executor_gate_enter(hl_native_executor *executor) {
     if (executor == NULL) return HL_NATIVE_ARGUMENT;
@@ -675,10 +679,12 @@ static hl_native_status run_exit(hl_native_execution *execution, hl_native_exit 
                                     instruction, instruction, 0, 0);
 }
 
+#if defined(__aarch64__)
 static hl_native_status run_fatal(hl_native_execution *execution, hl_native_exit *output, uint64_t code) {
     return hl_native_execution_exit(execution, output, HL_NATIVE_EXIT_FATAL, HL_NATIVE_ACCESS_UNKNOWN,
                                     0, 0, 0, code == 0 ? 1 : code);
 }
+#endif
 
 hl_native_status hl_native_synchronize_epoch(hl_native_executor *executor, uint64_t mapping_epoch,
                                              uint64_t instruction_epoch, uint64_t memory_mode,

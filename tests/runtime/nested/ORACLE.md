@@ -27,3 +27,15 @@ provides a target-specific linker for each GNU triple. Commit `07dcff6be` remove
 the former `runtime/core` fixture; the nested leaf is now the active
 `runtime/abi-core/hello` artifact, whose own manifest declares ARM64, exit 42, and
 the byte-exact `hi\n` output used by this gate.
+
+The native executor compilation owner is `src/containers/hl-engine/build.rs`,
+which deliberately compiles the common C translation unit on both Linux host
+architectures and selects assembly by target. The AArch64 fallback accounting,
+IBTC site fill, and fatal translated-run exit routines in
+`src/native/exec/src/executor.c` are owned exclusively by the AArch64 run path;
+their definitions are therefore target-guarded along with their call sites so
+the warning-strict AMD64 foreign build does not create dead host code. The
+retained engine has no corresponding portable nested artifact builder: its
+relevant oracle remains `cmake/Phase2Production.cmake:hl_linux_production` and
+`cmake/Phase3Gates.cmake:nested-foreign-engines`, which build each host-native
+engine using a separate static cross toolchain.
