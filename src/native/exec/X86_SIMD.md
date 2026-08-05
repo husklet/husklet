@@ -28,7 +28,7 @@ selection.
 | MOVAPS/MOVUPS, MOVDQA/MOVDQU | aligned/unaligned 128-bit register and guarded memory load/store | implemented | aligned faults and store observation covered by existing projection tests |
 | MOVD/MOVQ, MOVSS/MOVSD | GPR transfer; scalar load merge and scalar register-copy upper-lane rules | partial: integer and broad 128-bit copy forms exist; scalar prefix semantics are incomplete | complete every scalar merge/zero rule |
 | PUNPCKL/H B/W/D/Q | all four widths, register/memory | implemented | retained memory fault-before-commit contract |
-| PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | missing except narrow insert support | implement general immediate permutation before claiming initialization coverage |
+| PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | legacy SSE forms implemented; VEX forms remain absent | implement VEX 128/256 non-destructive forms before claiming AVX coverage |
 | PAND/PANDN/POR/PXOR | full 128-bit register/memory | implemented | none known |
 | PCMPEQB/W/D, PMOVMSKB | all lane widths; mask to GPR | implemented | PCMPEQQ and wider compare families remain absent |
 | PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | missing | coherent integer comparison/minmax slice |
@@ -143,3 +143,127 @@ interpreter is portable. MMX and VEX forms remain separate branches.
 `test/x86_translation.c::packed_integer_multiply` exercises every register and
 unaligned guarded-memory form, checks every lane against a software oracle,
 verifies source/EFLAGS/MXCSR preservation, and rejects the MMX spelling.
+
+## Consolidated retained-oracle evidence (2026-08-05)
+
+### Legacy SSE shuffle
+
+The retained implementation was inspected read-only at
+`../engine/src/translator/guest/x86_64/translate.c` (`translate_one`, legacy
+`0F 70` and `0F C6` cases), `interp.c` (the complete `PSHUFD`, `PSHUFHW`,
+`PSHUFLW`, `SHUFPS`, and `SHUFPD` definitions), `avx.c` (the corresponding
+non-destructive VEX ownership), `emit.c` (`e_ins_s`, `e_ins_d`, vector-copy
+and broadcast emitters), and `lower/trace.c` (immediate-bearing instruction
+length admission). The benchmark instruction sequence was checked against
+`tests/perf/x86_flag_sse_diff.c` and the Rust-owned benchmark inventory in
+`X86_PERFORMANCE.md`.
+
+These operations own no allocation, locks, blocking, cancellation, signals,
+errno, or teardown. The dispatcher owns the CPU and translated-block
+lifetime. The instruction owns one immediate permutation and commits one XMM
+destination only after any memory operand has passed the complete guarded read.
+Register source/destination overlap is destructive but must read every selected
+input lane before architectural commit. None of the family changes integer
+flags or MXCSR. REX.R/REX.B extend XMM identities; address-size and segment
+prefixes remain owned by the generic effective-address path. The retained
+AArch64 path uses scratch vectors for overlap and general immediates, while the
+x86 interpreter performs the same byte-exact permutation. There are no
+host-specific branches beyond those two execution owners.
+
+| Retained capability | Rust native owner | State |
+|---|---|---|
+| `66 0F 70 /r ib` PSHUFD, every immediate | frontend decode + vector emitter | implemented |
+| `F2/F3 0F 70 /r ib` low/high word shuffle | frontend decode + vector emitter | implemented |
+| `0F C6 /r ib` SHUFPS | frontend decode + vector emitter | implemented |
+| `66 0F C6 /r ib` SHUFPD | frontend decode + vector emitter | implemented |
+| register, destructive alias, REX XMM identity | scratch-first vector emitter | implemented |
+| unaligned memory read and fault-before-commit | generic vector memory guard | implemented |
+| truncated ModRM/address/immediate | frontend bounded decoder | implemented |
+| VEX 128/256 non-destructive forms | no Rust native owner | remaining gap |
+
+Focused tests admit every legacy prefix and width, register and displaced
+memory forms, reject truncated immediates without advancing the guest PC, and
+execute a general self-independent PSHUFD permutation on AArch64 while checking
+source, flags, and MXCSR preservation. AMD64 quiet comparison is unavailable on
+this AArch64 host and is not represented as equivalent evidence.
+
+### 256-bit vector memory
+
+The read-only oracle was `../engine/src/translator/guest/x86_64/avx.c`, entry
+points `avx_get`, `avx_put`, `avx_ea`, `avx_try_read`, `avx_try_write`,
+`avx_memory_read`, and `avx_memory_write`, plus
+`../engine/src/translator/guest/x86_64/translate.c`, entry points
+`avx_cpu_ldr_q`, `avx_cpu_str_q`, `avx_zero_upper`, and the VEX memory lowering
+inside `emit_avx_inline`.
+
+The oracle owns low 128-bit state in `cpu.v`, YMM bits 128..255 in `cpu.vhi`,
+and higher ZMM state in `cpu.vz`. Register state is CPU-instance-local and
+survives until task teardown; these helpers neither allocate nor lock. A VEX
+write commits its requested width and zeroes state above that width. The
+dispatcher owns retry and fault delivery: a rejected whole-span access records
+guest address, width, access type, and instruction PC, then abandons before any
+architectural register or guest byte is changed. Gather's partial-result rule is
+separate and does not apply to ordinary vector loads/stores.
+
+The inline oracle validates `address + width` for overflow, active-view bounds,
+and permissions before translating the guest address. The 256-bit path transfers
+two 128-bit lanes. Loads stage both lanes before publishing the destination;
+stores validate the full 32-byte interval before either lane is written. Both
+unaligned accesses and spans crossing a page/view boundary use the same whole
+span rule. AArch64 host lowering uses Q-register scratch state; no host-specific
+branch changes the x86 architectural result.
+
+| Retained capability | Rust-native owner | Status |
+|---|---|---|
+| Low 128-bit live register | host `v0..v15`, spilled to `cpu.vectors` | implemented |
+| YMM upper 128-bit state | `hl_native_x86_64_cpu.vector_upper` | implemented |
+| Upper load/store/zero | `hl_x86_emit_vector_upper_{load,store,zero}` | implemented |
+| Whole-span cached read admission | `hl_x86_emit_read_cache` | implemented for 16/32 |
+| Whole-span active-view guard | `hl_x86_emit_vector` | implemented for 16/32 |
+| Two-lane load staging | `hl_x86_emit_vector` Q16/Q17 scratch | implemented |
+| Fault-before-load commit | post-guard copy plus upper store | implemented |
+| Fault-before-store commit | full-width guard before both Q stores | implemented |
+| Exact dirty interval | `hl_x86_emit_dirty` with width-derived end | implemented |
+| VEX opcode admission and operation cases | VEX frontend | intentionally remaining |
+
+### YMM state
+
+- `../engine/src/translator/guest/x86_64/cpu.h`, `struct cpu`: `v[32]`
+  owns XMM0..15 and `vhi[32]` owns YMM0..15 bits 255:128. Both are
+  per-CPU architectural storage, copied with the CPU on fork/checkpoint, and
+  live until that CPU is torn down. No shared state or lock protects them.
+- `../engine/src/translator/guest/x86_64/avx.c`, `avx_get`, `avx_put`, and the
+  `0x77` VEX dispatch: reads and writes combine `v` with `vhi`; every VEX write
+  zero-extends above its encoded width, so VEX.128 clears `vhi[destination]`.
+  Legacy SSE paths write only `v` and preserve `vhi`.
+- `../engine/src/translator/guest/x86_64/translate.c`, `avx_zero_upper` and the
+  VEX lowering entry: inline translated VEX operations use the same split
+  register ownership and upper-zero contract. Native faults spill live XMM
+  lows; upper halves remain in their CPU-owned memory slots.
+- `../engine/src/translator/guest/x86_64/interp.c`, `interp_xmm_get` and
+  `interp_xmm_put`: legacy interpreter writes explicitly preserve bits 128 and
+  above.
+- `../engine/src/translator/guest/x86_64/signal.c`,
+  `hl_x86_signal_build`, `hl_x86_signal_restore`, and
+  `hl_x86_signal_capture`: signal frames save and restore `vhi`; synchronous
+  host-fault capture reconstructs live XMM lows while retaining the CPU-owned
+  upper halves.
+
+These paths perform no blocking operation, cancellation, partial result, or
+errno conversion. Architecture-specific behavior is x86 VEX width zeroing;
+the retained implementation's host-specific AArch64 fault capture does not
+replace upper halves because they are never hosted in live vector registers.
+
+| Capability | Rust owner | Status after this lane |
+|---|---|---|
+| XMM low halves | `hl_execution::CpuState::vectors` | implemented |
+| YMM upper halves | `hl_execution::CpuState::vector_upper` | implemented |
+| checkpoint/fork | `hl-execution` codec and `ExecutionMachine` clone | implemented |
+| Linux signal save/restore | `hl-linux::X86SignalMachine` and engine signal-frame adapter | implemented |
+| native C/Rust ABI | generated `hl_native_x86_64_cpu.vector_upper` / `X86_64Cpu::vector_upper` | implemented |
+| native entry/exit transport | `NativeX86::capture` / `NativeX86::restore` | implemented |
+| VEX.128 destination upper-zero | future VEX instruction owner | schema ready; opcodes deliberately outside this lane |
+
+The ABI field is appended after all established native fields. Existing baked
+emitter, trampoline, polling, dirty-publication, and fault offsets therefore do
+not move. The generated C and Rust size/offset assertions cover the new tail.
