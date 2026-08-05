@@ -259,6 +259,8 @@ typedef uint32_t (*hl_native_operand_resolve)(void *context, uint64_t address,
                                               uint64_t mapping_incarnation,
                                               uint64_t instruction_epoch,
                                               hl_native_projection_view *output);
+typedef uint32_t (*hl_native_quantum_poll)(void *context, uint64_t executed,
+                                           uint64_t cumulative_budget);
 
 typedef struct hl_native_fault_scope hl_native_fault_scope;
 typedef uint32_t (*hl_native_fault_publish)(void *, const hl_native_fault_scope *);
@@ -292,6 +294,9 @@ typedef struct hl_native_run_request {
     uint64_t authority_generation;
     const hl_native_direct_token *direct_token;
     uint64_t authority_identity;
+    void *quantum_context;
+    hl_native_quantum_poll quantum_poll;
+    uint64_t quantum_grant;
 } hl_native_run_request;
 
 typedef struct hl_native_cpu {
@@ -371,7 +376,7 @@ _Static_assert(sizeof(hl_native_projection_view) == 40, "native projection view 
 _Static_assert(sizeof(hl_native_projection) == 32, "native projection ABI drifted");
 _Static_assert(offsetof(hl_native_run_request, source) == 32, "native run prefix ABI drifted");
 _Static_assert(offsetof(hl_native_run_request, operand_context) == 64, "native resolver prefix ABI drifted");
-_Static_assert(sizeof(hl_native_run_request) == 136, "native run request ABI drifted");
+_Static_assert(sizeof(hl_native_run_request) == 160, "native run request ABI drifted");
 _Static_assert(sizeof(hl_native_cpu) == 24, "native CPU handle ABI drifted");
 _Static_assert(sizeof(hl_native_fault_scope) == 32, "native fault scope ABI drifted");
 _Static_assert(sizeof(hl_native_direct_authority) == 64, "native direct authority ABI drifted");

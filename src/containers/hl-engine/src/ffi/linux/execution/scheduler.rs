@@ -657,7 +657,10 @@ impl GuestExecutor {
                 .as_ref()
                 .is_some_and(threads::SchedulerContinuation::is_current);
             let native_budget = Self::native_budget(may_extend);
-            let result = Self::execute_turn(isa, run, native, native_budget);
+            let poll_continuation = (!native.boundary_sensitive.contains(&run.process))
+                .then_some(continuation.as_ref())
+                .flatten();
+            let result = Self::execute_turn(isa, run, native, native_budget, poll_continuation);
             run = result.run;
             if matches!(result.action, TurnAction::Dispatch) && Self::observes_cpu_accounting(isa, &run.machine) {
                 Self::charge_elapsed(run.cpu_account.as_deref(), charged_at);
@@ -733,9 +736,10 @@ impl GuestExecutor {
         run: threads::ThreadRun,
         native: &mut NativePool,
         native_budget: u64,
+        continuation: Option<&threads::SchedulerContinuation>,
     ) -> TurnResult {
         let action = match run.space.with_execution_memory(|memory| {
-            let outcome = Self::native_slice(&run, memory, native, native_budget)
+            let outcome = Self::native_slice(&run, memory, native, native_budget, continuation)
                 .unwrap_or_else(|| run.machine.run_slice(1, SLICE_BUDGET, memory));
             Self::step(isa, memory, outcome)
         }) {
@@ -1105,6 +1109,7 @@ impl GuestExecutor {
         memory: &mut super::operand::SliceMemory<'_>,
         pool: &mut NativePool,
         native_budget: u64,
+        continuation: Option<&threads::SchedulerContinuation>,
     ) -> Option<StepOutcome> {
         enum NativeCoordinates {
             Aarch64 { pc: u64, stack: u64 },
@@ -1125,7 +1130,7 @@ impl GuestExecutor {
             return Some(observed);
         }
         let NativeCoordinates::Aarch64 { pc, stack } = coordinates? else {
-            return Self::native_x86(run, memory, pool, native_budget);
+            return Self::native_x86(run, memory, pool, native_budget, continuation);
         };
         let lease = super::operand::ImageMemory::lease(memory);
         let mappings = lease.mappings();
@@ -1304,6 +1309,7 @@ impl GuestExecutor {
         memory: &mut super::operand::SliceMemory<'_>,
         pool: &mut NativePool,
         native_budget: u64,
+        continuation: Option<&threads::SchedulerContinuation>,
     ) -> Option<StepOutcome> {
         let mut coordinates = None;
         let observed = run.machine.handle_syscall(1, |snapshot| {
@@ -1410,6 +1416,13 @@ impl GuestExecutor {
         let mut statistics = None;
         let mut boundary = None;
         let mut stack_projection = Some(stack_projection);
+        let checkpoint = stack_projection.as_ref()?.checkpoint_continuation();
+        let mapping = stack_projection.as_ref()?.request_continuation();
+        let mut poll = |_: u64, _: u64| {
+            checkpoint.is_current()
+                && mapping.is_current()
+                && continuation.is_some_and(threads::SchedulerContinuation::is_current)
+        };
         let outcome = run.machine.handle_syscall(1, |snapshot| {
             let ExecutionCpuSnapshot::X86_64(cpu) = snapshot else {
                 return StepOutcome::Fault(hl_execution::ExecutionFault::CacheEpoch);
@@ -1418,9 +1431,16 @@ impl GuestExecutor {
             let Some(projection) = stack_projection.take() else {
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
             };
-            let Ok((result, stats)) =
-                executor.run_x86_lease(cpu, &source, projection, token, native_budget, false, &mut resolve)
-            else {
+            let Ok((result, stats)) = executor.run_x86_lease(
+                cpu,
+                &source,
+                projection,
+                token,
+                native_budget,
+                false,
+                &mut resolve,
+                Some(&mut poll),
+            ) else {
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
             };

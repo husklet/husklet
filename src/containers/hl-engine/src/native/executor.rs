@@ -956,6 +956,22 @@ struct RunRequest {
     authority_generation: u64,
     direct_token: *const DirectToken,
     authority_identity: u64,
+    quantum_context: *mut c_void,
+    quantum_poll: Option<unsafe extern "C" fn(*mut c_void, u64, u64) -> u32>,
+    quantum_grant: u64,
+}
+
+unsafe extern "C" fn poll_quantum(context: *mut c_void, executed: u64, admitted: u64) -> u32 {
+    if context.is_null() {
+        return 0;
+    }
+    // SAFETY: run_x86_inner supplies a uniquely borrowed closure which remains
+    // alive for the synchronous native run. Native invokes it serially only at
+    // fully spilled REP boundaries. Catching panic prevents unwind across FFI.
+    let poll = unsafe { &mut *context.cast::<&mut dyn FnMut(u64, u64) -> bool>() };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| poll(executed, admitted)))
+        .ok()
+        .is_some_and(|grant| grant) as u32
 }
 
 #[repr(C)]
@@ -2158,6 +2174,9 @@ impl Executor {
             authority_generation: direct.map_or(0, |identity| identity.1),
             direct_token: direct.map_or(std::ptr::null(), |identity| identity.0),
             authority_identity: direct.map_or(0, |identity| identity.2),
+            quantum_context: std::ptr::null_mut(),
+            quantum_poll: None,
+            quantum_grant: 0,
         };
         let mut output = RunExit {
             abi: ABI,
@@ -2205,6 +2224,33 @@ impl Executor {
         projection: Option<&Projection>,
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<usize>,
     ) -> Result<(X86RunOutcome, RunStatistics, bool), ()> {
+        self.run_x86_test(
+            state,
+            sources,
+            mapping_epoch,
+            instruction_epoch,
+            budget,
+            interrupt,
+            projection,
+            resolve,
+            None,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn run_x86_test(
+        &self,
+        state: &mut X86CpuState,
+        sources: &[BorrowedSource<'_>],
+        mapping_epoch: u64,
+        instruction_epoch: u64,
+        budget: u64,
+        interrupt: bool,
+        projection: Option<&Projection>,
+        resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<usize>,
+        poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
+    ) -> Result<(X86RunOutcome, RunStatistics, bool), ()> {
         let mut observed = self.test_epoch.lock().map_err(|_| ())?;
         if let Some((previous_mapping, previous_instruction)) = *observed {
             if previous_mapping != mapping_epoch {
@@ -2242,6 +2288,7 @@ impl Executor {
             projection,
             &mut tagged,
             None,
+            poll,
         )
         .map(|(outcome, statistics, writes)| (outcome, statistics, !matches!(writes, NativeWrites::None)))
     }
@@ -2255,6 +2302,7 @@ impl Executor {
         budget: u64,
         interrupt: bool,
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<(usize, ExecutableToken)>,
+        poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(X86RunOutcome, RunStatistics), ()> {
         let generation = lease.generation();
         let range = lease.range();
@@ -2326,6 +2374,7 @@ impl Executor {
             Some(&projection),
             resolve,
             Some(((&raw mut operand).cast(), resolve_operand::<H>)),
+            poll,
         )?;
         drop(operand);
         if !observed.entries.is_empty() {
@@ -2357,6 +2406,7 @@ impl Executor {
         projection: Option<&Projection>,
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<(usize, ExecutableToken)>,
         operand: Option<(*mut c_void, OperandResolve)>,
+        poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(X86RunOutcome, RunStatistics, NativeWrites), ()> {
         if sources.is_empty() || sources.len() > 8 || sources.iter().any(|span| span.bytes.is_empty()) {
             return Err(());
@@ -2400,6 +2450,15 @@ impl Executor {
             boundary_capture: None,
         };
         let (operand_context, operand_resolve) = operand.unzip();
+        let mut poll = poll;
+        let (quantum_context, quantum_poll, quantum_grant) = match poll.as_mut() {
+            Some(callback) => (
+                (callback as *mut &mut dyn FnMut(u64, u64) -> bool).cast(),
+                Some(poll_quantum as unsafe extern "C" fn(*mut c_void, u64, u64) -> u32),
+                budget,
+            ),
+            None => (std::ptr::null_mut(), None, 0),
+        };
         let mut native = NativeX86::capture(state, interrupt);
         let mut cpu = CpuHandle {
             abi: ABI,
@@ -2428,6 +2487,9 @@ impl Executor {
             authority_generation: 0,
             direct_token: std::ptr::null(),
             authority_identity: 0,
+            quantum_context,
+            quantum_poll,
+            quantum_grant,
         };
         let mut output = RunExit {
             abi: ABI,
@@ -2557,7 +2619,7 @@ const _: () = {
     assert!(std::mem::size_of::<Source>() == 32);
     assert!(std::mem::size_of::<ProjectionView>() == 40);
     assert!(std::mem::size_of::<Projection>() == 32);
-    assert!(std::mem::size_of::<RunRequest>() == 136);
+    assert!(std::mem::size_of::<RunRequest>() == 160);
     assert!(std::mem::size_of::<CpuHandle>() == 24);
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
@@ -4287,27 +4349,32 @@ mod test {
         cpu.registers[7] = FIRST + COUNT as u64;
         let mut resolve = |_: u64, _: &mut [u8]| None;
 
-        for turn in 1..=COUNT as u64 / BUDGET {
-            let outcome = executor
-                .run_x86(&mut cpu, &source, 31, 1, BUDGET, false, Some(&projection), &mut resolve)
-                .unwrap()
-                .0;
-            assert_eq!(
-                (outcome.exit, outcome.executed, outcome.remaining),
-                (Exit::Yield, BUDGET, 0)
-            );
-            assert_eq!(cpu.rip, 0x5000);
-            assert_eq!(cpu.registers[1], COUNT as u64 - turn * BUDGET);
-            assert_eq!(cpu.registers[6], FIRST + turn * BUDGET);
-            assert_eq!(cpu.registers[7], FIRST + COUNT as u64 + turn * BUDGET);
-        }
-
+        let mut polls = Vec::new();
+        let mut poll = |executed, admitted| {
+            polls.push((executed, admitted));
+            true
+        };
         let outcome = executor
-            .run_x86(&mut cpu, &source, 31, 1, BUDGET, false, Some(&projection), &mut resolve)
+            .run_x86_test(
+                &mut cpu,
+                &source,
+                31,
+                1,
+                BUDGET,
+                false,
+                Some(&projection),
+                &mut resolve,
+                Some(&mut poll),
+            )
             .unwrap()
             .0;
         assert_eq!(outcome.exit, Exit::Syscall);
-        assert_eq!(outcome.executed, 18);
+        assert_eq!(outcome.executed, COUNT as u64 + 1);
+        assert_eq!(polls.len(), COUNT / BUDGET as usize);
+        for (index, &(executed, admitted)) in polls.iter().enumerate() {
+            let cumulative = (index as u64 + 1) * BUDGET;
+            assert_eq!((executed, admitted), (cumulative, cumulative));
+        }
         assert_eq!(
             (cpu.registers[1], cpu.registers[6], cpu.registers[7]),
             (0, FIRST + COUNT as u64, FIRST + (COUNT * 2) as u64)

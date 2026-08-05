@@ -577,6 +577,11 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
     void *operand_context = NULL;
     x86_run_views operand_views = {0};
     uint64_t budget = request->budget;
+    uint64_t cumulative_budget = request->budget;
+    hl_native_quantum_poll quantum_poll = NULL;
+    void *quantum_context = NULL;
+    uint64_t quantum_grant = 0;
+    int rep_continuation = 0;
     uint64_t memory_mode = 0;
     uint64_t authority_generation = 0;
     uint64_t authority_identity = 0;
@@ -608,6 +613,12 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
     }
     if (request->size >= offsetof(hl_native_run_request, authority_identity)) direct_token = request->direct_token;
     if (request->size >= sizeof(*request)) authority_identity = request->authority_identity;
+    if (request->size >= offsetof(hl_native_run_request, quantum_grant)) {
+        quantum_context = request->quantum_context;
+        quantum_poll = request->quantum_poll;
+    }
+    if (request->size >= sizeof(*request)) quantum_grant = request->quantum_grant;
+    if ((quantum_poll == NULL) != (quantum_grant == 0)) return HL_NATIVE_ARGUMENT;
     if ((memory_mode == 0) != (authority_generation == 0) ||
         (memory_mode == 0) != (authority_identity == 0)) return HL_NATIVE_ARGUMENT;
     hl_native_status epoch_status = memory_mode == 0
@@ -647,7 +658,18 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             }
         }
         if (cpu->interrupt != 0) return leave_exit(&execution, output, HL_NATIVE_EXIT_INTERRUPT, pc);
-        if (budget == 0) return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
+        if (budget == 0) {
+            if (!rep_continuation || quantum_poll == NULL ||
+                !quantum_poll(quantum_context, cpu->executed, cumulative_budget))
+                return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
+            if (cumulative_budget > UINT64_MAX - quantum_grant ||
+                cpu->executed > cumulative_budget)
+                return fatal_exit(&execution, output, X86_FATAL_BUDGET);
+            cumulative_budget += quantum_grant;
+            budget = quantum_grant;
+            cpu->budget = budget;
+            rep_continuation = 0;
+        }
         size = source_bytes(source, pc, &bytes);
         x86_rep rep;
         x86_rep_result rep_result = size != 0 && rep_decode(bytes, size, &rep)
@@ -656,6 +678,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         if (rep_result == X86_REP_FATAL) return fatal_exit(&execution, output, X86_FATAL_REASON);
         if (rep_result == X86_REP_EPOCH) return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, pc);
         if (rep_result == X86_REP_COMPLETE) {
+            rep_continuation = cpu->program == pc;
             if ((cpu->executable_written & 4u) != 0)
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
             continue;
