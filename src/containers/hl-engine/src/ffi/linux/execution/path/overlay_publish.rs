@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::overlay_lease::ParentLease;
@@ -12,7 +12,7 @@ static NEXT_STAGE: AtomicU64 = AtomicU64::new(1);
 
 /// A copy-up staged under a pinned upper parent and published by one rename.
 pub(super) struct CopyUp<'lease> {
-    parent: &'lease File,
+    parent: &'lease OwnedFd,
     final_name: CString,
     staged_name: CString,
     staged: File,
@@ -22,7 +22,9 @@ pub(super) struct CopyUp<'lease> {
 impl<'lease> CopyUp<'lease> {
     pub(super) fn stage(lease: &'lease ParentLease, name: &CStr, source: &File) -> io::Result<Self> {
         validate_name(name)?;
-        let parent = lease.mutation();
+        let parent = lease
+            .mutation()
+            .map_err(|_| io::Error::from_raw_os_error(libc::ENOENT))?;
         let staged_name = stage_name("copy")?;
         let staged = create_exclusive(parent, &staged_name, 0o600)?;
         if let Err(error) = copy_content(source, &staged).and_then(|()| copy_metadata(source, &staged)) {
@@ -40,8 +42,14 @@ impl<'lease> CopyUp<'lease> {
 
     pub(super) fn commit(mut self) -> io::Result<()> {
         self.staged.sync_all()?;
-        clear_whiteout(self.parent, &self.final_name)?;
         rename(self.parent, &self.staged_name, &self.final_name)?;
+        if let Err(error) = clear_whiteout(self.parent, &self.final_name) {
+            // Keep a failed publication hidden. Restoring the private staged
+            // name lets Drop remove it; if the rollback rename itself fails,
+            // the still-present whiteout continues to hide the upper entry.
+            let _ = rename(self.parent, &self.final_name, &self.staged_name);
+            return Err(error);
+        }
         sync_directory(self.parent)?;
         self.published = true;
         Ok(())
@@ -57,7 +65,7 @@ impl Drop for CopyUp<'_> {
 }
 
 /// Materializes one already-validated upper ancestor without following links.
-pub(super) fn materialize_parent(parent: &File, name: &CStr, mode: u32) -> io::Result<()> {
+pub(super) fn materialize_parent(parent: &impl AsRawFd, name: &CStr, mode: u32) -> io::Result<()> {
     validate_name(name)?;
     // SAFETY: the parent descriptor and terminated name remain live, and
     // mkdirat retains neither after returning.
@@ -92,7 +100,9 @@ pub(super) fn materialize_parent(parent: &File, name: &CStr, mode: u32) -> io::R
 /// Replaces one upper entry with a marker that hides every lower copy.
 pub(super) fn publish_whiteout(lease: &ParentLease, name: &CStr) -> io::Result<()> {
     validate_name(name)?;
-    let parent = lease.mutation();
+    let parent = lease
+        .mutation()
+        .map_err(|_| io::Error::from_raw_os_error(libc::ENOENT))?;
     let marker = whiteout_name(name)?;
     let staged_name = stage_name("whiteout")?;
     let staged = create_exclusive(parent, &staged_name, 0o600)?;
@@ -108,7 +118,7 @@ pub(super) fn publish_whiteout(lease: &ParentLease, name: &CStr) -> io::Result<(
 }
 
 /// Marks an upper directory opaque so children from lower layers stay hidden.
-pub(super) fn publish_opaque(directory: &File) -> io::Result<()> {
+pub(super) fn publish_opaque(directory: &impl AsRawFd) -> io::Result<()> {
     let staged_name = stage_name("opaque")?;
     let staged = create_exclusive(directory, &staged_name, 0o600)?;
     let result = staged
@@ -189,7 +199,7 @@ fn copy_metadata(source: &File, target: &File) -> io::Result<()> {
     super::overlay_xattr::copy(source, target)
 }
 
-fn create_exclusive(parent: &File, name: &CStr, mode: u32) -> io::Result<File> {
+fn create_exclusive(parent: &impl AsRawFd, name: &CStr, mode: u32) -> io::Result<File> {
     let flags = libc::O_CREAT | libc::O_EXCL | libc::O_RDWR | libc::O_CLOEXEC | libc::O_NOFOLLOW;
     // SAFETY: parent and name remain live; success returns unique descriptor ownership.
     let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, mode as libc::mode_t) };
@@ -201,7 +211,7 @@ fn create_exclusive(parent: &File, name: &CStr, mode: u32) -> io::Result<File> {
     }
 }
 
-fn clear_whiteout(parent: &File, name: &CStr) -> io::Result<()> {
+fn clear_whiteout(parent: &impl AsRawFd, name: &CStr) -> io::Result<()> {
     let marker = whiteout_name(name)?;
     // SAFETY: parent and marker remain live and unlinkat retains neither.
     if unsafe { libc::unlinkat(parent.as_raw_fd(), marker.as_ptr(), 0) } == 0 {
@@ -215,7 +225,7 @@ fn clear_whiteout(parent: &File, name: &CStr) -> io::Result<()> {
     }
 }
 
-fn remove_entry(parent: &File, name: &CStr) -> io::Result<()> {
+fn remove_entry(parent: &impl AsRawFd, name: &CStr) -> io::Result<()> {
     // SAFETY: parent and name remain live and unlinkat retains neither.
     if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0 {
         return Ok(());
@@ -232,7 +242,7 @@ fn remove_entry(parent: &File, name: &CStr) -> io::Result<()> {
     }
 }
 
-fn rename(parent: &File, from: &CStr, to: &CStr) -> io::Result<()> {
+fn rename(parent: &impl AsRawFd, from: &CStr, to: &CStr) -> io::Result<()> {
     // SAFETY: both names and the pinned parent live through the non-retaining call.
     if unsafe { libc::renameat(parent.as_raw_fd(), from.as_ptr(), parent.as_raw_fd(), to.as_ptr()) } == 0 {
         Ok(())
@@ -241,7 +251,7 @@ fn rename(parent: &File, from: &CStr, to: &CStr) -> io::Result<()> {
     }
 }
 
-fn sync_directory(directory: &File) -> io::Result<()> {
+fn sync_directory(directory: &impl AsRawFd) -> io::Result<()> {
     // SAFETY: fsync operates on the owned descriptor and retains nothing.
     if unsafe { libc::fsync(directory.as_raw_fd()) } == 0 {
         Ok(())
@@ -250,7 +260,7 @@ fn sync_directory(directory: &File) -> io::Result<()> {
     }
 }
 
-fn unlink(parent: &File, name: &CStr, flags: i32) {
+fn unlink(parent: &impl AsRawFd, name: &CStr, flags: i32) {
     // SAFETY: parent and name are live and cleanup ignores an absent entry.
     unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), flags) };
 }
@@ -285,7 +295,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use hl_runtime::GuestPath;
+    use hl_runtime::GuestPathBytes;
 
     use super::{CopyUp, materialize_parent, publish_opaque, publish_whiteout};
     use crate::ffi::linux::execution::path::overlay_lease::ParentLease;
@@ -319,10 +329,10 @@ mod tests {
         source.write_all(b"lower-content").unwrap();
         fs::set_permissions(&lower_path, fs::Permissions::from_mode(0o6751)).unwrap();
         let lease = ParentLease::lower(
-            GuestPath::new("/").unwrap(),
+            GuestPathBytes::new(b"/").unwrap(),
             0,
-            File::open(root.0.join("lower")).unwrap(),
-            File::open(root.0.join("upper")).unwrap(),
+            File::open(root.0.join("lower")).unwrap().into(),
+            Some(File::open(root.0.join("upper")).unwrap().into()),
         );
 
         CopyUp::stage(&lease, c"item", &source).unwrap().commit().unwrap();
@@ -337,12 +347,12 @@ mod tests {
         let root = Root::new();
         fs::write(root.0.join("upper/item"), b"upper").unwrap();
         let lease = ParentLease::upper(
-            GuestPath::new("/").unwrap(),
-            File::open(root.0.join("upper")).unwrap(),
+            GuestPathBytes::new(b"/").unwrap(),
+            File::open(root.0.join("upper")).unwrap().into(),
         );
 
         publish_whiteout(&lease, c"item").unwrap();
-        publish_opaque(lease.mutation()).unwrap();
+        publish_opaque(lease.mutation().unwrap()).unwrap();
 
         assert!(!root.0.join("upper/item").exists());
         assert!(root.0.join("upper/.wh.item").exists());

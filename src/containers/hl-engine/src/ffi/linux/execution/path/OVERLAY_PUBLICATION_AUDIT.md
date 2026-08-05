@@ -18,7 +18,10 @@ copy is visible before metadata is complete.
 
 `overlay_publish.rs` confines every operation beneath an already pinned upper
 parent. Regular content, mode, timestamps, and xattrs are completed in a hidden
-staging inode and one `renameat` publishes it. Source reads use `pread`, so copy
+staging inode and one `renameat` publishes it. The whiteout is cleared only
+after that upper entry exists; a clear failure attempts to restore the private
+staged name, while a failed rollback still leaves the upper entry hidden by the
+marker. Source reads use `pread`, so copy
 up neither writes the lower nor changes its shared file offset. Whiteout and
 opaque markers are likewise staged and renamed. Parent materialization rejects
 a symlink or non-directory collision. Directory fsync makes each publication
