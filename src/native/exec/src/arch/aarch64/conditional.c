@@ -77,31 +77,6 @@ int hl_a64_conditional_chain(hl_a64_assembler *assembler, uint32_t word, uint64_
     return hl_a64_assembler_ok(assembler);
 }
 
-int hl_a64_conditional_stitch(hl_a64_assembler *assembler, uint32_t word, uint64_t pc,
-                              uint32_t **taken_patch, uint64_t *taken_target) {
-    predicate_kind kind;
-    int64_t displacement;
-    uint32_t *branch;
-    uint32_t inverted;
-    if (assembler == NULL || !decode(word, &kind, &displacement)) return 0;
-    /* AL and NV are both architecturally unconditional.  Inverting their low
-     * condition bit does not create a fall-through path. */
-    if (kind == PREDICATE_CONDITION && (word & 15u) >= 14) return 0;
-    /* Match the retained stitch admission: the compare/test source must stay
-     * live across the out-of-line taken exit without borrowing an engine IP. */
-    if (kind != PREDICATE_CONDITION && stolen(word & 31u)) return 0;
-
-    if (kind != PREDICATE_CONDITION) source(assembler, word & 31u);
-    inverted = kind == PREDICATE_CONDITION ? word ^ 1u : word ^ (1u << 24);
-    branch = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    if (taken_patch != NULL) *taken_patch = (uint32_t *)assembler->cursor;
-    if (taken_target != NULL) *taken_target = pc + (uint64_t)displacement;
-    hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_BRANCH, pc + (uint64_t)displacement);
-    patch(branch, assembler->cursor, inverted, kind);
-    return hl_a64_assembler_ok(assembler);
-}
-
 int hl_a64_conditional_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc) {
     return hl_a64_conditional_chain(assembler, word, pc, NULL, NULL, NULL, NULL);
 }

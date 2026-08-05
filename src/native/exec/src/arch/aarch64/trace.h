@@ -6,8 +6,6 @@
 
 #define HL_A64_TRACE_MAX_WORDS 32u
 #define HL_A64_TRACE_MAX_BYTES 16384u
-#define HL_A64_TRACE_MAX_CONDITIONALS 3u
-#define HL_A64_TRACE_MAX_RELOCATIONS (HL_A64_TRACE_MAX_CONDITIONALS + 2u)
 
 typedef struct hl_a64_trace_result {
     uint64_t source_first;
@@ -20,7 +18,7 @@ typedef struct hl_a64_trace_result {
     uint32_t relocation_count;
     uint32_t conditional_self_loop;
     uint64_t loop_pc;
-    hl_native_relocation relocations[HL_A64_TRACE_MAX_RELOCATIONS];
+    hl_native_relocation relocations[2];
     hl_native_provenance provenance[HL_A64_SOURCE_MAX_WORDS];
 } hl_a64_trace_result;
 
