@@ -637,8 +637,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/ptyjobsig.out }
   - id: runtime/posix/pty-ctl
-    status: !unsupported
-      reason: "excluded-macos: TIOCGSID/tcgetsid session-id ioctl returns ENOTTY on the macOS engine (Darwin tty backend gap); TIOCPKT/devtty work. Linux engine still runs+passes this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "TIOCGSID/tcgetsid session-id ioctl returns ENOTTY on the macOS engine (Darwin tty backend gap); TIOCPKT/devtty work. Linux engine still runs+passes this."
       evidence: "tests/runtime/posix/ORACLE.md"
     compat: { class: compatibility }
     build: { source: ptyctl.c, output: pty-ctl, flags: [-static, -O2, -std=gnu11] }
@@ -646,8 +647,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/ptyctl.out }
   - id: runtime/posix/ctty-session
-    status: !unsupported
-      reason: "excluded-macos: tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/posix/ORACLE.md"
     compat: { class: compatibility }
     build: { source: ctty_session.c, output: ctty-session, flags: [-static, -O2, -std=gnu11] }
@@ -655,8 +657,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/ctty_session.out }
   - id: runtime/posix/tty-notty
-    status: !unsupported
-      reason: "excluded-macos: tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/posix/ORACLE.md"
     compat: { class: compatibility }
     build: { source: tty_notty.c, output: tty-notty, flags: [-static, -O2, -std=gnu11] }
@@ -664,8 +667,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/tty_notty.out }
   - id: runtime/posix/tty-suspend
-    status: !unsupported
-      reason: "excluded-macos: tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "tty/ctty session ioctl semantics (TIOCGSID/tcgetsid, notty, suspend) diverge on the macOS engine tty backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/posix/ORACLE.md"
     compat: { class: compatibility }
     build: { source: tty_suspend.c, output: tty-suspend, flags: [-static, -O2, -std=gnu11] }

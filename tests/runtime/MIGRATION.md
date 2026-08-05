@@ -8,9 +8,11 @@ tree on 2026-08-04. The retained `../engine` tree was read only.
 
 The runtime runner discovers only direct children of `tests/runtime` containing
 `test.yaml`. There are currently 36 such category manifests containing 1,608
-case definitions: 1,429 active, 119 explicitly broken, and 60 explicitly
-unsupported. Every manifest loaded successfully through `testing runtime` and
-all 1,608 declared stdout paths exist inside the category that names them.
+case definitions: 1,429 unconditionally active, 20 active except on macOS, 119
+explicitly broken, and 40 unsupported. The 20 host-conditional cases account
+for 40 ISA rows and no longer lose Linux and Windows coverage. Every manifest
+loaded successfully through `testing runtime` and all 1,608 declared stdout
+paths exist inside the category that names them.
 
 This does not yet make `tests/runtime/legacy` removable. Three other direct
 children are not ordinary runtime categories:
@@ -162,13 +164,11 @@ complete retirement of the C corpus or the legacy harness.
 
 ## Acceptance order
 
-1. Declare every category-local header/included source with `build.inputs` and
-   make the fingerprint gate prove that changing one invalidates its rows.
-2. Add typed multi-artifact and projected-root setup where the retained C lane
+1. Add typed multi-artifact and projected-root setup where the retained C lane
    requires auxiliary executables or filesystem state.
-3. Migrate the active consumers above and remove their detached package tests
+2. Migrate the active consumers above and remove their detached package tests
    only after exact YAML equivalents pass on both ISAs.
-4. Compare every retained C manifest row to a YAML case with matching ISA,
+3. Compare every retained C manifest row to a YAML case with matching ISA,
    flags/linkage, disposition, exit, stdout, environment, and special setup.
-5. Replace the flake's Python legacy checks with the typed inventory gate, then
+4. Replace the flake's Python legacy checks with the typed inventory gate, then
    delete `tests/runtime/legacy` as one final boundary.

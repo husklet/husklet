@@ -35,7 +35,7 @@ reported separately because they are not the same execution policy.
 | active | active, same identity and ISA | 690 |
 | active | `!broken`, same identity and ISA | 74 |
 | active | no same suite/case/ISA identity | 42 |
-| excluded only on macOS | unconditional `!unsupported` | 40 |
+| excluded only on macOS | typed `!host-excluded [macos]` | 40 |
 | **total** | | **846** |
 
 Of the 804 identity-matched rows, 712 retain byte-identical sources. Another
@@ -78,8 +78,9 @@ than isolated omissions:
   `pipe2-badflag`, `pwritev2-rwf`, `modern-procfd`, and `iov-bounds`);
 - `posix/chmodchown` on both ISAs: 2 rows.
 
-The 40 host-policy divergences are retained `excluded-macos` rows represented
-as unconditional YAML `!unsupported`:
+The 40 retained `excluded-macos` rows now use typed
+`!host-excluded [macos]` status, so they execute on Linux and Windows while
+remaining inactive on macOS:
 
 - network: `lo-any-bridge`, `oob`, `passcred-scm`, `so-type`,
   `socket-matrix`, `udp-msg-trunc`, `udp-switch`, `unix-seqpacket`;
@@ -89,9 +90,8 @@ as unconditional YAML `!unsupported`:
   `output-buffer-fault2`, `output-buffer-fault3`, `pipe-size-dup3`,
   `seccomp-probe`.
 
-Each name represents two ISA rows. The YAML schema currently cannot express
-“run on Linux hosts, decline only on macOS”, so this loses retained Linux
-execution coverage even when the reason text still says `excluded-macos`.
+Each name represents two ISA rows. This closes the former host-policy
+divergence without changing source, build, golden, or exit contracts.
 
 ## Build-only rows
 
@@ -104,16 +104,14 @@ carry only the category helper-include change described above.
 
 ## Highest-value migration families
 
-1. Restore the 40 host-conditional rows with a typed host applicability field;
-   unconditional `!unsupported` is a real loss of Linux coverage.
-2. Port the complete 21-case isolation setup domain. Marking every row broken
+1. Port the complete 21-case isolation setup domain. Marking every row broken
    preserves names but supplies no executable compatibility evidence.
-3. Restore the 15-case syscall failure cohort as a domain, starting from the
+2. Restore the 15-case syscall failure cohort as a domain, starting from the
    retained syscall implementation and its complete call graph rather than
    fixture-by-fixture patches.
-4. Resolve the 20 `core/abi` and `core/syscall` case identities. Represent the
+3. Resolve the 20 `core/abi` and `core/syscall` case identities. Represent the
    four proven moves explicitly, then migrate or deliberately supersede the
    remaining sources and goldens.
-5. Add the mechanical comparison as a typed repository gate before deleting
+4. Add the mechanical comparison as a typed repository gate before deleting
    the centralized inventory. YAML parsing alone cannot detect any divergence
    listed in this report.

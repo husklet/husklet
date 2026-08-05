@@ -90,7 +90,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/page_fault.out }
   - id: runtime/reallocchurn
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "retained macOS process-group-cleanup exclusion"
       evidence: "tests/runtime/soak/ORACLE.md"
     compat: { class: soak }

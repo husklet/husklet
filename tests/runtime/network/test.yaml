@@ -70,8 +70,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/listen_tcp.out }
   - id: runtime/network/lo-any-bridge
-    status: !unsupported
-      reason: "excluded-macos: netns/bridge loopback registration is not emulated on the macOS engine (no network namespaces on Darwin); bind returns EADDRINUSE. Linux engine still runs+passes this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "netns/bridge loopback registration is not emulated on the macOS engine (no network namespaces on Darwin); bind returns EADDRINUSE. Linux engine still runs+passes this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: lo_anybridge.c, output: lo_anybridge, flags: [-static, -O2, -std=gnu11] }
@@ -470,8 +471,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/shutdown_wr.out }
   - id: runtime/network/so-type
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: so_type.c, inputs: [socket_util.h], output: so_type, flags: [-static, -O2, -std=gnu11] }
@@ -486,8 +488,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/so_reuseport.out }
   - id: runtime/network/udp-msg-trunc
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: udp_msgtrunc.c, inputs: [socket_util.h], output: udp_msgtrunc, flags: [-static, -O2, -std=gnu11] }
@@ -518,8 +521,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/linger_reset.out }
   - id: runtime/network/passcred-scm
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: passcred_scm.c, inputs: [socket_util.h], output: passcred_scm, flags: [-static, -O2, -std=gnu11] }
@@ -527,8 +531,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/passcred_scm.out }
   - id: runtime/network/unix-seqpacket
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: unix_seqpacket.c, inputs: [socket_util.h], output: unix_seqpacket, flags: [-static, -O2, -std=gnu11] }
@@ -543,8 +548,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/mmsg.out }
   - id: runtime/network/oob
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: oob.c, inputs: [socket_util.h], output: oob, flags: [-static, -O2, -std=gnu11] }
@@ -573,8 +579,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/netlink_edges.out }
   - id: runtime/network/udp-switch
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: udp_switch.c, inputs: [socket_util.h], output: udp_switch, flags: [-static, -O2, -std=gnu11] }
@@ -605,8 +612,9 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/ip_sockopt.out }
   - id: runtime/network/socket-matrix
-    status: !unsupported
-      reason: "excluded-macos: BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
+    status: !host-excluded
+      hosts: [macos]
+      reason: "BSD socket type/credential/OOB/UDP/seqpacket semantics diverge on the macOS engine socket backend; Linux engine still runs+enforces this."
       evidence: "tests/runtime/network/ORACLE.md"
     compat: { class: compatibility }
     build: { source: socket_matrix.c, inputs: [socket_util.h], output: socket_matrix, flags: [-static, -O2, -std=gnu11] }

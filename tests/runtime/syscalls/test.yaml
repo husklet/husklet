@@ -523,7 +523,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/cfr_overlap.out }
   - id: runtime/syscalls/pipe-size-dup3
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -581,7 +582,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/resource_accounting.out }
   - id: runtime/syscalls/seccomp-probe
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -590,7 +592,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/seccomp_probe.out }
   - id: runtime/syscalls/fcntl-cmds
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -608,7 +611,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/modern_procfd.out }
   - id: runtime/syscalls/memfd-seals
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -631,7 +635,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/getentropy_probe.out }
   - id: runtime/syscalls/output-buffer-fault
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -640,7 +645,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/output_fault.out }
   - id: runtime/syscalls/output-buffer-fault2
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
@@ -649,7 +655,8 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/output_fault2.out }
   - id: runtime/syscalls/output-buffer-fault3
-    status: !unsupported
+    status: !host-excluded
+      hosts: [macos]
       reason: "Legacy contract is Linux-only and the macOS engine has a documented semantic divergence"
       evidence: "tests/runtime/syscalls/ORACLE.md"
     compat: { class: compatibility }
