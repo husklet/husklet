@@ -285,6 +285,65 @@ static int packed_integer_multiply(void) {
         CHECK(hl_x86_a64_emit(&memory_request, &memory_result) == HL_X86_A64_OK);
         CHECK(memory_result.instruction_count == 1 && memory_provenance[0].guest_size == 5);
     }
+    { /* VEX forms are three-operand, accept both widths, and include full-width memory. */
+        static const uint8_t vex_opcodes[] = {0xd5, 0xe4, 0xe5, 0xf4};
+        static const uint8_t vex_guest[] = {
+            0xc5, 0xe9, 0xd5, 0xcb, /* vpmullw xmm1,xmm2,xmm3 */
+            0xc5, 0xe9, 0xe4, 0xcb, /* vpmulhuw xmm1,xmm2,xmm3 */
+            0xc5, 0xe9, 0xe5, 0xcb, /* vpmulhw xmm1,xmm2,xmm3 */
+            0xc5, 0xe9, 0xf4, 0xcb, /* vpmuludq xmm1,xmm2,xmm3 */
+            0xc5, 0xed, 0xd5, 0xcb, /* vpmullw ymm1,ymm2,ymm3 */
+            0xc5, 0xed, 0xe4, 0xcb, /* vpmulhuw ymm1,ymm2,ymm3 */
+            0xc5, 0xed, 0xe5, 0xcb, /* vpmulhw ymm1,ymm2,ymm3 */
+            0xc5, 0xed, 0xf4, 0xcb, /* vpmuludq ymm1,ymm2,ymm3 */
+        };
+        uint32_t vex_host[512] = {0};
+        hl_x86_a64_provenance vex_provenance[8] = {0};
+        hl_x86_a64_request vex_request =
+            request_for(vex_guest, sizeof vex_guest, vex_host, vex_provenance);
+        hl_x86_a64_result vex_result;
+        CHECK(hl_x86_a64_emit(&vex_request, &vex_result) == HL_X86_A64_OK);
+        CHECK(vex_result.instruction_count == 8 && vex_result.exit == HL_X86_A64_FALLTHROUGH);
+        for (index = 0; index < 8u; ++index)
+            CHECK(vex_provenance[index].guest_size == 4 &&
+                  vex_provenance[index].word_end > vex_provenance[index].word_start);
+        for (index = 0; index < 4u; ++index) {
+            uint8_t memory[] = {0xc5, 0xed, 0xd5, 0x4b, 0x10};
+            uint32_t memory_host[256] = {0};
+            hl_x86_a64_provenance memory_provenance[2] = {0};
+            hl_x86_a64_request memory_request;
+            hl_x86_a64_result memory_result;
+            memory[2] = vex_opcodes[index];
+            memory_request = request_for(memory, sizeof memory, memory_host, memory_provenance);
+            CHECK(hl_x86_a64_emit(&memory_request, &memory_result) == HL_X86_A64_OK);
+            CHECK(memory_result.instruction_count == 1 && memory_provenance[0].guest_size == 5);
+        }
+        for (index = 0; index < 8u; ++index) { /* Exact sizing is part of the emitter contract. */
+            uint8_t one[] = {0xc5, index < 4u ? 0xe9 : 0xed,
+                             vex_opcodes[index & 3u], 0xcb};
+            uint32_t sized_host[256] = {0};
+            hl_x86_a64_provenance sized_provenance[8] = {0};
+            hl_x86_a64_request sized_request =
+                request_for(one, sizeof one, sized_host, sized_provenance);
+            hl_x86_a64_result sized_result;
+            uint32_t required;
+
+            CHECK(hl_x86_a64_emit(&sized_request, &sized_result) == HL_X86_A64_OK);
+            required = sized_result.word_count;
+            memset(sized_host, 0xa5, sizeof sized_host);
+            memset(sized_provenance, 0xa5, sizeof sized_provenance);
+            sized_request.host_capacity = required;
+            CHECK(hl_x86_a64_emit(&sized_request, &sized_result) == HL_X86_A64_OK);
+            CHECK(sized_result.word_count == required);
+            memset(sized_host, 0xa5, sizeof sized_host);
+            memset(sized_provenance, 0xa5, sizeof sized_provenance);
+            sized_request.host_capacity = required - 1u;
+            CHECK(hl_x86_a64_emit(&sized_request, &sized_result) == HL_X86_A64_CAPACITY);
+            CHECK(sized_host[0] == UINT32_C(0xa5a5a5a5));
+            CHECK(sized_host[required] == UINT32_C(0xa5a5a5a5));
+            CHECK(sized_provenance[0].guest_pc == UINT64_C(0xa5a5a5a5a5a5a5a5));
+        }
+    }
 #if defined(__aarch64__)
     {
         static const uint8_t opcodes[] = {0xd5, 0xe4, 0xe5, 0xf4};
@@ -351,6 +410,42 @@ static int packed_integer_multiply(void) {
                 CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
                 CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
             }
+        }
+        for (index = 0; index < 8u; ++index) { /* VEX non-destructive and upper-lane contract. */
+            uint8_t one[] = {0xc5, index < 4u ? 0xe9 : 0xed,
+                             opcodes[index & 3u], 0xcb};
+            uint32_t one_host[256] = {0};
+            hl_x86_a64_provenance one_provenance[2] = {0};
+            hl_x86_a64_request one_request =
+                request_for(one, sizeof one, one_host, one_provenance);
+            hl_x86_a64_result one_result;
+            hl_native_x86_64_cpu cpu = {0};
+            uint8_t expected_low[16];
+            uint8_t expected_high[16];
+            uint8_t zero[16] = {0};
+            CHECK(hl_x86_a64_emit(&one_request, &one_result) == HL_X86_A64_OK);
+            memcpy(code, one_host, one_result.word_count * sizeof(uint32_t));
+            ((uint32_t *)code)[one_result.word_count] = UINT32_C(0xd65f03c0);
+            __builtin___clear_cache((char *)code,
+                                    (char *)code + (one_result.word_count + 1u) * 4u);
+            CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+            memset(&cpu.vectors[2], 0xa5, 16);
+            memset(&cpu.vector_upper[2], 0xa5, 16);
+            memcpy(&cpu.vectors[4], left, 16);
+            memcpy(&cpu.vector_upper[4], right, 16);
+            memcpy(&cpu.vectors[6], right, 16);
+            memcpy(&cpu.vector_upper[6], left, 16);
+            cpu.flags = UINT64_C(0xad7);
+            cpu.mxcsr = UINT32_C(0x5f80);
+            packed_multiply_expected(expected_low, left, right, opcodes[index & 3u]);
+            packed_multiply_expected(expected_high, right, left, opcodes[index & 3u]);
+            hl_native_x86_64_enter(&cpu, code);
+            CHECK(memcmp(&cpu.vectors[2], expected_low, 16) == 0);
+            CHECK(memcmp(&cpu.vector_upper[2], index < 4u ? zero : expected_high, 16) == 0);
+            CHECK(memcmp(&cpu.vectors[4], left, 16) == 0);
+            CHECK(memcmp(&cpu.vectors[6], right, 16) == 0);
+            CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+            CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
         }
         CHECK(munmap(code, (size_t)page) == 0);
     }

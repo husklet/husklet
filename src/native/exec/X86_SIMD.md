@@ -34,7 +34,7 @@ selection.
 | PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | VEX signed B/W/D/Q compare and VEX packed min/max implemented | legacy compare/min/max and average remain separate |
 | PADDB/W/D/Q, PSUBB/W/D/Q | wrapping lane arithmetic, no flags or exceptions | implemented by this lane | saturating forms remain separate |
 | PADDS/PADDUS/PSUBS/PSUBUS | signed/unsigned saturating byte/word arithmetic | missing | QC must not leak into guest-visible state |
-| PMULLW/PMULHW/PMULHUW/PMULUDQ | low/high and widening products with exact lane selection | missing | coherent packed multiply slice |
+| PMULLW/PMULHW/PMULHUW/PMULUDQ | low/high and widening products with exact lane selection | legacy SSE and VEX 128/256 non-destructive forms implemented | MMX remains separate |
 | PSLL/PSRL/PSRA | immediate and XMM scalar counts; x86 oversized-count saturation | missing | retained count saturation differs from raw AArch64 shifts |
 | ADD/SUB packed and scalar S/D | all widths; scalar upper lanes; result/input NaN priority | ADD/SUB implemented for packed S/D and scalar S/D | fuller retained generated-NaN sign and payload rules |
 | MUL/DIV packed and scalar S/D | all widths and the same exception/NaN contract | scalar double only | packed and scalar-single remain explicit fallback |
@@ -138,11 +138,40 @@ interpreter is portable. MMX and VEX forms remain separate branches.
 | PMULHUW unsigned high-word products | same | implemented, register/memory |
 | PMULUDQ even-dword widening products | same | implemented, register/memory |
 | Full memory validation before commit | generic vector guard | implemented |
-| MMX and VEX forms | native frontend | remaining separate gaps |
+| MMX forms | native frontend | remaining separate gap |
+
+The VEX extension re-audited the read-only entry path in
+`../engine/src/translator/guest/x86_64/decode.c::hl_x86_decode` through the
+`R_AVX` dispatch, `avx.c::hl_x86_avx_run`, `do_avx`, `avx_get`, `avx_get_rm`,
+and `avx_put`, plus `translate.c::translate_avx_inline`. Map-one mandatory-66
+opcodes `D5/E4/E5/F4` use decoded VEX.vvvv as the non-destructive first source,
+accept register or full-width memory as source two, and apply the same word-low,
+signed/unsigned word-high, and even-dword widening rules independently to both
+128-bit lanes when L is set. C4/C5 field inversion and WIG behavior remain
+shared decoder contracts.
+
+The CPU owns XMM and YMM-high storage for the dispatcher lifetime; these
+operations allocate and lock nothing and have no blocking, cancellation, errno,
+signal, partial-result, or teardown behavior. `avx_get_rm` completes the entire
+16/32-byte read before `avx_put` publishes the destination. VEX.128 clears the
+destination upper half, VEX.256 commits both halves, and neither source, EFLAGS,
+nor MXCSR changes. The portable C loop and AArch64 inline owner have the same
+architectural contract.
+
+| Retained VEX capability | Husklet owner | State after this lane |
+|---|---|---|
+| VPMULLW, VPMULHW, VPMULHUW | `frontend.c` + `frontend/memory.c` | implemented, XMM/YMM register and memory |
+| VPMULUDQ even-dword selection | same | implemented, XMM/YMM register and memory |
+| non-destructive vvvv first source | decoded vector source + scratch-first emitter | implemented |
+| VEX.128 upper zero / VEX.256 upper result | VEX completion + generated CPU layout | implemented |
+| full memory validation before either lane commits | generic vector guard | implemented |
+| MMX packed multiply spellings | native frontend | remaining separate gap |
 
 `test/x86_translation.c::packed_integer_multiply` exercises every register and
-unaligned guarded-memory form, checks every lane against a software oracle,
-verifies source/EFLAGS/MXCSR preservation, and rejects the MMX spelling.
+unaligned guarded-memory legacy form plus all four VEX operations at 128 and
+256 bits, checks every lane against a software oracle, verifies non-destructive
+sources, EFLAGS/MXCSR preservation and VEX upper-lane rules, and rejects the MMX
+spelling.
 
 ## VEX packed integer compare slice
 
