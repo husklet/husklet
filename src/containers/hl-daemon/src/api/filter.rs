@@ -247,6 +247,7 @@ impl List {
                         | "health"
                         | "expose"
                         | "is-task"
+                        | "publish"
                         | "before"
                         | "since"
                 )
@@ -254,8 +255,10 @@ impl List {
             .cloned()
             .collect::<Vec<_>>();
         if unsupported.is_empty() {
-            for value in list.filters.get("expose").into_iter().flatten() {
-                Self::exposed_port(value)?;
+            for name in ["expose", "publish"] {
+                for value in list.filters.get(name).into_iter().flatten() {
+                    Self::exposed_port(value)?;
+                }
             }
             let mut task = None;
             for value in list.filters.get("is-task").into_iter().flatten() {
@@ -356,6 +359,14 @@ impl List {
                         .any(|port| (start..=end).contains(&port.guest))
             }),
             "is-task" => Self::task_filter(value).is_ok_and(|is_task| !is_task),
+            "publish" => Self::exposed_port(value).is_ok_and(|(start, end, protocol)| {
+                protocol == "tcp"
+                    && container
+                        .spec
+                        .publish
+                        .iter()
+                        .any(|publish| (start..=end).contains(&publish.port.guest))
+            }),
             _ => false,
         }
     }
@@ -567,6 +578,30 @@ mod tests {
             assert!(List::parse(true, Some(&format!(r#"{{"is-task":["{value}"]}}"#))).is_err());
         }
         assert!(List::parse(true, Some(r#"{"is-task":["true","false"]}"#)).is_err());
+    }
+
+    #[test]
+    fn publish_filter_matches_only_published_container_ports() {
+        let mut published = container();
+        published.spec = published
+            .spec
+            .clone()
+            .expose(hl_container::Port::tcp(81).unwrap())
+            .publish(hl_container::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8_080, 80).unwrap());
+        for value in ["80", "80/tcp", "79-80", "80-81/tcp"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"publish":["{value}"]}}"#))).unwrap();
+            assert!(matches(selected, &published, std::slice::from_ref(&published)));
+        }
+        for value in ["81", "80/udp", "80/sctp"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"publish":["{value}"]}}"#))).unwrap();
+            assert!(!matches(selected, &published, std::slice::from_ref(&published)));
+        }
+        let alternatives =
+            List::parse(true, Some(r#"{"publish":{"81":false,"80":true},"status":["exited"]}"#)).unwrap();
+        assert!(matches(alternatives, &published, std::slice::from_ref(&published)));
+        for value in ["", "0", "65536", "90-80", "80-", "-80", "80/icmp", "80/tcp/extra"] {
+            assert!(List::parse(true, Some(&format!(r#"{{"publish":["{value}"]}}"#))).is_err());
+        }
     }
 
     #[test]

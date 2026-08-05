@@ -45,7 +45,9 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         "Cmd": ["alpha", "two words"],
         "Labels": {"contract": "projection"},
         "ExposedPorts": {"80/tcp": {}},
-        "HostConfig": {"Mounts": [
+        "HostConfig": {
+            "PortBindings": {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": "0"}]},
+            "Mounts": [
             {
                 "Type": "bind",
                 "Source": bind_source,
@@ -336,6 +338,12 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         (r#"{"expose":["80/udp"]}"#, 0),
         (r#"{"expose":["81","80"],"name":["truthful"]}"#, 1),
         (r#"{"expose":["80"],"name":["missing"]}"#, 0),
+        (r#"{"publish":["80"]}"#, 1),
+        (r#"{"publish":{"79-80/tcp":false}}"#, 1),
+        (r#"{"publish":["81"]}"#, 0),
+        (r#"{"publish":["80/udp"]}"#, 0),
+        (r#"{"publish":["81","80"],"name":["truthful"]}"#, 1),
+        (r#"{"publish":["80"],"name":["missing"]}"#, 0),
     ] {
         let filtered = exchange(
             socket,
