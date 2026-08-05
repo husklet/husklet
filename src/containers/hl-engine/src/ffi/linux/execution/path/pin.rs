@@ -26,7 +26,7 @@ pub(super) struct Host {
 
 struct PinRegistry {
     next: AtomicU64,
-    entries: Mutex<std::collections::BTreeMap<u64, PinEntry>>,
+    entries: Mutex<std::collections::BTreeMap<u64, Arc<PinEntry>>>,
 }
 
 struct PinEntry {
@@ -92,16 +92,20 @@ impl Host {
             .entries
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .insert(identity, PinEntry { guest, candidates });
+            .insert(identity, Arc::new(PinEntry { guest, candidates }));
         Ok(NodeHandle::from_raw(LAYERED_HANDLE_BIT | identity))
     }
 
     fn with_entry<T>(&self, node: NodeHandle, operation: impl FnOnce(&PinEntry) -> T) -> Result<T, ResolveHostError> {
-        let entries = self.pins.entries.lock().unwrap_or_else(|error| error.into_inner());
-        entries
+        let entry = self
+            .pins
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
             .get(&(node.raw() & !LAYERED_HANDLE_BIT))
-            .map(operation)
-            .ok_or(ResolveHostError::NotFound)
+            .cloned()
+            .ok_or(ResolveHostError::NotFound)?;
+        Ok(operation(&entry))
     }
 
     fn duplicate_candidates(files: &[Arc<File>]) -> Result<Vec<LayerPin>, ResolveHostError> {
@@ -284,8 +288,10 @@ impl Host {
 #[cfg(test)]
 mod overlay_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
 
-    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver};
+    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver, VfsHost};
 
     use super::Host;
 
@@ -359,6 +365,31 @@ mod overlay_tests {
         std::fs::write(upper.join("dir/.wh..wh..opq"), b"").unwrap();
         let host = layered_host(&upper, &lower);
         assert!(resolve(&host, b"/dir/cut").is_err());
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn layered_pin_syscalls_do_not_hold_registry_lock() {
+        let upper = fixture("concurrent-upper");
+        let lower = fixture("concurrent-lower");
+        let host = layered_host(&upper, &lower);
+        let root = host.pin_root().unwrap();
+        let closing = host.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let closer = std::thread::spawn(move || {
+            entered_rx.recv().unwrap();
+            closing.close(root);
+            closed_tx.send(()).unwrap();
+        });
+
+        host.with_entry(root, |_| {
+            entered_tx.send(()).unwrap();
+            closed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        })
+        .unwrap();
+        closer.join().unwrap();
         std::fs::remove_dir_all(upper).unwrap();
         std::fs::remove_dir_all(lower).unwrap();
     }
