@@ -138,24 +138,19 @@ impl Disposition {
     }
 }
 
-pub(super) struct Lease(std::fs::File);
+pub(super) struct Lease {
+    _lock: ffi::FileLock,
+}
 
 impl Lease {
     pub(super) fn acquire(path: PathBuf) -> io::Result<Self> {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(path)?;
-        // SAFETY: `file` owns a valid open descriptor for this call. `flock` does not retain
-        // the descriptor or access Rust-managed memory.
-        if unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(io::Error::new(
+        match ffi::FileLock::try_acquire(&path)? {
+            Some(lock) => Ok(Self { _lock: lock }),
+            None => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "workspace execution domain is already starting",
-            ));
+            )),
         }
-        Ok(Self(file))
     }
 
     pub(super) fn acquire_wait(path: PathBuf, timeout: std::time::Duration) -> io::Result<Self> {
@@ -183,11 +178,60 @@ impl Lease {
     }
 }
 
-impl Drop for Lease {
-    fn drop(&mut self) {
-        // SAFETY: the lease still owns its open descriptor. Unlocking neither retains the
-        // descriptor nor accesses Rust-managed memory.
-        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.0), libc::LOCK_UN) };
+/// Private file-lock boundary consumed through an owned safe lease.
+mod ffi {
+    use std::os::fd::AsRawFd;
+
+    pub(super) struct FileLock(std::fs::File);
+
+    impl FileLock {
+        pub(super) fn try_acquire(path: &std::path::Path) -> std::io::Result<Option<Self>> {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(path)?;
+            // SAFETY: `file` uniquely owns a valid descriptor through the call and, on success,
+            // for the lock lifetime. `flock` retains no pointer, invokes no callback, accesses no
+            // aliased Rust storage, and cannot unwind across the ABI.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(Some(Self(file)));
+            }
+            let error = std::io::Error::last_os_error();
+            if contention(&error) {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
+    }
+
+    fn contention(error: &std::io::Error) -> bool {
+        let code = error.raw_os_error();
+        code == Some(libc::EWOULDBLOCK) || code == Some(libc::EAGAIN)
+    }
+
+    impl Drop for FileLock {
+        fn drop(&mut self) {
+            // SAFETY: this value uniquely owns the live descriptor until after the call. `flock`
+            // retains no pointer, invokes no callback, accesses no aliased Rust storage, and cannot
+            // unwind across the ABI. Closing the file after return releases all remaining state.
+            let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn only_would_block_errors_are_lock_contention() {
+            for code in [libc::EWOULDBLOCK, libc::EAGAIN] {
+                assert!(super::contention(&std::io::Error::from_raw_os_error(code)));
+            }
+            for code in [libc::EINTR, libc::EBADF, libc::EINVAL, libc::ENOLCK, libc::EIO] {
+                assert!(!super::contention(&std::io::Error::from_raw_os_error(code)));
+            }
+            assert!(!super::contention(&std::io::Error::other("host failure")));
+        }
     }
 }
 
