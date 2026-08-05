@@ -142,6 +142,46 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         summaries.len() == 1,
         "container list did not return the created container",
     )?;
+    for (filters, expected) in [
+        (r#"{"is-task":["false"]}"#, 1),
+        (r#"{"is-task":{"false":false}}"#, 1),
+        (r#"{"is-task":["true"]}"#, 0),
+        (r#"{"is-task":["true","false"],"name":["truthful"]}"#, 1),
+        (r#"{"is-task":["false"],"name":["missing"]}"#, 0),
+    ] {
+        let encoded = filters.bytes().fold(String::new(), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                encoded.push(char::from(byte));
+            } else {
+                write!(encoded, "%{byte:02X}").unwrap();
+            }
+            encoded
+        });
+        let response = exchange(
+            socket,
+            "GET",
+            &format!("/v1.43/containers/json?all=true&filters={encoded}"),
+            None,
+        )
+        .await?;
+        require(response.0.starts_with("HTTP/1.1 200"), "is-task filter request failed")?;
+        require(
+            response.1.as_array().is_some_and(|values| values.len() == expected),
+            "is-task filter selected the wrong ordinary-container set",
+        )?;
+    }
+    let malformed = exchange(
+        socket,
+        "GET",
+        "/v1.43/containers/json?all=true&filters=%7B%22is-task%22%3A%5B%22yes%22%5D%7D",
+        None,
+    )
+    .await?;
+    require(
+        malformed.0.starts_with("HTTP/1.1 400"),
+        "malformed is-task filter was accepted",
+    )?;
     let summary = &summaries[0];
     require(summary["Id"] == id, "container list changed Id")?;
     require(

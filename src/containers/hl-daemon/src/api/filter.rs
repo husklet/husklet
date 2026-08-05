@@ -246,6 +246,7 @@ impl List {
                         | "exited"
                         | "health"
                         | "expose"
+                        | "is-task"
                         | "before"
                         | "since"
                 )
@@ -255,6 +256,9 @@ impl List {
         if unsupported.is_empty() {
             for value in list.filters.get("expose").into_iter().flatten() {
                 Self::exposed_port(value)?;
+            }
+            for value in list.filters.get("is-task").into_iter().flatten() {
+                Self::task_filter(value)?;
             }
             Ok(list)
         } else {
@@ -346,6 +350,7 @@ impl List {
                         .iter()
                         .any(|port| (start..=end).contains(&port.guest))
             }),
+            "is-task" => Self::task_filter(value).is_ok_and(|is_task| !is_task),
             _ => false,
         }
     }
@@ -367,6 +372,14 @@ impl List {
             .filter(|port| *port != 0 && *port >= start)
             .ok_or_else(|| format!("invalid exposed port {value:?}"))?;
         Ok((start, end, protocol))
+    }
+
+    fn task_filter(value: &str) -> Result<bool, String> {
+        match value {
+            "true" | "1" => Ok(true),
+            "false" | "0" => Ok(false),
+            _ => Err(format!("invalid is-task boolean {value:?}")),
+        }
     }
 
     fn matches_label(container: &hl_container::Container, value: &str) -> bool {
@@ -528,6 +541,26 @@ mod tests {
         let empty = container();
         let selected = List::parse(true, Some(r#"{"expose":["1-65535"]}"#)).unwrap();
         assert!(!matches(selected, &empty, std::slice::from_ref(&empty)));
+    }
+
+    #[test]
+    fn is_task_filter_truth_table_preserves_only_ordinary_containers() {
+        let container = container();
+        for value in ["false", "0"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"is-task":["{value}"]}}"#))).unwrap();
+            assert!(matches(selected, &container, std::slice::from_ref(&container)));
+        }
+        for value in ["true", "1"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"is-task":["{value}"]}}"#))).unwrap();
+            assert!(!matches(selected, &container, std::slice::from_ref(&container)));
+        }
+        let alternatives = List::parse(true, Some(r#"{"is-task":["true","false"],"status":["exited"]}"#)).unwrap();
+        assert!(matches(alternatives, &container, std::slice::from_ref(&container)));
+        let map_set = List::parse(true, Some(r#"{"is-task":{"false":false}}"#)).unwrap();
+        assert!(matches(map_set, &container, std::slice::from_ref(&container)));
+        for value in ["", "yes", "False", "2"] {
+            assert!(List::parse(true, Some(&format!(r#"{{"is-task":["{value}"]}}"#))).is_err());
+        }
     }
 
     #[test]
