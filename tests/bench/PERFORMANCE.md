@@ -72,6 +72,52 @@ cadence is the README matrix command with five repeats, 60-second timeout,
 only divisor to 20 and timeout to 120. Preserve the output directory and use
 `--resume` only with the exact content identity already recorded there.
 
+### Native versus interpreter attribution
+
+The saved per-repeat CSVs distinguish guest execution from fixture and process
+setup. At the fast cadence, native compute spent a 46,352-us median inside the
+guest-timed phase and 65,515 us wall-clock, versus 8,131 and 34,212 us for the
+interpreter. At the historical cadence the corresponding medians were
+1,456,966/1,498,203 us and 303,323/352,166 us. Thus startup contributes to wall
+spread but cannot explain the inversion: 71% and 97% of native wall time was
+inside the selected compute phase. Native compute's fast samples
+(8,696--61,459 us) are much noisier than host and C (both exactly 47 us), while
+the longer historical samples narrow to 1,441,567--1,474,217 us. The short row
+is too small for a stable regression threshold; the historical inversion is
+repeatable.
+
+Compute diagnostics identify the generic control-flow owner. Fast proof made
+39,459 native branch transitions for 341,397 completed instructions; historical
+proof made 11,962,238 transitions for 18,642,223 instructions, 287 public runs,
+53 builds, and only three fallbacks. It had three full guards and no fast guard,
+so memory admission cannot explain compute. Retained `dispatch.c::run_guest`
+and AArch64 `stubs.c::emit_chain_exit_from` keep registers live across direct
+edges and poll at cycle boundaries. Rust `trace.c` terminates certifiable ranges
+at every control transfer, while `stub.c` and the executor's AArch64 run loop
+own branch completion, budget accounting, interrupt polling, and cache lookup.
+The attributable domain is bounded conditional trace chaining and cycle-edge
+accounting, not opcode interpretation, setup, or the benchmark fixture.
+
+Float SIMD and memory have a different owner. At divisor 20, float SIMD made
+87,859,588 full guards, 29,213,509 dirty publications, 8,844 generated guard
+fallbacks, and zero fast guards; memory made 28,991,955 full guards,
+14,516,893 dirty publications, 3,628 generated guard fallbacks, and zero fast
+guards. Float native was 65% slower than the interpreter; memory was within
+1.5%. Their phase shares were 91% and 94% of native wall time, again excluding
+startup as the cause. The retained same-ISA translator folds authenticated
+memory accesses and preserves publication/fault order through the JIT-owned
+mapping lifetime. Rust `guard.c`, `single.c`, `pair.c`, and projection leases
+perform per-access range/permission/owner admission and exact dirty archival.
+Those full guards and dirty publication are the generic measured owner. The
+recorded evidence does not authorize weakening mapping identity, fault
+atomicity, executable-write invalidation, or dirty ordering.
+
+No broad rerun is scheduled from this attribution. The next periodic checkpoint
+should follow an integrated conditional-trace or authenticated-memory-admission
+change, or the normal scheduled cadence. Use the preserved content-bound
+artifacts under `/var/tmp/husklet-benchmark-a94efb2ff-artifacts`; do not compare
+opcode microtests to these end-to-end phase times.
+
 ## 2026-08-04: exact-head float-SIMD attribution
 
 Clean detached commit `fbfe10df8dc21b1c4827580a624da54c67416585`
