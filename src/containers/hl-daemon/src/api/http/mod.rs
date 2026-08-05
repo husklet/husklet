@@ -97,7 +97,7 @@ pub(crate) fn router(
         .route("/images/json", get(image::list))
         .route("/commit", post(image::commit))
         .route("/images/search", get(image::search))
-        .route("/distribution/:name/json", get(image::distribution))
+        .route("/distribution/*path", any(image::named_distribution))
         .route("/images/load", post(image::load))
         .route("/images/create", post(image::pull))
         .route("/images/prune", post(image::prune))

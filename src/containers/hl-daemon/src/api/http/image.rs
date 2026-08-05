@@ -289,7 +289,24 @@ use identity::{RemoveQuery, removal_conflicts};
 #[cfg(test)]
 use list::{ImageSelection, ListQuery};
 pub(super) use list::{Prune, list, prune};
-pub(super) use registry::{commit, distribution, pull, search};
+pub(super) use registry::{commit, pull, search};
+
+/// Dispatches distribution inspection for literal repository-qualified references.
+pub(super) async fn named_distribution(
+    State(state): State<DockerState>,
+    Path(path): Path<String>,
+    request: Request,
+) -> Response {
+    if request.method() != Method::GET {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(name) = path.strip_suffix("/json").filter(|name| !name.is_empty()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    registry::distribution(State(state), Path(name.to_owned()))
+        .await
+        .into_response()
+}
 
 /// Dispatches named-image operations whose repository reference contains path separators.
 ///
