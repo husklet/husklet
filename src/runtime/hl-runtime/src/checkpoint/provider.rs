@@ -60,7 +60,7 @@ impl ProviderNamespace {
     }
 
     fn lease(&self) -> NamespaceLease {
-        let current = self.current.read().unwrap_or_else(|error| error.into_inner());
+        let current = self.current.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         NamespaceLease {
             generation: current.generation,
             namespace: current.namespace.clone(),
@@ -68,7 +68,7 @@ impl ProviderNamespace {
     }
 
     fn replace(&self, expected: u64, namespace: Arc<HandleNamespace>) -> Result<(Arc<HandleNamespace>, u64), ()> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.generation != expected {
             return Err(());
         }
@@ -236,7 +236,7 @@ impl CheckpointParticipant for ProviderCheckpointParticipant {
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             if let Some(generation) = state.committed {
@@ -266,7 +266,7 @@ impl CheckpointParticipant for ProviderCheckpointParticipant {
     fn finish(&self, reservation: u64) {
         self.staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
     }
 }

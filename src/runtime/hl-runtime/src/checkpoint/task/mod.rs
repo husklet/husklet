@@ -65,20 +65,20 @@ impl Registry {
     pub fn current(&self) -> Arc<HostRegistry> {
         self.current
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .registry
             .clone()
     }
 
     fn snapshot(&self) -> (u64, Arc<HostRegistry>) {
-        let current = self.current.read().unwrap_or_else(|error| error.into_inner());
+        let current = self.current.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         (current.generation, current.registry.clone())
     }
 
     pub(crate) fn staged(&self) -> Option<(Arc<HostRegistry>, Arc<TaskRegistryImage>)> {
         self.staged
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .map(|state| (state.registry.clone(), state.image.clone()))
     }
@@ -93,7 +93,7 @@ impl Registry {
     }
 
     fn clear_stage(&self, registry: &Arc<HostRegistry>) {
-        let mut staged = self.staged.write().unwrap_or_else(|error| error.into_inner());
+        let mut staged = self.staged.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if staged
             .as_ref()
             .is_some_and(|value| Arc::ptr_eq(&value.registry, registry))
@@ -103,7 +103,7 @@ impl Registry {
     }
 
     fn replace(&self, expected: u64, registry: Arc<HostRegistry>) -> Result<(u64, Arc<HostRegistry>), ()> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.generation != expected {
             return Err(());
         }
@@ -113,7 +113,7 @@ impl Registry {
     }
 
     fn rollback(&self, expected: u64, generation: u64, registry: Arc<HostRegistry>) -> Result<(), ()> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.generation != expected {
             return Err(());
         }
@@ -362,7 +362,7 @@ impl CheckpointParticipant for Participant {
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             self.registry.clear_stage(&state.replacement);

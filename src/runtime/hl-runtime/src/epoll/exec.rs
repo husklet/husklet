@@ -31,12 +31,20 @@ impl PreparedEpollExec {
         if self.published {
             return false;
         }
-        let _mutation = self.control.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self
+            .control
+            .mutation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.graph = Some(self.control.graph.snapshot());
         for identity in &self.retired {
             self.control.graph.close(*identity);
         }
-        let mut state = self.control.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .control
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for identity in &self.retired {
             if let Some(epoll) = state.epolls.remove(identity) {
                 self.epolls.insert(*identity, epoll);
@@ -50,14 +58,18 @@ impl PreparedEpollExec {
         if !self.published {
             return;
         }
-        let _mutation = self.control.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self
+            .control
+            .mutation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(graph) = self.graph.take() {
             self.control.graph.restore(&graph);
         }
         self.control
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .epolls
             .append(&mut self.epolls);
         self.published = false;

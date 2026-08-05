@@ -38,7 +38,7 @@ impl RouteSocket {
         !self
             .replies
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 
@@ -66,7 +66,7 @@ impl RouteSocket {
         if offset != input.len() {
             return Err(ObjectError::InvalidArgument);
         }
-        let mut replies = self.replies.lock().unwrap_or_else(|error| error.into_inner());
+        let mut replies = self.replies.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         replies.extend(generated);
         drop(replies);
         self.readiness.notify();
@@ -74,7 +74,7 @@ impl RouteSocket {
     }
 
     pub(crate) fn receive(&self, output: &mut [u8], peek: bool) -> Result<(usize, usize), ObjectError> {
-        let mut replies = self.replies.lock().unwrap_or_else(|error| error.into_inner());
+        let mut replies = self.replies.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(reply) = replies.front() else {
             return Err(ObjectError::WouldBlock);
         };

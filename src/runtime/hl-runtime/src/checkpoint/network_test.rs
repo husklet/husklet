@@ -365,7 +365,7 @@ impl NetworkCheckpointHost for UnixRestoreHost {
         self.reservation_rollbacks.fetch_add(1, Ordering::Relaxed);
         self.staged_ports
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 }

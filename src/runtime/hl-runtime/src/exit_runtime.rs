@@ -88,11 +88,14 @@ impl ExitRuntime {
         threads: &[ThreadId],
         status: ExitStatus,
     ) -> Result<bool, ExitRuntimeError> {
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self
             .completed
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&process)
         {
             return Ok(false);
@@ -133,7 +136,7 @@ impl ExitRuntime {
         }
         self.completed
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(process);
         for stage in &mut prepared {
             stage.finish();

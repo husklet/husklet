@@ -38,13 +38,16 @@ impl CatalogBoundEvent {
         }
     }
     pub(crate) fn bind(&self, id: EventObjectId) {
-        *self.id.lock().unwrap_or_else(|error| error.into_inner()) = Some(id);
+        *self.id.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
     }
     pub(crate) fn bind_epoll(&self, control: Arc<Control>, identity: DescriptionIdentity) {
-        *self.epoll.lock().unwrap_or_else(|error| error.into_inner()) = Some((control, identity));
+        *self.epoll.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((control, identity));
     }
     pub(crate) fn bind_operations(&self, registry: Arc<OperationRegistry>, identity: DescriptionIdentity) {
-        *self.operations.lock().unwrap_or_else(|error| error.into_inner()) = Some((registry, identity));
+        *self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((registry, identity));
     }
 
     pub(crate) fn bind_checkpoint(
@@ -54,7 +57,10 @@ impl CatalogBoundEvent {
         id: EventObjectId,
     ) -> Result<(), hl_event::EventCheckpointError> {
         bindings.register_object(identity.identity, id)?;
-        *self.checkpoint.lock().unwrap_or_else(|error| error.into_inner()) = Some((bindings, identity.identity, id));
+        *self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((bindings, identity.identity, id));
         Ok(())
     }
 }
@@ -68,7 +74,7 @@ impl OpenFileDescription for CatalogBoundEvent {
     }
     fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
         let mut metadata = self.object.metadata()?;
-        if let Some(id) = *self.id.lock().unwrap_or_else(|error| error.into_inner()) {
+        if let Some(id) = *self.id.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
             metadata.inode = u64::from(id.slot) | (u64::from(id.generation) << 32);
         }
         Ok(metadata)
@@ -115,16 +121,30 @@ impl OpenFileDescription for CatalogBoundEvent {
             return;
         }
         self.object.close();
-        if let Some(id) = self.id.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some(id) = self.id.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
             let _ = self.catalog.remove(id);
         }
-        if let Some((control, identity)) = self.epoll.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some((control, identity)) = self
+            .epoll
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
             control.retire_identity(identity);
         }
-        if let Some((registry, identity)) = self.operations.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some((registry, identity)) = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
             registry.retire(identity);
         }
-        if let Some((bindings, identity, id)) = self.checkpoint.lock().unwrap_or_else(|error| error.into_inner()).take()
+        if let Some((bindings, identity, id)) = self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
         {
             bindings.unregister_object(identity, id);
         }

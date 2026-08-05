@@ -65,19 +65,19 @@ where
 
     #[cfg(test)]
     pub(crate) fn inject_fault(&self, role: crate::ForkParticipantRole, phase: crate::ForkPhase) {
-        *self.fault.lock().unwrap_or_else(|error| error.into_inner()) = Some((role, phase));
+        *self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((role, phase));
     }
 
     #[cfg(test)]
     pub(crate) fn clear_fault(&self) {
-        *self.fault.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        *self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     #[cfg(test)]
     fn participant(&self, participant: Arc<dyn ForkParticipant>) -> Arc<dyn ForkParticipant> {
         Arc::new(TestFaultParticipant {
             inner: participant,
-            fault: *self.fault.lock().unwrap_or_else(|error| error.into_inner()),
+            fault: *self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         })
     }
 

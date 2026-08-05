@@ -223,7 +223,10 @@ impl RuntimeCheckpointCoordinator {
     }
 
     pub fn checkpoint<S: CheckpointSink>(&self, sink: &mut S) -> Result<(), Error> {
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut frozen = FreezeTransaction::new(self.participants.len());
         for participant in &self.participants {
             if frozen.freeze(participant).is_err() {
@@ -269,7 +272,10 @@ impl RuntimeCheckpointCoordinator {
     }
 
     pub fn restore<S: CheckpointSource>(&self, source: &mut S) -> Result<(), Error> {
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let image = CheckpointReader::new(self.limits).read(source)?;
         self.validate_image(&image)?;
         let mut staged = Vec::with_capacity(self.participants.len());

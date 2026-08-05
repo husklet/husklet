@@ -45,7 +45,7 @@ impl<H: MappingHost> ChildResourceCatalog<H> {
     }
 
     pub fn prepare(&self, process: ProcessId) -> Result<PreparedChildResources<H>, ChildResourceError> {
-        let mut children = self.children.lock().unwrap_or_else(|error| error.into_inner());
+        let mut children = self.children.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if children.contains_key(&process) {
             return Err(ChildResourceError::Exists);
         }
@@ -64,7 +64,7 @@ impl<H: MappingHost> ChildResourceCatalog<H> {
         let slot = self
             .children
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process)?;
         match slot {
             ChildResourceSlot::Published(resources) => Some(resources),
@@ -73,7 +73,7 @@ impl<H: MappingHost> ChildResourceCatalog<H> {
     }
 
     pub fn child(&self, process: ProcessId) -> Option<Arc<ChildResources<H>>> {
-        let children = self.children.lock().unwrap_or_else(|error| error.into_inner());
+        let children = self.children.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match children.get(&process)? {
             ChildResourceSlot::Published(resources) => Some(Arc::clone(resources)),
             ChildResourceSlot::Reserved => None,
@@ -82,7 +82,10 @@ impl<H: MappingHost> ChildResourceCatalog<H> {
 
     #[must_use]
     pub fn len(&self) -> usize {
-        self.children.lock().unwrap_or_else(|error| error.into_inner()).len()
+        self.children
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -99,7 +102,7 @@ impl<H: MappingHost> PreparedChildResources<H> {
         }
         let children = Arc::clone(&self.children);
         {
-            let guard = children.lock().unwrap_or_else(|error| error.into_inner());
+            let guard = children.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !matches!(guard.get(&self.process), Some(ChildResourceSlot::Reserved)) {
                 return Err(ChildResourceError::Stale);
             }
@@ -116,7 +119,7 @@ impl<H: MappingHost> PreparedChildResources<H> {
         if resources.process != self.process {
             return Err(ChildResourceError::Identity);
         }
-        let mut children = self.children.lock().unwrap_or_else(|error| error.into_inner());
+        let mut children = self.children.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = children.get_mut(&self.process).ok_or(ChildResourceError::Stale)?;
         if !matches!(slot, ChildResourceSlot::Reserved) {
             return Err(ChildResourceError::Stale);
@@ -137,7 +140,7 @@ impl<H: MappingHost> ReadyChildResources<H> {
     /// Publishes a previously identity-checked exclusive reservation.
     pub fn publish(mut self) {
         let resources = self.resources.take().expect("staged child resources");
-        let mut children = self.children.lock().unwrap_or_else(|error| error.into_inner());
+        let mut children = self.children.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = children.get_mut(&self.process).expect("exclusive child reservation");
         debug_assert!(matches!(slot, ChildResourceSlot::Reserved));
         *slot = ChildResourceSlot::Published(Arc::new(resources));
@@ -149,7 +152,7 @@ impl<H: MappingHost> Drop for ReadyChildResources<H> {
         if self.resources.is_some() {
             self.children
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&self.process);
         }
     }
@@ -160,7 +163,7 @@ impl<H: MappingHost> Drop for PreparedChildResources<H> {
         if !self.finished {
             self.children
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&self.process);
         }
     }

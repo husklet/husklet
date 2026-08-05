@@ -31,7 +31,7 @@ impl ProviderForkParticipant {
     pub fn child(&self, transaction: u64) -> Option<Arc<HandleNamespace>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .get(&transaction)
             .cloned()
@@ -40,7 +40,7 @@ impl ProviderForkParticipant {
     pub fn take_child(&self, transaction: u64) -> Option<Arc<HandleNamespace>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .remove(&transaction)
     }
@@ -49,7 +49,7 @@ impl ProviderForkParticipant {
         let child = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .remove(&transaction);
         child.map_or_else(Vec::new, |namespace| namespace.revoke())
@@ -64,7 +64,7 @@ impl ProviderForkParticipant {
     pub fn staged_count(&self) -> usize {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .staged
             .len()
     }
@@ -76,7 +76,7 @@ impl ForkParticipant for ProviderForkParticipant {
     }
 
     fn prepare(&self, context: ForkContext) -> Result<u64, ()> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let reservation = state.next_reservation;
         state.next_reservation = state.next_reservation.checked_add(1).ok_or(())?;
         state.staged.insert(context.transaction, (reservation, None));
@@ -92,7 +92,7 @@ impl ForkParticipant for ProviderForkParticipant {
 
     fn clone_child(&self, context: ForkContext, reservation: u64) -> Result<(), ()> {
         let plan = self.parent.begin_fork().map_err(|_| ())?;
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.staged.get_mut(&context.transaction).ok_or(())?;
         if entry.0 != reservation || entry.1.is_some() {
             return Err(());
@@ -109,7 +109,7 @@ impl ForkParticipant for ProviderForkParticipant {
     }
 
     fn commit(&self, context: ForkContext, reservation: u64) -> Result<(), ()> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (actual, plan) = state.staged.remove(&context.transaction).ok_or(())?;
         if actual != reservation {
             return Err(());
@@ -120,7 +120,7 @@ impl ForkParticipant for ProviderForkParticipant {
     }
 
     fn rollback(&self, context: ForkContext, _: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.staged.remove(&context.transaction);
         state.committed.remove(&context.transaction);
     }

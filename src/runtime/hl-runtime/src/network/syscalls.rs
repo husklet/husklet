@@ -372,7 +372,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 UnixAddress::Pathname(value) => SocketAddress::Unix(value),
                 UnixAddress::Abstract(value) => SocketAddress::Unix([vec![0], value].concat()),
             };
-            let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut snapshot = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             snapshot.local = Some(local);
             snapshot.state = SocketState::Bound;
             return match self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
@@ -398,7 +401,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             return LinuxResult::Error(Errno::ENOSYS);
         };
         if !self.host_projection && !Self::local_projection(&address) {
-            let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut snapshot = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let family = snapshot.family;
             let mut port = match &address {
                 SocketAddress::Inet4 { port, .. } | SocketAddress::Inet6 { port, .. } => *port,
@@ -435,7 +441,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::runtime(error)),
         };
-        let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        let mut snapshot = socket
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         snapshot.local = Some(local);
         snapshot.state = SocketState::Bound;
         if self
@@ -461,7 +470,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             if named.listen(backlog as usize).is_err() {
                 return LinuxResult::Error(Errno::EINVAL);
             }
-            let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut snapshot = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             snapshot.state = SocketState::Listening {
                 backlog: backlog.max(1),
             };
@@ -480,12 +492,15 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let local_projection = socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .local
             .as_ref()
             .is_some_and(Self::local_projection);
         if !self.host_projection && !local_projection {
-            let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut snapshot = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if snapshot.state != SocketState::Bound {
                 return LinuxResult::Error(Errno::EINVAL);
             }
@@ -502,7 +517,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             return LinuxResult::Error(SocketErrno::runtime(error));
         }
         description.listen(backlog as usize);
-        let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        let mut snapshot = socket
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         snapshot.state = SocketState::Listening { backlog };
         if self
             .current_catalog()
@@ -524,7 +542,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Err(error) => return LinuxResult::Error(error),
         };
         {
-            let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut snapshot = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if matches!(snapshot.state, SocketState::Listening { .. }) {
                 return LinuxResult::Error(Errno::EISCONN);
             }
@@ -570,11 +591,14 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 if listener.unix_datagram().is_none() || datagram.connect(target).is_err() {
                     return LinuxResult::Error(Errno::ECONNREFUSED);
                 }
-                let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+                let mut snapshot = socket
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 snapshot.peer = listener
                     .snapshot
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .local
                     .clone();
                 snapshot.state = SocketState::Connected;
@@ -589,12 +613,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let current = socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
             let listener_snapshot = listener
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
             let nonblocking = current.nonblocking;
             let queue = listener_named.wait_queue();
@@ -651,7 +675,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             accepted_snapshot.id = accepted_id;
             let lifetime = RuntimeSocket::<H>::pair_lifetime(catalog, socket.id);
             socket.attach_unix_connection(pair.clone(), 0, lifetime.clone());
-            *socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()) = client_snapshot;
+            *socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = client_snapshot;
             listener.queue_pending(
                 accepted_id,
                 RuntimeSocket::connected_unix(pair.clone(), 1, accepted_id, accepted_snapshot, lifetime),
@@ -670,7 +697,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type
             == SocketType::Datagram
         {
@@ -679,7 +706,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             }
             match hl_network::SocketHostIo::start_connect(host.as_ref(), *token, false) {
                 SocketConnectStatus::Connected => {
-                    let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+                    let mut snapshot = socket
+                        .snapshot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     snapshot.peer = Some(address);
                     snapshot.state = SocketState::Connected;
                     return match self
@@ -701,7 +731,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             return LinuxResult::Error(SocketErrno::runtime(error));
         }
         {
-            let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut snapshot = socket
+                .snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             snapshot.peer = Some(address);
             snapshot.state = SocketState::Connecting;
             if self
@@ -715,7 +748,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let blocking = !socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .nonblocking;
         let connected = if blocking {
             if let Some(wait) = &self.wait {
@@ -766,7 +799,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         }
         let address = match &socket.kind {
             RuntimeSocketKind::Host { token, .. } => {
-                let snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+                let snapshot = socket
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if peer && snapshot.socket_type == SocketType::Datagram {
                     snapshot
                         .peer
@@ -790,7 +826,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 Ok(GuestNetworkAddress::Unix(pair.endpoints[*endpoint].address().clone()))
             }
             RuntimeSocketKind::UnixStandalone { .. } => {
-                let snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+                let snapshot = socket
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let address = if peer {
                     snapshot.peer.as_ref()
                 } else {
@@ -849,7 +888,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         };
         match result {
             Ok(()) => {
-                let mut snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+                let mut snapshot = socket
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 snapshot.shutdown.read |= read;
                 snapshot.shutdown.write |= write;
                 if self

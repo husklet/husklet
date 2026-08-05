@@ -56,16 +56,16 @@ impl VforkParentToken {
 
     #[must_use]
     pub fn released(&self) -> bool {
-        *self.state.lock().unwrap_or_else(|error| error.into_inner()) == State::Released
+        *self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == State::Released
     }
 }
 
 impl Drop for VforkParentToken {
     fn drop(&mut self) {
-        if *self.state.get_mut().unwrap_or_else(|error| error.into_inner()) == State::Active
+        if *self.state.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner) == State::Active
             && self.wake.resume(self.parent).is_ok()
         {
-            *self.state.get_mut().unwrap_or_else(|error| error.into_inner()) = State::Released;
+            *self.state.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner) = State::Released;
         }
     }
 }

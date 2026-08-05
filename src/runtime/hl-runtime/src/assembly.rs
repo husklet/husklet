@@ -164,7 +164,7 @@ impl RuntimeAssembly {
     }
 
     pub fn install_memory(&self, memory: Arc<dyn ExitParticipant>) -> Result<(), RuntimeAssemblyError> {
-        let mut current = self.memory.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.is_some() {
             return Err(RuntimeAssemblyError::Construction(RuntimeDomain::Memory));
         }
@@ -174,7 +174,10 @@ impl RuntimeAssembly {
 
     #[must_use]
     pub fn memory(&self) -> Option<Arc<dyn ExitParticipant>> {
-        self.memory.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn install_ipc(&self, objects: Arc<SharedObjectStore>) -> Result<(), RuntimeAssemblyError> {
@@ -193,7 +196,7 @@ impl RuntimeAssembly {
             SemaphoreNamespace::new(semaphore_limits)
                 .map_err(|_| RuntimeAssemblyError::Construction(RuntimeDomain::Ipc))?,
         );
-        let mut current = self.ipc.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.ipc.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.is_some() {
             return Err(RuntimeAssemblyError::Construction(RuntimeDomain::Ipc));
         }
@@ -209,7 +212,7 @@ impl RuntimeAssembly {
         ))));
         let bindings = Arc::new(crate::IpcPipeBindings::new());
         let registry = Arc::new(crate::IpcPipeRegistry::new(checkpoint.clone(), bindings));
-        *self.ipc_pipes.lock().unwrap_or_else(|error| error.into_inner()) = Some(registry);
+        *self.ipc_pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(registry);
         *current = Some(checkpoint);
         Ok(())
     }
@@ -218,19 +221,25 @@ impl RuntimeAssembly {
     pub fn ipc(&self) -> Option<Arc<IpcCatalog>> {
         self.ipc
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .map(|catalog| catalog.current())
     }
 
     #[must_use]
     pub fn checkpoint_ipc(&self) -> Option<Arc<CheckpointIpcCatalog>> {
-        self.ipc.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.ipc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     #[must_use]
     pub fn ipc_pipes(&self) -> Option<Arc<crate::IpcPipeRegistry>> {
-        self.ipc_pipes.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.ipc_pipes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     #[must_use]
@@ -332,7 +341,7 @@ impl RuntimeAssembly {
         if self
             .checkpoint
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .is_some()
         {
@@ -340,13 +349,13 @@ impl RuntimeAssembly {
         }
         self.checkpoint_pending
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         if self
             .exec
             .current
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .is_some()
         {
@@ -358,7 +367,7 @@ impl RuntimeAssembly {
         if self
             .memory
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .is_some()
         {
@@ -366,12 +375,12 @@ impl RuntimeAssembly {
         }
         self.ipc_pipes
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if self
             .ipc
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .is_some()
         {

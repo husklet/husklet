@@ -37,7 +37,7 @@ impl Control {
         last: u32,
         close_on_exec: bool,
     ) -> Result<(), ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptors = table.descriptor_table();
         let selected = descriptors
             .active_snapshots()

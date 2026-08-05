@@ -47,7 +47,7 @@ impl TaskForkParticipant {
     pub fn reserved_child(&self) -> Option<(ProcessId, ThreadId)> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plan
             .as_ref()
             .map(|plan| (plan.process(), plan.thread()))
@@ -73,7 +73,10 @@ impl TaskForkParticipant {
     }
 
     pub fn child(&self) -> Option<(ProcessId, ThreadId)> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).child
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .child
     }
 }
 
@@ -134,7 +137,12 @@ impl ForkParticipant for TaskForkParticipant {
     }
 
     fn rollback(&self, _: ForkContext, _: u64) {
-        let plan = self.state.lock().unwrap_or_else(|error| error.into_inner()).plan.take();
+        let plan = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .plan
+            .take();
         if let Some(plan) = plan {
             let _ = self.tasks.rollback_fork_process(plan);
         }
@@ -146,7 +154,7 @@ impl Drop for TaskForkParticipant {
         let plan = self
             .state
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plan
             .take();
         if let Some(plan) = plan {

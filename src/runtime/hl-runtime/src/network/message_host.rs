@@ -148,7 +148,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let record = socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type
             != hl_network::SocketType::Stream;
         loop {
@@ -294,12 +294,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             || socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
         let record = socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type
             != hl_network::SocketType::Stream;
         let RuntimeSocketKind::Host { description, token } = &socket.kind else {

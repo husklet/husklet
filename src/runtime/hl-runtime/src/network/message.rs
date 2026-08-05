@@ -296,7 +296,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             || socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
         if socket.unix_datagram().is_some() {
             if !imported.controls.is_empty() {
@@ -324,7 +324,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             && socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .socket_type
                 == hl_network::SocketType::Stream
         {
@@ -401,7 +401,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             || socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
         let mut deadline = None;
         let mut timeout_armed = false;
@@ -478,7 +478,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 let record_oriented = socket
                     .snapshot
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .socket_type
                     != hl_network::SocketType::Stream;
                 reported.set(if record_oriented && flags & MSG_TRUNC != 0 {

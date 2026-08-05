@@ -23,7 +23,7 @@ impl NamespaceHandle {
     }
 
     fn bind(&self, registry: Weak<NamespaceHandleRegistry>, identity: DescriptionIdentity) {
-        *self.binding.lock().unwrap_or_else(|error| error.into_inner()) = Some((registry, identity));
+        *self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((registry, identity));
     }
 }
 
@@ -53,7 +53,11 @@ impl OpenFileDescription for NamespaceHandle {
 
 impl Drop for NamespaceHandle {
     fn drop(&mut self) {
-        let binding = self.binding.get_mut().unwrap_or_else(|error| error.into_inner()).take();
+        let binding = self
+            .binding
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         if let Some((registry, identity)) = binding {
             if let Some(registry) = registry.upgrade() {
                 registry.retire(identity);
@@ -101,7 +105,7 @@ impl NamespaceHandleRegistry {
         identity: DescriptionIdentity,
         object: &Arc<NamespaceHandle>,
     ) -> Result<(), NamespaceHandleError> {
-        let mut objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if objects.contains_key(&identity) {
             return Err(NamespaceHandleError::Duplicate);
         }
@@ -111,7 +115,7 @@ impl NamespaceHandleRegistry {
     }
 
     pub fn identifier(&self, identity: DescriptionIdentity) -> Result<NamespaceId, NamespaceHandleError> {
-        let mut objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match objects.get(&identity).and_then(Weak::upgrade) {
             Some(object) => Ok(object.identifier),
             None => {
@@ -124,7 +128,7 @@ impl NamespaceHandleRegistry {
     fn retire(&self, identity: DescriptionIdentity) {
         self.objects
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&identity);
     }
 
@@ -172,7 +176,7 @@ pub enum NamespaceHandleError {
 
 impl DescriptorObjectCheckpoint for NamespaceHandleRegistry {
     fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        let objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let identifier = objects
             .iter()
             .find(|(candidate, _)| candidate.identity == identity)
@@ -192,7 +196,7 @@ impl DescriptorObjectCheckpoint for NamespaceHandleRegistry {
             generation: description.generation,
         };
         let object = NamespaceHandle::new(identifier);
-        let mut objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if objects.contains_key(&identity) {
             return Err(DescriptorCheckpointError::Object);
         }

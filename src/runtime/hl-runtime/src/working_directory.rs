@@ -30,11 +30,15 @@ impl WorkingDirectory {
     }
 
     pub fn snapshot(&self) -> DirectorySnapshot {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn replace(&self, path: GuestPath) {
-        *self.state.lock().unwrap_or_else(|error| error.into_inner()) = DirectorySnapshot { path, deleted: false };
+        *self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            DirectorySnapshot { path, deleted: false };
     }
 
     pub fn replace_path(&self, path: &str) -> Result<(), ()> {
@@ -43,7 +47,10 @@ impl WorkingDirectory {
     }
 
     pub fn mark_deleted(&self) {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).deleted = true;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .deleted = true;
     }
 }
 

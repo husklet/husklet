@@ -113,7 +113,7 @@ impl ArtifactExchange {
             reservation,
             artifact: TypeId::of::<T>(),
         };
-        let mut values = self.values.lock().unwrap_or_else(|error| error.into_inner());
+        let mut values = self.values.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if values.keys().any(|existing| {
             existing.transaction == context.transaction
                 && existing.role == role
@@ -128,7 +128,7 @@ impl ArtifactExchange {
     pub fn get<T: Any + Send + Sync>(&self, context: Context, role: ParticipantRole) -> Option<Arc<T>> {
         self.values
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|(key, _)| {
                 key.transaction == context.transaction && key.role == role && key.artifact == TypeId::of::<T>()
@@ -140,7 +140,7 @@ impl ArtifactExchange {
     }
 
     pub fn take<T: Any + Send + Sync>(&self, context: Context, role: ParticipantRole) -> Option<Arc<T>> {
-        let mut values = self.values.lock().unwrap_or_else(|error| error.into_inner());
+        let mut values = self.values.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = values
             .keys()
             .find(|key| key.transaction == context.transaction && key.role == role && key.artifact == TypeId::of::<T>())
@@ -151,7 +151,7 @@ impl ArtifactExchange {
     fn remove_transaction(&self, transaction: u64) {
         self.values
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|key, _| key.transaction != transaction);
     }
 }
@@ -183,7 +183,10 @@ impl Coordinator {
 
     pub fn fork(&self, request: ForkRequest, cancellation: &dyn Cancellation) -> Result<Outcome, Error> {
         request.validate().map_err(|_| Error::InvalidRequest)?;
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let transaction = self.next_transaction.fetch_add(1, Ordering::Relaxed);
         if transaction == 0 {
             return Err(Error::InvalidRequest);

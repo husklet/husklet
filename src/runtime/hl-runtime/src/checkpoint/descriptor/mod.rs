@@ -104,7 +104,10 @@ impl Table {
     }
 
     pub(crate) fn staged(&self) -> Option<Arc<HostDescriptorTable>> {
-        self.staged.read().unwrap_or_else(|error| error.into_inner()).clone()
+        self.staged
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn stage(&self, table: Arc<HostDescriptorTable>) -> Result<(), ()> {
@@ -117,7 +120,7 @@ impl Table {
     }
 
     fn clear_stage(&self, table: &Arc<HostDescriptorTable>) {
-        let mut staged = self.staged.write().unwrap_or_else(|error| error.into_inner());
+        let mut staged = self.staged.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if staged.as_ref().is_some_and(|value| Arc::ptr_eq(value, table)) {
             *staged = None;
         }
@@ -229,7 +232,7 @@ impl CheckpointParticipant for Participant {
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             self.table.clear_stage(&state.replacement);

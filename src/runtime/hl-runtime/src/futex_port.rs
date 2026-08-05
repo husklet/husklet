@@ -75,7 +75,7 @@ impl<H: MemoryAccessHost> FutexAccessMemory<H> {
             .ledger()
             .futex_identity(address_space, address, private, access)
             .ok_or(FutexError::Fault)?;
-        let mut keys = self.keys.lock().unwrap_or_else(|error| error.into_inner());
+        let mut keys = self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = match identity {
             private @ FutexIdentity::Private { address, .. } => {
                 let owner = match keys.shared.get(&private).copied() {
@@ -121,7 +121,7 @@ impl<H: MemoryAccessHost> FutexAccessMemory<H> {
         key: FutexKey,
         access: FutexAccess,
     ) -> Result<(Arc<MappingCoordinator<H>>, GuestAddress), FutexError> {
-        let keys = self.keys.lock().unwrap_or_else(|error| error.into_inner());
+        let keys = self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let bindings = keys.bindings.get(&key).ok_or(FutexError::Fault)?;
         bindings
             .iter()

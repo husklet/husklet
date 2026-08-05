@@ -156,7 +156,7 @@ impl Control {
     pub fn register_epoll(&self, identity: DescriptionIdentity, epoll: Arc<Epoll>) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .epolls
             .insert(identity, epoll);
     }
@@ -221,13 +221,13 @@ impl Control {
         flags: DescriptorFlags,
         watch_limit: usize,
     ) -> Result<i32, ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let epoll = Arc::new(Epoll::with_watch_limit(watch_limit)?);
         let number = Self::install_object(table, epoll.clone(), flags)?;
         let identity = table.descriptor_table().pin(number)?.description_identity();
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .epolls
             .insert(identity, epoll);
         Ok(number)
@@ -240,7 +240,7 @@ impl Control {
         flags: SignalFdFlags,
         queue: Arc<dyn SignalQueue>,
     ) -> Result<i32, ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let closes = if flags.closes_on_exec() {
             DescriptorFlags::from_bits(DescriptorFlags::CLOSE_ON_EXEC)
         } else {
@@ -258,7 +258,7 @@ impl Control {
         limits: InotifyLimits,
         source: Arc<dyn WatchSource>,
     ) -> Result<i32, ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let flags = if close_on_exec {
             DescriptorFlags::from_bits(DescriptorFlags::CLOSE_ON_EXEC)
         } else {
@@ -276,7 +276,7 @@ impl Control {
         interests: EpollInterest,
         data: u64,
     ) -> Result<EpollWatchKey, ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let source = table.descriptor_table().pin(epoll_number)?;
         let target = table.descriptor_table().pin(target_number)?;
         let epoll = self.epoll(source.description_identity())?;
@@ -293,7 +293,7 @@ impl Control {
         interests: EpollInterest,
         data: u64,
     ) -> Result<(), ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let source = table.descriptor_table().pin(epoll_number)?;
         let target = table.descriptor_table().pin(target_number)?;
         self.epoll(source.description_identity())?
@@ -307,7 +307,7 @@ impl Control {
         epoll_number: i32,
         target_number: i32,
     ) -> Result<(), ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let source = table.descriptor_table().pin(epoll_number)?;
         let target = table.descriptor_table().pin(target_number)?;
         let epoll = self.epoll(source.description_identity())?;
@@ -316,7 +316,7 @@ impl Control {
     }
 
     pub fn close(&self, table: &RuntimeDescriptorTable, number: i32) -> Result<(), ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptors = table.descriptor_table();
         let snapshot = descriptors.snapshot(number)?;
         descriptors.close(number)?;
@@ -333,7 +333,7 @@ impl Control {
         minimum: i32,
         flags: DescriptorFlags,
     ) -> Result<i32, ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(table.descriptor_table().duplicate(source, minimum, flags)?)
     }
 
@@ -344,7 +344,7 @@ impl Control {
         destination: i32,
         operation: ExactDuplicate,
     ) -> Result<i32, ControlError> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptors = table.descriptor_table();
         let replaced = descriptors.snapshot(destination).ok();
         let result = descriptors.duplicate_exact(source, destination, operation)?;
@@ -358,9 +358,9 @@ impl Control {
     }
 
     pub fn fork(&self, table: &RuntimeDescriptorTable) -> RuntimeDescriptorTable {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let id = DescriptorTableId(state.next_table);
             state.next_table = state.next_table.wrapping_add(1).max(2);
             id
@@ -375,9 +375,9 @@ impl Control {
     }
 
     pub fn share(&self, table: &RuntimeDescriptorTable) -> RuntimeDescriptorTable {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let id = DescriptorTableId(state.next_table);
             state.next_table = state.next_table.wrapping_add(1).max(2);
             id
@@ -405,7 +405,7 @@ impl Control {
     }
 
     pub fn exec_sweep(&self, table: &RuntimeDescriptorTable) -> Vec<i32> {
-        let _mutation = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _mutation = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let snapshots = Self::snapshots(table);
         let closed = table.descriptor_table().close_on_exec();
         let mut closed_counts = BTreeMap::<DescriptionIdentity, u32>::new();
@@ -443,7 +443,7 @@ impl Control {
     fn epoll(&self, identity: DescriptionIdentity) -> Result<Arc<Epoll>, ControlError> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .epolls
             .get(&identity)
             .cloned()
@@ -454,7 +454,7 @@ impl Control {
         self.graph.close(identity);
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .epolls
             .remove(&identity);
     }

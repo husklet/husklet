@@ -76,7 +76,7 @@ impl TaskResourceCatalog {
     pub fn unbind_process(&self, process: ProcessId) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .processes
             .remove(&process);
     }
@@ -84,7 +84,7 @@ impl TaskResourceCatalog {
     pub fn unbind_thread(&self, thread: ThreadId) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .threads
             .remove(&thread);
     }

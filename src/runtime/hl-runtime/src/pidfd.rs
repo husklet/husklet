@@ -31,7 +31,7 @@ impl ProcessHandleRegistry {
     }
 
     pub fn notify_exit(&self, target: ProcessId) {
-        let objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let handles = objects
             .values()
             .filter_map(Weak::upgrade)
@@ -50,12 +50,12 @@ impl ProcessHandleRegistry {
     pub fn register_files(&self, process: ProcessId, table: &Arc<DescriptorTable>) {
         self.files
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(process, Arc::downgrade(table));
     }
 
     pub fn export(&self, process: ProcessId, descriptor: i32) -> Result<DescriptionRef, ProcessHandleError> {
-        let mut files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let table = match files.get(&process).and_then(Weak::upgrade) {
             Some(table) => table,
             None => {
@@ -74,7 +74,7 @@ impl ProcessHandleRegistry {
         identity: DescriptionIdentity,
         object: Arc<ProcessHandle>,
     ) -> Result<(), ProcessHandleError> {
-        let mut objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if objects.insert(identity, Arc::downgrade(&object)).is_some() {
             return Err(ProcessHandleError::Duplicate);
         }
@@ -83,7 +83,7 @@ impl ProcessHandleRegistry {
     }
 
     pub fn target(&self, identity: DescriptionIdentity) -> Result<ProcessId, ProcessHandleError> {
-        let mut objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match objects.get(&identity).and_then(Weak::upgrade) {
             Some(object) => Ok(object.target),
             None => {
@@ -121,7 +121,7 @@ impl ProcessHandleRegistry {
     fn retire(&self, identity: DescriptionIdentity) {
         self.objects
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&identity);
     }
 }
@@ -136,7 +136,7 @@ pub struct ProcessHandle {
 
 impl ProcessHandle {
     fn bind(&self, registry: Weak<ProcessHandleRegistry>, identity: DescriptionIdentity) {
-        *self.binding.lock().unwrap_or_else(|error| error.into_inner()) = Some((registry, identity));
+        *self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((registry, identity));
     }
 
     fn mark_exited(&self) {
@@ -185,7 +185,11 @@ impl OpenFileDescription for ProcessHandle {
     }
 
     fn retire(&self) {
-        let binding = self.binding.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let binding = self
+            .binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         if let Some((registry, identity)) = binding {
             if let Some(registry) = registry.upgrade() {
                 registry.retire(identity);
@@ -196,7 +200,11 @@ impl OpenFileDescription for ProcessHandle {
 
 impl Drop for ProcessHandle {
     fn drop(&mut self) {
-        let binding = self.binding.get_mut().unwrap_or_else(|error| error.into_inner()).take();
+        let binding = self
+            .binding
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         if let Some((registry, identity)) = binding {
             if let Some(registry) = registry.upgrade() {
                 registry.retire(identity);
@@ -216,7 +224,7 @@ pub enum ProcessHandleError {
 
 impl DescriptorObjectCheckpoint for ProcessHandleRegistry {
     fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        let objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let found = objects
             .iter()
             .find(|(key, _)| key.identity == identity)
@@ -234,7 +242,7 @@ impl DescriptorObjectCheckpoint for ProcessHandleRegistry {
             identity: description.identity,
             generation: description.generation,
         };
-        let mut objects = self.objects.lock().unwrap_or_else(|error| error.into_inner());
+        let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         objects.insert(identity, Arc::downgrade(&object));
         Ok(object)
     }

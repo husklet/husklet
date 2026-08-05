@@ -61,7 +61,7 @@ impl<H: MappingHost> IpcForkParticipant<H> {
         let committed = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .remove(&transaction)?;
         committed.shared.finish();
@@ -73,7 +73,7 @@ impl<H: MappingHost> IpcForkParticipant<H> {
     pub fn child(&self, transaction: u64) -> Option<Arc<IpcForkChild<H>>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .get(&transaction)
             .map(|committed| Arc::clone(&committed.child))
@@ -205,7 +205,7 @@ impl<H: MappingHost + 'static> ForkParticipant for IpcForkParticipant<H> {
 
     fn rollback(&self, context: ForkContext, _: u64) {
         let committed = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.reservations.remove(&context.transaction);
             state.prepared.remove(&context.transaction);
             state.committed.remove(&context.transaction)

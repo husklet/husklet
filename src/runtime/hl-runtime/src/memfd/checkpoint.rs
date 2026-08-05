@@ -408,7 +408,11 @@ impl MemoryResourceTransaction for Transaction {
             return;
         }
         if let Some(previous) = self.previous.take() {
-            let mut state = self.registry.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .registry
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.epoch == self.epoch {
                 let replacement = std::mem::replace(&mut *state, previous);
                 for object in replacement.objects.values() {

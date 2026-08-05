@@ -25,13 +25,13 @@ impl TraceExchange {
     fn current(&self) -> Result<StoppedRegisterImage, TraceError> {
         self.image
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or(TraceError::NotStopped)
     }
 
     fn replace(&self, image: StoppedRegisterImage) {
-        *self.image.lock().unwrap_or_else(|error| error.into_inner()) = Some(image);
+        *self.image.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(image);
     }
 }
 
@@ -44,7 +44,7 @@ impl TraceSafepointPort for TraceExchange {
     fn restore(&self) -> Result<StoppedRegisterImage, TraceRegisterError> {
         self.image
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
             .ok_or(TraceRegisterError::Architecture)
     }
@@ -72,7 +72,7 @@ impl Catalog {
     pub fn register(&self, process: ProcessId, exchange: Arc<TraceExchange>) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .processes
             .insert(process, exchange);
     }
@@ -81,7 +81,7 @@ impl Catalog {
         let exchange = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .processes
             .get(&process)
             .cloned()?;
@@ -91,7 +91,7 @@ impl Catalog {
     pub fn register_wake(&self, process: ProcessId, wake: Arc<dyn TraceWake>) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .wakes
             .insert(process, wake);
     }
@@ -100,14 +100,14 @@ impl Catalog {
     /// cleanup. In particular, the exchange owns the tracee's guest memory;
     /// retaining it would keep the complete address space alive after reap.
     pub fn unregister(&self, process: ProcessId) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.processes.remove(&process);
         state.wakes.remove(&process);
         state.links.retain(|_, link| link.tracee != process);
     }
 
     fn exchange(&self, link: TraceLinkId) -> Result<Arc<TraceExchange>, TraceError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let process = state.links.get(&link).ok_or(TraceError::InvalidLink)?.tracee;
         state.processes.get(&process).cloned().ok_or(TraceError::InvalidProcess)
     }
@@ -115,7 +115,7 @@ impl Catalog {
 
 impl PtracePort for Catalog {
     fn attached(&self, link: TraceLinkId, tracee: ProcessId) -> Result<(), TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.links.insert(
             link,
             Link {
@@ -128,7 +128,7 @@ impl PtracePort for Catalog {
     }
 
     fn permission(&self, _: ProcessId, tracee: ProcessId) -> TracePermission {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.processes.contains_key(&tracee) {
             TracePermission::Granted
         } else {
@@ -146,13 +146,13 @@ impl PtracePort for Catalog {
     }
 
     fn options(&self, link: TraceLinkId, options: PtraceOptions) -> Result<(), TraceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.links.get_mut(&link).ok_or(TraceError::InvalidLink)?.options = options;
         Ok(())
     }
 
     fn event_message(&self, link: TraceLinkId) -> Result<u64, TraceError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(state.links.get(&link).ok_or(TraceError::InvalidLink)?.event_message)
     }
 
@@ -176,7 +176,7 @@ impl PtracePort for Catalog {
         let options = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .links
             .get(&event.link)
             .map(|link| link.options)
@@ -194,7 +194,7 @@ impl PtracePort for Catalog {
 
     fn resumed(&self, link: TraceLinkId) {
         let wake = {
-            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state
                 .links
                 .get(&link)

@@ -63,7 +63,7 @@ impl Catalog {
     }
 
     fn lease(&self) -> CatalogLease {
-        let current = self.current.read().unwrap_or_else(|error| error.into_inner());
+        let current = self.current.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         CatalogLease {
             generation: current.generation,
             catalog: current.catalog.clone(),
@@ -71,7 +71,7 @@ impl Catalog {
     }
 
     fn replace(&self, expected: u64, catalog: Arc<HostEventCatalog>) -> Result<(Arc<HostEventCatalog>, u64), ()> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.generation != expected {
             return Err(());
         }
@@ -217,7 +217,7 @@ impl CheckpointParticipant for Participant {
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             if let Some(generation) = state.committed {
@@ -247,7 +247,7 @@ impl CheckpointParticipant for Participant {
     fn finish(&self, reservation: u64) {
         self.staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
     }
 }

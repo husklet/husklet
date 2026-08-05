@@ -81,11 +81,14 @@ impl<H> MemoryState<H> {
 
     #[must_use]
     pub fn current(&self) -> Arc<Memory<H>> {
-        self.current.read().unwrap_or_else(|error| error.into_inner()).clone()
+        self.current
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn staged(&self) -> Option<Arc<Memory<H>>> {
-        let staged = self.staged.read().unwrap_or_else(|error| error.into_inner());
+        let staged = self.staged.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         (staged.len() == 1).then(|| staged[0].clone())
     }
 
@@ -99,12 +102,12 @@ impl<H> MemoryState<H> {
     }
 
     fn clear_stage(&self, memory: &Arc<Memory<H>>) {
-        let mut staged = self.staged.write().unwrap_or_else(|error| error.into_inner());
+        let mut staged = self.staged.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         staged.retain(|value| !Arc::ptr_eq(value, memory));
     }
 
     fn replace(&self, memory: Arc<Memory<H>>) -> Arc<Memory<H>> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         std::mem::replace(&mut *current, memory)
     }
 }
@@ -320,7 +323,7 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             self.memory.clear_stage(&state.replacement);
@@ -359,7 +362,7 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             if let Some(resources) = &mut state.resources {

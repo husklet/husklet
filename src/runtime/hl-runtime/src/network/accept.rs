@@ -38,7 +38,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let nonblocking = listener
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
             let queue = named.wait_queue();
             loop {
@@ -68,7 +68,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let snapshot = object
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
             let peer = snapshot
                 .peer
@@ -84,7 +84,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let listener_snapshot = listener
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let nonblocking = listener_snapshot.nonblocking;
         if !self.host_projection && nonblocking && matches!(listener_snapshot.state, SocketState::Listening { .. }) {

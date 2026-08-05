@@ -69,7 +69,12 @@ impl<H: SocketHostIo> std::fmt::Debug for RuntimeSocket<H> {
 
 impl<H: SocketHostIo> RuntimeSocket<H> {
     fn unregister(&self) {
-        let Some((registry, identity)) = self.registry.lock().unwrap_or_else(|error| error.into_inner()).take() else {
+        let Some((registry, identity)) = self
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        else {
             return;
         };
         if let Some(registry) = registry.upgrade() {
@@ -78,11 +83,12 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
     }
 
     fn attach_registry(&self, registry: &Arc<RuntimeSocketRegistry<H>>, identity: DescriptionIdentity) {
-        *self.registry.lock().unwrap_or_else(|error| error.into_inner()) = Some((Arc::downgrade(registry), identity));
+        *self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((Arc::downgrade(registry), identity));
     }
 
     fn detach_registry(&self, identity: DescriptionIdentity) {
-        let mut current = self.registry.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.registry.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.as_ref().is_some_and(|(_, value)| *value == identity) {
             current.take();
         }
@@ -287,8 +293,10 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         requested: hl_network::UnixAddress,
     ) -> Result<hl_network::UnixAddress, hl_network::UnixNamespaceError> {
         let (address, binding) = namespace.bind(requested, self.id)?;
-        *self.unix_binding.lock().unwrap_or_else(|error| error.into_inner()) =
-            Some((namespace, address.clone(), binding));
+        *self
+            .unix_binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((namespace, address.clone(), binding));
         Ok(address)
     }
 
@@ -296,7 +304,7 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         let Some((namespace, address, binding)) = self
             .unix_binding
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         else {
             return;
@@ -313,7 +321,10 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         let RuntimeSocketKind::UnixStandalone { connection, .. } = &self.kind else {
             return None;
         };
-        connection.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn named_unix(&self) -> Option<Arc<hl_network::UnixNamedSocket>> {
@@ -337,8 +348,8 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         lifetime: Arc<CatalogLifetime>,
     ) {
         if let RuntimeSocketKind::UnixStandalone { connection, .. } = &self.kind {
-            *connection.lock().unwrap_or_else(|error| error.into_inner()) = Some((pair, endpoint));
-            *self.catalog.lock().unwrap_or_else(|error| error.into_inner()) = lifetime;
+            *connection.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((pair, endpoint));
+            *self.catalog.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = lifetime;
         }
     }
 
@@ -379,7 +390,7 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         if let RuntimeSocketKind::UnixStandalone { pending, .. } = &self.kind {
             pending
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(id, socket);
         }
     }
@@ -388,20 +399,23 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         let RuntimeSocketKind::UnixStandalone { pending, .. } = &self.kind else {
             return None;
         };
-        pending.lock().unwrap_or_else(|error| error.into_inner()).remove(&id)
+        pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id)
     }
 
     pub(crate) fn set_option(&self, level: i32, option: i32, value: hl_linux::GuestSocketOption) {
         self.options
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert((level, option), value);
     }
 
     pub(crate) fn option(&self, level: i32, option: i32) -> Option<hl_linux::GuestSocketOption> {
         self.options
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(level, option))
             .cloned()
     }
@@ -412,7 +426,11 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
             RuntimeSocketKind::Unix { .. } => return Ok(SocketConnectStatus::Connected),
             RuntimeSocketKind::UnixStandalone { connection, .. } => {
                 return Ok(
-                    if connection.lock().unwrap_or_else(|error| error.into_inner()).is_some() {
+                    if connection
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .is_some()
+                    {
                         SocketConnectStatus::Connected
                     } else {
                         SocketConnectStatus::Idle
@@ -421,7 +439,7 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
             }
         };
         let status = description.connect_status();
-        let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match status {
             SocketConnectStatus::Idle if snapshot.connect_error.is_some() => {
                 snapshot.state = if snapshot.local.is_some() {
@@ -448,7 +466,7 @@ impl<H: SocketHostIo> RuntimeSocket<H> {
         }
         self.catalog
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .catalog
             .replace_snapshot(self.id, snapshot.clone())
             .map_err(|_| ObjectError::Io)?;
@@ -582,7 +600,7 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         if self.netlink.is_some() {
             self.snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking = flags.bits() & StatusFlags::NONBLOCKING != 0;
             return Ok(());
         }
@@ -594,11 +612,11 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
                 None => Ok(()),
             },
         }?;
-        let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         snapshot.nonblocking = flags.bits() & StatusFlags::NONBLOCKING != 0;
         self.catalog
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .catalog
             .replace_snapshot(self.id, snapshot.clone())
             .map_err(|_| ObjectError::Io)
@@ -662,7 +680,10 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         }
         if self.netlink.is_some() {
             self.unregister();
-            self.catalog.lock().unwrap_or_else(|error| error.into_inner()).release();
+            self.catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .release();
             return;
         }
         match &self.kind {
@@ -681,12 +702,15 @@ impl<H: SocketHostIo> OpenFileDescription for RuntimeSocket<H> {
         if let Some((namespace, address, binding)) = self
             .unix_binding
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         {
             namespace.release(&address, binding);
         }
-        self.catalog.lock().unwrap_or_else(|error| error.into_inner()).release();
+        self.catalog
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .release();
     }
 }
 
@@ -717,12 +741,15 @@ impl<H: SocketHostIo> Default for RuntimeSocketRegistry<H> {
 impl<H: SocketHostIo> RuntimeSocketRegistry<H> {
     #[must_use]
     pub fn unix_namespace(&self) -> Arc<hl_network::UnixNamespace> {
-        self.unix.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.unix
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn replace_unix(&self, replacement: Arc<hl_network::UnixNamespace>) -> Arc<hl_network::UnixNamespace> {
         std::mem::replace(
-            &mut *self.unix.lock().unwrap_or_else(|error| error.into_inner()),
+            &mut *self.unix.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
             replacement,
         )
     }
@@ -740,7 +767,7 @@ impl<H: SocketHostIo> RuntimeSocketRegistry<H> {
         identity: DescriptionIdentity,
         socket: Arc<RuntimeSocket<H>>,
     ) -> Result<(), ()> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.sockets.contains_key(&identity) {
             return Err(());
         }
@@ -754,7 +781,7 @@ impl<H: SocketHostIo> RuntimeSocketRegistry<H> {
     pub(crate) fn get(&self, identity: DescriptionIdentity) -> Option<Arc<RuntimeSocket<H>>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sockets
             .get(&identity)
             .cloned()
@@ -762,21 +789,21 @@ impl<H: SocketHostIo> RuntimeSocketRegistry<H> {
     pub(crate) fn get_id(&self, id: SocketId) -> Option<Arc<RuntimeSocket<H>>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sockets
             .values()
             .find(|socket| socket.id == id)
             .cloned()
     }
     fn retire(&self, identity: DescriptionIdentity) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.sockets.remove(&identity).is_some() {
             state.generation = state.generation.saturating_add(1);
         }
     }
 
     pub(crate) fn checkpoint_lease(&self) -> (u64, BTreeMap<DescriptionIdentity, Arc<RuntimeSocket<H>>>) {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (state.generation, state.sockets.clone())
     }
 

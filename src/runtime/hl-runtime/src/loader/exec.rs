@@ -248,7 +248,7 @@ where
         let tls = self
             .tls
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .prepare_initial(loaded.initial_tls())
             .map_err(|_| RuntimeExecError::NoMemory)?;
         let execution = self.execution.build(self.architecture, &loaded, &tls)?;

@@ -96,13 +96,17 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
         let request = Self::request(plan, requested)?;
         let address = self.coordinator.map(request).map_err(Self::memory_error)?;
         let range = AddressRange::nonempty(address, request.length).map_err(|_| MappingError::Invariant)?;
-        let previous = self.mappings.lock().unwrap_or_else(|error| error.into_inner()).insert(
-            address,
-            Mapping {
-                range,
-                attachment: None,
-            },
-        );
+        let previous = self
+            .mappings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                address,
+                Mapping {
+                    range,
+                    attachment: None,
+                },
+            );
         if previous.is_some() {
             let _ = self.coordinator.unmap(range);
             return Err(MappingError::Invariant);
@@ -111,7 +115,7 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
     }
 
     fn bind(&self, address: GuestAddress, attachment: u64) -> Result<(), MappingError> {
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mapping = mappings.get_mut(&address).ok_or(MappingError::Invalid)?;
         if mapping.attachment.replace(attachment).is_some() {
             return Err(MappingError::Invariant);
@@ -123,14 +127,14 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
         let range = self
             .mappings
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&address)
             .ok_or(MappingError::Invalid)?
             .range;
         self.coordinator.unmap(range).map_err(Self::memory_error)?;
         self.mappings
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&address);
         Ok(())
     }
@@ -139,20 +143,20 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
         let mapping = *self
             .mappings
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&address)
             .ok_or(MappingError::Invalid)?;
         let attachment = mapping.attachment.ok_or(MappingError::Invalid)?;
         self.coordinator.unmap(mapping.range).map_err(Self::memory_error)?;
         self.mappings
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&address);
         Ok(attachment)
     }
 
     fn bindings(&self) -> Result<Vec<MemoryBinding>, MappingError> {
-        let mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         mappings
             .iter()
             .map(|(address, mapping)| {
@@ -186,7 +190,7 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
                 return Err(MappingError::Invalid);
             }
         }
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !mappings.is_empty() {
             return Err(MappingError::Invariant);
         }
@@ -206,7 +210,11 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
                 return Err(MappingError::Invalid);
             }
         }
-        let expected = self.mappings.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let expected = self
+            .mappings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         Ok(Box::new(binding::PreparedBindings {
             mappings: &self.mappings,
             expected,
@@ -226,7 +234,11 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
                 return Err(MappingError::Invalid);
             }
         }
-        let expected = self.mappings.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let expected = self
+            .mappings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         Ok(Box::new(binding::PreparedBindings {
             mappings: &self.mappings,
             expected,
@@ -239,7 +251,7 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
         if replacements.len() != inherited.len() {
             return Err(MappingError::Invalid);
         }
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for mapping in mappings.values_mut() {
             let old = mapping.attachment.ok_or(MappingError::Invariant)?;
             mapping.attachment = Some(*replacements.get(&old).ok_or(MappingError::Invalid)?);
@@ -248,7 +260,7 @@ impl<H: MappingHost> MemoryPort for MemoryMappings<H> {
     }
 
     fn unmap_all(&self) -> Result<Vec<u64>, MappingError> {
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut batch = MappingBatch::new();
         let mut attachments = Vec::with_capacity(mappings.len());
         for mapping in mappings.values() {

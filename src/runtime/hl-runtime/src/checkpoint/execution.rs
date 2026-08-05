@@ -115,7 +115,7 @@ impl CheckpointParticipant for ExecutionCheckpointParticipant {
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(state) = state {
             if state.committed {

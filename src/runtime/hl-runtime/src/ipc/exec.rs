@@ -106,7 +106,11 @@ impl<H: MappingHost + 'static> RuntimeExecParticipant for ExecParticipant<H> {
 
 impl<H: MappingHost> PreparedExecMappings<H> {
     pub(crate) fn new(owner: &MemoryMappings<H>) -> Result<Self, RuntimeExecError> {
-        let expected = owner.mappings.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let expected = owner
+            .mappings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let regions = owner.coordinator.ledger().regions();
         let mut requests = Vec::with_capacity(expected.len());
         for mapping in expected.values() {
@@ -138,7 +142,7 @@ impl<H: MappingHost> PreparedExecMappings<H> {
             batch.push(MappingOperation::Unmap(mapping.range));
         }
         self.coordinator.apply(&batch).map_err(|_| RuntimeExecError::Failed)?;
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *mappings != self.expected {
             drop(mappings);
             self.restore_memory()?;
@@ -154,7 +158,7 @@ impl<H: MappingHost> PreparedExecMappings<H> {
             return Ok(());
         }
         self.restore_memory()?;
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !mappings.is_empty() {
             return Err(RuntimeExecError::Failed);
         }

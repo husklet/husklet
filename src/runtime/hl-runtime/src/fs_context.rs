@@ -31,11 +31,14 @@ impl FsContext {
 
     #[must_use]
     pub fn root(&self) -> GuestPath {
-        self.root.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.root
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn replace_root(&self, path: GuestPath) {
-        *self.root.lock().unwrap_or_else(|error| error.into_inner()) = path;
+        *self.root.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = path;
     }
 
     pub fn rooted(&self, path: &GuestPath) -> Result<GuestPath, ()> {

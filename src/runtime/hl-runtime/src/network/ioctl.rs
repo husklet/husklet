@@ -49,7 +49,7 @@ impl<H: RuntimeNetworkHost> SocketIoctlPort for SocketIoctl<H> {
         if socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type
             != SocketType::Stream
         {

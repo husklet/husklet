@@ -52,7 +52,7 @@ impl AnonymousMemoryLease {
 
     #[must_use]
     pub fn current(&self) -> u64 {
-        *self.current.lock().unwrap_or_else(|error| error.into_inner())
+        *self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn transition<T, E>(
@@ -60,7 +60,7 @@ impl AnonymousMemoryLease {
         target: u64,
         operation: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, ChargeTransitionError<E>> {
-        let mut current = self.current.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let reserve = target.saturating_sub(*current);
         if reserve != 0 && !self.account.reserve(reserve) {
             return Err(ChargeTransitionError::Limit);
@@ -92,7 +92,10 @@ impl AnonymousMemoryLease {
 
 impl Drop for AnonymousMemoryLease {
     fn drop(&mut self) {
-        let current = *self.current.get_mut().unwrap_or_else(|error| error.into_inner());
+        let current = *self
+            .current
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if current != 0 {
             self.account.refund(current);
         }

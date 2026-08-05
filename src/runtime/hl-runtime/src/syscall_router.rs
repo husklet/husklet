@@ -242,7 +242,7 @@ impl RuntimeSyscallRouter {
     pub(crate) fn with_clone(mut self, port: Box<dyn crate::ThreadCloneTrapPort>) -> Self {
         self.ports
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .thread_clone = Some(port);
         self
     }
@@ -251,20 +251,26 @@ impl RuntimeSyscallRouter {
     pub(crate) fn with_fork(mut self, port: Box<dyn crate::ProcessForkTrap>) -> Self {
         self.ports
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .process_fork = Some(port);
         self
     }
 
     #[must_use]
     pub fn trace(&self) -> Option<Vec<SyscallRecord>> {
-        self.trace
-            .as_ref()
-            .map(|trace| trace.lock().unwrap_or_else(|e| e.into_inner()).ordered())
+        self.trace.as_ref().map(|trace| {
+            trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .ordered()
+        })
     }
 
     pub fn take_terminal(&self) -> Option<RuntimeTerminal> {
-        self.terminal.lock().unwrap_or_else(|error| error.into_inner()).take()
+        self.terminal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     #[must_use]
@@ -282,7 +288,7 @@ impl RuntimeSyscallRouter {
         }
         self.ports
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .filesystem
             .may_block(operation, frame.arguments)
     }
@@ -302,7 +308,7 @@ impl RuntimeSyscallRouter {
         }
         self.ports
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .descriptor_io
             .may_block(operation, frame.arguments)
     }
@@ -444,7 +450,7 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
             .and_then(|_| self.task_identity_result(route.disposition));
         let mut dependencies = direct_identity
             .is_none()
-            .then(|| self.ports.lock().unwrap_or_else(|error| error.into_inner()));
+            .then(|| self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let enforced = if let Some(dependencies) = dependencies.as_mut() {
             match self.seccomp_result(dependencies.seccomp.evaluate(&frame, pc)) {
                 Ok(value) => value,
@@ -523,14 +529,17 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
         };
         if let Some(trace) = &self.trace {
             let (name, number) = Self::trace_identity(architecture, frame.raw_number, route.disposition);
-            trace.lock().unwrap_or_else(|e| e.into_inner()).push(SyscallRecord {
-                architecture,
-                number,
-                name,
-                arguments: frame.arguments,
-                result: result.encode(),
-                pc,
-            });
+            trace
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(SyscallRecord {
+                    architecture,
+                    number,
+                    name,
+                    arguments: frame.arguments,
+                    result: result.encode(),
+                    pc,
+                });
         }
         let replacement = match (&self.exec, route.disposition, result) {
             (Some((thread, queue)), SyscallDisposition::Operation(operation), hl_linux::LinuxResult::Value(0))
@@ -575,7 +584,7 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
                 } else {
                     RuntimeTerminal::Thread(status)
                 };
-                *self.terminal.lock().unwrap_or_else(|error| error.into_inner()) = Some(terminal);
+                *self.terminal.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(terminal);
                 RuntimeTrapOutcome::Exit(status)
             }
             _ => RuntimeTrapOutcome::Continue,

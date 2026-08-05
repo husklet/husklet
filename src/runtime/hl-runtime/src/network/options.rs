@@ -197,7 +197,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 }
             },
             30 => GuestSocketOption::Scalar(i32::from(matches!(
-                socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state,
+                socket
+                    .snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .state,
                 SocketState::Listening { .. },
             ))),
             38 => GuestSocketOption::Scalar(Self::protocol(&socket)),
@@ -205,7 +209,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             TCP_INFO if level == SOL_TCP => match self.host_option(&socket, level, option) {
                 Ok(Some(value)) => value,
                 Ok(None) | Err(Errno::ENOPROTOOPT | Errno::EOPNOTSUPP | Errno::ENOSYS) => {
-                    let state = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
+                    let state = socket
+                        .snapshot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .state;
                     let mut bytes = vec![0; 512];
                     bytes[0] = if matches!(state, SocketState::Connected { .. }) {
                         1
@@ -318,7 +326,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         match socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type
         {
             SocketType::Stream => 1,
@@ -329,7 +337,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn domain(socket: &crate::RuntimeSocket<H>) -> i32 {
-        match socket.snapshot.lock().unwrap_or_else(|error| error.into_inner()).family {
+        match socket
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .family
+        {
             hl_network::AddressFamily::Unix => 1,
             hl_network::AddressFamily::Inet4 => 2,
             hl_network::AddressFamily::Inet6 => 10,
@@ -337,7 +350,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn protocol(socket: &crate::RuntimeSocket<H>) -> i32 {
-        let snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        let snapshot = socket
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match (snapshot.protocol, snapshot.family, snapshot.socket_type) {
             (
                 SocketProtocol::Default,

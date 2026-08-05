@@ -59,7 +59,11 @@ impl ProviderRemoteRestore for RemoteTransaction {
             return;
         }
         if let Some(generation) = self.committed {
-            let mut state = self.store.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .store
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.generation == generation {
                 state.current = Arc::clone(&self.previous);
                 state.generation = state.generation.saturating_add(1);

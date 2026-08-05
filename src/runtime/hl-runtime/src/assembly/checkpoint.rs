@@ -17,7 +17,7 @@ impl RuntimeAssembly {
     pub fn has_checkpoint_role(&self, role: CheckpointRole) -> bool {
         self.checkpoint_pending
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .any(|participant| participant.role() == role)
     }
@@ -72,7 +72,10 @@ impl RuntimeAssembly {
         &self,
         coordinator: Arc<RuntimeCheckpointCoordinator>,
     ) -> Result<(), RuntimeAssemblyError> {
-        let mut current = self.checkpoint.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self
+            .checkpoint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.is_some() {
             return Err(Self::checkpoint_error());
         }
@@ -113,7 +116,7 @@ impl RuntimeAssembly {
                 *self
                     .checkpoint_pending
                     .lock()
-                    .unwrap_or_else(|poison| poison.into_inner()) = participants;
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = participants;
                 Err(error)
             }
         }
@@ -123,7 +126,7 @@ impl RuntimeAssembly {
     pub fn checkpoint(&self) -> Option<Arc<RuntimeCheckpointCoordinator>> {
         self.checkpoint
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 

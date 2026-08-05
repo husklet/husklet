@@ -20,7 +20,11 @@ impl<H: MappingHost> MemoryMappings<H> {
                 return Err(MappingError::Invalid);
             }
         }
-        let expected = self.mappings.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let expected = self
+            .mappings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         Ok(binding::OwnedPreparedBindings {
             mappings: Arc::clone(&self.mappings),
             expected,

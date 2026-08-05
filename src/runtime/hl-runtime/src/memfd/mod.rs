@@ -47,7 +47,7 @@ impl Registry {
         identity: DescriptionIdentity,
         object: Arc<RuntimeMemfd>,
     ) -> Result<(), ()> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.objects.contains_key(&identity) {
             return Err(());
         }
@@ -72,7 +72,7 @@ impl Registry {
         let (store, owner) = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .store
             .as_ref()
             .map(|(store, owner)| (Arc::clone(store), *owner))
@@ -132,7 +132,7 @@ impl Registry {
     fn object(&self, identity: DescriptionIdentity) -> Result<Arc<RuntimeMemfd>, SharedError> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .objects
             .get(&identity)
             .cloned()
@@ -140,7 +140,7 @@ impl Registry {
     }
 
     fn retire(&self, identity: DescriptionIdentity, epoch: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.epoch == epoch {
             state.objects.remove(&identity);
         }
@@ -198,7 +198,7 @@ impl RuntimeMemfd {
     }
 
     fn bind(&self, registry: Weak<Registry>, identity: DescriptionIdentity, epoch: u64) {
-        *self.binding.lock().unwrap_or_else(|error| error.into_inner()) = Some((registry, identity, epoch));
+        *self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((registry, identity, epoch));
     }
 
     fn activate_backing(&self) {
@@ -286,7 +286,11 @@ impl RuntimeMemfd {
         if self.released.swap(true, Ordering::AcqRel) {
             return;
         }
-        let binding = self.binding.lock().unwrap_or_else(|error| error.into_inner()).take();
+        let binding = self
+            .binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         if let Some((registry, identity, epoch)) = binding {
             if let Some(registry) = registry.upgrade() {
                 registry.retire(identity, epoch);
@@ -334,7 +338,7 @@ impl OpenFileDescription for RuntimeMemfd {
     }
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
-        let mut position = self.position.lock().unwrap_or_else(|error| error.into_inner());
+        let mut position = self.position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if position.splice_reserved {
             return Err(ObjectError::WouldBlock);
         }
@@ -344,7 +348,7 @@ impl OpenFileDescription for RuntimeMemfd {
     }
 
     fn write(&self, input: &[u8]) -> Result<usize, ObjectError> {
-        let mut position = self.position.lock().unwrap_or_else(|error| error.into_inner());
+        let mut position = self.position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if position.splice_reserved {
             return Err(ObjectError::WouldBlock);
         }
@@ -402,7 +406,7 @@ impl OpenFileDescription for RuntimeMemfd {
         _nonblocking: bool,
         _cancellation: Option<&dyn hl_descriptor::OperationCancellation>,
     ) -> Result<Option<Box<dyn PreparedSpliceRead>>, ObjectError> {
-        let mut position = self.position.lock().unwrap_or_else(|error| error.into_inner());
+        let mut position = self.position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let reserved = offset.is_none();
         if reserved && position.splice_reserved {
             return Err(ObjectError::WouldBlock);
@@ -431,7 +435,7 @@ impl OpenFileDescription for RuntimeMemfd {
 
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
         let size = self.size().map_err(Self::object_error)?;
-        let mut current = self.position.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.splice_reserved {
             return Err(ObjectError::WouldBlock);
         }
@@ -480,7 +484,7 @@ impl RuntimeMemfd {
         if reserved {
             self.position
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .splice_reserved = false;
         }
     }
@@ -496,7 +500,7 @@ impl PreparedSpliceRead for PreparedMemfdRead {
             return Err(ObjectError::InvalidArgument);
         }
         if self.reserved {
-            let mut position = self.position.lock().unwrap_or_else(|error| error.into_inner());
+            let mut position = self.position.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !position.splice_reserved || position.offset != self.start {
                 return Err(ObjectError::Interrupted);
             }
@@ -513,7 +517,7 @@ impl Drop for PreparedMemfdRead {
         if self.reserved {
             self.position
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .splice_reserved = false;
         }
     }

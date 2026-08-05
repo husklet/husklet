@@ -47,7 +47,7 @@ impl AlarmRegistry {
     pub fn register_interruption(&self, thread: hl_task::ThreadId, interruption: Arc<Interruption>) {
         self.interruptions
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(thread, Arc::downgrade(&interruption));
     }
 
@@ -56,7 +56,7 @@ impl AlarmRegistry {
         let state = self
             .timers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&process)
             .copied()
             .unwrap_or_default();
@@ -70,7 +70,7 @@ impl AlarmRegistry {
         let state = self
             .cpu_timers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(process, which))
             .copied()
             .unwrap_or_default();
@@ -84,7 +84,10 @@ impl AlarmRegistry {
         let previous = self.current_cpu(process, which, now);
         let value = timer.value.checked_nanoseconds().ok_or(())?;
         let interval = timer.interval.checked_nanoseconds().ok_or(())?;
-        let mut timers = self.cpu_timers.lock().unwrap_or_else(|error| error.into_inner());
+        let mut timers = self
+            .cpu_timers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = timers.entry((process, which)).or_default();
         state.interval = interval;
         state.deadline = (value != 0).then(|| now.saturating_add(value));
@@ -94,7 +97,10 @@ impl AlarmRegistry {
     pub(crate) fn poll_cpu(&self, process: ProcessId, virtual_now: u64, prof_now: u64) {
         let mut signals = Vec::new();
         {
-            let mut timers = self.cpu_timers.lock().unwrap_or_else(|error| error.into_inner());
+            let mut timers = self
+                .cpu_timers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for which in [1, 2] {
                 let now = if which == 1 { virtual_now } else { prof_now };
                 let Some(state) = timers.get_mut(&(process, which)) else {
@@ -126,14 +132,14 @@ impl AlarmRegistry {
         let state = self
             .timers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process);
         if let Some(token) = state.and_then(|state| state.token) {
             self.scheduler.cancel(token);
         }
         self.cpu_timers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|(owner, _), _| *owner != process);
     }
 
@@ -142,7 +148,7 @@ impl AlarmRegistry {
         let value = timer.value.checked_nanoseconds().ok_or(())?;
         let interval = timer.interval.checked_nanoseconds().ok_or(())?;
         let now = self.scheduler.now();
-        let mut timers = self.timers.lock().unwrap_or_else(|error| error.into_inner());
+        let mut timers = self.timers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = timers.entry(process).or_default();
         if let Some(token) = state.token.take() {
             self.scheduler.cancel(token);
@@ -163,7 +169,7 @@ impl AlarmRegistry {
         let weak = Arc::downgrade(self);
         let callback = Arc::new(move || Self::expire(&weak, process, generation));
         let token = self.scheduler.schedule(deadline, callback)?;
-        let mut timers = self.timers.lock().unwrap_or_else(|error| error.into_inner());
+        let mut timers = self.timers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = timers.get_mut(&process).ok_or(())?;
         if state.generation != generation {
             self.scheduler.cancel(token);
@@ -177,7 +183,10 @@ impl AlarmRegistry {
         let Some(registry) = registry.upgrade() else { return };
         let now = registry.scheduler.now();
         let next = {
-            let mut timers = registry.timers.lock().unwrap_or_else(|error| error.into_inner());
+            let mut timers = registry
+                .timers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(state) = timers.get_mut(&process) else { return };
             if state.generation != generation {
                 return;
@@ -213,7 +222,10 @@ impl AlarmRegistry {
             .filter(|thread| thread.process == process)
             .map(|thread| thread.id)
             .collect::<Vec<_>>();
-        let mut interruptions = self.interruptions.lock().unwrap_or_else(|error| error.into_inner());
+        let mut interruptions = self
+            .interruptions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         interruptions.retain(|_, value| value.strong_count() != 0);
         for thread in threads {
             if let Some(interruption) = interruptions.get(&thread).and_then(Weak::upgrade) {

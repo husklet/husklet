@@ -132,7 +132,7 @@ impl PipeBindings {
     }
 
     pub(super) fn unregister(&self, identity: u64, key: IpcResourceKey) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state
             .resources
             .get(&identity)
@@ -146,7 +146,7 @@ impl PipeBindings {
     pub(super) fn registered(&self) -> usize {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .resources
             .len()
     }
@@ -185,7 +185,7 @@ impl PipeBindings {
     }
 
     pub(crate) fn rollback(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for pending in state.pending.values() {
             pending.deactivate();
         }
@@ -207,7 +207,7 @@ impl PipeBindings {
     }
 
     pub(crate) fn finish(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.phase != Phase::Resumed {
             return;
         }
@@ -244,7 +244,7 @@ impl Drop for Registration {
         if self.published {
             return;
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for (identity, resource) in self.resources {
             state.remove(identity, resource);
         }
@@ -470,7 +470,7 @@ impl OpenFileDescription for PendingObject {
         if !self.active.load(Ordering::Acquire) {
             return;
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.remove(
             self.identity,
             Resource {

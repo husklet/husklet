@@ -61,39 +61,45 @@ impl SystemAuthority {
     }
 
     pub fn snapshot(&self) -> ResourceSnapshot {
-        *self.resources.read().unwrap_or_else(|error| error.into_inner())
+        *self.resources.read().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn replace(&self, snapshot: ResourceSnapshot) {
-        *self.resources.write().unwrap_or_else(|error| error.into_inner()) = snapshot;
+        *self
+            .resources
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
     }
 
     pub fn observe_uptime(&self, seconds: u64) {
         self.resources
             .write()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .uptime_seconds = seconds;
     }
 
     pub fn observe_fork(&self) {
-        let mut snapshot = self.resources.write().unwrap_or_else(|error| error.into_inner());
+        let mut snapshot = self
+            .resources
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         snapshot.process_creations = snapshot.process_creations.saturating_add(1);
     }
 
     pub fn observe_free_memory(&self, bytes: u64) {
         self.resources
             .write()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .free_memory = bytes;
     }
 
     #[must_use]
     pub fn boot_identity(&self) -> [u8; 16] {
-        *self.boot.read().unwrap_or_else(|error| error.into_inner())
+        *self.boot.read().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn set_boot_key(&self, key: &[u8]) {
-        *self.boot.write().unwrap_or_else(|error| error.into_inner()) = Self::identity(key);
+        *self.boot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Self::identity(key);
         self.sequence.store(1, Ordering::Relaxed);
     }
 

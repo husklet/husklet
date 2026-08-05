@@ -21,7 +21,7 @@ impl ExecSlot {
     }
 
     pub fn install(&self, exec: Arc<dyn RuntimeExecPort>) -> Result<(), RuntimeAssemblyError> {
-        let mut current = self.current.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.is_some() {
             return Err(RuntimeAssemblyError::Construction(RuntimeDomain::Execution));
         }
@@ -31,11 +31,14 @@ impl ExecSlot {
 
     #[must_use]
     pub fn get(&self) -> Option<Arc<dyn RuntimeExecPort>> {
-        self.current.lock().unwrap_or_else(|error| error.into_inner()).clone()
+        self.current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub fn register(&self, process: ProcessId, exec: Arc<dyn RuntimeExecPort>) -> Result<(), RuntimeAssemblyError> {
-        let mut processes = self.processes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut processes = self.processes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if processes.contains_key(&process) {
             return Err(RuntimeAssemblyError::Construction(RuntimeDomain::Execution));
         }
@@ -47,7 +50,7 @@ impl ExecSlot {
     pub fn for_process(&self, process: ProcessId) -> Option<Arc<dyn RuntimeExecPort>> {
         self.processes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&process)
             .cloned()
             .or_else(|| self.get())
@@ -56,7 +59,7 @@ impl ExecSlot {
     pub fn unregister(&self, process: ProcessId) {
         self.processes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process);
     }
 }

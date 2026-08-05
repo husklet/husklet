@@ -31,9 +31,12 @@ pub(super) struct Activity {
 
 impl Activity {
     fn admit(self: &Arc<Self>) -> Admission {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.frozen {
-            state = self.changed.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         state.admitted += 1;
         Admission(Arc::clone(self))
@@ -52,13 +55,16 @@ impl Activity {
     }
 
     pub(super) fn thaw(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.frozen = false;
         self.changed.notify_all();
     }
 
     fn frozen(&self) -> bool {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).frozen
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .frozen
     }
 }
 
@@ -66,7 +72,7 @@ struct Admission(Arc<Activity>);
 
 impl Drop for Admission {
     fn drop(&mut self) {
-        let mut state = self.0.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.admitted -= 1;
         if state.admitted == 0 {
             self.0.changed.notify_all();
@@ -198,7 +204,11 @@ impl Registry {
 
     #[must_use]
     pub fn projected(&self) -> (Vec<ProviderFileCheckpoint>, ProviderClientCheckpoint) {
-        let state = self.store.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self
+            .store
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (state.current.files.clone(), state.current.client.clone())
     }
 
@@ -324,8 +334,15 @@ impl Registry {
 
     fn release(&self, resource: &Arc<Resource>) {
         let _admission = self.store.activity.admit();
-        let mut state = self.store.state.lock().unwrap_or_else(|error| error.into_inner());
-        let mut owners = resource.owners.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .store
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut owners = resource
+            .owners
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *owners -= 1;
         if *owners != 0 {
             return;

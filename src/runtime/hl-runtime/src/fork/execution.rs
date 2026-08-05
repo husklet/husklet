@@ -38,7 +38,7 @@ impl ExecutionForkParticipant {
     }
 
     pub fn take_child(&self, transaction: u64) -> Option<Arc<ExecutionMachine>> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.staged.remove(&transaction);
         state.children.remove(&transaction)
     }
@@ -46,7 +46,7 @@ impl ExecutionForkParticipant {
     pub fn child(&self, transaction: u64) -> Option<Arc<ExecutionMachine>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .children
             .get(&transaction)
             .cloned()
@@ -136,7 +136,7 @@ impl ForkParticipant for ExecutionForkParticipant {
         let staged = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .staged
             .remove(&context.transaction);
         if let Some(staged) = staged {
@@ -147,7 +147,7 @@ impl ForkParticipant for ExecutionForkParticipant {
         }
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .children
             .remove(&context.transaction);
     }

@@ -68,7 +68,7 @@ impl OwnershipGraph {
         if source_id == target_id {
             return Err(GraphError::InvalidArgument);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let nested = target.object().kind() == ObjectKind::Poll;
         if nested {
             self.validate_edge(&state, source_id, target_id)?;
@@ -84,7 +84,7 @@ impl OwnershipGraph {
     pub fn delete(&self, source: &OperationLease, epoll: &Epoll, target: &OperationLease) -> Result<(), GraphError> {
         let source_id = source.description_identity();
         let target_id = target.description_identity();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         epoll.delete(target)?;
         if target.object().kind() == ObjectKind::Poll {
             Self::remove_edge(&mut state, source_id, target_id);
@@ -93,7 +93,7 @@ impl OwnershipGraph {
     }
 
     pub fn close(&self, identity: DescriptionIdentity) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.edges.remove(&identity);
         for targets in state.edges.values_mut() {
             targets.remove(&identity);
@@ -109,12 +109,15 @@ impl OwnershipGraph {
                 .or_insert_with(BTreeMap::new)
                 .insert(edge.target, edge.watches);
         }
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).edges = edges;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .edges = edges;
     }
 
     #[must_use]
     pub fn snapshot(&self) -> GraphSnapshot {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let edges = state
             .edges
             .iter()

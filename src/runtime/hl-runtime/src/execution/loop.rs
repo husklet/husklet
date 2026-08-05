@@ -57,7 +57,7 @@ impl<M: ExecutionInstructionMemory> RuntimeExecutionLoop<M> {
     }
 
     pub fn run_slice(&self) -> RuntimeExecutionOutcome {
-        let mut memory = self.memory.lock().unwrap_or_else(|error| error.into_inner());
+        let mut memory = self.memory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match self
             .machine
             .run_slice(self.cache_epoch, self.slice_budget, &mut *memory)

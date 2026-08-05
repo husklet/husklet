@@ -24,7 +24,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             signal
         };
         let pass = {
-            let mut pass = self.trace_signal_pass.lock().unwrap_or_else(|error| error.into_inner());
+            let mut pass = self
+                .trace_signal_pass
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if *pass == Some(u32::from(signal.get())) {
                 *pass = None;
                 true
@@ -96,7 +99,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             .enqueue_signal(PendingTarget::Thread(self.thread), SignalInfo::bare(signal))
             .map_err(|_| Errno::ESRCH)?;
         if queued {
-            *self.trace_signal_pass.lock().unwrap_or_else(|error| error.into_inner()) = Some(raw);
+            *self
+                .trace_signal_pass
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(raw);
         }
         Ok(())
     }

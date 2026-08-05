@@ -71,7 +71,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             || socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
         match self.write_socket(&socket, &input, nonblocking) {
             Ok(count) => LinuxResult::Value(count as u64),
@@ -170,7 +170,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             || socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
         match host.send_to_route(*token, &input, self.connect_route(address), nonblocking) {
             Ok(count) => LinuxResult::Value(count as u64),
@@ -238,7 +238,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             || socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
         let mut output = vec![0; length];
         let received = self.receive_from_socket(
@@ -286,7 +286,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let record_oriented = socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type
             != hl_network::SocketType::Stream;
         let reported = if record_oriented && flags & MSG_TRUNC != 0 {
@@ -315,13 +315,13 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let socket_type = socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .socket_type;
         let requested_source = if source_requested {
             socket
                 .snapshot
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .peer
                 .clone()
         } else {
@@ -396,7 +396,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let source = socket
             .snapshot
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .local
             .clone()
             .and_then(|address| match address {
@@ -412,7 +412,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         length: usize,
         has_destination: bool,
     ) -> Result<(), Errno> {
-        let snapshot = socket.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        let snapshot = socket
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if snapshot.socket_type != hl_network::SocketType::Datagram {
             return Ok(());
         }

@@ -77,7 +77,12 @@ impl RuntimeSafepoint {
         original: u64,
         exit: bool,
     ) -> Result<TraceBoundary, TraceError> {
-        if self.pending.lock().unwrap_or_else(|error| error.into_inner()).is_some() {
+        if self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
             return Ok(TraceBoundary::Park);
         }
         let event = match self.tasks.trace_syscall_stop(self.process, exit) {
@@ -87,7 +92,7 @@ impl RuntimeSafepoint {
         };
         self.publish(cpu, original)?;
         let kind = if exit { PendingKind::Exit } else { PendingKind::Entry };
-        *self.pending.lock().unwrap_or_else(|error| error.into_inner()) = Some(PendingStop { event, kind });
+        *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingStop { event, kind });
         Ok(TraceBoundary::Park)
     }
 
@@ -97,11 +102,16 @@ impl RuntimeSafepoint {
         original: u64,
         event: TraceEvent,
     ) -> Result<TraceBoundary, TraceError> {
-        if self.pending.lock().unwrap_or_else(|error| error.into_inner()).is_some() {
+        if self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
             return Err(TraceError::AlreadyStopped);
         }
         self.publish(cpu, original)?;
-        *self.pending.lock().unwrap_or_else(|error| error.into_inner()) = Some(PendingStop {
+        *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingStop {
             event,
             kind: PendingKind::Signal,
         });
@@ -109,7 +119,7 @@ impl RuntimeSafepoint {
     }
 
     pub fn resume_boundary(&self, cpu: &mut ExecutionCpuSnapshot) -> Result<TraceBoundary, TraceError> {
-        let pending = *self.pending.lock().unwrap_or_else(|error| error.into_inner());
+        let pending = *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(pending) = pending else {
             return Ok(TraceBoundary::Continue);
         };
@@ -117,7 +127,7 @@ impl RuntimeSafepoint {
             return Ok(TraceBoundary::Park);
         };
         self.apply(cpu)?;
-        *self.pending.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         Ok(match command {
             TraceResume::Kill => TraceBoundary::Kill,
             TraceResume::Continue(signal) | TraceResume::Syscall(signal) | TraceResume::Detach(signal)

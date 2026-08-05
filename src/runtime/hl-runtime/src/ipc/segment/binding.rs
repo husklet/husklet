@@ -42,7 +42,7 @@ pub(crate) struct OwnedCommittedBindings {
 
 impl OwnedPreparedBindings {
     pub(crate) fn commit(self) -> Result<OwnedCommittedBindings, MappingError> {
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *mappings != self.expected {
             return Err(MappingError::Invariant);
         }
@@ -59,7 +59,7 @@ impl OwnedPreparedBindings {
 
 impl OwnedCommittedBindings {
     pub(crate) fn rollback(self) -> Result<(), MappingError> {
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *mappings != self.published {
             return Err(MappingError::Invariant);
         }
@@ -72,7 +72,7 @@ impl OwnedCommittedBindings {
 
 impl<'a> PreparedBindingSet<'a> for PreparedBindings<'a> {
     fn commit(self: Box<Self>) -> Result<Box<dyn CommittedBindingSet + 'a>, MappingError> {
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *mappings != self.expected {
             return Err(MappingError::Invariant);
         }
@@ -89,7 +89,7 @@ impl<'a> PreparedBindingSet<'a> for PreparedBindings<'a> {
 
 impl CommittedBindingSet for CommittedBindings<'_> {
     fn rollback(self: Box<Self>) -> Result<(), MappingError> {
-        let mut mappings = self.mappings.lock().unwrap_or_else(|error| error.into_inner());
+        let mut mappings = self.mappings.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *mappings != self.published {
             return Err(MappingError::Invariant);
         }

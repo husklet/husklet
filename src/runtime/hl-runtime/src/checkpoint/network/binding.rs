@@ -117,7 +117,7 @@ impl<H: CheckpointHost> ObjectBindings<H> {
     }
 
     fn abort_stage(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.pending.clear();
         state.phase = Phase::Staging;
     }
@@ -481,10 +481,13 @@ impl<H: CheckpointHost> NetworkCatalogRestore for RestoreTransaction<H> {
         }
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pending
             .clear();
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).phase = Phase::Staging;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .phase = Phase::Staging;
         self.close_rebound();
     }
 

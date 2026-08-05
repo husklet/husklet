@@ -110,7 +110,7 @@ impl ObjectBindings {
     }
 
     pub fn unregister_object(&self, identity: u64, id: EventObjectId) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.identities.get(&identity) == Some(&id) {
             state.identities.remove(&identity);
             state.inotify_sources.remove(&identity);
@@ -120,7 +120,7 @@ impl ObjectBindings {
     pub fn object_id(&self, identity: u64) -> Option<EventObjectId> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .identities
             .get(&identity)
             .copied()
@@ -146,7 +146,7 @@ impl ObjectBindings {
     pub fn inotify_source(&self, identity: u64) -> Option<EventResourceKey> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .inotify_sources
             .get(&identity)
             .copied()
@@ -292,7 +292,7 @@ impl BindingRestore for ObjectBindings {
     }
 
     fn rollback(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.pending.clear();
         let rebound = std::mem::take(&mut state.rebound);
         state.phase = Phase::Staging;
@@ -341,7 +341,10 @@ impl PendingObject {
     }
 
     fn bound(&self) -> bool {
-        self.object.read().unwrap_or_else(|error| error.into_inner()).is_some()
+        self.object
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
     }
 
     fn current(&self) -> Result<Arc<dyn OpenFileDescription>, ObjectError> {

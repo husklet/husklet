@@ -93,7 +93,10 @@ impl SafeRuntimeExec {
         plan: &ExecPlan,
     ) -> Result<PreparedRuntimeExec, RuntimeExecError> {
         {
-            let mut active = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+            let mut active = self
+                .transaction
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if *active {
                 return Err(RuntimeExecError::Failed);
             }
@@ -107,7 +110,10 @@ impl SafeRuntimeExec {
                 complete: false,
             }),
             Err(error) => {
-                *self.transaction.lock().unwrap_or_else(|lock| lock.into_inner()) = false;
+                *self
+                    .transaction
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
                 Err(error)
             }
         }
@@ -161,7 +167,10 @@ impl PreparedRuntimeExec {
     }
 
     fn release(&self) {
-        *self.transaction.lock().unwrap_or_else(|error| error.into_inner()) = false;
+        *self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
     }
 }
 
@@ -214,7 +223,7 @@ impl<I> Image<I> {
 
     #[must_use]
     pub fn current(&self) -> (u64, Arc<I>) {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         (state.generation, Arc::clone(&state.current))
     }
 
@@ -245,7 +254,7 @@ impl<I> PreparedProcessImage<I> {
 
 impl<I: Send + Sync + 'static> PreparedExecParticipant for PreparedProcessImage<I> {
     fn publish(&mut self) -> Result<(), RuntimeExecError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.generation != self.expected || self.previous.is_some() {
             return Err(RuntimeExecError::Failed);
         }
@@ -259,7 +268,7 @@ impl<I: Send + Sync + 'static> PreparedExecParticipant for PreparedProcessImage<
         let Some(previous) = self.previous.take() else {
             return;
         };
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.current = previous;
         state.generation = self.expected;
     }

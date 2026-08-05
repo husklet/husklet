@@ -58,7 +58,7 @@ impl<H, F, R> MemoryForkParticipant<H, F, R> {
     pub fn child(&self, transaction: u64) -> Option<Arc<MappingCoordinator<H>>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .get(&transaction)
             .cloned()
@@ -67,7 +67,7 @@ impl<H, F, R> MemoryForkParticipant<H, F, R> {
     pub fn take_child(&self, transaction: u64) -> Option<Arc<MappingCoordinator<H>>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .committed
             .remove(&transaction)
     }
@@ -76,7 +76,7 @@ impl<H, F, R> MemoryForkParticipant<H, F, R> {
     pub fn staged_count(&self) -> usize {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .staged
             .len()
     }
@@ -93,7 +93,7 @@ where
     }
 
     fn prepare(&self, context: ForkContext) -> Result<u64, ()> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let reservation = state.next_reservation;
         state.next_reservation = state.next_reservation.checked_add(1).ok_or(())?;
         state.staged.insert(context.transaction, (reservation, None));
@@ -138,7 +138,7 @@ where
     }
 
     fn commit(&self, context: ForkContext, reservation: u64) -> Result<(), ()> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (actual, child) = state.staged.remove(&context.transaction).ok_or(())?;
         if actual != reservation {
             return Err(());
@@ -148,7 +148,7 @@ where
     }
 
     fn rollback(&self, context: ForkContext, _: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.staged.remove(&context.transaction);
         state.committed.remove(&context.transaction);
     }
@@ -167,7 +167,7 @@ where
             let host = self.host.child_host(context)?;
             Arc::new(self.parent.fork_restore(host).map_err(|_| ())?)
         };
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.staged.get_mut(&context.transaction).ok_or(())?;
         if entry.0 != reservation || entry.1.is_some() {
             return Err(());

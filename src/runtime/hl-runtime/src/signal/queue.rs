@@ -31,14 +31,14 @@ impl SignalActivityWake for ActivityWake {
 impl ObserverEntry {
     fn notify(&self) {
         {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.active {
                 return;
             }
             state.callbacks += 1;
         }
         self.observer.signal_available();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.callbacks -= 1;
         if state.callbacks == 0 {
             self.quiescent.notify_all();
@@ -46,10 +46,13 @@ impl ObserverEntry {
     }
 
     fn quiesce(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.active = false;
         while state.callbacks != 0 {
-            state = self.quiescent.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self
+                .quiescent
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -93,7 +96,11 @@ impl TaskSignalQueue {
 
     pub fn quiesce(&self) {
         let entries = {
-            let mut registry = self.inner.observers.lock().unwrap_or_else(|error| error.into_inner());
+            let mut registry = self
+                .inner
+                .observers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             registry.closed = true;
             std::mem::take(&mut registry.entries)
         };
@@ -172,7 +179,11 @@ impl SignalQueue for TaskSignalQueue {
             quiescent: Condvar::new(),
         });
         let token = {
-            let mut registry = self.inner.observers.lock().unwrap_or_else(|error| error.into_inner());
+            let mut registry = self
+                .inner
+                .observers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if registry.closed {
                 return Err(SignalQueueError::Canceled);
             }
@@ -257,7 +268,7 @@ impl SignalSubscription for TaskSignalSubscription {
             queue
                 .observers
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .entries
                 .remove(&self.token);
         }

@@ -61,11 +61,14 @@ impl IpcCatalog {
 
     #[must_use]
     pub fn current(&self) -> Arc<HostIpcCatalog> {
-        self.current.read().unwrap_or_else(|error| error.into_inner()).clone()
+        self.current
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn replace(&self, catalog: Arc<HostIpcCatalog>) -> Arc<HostIpcCatalog> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         std::mem::replace(&mut *current, catalog)
     }
 }
@@ -203,7 +206,7 @@ impl CheckpointParticipant for IpcCheckpointParticipant {
         let state = self
             .staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
         if let Some(mut state) = state {
             if state.committed {
@@ -233,7 +236,7 @@ impl CheckpointParticipant for IpcCheckpointParticipant {
     fn finish(&self, reservation: u64) {
         self.staged
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
     }
 }

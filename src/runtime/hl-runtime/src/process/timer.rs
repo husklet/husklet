@@ -74,7 +74,7 @@ impl TimerRegistry {
     }
 
     fn allocate(&self, clock: ClockIdentity, event: Option<TimerEvent>) -> Option<usize> {
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = slots.iter().position(Option::is_none)?;
         slots[id] = Some(Timer {
             clock,
@@ -93,7 +93,7 @@ impl TimerRegistry {
         usize::try_from(id).ok().and_then(|id| {
             self.slots
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(id)
                 .copied()
                 .flatten()
@@ -111,7 +111,7 @@ impl TimerRegistry {
         let Ok(id) = usize::try_from(id) else {
             return false;
         };
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(slot) = slots.get_mut(id) else {
             return false;
         };
@@ -129,7 +129,7 @@ impl TimerRegistry {
         let removed = self
             .slots
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_mut(id)
             .and_then(Option::take);
         if let (Some(timer), Some(delivery)) = (removed, &self.delivery) {
@@ -143,7 +143,7 @@ impl TimerRegistry {
 
     pub fn clear(&self) {
         let old = {
-            let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+            let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             std::mem::replace(&mut *slots, [None; TIMER_LIMIT])
         };
         if let Some(delivery) = &self.delivery {
@@ -166,7 +166,7 @@ impl TimerRegistry {
     pub(crate) fn allocated_for_test(&self) -> usize {
         self.slots
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .flatten()
             .count()
@@ -177,7 +177,7 @@ impl TimerRegistry {
         let weak = Arc::downgrade(self);
         let callback = Arc::new(move || Self::expire(&weak, id, generation));
         let token = delivery.alarms.schedule_callback(deadline, callback)?;
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(timer) = slots.get_mut(id).and_then(Option::as_mut) else {
             delivery.alarms.cancel_callback(token);
             return Ok(());
@@ -243,7 +243,7 @@ impl TimerRegistry {
         let Some(delivery) = &registry.delivery else { return };
         let now = delivery.alarms.schedule_callback_now();
         let next = {
-            let mut slots = registry.slots.lock().unwrap_or_else(|error| error.into_inner());
+            let mut slots = registry.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(timer) = slots.get_mut(id).and_then(Option::as_mut) else {
                 return;
             };
@@ -290,7 +290,7 @@ impl TimerRegistry {
         };
         if let Some(next) = next {
             if registry.arm(id, generation, next).is_err() {
-                let mut slots = registry.slots.lock().unwrap_or_else(|error| error.into_inner());
+                let mut slots = registry.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(timer) = slots.get_mut(id).and_then(Option::as_mut) {
                     if timer.generation == generation && timer.deadline == Some(next) {
                         timer.deadline = None;

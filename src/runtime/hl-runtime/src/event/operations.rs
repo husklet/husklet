@@ -44,7 +44,7 @@ impl OperationRegistry {
     pub fn retire(&self, identity: DescriptionIdentity) -> bool {
         self.operations
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&identity)
             .is_some()
     }
@@ -71,7 +71,10 @@ impl OperationRegistry {
     }
 
     fn register(&self, identity: DescriptionIdentity, operation: Operation) -> Result<(), OperationError> {
-        let mut operations = self.operations.lock().unwrap_or_else(|error| error.into_inner());
+        let mut operations = self
+            .operations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if operations.contains_key(&identity) {
             return Err(OperationError::AlreadyRegistered);
         }
@@ -82,7 +85,7 @@ impl OperationRegistry {
     fn lookup(&self, identity: DescriptionIdentity) -> Result<Operation, OperationError> {
         self.operations
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&identity)
             .cloned()
             .ok_or(OperationError::NotFound)

@@ -312,7 +312,7 @@ mod test {
         type Projection = u64;
 
         fn read(&self, range: AddressRange, output: &mut [u8], _: Protection) -> Result<(), MemoryError> {
-            let bytes = self.bytes.lock().unwrap_or_else(|error| error.into_inner());
+            let bytes = self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             for (offset, byte) in output.iter_mut().enumerate() {
                 *byte = bytes
                     .get(&range.start().get().wrapping_add(offset as u64))
@@ -326,7 +326,7 @@ mod test {
             let token = self.next.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
             self.writes
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(token, range);
             Ok(token)
         }
@@ -335,13 +335,13 @@ mod test {
             let range = self
                 .writes
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&reservation)
                 .ok_or(MemoryError::InvariantViolation)?;
             if range.length() != input.len() as u64 {
                 return Err(MemoryError::InvariantViolation);
             }
-            let mut bytes = self.bytes.lock().unwrap_or_else(|error| error.into_inner());
+            let mut bytes = self.bytes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             for (offset, byte) in input.iter().enumerate() {
                 bytes.insert(range.start().get().wrapping_add(offset as u64), *byte);
             }
@@ -351,7 +351,7 @@ mod test {
         fn rollback_write(&self, reservation: u64) {
             self.writes
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&reservation);
         }
     }

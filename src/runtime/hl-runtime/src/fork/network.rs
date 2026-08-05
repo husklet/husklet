@@ -40,7 +40,7 @@ impl NetworkForkParticipant {
     }
 
     pub fn take_child(&self, transaction: u64) -> Option<Arc<NetworkCatalog>> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.children.remove(&transaction)
     }
 
@@ -48,7 +48,7 @@ impl NetworkForkParticipant {
     pub fn child(&self, transaction: u64) -> Option<Arc<NetworkCatalog>> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .children
             .get(&transaction)
             .cloned()
@@ -58,7 +58,7 @@ impl NetworkForkParticipant {
     pub(crate) fn staged_count(&self) -> usize {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .staged
             .len()
     }
@@ -127,7 +127,7 @@ impl ForkParticipant for NetworkForkParticipant {
     }
 
     fn rollback(&self, context: ForkContext, _: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.staged.remove(&context.transaction);
         state.children.remove(&context.transaction);
     }

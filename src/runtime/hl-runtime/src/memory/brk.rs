@@ -108,7 +108,7 @@ impl<H: MappingHost> BrkRegion<H> {
 
     #[must_use]
     pub fn set(&self, requested: u64) -> u64 {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let old = state.snapshot.current;
         if requested == 0 {
             return old.get();
@@ -174,7 +174,10 @@ impl<H: MappingHost> BrkRegion<H> {
 
     #[must_use]
     pub fn snapshot(&self) -> BrkSnapshot {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).snapshot
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot
     }
 
     fn request(start: GuestAddress, length: u64, state: BrkSnapshot) -> MapRequest {
