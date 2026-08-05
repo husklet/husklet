@@ -119,6 +119,11 @@ impl From<hl_container::RestartPolicy> for RestartPolicy {
 }
 
 /// Runtime-effective subset of Docker's container-update request.
+///
+/// Docker update clients send zero-valued `Memory` and `NanoCpus` members when
+/// changing unrelated settings, so zero preserves the stored limits here.
+/// `PidsLimit` has a distinct Docker contract: explicit zero and minus one both
+/// select the unlimited process count. Create uses its own initial-value mapping.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Update {
@@ -317,6 +322,7 @@ mod tests {
         let settings = update.settings().unwrap();
         assert_eq!(settings.memory_bytes, None);
         assert_eq!(settings.cpu_count, None);
+        assert_eq!(settings.process_count, None);
         assert_eq!(settings.restart, Some(hl_container::RestartPolicy::Never));
 
         let effective: Update = serde_json::from_value(serde_json::json!({
@@ -327,5 +333,13 @@ mod tests {
         let settings = effective.settings().unwrap();
         assert_eq!(settings.memory_bytes, Some(1048576));
         assert_eq!(settings.cpu_count, Some(2));
+
+        for pids_limit in [0, -1] {
+            let update: Update = serde_json::from_value(serde_json::json!({
+                "PidsLimit": pids_limit
+            }))
+            .unwrap();
+            assert_eq!(update.settings().unwrap().process_count, Some(0));
+        }
     }
 }

@@ -60,6 +60,44 @@ async fn container_update_persists_effective_settings_and_rejects_unknown_fields
         hl_container::RestartPolicy::OnFailure { maximum: Some(3) }
     );
 
+    client
+        .containers()
+        .update(
+            &created.id,
+            &hl_client::model::Update {
+                memory: Some(0),
+                nano_cpus: Some(0),
+                restart_policy: Some(hl_client::model::RestartPolicy {
+                    name: "always".into(),
+                    maximum_retry_count: 0,
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let stored = containers.inspect(&created.id).await.unwrap();
+    assert_eq!(stored.spec.resources.memory_bytes, 8192);
+    assert_eq!(stored.spec.resources.process_count, 12);
+    assert_eq!(stored.spec.resources.cpu_count, 2);
+    assert_eq!(stored.spec.restart, hl_container::RestartPolicy::Always);
+
+    for pids_limit in [0, -1] {
+        client
+            .containers()
+            .update(
+                &created.id,
+                &hl_client::model::Update {
+                    pids_limit: Some(pids_limit),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let stored = containers.inspect(&created.id).await.unwrap();
+        assert_eq!(stored.spec.resources.process_count, 0);
+    }
+
     let unsupported = client
         .containers()
         .update(
