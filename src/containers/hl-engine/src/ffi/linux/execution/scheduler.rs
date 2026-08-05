@@ -1095,28 +1095,27 @@ impl GuestExecutor {
         pool: &mut NativePool,
         native_budget: u64,
     ) -> Option<StepOutcome> {
-        let mut x86 = false;
-        let detected = run.machine.handle_syscall(1, |snapshot| {
-            x86 = matches!(snapshot, ExecutionCpuSnapshot::X86_64(_));
-            StepOutcome::Continue
-        });
-        if detected != StepOutcome::Continue {
-            return Some(detected);
-        }
-        if x86 {
-            return Self::native_x86(run, memory, pool, native_budget);
+        enum NativeCoordinates {
+            Aarch64 { pc: u64, stack: u64 },
+            X86_64,
         }
         let mut coordinates = None;
         let observed = run.machine.handle_syscall(1, |snapshot| {
-            if let ExecutionCpuSnapshot::Aarch64(cpu) = snapshot {
-                coordinates = Some((cpu.pc, cpu.sp));
-            }
+            coordinates = Some(match snapshot {
+                ExecutionCpuSnapshot::Aarch64(cpu) => NativeCoordinates::Aarch64 {
+                    pc: cpu.pc,
+                    stack: cpu.sp,
+                },
+                ExecutionCpuSnapshot::X86_64(_) => NativeCoordinates::X86_64,
+            });
             StepOutcome::Continue
         });
         if observed != StepOutcome::Continue {
             return Some(observed);
         }
-        let (pc, stack) = coordinates?;
+        let NativeCoordinates::Aarch64 { pc, stack } = coordinates? else {
+            return Self::native_x86(run, memory, pool, native_budget);
+        };
         let lease = super::operand::ImageMemory::lease(memory);
         let mappings = lease.mappings();
         let executable = mappings
