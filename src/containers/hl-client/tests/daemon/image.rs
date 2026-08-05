@@ -47,6 +47,18 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
     assert_eq!(inspected.os, "linux");
     assert_eq!(inspected.architecture, "arm64");
     assert_eq!(inspected.created, "2026-07-15T12:34:56Z");
+    assert_eq!(client.images().inspect(&inspected.id).await.unwrap().id, inspected.id);
+    assert_eq!(
+        client.images().inspect(&inspected.id[..19]).await.unwrap().id,
+        inspected.id
+    );
+    assert!(
+        client
+            .images()
+            .inspect("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+            .await
+            .is_err()
+    );
     let distribution = client.images().distribution("scenario/fixture:v1").await.unwrap();
     assert_ne!(distribution.descriptor.digest().to_string(), inspected.id);
     assert_eq!(distribution.platforms, [Platform::linux_arm64()]);

@@ -7,7 +7,7 @@ use hl_container::{
     Console, ContainerSpec, Error as ContainerError, ExitStatus, Isolation, Mount, NetworkDriver, NetworkSpec,
     Resources, Signal, Streams, Subnet,
 };
-use hl_images::{Reference, RuntimeOverrides};
+use hl_images::RuntimeOverrides;
 use http_body_util::BodyExt as _;
 use serde::Deserialize;
 use std::collections::BTreeMap;

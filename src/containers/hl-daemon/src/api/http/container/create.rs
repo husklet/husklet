@@ -7,14 +7,8 @@ pub(in super::super) struct CreateQuery {
 
 impl DockerState {
     async fn unpack(&self, value: &str) -> ApiResult<(hl_images::UnpackedImage, hl_images::Metadata)> {
-        let reference: Reference = value
-            .parse()
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid image reference: {error}")))?;
         let images = self.containers.images().map_err(ApiError::container)?;
-        let image = images
-            .resolve(&reference)
-            .map_err(ApiError::image)?
-            .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {value}")))?;
+        let image = self.find_image(value).await?;
         let platform = self.platform.clone();
         tokio::task::spawn_blocking(move || {
             let unpacked = images.unpack(&image, &platform)?;

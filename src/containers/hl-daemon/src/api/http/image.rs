@@ -136,22 +136,43 @@ impl DockerState {
         let platform = self.platform.clone();
         let candidates = records.clone();
         let wanted = name.to_owned();
+        enum IdLookup {
+            Found(hl_images::Image),
+            Missing,
+            Ambiguous,
+        }
         let selected = tokio::task::spawn_blocking(move || {
-            candidates
-                .into_iter()
-                .map(|image| images.image_id(&image, &platform).map(|id| (image, id)))
-                .find_map(|result| match result {
-                    Ok((image, id)) if id.to_string() == wanted => Some(Ok(image)),
-                    Ok(_) => None,
-                    Err(error) => Some(Err(error)),
-                })
-                .transpose()
+            let Some(prefix) = docker_id_prefix(&wanted) else {
+                return Ok(IdLookup::Missing);
+            };
+            let mut identities = BTreeMap::new();
+            for image in candidates {
+                let id = images.image_id(&image, &platform)?.to_string();
+                identities.entry(id).or_insert(image);
+            }
+            match unique_image_id(identities.keys().map(String::as_str), &prefix) {
+                Ok(Some(id)) => {
+                    let id = id.to_owned();
+                    Ok(IdLookup::Found(
+                        identities.remove(&id).expect("selected catalog identity"),
+                    ))
+                }
+                Ok(None) => Ok(IdLookup::Missing),
+                Err(()) => Ok(IdLookup::Ambiguous),
+            }
         })
         .await
         .map_err(ApiError::task)?
         .map_err(ApiError::image)?;
-        if let Some(image) = selected {
-            return Ok(image.clone());
+        match selected {
+            IdLookup::Found(image) => return Ok(image),
+            IdLookup::Ambiguous => {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    format!("image ID prefix is ambiguous: {name}"),
+                ));
+            }
+            IdLookup::Missing => {}
         }
         let reference: Reference = name
             .parse()
@@ -161,6 +182,25 @@ impl DockerState {
             .into_iter()
             .find(|image| image.name.to_string() == canonical)
             .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {name}")))
+    }
+}
+
+fn docker_id_prefix(value: &str) -> Option<String> {
+    let encoded = value.strip_prefix("sha256:").unwrap_or(value);
+    (12..=64)
+        .contains(&encoded.len())
+        .then_some(encoded)
+        .filter(|encoded| encoded.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(|encoded| format!("sha256:{}", encoded.to_ascii_lowercase()))
+}
+
+fn unique_image_id<'a>(identities: impl IntoIterator<Item = &'a str>, prefix: &str) -> Result<Option<&'a str>, ()> {
+    let mut matches = identities.into_iter().filter(|id| id.starts_with(prefix));
+    let selected = matches.next();
+    if matches.next().is_some() {
+        Err(())
+    } else {
+        Ok(selected)
     }
 }
 
@@ -252,27 +292,29 @@ pub(super) use registry::{commit, distribution, pull, search};
 /// Axum's single-segment `:name` routes own short names and image IDs. Docker sends
 /// repository-qualified names as literal path segments, so this terminal wildcard preserves the
 /// complete reference and separates only the operation suffix.
-pub(super) async fn named(
-    State(state): State<DockerState>,
-    Path(path): Path<String>,
-    request: Request,
-) -> Response {
+pub(super) async fn named(State(state): State<DockerState>, Path(path): Path<String>, request: Request) -> Response {
     let method = request.method().clone();
     let uri = request.uri().clone();
     let headers = request.headers().clone();
     match method {
         Method::GET => {
             if let Some(name) = path.strip_suffix("/json").filter(|name| !name.is_empty()) {
-                return identity::inspect(State(state), Path(name.to_owned())).await.into_response();
+                return identity::inspect(State(state), Path(name.to_owned()))
+                    .await
+                    .into_response();
             }
             if let Some(name) = path.strip_suffix("/history").filter(|name| !name.is_empty()) {
-                return identity::history(State(state), Path(name.to_owned())).await.into_response();
+                return identity::history(State(state), Path(name.to_owned()))
+                    .await
+                    .into_response();
             }
         }
         Method::POST => {
             if let Some(name) = path.strip_suffix("/tag").filter(|name| !name.is_empty()) {
                 return match Query::<identity::TagQuery>::try_from_uri(&uri) {
-                    Ok(query) => identity::tag(State(state), Path(name.to_owned()), query).await.into_response(),
+                    Ok(query) => identity::tag(State(state), Path(name.to_owned()), query)
+                        .await
+                        .into_response(),
                     Err(rejection) => rejection.into_response(),
                 };
             }

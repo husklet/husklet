@@ -1,6 +1,32 @@
-use super::{Fields, ImageSelection, ListQuery, Prune, RemoveQuery, build_image_summaries, removal_conflicts};
+use super::{
+    Fields, ImageSelection, ListQuery, Prune, RemoveQuery, build_image_summaries, docker_id_prefix, removal_conflicts,
+    unique_image_id,
+};
 use axum::http::StatusCode;
 use std::collections::BTreeMap;
+
+#[test]
+fn docker_id_prefix_syntax_preserves_named_references() {
+    assert_eq!(
+        docker_id_prefix("sha256:0123456789ab"),
+        Some("sha256:0123456789ab".into())
+    );
+    assert_eq!(
+        docker_id_prefix("0123456789ABCDEF"),
+        Some("sha256:0123456789abcdef".into())
+    );
+    assert_eq!(docker_id_prefix("scenario/fixture:v1"), None);
+    assert_eq!(docker_id_prefix("deadbeef"), None);
+    assert_eq!(docker_id_prefix("sha256:not-hexadecimal"), None);
+}
+
+#[test]
+fn image_id_prefix_requires_one_config_identity() {
+    let ids = ["sha256:0123456789abcdef", "sha256:fedcba9876543210"];
+    assert_eq!(unique_image_id(ids, "sha256:0123456789ab"), Ok(Some(ids[0])));
+    assert_eq!(unique_image_id(ids, "sha256:111111111111"), Ok(None));
+    assert_eq!(unique_image_id(ids, "sha256:"), Err(()));
+}
 
 #[test]
 fn image_queries_reject_meaningful_unknown_options_before_work() {
