@@ -1453,10 +1453,24 @@ int main(void) {
     run_state.registers[2] = UINT64_C(0x2222222222222222);
     run_state.registers[3] = UINT64_C(0x3333333333333333);
     run_state.registers[4] = UINT64_C(0x4444444444444444);
+    run_state.dirty_first = UINT64_MAX;
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 2);
     CHECK(views.values[0][0] == run_state.registers[3]);
     CHECK(views.values[1][0] == run_state.registers[4]);
+    CHECK(run_state.dirty_count == 3);
+    for (size_t index = 0; index < 3; index++) {
+        size_t view = index & 1u;
+        uint64_t owner_length = index < 2 ? sizeof(uint64_t) : views.lengths[view];
+        CHECK(run_state.dirty_records[index][0] == views.guests[view]);
+        CHECK(run_state.dirty_records[index][1] == views.guests[view] + owner_length);
+        CHECK(run_state.dirty_records[index][2] == views.guests[view]);
+        CHECK(run_state.dirty_records[index][3] == views.guests[view] + sizeof(uint64_t));
+    }
+    CHECK(run_state.dirty_view_first == views.guests[1] &&
+          run_state.dirty_view_last == views.guests[1] + views.lengths[1] &&
+          run_state.dirty_first == views.guests[1] &&
+          run_state.dirty_last == views.guests[1] + sizeof(uint64_t));
 
     const uint32_t boundary_words[] = {LDR_X(0, 10), LDR_X(1, 11), 0xd4000001u};
     const hl_a64_source_span boundary_span = {

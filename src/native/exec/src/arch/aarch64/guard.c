@@ -364,9 +364,11 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
  * selected view as the active write owner so exact dirty intervals retain the
  * correct projection identity. The slow callback remains authoritative for a
  * view absent from this bounded, generation-qualified cache. */
-static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, const uint8_t *resume) {
+static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
+                        const uint8_t *resume) {
     uint32_t *inactive[4];
     uint32_t *next[4][4];
+    uint32_t *selected[4];
     uint8_t *starts[4];
 
     hl_a64_addi(assembler, 9, 16, (unsigned)bytes);
@@ -406,31 +408,86 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, const uint8
         next[index][3] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
 
-        hl_a64_ldr(assembler, 18, CPU, base);
-        hl_a64_str(assembler, 18, CPU, OFFSET_FIRST);
-        hl_a64_ldr(assembler, 18, CPU, base + (int)sizeof(uint64_t));
-        hl_a64_str(assembler, 18, CPU, OFFSET_LAST);
-        hl_a64_ldr(assembler, 17, CPU, base + 2 * (int)sizeof(uint64_t));
-        hl_a64_str(assembler, 17, CPU, OFFSET_DELTA);
-        hl_a64_emit32(assembler, 0x8B110210u); /* add projected EA */
-        hl_a64_ldr(assembler, 18, CPU, base + 3 * (int)sizeof(uint64_t));
-        hl_a64_str(assembler, 18, CPU, OFFSET_PERMISSIONS);
-        int publication = OFFSET_READ_VIEW_PUBLICATION + (int)(index * 2u * sizeof(uint64_t));
-        hl_a64_ldr(assembler, 18, CPU, publication);
-        hl_a64_str(assembler, 18, CPU, OFFSET_WRITE_POLICY);
-        hl_a64_ldr(assembler, 18, CPU, publication + (int)sizeof(uint64_t));
-        hl_a64_str(assembler, 18, CPU, OFFSET_WRITE_INDEX);
-        hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
-        hl_a64_emit32(assembler, 0xD51B4200u | 17u);
-        hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-        uint32_t *retry = (uint32_t *)assembler->cursor;
+        hl_a64_movz(assembler, 9, index, 0);
+        selected[index] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
-        if (!hl_a64_assembler_ok(assembler)) return;
-        branch(assembler, retry, resume);
     }
+
+    uint32_t *to_miss = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    uint8_t *selected_target = assembler->cursor;
+    /* A cache hit can switch away from an owner with completed stores. Retain
+     * that exact owner before changing any active-view field. Capacity is
+     * decided before the retried host store, so overflow cannot lose either
+     * the old interval or partially publish the new one. x9 keeps the selected
+     * immutable-view index while x17/x18 archive the old owner. */
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_movconst(assembler, 18, UINT64_MAX);
+    hl_a64_emit32(assembler, UINT32_C(0xeb12023f)); /* cmp dirty_first,#UINT64_MAX */
+    uint32_t *empty = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
+    hl_a64_emit32(assembler, UINT32_C(0xf100423f)); /* cmp dirty_count,#16 */
+    uint32_t *overflow = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_addi(assembler, 18, CPU, OFFSET_DIRTY_RECORDS);
+    hl_a64_addlsl4(assembler, 18, 18, 17);
+    hl_a64_addlsl4(assembler, 18, 18, 17);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_VIEW_FIRST);
+    hl_a64_str(assembler, 17, 18, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_VIEW_LAST);
+    hl_a64_str(assembler, 17, 18, 8);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_str(assembler, 17, 18, 16);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+    hl_a64_str(assembler, 17, 18, 24);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
+    hl_a64_addi(assembler, 17, 17, 1);
+    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
+    hl_a64_movconst(assembler, 17, UINT64_MAX);
+    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_movz(assembler, 17, 0, 0);
+    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+
+    uint8_t *activate = assembler->cursor;
+    hl_a64_addi(assembler, 18, CPU, OFFSET_READ_VIEWS);
+    hl_a64_emit32(assembler, UINT32_C(0x8b000000) | (9u << 16) | (5u << 10) |
+                                 (18u << 5) | 18u); /* add x18,x18,x9,lsl#5 */
+    hl_a64_ldr(assembler, 17, 18, 0);
+    hl_a64_str(assembler, 17, CPU, OFFSET_FIRST);
+    hl_a64_ldr(assembler, 17, 18, (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 17, CPU, OFFSET_LAST);
+    hl_a64_ldr(assembler, 17, 18, 2 * (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 17, CPU, OFFSET_DELTA);
+    hl_a64_emit32(assembler, UINT32_C(0x8b110210)); /* add projected EA */
+    hl_a64_ldr(assembler, 17, 18, 3 * (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 17, CPU, OFFSET_PERMISSIONS);
+    hl_a64_addi(assembler, 18, CPU, OFFSET_READ_VIEW_PUBLICATION);
+    hl_a64_addlsl4(assembler, 18, 18, 9);
+    hl_a64_ldr(assembler, 17, 18, 0);
+    hl_a64_str(assembler, 17, CPU, OFFSET_WRITE_POLICY);
+    hl_a64_ldr(assembler, 17, 18, (int)sizeof(uint64_t));
+    hl_a64_str(assembler, 17, CPU, OFFSET_WRITE_INDEX);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
+    hl_a64_emit32(assembler, UINT32_C(0xd51b4211)); /* msr nzcv,x17 */
+    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    uint32_t *retry = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    uint8_t *overflow_target = assembler->cursor;
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
+    hl_a64_emit32(assembler, UINT32_C(0xd51b4211)); /* msr nzcv,x17 */
+    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
 
     uint8_t *miss = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
+    branch(assembler, to_miss, miss);
+    for (unsigned index = 0; index < 4; ++index) branch(assembler, selected[index], selected_target);
+    condition(assembler, empty, activate, 0u);
+    condition(assembler, overflow, overflow_target, 2u);
+    branch(assembler, retry, resume);
     condition(assembler, inactive[0], miss, 3u);
     condition(assembler, inactive[1], miss, 0u);
     condition(assembler, inactive[2], miss, 1u);
@@ -577,7 +634,7 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     test(assembler, guard->permission, miss,
          guard->required == HL_A64_PERMISSION_READ ? 0u : 1u);
     if (guard->required == HL_A64_PERMISSION_WRITE)
-        write_cache(assembler, guard->bytes, guard->resume);
+        write_cache(assembler, guard->bytes, guard->pc, guard->resume);
     if (!hl_a64_assembler_ok(assembler)) return;
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
