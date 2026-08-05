@@ -9,8 +9,14 @@ The retained C oracle was read in
 a byte-exact name wins; a whiteout participates in this decision without being
 emitted. An opaque directory ends the lower scan. `.` and `..` are synthesized
 first. Immediate bind-mount, proc, and provider children are appended after the
-layer merge and deduplicated against it. The C arrays grow with the directory;
-the Rust adapter instead applies an explicit 65,536-entry resource bound.
+layer merge and deduplicated against it. That append order conflicts with the
+same oracle's `jail_match` lookup rule: a bind is an independent namespace
+route and must remain visible even when a layer has the same name or a
+whiteout. The Rust merge therefore reserves namespace names before scanning
+layers, but emits them afterward to retain stable listing order. A focused
+collision test covers both an upper inode and a whiteout. The C arrays grow
+with the directory; the Rust adapter instead applies an explicit 65,536-entry
+resource bound.
 
 `guest_from_host_raw` compares canonical host roots for the upper, every lower,
 and active mounts. A component-boundary match is required and the longest host

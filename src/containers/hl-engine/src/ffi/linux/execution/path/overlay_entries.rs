@@ -31,10 +31,17 @@ pub(super) struct MergedEntry {
 pub(super) fn merge(layers: &[LayerDirectory], namespace: &[Candidate]) -> io::Result<Vec<MergedEntry>> {
     let mut seen = BTreeSet::new();
     let mut output = Vec::new();
+    let namespace_names = namespace
+        .iter()
+        .map(|candidate| candidate.name.as_bytes().to_vec())
+        .collect::<BTreeSet<_>>();
     push_named(&mut seen, &mut output, b".", libc::DT_DIR)?;
     push_named(&mut seen, &mut output, b"..", libc::DT_DIR)?;
     for layer in layers {
         for candidate in &layer.entries {
+            if namespace_names.contains(candidate.name.as_bytes()) {
+                continue;
+            }
             merge_candidate(candidate, &mut seen, &mut output)?;
         }
         if layer.opaque {
@@ -141,6 +148,30 @@ mod tests {
 
         let merged = merge(&layers, &namespace).unwrap();
         let names: Vec<&[u8]> = merged.iter().map(|entry| entry.name.as_slice()).collect();
-        assert_eq!(names, [b".".as_slice(), b"..", b"upper", b"mount"]);
+        assert_eq!(names, [b".".as_slice(), b"..", b"mount", b"upper"]);
+        assert_eq!(merged[3].kind, libc::DT_DIR);
+    }
+
+    #[test]
+    fn namespace_route_wins_over_upper_entry_and_whiteout() {
+        let layers = [LayerDirectory {
+            entries: vec![entry(b"mounted", libc::DT_REG), whiteout(b"projected")],
+            opaque: false,
+        }];
+        let namespace = [entry(b"mounted", libc::DT_DIR), entry(b"projected", libc::DT_LNK)];
+        let merged = merge(&layers, &namespace).unwrap();
+        let values = merged
+            .iter()
+            .map(|entry| (entry.name.as_slice(), entry.kind))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                (b".".as_slice(), libc::DT_DIR),
+                (b"..".as_slice(), libc::DT_DIR),
+                (b"mounted".as_slice(), libc::DT_DIR),
+                (b"projected".as_slice(), libc::DT_LNK),
+            ]
+        );
     }
 }
