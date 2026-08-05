@@ -279,7 +279,8 @@ static int branch_diagnostics(void) {
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     static _Alignas(16) uint8_t stack[4096];
     uint32_t sequential_words[33];
-    for (size_t index = 0; index < 33; index++) sequential_words[index] = UINT32_C(0xd503201f);
+    for (size_t index = 0; index < 32; index++) sequential_words[index] = UINT32_C(0xd503201f);
+    sequential_words[32] = UINT32_C(0xd4000001);
     const hl_native_source_span sequential_span = {
         0x5000, (const uint8_t *)sequential_words, sizeof(sequential_words), 21, 7};
     const hl_native_source sequential_source = {&sequential_span, 1, 21, 7};
@@ -295,16 +296,24 @@ static int branch_diagnostics(void) {
     hl_native_diagnostics after = before;
     CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
-    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 33);
+    CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && state.executed == 33);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.a64_branch_exhaustion - before.a64_branch_exhaustion == 2 &&
-          after.a64_branch_cold_relocation - before.a64_branch_cold_relocation == 0 &&
+    CHECK(after.a64_branch_exhaustion - before.a64_branch_exhaustion == 0 &&
+          after.a64_branch_cold_relocation - before.a64_branch_cold_relocation == 1 &&
           after.a64_branch_nonrelocatable - before.a64_branch_nonrelocatable == 0 &&
           after.a64_branch_unidentified - before.a64_branch_unidentified == 0);
     CHECK(after.a64_branch_sample_pc == 0x5080 &&
           after.a64_branch_sample_source_first == 0x5000 &&
           after.a64_branch_sample_source_last == 0x5080 &&
-          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION);
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION);
+    before = after;
+    state.program = 0x5000;
+    request.budget = 33;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && state.executed == 33);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.boundary_branch == before.boundary_branch &&
+          after.a64_branch_cold_relocation == before.a64_branch_cold_relocation);
 
     const uint32_t branch_words[] = {UINT32_C(0x14000001), UINT32_C(0xd503201f)};
     const hl_native_source_span branch_span = {
@@ -321,19 +330,19 @@ static int branch_diagnostics(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 2);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.a64_branch_exhaustion - before.a64_branch_exhaustion == 1 &&
-          after.a64_branch_cold_relocation - before.a64_branch_cold_relocation == 1 &&
+    CHECK(after.a64_branch_exhaustion - before.a64_branch_exhaustion == 0 &&
+          after.a64_branch_cold_relocation - before.a64_branch_cold_relocation == 2 &&
           after.a64_branch_nonrelocatable - before.a64_branch_nonrelocatable == 0 &&
           after.a64_branch_unidentified - before.a64_branch_unidentified == 0);
     CHECK(after.a64_branch_sample_pc == 0x5080 &&
           after.a64_branch_sample_source_first == 0x5000 &&
           after.a64_branch_sample_source_last == 0x5080 &&
-          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION);
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION);
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
     CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK &&
           after.a64_branch_sample_pc == 0x5080 &&
-          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_EXHAUSTION);
+          after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
 
     executable_memory cold_host = {0};
@@ -351,7 +360,7 @@ static int branch_diagnostics(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 2);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.a64_branch_cold_relocation == 1 &&
+    CHECK(after.a64_branch_cold_relocation == 2 &&
           after.a64_branch_sample_pc == 0x6004 &&
           after.a64_branch_sample_source_first == 0x6000 &&
           after.a64_branch_sample_source_last == 0x6004 &&

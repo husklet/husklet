@@ -562,6 +562,37 @@ static int diagnostics_off_byte_identity_and_density(void) {
     return 0;
 }
 
+static int source_window_fallthrough_shape(void) {
+    uint32_t words[32];
+    for (size_t index = 0; index < 32; index++) words[index] = UINT32_C(0xd503201f);
+    const hl_a64_source_span span = {0x4c00, (const uint8_t *)words, sizeof(words), 7, 12};
+    const hl_a64_source source = {&span, 1, 7, 12};
+    uint8_t code[HL_A64_TRACE_MAX_BYTES] = {0};
+    hl_a64_trace_result trace;
+    CHECK(hl_a64_trace_build(&source, 0x4c00, 32, code, sizeof(code), &trace));
+    CHECK(trace.source_first == 0x4c00 && trace.source_last == 0x4c80 &&
+          trace.instruction_count == 32 && trace.terminal == HL_NATIVE_EXIT_BRANCH);
+    CHECK(trace.relocation_count == 1 && trace.relocations[0].target_guest == 0x4c80 &&
+          trace.relocations[0].target_epoch_known == 0 &&
+          trace.relocations[0].span.word_count == HL_A64_EDGE_SPAN_WORDS);
+    const uint32_t *cold = (const uint32_t *)(code + trace.relocations[0].code_offset);
+    CHECK(trace.relocations[0].expected == cold[0] &&
+          memcmp(trace.relocations[0].span.cold, cold,
+                 HL_A64_EDGE_SPAN_WORDS * sizeof(*cold)) == 0);
+
+    uint8_t bounded[HL_A64_TRACE_MAX_BYTES];
+    memset(bounded, 0xa5, sizeof(bounded));
+    hl_a64_trace_result failed;
+    memset(&failed, 0xa5, sizeof(failed));
+    size_t bounded_capacity = (size_t)trace.relocations[0].code_offset +
+                              HL_A64_EDGE_SPAN_WORDS * sizeof(uint32_t) - 1;
+    CHECK(bounded_capacity >= HL_A64_STUB_MAX_BYTES);
+    CHECK(!hl_a64_trace_build(&source, 0x4c00, 32, bounded, bounded_capacity, &failed));
+    CHECK(memcmp(&failed, &(hl_a64_trace_result){0}, sizeof(failed)) == 0);
+    for (size_t index = 0; index < bounded_capacity; index++) CHECK(bounded[index] == 0);
+    return 0;
+}
+
 int main(void) {
     if (effect_analysis() != 0) return 1;
     if (loop_preflight() != 0) return 1;
@@ -570,6 +601,7 @@ int main(void) {
     if (certificate_authentication() != 0) return 1;
     if (guard_modes() != 0) return 1;
     if (diagnostics_off_byte_identity_and_density() != 0) return 1;
+    if (source_window_fallthrough_shape() != 0) return 1;
 #if !defined(__aarch64__)
     return 0;
 #else
@@ -615,7 +647,7 @@ int main(void) {
         const hl_a64_source_span simd_span = {
             0x1f00, (const uint8_t *)simd_words, sizeof(simd_words), 3, 4};
         const hl_a64_source simd_source = {&simd_span, 1, 3, 4};
-        CHECK(hl_a64_trace_build(&simd_source, 0x1f00, 7, code, capacity, &trace));
+        CHECK(hl_a64_trace_build(&simd_source, 0x1f00, 9, code, capacity, &trace));
         CHECK(trace.instruction_count == 9 && trace.source_last == 0x1f24 &&
               trace.terminal == HL_NATIVE_EXIT_SYSCALL);
         const uint32_t invalid_words[] = {

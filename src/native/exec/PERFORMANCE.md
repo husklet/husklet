@@ -1,5 +1,27 @@
 # Native memory performance
 
+## 2026-08-05 AArch64 source-window fallthrough
+
+The retained read-only audit covered `/Users/x/dd/engine/src/core/dispatch.c`
+(`run_guest`, `run_block`), `/Users/x/dd/engine/src/translator/cache.c`
+(pending-edge publication, resolution, invalidation, generation retirement, and
+fork repair), and `/Users/x/dd/engine/src/translator/guest/aarch64/translate.c`
+and `stubs.c` (ordinary sequential termination, cold full-spill edges, budget
+and interrupt admission). Retained sequential translations publish their exact
+half-open successor as an ordinary pending direct edge; cache lifecycle code,
+not the frontend, resolves and restores it under W^X admission.
+
+Rust now maps only the structural `terminal == 0` trace completion to that
+mechanism. It reserves the standard 16-word edge span, records one unknown-epoch
+relocation to exact `source_last`, and retains the existing full-spill branch as
+the cold bytes. Direct, conditional, indirect, syscall, fallback, and other
+typed terminators are unchanged. The existing cache owns resolution,
+cycle rejection, invalidation restoration, epoch retirement, and fork repair.
+No allocation, token, diagnostic dependency, interior-PC inference, or backend
+write is added. At most three stitched conditional relocations plus this one
+fallthrough remain within the five-entry trace bound; admission fails closed if
+that invariant is violated.
+
 ## 2026-08-05 AArch64 dynamic branch-return discriminator
 
 The retained read-only termination audit covered `../engine/src/core/dispatch.c`

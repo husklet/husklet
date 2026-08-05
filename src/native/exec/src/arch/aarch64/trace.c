@@ -681,8 +681,27 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         }
     }
     if (output->terminal == 0) {
+        if (output->relocation_count >= HL_A64_TRACE_MAX_RELOCATIONS) {
+            memset(buffer, 0, capacity);
+            memset(output, 0, sizeof(*output));
+            return 0;
+        }
         output->source_last = pc + count * 4;
         output->terminal = HL_NATIVE_EXIT_BRANCH;
+        uint32_t *fallthrough = hl_a64_stub_edge_reserve(&assembler);
+        if (!hl_a64_assembler_ok(&assembler)) {
+            memset(buffer, 0, capacity);
+            memset(output, 0, sizeof(*output));
+            return 0;
+        }
+        output->relocations[output->relocation_count++] = (hl_native_relocation){
+            .code_offset = (uint64_t)((uint8_t *)fallthrough - (uint8_t *)buffer),
+            .target_guest = output->source_last,
+            .expected = *fallthrough,
+        };
+        hl_native_relocation *relocation = &output->relocations[output->relocation_count - 1];
+        relocation->span.word_count = HL_A64_EDGE_SPAN_WORDS;
+        memcpy(relocation->span.cold, fallthrough, sizeof(relocation->span.cold));
         hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, output->source_last);
     }
     output->instruction_count = charged_prefix != 0

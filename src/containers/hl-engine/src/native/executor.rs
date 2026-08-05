@@ -308,7 +308,7 @@ struct Diagnostics {
 }
 
 #[cfg(test)]
-const A64_BRANCH_FORM_EXHAUSTION: u64 = 1;
+const A64_BRANCH_FORM_COLD_RELOCATION: u64 = 2;
 
 #[derive(Clone, Copy)]
 pub(crate) struct BorrowedSource<'a> {
@@ -5092,8 +5092,8 @@ mod test {
         assert_eq!(outcome.0, Exit::Fallback);
         assert_eq!((outcome.4, outcome.5, cpu.pc), (1, 32, 0x3080));
         let diagnostics = executor.diagnostics().expect("diagnostics");
-        assert_eq!(diagnostics.a64_branch_exhaustion, 1);
-        assert_eq!(diagnostics.a64_branch_cold_relocation, 0);
+        assert_eq!(diagnostics.a64_branch_exhaustion, 0);
+        assert_eq!(diagnostics.a64_branch_cold_relocation, 1);
         assert_eq!(diagnostics.a64_branch_nonrelocatable, 0);
         assert_eq!(diagnostics.a64_branch_unidentified, 0);
         assert_eq!(
@@ -5103,7 +5103,12 @@ mod test {
                 diagnostics.a64_branch_sample_source_last,
                 diagnostics.a64_branch_sample_form,
             ),
-            (0x3080, 0x3000, 0x3080, A64_BRANCH_FORM_EXHAUSTION),
+            (
+                0x3080,
+                0x3000,
+                0x3080,
+                A64_BRANCH_FORM_COLD_RELOCATION,
+            ),
         );
     }
 
