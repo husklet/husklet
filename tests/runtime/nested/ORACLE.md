@@ -9,9 +9,12 @@ The retained implementation was studied read-only in `../engine`.
 | Per-layer engine configuration | C production engines consume their own command line; no ambient option is forwarded through a parent guest | Each layer owns its argv and lifetime; native diagnostics require native execution | `EngineOptions::append` immediately after its owning layer | Implemented |
 | Exact result gate | `tools/nested_engine_gate.c:main`, `read_file` | Waits for the chain, requires ordinary exit and byte-exact stdout; stderr remains a diagnostic channel | `execute` | Implemented; native-mode rows additionally require propagated `hl-native-detail` evidence |
 | Bounded supervision | `tools/process.c:hl_process_run`, `child_exec`, `read_output` | Fork/exec ownership, EINTR-safe reads and wait; the C capture grows without a bound and has no timeout/process-group teardown | `capture`, `drain`, `terminate_group` | Rust intentionally strengthens the oracle with byte bounds, timeout, TERM/KILL, and reap |
-| Foreign static nested artifacts | `cmake/Phase2Production.cmake:hl_linux_production`, `cmake/Phase3Gates.cmake:nested-foreign-engines` | Second static cross-toolchain; deliberately absent from default build | Manifest `ArtifactSource::ForeignBuild` plus required build instruction | Schema implemented; artifact build is an honest remaining gap |
+| Foreign static nested artifacts | `cmake/Phase2Production.cmake:hl_linux_production`, `cmake/Phase3Gates.cmake:nested-foreign-engines` | Second static cross-toolchain; deliberately absent from default build | Typed Cargo recipe plus `testing nested prepare`; the recipe and complete Rust source tree determine the cache key, while a SHA-256 receipt verifies reused bytes | Implemented; target toolchains remain an explicit host prerequisite |
 
 Architecture branches are encoded by the manifest rather than host-conditionals in
 the runner. The retained matrix covers same-ISA, cross-ISA, three-layer inverse,
-and `aarch64 -> x86_64 -> aarch64`; this initial checked manifest names the final
-acceptance chain without pretending the necessary static foreign binaries exist.
+and `aarch64 -> x86_64 -> aarch64`. `testing nested prepare` builds the declared
+Linux targets with locked, offline Cargo, installs verified artifacts atomically,
+and reuses only a content-bound cache entry. `testing nested run` prepares first,
+so an unavailable compiler or target is a build failure rather than a false test
+result.

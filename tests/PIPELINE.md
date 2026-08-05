@@ -418,6 +418,25 @@ CI may cache images, compiled artifacts, and verified oracle observations. It
 must execute Husklet from the current committed tree; a cached engine result is
 never a current verdict.
 
+Nested-engine artifacts use the same rule through a typed surface:
+
+```text
+testing nested prepare
+testing nested run
+```
+
+The nested manifest names a Cargo package, target triple, profile, and binary;
+it cannot embed a shell command. Preparation uses locked, offline Cargo. Its
+cache key frames that recipe, workspace manifests and lockfile, Cargo
+configuration, effective Cargo/rustc and target-library identity, relevant
+Rust flags and target-linker environment, toolchain pin, and every file below
+`src/`. A cross-process per-key lock serializes admission and publication. The
+cached executable carries a key-bound SHA-256 receipt which is checked before
+reuse, then is hard-linked or copied to the declared chain path. A source,
+compiler, configuration, or recipe change therefore prepares a new object,
+while an identical chain reuses the exact bytes. The cache is build evidence only:
+`nested run` still executes every selected chain from the current invocation.
+
 Stable exit meanings are required: success, test or comparison failure, invalid
 definition or selection, unavailable required provider, and interrupted or
 incomplete execution. Interrupted work retains a resumable record.

@@ -12,6 +12,7 @@ workspace = true
 # The repository testing application owns the typed command surface that selects
 # its independent runtime, scenario, and benchmark runners.
 clap.workspace = true
+fs2.workspace = true
 hl-container = { path = "../../containers/hl-container" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }

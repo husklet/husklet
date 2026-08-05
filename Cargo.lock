@@ -2817,6 +2817,7 @@ name = "testing"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "fs2",
  "hl-checkpoint",
  "hl-container",
  "hl-descriptor",

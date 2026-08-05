@@ -124,6 +124,13 @@ mod cli_tests {
     }
 
     #[test]
+    fn nested_preparation_and_execution_are_typed() {
+        assert!(Cli::try_parse_from(["testing", "nested", "prepare"]).is_ok());
+        assert!(Cli::try_parse_from(["testing", "nested", "run", "tests/runtime/nested/chains.yaml"]).is_ok());
+        assert!(Cli::try_parse_from(["testing", "nested", "prepare", "--shell", "make foreign"]).is_err());
+    }
+
+    #[test]
     fn invalid_isa_and_conflicting_oracle_modes_fail() {
         assert!(Cli::try_parse_from(["testing", "runtime", "--isa", "x86"]).is_err());
         assert!(Cli::try_parse_from(["testing", "oracle", "--check", "--update"]).is_err());

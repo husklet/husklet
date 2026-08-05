@@ -1,9 +1,11 @@
-use clap::Args;
+use clap::{Args, Subcommand};
+use fs2::FileExt as _;
 use hl_process::{Capture, Command as ProcessCommand, Outcome as ProcessOutcome};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     fs,
+    fs::OpenOptions,
     os::unix::fs::PermissionsExt,
     path::{Component, Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -50,7 +52,17 @@ struct Artifact {
     path: PathBuf,
     #[serde(default)]
     source: ArtifactSource,
-    build: Option<String>,
+    build: Option<Build>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Build {
+    package: String,
+    target: String,
+    #[serde(default = "release_profile")]
+    profile: String,
+    binary: String,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -126,16 +138,39 @@ const fn default_capture_limit() -> usize {
 
 #[derive(Args)]
 pub(crate) struct Options {
+    #[command(subcommand)]
+    action: Option<Action>,
+}
+
+#[derive(Subcommand)]
+enum Action {
+    /// Build and cache every declared nested-engine artifact.
+    Prepare(Selection),
+    /// Execute nested-engine chains, preparing declared artifacts first.
+    Run(Selection),
+}
+
+#[derive(Args, Default)]
+struct Selection {
     /// Nested-chain manifest relative to the workspace root.
     manifest: Option<PathBuf>,
 }
 
 pub fn run(options: Options) -> Result<(), Error> {
     let root = crate::runtime::workspace()?;
-    let definition = options
+    let (prepare_only, selection) = match options.action {
+        Some(Action::Prepare(selection)) => (true, selection),
+        Some(Action::Run(selection)) => (false, selection),
+        None => (false, Selection::default()),
+    };
+    let definition = selection
         .manifest
         .map_or_else(|| root.join("tests/runtime/nested/chains.yaml"), |path| root.join(path));
     let document = load(&root, &definition)?;
+    prepare(&root, &document)?;
+    if prepare_only {
+        return Ok(());
+    }
     let mut failed = 0;
     let mut unsupported = 0;
     for chain in document.chains {
@@ -188,8 +223,7 @@ fn load(root: &Path, definition: &Path) -> Result<Document, Error> {
 fn validate_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
     safe_relative(&artifact.path)?;
     if root.join(&artifact.path) == root
-        || matches!(artifact.source, ArtifactSource::ForeignBuild)
-            && artifact.build.as_deref().is_none_or(str::is_empty)
+        || matches!(artifact.source, ArtifactSource::ForeignBuild) && artifact.build.is_none()
     {
         return Err(format!(
             "artifact {} has no usable path/build instruction",
@@ -197,6 +231,303 @@ fn validate_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
         )
         .into());
     }
+    Ok(())
+}
+
+fn release_profile() -> String {
+    "release".into()
+}
+
+fn prepare(root: &Path, document: &Document) -> Result<(), Error> {
+    let mut artifacts = document
+        .chains
+        .iter()
+        .flat_map(|chain| chain.layers.iter().map(|layer| &layer.artifact).chain([&chain.guest]))
+        .filter(|artifact| artifact.build.is_some())
+        .collect::<Vec<_>>();
+    artifacts.sort_by(|left, right| left.path.cmp(&right.path));
+    artifacts.dedup_by(|left, right| left.path == right.path);
+    for artifact in artifacts {
+        prepare_artifact(root, artifact)?;
+    }
+    Ok(())
+}
+
+fn prepare_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
+    let build = artifact.build.as_ref().ok_or("prepared artifact has no build")?;
+    validate_build(build)?;
+    let identity = build_identity(root, build)?;
+    let key = &identity.key;
+    let cache = root.join(".cache/testing/nested/artifacts").join(&key);
+    let cached = cache.join(&build.binary);
+    let receipt = cache.join("sha256");
+    let lock = artifact_lock(root, key)?;
+    lock.lock_exclusive()?;
+    if !verified(&cached, &receipt, key)? {
+        build_artifact(root, build, &identity.cargo, &cache, &cached, &receipt, key)?;
+        println!("BUILT {} key={key}", artifact.path.display());
+    } else {
+        println!("REUSED {} key={key}", artifact.path.display());
+    }
+    materialize(&cached, &root.join(&artifact.path))?;
+    Ok(())
+}
+
+fn validate_build(build: &Build) -> Result<(), Error> {
+    if build.package.is_empty()
+        || build.binary.is_empty()
+        || build.target.is_empty()
+        || build.profile.is_empty()
+        || build
+            .binary
+            .chars()
+            .any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_')))
+    {
+        return Err("nested Cargo build contains an invalid package, target, profile, or binary".into());
+    }
+    Ok(())
+}
+
+struct BuildIdentity {
+    key: String,
+    cargo: String,
+}
+
+fn build_identity(root: &Path, build: &Build) -> Result<BuildIdentity, Error> {
+    let cargo = environment("CARGO").unwrap_or_else(|| "cargo".into());
+    let values = build_environment(build);
+    let key = build_key_with_environment(root, build, &cargo, &values)?;
+    Ok(BuildIdentity { key, cargo })
+}
+
+fn build_key_with_environment(
+    root: &Path,
+    build: &Build,
+    cargo: &str,
+    values: &[(String, String)],
+) -> Result<String, Error> {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    hash_field(&mut digest, b"husklet-nested-build-v2")?;
+    for value in [&build.package, &build.target, &build.profile, &build.binary] {
+        hash_field(&mut digest, value.as_bytes())?;
+    }
+    for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+        let path = root.join(name);
+        if path.is_file() {
+            hash_source(&mut digest, root, &path)?;
+        }
+    }
+    for path in cargo_configs(root) {
+        if path.is_file() {
+            hash_source_named(&mut digest, b"cargo-config", &path)?;
+        }
+    }
+    let rustc = environment("RUSTC").unwrap_or_else(|| "rustc".into());
+    for (name, value) in values {
+        hash_field(&mut digest, name.as_bytes())?;
+        hash_field(&mut digest, value.as_bytes())?;
+    }
+    hash_tool(&mut digest, "cargo", cargo, &["-V"])?;
+    hash_tool(&mut digest, "rustc", &rustc, &["-vV"])?;
+    hash_tool(
+        &mut digest,
+        "rustc-target",
+        &rustc,
+        &["--print", "target-libdir", "--target", &build.target],
+    )?;
+    hash_tree(&mut digest, root, &root.join("src"))?;
+    Ok(hex(digest.finalize().as_ref()))
+}
+
+fn environment(name: &str) -> Option<String> {
+    std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
+}
+
+fn build_environment(build: &Build) -> Vec<(String, String)> {
+    let linker = format!(
+        "CARGO_TARGET_{}_LINKER",
+        build.target.to_ascii_uppercase().replace('-', "_")
+    );
+    [
+        "CARGO",
+        "RUSTC",
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "RUSTUP_TOOLCHAIN",
+        &linker,
+    ]
+    .into_iter()
+    .map(|name| (name.to_owned(), environment(name).unwrap_or_default()))
+    .collect()
+}
+
+fn cargo_configs(root: &Path) -> Vec<PathBuf> {
+    let mut paths = root
+        .ancestors()
+        .flat_map(|directory| [directory.join(".cargo/config"), directory.join(".cargo/config.toml")])
+        .collect::<Vec<_>>();
+    let cargo_home = environment("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| environment("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+    if let Some(home) = cargo_home {
+        paths.extend([home.join("config"), home.join("config.toml")]);
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn hash_source_named(digest: &mut impl sha2::Digest, name: &[u8], path: &Path) -> Result<(), Error> {
+    hash_field(digest, name)?;
+    hash_field(digest, path.as_os_str().as_encoded_bytes())?;
+    hash_field(digest, &fs::read(path)?)
+}
+
+fn hash_tool(digest: &mut impl sha2::Digest, name: &str, program: &str, arguments: &[&str]) -> Result<(), Error> {
+    let mut command = vec![program.to_owned()];
+    command.extend(arguments.iter().map(|value| (*value).to_owned()));
+    let output = capture(&command, Duration::from_secs(30), 128 * 1024)
+        .map_err(|error| format!("cannot identify {name}: {error}"))?;
+    if output.status != Some(0) {
+        return Err(format!("{name} identity command exited {:?}", output.status).into());
+    }
+    hash_field(digest, name.as_bytes())?;
+    hash_field(digest, program.as_bytes())?;
+    hash_field(digest, &output.stdout)?;
+    hash_field(digest, &output.stderr)
+}
+
+fn artifact_lock(root: &Path, key: &str) -> Result<fs::File, Error> {
+    let directory = root.join(".cache/testing/nested/locks");
+    fs::create_dir_all(&directory)?;
+    Ok(OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(directory.join(format!("{key}.lock")))?)
+}
+
+fn hash_tree(digest: &mut impl sha2::Digest, root: &Path, directory: &Path) -> Result<(), Error> {
+    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            hash_tree(digest, root, &path)?;
+        } else if kind.is_file() {
+            hash_source(digest, root, &path)?;
+        } else {
+            return Err(format!("nested build input is not a regular file: {}", path.display()).into());
+        }
+    }
+    Ok(())
+}
+
+fn hash_source(digest: &mut impl sha2::Digest, root: &Path, path: &Path) -> Result<(), Error> {
+    let relative = path.strip_prefix(root)?;
+    hash_field(digest, relative.as_os_str().as_encoded_bytes())?;
+    hash_field(digest, &fs::read(path)?)?;
+    Ok(())
+}
+
+fn hash_field(digest: &mut impl sha2::Digest, value: &[u8]) -> Result<(), Error> {
+    digest.update(u64::try_from(value.len())?.to_be_bytes());
+    digest.update(value);
+    Ok(())
+}
+
+fn build_artifact(
+    root: &Path,
+    build: &Build,
+    cargo: &str,
+    cache: &Path,
+    cached: &Path,
+    receipt: &Path,
+    key: &str,
+) -> Result<(), Error> {
+    let arguments = vec![
+        cargo.into(),
+        "build".into(),
+        "--locked".into(),
+        "--offline".into(),
+        "--manifest-path".into(),
+        root.join("Cargo.toml").display().to_string(),
+        "--package".into(),
+        build.package.clone(),
+        "--target".into(),
+        build.target.clone(),
+        "--profile".into(),
+        build.profile.clone(),
+        "--bin".into(),
+        build.binary.clone(),
+    ];
+    let output = capture(&arguments, Duration::from_secs(3600), 16 * 1024 * 1024)
+        .map_err(|error| format!("nested Cargo build failed: {error}"))?;
+    if output.status != Some(0) {
+        return Err(format!(
+            "nested Cargo build exited {:?}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+    let produced = root
+        .join("target")
+        .join(&build.target)
+        .join(&build.profile)
+        .join(&build.binary);
+    let bytes = fs::read(&produced)
+        .map_err(|error| format!("cannot read built nested artifact {}: {error}", produced.display()))?;
+    let digest = sha256(&bytes);
+    let parent = cache.parent().ok_or("nested cache has no parent")?;
+    fs::create_dir_all(parent)?;
+    let stage = tempfile::tempdir_in(parent)?;
+    fs::write(stage.path().join(&build.binary), &bytes)?;
+    fs::set_permissions(stage.path().join(&build.binary), fs::Permissions::from_mode(0o755))?;
+    fs::write(stage.path().join("sha256"), format!("key={key}\nsha256={digest}\n"))?;
+    if cache.exists() {
+        fs::remove_dir_all(cache)?;
+    }
+    fs::rename(stage.keep(), cache)?;
+    debug_assert_eq!(cached, &cache.join(&build.binary));
+    debug_assert_eq!(receipt, &cache.join("sha256"));
+    Ok(())
+}
+
+fn verified(artifact: &Path, receipt: &Path, key: &str) -> Result<bool, Error> {
+    if !artifact.is_file() || !receipt.is_file() {
+        return Ok(false);
+    }
+    let expected = format!("key={key}\nsha256={}", sha256(&fs::read(artifact)?));
+    Ok(fs::read_to_string(receipt)?.trim() == expected)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex(Sha256::digest(bytes).as_ref())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn materialize(source: &Path, destination: &Path) -> Result<(), Error> {
+    fs::create_dir_all(
+        destination
+            .parent()
+            .ok_or("nested artifact destination has no parent")?,
+    )?;
+    let temporary = destination.with_extension(format!("prepare-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
+    }
+    if fs::hard_link(source, &temporary).is_err() {
+        fs::copy(source, &temporary)?;
+    }
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
+    fs::rename(temporary, destination)?;
     Ok(())
 }
 
@@ -233,9 +564,8 @@ fn unavailable(root: &Path, artifact: &Artifact) -> Option<Outcome> {
     }
     Some(match artifact.source {
         ArtifactSource::ForeignBuild => Outcome::Unsupported(format!(
-            "foreign artifact {} is absent or not executable; build with: {}",
+            "foreign artifact {} is absent or not executable; run `testing nested prepare`",
             path.display(),
-            artifact.build.as_deref().unwrap_or("<missing build instruction>")
         )),
         ArtifactSource::Local => Outcome::Failed(format!(
             "required local artifact {} is absent or not executable",
@@ -352,12 +682,73 @@ expect: { exit: 42, stdout: hello.txt }
 
     #[test]
     fn missing_foreign_artifact_is_explicitly_unsupported() {
-        let artifact: Artifact =
-            serde_yaml::from_str("path: missing\nsource: foreign-build\nbuild: make foreign\n").unwrap();
+        let artifact: Artifact = serde_yaml::from_str(
+            "path: missing\nsource: foreign-build\nbuild: { package: hl-engine, target: x86_64-unknown-linux-musl, binary: hl-engine }\n",
+        )
+        .unwrap();
         assert!(matches!(
             unavailable(Path::new("/definitely-absent"), &artifact),
             Some(Outcome::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn build_key_binds_source_and_typed_recipe() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(root.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(root.path().join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::write(root.path().join("src/lib.rs"), "pub fn first() {}\n").unwrap();
+        let build: Build =
+            serde_yaml::from_str("package: hl-engine\ntarget: aarch64-unknown-linux-musl\nbinary: hl-engine\n")
+                .unwrap();
+        let environment = vec![("RUSTFLAGS".into(), "-Ctarget-cpu=generic".into())];
+        let initial = build_key_with_environment(root.path(), &build, "cargo", &environment).unwrap();
+        assert_eq!(
+            initial,
+            build_key_with_environment(root.path(), &build, "cargo", &environment).unwrap()
+        );
+        fs::write(root.path().join("src/lib.rs"), "pub fn second() {}\n").unwrap();
+        assert_ne!(
+            initial,
+            build_key_with_environment(root.path(), &build, "cargo", &environment).unwrap()
+        );
+        let changed: Build =
+            serde_yaml::from_str("package: hl-engine\ntarget: x86_64-unknown-linux-musl\nbinary: hl-engine\n").unwrap();
+        assert_ne!(
+            initial,
+            build_key_with_environment(root.path(), &changed, "cargo", &environment).unwrap()
+        );
+        let changed_environment = vec![("RUSTFLAGS".into(), "-Ctarget-cpu=native".into())];
+        assert_ne!(
+            initial,
+            build_key_with_environment(root.path(), &build, "cargo", &changed_environment).unwrap()
+        );
+    }
+
+    #[test]
+    fn cache_receipt_rejects_changed_artifact() {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact = directory.path().join("hl-engine");
+        let receipt = directory.path().join("sha256");
+        fs::write(&artifact, b"first").unwrap();
+        fs::write(&receipt, format!("key=environment-a\nsha256={}\n", sha256(b"first"))).unwrap();
+        assert!(verified(&artifact, &receipt, "environment-a").unwrap());
+        assert!(!verified(&artifact, &receipt, "environment-b").unwrap());
+        fs::write(&artifact, b"second").unwrap();
+        assert!(!verified(&artifact, &receipt, "environment-a").unwrap());
+    }
+
+    #[test]
+    fn concurrent_preparation_is_serialized_by_key() {
+        let root = tempfile::tempdir().unwrap();
+        let first = artifact_lock(root.path(), "same-key").unwrap();
+        let second = artifact_lock(root.path(), "same-key").unwrap();
+        first.lock_exclusive().unwrap();
+        assert!(second.try_lock_exclusive().is_err());
+        fs2::FileExt::unlock(&first).unwrap();
+        second.lock_exclusive().unwrap();
+        fs2::FileExt::unlock(&second).unwrap();
     }
 
     #[test]
