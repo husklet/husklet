@@ -219,6 +219,7 @@ impl Plan {
         })
     }
 
+    #[must_use]
     pub fn child(&self, parent: &ExecutionCpuSnapshot) -> ExecutionSnapshot {
         let mut cpu = parent.clone();
         match &mut cpu {

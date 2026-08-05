@@ -21,6 +21,7 @@ impl ProcessHandleRegistry {
         Self::default()
     }
 
+    #[must_use]
     pub fn create(target: ProcessId) -> Arc<ProcessHandle> {
         Arc::new(ProcessHandle {
             target,

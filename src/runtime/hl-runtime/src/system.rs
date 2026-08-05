@@ -52,6 +52,7 @@ pub struct SystemAuthority {
 }
 
 impl SystemAuthority {
+    #[must_use]
     pub fn new(snapshot: ResourceSnapshot) -> Self {
         Self {
             resources: RwLock::new(snapshot),

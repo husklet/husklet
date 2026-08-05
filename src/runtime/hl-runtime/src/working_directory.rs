@@ -14,6 +14,7 @@ pub struct WorkingDirectory {
 }
 
 impl WorkingDirectory {
+    #[must_use]
     pub fn root() -> Self {
         Self {
             state: Mutex::new(DirectorySnapshot {
@@ -23,6 +24,7 @@ impl WorkingDirectory {
         }
     }
 
+    #[must_use]
     pub fn from_snapshot(snapshot: DirectorySnapshot) -> Self {
         Self {
             state: Mutex::new(snapshot),
