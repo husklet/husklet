@@ -141,7 +141,7 @@ impl ThreadSet {
     }
 
     pub(super) fn is_only_runnable(&self, thread: ThreadId) -> bool {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .machines
             .keys()
@@ -208,7 +208,7 @@ impl ThreadSet {
     }
 
     pub(super) fn find(&self, thread: ThreadId) -> Option<ThreadRun> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.machines.get(&thread).map(Self::copy_run)
     }
 
@@ -302,13 +302,13 @@ impl ThreadSet {
     pub(super) fn discard(&self, thread: ThreadId) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .prepared
             .remove(&thread);
     }
 
     pub(super) fn next(&self) -> Option<ThreadRun> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let selected_thread = state
             .previous
             .and_then(|previous| {
@@ -377,7 +377,7 @@ impl ThreadSet {
     }
 
     pub(super) fn is_parked(&self, run: &ThreadRun) -> bool {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.machines.get(&run.thread).is_some_and(|current| {
             current.process == run.process
                 && current.generation == run.generation
@@ -508,7 +508,7 @@ impl ThreadSet {
         let Some(tasks) = &self.tasks else {
             return;
         };
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let parked = state
             .syscall_parked
             .iter()
@@ -534,7 +534,7 @@ impl ThreadSet {
     }
 
     pub(super) fn cancel_all(&self, signal: i32) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let signal = *state.cancellation.get_or_insert(signal);
         for run in state.machines.values() {
             // Cancellation has two independently blocking execution domains.
@@ -548,7 +548,7 @@ impl ThreadSet {
     }
 
     pub(super) fn signal(&self) -> Option<(Arc<RuntimeSyscallRouter>, i32)> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.machines.values().find_map(|run| {
             run.cancellation
                 .signal()
@@ -559,7 +559,7 @@ impl ThreadSet {
     pub(super) fn is_empty(&self) -> bool {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .machines
             .is_empty()
     }
@@ -568,14 +568,14 @@ impl ThreadSet {
         !self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .parked
             .is_empty()
     }
 
     #[cfg(test)]
     pub(super) fn cancel_parked_process(&self, process: ProcessId) -> bool {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let selected = state.syscall_parked.iter().find_map(|thread| {
             state
                 .machines
@@ -631,7 +631,7 @@ impl ThreadSet {
         let hl_task::SignalActivityKind::ProcessControl { process, action } = event.kind else {
             return;
         };
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .control_epochs
             .entry(process)
@@ -683,7 +683,7 @@ impl ThreadSet {
     }
 
     pub(super) fn terminate_all(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let threads = state.machines.keys().copied().collect::<Vec<_>>();
         let mut removed = Vec::new();
         for thread in threads {
@@ -720,7 +720,7 @@ impl ThreadSet {
     }
 
     pub(super) fn terminate_group(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process
             || current.generation != run.generation
@@ -820,7 +820,7 @@ impl PreparedImage {
         if !self.published {
             return;
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.candidate = state.machines.remove(&self.target);
         state.ownership.remove(&self.target);
         for (run, ownership) in self.previous.drain(..) {
@@ -846,7 +846,7 @@ impl Drop for PreparedImage {
             self.rollback()
         }
         if self.candidate.take().is_some() {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.reserved = state.reserved.saturating_sub(1);
         }
     }
@@ -893,7 +893,7 @@ impl RuntimeThreadPort for ThreadSet {
 
 impl PreparedThread for ThreadStage {
     fn publish(mut self: Box<Self>) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.reserved -= 1;
         let run = self.run.take().expect("staged runnable");
         if let Some(signal) = state.cancellation {
@@ -938,7 +938,7 @@ impl Drop for ThreadStage {
             self.registered = false;
         }
         let Some(run) = self.run.take() else { return };
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.reserved -= 1;
         state.prepared.insert(
             self.thread,
