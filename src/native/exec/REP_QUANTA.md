@@ -1,5 +1,49 @@
 # AMD64 REP quantum audit
 
+## Exact-quantum completion boundary
+
+The follow-up audit used detached commit `d6d1ad382`. In addition to the
+retained files below, it inspected
+`lower/repstr.c::emit_rep_string` through its completed-count epilogue,
+`interp.c`'s MOVS/STOS cases, and `dispatch.h::G_DISPATCH_REASON`. The retained
+owner keeps one thread's spilled CPU live across helper completion, applies
+completed elements to RCX/RSI/RDI before executable-write draining, and only
+then resumes the following instruction. Faults retain the REP RIP and exact
+partial registers; DF and widths 1/2/4/8 share that ownership model. There is
+no REP-local lock or teardown object: pins and helper state are released on
+every return, while dispatcher/thread registration owns signal and shutdown
+lifetime. Host-specific bulk lowering is AArch64-only; the retained
+interpreter is the elementwise fallback on other hosts.
+
+The active comparison covered `run.c::{rep_execute,hl_native_x86_64_run}`,
+`executor.rs::{run_x86_inner,poll_quantum}`,
+`scheduler.rs::{advance,native_x86}`, mapping `ProjectionLease` request and
+checkpoint continuations, and the generation-qualified scheduler
+continuation. The completed REP path has already advanced RIP, charged every
+element, updated RCX/RSI/RDI, and published exact dirty ranges before returning
+to the run loop. It is therefore the same safe polling boundary as incomplete
+REP exhaustion. A successful poll adds exactly `quantum_grant` to the explicit
+cumulative admission before the following instruction enters; denial still
+produces the ordinary public yield. Interrupt, signal/cancellation, scheduler
+generation, mapping request, checkpoint request, and overflow checks are
+unchanged.
+
+| Capability | Retained C | Active owner after this change |
+|---|---|---|
+| widths 1/2/4/8 and DF | helper plus scalar fallback | `rep_decode`, `rep_copy`, `rep_fill` |
+| partial fault progress | completed-count epilogue | scalar fallback after bounded bulk prefix |
+| exact accounting | no equivalent request budget | per-element `executed`, cumulative grants |
+| incomplete quantum boundary | dispatcher/helper state is coherent | grant poll already implemented |
+| exact-quantum completion | resumes next instruction in dispatcher | completed REP is grant-eligible |
+| signal/cancellation/mapping/checkpoint | dispatcher registries and pins | unchanged continuation tokens |
+
+The structural regression uses REP MOVSB ending exactly on budget two followed
+by SYSCALL. It proves one poll observes `(executed, admitted) == (2, 2)`, the
+syscall enters under the two-credit grant, and the result is exactly three
+executed with one remaining credit. The existing `x86_rep` cohort covers all
+MOVS/STOS widths, both directions, overlaps, permission faults, split views,
+zero count, dirty publication, and partial progress.
+
 ## Scope and evidence
 
 This is a read-only design audit for eliminating repeated native `YIELD`

@@ -9,6 +9,20 @@
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "x86_rep:%d: %s\n", __LINE__, #value); return 1; } } while (0)
 
 #if defined(__aarch64__)
+typedef struct quantum_observation {
+    uint64_t calls;
+    uint64_t executed;
+    uint64_t admitted;
+} quantum_observation;
+
+static uint32_t admit_quantum(void *opaque, uint64_t executed, uint64_t admitted) {
+    quantum_observation *observation = opaque;
+    observation->calls++;
+    observation->executed = executed;
+    observation->admitted = admitted;
+    return 1;
+}
+
 static hl_native_status executable_begin(void *opaque) {
     test_memory *memory = opaque;
     memory->begin_calls++;
@@ -247,6 +261,37 @@ static int rep_contract(void) {
         CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == 0xd380 &&
               state.registers[1] == 4 && state.registers[6] == 0xe004 &&
               state.registers[7] == 0xf004 && memcmp(destination_bytes, "abcd\0\0\0\0", 8) == 0);
+    }
+    {
+        static const uint8_t rep_then_syscall[] = {0xf3, 0xa4, 0x0f, 0x05};
+        quantum_observation observation = {0};
+        views[0] = (hl_native_projection_view){0xe000, 0xe010,
+                                               (uint64_t)(uintptr_t)source_bytes, 7,
+                                               HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 0};
+        views[1] = (hl_native_projection_view){0xf000, 0xf010,
+                                               (uint64_t)(uintptr_t)destination_bytes, 7,
+                                               HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+                                               HL_NATIVE_WRITE_EXACT, 1};
+        projection = (hl_native_projection){views, 2, 7, 1};
+        request.projection = &projection;
+        instruction = (hl_native_source_span){0xd580, rep_then_syscall,
+                                               sizeof(rep_then_syscall), 7, 16};
+        memset(destination_bytes, 0, sizeof(destination_bytes));
+        state = (hl_native_x86_64_cpu){.program = 0xd580,
+            .registers = {[1] = 2, [6] = 0xe000, [7] = 0xf000},
+            .dirty_first = UINT64_MAX};
+        request.budget = 2;
+        request.quantum_context = &observation;
+        request.quantum_poll = admit_quantum;
+        request.quantum_grant = 2;
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && output.instruction == 0xd582 &&
+              state.program == 0xd584 && state.executed == 3 && state.budget == 1 &&
+              observation.calls == 1 && observation.executed == 2 &&
+              observation.admitted == 2 && memcmp(destination_bytes, "ab", 2) == 0);
+        request.quantum_context = NULL;
+        request.quantum_poll = NULL;
+        request.quantum_grant = 0;
     }
     {
         static const uint8_t address_rep[] = {0xf3, 0x67, 0xa4};
