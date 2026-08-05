@@ -88,3 +88,22 @@ evidence and the timings are bounded A/B evidence rather than a stable-host
 certificate. The remaining deep-path gap is dominated by the missing C-style
 epoch-gated dentry/full-resolution memo, registry locking, candidate
 allocation, and descriptor duplication.
+
+## Cache safety gate
+
+A positive descriptor cache was prototyped and deliberately not retained.
+`ParentLease::publish` is currently called only by successful regular-file
+copy-up. The following namespace mutations do not yet advance the resolver
+epoch: successful mkdir, mknod, unlink, rmdir, rename, link, symlink,
+`open(O_CREAT)`, upper-parent materialization, and descriptor/inode link
+publication. C covers these through the dispatch mutation bump and explicit
+copy-up/materialization bumps in `overlay.c` and `fdcache.c`.
+
+Until those paths publish after every visible commit—including partial-failure
+paths—a cache could resurrect a renamed or deleted pathname. The eventual
+cache must retain owned descriptors, be bounded, exclude host-mutable mount
+routes, validate the Acquire-loaded epoch again after borrowing a cached pin,
+and discard a fill if the epoch changes during resolution. Fork, chroot, root,
+and mount changes additionally require a process-local namespace generation,
+matching the retained C `fgen` model. These invalidation tests are prerequisites
+to implementation, not follow-up hardening.
