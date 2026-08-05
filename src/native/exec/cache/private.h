@@ -8,7 +8,7 @@
 enum entry_state { ENTRY_EMPTY, ENTRY_RESERVED, ENTRY_LIVE, ENTRY_TOMBSTONE };
 
 typedef struct cache_entry {
-    uint64_t guest, source_first, source_last, code_offset, code_size, body_offset;
+    uint64_t guest, source_first, source_last, code_offset, code_size, body_offset, admitted_offset;
     uint64_t mapping_epoch, instruction_epoch, token;
     uint64_t memory_mode, authority_generation;
     uint64_t loop_pc;

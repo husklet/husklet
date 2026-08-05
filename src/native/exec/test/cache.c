@@ -80,6 +80,7 @@ static int reuse(void) {
     CHECK(publish(&fixture, 0x4000, 7, 0x4000, 0x4010) == HL_NATIVE_OK);
     CHECK(hl_native_cache_lookup(fixture.cache, 0x4000, 7, &code) == HL_NATIVE_HIT);
     CHECK(code.entry == fixture.arena.executable && code.body == fixture.arena.executable + 8);
+    CHECK(code.admitted == code.entry);
     CHECK(hl_native_cache_lookup(fixture.cache, 0x4000, 7, &code) == HL_NATIVE_HIT);
     CHECK(hl_native_cache_provenance(fixture.cache, fixture.arena.executable + 12, &guest));
     CHECK(guest == 0x4000);

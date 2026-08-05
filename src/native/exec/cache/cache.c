@@ -135,6 +135,7 @@ hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *cache, uint64_t gue
     }
     output->entry = cache->arena->executable + entry->code_offset;
     output->body = cache->arena->executable + entry->body_offset;
+    output->admitted = cache->arena->executable + entry->admitted_offset;
     output->code_size = entry->code_size;
     output->generation = cache->generation;
     output->source_first = entry->source_first;
@@ -200,6 +201,7 @@ hl_native_status hl_native_cache_reserve_key(hl_native_cache *cache, uint64_t gu
     entry->code_offset = span.offset;
     entry->code_size = maximum;
     entry->body_offset = span.offset;
+    entry->admitted_offset = span.offset;
     entry->mapping_epoch = mapping_epoch;
     entry->instruction_epoch = instruction_epoch;
     entry->memory_mode = memory_mode;
@@ -215,6 +217,7 @@ hl_native_status hl_native_cache_reserve_key(hl_native_cache *cache, uint64_t gu
     block->code_offset = span.offset;
     block->code_size = maximum;
     block->body_offset = span.offset;
+    block->admitted_offset = span.offset;
     block->mapping_epoch = mapping_epoch;
     block->instruction_epoch = instruction_epoch;
     block->memory_mode = memory_mode;
@@ -255,7 +258,9 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     cache_entry *entry;
     hl_native_status status;
     if (cache == NULL || block == NULL || block->slot >= cache->capacity || used == 0 || used > block->code_size ||
-        body_offset >= used || records == NULL || record_count == 0 || record_count > cache->provenance_capacity)
+        body_offset >= used || block->admitted_offset < block->code_offset ||
+        block->admitted_offset >= block->code_offset + used || records == NULL || record_count == 0 ||
+        record_count > cache->provenance_capacity)
         return HL_NATIVE_ARGUMENT;
     uint64_t previous_end = 0;
     for (uint32_t index = 0; index < record_count; index++) {
@@ -295,6 +300,7 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     entry->code_offset = block->code_offset;
     entry->code_size = used;
     entry->body_offset = block->code_offset + body_offset;
+    entry->admitted_offset = block->admitted_offset;
     entry->instruction_count = block->instruction_count != 0 ? block->instruction_count : 1u;
     entry->conditional_self_loop = block->conditional_self_loop;
     entry->cycle_safe = block->cycle_safe;
@@ -367,6 +373,7 @@ int hl_native_cache_execution(const hl_native_cache *cache, uint64_t identity, h
             continue;
         output->entry = (void *)first;
         output->body = cache->arena->executable + entry->body_offset;
+        output->admitted = cache->arena->executable + entry->admitted_offset;
         output->code_size = entry->code_size;
         output->generation = entry->generation;
         output->source_first = entry->source_first;

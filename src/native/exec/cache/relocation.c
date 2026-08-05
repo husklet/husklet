@@ -51,7 +51,8 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
     if (source->memory_mode != target->memory_mode ||
         source->authority_generation != target->authority_generation)
         return HL_NATIVE_STATE;
-    if (relocation->reserved != 0 || relocation->target_epoch_known > 1 || source->code_size < 4 ||
+    if (relocation->reserved != 0 || relocation->target_instruction_count != 0 ||
+        relocation->target_epoch_known > 1 || source->code_size < 4 ||
         relocation->code_offset > source->code_size - 4)
         return HL_NATIVE_ARGUMENT;
     source_offset = source->code_offset + relocation->code_offset;
@@ -74,7 +75,7 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
 }
 
 static hl_native_status remember(hl_native_cache *cache, const cache_entry *source,
-                                 const hl_native_relocation *relocation, uint32_t patched,
+                                 const cache_entry *target, const hl_native_relocation *relocation, uint32_t patched,
                                  uint32_t target_epoch_wildcard) {
     if (cache->resolved_count == cache->resolved_capacity) {
         hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
@@ -83,6 +84,8 @@ static hl_native_status remember(hl_native_cache *cache, const cache_entry *sour
     cache->resolved[cache->resolved_count++] = (resolved_relocation){
         source->guest, source->instruction_epoch, source->code_offset,
         *relocation, patched, cache->generation, target_epoch_wildcard};
+    cache->resolved[cache->resolved_count - 1].relocation.target_instruction_count =
+        target->instruction_count;
     return HL_NATIVE_OK;
 }
 
@@ -160,7 +163,7 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
     uint32_t value;
     hl_native_status status = patch(cache, source, &cache->entries[target_slot], &relocation, &value);
     if (status == HL_NATIVE_CAPACITY) return HL_NATIVE_OK;
-    if (status == HL_NATIVE_OK) status = remember(cache, source, &relocation, value, 0);
+    if (status == HL_NATIVE_OK) status = remember(cache, source, &cache->entries[target_slot], &relocation, value, 0);
     if (status == HL_NATIVE_OK && patched != NULL) *patched = 1;
     return status;
 }
@@ -218,6 +221,7 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
                 pending.target_instruction_epoch = 0;
                 pending.target_epoch_known = 0;
             }
+            pending.target_instruction_count = 0;
             cache->relocations[cache->relocation_count++] = (pending_relocation){
                 resolved.source_guest, resolved.source_instruction_epoch,
                 resolved.source_code_offset, pending, cache->generation};
@@ -260,7 +264,8 @@ hl_native_status hl_native_cache_relocate(hl_native_cache *cache, uint64_t sourc
             }
             hl_native_status status = patch(cache, source, &cache->entries[target_slot], &bound, &patched);
             if (status == HL_NATIVE_OK)
-                status = remember(cache, source, &bound, patched, !relocation->target_epoch_known);
+                status = remember(cache, source, &cache->entries[target_slot], &bound, patched,
+                                  !relocation->target_epoch_known);
             if (status != HL_NATIVE_OK) return status;
             continue;
         }
@@ -323,7 +328,7 @@ hl_native_status hl_native_cache_resolve(hl_native_cache *cache, uint64_t target
         hl_native_status status = patch(cache, &cache->entries[source_slot],
                                         &cache->entries[target_slot], &bound, &patched);
         if (status == HL_NATIVE_OK)
-            status = remember(cache, &cache->entries[source_slot], &bound, patched,
+            status = remember(cache, &cache->entries[source_slot], &cache->entries[target_slot], &bound, patched,
                               !pending.relocation.target_epoch_known);
         if (status != HL_NATIVE_OK) return status;
     }

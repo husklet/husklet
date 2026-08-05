@@ -14,6 +14,7 @@ typedef struct hl_a64_trace_result {
     uint64_t source_last;
     uint64_t code_size;
     uint64_t body_offset;
+    uint64_t admitted_offset;
     uint64_t instruction_count;
     uint32_t provenance_count;
     uint32_t terminal;

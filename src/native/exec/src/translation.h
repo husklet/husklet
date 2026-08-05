@@ -17,6 +17,7 @@ typedef struct hl_native_emission {
     const uint8_t *bytes;
     uint64_t size;
     uint64_t body_offset;
+    uint64_t admitted_offset;
     const hl_native_provenance *provenance;
     uint32_t provenance_count;
     const hl_native_relocation *relocations;

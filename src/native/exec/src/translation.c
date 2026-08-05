@@ -20,7 +20,8 @@ hl_native_status hl_native_translation_publish(hl_native_executor *executor, con
     int published = 0;
     int reserved = 0;
     if (executor == NULL || key == NULL || emission == NULL || emission->bytes == NULL ||
-        emission->size == 0 || emission->body_offset >= emission->size || emission->provenance == NULL ||
+        emission->size == 0 || emission->body_offset >= emission->size ||
+        emission->admitted_offset >= emission->size || emission->provenance == NULL ||
         emission->provenance_count == 0 || emission->provenance_count > HL_NATIVE_PROVENANCE_MAX ||
         (emission->relocation_count != 0 && emission->relocations == NULL) ||
         (emission->conditional_self_loop != 0 && emission->loop_pc != key->guest) ||
@@ -49,6 +50,7 @@ hl_native_status hl_native_translation_publish(hl_native_executor *executor, con
     if (status == HL_NATIVE_OK) memcpy(writable, emission->bytes, emission->size);
     if (status == HL_NATIVE_OK) {
         block.instruction_count = emission->instruction_count != 0 ? emission->instruction_count : 1u;
+        block.admitted_offset = block.code_offset + emission->admitted_offset;
         block.conditional_self_loop = emission->conditional_self_loop;
         block.cycle_safe = emission->cycle_safe;
         block.loop_pc = emission->loop_pc;

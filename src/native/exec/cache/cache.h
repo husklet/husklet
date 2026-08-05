@@ -30,6 +30,7 @@ typedef struct hl_native_block {
     uint64_t code_offset;
     uint64_t code_size;
     uint64_t body_offset;
+    uint64_t admitted_offset;
     uint64_t mapping_epoch;
     uint64_t instruction_epoch;
     uint64_t memory_mode;
@@ -46,6 +47,7 @@ typedef struct hl_native_block {
 typedef struct hl_native_code {
     void *entry;
     void *body;
+    void *admitted;
     uint64_t code_size;
     uint64_t generation;
     uint64_t source_first;
@@ -79,6 +81,7 @@ typedef struct hl_native_relocation {
     uint64_t target_instruction_epoch;
     uint32_t target_epoch_known;
     uint32_t expected;
+    uint32_t target_instruction_count;
     uint32_t reserved;
 } hl_native_relocation;
 

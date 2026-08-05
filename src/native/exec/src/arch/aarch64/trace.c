@@ -555,6 +555,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     hl_a64_stub_prologue(&assembler);
     output->body_offset = hl_a64_assembler_size(&assembler);
     hl_a64_stub_budget_begin(&assembler, pc, &budget_guard);
+    output->admitted_offset = hl_a64_assembler_size(&assembler);
     output->source_first = pc;
     for (size_t index = 0; index < count; index++) {
         uint64_t instruction = pc + index * 4;
@@ -783,6 +784,7 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
     if (trace.provenance_count == 0) return HL_NATIVE_STATE;
     emission = (hl_native_emission){.bytes = buffer, .size = trace.code_size,
                                     .body_offset = trace.body_offset, .provenance = trace.provenance,
+                                    .admitted_offset = trace.admitted_offset,
                                     .provenance_count = trace.provenance_count,
                                     .relocations = trace.relocations,
                                     .relocation_count = trace.relocation_count,

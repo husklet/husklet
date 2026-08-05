@@ -660,7 +660,8 @@ int main(void) {
     }
     CHECK(hl_a64_trace_build(&source, 0x2000, 17, code, capacity, &trace));
     CHECK(trace.code_size != 0 && trace.provenance_count == 23);
-    CHECK(trace.body_offset != 0 && trace.body_offset < trace.code_size && trace.instruction_count == 17);
+    CHECK(trace.body_offset != 0 && trace.body_offset < trace.admitted_offset &&
+          trace.admitted_offset < trace.code_size && trace.instruction_count == 17);
     CHECK(trace.source_first == 0x2000 && trace.source_last == 0x2044);
     for (unsigned i = 0; i < 17; i++) CHECK(trace.provenance[i].guest == 0x2000 + i * 4);
     CHECK(mprotect(code, capacity, PROT_READ | PROT_EXEC) == 0);
@@ -851,6 +852,7 @@ int main(void) {
                                  sizeof(scratch), &cached, &hit) == HL_NATIVE_OK);
         CHECK(hit == 0);
         CHECK(cached.body != cached.entry);
+        CHECK((const uint8_t *)cached.admitted > (const uint8_t *)cached.body);
         CHECK(hl_a64_trace_cache(executor, &flow, flow_pc[i], flow_count[i], scratch,
                                  sizeof(scratch), &cached, &hit) == HL_NATIVE_OK);
         CHECK(hit == 1);
