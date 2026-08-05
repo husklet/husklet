@@ -26,8 +26,8 @@ static void jump(uint32_t *instruction, uint32_t *target) {
     *instruction = UINT32_C(0x14000000) | ((uint32_t)distance & UINT32_C(0x03ffffff));
 }
 
-uint32_t hl_x86_read_cache_words(void) {
-    return 12u + HL_X86_READ_VIEWS * 14u;
+uint32_t hl_x86_read_cache_words(unsigned width) {
+    return 12u + HL_X86_READ_VIEWS * (14u + (width == 32u ? 1u : 0u));
 }
 
 void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
@@ -66,6 +66,8 @@ void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
             : ((width == 1u ? UINT32_C(0x39400220) :
                 width == 2u ? UINT32_C(0x79400220) :
                 width == 4u ? UINT32_C(0xb9400220) : UINT32_C(0xf9400220)) | destination);
+        if (vector && width == 32u)
+            words[(*cursor)++] = UINT32_C(0x3dc00620) | (destination + 1u); /* ldr qD+1,[x17,#16] */
         hits[index] = &words[(*cursor)++];
     }
     uint32_t *active = &words[*cursor];
@@ -82,6 +84,26 @@ void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
         branch(next[index][2], following, 8u); /* end above last */
         test(next[index][3], following, 0u);
     }
+}
+
+void hl_x86_emit_vector_upper_load(uint32_t *words, uint32_t *cursor,
+                                   unsigned destination, unsigned guest) {
+    size_t offset = offsetof(hl_native_x86_64_cpu, vector_upper) + guest * 16u;
+    words[(*cursor)++] = UINT32_C(0x91000000) | (uint32_t)offset << 10 | 28u << 5 | 20u;
+    words[(*cursor)++] = UINT32_C(0x3dc00280) | destination; /* ldr qD,[x20] */
+}
+
+void hl_x86_emit_vector_upper_store(uint32_t *words, uint32_t *cursor,
+                                    unsigned source, unsigned guest) {
+    size_t offset = offsetof(hl_native_x86_64_cpu, vector_upper) + guest * 16u;
+    words[(*cursor)++] = UINT32_C(0x91000000) | (uint32_t)offset << 10 | 28u << 5 | 20u;
+    words[(*cursor)++] = UINT32_C(0x3d800280) | source; /* str qS,[x20] */
+}
+
+void hl_x86_emit_vector_upper_zero(uint32_t *words, uint32_t *cursor, unsigned guest) {
+    size_t offset = offsetof(hl_native_x86_64_cpu, vector_upper) + guest * 16u;
+    words[(*cursor)++] = store_word(31u, offset);
+    words[(*cursor)++] = store_word(31u, offset + 8u);
 }
 
 void hl_x86_patch_read_hits(uint32_t **hits, uint32_t *target) {
@@ -266,7 +288,7 @@ uint32_t hl_x86_load_words(const instruction *item) {
     uint32_t words = hl_x86_address_words(item) - 1u + 23u + (item->live_chain != 0u ? 19u : 0u) +
                      item->memory_write +
                      constant_words(access_width) + constant_words(item->pc);
-    if (item->memory_write == 0u) words += hl_x86_read_cache_words();
+    if (item->memory_write == 0u) words += hl_x86_read_cache_words(access_width);
     else words += HL_X86_WRITE_CACHE_WORDS;
 
     if (item->load_width != 0u && item->signed_extend != 0u && item->width == 2u) ++words;
@@ -826,14 +848,16 @@ static uint32_t vector_operation_words(const instruction *item) {
 
 uint32_t hl_x86_vector_words(const instruction *item) {
     uint32_t operation = vector_operation_words(item);
+    uint32_t width = item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
     uint32_t aligned = item->vector_aligned == 0u ? 0u :
                        6u + constant_words(item->pc) + (item->live_chain != 0u ? 19u : 0u);
     if (item->memory_operand == 0u) return operation;
     return hl_x86_address_words(item) - 1u + (item->memory_write != 0u ? 42u + HL_X86_WRITE_CACHE_WORDS : 24u) +
-           (item->memory_write == 0u ? hl_x86_read_cache_words() : 0u) +
+           (item->memory_write == 0u ? hl_x86_read_cache_words(width) : 0u) +
            (item->live_chain != 0u ? 19u : 0u) +
            constant_words(item->pc) +
-           (item->vector_kind != VECTOR_COPY && item->memory_write == 0u ? operation : 0u) + aligned;
+           (item->vector_kind != VECTOR_COPY && item->memory_write == 0u ? operation : 0u) + aligned +
+           (width == 32u ? (item->memory_write != 0u ? 3u : 4u) : 0u);
 }
 
 static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instruction *item) {
@@ -1143,7 +1167,8 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
     }
     if (item->memory_write == 0u)
         hl_x86_emit_read_cache(words, cursor, width,
-                               item->vector_kind == VECTOR_COPY ? item->destination : 16u,
+                               width == 32u ? 16u :
+                                   item->vector_kind == VECTOR_COPY ? item->destination : 16u,
                                !scalar_vector, cache_hits);
     else
         emit_write_cache(words, cursor, width);
@@ -1160,10 +1185,13 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_delta));
     words[(*cursor)++] = UINT32_C(0x8b110211); /* add x17,x16,x17 */
     if (item->memory_write != 0u) {
+        if (width == 32u) hl_x86_emit_vector_upper_load(words, cursor, 17u, item->source);
         words[(*cursor)++] = UINT32_C(0xd5033abf); /* dmb ishst: preserve x86 StoreStore ordering */
         words[(*cursor)++] = (width == 4u ? UINT32_C(0xbd000220) :
                                width == 8u ? UINT32_C(0xfd000220) : UINT32_C(0x3d800220)) |
                               item->source;
+        if (width == 32u)
+            words[(*cursor)++] = UINT32_C(0x3d800620) | 17u; /* str q17,[x17,#16] */
         words[(*cursor)++] = UINT32_C(0xd2800031);
         words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, memory_written));
         hl_x86_emit_dirty(words, cursor);
@@ -1175,9 +1203,16 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
         words[(*cursor)++] = (width == 2u ? UINT32_C(0x79400220) :
                                width == 4u ? UINT32_C(0xbd400220) :
                                width == 8u ? UINT32_C(0xfd400220) : UINT32_C(0x3dc00220)) |
-                              (item->vector_kind == VECTOR_COPY ? item->destination : 16u);
+                              (width == 32u ? 16u :
+                                  item->vector_kind == VECTOR_COPY ? item->destination : 16u);
+        if (width == 32u)
+            words[(*cursor)++] = UINT32_C(0x3dc00620) | 17u; /* ldr q17,[x17,#16] */
+        if (width == 32u && item->vector_kind == VECTOR_COPY) loaded_operation = &words[*cursor];
         words[(*cursor)++] = UINT32_C(0xd50339bf); /* dmb ishld: preserve x86 LoadLoad/LoadStore */
-        if (item->vector_kind != VECTOR_COPY) {
+        if (width == 32u && item->vector_kind == VECTOR_COPY) {
+            words[(*cursor)++] = UINT32_C(0x4ea01c00) | 16u << 16 | 16u << 5 | item->destination;
+            hl_x86_emit_vector_upper_store(words, cursor, 17u, item->destination);
+        } else if (item->vector_kind != VECTOR_COPY) {
             loaded_operation = &words[*cursor];
             emit_vector_operation(words, cursor, item);
         }
@@ -1221,5 +1256,6 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
     branch(skip, &words[*cursor], 14u);
     if (item->memory_write == 0u)
         hl_x86_patch_read_hits(cache_hits,
-                               item->vector_kind == VECTOR_COPY ? &words[*cursor] : loaded_operation);
+                               item->vector_kind == VECTOR_COPY && width != 32u ?
+                                   &words[*cursor] : loaded_operation);
 }

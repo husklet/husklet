@@ -1707,7 +1707,7 @@ static int rmw_projection_contract(void) {
 
 #if defined(__aarch64__)
 static uint32_t vector_fragment(uint32_t *host, size_t host_capacity, int write,
-                                unsigned vector);
+                                unsigned vector, unsigned width);
 
 static int execute_fragment(const uint32_t *host, uint32_t count, hl_native_x86_64_cpu *cpu) {
     long page = sysconf(_SC_PAGESIZE);
@@ -1872,7 +1872,7 @@ static int read_cache_contract(void) {
     uint32_t control[256] = {0};
     uint32_t scalar_count = scalar_read_fragment(scalar);
     uint32_t vector_count =
-        vector_fragment(vector, sizeof vector / sizeof vector[0], 0, 9u);
+        vector_fragment(vector, sizeof vector / sizeof vector[0], 0, 9u, 16u);
     hl_native_x86_64_cpu cpu;
     instruction item;
     uint32_t control_count = 0;
@@ -3919,14 +3919,14 @@ static int leave_contract(void) {
 }
 
 static uint32_t vector_fragment(uint32_t *host, size_t host_capacity, int write,
-                                unsigned vector) {
+                                unsigned vector, unsigned width) {
     instruction item;
     uint32_t cursor = 0;
 
     memset(&item, 0, sizeof item);
     item.pc = UINT64_C(0x45678000);
     item.operation = OP_VECTOR;
-    item.width = 16u;
+    item.width = (uint8_t)width;
     item.destination = (uint8_t)vector;
     item.source = (uint8_t)vector;
     item.memory_operand = 1u;
@@ -3961,7 +3961,7 @@ static int vector_projection(void) {
     memset(unchanged, 0x5a, sizeof unchanged);
     memset(storage, 0xa5, sizeof storage);
     memcpy(storage + 8, value, sizeof value);
-    count = vector_fragment(host, sizeof host / sizeof host[0], 0, 9u);
+    count = vector_fragment(host, sizeof host / sizeof host[0], 0, 9u, 16u);
     memcpy(code, host, count * sizeof(uint32_t));
     __builtin___clear_cache((char *)code, (char *)code + count * sizeof(uint32_t));
     CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
@@ -4004,7 +4004,7 @@ static int vector_projection(void) {
 
     CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
     memset(host, 0, sizeof host);
-    count = vector_fragment(host, sizeof host / sizeof host[0], 1, 8u);
+    count = vector_fragment(host, sizeof host / sizeof host[0], 1, 8u, 16u);
     memcpy(code, host, count * sizeof(uint32_t));
     __builtin___clear_cache((char *)code, (char *)code + count * sizeof(uint32_t));
     CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
@@ -4063,6 +4063,69 @@ static int guarded_load_store_handoff(void) {
     hl_native_x86_64_enter(&cpu, code);
     CHECK(storage[1] == storage[0]);
     CHECK(cpu.fault_access == 0 && cpu.memory_written == 1);
+    CHECK(munmap(code, (size_t)page) == 0);
+    return 0;
+#endif
+}
+
+static int vector_256_memory_owner(void) {
+#if !defined(__aarch64__)
+    return 0;
+#else
+    _Alignas(32) uint8_t storage[64];
+    uint8_t expected[32], before[32];
+    long page = sysconf(_SC_PAGESIZE);
+    uint32_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    uint32_t host[384] = {0};
+    hl_native_x86_64_cpu cpu = {0};
+    uint32_t count;
+    unsigned index;
+
+    CHECK(code != MAP_FAILED);
+    for (index = 0; index < sizeof expected; ++index) expected[index] = (uint8_t)(index * 13u + 5u);
+    memcpy(storage + 7, expected, sizeof expected); /* deliberately unaligned */
+    count = vector_fragment(host, sizeof host / sizeof host[0], 0, 6u, 32u);
+    memcpy(code, host, count * sizeof(uint32_t));
+    __builtin___clear_cache((char *)code, (char *)code + count * sizeof(uint32_t));
+    CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+    memset(&cpu.vectors[12], 0xa5, 16); memset(&cpu.vector_upper[12], 0xa5, 16);
+    cpu.registers[3] = UINT64_C(0x2017); cpu.memory_first = UINT64_C(0x2000);
+    cpu.memory_last = UINT64_C(0x2037);
+    cpu.memory_delta = (uint64_t)(uintptr_t)storage - UINT64_C(0x2010);
+    cpu.memory_permissions = 1u; cpu.dirty_first = UINT64_MAX;
+    cpu.read_incarnation = cpu.read_token = 7u; cpu.read_count = 1u;
+    cpu.read_views[0][0] = UINT64_C(0x2000); cpu.read_views[0][1] = UINT64_C(0x2037);
+    cpu.read_views[0][2] = cpu.memory_delta; cpu.read_views[0][3] = 1u;
+    cpu.memory_first = cpu.memory_last = 0; /* success must come from the published cache view */
+    hl_native_x86_64_enter(&cpu, code);
+    CHECK(memcmp(&cpu.vectors[12], expected, 16) == 0);
+    CHECK(memcmp(&cpu.vector_upper[12], expected + 16, 16) == 0);
+
+    memset(&cpu.vectors[12], 0x5a, 16); memset(&cpu.vector_upper[12], 0x5a, 16);
+    memset(before, 0x5a, sizeof before); cpu.memory_last = UINT64_C(0x2027);
+    cpu.memory_first = UINT64_C(0x2000); cpu.read_token = 0;
+    cpu.reason = cpu.fault_access = cpu.fault_size = 0;
+    hl_native_x86_64_enter(&cpu, code);
+    CHECK(memcmp(&cpu.vectors[12], before, 16) == 0);
+    CHECK(memcmp(&cpu.vector_upper[12], before + 16, 16) == 0);
+    CHECK(cpu.fault_access == 1u && cpu.fault_size == 32u);
+
+    CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+    count = vector_fragment(host, sizeof host / sizeof host[0], 1, 6u, 32u);
+    memcpy(code, host, count * sizeof(uint32_t));
+    __builtin___clear_cache((char *)code, (char *)code + count * sizeof(uint32_t));
+    CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+    memcpy(&cpu.vectors[12], expected, 16); memcpy(&cpu.vector_upper[12], expected + 16, 16);
+    memset(storage + 7, 0x33, 32); memcpy(before, storage + 7, 32);
+    cpu.memory_permissions = 2u; cpu.memory_last = UINT64_C(0x2027);
+    cpu.reason = cpu.fault_access = cpu.fault_size = cpu.memory_written = 0;
+    hl_native_x86_64_enter(&cpu, code);
+    CHECK(memcmp(storage + 7, before, 32) == 0 && cpu.memory_written == 0u);
+    cpu.memory_last = UINT64_C(0x2037); cpu.reason = cpu.fault_access = cpu.fault_size = 0;
+    hl_native_x86_64_enter(&cpu, code);
+    CHECK(memcmp(storage + 7, expected, 32) == 0 && cpu.memory_written == 1u);
+    CHECK(cpu.dirty_first == UINT64_C(0x2017) && cpu.dirty_last == UINT64_C(0x2037));
     CHECK(munmap(code, (size_t)page) == 0);
     return 0;
 #endif
@@ -4514,6 +4577,8 @@ int main(void) {
     status = accumulator_sign();
     if (status != 0) return status;
     status = vector_projection();
+    if (status != 0) return status;
+    status = vector_256_memory_owner();
     if (status != 0) return status;
     status = guarded_load_store_handoff();
     if (status != 0) return status;

@@ -84,10 +84,15 @@ uint32_t hl_x86_address_words(const instruction *item);
 void hl_x86_emit_address(uint32_t *words, uint32_t *cursor, const instruction *item);
 uint32_t hl_x86_load_words(const instruction *item);
 void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item);
-uint32_t hl_x86_read_cache_words(void);
+uint32_t hl_x86_read_cache_words(unsigned width);
 void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
                             unsigned destination, int vector, uint32_t **hits);
 void hl_x86_patch_read_hits(uint32_t **hits, uint32_t *target);
+void hl_x86_emit_vector_upper_load(uint32_t *words, uint32_t *cursor,
+                                   unsigned destination, unsigned guest);
+void hl_x86_emit_vector_upper_store(uint32_t *words, uint32_t *cursor,
+                                    unsigned source, unsigned guest);
+void hl_x86_emit_vector_upper_zero(uint32_t *words, uint32_t *cursor, unsigned guest);
 uint32_t hl_x86_cmov_words(const instruction *item);
 void hl_x86_emit_cmov(uint32_t *words, uint32_t *cursor, const instruction *item, unsigned source);
 uint32_t hl_x86_set_words(const instruction *item);
