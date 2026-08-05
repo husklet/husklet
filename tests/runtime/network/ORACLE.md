@@ -105,3 +105,28 @@ were not counted as QEMU active rows.
 87 registrations. Its source and `provider-loopback ok\n` golden are preserved,
 but direct native execution cannot pass because the retired typed provider must
 inject its descriptors; its typed unsupported status records that runner gap.
+
+## Dual-stack bridge wildcard audit
+
+The live container routing lane additionally followed retained
+`syscall/net.c::svc_net` bind, listen, accept, and connect cases through
+`container/netns.c::{br6_any_is,br_bind_interface,br_path,br_v6only_path,
+br_alias_wildcard_listener,fd_carry_sock,udp_ref_create,udp_ref_dup,
+udp_ref_drop}`. An IPv6 unspecified stream bind joins the first configured
+IPv4 bridge; `IPV6_V6ONLY` uses a distinct `.v6only` rendezvous, while a
+dual-stack listener owns the ordinary IPv4 path and wildcard aliases. The
+AF_UNIX inode remains owned until the last duplicate/fork reference closes.
+Bind failures retain `EINVAL`, `EADDRINUSE`, and path-length errors; listen and
+accept keep their ordinary blocking, cancellation, signal, and partial-I/O
+paths. This mechanism has no guest-ISA branch. Windows leaves the private
+AF_UNIX namespace disabled; POSIX hosts use the switch path.
+
+| Capability | Rust owner | Status |
+|---|---|---|
+| IPv6 `::` selects the first configured bridge | `hl-network::NetworkPolicy::bind_route` | implemented |
+| wildcard listener aliases every attached bridge | `hl-network::BindRoute`; native switch path ownership | implemented |
+| dual-stack listener owns the IPv4 rendezvous | `hl-engine` native `RuntimeNetworkHost::bind_route` | implemented |
+| `IPV6_V6ONLY` remains isolated from IPv4 peers | native socket option projection and `.v6only` path | implemented |
+| specific IPv6 binds remain on the native IPv6 stack | `hl-network::NetworkPolicy` | implemented |
+| policy-selected bridge listeners invoke host listen/accept | `hl-runtime::RuntimeNetworkSyscalls` | implemented |
+| last-close cleanup and failed-bind rollback | native `SwitchPath` ownership and socket restoration | implemented |

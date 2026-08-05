@@ -41,9 +41,16 @@ impl NetworkPolicy {
     pub fn bind_route(&self, address: SocketAddress) -> BindRoute {
         let interface = match &address {
             SocketAddress::Inet4 { address, .. } => self.bind_interface(*address).map(EgressInterface::from),
+            SocketAddress::Inet6 { address, .. } if *address == [0; 16] => self
+                .interfaces
+                .iter()
+                .find(|candidate| !candidate.bridge.is_empty())
+                .map(EgressInterface::from),
             SocketAddress::Inet6 { .. } | SocketAddress::Unix(_) => None,
         };
-        let aliases = if matches!(&address, SocketAddress::Inet4 { address, .. } if *address == [0; 4]) {
+        let wildcard = matches!(&address, SocketAddress::Inet4 { address, .. } if *address == [0; 4])
+            || matches!(&address, SocketAddress::Inet6 { address, .. } if *address == [0; 16]);
+        let aliases = if wildcard {
             self.interfaces
                 .iter()
                 .filter(|candidate| !candidate.bridge.is_empty())
@@ -103,5 +110,27 @@ mod tests {
         assert_eq!(route.aliases.len(), 1);
         assert_eq!(route.aliases[0].bridge, b"second");
         assert_eq!(route.aliases[0].ipv4, [192, 0, 2, 2]);
+
+        let ipv6 = policy.bind_route(SocketAddress::Inet6 {
+            address: [0; 16],
+            port: 8080,
+            scope: 0,
+        });
+        assert_eq!(ipv6.interface.as_ref().unwrap().bridge, b"first");
+        assert_eq!(ipv6.aliases, route.aliases);
+    }
+
+    #[test]
+    fn specific_ipv6_bind_stays_on_the_native_ipv6_stack() {
+        let policy = NetworkPolicy::from_launch(false, b"", b"", b"first=10.0.0.2/8").unwrap();
+        let mut address = [0; 16];
+        address[15] = 1;
+        let route = policy.bind_route(SocketAddress::Inet6 {
+            address,
+            port: 8080,
+            scope: 0,
+        });
+        assert!(route.interface.is_none());
+        assert!(route.aliases.is_empty());
     }
 }

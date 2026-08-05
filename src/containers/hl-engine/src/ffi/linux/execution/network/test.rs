@@ -245,6 +245,43 @@ fn selected_interface_streams_rendezvous_and_release_their_path() {
 }
 
 #[test]
+fn dual_stack_wildcard_listener_owns_the_ipv4_switch_path() {
+    let bridge = format!("dual-stack-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 99, 0, 2],
+    };
+    let port = 34_000 + (std::process::id() % 20_000) as u16;
+    let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.99.0.2:{port}"));
+    let host = Native::new();
+    let listener = host
+        .create(AddressFamily::Inet6, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    assert_eq!(
+        host.bind_route(
+            listener.token,
+            BindRoute {
+                address: SocketAddress::Inet6 {
+                    address: [0; 16],
+                    port,
+                    scope: 0,
+                },
+                interface: Some(interface),
+                aliases: Vec::new(),
+            },
+        ),
+        Ok(SocketAddress::Inet4 {
+            address: [10, 99, 0, 2],
+            port,
+        })
+    );
+    assert!(path.exists());
+    host.close(listener.token);
+    assert!(!path.exists());
+}
+
+#[test]
 fn selected_interface_stream_connect_retries_until_listener_arrives() {
     let bridge = format!("retry-{}", std::process::id());
     let interface = EgressInterface {

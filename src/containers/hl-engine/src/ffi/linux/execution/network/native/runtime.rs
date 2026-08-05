@@ -166,8 +166,10 @@ impl RuntimeNetworkHost for Native {
         let Some(interface) = route.interface else {
             return self.bind(token, route.address);
         };
-        let SocketAddress::Inet4 { address, port } = route.address else {
-            return Err(RuntimeNetworkError::Invalid);
+        let (address, port, ipv6_wildcard) = match route.address {
+            SocketAddress::Inet4 { address, port } => (address, port, false),
+            SocketAddress::Inet6 { address, port, .. } if address == [0; 16] => ([0; 4], port, true),
+            SocketAddress::Inet6 { .. } | SocketAddress::Unix(_) => return Err(RuntimeNetworkError::Invalid),
         };
         let kind = self.socket_type(token)?;
         if !matches!(kind, libc::SOCK_STREAM | libc::SOCK_DGRAM) {
@@ -179,10 +181,21 @@ impl RuntimeNetworkHost for Native {
             port
         };
         let attempts = if port == 0 { 45_000 } else { 1 };
+        let ipv6_only = if ipv6_wildcard {
+            matches!(
+                super::super::socket_option::get(self.descriptor(token)?, 41, 26),
+                Ok(hl_linux::GuestSocketOption::Scalar(value)) if value != 0
+            )
+        } else {
+            false
+        };
         let mut descriptor = None;
         for offset in 0..attempts {
             let candidate = first.wrapping_add(offset as u16).max(1024);
-            let (directory, path) = Self::switch_path(&interface, interface.ipv4, candidate)?;
+            let (directory, mut path) = Self::switch_path(&interface, interface.ipv4, candidate)?;
+            if ipv6_only {
+                path.extend_from_slice(b".v6only");
+            }
             Self::mkdir_switch(&directory)?;
             let (storage, length) = Self::socket_address(&SocketAddress::Unix(path.clone()))?;
             let descriptor = match descriptor {
@@ -205,7 +218,10 @@ impl RuntimeNetworkHost for Native {
                         return Ok(());
                     }
                     for alias in route.aliases {
-                        let (alias_directory, alias_path) = Self::switch_path(&alias, alias.ipv4, candidate)?;
+                        let (alias_directory, mut alias_path) = Self::switch_path(&alias, alias.ipv4, candidate)?;
+                        if ipv6_only {
+                            alias_path.extend_from_slice(b".v6only");
+                        }
                         Self::mkdir_switch(&alias_directory)?;
                         let target = std::ffi::CString::new(path.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
                         let alias_name =

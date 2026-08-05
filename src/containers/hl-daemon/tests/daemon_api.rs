@@ -31,6 +31,19 @@ api_test!(persistence_restart, persistence_restart);
 api_test!(removal_wait_race, removal_race);
 api_test!(volume_raw_contract, volume);
 
+#[tokio::test]
+#[ignore = "requires HL_ALPINE_ARCHIVE"]
+async fn bridge_routing_contract() -> Result<(), Error> {
+    let work = TempDir::new()?;
+    let rootfs = work.path().join("rootfs");
+    let archive = env::var_os("HL_ALPINE_ARCHIVE")
+        .map(PathBuf::from)
+        .ok_or("HL_ALPINE_ARCHIVE must name the pinned Alpine minirootfs")?;
+    unpack(archive, rootfs.clone()).await?;
+    let containers = containers_for(work.path()).await?;
+    api::network_bridge::run(&containers, &rootfs).await
+}
+
 /// These contracts execute real Linux programs and therefore require the pinned
 /// Alpine rootfs used by repository end-to-end runs.
 #[tokio::test]

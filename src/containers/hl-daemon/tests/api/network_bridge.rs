@@ -28,19 +28,18 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Bo
             .isolation(isolation),
         )
         .await?;
-    let client = containers
-        .create(
-            ContainerSpec::from_directory(
-                rootfs,
-                Process::new("/bin/sh").args(["-c", "nc -w 3 network-server 23456"]),
-            )
-            .name("network-client")
-            .isolation(isolation),
-        )
-        .await?;
-    containers
+    let server_endpoint = containers
         .networks()
         .connect(&network.name, server.id.as_str(), hl_container::EndpointSpec::default())
+        .await?;
+    let server_address = server_endpoint.address.ok_or("bridge server endpoint has no address")?;
+    let client_command = format!("nc -w 3 network-server 23456; nc -w 3 {server_address} 23456");
+    let client = containers
+        .create(
+            ContainerSpec::from_directory(rootfs, Process::new("/bin/sh").args(["-c", &client_command]))
+                .name("network-client")
+                .isolation(isolation),
+        )
         .await?;
     containers
         .networks()
@@ -60,7 +59,7 @@ pub(crate) async fn run(containers: &Containers, rootfs: &Path) -> Result<(), Bo
         .into());
     }
     let client_logs = containers.logs(client.id.as_str()).await?;
-    if client_logs.stdout != b"bridge-ok\n" {
+    if client_logs.stdout != b"bridge-ok\nbridge-ok\n" {
         return Err(format!(
             "bridge payload mismatch: stdout={:?}; stderr={:?}",
             String::from_utf8_lossy(&client_logs.stdout),

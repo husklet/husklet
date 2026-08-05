@@ -495,7 +495,13 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .local
             .as_ref()
-            .is_some_and(Self::local_projection);
+            .is_some_and(|address| {
+                Self::local_projection(address)
+                    || self
+                        .policy
+                        .as_ref()
+                        .is_some_and(|policy| policy.bind_route(address.clone()).interface.is_some())
+            });
         if !self.host_projection && !local_projection {
             let mut snapshot = socket
                 .snapshot
