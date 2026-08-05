@@ -9,14 +9,23 @@ use crate::{
 
 impl TaskRegistry {
     pub fn charge_cpu(&self, process: ProcessId, nanoseconds: u64) -> Result<(), TaskError> {
-        let mut state = self.lock();
-        let usage = &mut Self::process_mut(&mut state, process)?.cpu_usage.self_nanoseconds;
-        *usage = usage.saturating_add(nanoseconds);
+        self.cpu_account(process)?.charge(nanoseconds);
         Ok(())
     }
 
+    pub fn cpu_account(&self, process: ProcessId) -> Result<std::sync::Arc<crate::CpuAccount>, TaskError> {
+        Ok(std::sync::Arc::clone(
+            &Self::process(&self.lock(), process)?.cpu_account,
+        ))
+    }
+
     pub fn cpu_usage(&self, process: ProcessId) -> Result<crate::CpuUsage, TaskError> {
-        Ok(Self::process(&self.lock(), process)?.cpu_usage)
+        let state = self.lock();
+        let process = Self::process(&state, process)?;
+        Ok(crate::CpuUsage {
+            self_nanoseconds: process.cpu_account.nanoseconds(),
+            children_nanoseconds: process.cpu_usage.children_nanoseconds,
+        })
     }
 
     pub(super) fn ensure_process_unreserved(state: &State, process: ProcessId) -> Result<(), TaskError> {
@@ -66,7 +75,11 @@ impl TaskRegistry {
             let action = Self::process(state, parent)?.signals.actions[16];
             let auto_reap = action.disposition == SignalDisposition::Ignore || action.flags & SA_NOCLDWAIT != 0;
             if auto_reap {
-                let child_usage = Self::process(state, process)?.cpu_usage.total_nanoseconds();
+                let child = Self::process(state, process)?;
+                let child_usage = child
+                    .cpu_account
+                    .nanoseconds()
+                    .saturating_add(child.cpu_usage.children_nanoseconds);
                 let usage = &mut Self::process_mut(state, parent)?.cpu_usage.children_nanoseconds;
                 *usage = usage.saturating_add(child_usage);
                 Self::queue_child_signal(state, parent, process, ChildEventKind::Exited(status), max_pending)?;

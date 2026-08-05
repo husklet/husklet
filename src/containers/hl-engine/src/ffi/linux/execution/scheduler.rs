@@ -555,10 +555,10 @@ impl GuestExecutor {
                     CompletionTurn::Idle | CompletionTurn::Continue => continue,
                 }
             };
-            let process = run.process;
+            let cpu_account = run.cpu_account.clone();
             let mut charged_at = Self::thread_cpu();
             let advanced = Self::advance(isa, plan, threads, waiters, run, &mut native, &mut charged_at);
-            Self::charge_elapsed(threads, process, &mut charged_at);
+            Self::charge_elapsed(cpu_account.as_deref(), &mut charged_at);
             if let Some(exit) = advanced? {
                 return Ok(exit);
             }
@@ -572,10 +572,12 @@ impl GuestExecutor {
         crate::native::HostSyscalls::clock_ns(&crate::ffi::LinuxHost, crate::native::ClockKind::ThreadCpu).ok()
     }
 
-    fn charge_elapsed(threads: &threads::ThreadSet, process: hl_task::ProcessId, charged_at: &mut Option<u64>) {
+    fn charge_elapsed(account: Option<&hl_task::CpuAccount>, charged_at: &mut Option<u64>) {
         let Some(finished) = Self::thread_cpu() else { return };
         if let Some(started) = charged_at.replace(finished) {
-            threads.charge_cpu(process, finished.saturating_sub(started));
+            if let Some(account) = account {
+                account.charge(finished.saturating_sub(started));
+            }
         }
     }
 
@@ -650,7 +652,7 @@ impl GuestExecutor {
             let result = Self::execute_turn(isa, run, native, native_budget);
             run = result.run;
             if matches!(result.action, TurnAction::Dispatch) && Self::observes_cpu_accounting(isa, &run.machine) {
-                Self::charge_elapsed(threads, run.process, charged_at);
+                Self::charge_elapsed(run.cpu_account.as_deref(), charged_at);
             }
             if matches!(result.action, TurnAction::Dispatch) && Self::configures_cpu_boundary(isa, &run.machine) {
                 native.boundary_sensitive.insert(run.process);

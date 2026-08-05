@@ -41,6 +41,7 @@ struct ThreadContext {
 pub(super) struct ThreadRun {
     pub(super) thread: ThreadId,
     pub(super) process: ProcessId,
+    pub(super) cpu_account: Option<Arc<hl_task::CpuAccount>>,
     pub(super) generation: u64,
     pub(super) machine: Arc<ExecutionMachine>,
     pub(super) router: Arc<RuntimeSyscallRouter>,
@@ -107,9 +108,14 @@ impl ThreadSet {
                 .map_err(|_| RuntimeThreadError::Invalid)?;
         }
         let prepared = state.prepared.remove(&thread).expect("validated prepared thread");
+        let cpu_account = self
+            .tasks
+            .as_ref()
+            .and_then(|tasks| tasks.cpu_account(prepared.process).ok());
         let run = ThreadRun {
             thread,
             process: prepared.process,
+            cpu_account,
             generation,
             machine,
             router: prepared.router,
@@ -131,6 +137,7 @@ impl ThreadSet {
         ThreadRun {
             thread: run.thread,
             process: run.process,
+            cpu_account: run.cpu_account.clone(),
             generation: run.generation,
             machine: Arc::clone(&run.machine),
             router: Arc::clone(&run.router),
@@ -156,12 +163,6 @@ impl ThreadSet {
         })
     }
 
-    pub(super) fn charge_cpu(&self, process: ProcessId, nanoseconds: u64) {
-        if let Some(tasks) = &self.tasks {
-            let _ = tasks.charge_cpu(process, nanoseconds);
-        }
-    }
-
     pub(super) fn prepare_image(
         &self,
         caller: ThreadId,
@@ -173,10 +174,15 @@ impl ThreadSet {
     ) -> Result<PreparedImage, RuntimeThreadError> {
         let machine = Arc::new(self.machine(snapshot)?);
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
-        let Some((current_process, caller_generation, interrupt)) = state
-            .machines
-            .get(&caller)
-            .map(|run| (run.process, run.generation, Arc::clone(&run.interrupt)))
+        let Some((current_process, caller_generation, interrupt, cpu_account)) =
+            state.machines.get(&caller).map(|run| {
+                (
+                    run.process,
+                    run.generation,
+                    Arc::clone(&run.interrupt),
+                    run.cpu_account.clone(),
+                )
+            })
         else {
             return Err(RuntimeThreadError::Missing);
         };
@@ -194,6 +200,7 @@ impl ThreadSet {
             candidate: Some(ThreadRun {
                 thread: target,
                 process: current_process,
+                cpu_account,
                 generation,
                 machine,
                 router,

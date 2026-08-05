@@ -27,10 +27,10 @@ pub use fork_model::{
 pub use identity::{ProcessGroupId, ProcessId, SessionId, ThreadId};
 pub use model::{
     CancellationEvent, CapabilitySets, ChildClass, ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector,
-    ChildWaitOptions, ChildWaitResult, CloneThreadPlan, CpuUsage, ExitStatus, ForkProcessPlan, PreparedChildWait,
-    PreparedWaitSelection, ProcessCredentials, ProcessGroupSnapshot, ProcessLifecycle, ProcessObservation,
-    ProcessSnapshot, RegistryConfig, RegistrySnapshot, SessionSnapshot, SetIdAuthority, SignalPendingEvent, TaskError,
-    ThreadLifecycle, ThreadSnapshot, WaitEvent, WaitSelector,
+    ChildWaitOptions, ChildWaitResult, CloneThreadPlan, CpuAccount, CpuUsage, ExitStatus, ForkProcessPlan,
+    PreparedChildWait, PreparedWaitSelection, ProcessCredentials, ProcessGroupSnapshot, ProcessLifecycle,
+    ProcessObservation, ProcessSnapshot, RegistryConfig, RegistrySnapshot, SessionSnapshot, SetIdAuthority,
+    SignalPendingEvent, TaskError, ThreadLifecycle, ThreadSnapshot, WaitEvent, WaitSelector,
 };
 pub use namespace::{
     IdMap, IdRange, MAX_ID_RANGES, MapError, NamespaceId, NamespaceKind, NamespaceSet, SetgroupsState,

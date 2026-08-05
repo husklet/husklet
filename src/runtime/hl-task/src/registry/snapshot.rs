@@ -186,7 +186,10 @@ impl TaskRegistry {
             namespaces: process.namespaces,
             parent_death_signal: process.parent_death_signal,
             child_subreaper: process.child_subreaper,
-            cpu_usage: process.cpu_usage,
+            cpu_usage: crate::CpuUsage {
+                self_nanoseconds: process.cpu_account.nanoseconds(),
+                children_nanoseconds: process.cpu_usage.children_nanoseconds,
+            },
             dumpable: process.dumpable,
             oom_score_adj: process.oom_score_adj,
             timer_slack: process.timer_slack,

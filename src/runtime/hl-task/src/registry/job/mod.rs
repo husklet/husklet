@@ -427,7 +427,10 @@ impl TaskRegistry {
             {
                 return Err(TaskError::InvalidPlan);
             }
-            let child_usage = child_state.cpu_usage.total_nanoseconds();
+            let child_usage = child_state
+                .cpu_account
+                .nanoseconds()
+                .saturating_add(child_state.cpu_usage.children_nanoseconds);
             let parent_usage = &mut Self::process_mut(&mut state, parent)?.cpu_usage.children_nanoseconds;
             *parent_usage = parent_usage.saturating_add(child_usage);
             Self::process_mut(&mut state, parent)?.children.remove(&child);

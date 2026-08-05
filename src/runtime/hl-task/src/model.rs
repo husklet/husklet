@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{error::Error, fmt};
 
 use crate::{
@@ -340,6 +341,34 @@ pub struct CpuUsage {
     pub children_nanoseconds: u64,
 }
 
+/// Process-lifetime CPU counter retained by admitted executors. A PID slot
+/// reuse installs a different account, so late charges remain generation-safe.
+#[derive(Debug, Default)]
+pub struct CpuAccount {
+    nanoseconds: AtomicU64,
+}
+
+impl CpuAccount {
+    pub(crate) fn restored(nanoseconds: u64) -> Self {
+        Self {
+            nanoseconds: AtomicU64::new(nanoseconds),
+        }
+    }
+
+    pub fn charge(&self, nanoseconds: u64) {
+        let _ = self
+            .nanoseconds
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                Some(value.saturating_add(nanoseconds))
+            });
+    }
+
+    #[must_use]
+    pub fn nanoseconds(&self) -> u64 {
+        self.nanoseconds.load(Ordering::Relaxed)
+    }
+}
+
 impl CpuUsage {
     #[must_use]
     pub const fn total_nanoseconds(self) -> u64 {
@@ -624,3 +653,29 @@ impl fmt::Display for TaskError {
 }
 
 impl Error for TaskError {}
+
+#[cfg(test)]
+mod cpu_account_test {
+    use std::sync::Arc;
+
+    use super::CpuAccount;
+
+    #[test]
+    fn retired_account_is_independent_from_reused_process_account() {
+        let retired = Arc::new(CpuAccount::default());
+        let admitted = Arc::clone(&retired);
+        let reused = Arc::new(CpuAccount::default());
+
+        admitted.charge(17);
+
+        assert_eq!(retired.nanoseconds(), 17);
+        assert_eq!(reused.nanoseconds(), 0);
+    }
+
+    #[test]
+    fn charge_saturates_without_wrapping() {
+        let account = CpuAccount::restored(u64::MAX - 1);
+        account.charge(2);
+        assert_eq!(account.nanoseconds(), u64::MAX);
+    }
+}

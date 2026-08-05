@@ -89,6 +89,7 @@ impl TaskRegistry {
                 parent_death_signal: saved.parent_death_signal,
                 child_subreaper: saved.child_subreaper,
                 cpu_usage: saved.cpu_usage,
+                cpu_account: Arc::new(crate::CpuAccount::restored(saved.cpu_usage.self_nanoseconds)),
                 dumpable: saved.dumpable,
                 oom_score_adj: saved.oom_score_adj,
                 timer_slack: saved.timer_slack,

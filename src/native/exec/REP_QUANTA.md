@@ -224,6 +224,31 @@ fail-closed behavior.
 | Optional borrowed native poll ABI and cumulative grants | `src/native/exec/include/executor.h`, `src/native/exec/src/arch/x86_64/run.c` | missing |
 | Existing bounded REP correctness across widths, DF, overlap, dirty and epoch exits | `run.c::{rep_decode,rep_span,rep_copy,rep_fill,rep_execute}` | implemented; must be preserved |
 
+### CPU-accounting continuation audit
+
+The retained implementation inspected was
+`../engine/src/linux_abi/syscall/rare.c::syscall_rare` cases 102/103 and
+`../engine/src/linux_abi/host_signal.h::{setitimer,getitimer}`. On POSIX it
+delegates all three interval timers to the host process, whose kernel owns
+timer identity, locking, CPU charging, signal generation, and teardown; the
+Windows seam explicitly returns `ENOSYS`. There is no retained per-activation
+account object or architecture branch beyond that host split.
+
+The Rust path inspected was
+`hl-task::registry::{Process,TaskRegistry::charge_cpu,cpu_usage,make_zombie}`,
+checkpoint restore/snapshot and child reaping, plus
+`hl-engine::execution::{ThreadRun,ThreadSet::stage_inner,prepare_image}` and
+`scheduler::{run,advance,charge_elapsed}`. The process-lifetime `CpuAccount`
+now supplies atomic saturating publication. Every admitted `ThreadRun` retains
+its account, exec-image preparation clones it, fork staging obtains the new
+process account, checkpoint restores its value, and snapshot/wait/reap observe
+it. PID-slot reuse installs a distinct `Arc`; therefore a late scheduler charge
+can affect only the retired generation. Quantum charging no longer acquires the
+task-registry mutex. Signal/cancellation boundaries still force `charge_elapsed`
+on return from `advance`; CPU-timer polling remains at the existing signal
+boundary. Lock-free CPU-timer deadline/generation publication itself remains
+missing in `hl-runtime::process::itimer::AlarmRegistry`.
+
 The largest locally bounded prerequisite is the mapping-request generation,
 but it is not a one-file change: every map, unmap, protect, batch, remap,
 external-write, executable-publication, and checkpoint transaction ingress
