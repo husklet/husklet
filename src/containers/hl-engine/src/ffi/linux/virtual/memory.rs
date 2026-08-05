@@ -222,7 +222,7 @@ impl Memory {
         if self.operation_pinned(operation)? {
             return Err(MemoryError::Host);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -234,7 +234,10 @@ impl Memory {
 
     pub(super) fn pin_direct(&self, range: hl_isa::AddressRange) -> Result<u64, MemoryError> {
         self.host_range(range.start().get(), range.length())?;
-        let mut pins = self.direct_pins.lock().unwrap_or_else(|error| error.into_inner());
+        let mut pins = self
+            .direct_pins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         pins.next = pins.next.wrapping_add(1).max(1);
         let token = pins.next;
         pins.ranges.insert(token, range);
@@ -244,7 +247,7 @@ impl Memory {
     pub(super) fn unpin_direct(&self, token: u64) {
         self.direct_pins
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .ranges
             .remove(&token);
     }
@@ -267,7 +270,10 @@ impl Memory {
                     .map_err(|_| MemoryError::InvalidRange)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let pins = self.direct_pins.lock().unwrap_or_else(|error| error.into_inner());
+        let pins = self
+            .direct_pins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(pins.ranges.values().any(|pin| {
             ranges
                 .iter()
@@ -278,13 +284,13 @@ impl Memory {
     pub(super) fn rollback(&self, token: u64) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .staged
             .remove(&token);
     }
 
     pub(super) fn commit(&self, tokens: &[u64]) -> Result<(), MemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -296,9 +302,9 @@ impl Memory {
         for operation in &operations {
             candidate.apply(*operation)?;
         }
-        let mut advice = self.advice.lock().unwrap_or_else(|error| error.into_inner());
+        let mut advice = self.advice.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let advice_candidate = advice.apply(&operations)?;
-        let mut locks = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let mut locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let lock_candidate = locks.apply(&operations)?;
         let applied = self.apply_operations(&mut state, &operations)?;
         if let Err(error) = self.transition_locks(&locks, &lock_candidate) {
@@ -317,7 +323,7 @@ impl Memory {
     }
 
     pub(super) fn read(&self, offset: u64, output: &mut [u8]) -> Result<(), MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -361,7 +367,7 @@ impl Memory {
         protection: Protection,
         frozen: bool,
     ) -> Result<(), MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.mappings.access(offset, output.len() as u64, protection)?;
         let (address, _) = self.host_range(offset, output.len() as u64)?;
         let native = Self::native_protection(protection)?;
@@ -399,7 +405,7 @@ impl Memory {
         if length == 0 {
             return Ok(());
         }
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -409,7 +415,7 @@ impl Memory {
     }
 
     pub(super) fn writable_prefix(&self, offset: u64, length: u64) -> Result<usize, MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -422,7 +428,7 @@ impl Memory {
     }
 
     pub(super) fn clear(&self, range: hl_isa::AddressRange) -> Result<(), MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -439,7 +445,7 @@ impl Memory {
     }
 
     fn write_scatter_with(&self, writes: &[(u64, &[u8])], invalidate: bool) -> Result<(), MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -483,7 +489,7 @@ impl Memory {
         Ok(())
     }
     pub(super) fn compare_write(&self, writes: &[AtomicU32Write]) -> Result<(), MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {
             return Err(MemoryError::Poisoned);
         }
@@ -562,14 +568,14 @@ impl Memory {
 
     #[cfg(test)]
     pub(super) fn inject_failures(&self, failures: &[usize]) {
-        let mut fault = self.fault.lock().unwrap_or_else(|error| error.into_inner());
+        let mut fault = self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         fault.call = 0;
         fault.failures = failures.iter().map(|call| (*call, ())).collect();
     }
 
     #[cfg(test)]
     fn host_step(&self) -> Result<(), MemoryError> {
-        let mut fault = self.fault.lock().unwrap_or_else(|error| error.into_inner());
+        let mut fault = self.fault.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         fault.call += 1;
         if fault.failures.contains_key(&fault.call) {
             return Err(MemoryError::Host);
