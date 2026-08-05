@@ -59,6 +59,9 @@ aarch64	diagnostic_dirty_reserved	2112	1	u64
 aarch64	diagnostic_dirty_overflow	2120	1	u64
 aarch64	diagnostic_dirty_committed	2128	1	u64
 aarch64	diagnostic_dirty_merged	2136	1	u64
+aarch64	read_view_publication	2144	4	u64x2
+aarch64	memory_write_policy	2208	1	u64
+aarch64	memory_write_index	2216	1	u64
 x86_64	registers	0	16	u64
 x86_64	program	128	1	u64
 x86_64	flags	136	1	u64

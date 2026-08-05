@@ -758,10 +758,11 @@ static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cp
     size_t count = cache != NULL ? cache->count : 0;
     __atomic_store_n(&cpu->read_token, 0, __ATOMIC_RELEASE);
     cpu->read_count = 0;
+    memset(cpu->read_view_publication, 0, sizeof(cpu->read_view_publication));
     if (mapping_incarnation == 0 || count > HL_A64_RUN_VIEW_COUNT) return;
     for (size_t index = 0; index < count; ++index) {
         const hl_a64_view *view = &cache->entries[index];
-        if (view->guest_last <= view->guest_first || view->reserved != 0 ||
+        if (view->guest_last <= view->guest_first || view->write_policy != HL_NATIVE_WRITE_EXACT ||
             view->mapping_incarnation != mapping_incarnation || view->permissions == 0 ||
             (view->permissions & ~7u) != 0 ||
             view->host_first > UINT64_MAX - (view->guest_last - view->guest_first))
@@ -770,6 +771,8 @@ static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cp
         cpu->read_views[index][1] = view->guest_last;
         cpu->read_views[index][2] = view->host_first - view->guest_first;
         cpu->read_views[index][3] = view->permissions;
+        cpu->read_view_publication[index][0] = view->write_policy;
+        cpu->read_view_publication[index][1] = view->write_index;
     }
     cpu->read_count = count;
     cpu->read_incarnation = mapping_incarnation;
@@ -819,6 +822,10 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     hl_native_direct_authority direct_authority = {0};
     cpu->read_token = 0;
     cpu->read_count = 0;
+    memset(cpu->read_views, 0, sizeof(cpu->read_views));
+    memset(cpu->read_view_publication, 0, sizeof(cpu->read_view_publication));
+    cpu->memory_write_policy = 0;
+    cpu->memory_write_index = 0;
     cpu->certificate_valid = 0;
     cpu->certificate_delta = 0;
     cpu->active_authority = 0;

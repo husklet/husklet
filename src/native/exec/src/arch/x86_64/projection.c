@@ -36,7 +36,7 @@ int hl_x86_projection_validate(const hl_native_projection *projection) {
         return 0;
     for (index = 0; index < projection->count; ++index) {
         const hl_native_projection_view *view = &projection->views[index];
-        if (view->guest_last <= view->guest_first || view->reserved != 0 ||
+        if (view->guest_last <= view->guest_first || view->write_policy != HL_NATIVE_WRITE_EXACT ||
             view->mapping_incarnation != projection->mapping_incarnation ||
             view->permissions == 0 || (view->permissions & ~7u) != 0 ||
             view->host_first > UINT64_MAX - (view->guest_last - view->guest_first) ||

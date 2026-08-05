@@ -34,7 +34,8 @@ fn x86_memory_movq_unpack_matches_interpreter() {
         host_first: constant.as_mut_ptr() as usize as u64,
         mapping_incarnation: 1,
         permissions: 1,
-        reserved: 0,
+        write_policy: super::WRITE_EXACT,
+        write_index: 0,
     }];
     let projection = Projection {
         views: views.as_ptr(),
@@ -107,7 +108,8 @@ fn x86_strsearch_arithmetic_loop_matches_interpreter_at_each_boundary() {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 1,
             permissions: 3,
-            reserved: 0,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -311,7 +313,8 @@ impl TraceCase {
                     host_first: bytes.as_mut_ptr() as usize as u64,
                     mapping_incarnation: 1,
                     permissions: input.permissions,
-                    reserved: 0,
+                    write_policy: super::WRITE_EXACT,
+                    write_index: 0,
                 })
             })
             .collect::<Result<_, &'static str>>()?;
@@ -948,7 +951,8 @@ fn boundary_capture_is_ordinal_and_bounded() {
         host_first: data.as_mut_ptr() as usize as u64,
         mapping_incarnation: 1,
         permissions: u32::from(Protection::READ.bits()),
-        reserved: 0,
+        write_policy: super::WRITE_EXACT,
+        write_index: 0,
     }];
     let token = hl_memory::ExecutableToken {
         incarnation: 1,
@@ -964,7 +968,8 @@ fn boundary_capture_is_ordinal_and_bounded() {
         host_first: slow_data.as_mut_ptr() as usize as u64,
         mapping_incarnation: 1,
         permissions: u32::from(Protection::READ.bits()),
-        reserved: 0,
+        write_policy: super::WRITE_EXACT,
+        write_index: 0,
     };
     {
         let mut capture = executor.boundary_capture.lock().unwrap();

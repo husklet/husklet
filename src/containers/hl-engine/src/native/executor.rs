@@ -8,6 +8,7 @@ use hl_isa::{AddressRange, GuestAddress};
 use hl_memory::{DirectAuthorityLease, ExecutableToken, MemoryAccessHost, MemoryError, ProjectionLease, Protection};
 
 const ABI: u32 = 1;
+const WRITE_EXACT: u16 = 1;
 const AARCH64: u32 = 1;
 const X86_64: u32 = 2;
 
@@ -830,7 +831,8 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
                 host_first: view.storage_address,
                 mapping_incarnation,
                 permissions: u32::from(view.protection.bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: view.index,
             };
             #[cfg(test)]
             if let Some(capture) = provider.boundary_capture {
@@ -916,7 +918,8 @@ pub(crate) struct ProjectionView {
     pub(crate) host_first: u64,
     pub(crate) mapping_incarnation: u64,
     pub(crate) permissions: u32,
-    pub(crate) reserved: u32,
+    pub(crate) write_policy: u16,
+    pub(crate) write_index: u16,
 }
 
 #[repr(C)]
@@ -1173,6 +1176,9 @@ impl NativeAarch64 {
             diagnostic_dirty_overflow: 0,
             diagnostic_dirty_committed: 0,
             diagnostic_dirty_merged: 0,
+            read_view_publication: [[0; 2]; 4],
+            memory_write_policy: 0,
+            memory_write_index: 0,
         })
     }
 
@@ -1902,7 +1908,8 @@ impl Executor {
             host_first: lease.storage_address(),
             mapping_incarnation: generation.incarnation,
             permissions: u32::from(lease.protection().bits()),
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let hints = {
             let mut retained = self.view_hints.lock().unwrap_or_else(|error| error.into_inner());
@@ -1924,7 +1931,8 @@ impl Executor {
                 host_first: view.storage_address,
                 mapping_incarnation: generation.incarnation,
                 permissions: u32::from(view.protection.bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: view.index,
             };
             if !views.iter().any(|existing| {
                 existing.guest_first < candidate.guest_last && candidate.guest_first < existing.guest_last
@@ -2227,7 +2235,8 @@ impl Executor {
             host_first: lease.storage_address(),
             mapping_incarnation: generation.incarnation,
             permissions: u32::from(lease.protection().bits()),
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let hint_epoch = [generation.incarnation, generation.mappings, token.version, 0];
         let hints = {
@@ -2248,7 +2257,8 @@ impl Executor {
                 host_first: view.storage_address,
                 mapping_incarnation: generation.incarnation,
                 permissions: u32::from(view.protection.bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: view.index,
             };
             if !views.iter().any(|existing| {
                 existing.guest_first < candidate.guest_last && candidate.guest_first < existing.guest_last
@@ -3549,7 +3559,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 4,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -3607,7 +3618,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 4,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -3666,7 +3678,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 4,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -3725,7 +3738,8 @@ mod test {
             host_first: 0x9000,
             mapping_incarnation: 8,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -3829,7 +3843,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 3,
             permissions: 1,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -3918,7 +3933,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 7,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -3960,7 +3976,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 9,
             permissions: 1,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4040,7 +4057,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 4,
             permissions: 1,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4080,7 +4098,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 12,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4204,7 +4223,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 31,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4341,7 +4361,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 11,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4385,7 +4406,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 10,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4448,7 +4470,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 9,
             permissions: 3,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4496,7 +4519,8 @@ mod test {
             host_first: storage.as_mut_ptr() as usize as u64,
             mapping_incarnation: 13,
             permissions: 7,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4555,7 +4579,8 @@ mod test {
                 host_first: storage.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 1,
                 permissions: 3,
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 0,
             };
             let projection = Projection {
                 views: &raw const view,
@@ -4597,7 +4622,8 @@ mod test {
             host_first: storage.as_ptr() as usize as u64,
             mapping_incarnation: 1,
             permissions: 1,
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -4637,7 +4663,8 @@ mod test {
                 host_first: storage.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 1,
                 permissions: 3,
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 0,
             };
             let projection = Projection {
                 views: &raw const view,
@@ -4740,7 +4767,8 @@ mod test {
                 host_first: storage.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 1,
                 permissions,
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 3,
             };
             let projection = Projection {
                 views: &raw const view,
@@ -4959,7 +4987,8 @@ mod test {
             host_first: stack.as_mut_ptr() as usize as u64,
             mapping_incarnation: 1,
             permissions: u32::from(Protection::READ.union(Protection::WRITE).bits()),
-            reserved: 0,
+            write_policy: WRITE_EXACT,
+            write_index: 0,
         };
         let projection = Projection {
             views: &raw const view,
@@ -5076,7 +5105,8 @@ mod test {
                 host_first: low.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 7,
                 permissions: u32::from(Protection::READ.bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 0,
             },
             ProjectionView {
                 guest_first: 0x8000,
@@ -5084,7 +5114,8 @@ mod test {
                 host_first: writable.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 7,
                 permissions: u32::from(Protection::READ.union(Protection::WRITE).bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 0,
             },
         ];
         let projection = Projection {
@@ -5132,7 +5163,8 @@ mod test {
                 host_first: low.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 7,
                 permissions: u32::from(Protection::READ.bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 0,
             },
             ProjectionView {
                 guest_first: 0x1008,
@@ -5140,7 +5172,8 @@ mod test {
                 host_first: writable.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 7,
                 permissions: u32::from(Protection::READ.union(Protection::WRITE).bits()),
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 0,
             },
         ];
         let invalid_overlap = Projection {
@@ -5186,7 +5219,8 @@ mod test {
                 host_first: low.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 8,
                 permissions,
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 3,
             },
             ProjectionView {
                 guest_first: 0x8000,
@@ -5194,7 +5228,8 @@ mod test {
                 host_first: high.as_mut_ptr() as usize as u64,
                 mapping_incarnation: 8,
                 permissions,
-                reserved: 0,
+                write_policy: WRITE_EXACT,
+                write_index: 9,
             },
         ];
         let projection = Projection {
@@ -5218,6 +5253,7 @@ mod test {
             .unwrap();
         assert_eq!(outcome.0, Exit::Syscall);
         assert_eq!(u64::from_le_bytes(low[..8].try_into().unwrap()), value);
+
         assert_eq!(u64::from_le_bytes(high[..8].try_into().unwrap()), value);
         let NativeWrites::Exact(ranges) = outcome.6 else {
             panic!("expected exact dirty publication")
@@ -5225,6 +5261,18 @@ mod test {
         assert_eq!(ranges.len(), 2);
         assert_eq!((ranges[0].start().get(), ranges[0].end().get()), (0x1000, 0x1008));
         assert_eq!((ranges[1].start().get(), ranges[1].end().get()), (0x8000, 0x8008));
+
+        views[0].write_policy = 0;
+        let stale_policy = Projection {
+            views: views.as_ptr(),
+            ..projection
+        };
+        assert!(
+            executor
+                .run_aarch64(&mut cpu, &source, Some(&stale_policy), 8, 1, None, None)
+                .is_err()
+        );
+        views[0].write_policy = WRITE_EXACT;
 
         views[0].permissions = u32::from(Protection::READ.bits());
         let denied_projection = Projection {

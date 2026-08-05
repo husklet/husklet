@@ -30,6 +30,10 @@ reconstructed from the narrower envelope when publishing dirty records.
 The active-view identity binds the current `memory_*` owner to the validated mapping
 incarnation and run authority. It does not certify an access envelope: generated
 guards must still check bounds and permissions before consuming the owner.
+The append-only `read_view_publication` array extends each AArch64 cached view
+with its validated write-publication policy and stable lease-local index without
+moving the established four-word view ABI. `memory_write_policy` and
+`memory_write_index` identify the owner currently installed in `memory_*`.
 
 `x86_64.vector_dirty` is diagnostics-only native scratch. Diagnostics-enabled
 translated blocks set it before their first vector-register write, chains carry

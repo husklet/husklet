@@ -10,6 +10,7 @@
 #define HL_NATIVE_DUAL_PREFERRED 1u
 #define HL_NATIVE_DUAL_REQUIRED 2u
 #define HL_NATIVE_DIAGNOSTICS 4u
+#define HL_NATIVE_WRITE_EXACT 1u
 
 typedef uint64_t hl_native_handle;
 
@@ -224,7 +225,8 @@ typedef struct hl_native_projection_view {
     uint64_t host_first;
     uint64_t mapping_incarnation;
     uint32_t permissions;
-    uint32_t reserved;
+    uint16_t write_policy;
+    uint16_t write_index;
 } hl_native_projection_view;
 
 typedef struct hl_native_projection {

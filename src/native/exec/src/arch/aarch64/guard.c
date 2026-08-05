@@ -18,6 +18,9 @@
 #define OFFSET_READ_INCARNATION ((int)offsetof(hl_native_aarch64_cpu, read_incarnation))
 #define OFFSET_READ_COUNT ((int)offsetof(hl_native_aarch64_cpu, read_count))
 #define OFFSET_READ_VIEWS ((int)offsetof(hl_native_aarch64_cpu, read_views))
+#define OFFSET_READ_VIEW_PUBLICATION ((int)offsetof(hl_native_aarch64_cpu, read_view_publication))
+#define OFFSET_WRITE_POLICY ((int)offsetof(hl_native_aarch64_cpu, memory_write_policy))
+#define OFFSET_WRITE_INDEX ((int)offsetof(hl_native_aarch64_cpu, memory_write_index))
 #define OFFSET_WRITTEN ((int)offsetof(hl_native_aarch64_cpu, memory_written))
 #define OFFSET_EXECUTABLE_WRITTEN ((int)offsetof(hl_native_aarch64_cpu, executable_written))
 #define OFFSET_DIRTY_VIEW_FIRST ((int)offsetof(hl_native_aarch64_cpu, dirty_view_first))
@@ -362,6 +365,11 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, const uint8
         hl_a64_emit32(assembler, 0x8B110210u); /* add projected EA */
         hl_a64_ldr(assembler, 18, CPU, base + 3 * (int)sizeof(uint64_t));
         hl_a64_str(assembler, 18, CPU, OFFSET_PERMISSIONS);
+        int publication = OFFSET_READ_VIEW_PUBLICATION + (int)(index * 2u * sizeof(uint64_t));
+        hl_a64_ldr(assembler, 18, CPU, publication);
+        hl_a64_str(assembler, 18, CPU, OFFSET_WRITE_POLICY);
+        hl_a64_ldr(assembler, 18, CPU, publication + (int)sizeof(uint64_t));
+        hl_a64_str(assembler, 18, CPU, OFFSET_WRITE_INDEX);
         hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
         hl_a64_emit32(assembler, 0xD51B4200u | 17u);
         hl_a64_ldr(assembler, 9, CPU, 9 * 8);

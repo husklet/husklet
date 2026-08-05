@@ -62,6 +62,26 @@ published mapping incarnation.
 
 ## Safe optimization boundary
 
+### 2026-08-05 owner-metadata prerequisite audit
+
+The append-only owner-metadata slice rechecked retained C
+`src/core/dispatch.c::run_guest`, AArch64
+`translate.c::smc_commit`/`smc_icflush`, `stubs.c` block entry and return, and
+`dispatch.h` reason handling. Retained mappings own identity and lifetime under
+the dispatcher/JIT and stop-the-world locks; ordinary private writes remain
+direct host stores, while executable writes retain CPU-local precise ranges
+until dispatcher synchronization. Mapping replacement and teardown invalidate
+translated identity before reuse. There is no retained per-application policy,
+per-store callback, or publication index to copy.
+
+The Rust prerequisite therefore changes no publication behavior. Every live
+projection receives `Exact`; primary index zero and additional insertion
+ordinals remain stable when the bounded native cache promotes entries. The
+existing release-token publication makes the old four-word view and appended
+policy/index pair visible as one generation-qualified record. Resolver faults,
+generation changes, run reset, and callback transitions clear stale active
+metadata before another owner is installed. Coarse publication remains absent.
+
 A view may use coarse publication only when it is non-executable and either
 private or backed by a host-coherent shared mapping. Non-coherent shared views
 remain exact because untouched bytes must not be reconciled from stale host

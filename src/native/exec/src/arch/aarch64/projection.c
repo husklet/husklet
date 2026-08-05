@@ -26,7 +26,7 @@ int hl_a64_projection_validate(const hl_a64_projection *projection) {
         return 0;
     for (size_t index = 0; index < projection->count; index++) {
         const hl_a64_view *view = &projection->views[index];
-        if (view->guest_last <= view->guest_first || view->reserved != 0 ||
+        if (view->guest_last <= view->guest_first || view->write_policy != HL_NATIVE_WRITE_EXACT ||
             view->mapping_incarnation != projection->mapping_incarnation ||
             view->permissions == 0 || (view->permissions & ~7u) != 0 ||
             view->host_first > UINT64_MAX - (view->guest_last - view->guest_first) ||
@@ -54,6 +54,10 @@ int hl_a64_projection_resolve(const hl_a64_projection *projection, hl_native_aar
     uint64_t delta;
     uint32_t permissions;
     const hl_a64_view *view;
+    if (cpu != NULL) {
+        cpu->memory_write_policy = 0;
+        cpu->memory_write_index = 0;
+    }
     if (cpu == NULL || !hl_a64_projection_validate(projection) || size == 0 || address > UINT64_MAX - size ||
         required == 0 || (required & ~7u) != 0) {
         if (cpu != NULL) {
@@ -80,6 +84,8 @@ int hl_a64_projection_resolve(const hl_a64_projection *projection, hl_native_aar
     cpu->memory_last = cursor;
     cpu->memory_delta = delta;
     cpu->memory_permissions = permissions;
+    cpu->memory_write_policy = view->write_policy;
+    cpu->memory_write_index = view->write_index;
     cpu->fault_address = 0;
     cpu->fault_access = 0;
     cpu->fault_size = 0;

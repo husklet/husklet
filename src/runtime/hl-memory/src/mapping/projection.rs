@@ -53,6 +53,9 @@ pub struct ProjectionView {
     pub range: AddressRange,
     pub storage_address: u64,
     pub protection: Protection,
+    /// Stable identity within this lease: primary is zero, additional views
+    /// retain their insertion ordinal across native cache promotion.
+    pub index: u16,
 }
 
 struct LiveProjection<P> {
@@ -219,6 +222,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             range: self.range,
             storage_address: self.storage_address,
             protection: self.authority,
+            index: 0,
         };
         if contains(primary, range, required) {
             return Ok(primary);
@@ -261,6 +265,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             } else {
                 Protection::NONE
             }),
+            index: u16::try_from(self.additional.len() + 1).map_err(|_| MemoryError::ResourceLimit)?,
         };
         self.additional.push(LiveProjection {
             view,
@@ -311,6 +316,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             range: self.range,
             storage_address: self.storage_address,
             protection: self.authority,
+            index: 0,
         };
         if self.write_reservation.is_some() {
             self.validate_writable(primary)?;
@@ -368,6 +374,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             range: self.range,
             storage_address: self.storage_address,
             protection: self.authority,
+            index: 0,
         };
         let views = std::iter::once(primary)
             .chain(self.additional.iter().map(|entry| entry.view))
@@ -426,6 +433,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                 range: *range,
                 storage_address: view.storage_address + (range.start().get() - view.range.start().get()),
                 protection: Protection::WRITE,
+                index: view.index,
             })?;
             if let Backing::Shared(_) = resolution.region.backing()
                 && !self.view_shared_backing_is_coherent(view)

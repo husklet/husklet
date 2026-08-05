@@ -177,7 +177,7 @@ static uint32_t resolve_views(void *opaque, uint64_t address, uint64_t size,
             return HL_NATIVE_OPERAND_FAULT;
         *output = (hl_native_projection_view){first, first + length,
             (uint64_t)(uintptr_t)&provider->values[index][0], mapping,
-            provider->permissions[index], 0};
+            provider->permissions[index], HL_NATIVE_WRITE_EXACT, (uint16_t)index};
         return HL_NATIVE_OPERAND_RESOLVED;
     }
     return HL_NATIVE_OPERAND_FAULT;
@@ -194,7 +194,8 @@ static uint32_t resolve_operand(void *opaque, uint64_t address, uint64_t size,
     if (address != provider->guest || size != 8 || (provider->permissions & access) != access)
         return HL_NATIVE_OPERAND_FAULT;
     *output = (hl_native_projection_view){address, address + size,
-        (uint64_t)(uintptr_t)&provider->value, mapping, provider->permissions, 0};
+        (uint64_t)(uintptr_t)&provider->value, mapping, provider->permissions,
+        HL_NATIVE_WRITE_EXACT, 1};
     return HL_NATIVE_OPERAND_RESOLVED;
 }
 
@@ -881,7 +882,8 @@ int main(void) {
         {0x5000, (const uint8_t *)&unsupported_word, sizeof(unsupported_word), 7, 8},
     };
     const hl_a64_source run_source = {run_spans, 2, 7, 8};
-    const hl_a64_view run_view = {0x1000, 0x2000, 0x1000, 7, HL_A64_PERMISSION_READ, 0};
+    const hl_a64_view run_view = {0x1000, 0x2000, 0x1000, 7,
+                                  HL_A64_PERMISSION_READ, HL_NATIVE_WRITE_EXACT, 0};
     const hl_a64_projection run_projection = {&run_view, 1, 7, 0};
     executable_memory run_host = {0};
     hl_native_memory run_memory = executable_services(&run_host);
@@ -911,7 +913,8 @@ int main(void) {
         const hl_a64_source literal_source = {&literal_span, 1, 7, 8};
         uint64_t literal_value = UINT64_C(0x1122334455667788);
         const hl_a64_view literal_view = {
-            0x6100, 0x6108, (uint64_t)(uintptr_t)&literal_value, 7, HL_A64_PERMISSION_READ, 0};
+            0x6100, 0x6108, (uint64_t)(uintptr_t)&literal_value, 7,
+            HL_A64_PERMISSION_READ, HL_NATIVE_WRITE_EXACT, 0};
         const hl_a64_projection literal_projection = {&literal_view, 1, 7, 0};
         hl_native_direct_authority literal_authority = {
             .abi = HL_NATIVE_ABI, .size = sizeof(literal_authority),
@@ -987,7 +990,8 @@ int main(void) {
         hl_native_direct_authority store_authority = literal_authority;
         store_authority.permissions = HL_NATIVE_ACCESS_WRITE;
         const hl_a64_view store_view = {
-            0x6100, 0x6108, (uint64_t)(uintptr_t)&literal_value, 7, HL_A64_PERMISSION_WRITE, 0};
+            0x6100, 0x6108, (uint64_t)(uintptr_t)&literal_value, 7,
+            HL_A64_PERMISSION_WRITE, HL_NATIVE_WRITE_EXACT, 7};
         const hl_a64_projection store_projection = {&store_view, 1, 7, 0};
         CHECK(hl_native_direct_register(run_executor, &store_authority, &literal_token) == HL_NATIVE_OK);
         run_request.projection = &store_projection;
@@ -1013,7 +1017,9 @@ int main(void) {
             CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
             CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && literal_value == run_state.registers[3]);
             CHECK(run_state.memory_written == 1 && run_state.dirty_first == 0x6100 &&
-                  run_state.dirty_last == 0x6108);
+                  run_state.dirty_last == 0x6108 &&
+                  run_state.memory_write_policy == HL_NATIVE_WRITE_EXACT &&
+                  run_state.memory_write_index == 7);
             literal_value = 0;
             memset(&run_state, 0, sizeof(run_state));
             run_state.program = store_span.guest_first;

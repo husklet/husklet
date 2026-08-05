@@ -62,6 +62,9 @@ pub struct Aarch64Cpu {
     pub diagnostic_dirty_overflow: u64,
     pub diagnostic_dirty_committed: u64,
     pub diagnostic_dirty_merged: u64,
+    pub read_view_publication: [[u64; 2]; 4],
+    pub memory_write_policy: u64,
+    pub memory_write_index: u64,
 }
 
 #[repr(C)]
@@ -174,7 +177,10 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_overflow) == 2120);
     assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_committed) == 2128);
     assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_dirty_merged) == 2136);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2144);
+    assert!(std::mem::offset_of!(Aarch64Cpu, read_view_publication) == 2144);
+    assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_policy) == 2208);
+    assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_index) == 2216);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2224);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 

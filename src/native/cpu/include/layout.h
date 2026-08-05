@@ -66,6 +66,9 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t diagnostic_dirty_overflow;
     uint64_t diagnostic_dirty_committed;
     uint64_t diagnostic_dirty_merged;
+    uint64_t read_view_publication[4][2];
+    uint64_t memory_write_policy;
+    uint64_t memory_write_index;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -179,7 +182,10 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_reserved, 2112);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_overflow, 2120);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_committed, 2128);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_merged, 2136);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2144, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, read_view_publication, 2144);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_write_policy, 2208);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_write_index, 2216);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2224, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 
