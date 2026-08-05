@@ -11,6 +11,8 @@ pub(crate) struct Matrix {
     #[arg(long)]
     binary: PathBuf,
     #[arg(long)]
+    rootfs: Option<PathBuf>,
+    #[arg(long)]
     c_engine: PathBuf,
     #[arg(long)]
     rust_engine: PathBuf,
@@ -104,6 +106,7 @@ impl Matrix {
             provider,
             isa: self.isa,
             binary: self.binary.clone(),
+            rootfs: self.rootfs.clone(),
             engine,
             output: Some(
                 self.output
@@ -133,6 +136,7 @@ mod tests {
         let mut matrix = Matrix {
             isa,
             binary: "/guest".into(),
+            rootfs: None,
             c_engine: "/c-engine".into(),
             rust_engine: "/rust-engine".into(),
             output: "/results".into(),

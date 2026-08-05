@@ -223,6 +223,7 @@ struct PlanSource;
 impl PlanSource {
     fn guest(arguments: &[String]) -> Result<RuntimePlan, ProgramError> {
         let mut guest = Vec::new();
+        let mut rootfs = None;
         let mut options = Options::default();
         let mut index = 1;
         while index < arguments.len() {
@@ -239,6 +240,15 @@ impl PlanSource {
                 index = index.checked_add(2).ok_or(ProgramError::Usage)?;
                 continue;
             }
+            if arguments[index] == "--rootfs" {
+                let value = arguments.get(index + 1).ok_or(ProgramError::Usage)?;
+                if value.is_empty() {
+                    return Err(ProgramError::Usage);
+                }
+                rootfs = Some(value.as_bytes().to_vec());
+                index = index.checked_add(2).ok_or(ProgramError::Usage)?;
+                continue;
+            }
             guest.extend(arguments[index..].iter().map(|argument| argument.as_bytes().to_vec()));
             break;
         }
@@ -246,7 +256,7 @@ impl PlanSource {
             return Err(ProgramError::Usage);
         }
         Ok(RuntimePlan {
-            rootfs: None,
+            rootfs,
             executable_host: Some(guest[0].clone()),
             arguments: guest,
             environment: Vec::new(),
@@ -421,6 +431,22 @@ mod tests {
         let plan = PlanSource::guest(&arguments).unwrap();
         assert_eq!(plan.options.get("HL_NATIVE_EXECUTION"), Some("1"));
         assert_eq!(plan.arguments, vec![b"guest".to_vec(), b"argument".to_vec()]);
+    }
+
+    #[test]
+    fn direct_guest_projects_rootfs_into_runtime_plan() {
+        let arguments = vec![
+            "hl-engine".to_owned(),
+            "--guest-isa".to_owned(),
+            "aarch64".to_owned(),
+            "--rootfs".to_owned(),
+            "/images/alpine".to_owned(),
+            "/bin/true".to_owned(),
+        ];
+        let plan = PlanSource::guest(&arguments).unwrap();
+        assert_eq!(plan.rootfs.as_deref(), Some(b"/images/alpine".as_slice()));
+        assert_eq!(plan.arguments, vec![b"/bin/true".to_vec()]);
+        assert_eq!(plan.executable_host, Some(b"/bin/true".to_vec()));
     }
 
     #[test]

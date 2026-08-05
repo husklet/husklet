@@ -5,18 +5,25 @@ use std::process::{Command, Stdio};
 
 impl Process {
     pub(in crate::benchmark) fn command(&self, run: &Run) -> Result<Command, String> {
-        if !run.binary.is_file() {
-            return Err(format!("guest does not exist: {}", run.binary.display()));
+        let host_binary = run.host_binary();
+        if !host_binary.is_file() {
+            return Err(format!("guest does not exist: {}", host_binary.display()));
         }
         let mut command = match run.provider {
-            Provider::Native => Command::new(&run.binary),
+            Provider::Native => Command::new(&host_binary),
             Provider::Qemu => {
                 let mut command = Command::new(format!("qemu-{}", run.isa.name()));
-                command.arg(&run.binary);
+                if let Some(rootfs) = &run.rootfs {
+                    command.args(["-L".as_ref(), rootfs.as_os_str()]);
+                }
+                command.arg(&host_binary);
                 command
             }
             Provider::C => {
                 let mut command = Command::new(run.engine.as_ref().expect("validated engine"));
+                if let Some(rootfs) = &run.rootfs {
+                    command.arg("--rootfs").arg(rootfs);
+                }
                 command.arg(&run.binary);
                 command
             }
@@ -25,6 +32,9 @@ impl Process {
                 command.args(["--guest-isa", run.isa.name()]);
                 for (name, value) in &run.engine_options {
                     command.args(["--engine-option", &format!("{name}={value}")]);
+                }
+                if let Some(rootfs) = &run.rootfs {
+                    command.arg("--rootfs").arg(rootfs);
                 }
                 command.arg(&run.binary);
                 command

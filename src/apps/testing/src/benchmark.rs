@@ -68,6 +68,9 @@ pub(crate) struct Run {
     isa: Isa,
     #[arg(long)]
     binary: PathBuf,
+    /// Materialized Linux root used for this provider invocation.
+    #[arg(long)]
+    rootfs: Option<PathBuf>,
     #[arg(long)]
     engine: Option<PathBuf>,
     #[arg(long = "out")]
@@ -219,6 +222,19 @@ impl Run {
         if matches!(self.provider, Provider::C | Provider::Rust) && self.engine.is_none() {
             return Err("engine provider requires --engine".into());
         }
+        if let Some(rootfs) = &self.rootfs {
+            if !rootfs.is_dir() {
+                return Err(format!("rootfs does not exist: {}", rootfs.display()));
+            }
+            if !self.binary.is_absolute()
+                || self
+                    .binary
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+            {
+                return Err("rootfs guest executable must be an absolute confined path".into());
+            }
+        }
         if self.provider != Provider::Rust && !self.engine_options.is_empty() {
             return Err("--engine-option is supported only by rust-engine".into());
         }
@@ -257,7 +273,7 @@ impl Run {
 
     fn execute(self, process: &adapter::Process) -> Result<(), String> {
         let affinity = host_affinity();
-        let guest_identity = file_identity(&self.binary)?;
+        let guest_identity = file_identity(&self.host_binary())?;
         let engine_identity = self
             .engine
             .as_deref()
@@ -375,8 +391,24 @@ impl Run {
         for argument in &self.guest {
             identity_field(&mut digest, argument.as_bytes());
         }
+        if let Some(rootfs) = &self.rootfs {
+            identity_field(&mut digest, rootfs.as_os_str().as_encoded_bytes());
+        }
         identity_field(&mut digest, host_affinity().as_bytes());
         hex_digest(digest.finalize())
+    }
+
+    fn host_binary(&self) -> PathBuf {
+        self.rootfs.as_ref().map_or_else(
+            || self.binary.clone(),
+            |rootfs| {
+                rootfs.join(
+                    self.binary
+                        .strip_prefix("/")
+                        .expect("validated absolute guest executable"),
+                )
+            },
+        )
     }
 }
 
@@ -488,6 +520,7 @@ mod test {
             provider,
             isa: Isa::X86,
             binary,
+            rootfs: None,
             engine,
             output: None,
             repeats: 1,
@@ -518,6 +551,7 @@ mod test {
             provider: Provider::Rust,
             isa: Isa::Aarch64,
             binary: "/bin/sh".into(),
+            rootfs: None,
             engine: Some("/bin/sh".into()),
             output: None,
             repeats: 5,
@@ -594,6 +628,57 @@ mod test {
         );
     }
 
+    #[test]
+    fn providers_project_one_rootfs_without_host_execution_shortcuts() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let rootfs = directory.path().join("rootfs");
+        let binary = rootfs.join("bin/true");
+        let engine = directory.path().join("engine");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, []).unwrap();
+        fs::write(&engine, []).unwrap();
+        let process = adapter::Process::new(None);
+        let rooted = |provider, selected_engine| {
+            let mut run = command_run(provider, PathBuf::from("/bin/true"), selected_engine);
+            run.rootfs = Some(rootfs.clone());
+            run.validate().unwrap()
+        };
+        let native = process.command(&rooted(Provider::Native, None)).unwrap();
+        assert_eq!(native.get_program(), binary.as_os_str());
+        let qemu = process.command(&rooted(Provider::Qemu, None)).unwrap();
+        assert_eq!(
+            qemu.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("-L"),
+                rootfs.as_os_str(),
+                binary.as_os_str(),
+                OsStr::new("--phase"),
+                OsStr::new("compute")
+            ]
+        );
+        for provider in [Provider::C, Provider::Rust] {
+            let command = process.command(&rooted(provider, Some(engine.clone()))).unwrap();
+            let arguments = command.get_args().collect::<Vec<_>>();
+            assert!(
+                arguments
+                    .windows(2)
+                    .any(|pair| pair == [OsStr::new("--rootfs"), rootfs.as_os_str()])
+            );
+            assert!(arguments.iter().any(|argument| *argument == OsStr::new("/bin/true")));
+        }
+    }
+
+    #[test]
+    fn rootfs_rejects_unconfined_guest_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut run = command_run(Provider::Native, PathBuf::from("bin/true"), None);
+        run.rootfs = Some(directory.path().to_path_buf());
+        assert_eq!(
+            run.validate().unwrap_err(),
+            "rootfs guest executable must be an absolute confined path"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn timeout_contract() {
@@ -601,6 +686,7 @@ mod test {
             provider: Provider::Native,
             isa: Isa::Aarch64,
             binary: PathBuf::from("/bin/sh"),
+            rootfs: None,
             engine: None,
             output: None,
             repeats: 1,
