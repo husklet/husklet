@@ -51,7 +51,7 @@ pub use schedule::SchedulingProfile;
 pub use signal::{
     AlternateStack, DeliveryAction, PendingTarget, PreparedForcedDelivery, PreparedSignalWait, SIGNAL_FRAME_MAXIMUM,
     SignalAction, SignalDisposition, SignalExecPlan, SignalForkPlan, SignalFrameScope, SignalInfo, SignalMask,
-    SignalNumber, SignalProcessSnapshot, SignalQueueError, SignalThreadSnapshot,
+    SignalNumber, SignalProcessSnapshot, SignalQueueError, SignalThreadSnapshot, SignalThreadTarget,
 };
 pub use trace::{
     TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission, TraceResume, TraceSnapshot, TraceStop, TraceWait,

@@ -1,7 +1,7 @@
 use std::array;
 use std::collections::VecDeque;
 
-use crate::{ProcessId, ThreadId};
+use crate::{ProcessCredentials, ProcessId, ThreadId};
 
 pub const SIGNAL_COUNT: usize = 64;
 pub const SIGNAL_FRAME_MAXIMUM: usize = 32;
@@ -117,6 +117,16 @@ pub struct SignalInfo {
     pub value: u64,
     pub address: u64,
     pub source_tag: u32,
+}
+
+/// Stable identities and credentials needed to authorize a thread-directed
+/// signal without materializing a checkpoint-shaped registry snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignalThreadTarget {
+    pub thread: ThreadId,
+    pub process: ProcessId,
+    pub sender_credentials: ProcessCredentials,
+    pub target_credentials: ProcessCredentials,
 }
 
 impl SignalInfo {

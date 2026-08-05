@@ -193,29 +193,23 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let snapshot = self.tasks.snapshot();
-        let Some(thread) = snapshot.threads.iter().find(|thread| thread.id.number() == tid as u32) else {
-            return LinuxResult::Error(Errno::ESRCH);
+        let target = match self.tasks.signal_thread_target(self.process, tid as u32) {
+            Ok(Some(target)) => target,
+            Ok(None) | Err(_) => return LinuxResult::Error(Errno::ESRCH),
         };
-        let Some(target) = snapshot.processes.iter().find(|process| process.id == thread.process) else {
-            return LinuxResult::Error(Errno::ESRCH);
-        };
-        if expected_process.is_some_and(|pid| target.id.number() != pid as u32) {
+        if expected_process.is_some_and(|pid| target.process.number() != pid as u32) {
             return LinuxResult::Error(Errno::ESRCH);
         }
-        let Some(sender) = snapshot.processes.iter().find(|process| process.id == self.process) else {
-            return LinuxResult::Error(Errno::ESRCH);
-        };
-        if !Self::permitted(sender, target) {
+        if !Self::credentials_permitted(&target.sender_credentials, &target.target_credentials) {
             return LinuxResult::Error(Errno::EPERM);
         }
         let Some(signal) = signal else {
             return LinuxResult::Value(0);
         };
-        match self
-            .tasks
-            .enqueue_signal(PendingTarget::Thread(thread.id), Self::info(signal, sender, -6))
-        {
+        match self.tasks.enqueue_signal(
+            PendingTarget::Thread(target.thread),
+            Self::info_from_credentials(signal, &target.sender_credentials, self.process, -6),
+        ) {
             Ok(_) => LinuxResult::Value(0),
             Err(_) => LinuxResult::Error(Errno::EAGAIN),
         }
@@ -230,13 +224,30 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     pub(crate) fn permitted(sender: &ProcessSnapshot, target: &ProcessSnapshot) -> bool {
-        let source = &sender.credentials;
-        let destination = &target.credentials;
+        Self::credentials_permitted(&sender.credentials, &target.credentials)
+    }
+
+    fn credentials_permitted(source: &hl_task::ProcessCredentials, destination: &hl_task::ProcessCredentials) -> bool {
         source.has_capability(hl_task::CapabilitySets::KILL)
             || source.real_user == destination.real_user
             || source.real_user == destination.saved_user
             || source.effective_user == destination.real_user
             || source.effective_user == destination.saved_user
+    }
+
+    fn info_from_credentials(
+        signal: SignalNumber,
+        sender: &hl_task::ProcessCredentials,
+        sender_id: ProcessId,
+        code: i32,
+    ) -> SignalInfo {
+        SignalInfo {
+            signal,
+            code,
+            sender_process: sender_id.number(),
+            sender_user: sender.real_user,
+            ..SignalInfo::bare(signal)
+        }
     }
 
     pub(crate) fn info(signal: SignalNumber, sender: &ProcessSnapshot, code: i32) -> SignalInfo {

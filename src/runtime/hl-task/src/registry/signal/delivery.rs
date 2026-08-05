@@ -6,6 +6,37 @@ use crate::{
     ThreadId,
 };
 impl TaskRegistry {
+    /// Resolves the minimal authority state for `tkill`/`tgkill` under one
+    /// registry lock. This deliberately avoids [`TaskRegistry::snapshot`]: a
+    /// signal send is not a checkpoint and must not clone every process,
+    /// thread, pending queue, argument vector, or signal frame.
+    pub fn signal_thread_target(
+        &self,
+        sender: ProcessId,
+        thread_number: u32,
+    ) -> Result<Option<crate::SignalThreadTarget>, TaskError> {
+        let state = self.lock();
+        let sender_credentials = Self::process(&state, sender)?.credentials.clone();
+        let Some(slot) = thread_number
+            .checked_sub(1)
+            .and_then(|number| usize::try_from(number).ok())
+        else {
+            return Ok(None);
+        };
+        let Some(entry) = state.threads.get(slot).filter(|entry| entry.value.is_some()) else {
+            return Ok(None);
+        };
+        let thread = ThreadId::new(slot as u32, entry.generation);
+        let process = entry.value.as_ref().ok_or(TaskError::InvalidLifecycle)?.process;
+        let target_credentials = Self::process(&state, process)?.credentials.clone();
+        Ok(Some(crate::SignalThreadTarget {
+            thread,
+            process,
+            sender_credentials,
+            target_credentials,
+        }))
+    }
+
     pub(crate) fn publish_orphaned(&self, processes: Vec<ProcessId>) {
         let hangup = SignalNumber::new(1).expect("SIGHUP is a valid Linux signal");
         for process in processes {

@@ -42,6 +42,21 @@ impl Fixture {
 }
 
 #[test]
+fn signal_thread_target_is_generation_qualified() {
+    let (registry, process, thread) = Fixture::registry(4, 4);
+    let target = registry
+        .signal_thread_target(process, thread.number())
+        .unwrap()
+        .unwrap();
+    assert_eq!(target.thread, thread);
+    assert_eq!(target.process, process);
+    assert_eq!(target.sender_credentials, Fixture::credentials());
+    assert_eq!(target.target_credentials, Fixture::credentials());
+    assert_eq!(registry.signal_thread_target(process, 0).unwrap(), None);
+    assert_eq!(registry.signal_thread_target(process, 4).unwrap(), None);
+}
+
+#[test]
 fn parent_death_reparents() {
     let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let (_, leader) = registry.create_init(Fixture::credentials(), Fixture::limits()).unwrap();
