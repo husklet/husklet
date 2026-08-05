@@ -283,7 +283,16 @@ fn copy_metadata(source: &File, target: &File) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     #[cfg(target_os = "linux")]
-    let times = [status.st_atim, status.st_mtim];
+    let times = [
+        libc::timespec {
+            tv_sec: status.st_atime,
+            tv_nsec: status.st_atime_nsec,
+        },
+        libc::timespec {
+            tv_sec: status.st_mtime,
+            tv_nsec: status.st_mtime_nsec,
+        },
+    ];
     #[cfg(target_os = "macos")]
     let times = [status.st_atimespec, status.st_mtimespec];
     // SAFETY: times has exactly two initialized entries and target is live.

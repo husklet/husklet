@@ -1,6 +1,4 @@
-#[cfg(target_os = "macos")]
-use std::ffi::CStr;
-use std::ffi::{CString, OsStr};
+use std::ffi::{CStr, CString, OsStr};
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -473,7 +471,7 @@ impl Host {
             }
     }
 
-    fn child_kind(directory: RawFd, name: &CString) -> Result<NodeKind, ResolveHostError> {
+    fn child_kind(directory: RawFd, name: &CStr) -> Result<NodeKind, ResolveHostError> {
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: name is terminated, directory is pinned, and fstatat initializes
         // status on success without retaining either pointer.
