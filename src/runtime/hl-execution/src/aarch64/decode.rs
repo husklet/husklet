@@ -63,9 +63,9 @@ impl Aarch64Decoder {
                 Aarch64Instruction::AddCarry {
                     subtract: word >> 30 & 1 != 0,
                     set_flags: word >> 29 & 1 != 0,
-                    left: (word >> 5 & 31) as u8,
-                    right: (word >> 16 & 31) as u8,
-                    destination: (word & 31) as u8,
+                    left: u8::try_from(word >> 5 & 31).expect("masked register field fits u8"),
+                    right: u8::try_from(word >> 16 & 31).expect("masked register field fits u8"),
+                    destination: u8::try_from(word & 31).expect("masked register field fits u8"),
                 },
             ));
         }
@@ -79,8 +79,8 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::BitReverse {
-                    source: (word >> 5 & 31) as u8,
-                    destination: (word & 31) as u8,
+                    source: u8::try_from(word >> 5 & 31).expect("masked register field fits u8"),
+                    destination: u8::try_from(word & 31).expect("masked register field fits u8"),
                 },
             ));
         }
@@ -91,8 +91,8 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::CountLeadingZero {
-                    source: (word >> 5 & 31) as u8,
-                    destination: (word & 31) as u8,
+                    source: u8::try_from(word >> 5 & 31).expect("masked register field fits u8"),
+                    destination: u8::try_from(word & 31).expect("masked register field fits u8"),
                 },
             ));
         }
@@ -141,7 +141,7 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::BranchConditional {
-                    condition: Aarch64BranchCondition((word & 15) as u8),
+                    condition: Aarch64BranchCondition(u8::try_from(word & 15).expect("masked condition field fits u8")),
                     displacement: Self::sign_extend(u64::from(word >> 5 & 0x7ffff), 19) << 2,
                 },
             ));
@@ -150,7 +150,7 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::CompareBranch {
-                    source: (word & 31) as u8,
+                    source: u8::try_from(word & 31).expect("masked register field fits u8"),
                     nonzero: word >> 24 & 1 != 0,
                     displacement: Self::sign_extend(u64::from(word >> 5 & 0x7ffff), 19) << 2,
                 },
@@ -160,8 +160,8 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::TestBranch {
-                    source: (word & 31) as u8,
-                    bit: (((word >> 31 & 1) << 5) | (word >> 19 & 31)) as u8,
+                    source: u8::try_from(word & 31).expect("masked register field fits u8"),
+                    bit: u8::try_from(((word >> 31 & 1) << 5) | (word >> 19 & 31)).expect("six-bit test field fits u8"),
                     nonzero: word >> 24 & 1 != 0,
                     displacement: Self::sign_extend(u64::from(word >> 5 & 0x3fff), 14) << 2,
                 },
@@ -171,10 +171,12 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::ConditionalSelect {
-                    source: (word >> 5 & 31) as u8,
-                    alternate: (word >> 16 & 31) as u8,
-                    destination: (word & 31) as u8,
-                    condition: Aarch64BranchCondition((word >> 12 & 15) as u8),
+                    source: u8::try_from(word >> 5 & 31).expect("masked register field fits u8"),
+                    alternate: u8::try_from(word >> 16 & 31).expect("masked register field fits u8"),
+                    destination: u8::try_from(word & 31).expect("masked register field fits u8"),
+                    condition: Aarch64BranchCondition(
+                        u8::try_from(word >> 12 & 15).expect("masked condition field fits u8"),
+                    ),
                     invert: word >> 30 & 1 != 0,
                     increment: word >> 10 & 1 != 0,
                 },
@@ -187,7 +189,7 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::SupervisorCall {
-                    immediate: (word >> 5) as u16,
+                    immediate: u16::try_from(word >> 5 & 0xffff).expect("masked supervisor-call immediate fits u16"),
                 },
             ));
         }
@@ -195,7 +197,7 @@ impl Aarch64Decoder {
             return Ok(Self::ir(
                 word,
                 Aarch64Instruction::Breakpoint {
-                    immediate: (word >> 5) as u16,
+                    immediate: u16::try_from(word >> 5 & 0xffff).expect("masked breakpoint immediate fits u16"),
                 },
             ));
         }
