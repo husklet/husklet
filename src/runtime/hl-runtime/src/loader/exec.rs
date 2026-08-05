@@ -4,7 +4,7 @@ use hl_isa::GuestArchitecture;
 use hl_linux::ExecPlan;
 use hl_loader::{
     GuestCredentials, GuestFeatures, ImageProtectionRegistry, ImageSource, LoadError, LoadLimits, LoadRequest,
-    LoadedProcess, Loader, LoaderDiagnostic, ThreadLocalStorage, TransactionalAddressSpace,
+    LoadedProcess, Loader, LoaderDiagnostic, LoaderDiagnostics, ThreadLocalStorage, TransactionalAddressSpace,
 };
 use hl_task::{ProcessId, ThreadId};
 
@@ -23,6 +23,38 @@ impl LoadFailureReporter for LogLoadFailure {
             hl_log::tag::EXEC,
             "exec image load failed: process={process:?} error={error}"
         );
+    }
+}
+
+struct DiagnosticChannel(hl_log::Channel<LoaderDiagnostic>);
+
+impl LoaderDiagnostics for DiagnosticChannel {
+    fn try_publish(&self, diagnostic: LoaderDiagnostic) {
+        let _ = self.0.try_publish(diagnostic);
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_channel_test {
+    use super::*;
+    use hl_loader::LoaderPhase;
+
+    #[test]
+    fn preserves_bounded_loss() {
+        let (channel, receiver) = hl_log::Channel::bounded(1).unwrap();
+        let diagnostics = DiagnosticChannel(channel);
+        let first = LoaderDiagnostic {
+            phase: LoaderPhase::MainRead,
+            elapsed_us: 1,
+        };
+        diagnostics.try_publish(first);
+        diagnostics.try_publish(LoaderDiagnostic {
+            phase: LoaderPhase::Commit,
+            elapsed_us: 2,
+        });
+
+        assert_eq!(receiver.try_receive(), Ok(first));
+        assert_eq!(receiver.lost(), 1);
     }
 }
 
@@ -78,7 +110,7 @@ where
     tls: Mutex<T>,
     execution: E,
     failures: Arc<dyn LoadFailureReporter>,
-    diagnostics: Option<hl_log::Channel<LoaderDiagnostic>>,
+    diagnostics: Option<Arc<DiagnosticChannel>>,
     images: ProcessImage<Image<A::AddressSpace, T::Prepared, E::Image>>,
 }
 
@@ -153,7 +185,7 @@ where
 
     #[must_use]
     pub fn with_loader_diagnostics(mut self, diagnostics: hl_log::Channel<LoaderDiagnostic>) -> Self {
-        self.diagnostics = Some(diagnostics);
+        self.diagnostics = Some(Arc::new(DiagnosticChannel(diagnostics)));
         self
     }
 
