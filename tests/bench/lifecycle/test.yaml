@@ -1,0 +1,7 @@
+build:
+  source: main.c
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -std=c11]
+cases:
+  - id: lifecycle
+    repetitions: 11
