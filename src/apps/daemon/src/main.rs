@@ -70,6 +70,17 @@ struct Arguments {
     images: Option<PathBuf>,
     #[arg(long, requires = "images")]
     external_images: Option<PathBuf>,
+    /// Linux guest platform used to resolve images and create containers.
+    #[arg(long, default_value_t = default_platform())]
+    platform: Platform,
+}
+
+fn default_platform() -> Platform {
+    if cfg!(target_arch = "x86_64") {
+        Platform::linux_amd64()
+    } else {
+        Platform::linux_arm64()
+    }
 }
 
 #[derive(Debug, Default, Parser)]
@@ -206,7 +217,7 @@ impl Arguments {
             response: failure.clone(),
         };
         Daemon::new(containers)
-            .platform(Platform::linux_arm64())
+            .platform(self.platform)
             .image_source(Registry::new(Auth::Anonymous))
             .process_sampler(HostProcesses)
             .release(Release::new(ReleaseMetadata::version()))
@@ -228,8 +239,9 @@ impl Arguments {
 
 #[cfg(test)]
 mod tests {
-    use super::{Arguments, Logging, cpu_seconds};
+    use super::{Arguments, Logging, cpu_seconds, default_platform};
     use clap::{Parser, error::ErrorKind};
+    use hl_images::Platform;
     use std::path::PathBuf;
 
     #[test]
@@ -251,6 +263,23 @@ mod tests {
         assert_eq!(arguments.socket, PathBuf::from("/run/daemon.sock"));
         assert_eq!(arguments.images, Some(PathBuf::from("/images")));
         assert_eq!(arguments.external_images, Some(PathBuf::from("/external")));
+        assert_eq!(arguments.platform, default_platform());
+    }
+
+    #[test]
+    fn platform_selects_the_guest_image_and_execution_architecture() {
+        let arguments = Arguments::try_parse_from([
+            "hl-daemon",
+            "--root",
+            "/data",
+            "--socket",
+            "/run/daemon.sock",
+            "--platform",
+            "linux/amd64",
+        ])
+        .unwrap();
+
+        assert_eq!(arguments.platform, Platform::linux_amd64());
     }
 
     #[test]
