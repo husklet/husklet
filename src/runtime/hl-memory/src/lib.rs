@@ -34,6 +34,7 @@ pub use checkpoint::{
     MEMORY_CHECKPOINT_VERSION, MemoryCheckpointHost, MemoryCheckpointImage, MemoryHostRestore, MemoryHostStage,
     MemoryMappingSnapshot,
 };
+pub use checkpoint_activity::CheckpointContinuation;
 pub use executable::ExecutableToken;
 pub use ledger::{ExecutableAliasEvidence, MemoryLedger, MemoryLedgerSnapshot};
 pub use mapping::TransitionObserver as MappingTransitionObserver;

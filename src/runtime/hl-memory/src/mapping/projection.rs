@@ -158,6 +158,14 @@ impl<'a, H: MemoryAccessHost> DirectAuthorityLease<'a, H> {
     }
 }
 
+impl<H: MemoryAccessHost> ProjectionLease<'_, H> {
+    /// Captures checkpoint-request validity for this admitted projection.
+    /// Mapping and scheduler validity remain separate continuation gates.
+    pub fn checkpoint_continuation(&self) -> crate::CheckpointContinuation {
+        self._admission.continuation()
+    }
+}
+
 impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
     pub fn allows(&self, protection: Protection) -> bool {
         protection != Protection::NONE && self.authority.contains(protection)

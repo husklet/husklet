@@ -1600,3 +1600,32 @@ fn frozen_coordinator_blocks() {
     worker.join().unwrap();
     assert_eq!(coordinator.ledger().regions().len(), 1);
 }
+
+#[test]
+fn checkpoint_request_invalidates_live_projection_before_freeze_completes() {
+    let coordinator = Arc::new(MappingCoordinator::new(FakeHost::failing(usize::MAX)));
+    coordinator.map(request()).unwrap();
+    let projection = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 1)
+        .unwrap();
+    let continuation = projection.checkpoint_continuation();
+    let freezer = Arc::clone(&coordinator);
+    let (sent, received) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        freezer.freeze_checkpoint();
+        sent.send(()).unwrap();
+    });
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while continuation.is_current() && std::time::Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert!(!continuation.is_current());
+    assert!(received.try_recv().is_err());
+
+    drop(projection);
+    received.recv_timeout(Duration::from_secs(1)).unwrap();
+    coordinator.thaw_checkpoint();
+    assert!(!continuation.is_current());
+    worker.join().unwrap();
+}
