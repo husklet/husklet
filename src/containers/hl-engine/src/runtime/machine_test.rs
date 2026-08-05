@@ -380,7 +380,10 @@ fn invalid_projected_capacity() {
         plan: &Fixture::plan(b"guest", Some("0")),
         services: &Fixture::services(),
     });
-    assert!(matches!(result, Err(CompositionError::RuntimeConstruction)));
+    assert!(matches!(
+        result,
+        Err(CompositionError::Construction(ConstructionError::Assembly))
+    ));
     assert_eq!(*host.validations.lock().unwrap(), 0);
 }
 
