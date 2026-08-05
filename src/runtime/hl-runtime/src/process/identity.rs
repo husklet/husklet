@@ -1,11 +1,11 @@
 use hl_linux::{Errno, GuestMarshaller, GuestMemory, LinuxResult, ProcessAbi};
-use hl_task::{ProcessCredentials, ProcessSnapshot};
+use hl_task::{ProcessCredentials, ProcessObservation};
 
 use crate::RuntimeProcessSyscalls;
 
 impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
-    pub(crate) fn snapshot(&self) -> Result<ProcessSnapshot, Errno> {
-        self.tasks.process_snapshot(self.process).map_err(|_| Errno::ESRCH)
+    pub(crate) fn snapshot(&self) -> Result<ProcessObservation, Errno> {
+        self.tasks.process_observation(self.process).map_err(|_| Errno::ESRCH)
     }
 
     pub(crate) fn getppid(&self) -> LinuxResult {

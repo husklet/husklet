@@ -42,8 +42,11 @@ session, or process-group slots.
 
 `RuntimeProcessSyscalls::snapshot` is the shared observation boundary for the
 current-process identity, credential/capability, namespace, and `prctl` query
-families. It now calls the generation-qualified one-process API. A missing or
-stale process continues to map to `ESRCH`. Full registry snapshots remain at
+families. It now returns `ProcessObservation`, which contains only the parent,
+credentials, and simple control fields consumed by that family. It does not
+clone children, threads, arguments, limits, signal actions, pending signal
+queues, namespace topology, or process-group/session state. A missing or stale
+process continues to map to `ESRCH`. Rich one-process and full registry snapshots remain at
 call sites that genuinely need global topology or enumeration, including
 process counts, pidfd resolution, signal fanout, retirement, procfs, and
 checkpoint capture.
@@ -62,3 +65,11 @@ oracle measured 837-880 us and host-native measured 912-961 us in the paired
 runs. This removes the global-registry scan but does not claim native parity;
 the remaining 7.18x guest-phase gap belongs to later syscall-boundary and
 single-process observation work.
+
+A second exact-tree comparison split that simple observation from the rich
+`ProcessSnapshot`. Against the preceding one-process-snapshot commit, the same
+nine-repeat workload fell from 6,722 us to 4,334 us (-35.52%) with checksum and
+native diagnostics unchanged. Host-native measured 850-896 us and the retained
+C engine measured 841-918 us. The resulting Rust guest phase is 5.10x native;
+wall measurements (23,615 us versus 24,020 us) were dominated by startup noise
+and do not establish a wall-time improvement.

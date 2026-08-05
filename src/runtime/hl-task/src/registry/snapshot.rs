@@ -1,10 +1,27 @@
 use super::{State, TaskRegistry};
 use crate::{
-    ProcessGroupId, ProcessGroupSnapshot, ProcessId, ProcessSnapshot, RegistryConfig, RegistrySnapshot, SessionId,
-    SessionSnapshot, SignalAction, SignalNumber, SignalProcessSnapshot, SignalThreadSnapshot, ThreadId, ThreadSnapshot,
+    ProcessGroupId, ProcessGroupSnapshot, ProcessId, ProcessObservation, ProcessSnapshot, RegistryConfig,
+    RegistrySnapshot, SessionId, SessionSnapshot, SignalAction, SignalNumber, SignalProcessSnapshot,
+    SignalThreadSnapshot, ThreadId, ThreadSnapshot,
 };
 
 impl TaskRegistry {
+    /// Observes the state shared by simple current-process Linux operations.
+    pub fn process_observation(&self, id: ProcessId) -> Result<ProcessObservation, crate::TaskError> {
+        let state = self.lock();
+        let process = Self::process(&state, id)?;
+        Ok(ProcessObservation {
+            parent: process.parent,
+            credentials: process.credentials.clone(),
+            parent_death_signal: process.parent_death_signal,
+            child_subreaper: process.child_subreaper,
+            dumpable: process.dumpable,
+            timer_slack: process.timer_slack,
+            thp_disabled: process.thp_disabled,
+            mce_policy: process.mce_policy,
+        })
+    }
+
     /// Captures one generation-qualified process without scanning or cloning
     /// unrelated registry slots.
     pub fn process_snapshot(&self, id: ProcessId) -> Result<ProcessSnapshot, crate::TaskError> {

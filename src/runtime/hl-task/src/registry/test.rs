@@ -73,6 +73,25 @@ fn process_snapshot_is_exact_and_generation_qualified() {
 }
 
 #[test]
+fn process_observation_is_exact_and_generation_qualified() {
+    let (registry, process, _) = Fixture::registry(65_536, 65_536);
+    let full = registry.process_snapshot(process).unwrap();
+    let observation = registry.process_observation(process).unwrap();
+    assert_eq!(observation.parent, full.parent);
+    assert_eq!(observation.credentials, full.credentials);
+    assert_eq!(observation.parent_death_signal, full.parent_death_signal);
+    assert_eq!(observation.child_subreaper, full.child_subreaper);
+    assert_eq!(observation.dumpable, full.dumpable);
+    assert_eq!(observation.timer_slack, full.timer_slack);
+    assert_eq!(observation.thp_disabled, full.thp_disabled);
+    assert_eq!(observation.mce_policy, full.mce_policy);
+
+    let (slot, generation) = process.wire_parts();
+    let stale = ProcessId::from_wire(slot, generation.checked_add(1).unwrap()).unwrap();
+    assert_eq!(registry.process_observation(stale), Err(TaskError::InvalidProcess));
+}
+
+#[test]
 fn parent_death_reparents() {
     let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let (_, leader) = registry.create_init(Fixture::credentials(), Fixture::limits()).unwrap();

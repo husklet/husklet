@@ -524,6 +524,20 @@ pub struct ProcessSnapshot {
     pub personality: u32,
 }
 
+/// Coherent current-process state used by simple Linux identity and control
+/// operations without cloning process topology or signal queues.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessObservation {
+    pub parent: Option<ProcessId>,
+    pub credentials: ProcessCredentials,
+    pub parent_death_signal: u32,
+    pub child_subreaper: bool,
+    pub dumpable: bool,
+    pub timer_slack: u64,
+    pub thp_disabled: bool,
+    pub mce_policy: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThreadSnapshot {
     pub id: ThreadId,
