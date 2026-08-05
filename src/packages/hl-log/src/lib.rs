@@ -34,6 +34,7 @@
 //! Environment and CLI translation belongs to the application composition root.
 
 // ---- modules (one purpose each) -------------------------------------------------
+mod channel;
 mod config;
 mod counters;
 mod emit;
@@ -49,6 +50,7 @@ mod timing;
 
 // ---- re-exports: the flat public API -------------------------------------------
 
+pub use channel::{Channel, Publish, ReceiveError, Receiver};
 pub use config::Config;
 pub use counters::Counters;
 pub use emit::emit;
