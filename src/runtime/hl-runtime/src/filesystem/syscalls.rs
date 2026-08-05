@@ -161,7 +161,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             "dup" => Self::descriptor_result(self.descriptors.duplicate(descriptor, 0, DescriptorFlags::default())),
             "dup3" => {
                 let flags = arguments[2] as u32;
-                if flags & !0o2000000 != 0 {
+                if flags & !0o2_000_000 != 0 {
                     return LinuxResult::Error(Errno::EINVAL);
                 }
                 let local = DescriptorFlags::from_bits(if flags == 0 { 0 } else { DescriptorFlags::CLOSE_ON_EXEC });

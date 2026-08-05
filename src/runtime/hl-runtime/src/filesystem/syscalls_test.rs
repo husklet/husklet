@@ -409,7 +409,7 @@ fn registered_pipe_adapter(
         architecture,
     )
     .with_pipe_registry(assembly.ipc_pipes().unwrap());
-    assert_eq!(runtime.pipe2(0, 0o00004000), LinuxResult::Value(0));
+    assert_eq!(runtime.pipe2(0, 0o00_004_000), LinuxResult::Value(0));
     (runtime, table.pin(0).unwrap(), 1)
 }
 
@@ -1267,7 +1267,7 @@ fn pipe2_exact_copyout() {
             GuestArchitecture::Aarch64 => 0x1_0000,
             GuestArchitecture::X86_64 => StatusFlags::DIRECT,
         };
-        assert_eq!(adapter.pipe2(0, 0o02004000 | direct), LinuxResult::Value(0));
+        assert_eq!(adapter.pipe2(0, 0o02_004_000 | direct), LinuxResult::Value(0));
         assert_eq!(&*adapter.memory.bytes.lock().unwrap(), &[0, 0, 0, 0, 1, 0, 0, 0]);
         for descriptor in [0, 1] {
             assert!(descriptors.flags(descriptor).unwrap().closes_on_exec());
@@ -1384,7 +1384,7 @@ fn pipe2_leaks_fd() {
     )
     .with_pipe_registry(assembly.ipc_pipes().unwrap());
     assert_eq!(adapter.pipe2(0, 4), LinuxResult::Error(Errno::EINVAL));
-    assert_eq!(adapter.pipe2(0, 0o40000000), LinuxResult::Error(Errno::ENOSYS));
+    assert_eq!(adapter.pipe2(0, 0o40_000_000), LinuxResult::Error(Errno::ENOSYS));
     assert_eq!(adapter.pipe2(0, 0), LinuxResult::Error(Errno::EFAULT));
     assert_eq!(descriptors.reserve(0).unwrap().number(), 0);
     let catalog = assembly.ipc().unwrap();

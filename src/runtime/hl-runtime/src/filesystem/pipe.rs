@@ -8,9 +8,9 @@ use crate::{filesystem::errno::FileErrno, filesystem::syscalls::RuntimeFilesyste
 
 impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
     pub(super) fn pipe2(&self, output: u64, flags: u32) -> LinuxResult {
-        const NONBLOCK: u32 = 0o00004000;
-        const CLOEXEC: u32 = 0o02000000;
-        const NOTIFICATION: u32 = 0o40000000;
+        const NONBLOCK: u32 = 0o00_004_000;
+        const CLOEXEC: u32 = 0o02_000_000;
+        const NOTIFICATION: u32 = 0o40_000_000;
         let direct = match self.architecture {
             hl_linux::GuestArchitecture::Aarch64 => 0x1_0000,
             hl_linux::GuestArchitecture::X86_64 => StatusFlags::DIRECT,
@@ -36,7 +36,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             },
             crate::IpcOpenPipe::descriptions,
         );
-        let shared_status = flags & NONBLOCK | u32::from(flags & direct != 0) * StatusFlags::DIRECT;
+        let shared_status = (flags & NONBLOCK) | (u32::from(flags & direct != 0) * StatusFlags::DIRECT);
         let local = DescriptorFlags::from_bits(u32::from(flags & CLOEXEC != 0) * DescriptorFlags::CLOSE_ON_EXEC);
         let objects: Vec<_> = vec![
             (descriptions[0].clone(), StatusFlags::from_bits(shared_status), local),
