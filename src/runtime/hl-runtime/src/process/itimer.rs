@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
 use hl_linux::{Errno, GuestMarshaller, GuestMemory, IntervalTimer, LinuxResult, TimeFutexAbi};
@@ -21,11 +22,96 @@ struct TimerState {
     token: Option<u64>,
 }
 
+/// Lock-free view of the CPU interval timers for one process identity.
+///
+/// Readers retain this process-lifetime object across execution admission. PID
+/// slot reuse installs a different object, so a late reader cannot observe the
+/// replacement process. An odd generation denotes an update in progress; a
+/// reader that races repeated updates fails closed by reporting an armed timer.
+pub struct CpuTimerPublication {
+    generation: AtomicU64,
+    virtual_armed: AtomicBool,
+    virtual_deadline: AtomicU64,
+    prof_armed: AtomicBool,
+    prof_deadline: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CpuTimerSnapshot {
+    pub generation: u64,
+    pub virtual_deadline: Option<u64>,
+    pub prof_deadline: Option<u64>,
+}
+
+impl CpuTimerPublication {
+    fn new() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+            virtual_armed: AtomicBool::new(false),
+            virtual_deadline: AtomicU64::new(0),
+            prof_armed: AtomicBool::new(false),
+            prof_deadline: AtomicU64::new(0),
+        }
+    }
+
+    fn publish(&self, virtual_deadline: Option<u64>, prof_deadline: Option<u64>) {
+        let generation = self.generation.load(Ordering::Relaxed);
+        if generation >= u64::MAX - 1 {
+            // Exhaustion is terminal and fail-closed: no old continuation can
+            // become current again after generation wraparound.
+            self.generation.store(u64::MAX, Ordering::Release);
+            return;
+        }
+        self.generation.store(generation + 1, Ordering::Release);
+        self.virtual_deadline
+            .store(virtual_deadline.unwrap_or(0), Ordering::Relaxed);
+        self.virtual_armed.store(virtual_deadline.is_some(), Ordering::Relaxed);
+        self.prof_deadline.store(prof_deadline.unwrap_or(0), Ordering::Relaxed);
+        self.prof_armed.store(prof_deadline.is_some(), Ordering::Relaxed);
+        self.generation.store(generation + 2, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> CpuTimerSnapshot {
+        for _ in 0..3 {
+            let before = self.generation.load(Ordering::Acquire);
+            if before & 1 != 0 {
+                continue;
+            }
+            let virtual_armed = self.virtual_armed.load(Ordering::Relaxed);
+            let virtual_deadline = self.virtual_deadline.load(Ordering::Relaxed);
+            let prof_armed = self.prof_armed.load(Ordering::Relaxed);
+            let prof_deadline = self.prof_deadline.load(Ordering::Relaxed);
+            let after = self.generation.load(Ordering::Acquire);
+            if before == after {
+                return CpuTimerSnapshot {
+                    generation: after,
+                    virtual_deadline: virtual_armed.then_some(virtual_deadline),
+                    prof_deadline: prof_armed.then_some(prof_deadline),
+                };
+            }
+        }
+        // A native continuation must decline when publication is unstable.
+        CpuTimerSnapshot {
+            generation: self.generation.load(Ordering::Acquire),
+            virtual_deadline: Some(0),
+            prof_deadline: Some(0),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ProcessCpuTimers {
+    virtual_timer: TimerState,
+    prof_timer: TimerState,
+    publication: Option<Arc<CpuTimerPublication>>,
+}
+
 pub struct AlarmRegistry {
     tasks: Arc<TaskRegistry>,
     scheduler: Arc<dyn AlarmScheduler>,
     timers: Mutex<BTreeMap<ProcessId, TimerState>>,
-    cpu_timers: Mutex<BTreeMap<(ProcessId, i32), TimerState>>,
+    cpu_timers: Mutex<BTreeMap<ProcessId, ProcessCpuTimers>>,
     interruptions: Mutex<BTreeMap<hl_task::ThreadId, Weak<Interruption>>>,
 }
 
@@ -71,8 +157,14 @@ impl AlarmRegistry {
             .cpu_timers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&(process, which))
-            .copied()
+            .get(&process)
+            .map(|timers| {
+                if which == 1 {
+                    timers.virtual_timer
+                } else {
+                    timers.prof_timer
+                }
+            })
             .unwrap_or_default();
         IntervalTimer {
             interval: Self::timespec(state.interval),
@@ -88,10 +180,37 @@ impl AlarmRegistry {
             .cpu_timers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let state = timers.entry((process, which)).or_default();
+        let timers = timers.entry(process).or_default();
+        let state = if which == 1 {
+            &mut timers.virtual_timer
+        } else {
+            &mut timers.prof_timer
+        };
         state.interval = interval;
         state.deadline = (value != 0).then(|| now.saturating_add(value));
+        Self::publish_cpu(timers);
         Ok(previous)
+    }
+
+    /// Returns a process-generation-qualified handle suitable for retention by
+    /// an admitted executor. Only this lookup takes the registry lock.
+    pub fn cpu_timer_publication(&self, process: ProcessId) -> Arc<CpuTimerPublication> {
+        let mut timers = self
+            .cpu_timers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let timers = timers.entry(process).or_default();
+        Arc::clone(
+            timers
+                .publication
+                .get_or_insert_with(|| Arc::new(CpuTimerPublication::new())),
+        )
+    }
+
+    fn publish_cpu(timers: &ProcessCpuTimers) {
+        if let Some(publication) = &timers.publication {
+            publication.publish(timers.virtual_timer.deadline, timers.prof_timer.deadline);
+        }
     }
 
     pub(crate) fn poll_cpu(&self, process: ProcessId, virtual_now: u64, prof_now: u64) {
@@ -101,10 +220,13 @@ impl AlarmRegistry {
                 .cpu_timers
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(timers) = timers.get_mut(&process) else { return };
             for which in [1, 2] {
                 let now = if which == 1 { virtual_now } else { prof_now };
-                let Some(state) = timers.get_mut(&(process, which)) else {
-                    continue;
+                let state = if which == 1 {
+                    &mut timers.virtual_timer
+                } else {
+                    &mut timers.prof_timer
                 };
                 let Some(deadline) = state.deadline else { continue };
                 if now < deadline {
@@ -118,6 +240,7 @@ impl AlarmRegistry {
                 };
                 signals.push(if which == 1 { 26 } else { 27 });
             }
+            Self::publish_cpu(timers);
         }
         for raw in signals {
             if let Ok(signal) = SignalNumber::new(raw) {
@@ -137,10 +260,16 @@ impl AlarmRegistry {
         if let Some(token) = state.and_then(|state| state.token) {
             self.scheduler.cancel(token);
         }
-        self.cpu_timers
+        if let Some(timers) = self
+            .cpu_timers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|(owner, _), _| *owner != process);
+            .remove(&process)
+        {
+            if let Some(publication) = timers.publication {
+                publication.publish(None, None);
+            }
+        }
     }
 
     fn replace(self: &Arc<Self>, process: ProcessId, timer: IntervalTimer) -> Result<IntervalTimer, ()> {
@@ -422,5 +551,38 @@ mod tests {
             alarms.current_cpu(process, 1, 120_000_000).value,
             hl_time::Timespec::default()
         );
+    }
+
+    #[test]
+    fn cpu_timer_publication_tracks_set_expiry_and_exit() {
+        let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+        let credentials = ProcessCredentials::new(0, 0, &[], 65_536).unwrap();
+        let (process, _) = tasks.create_init(credentials, ProcessLimits::default()).unwrap();
+        let alarms = AlarmRegistry::new(tasks, Arc::new(Scheduler));
+        let publication = alarms.cpu_timer_publication(process);
+        let initial = publication.snapshot();
+        assert_eq!(initial.virtual_deadline, None);
+
+        let timer = IntervalTimer {
+            interval: hl_time::Timespec::default(),
+            value: hl_time::Timespec::new(0, 20_000_000).unwrap(),
+        };
+        alarms.replace_cpu(process, 1, 100_000_000, timer).unwrap();
+        let armed = publication.snapshot();
+        assert_eq!(armed.virtual_deadline, Some(120_000_000));
+        assert!(armed.generation > initial.generation);
+
+        alarms.poll_cpu(process, 120_000_000, 0);
+        let expired = publication.snapshot();
+        assert_eq!(expired.virtual_deadline, None);
+        assert!(expired.generation > armed.generation);
+
+        alarms.replace_cpu(process, 2, 10, timer).unwrap();
+        alarms.remove(process);
+        let retired = publication.snapshot();
+        assert_eq!(retired.virtual_deadline, None);
+        assert_eq!(retired.prof_deadline, None);
+        let replacement = alarms.cpu_timer_publication(process);
+        assert!(!Arc::ptr_eq(&publication, &replacement));
     }
 }

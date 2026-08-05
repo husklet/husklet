@@ -127,7 +127,7 @@ pub use process_image::{
     Image as ProcessImage, PreparedExecParticipant, PreparedProcessImage, PreparedRuntimeExec, RejectingExecPort,
     RuntimeExecParticipant, SafeRuntimeExec,
 };
-pub use process_itimer::{AlarmRegistry, AlarmScheduler};
+pub use process_itimer::{AlarmRegistry, AlarmScheduler, CpuTimerPublication, CpuTimerSnapshot};
 pub use process_schedule::RuntimeYieldPort;
 pub use process_syscalls::{RuntimeProcessSyscalls, RuntimeReapPort};
 pub use process_time::{
