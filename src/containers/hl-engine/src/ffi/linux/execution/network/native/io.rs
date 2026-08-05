@@ -132,11 +132,11 @@ impl SocketHostIo for Native {
         let error = Self::host_error();
         if error == SocketHostError::WouldBlock {
             let mut sockets = self.shared.sockets.lock().unwrap_or_else(|poison| poison.into_inner());
-            if let Some(entry) = sockets.get_mut(&token) {
-                entry.wants_write = true;
-            }
+            let changed = sockets.get_mut(&token).is_some_and(super::Entry::arm_write);
             drop(sockets);
-            self.wake();
+            if changed {
+                self.wake();
+            }
         }
         Err(error)
     }

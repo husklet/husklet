@@ -44,6 +44,22 @@ pub(super) struct Entry {
     pub(super) switched: bool,
 }
 
+impl Entry {
+    fn arm_read(&mut self) -> bool {
+        arm_interest(&mut self.wants_read)
+    }
+
+    pub(super) fn arm_write(&mut self) -> bool {
+        arm_interest(&mut self.wants_write)
+    }
+}
+
+fn arm_interest(armed: &mut bool) -> bool {
+    let changed = !*armed;
+    *armed = true;
+    changed
+}
+
 pub(super) struct SwitchPath(Vec<Vec<u8>>);
 
 impl Drop for SwitchPath {
@@ -204,11 +220,11 @@ impl Native {
 
     fn arm_read(&self, token: u64) {
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(entry) = sockets.get_mut(&token) {
-            entry.wants_read = true;
-        }
+        let changed = sockets.get_mut(&token).is_some_and(Entry::arm_read);
         drop(sockets);
-        self.wake();
+        if changed {
+            self.wake();
+        }
     }
 
     fn socket_address(address: &SocketAddress) -> Result<(libc::sockaddr_storage, u32), RuntimeNetworkError> {
@@ -705,8 +721,17 @@ impl Native {
 
 #[cfg(test)]
 mod kind_cache_test {
-    use super::Native;
+    use super::{Native, arm_interest};
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn readiness_interest_wakes_only_on_disarmed_to_armed_transition() {
+        let mut armed = false;
+        assert!(arm_interest(&mut armed));
+        assert!(!arm_interest(&mut armed));
+        armed = false;
+        assert!(arm_interest(&mut armed));
+    }
 
     #[test]
     fn readiness_worker_starts_with_first_socket() {
