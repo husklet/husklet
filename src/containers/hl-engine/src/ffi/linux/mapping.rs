@@ -177,7 +177,7 @@ impl PreparedHostExit for PreparedMappingExit {
             if let Some(reservation) = self
                 .stages
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .reservations
                 .remove(&token)
             {
@@ -189,7 +189,7 @@ impl PreparedHostExit for PreparedMappingExit {
 
     fn finish(&mut self) {
         if self.published {
-            let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+            let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let arena = self
                 .reservations
                 .iter()
@@ -223,7 +223,7 @@ impl Drop for PreparedMappingExit {
             if let Some(reservation) = self
                 .stages
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .reservations
                 .remove(&token)
             {
@@ -247,7 +247,7 @@ impl MappingHost for MappingHostAdapter {
         }
         self.check_range(address.get(), request.length)?;
         let capability = self.arena.prepare_canonical(request).map_err(Self::memory_error)?;
-        let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prior = stages
             .reservations
             .last_key_value()
@@ -273,7 +273,7 @@ impl MappingHost for MappingHostAdapter {
 
     fn stage_unmap(&self, range: AddressRange) -> Result<u64, MemoryError> {
         self.check_range(range.start().get(), range.length())?;
-        let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prior = stages
             .reservations
             .last_key_value()
@@ -292,7 +292,7 @@ impl MappingHost for MappingHostAdapter {
 
     fn stage_protect(&self, range: AddressRange, protection: Protection) -> Result<u64, MemoryError> {
         self.check_range(range.start().get(), range.length())?;
-        let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prior = stages
             .reservations
             .last_key_value()
@@ -307,7 +307,7 @@ impl MappingHost for MappingHostAdapter {
     }
 
     fn commit(&self, reservations: &[u64]) -> Result<(), MemoryError> {
-        let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let arena = reservations
             .iter()
             .map(|token| {
@@ -338,7 +338,7 @@ impl MappingHost for MappingHostAdapter {
         if let Some(reservation) = self
             .stages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reservations
             .remove(&reservation)
         {
@@ -356,7 +356,7 @@ impl MappingHost for MappingHostAdapter {
         self.check_range(source.start().get(), source.length())?;
         self.check_range(destination.get(), request.length)?;
         let capability = self.arena.prepare_canonical(request).map_err(Self::memory_error)?;
-        let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prior = stages
             .reservations
             .last_key_value()
@@ -395,7 +395,7 @@ impl BackingChangeHost for MappingHostAdapter {
         {
             return Err(MemoryError::InvariantViolation);
         }
-        let mut stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let prior = stages
             .reservations
             .last_key_value()
@@ -435,7 +435,7 @@ impl MemoryAccessHost for MappingHostAdapter {
     fn project_aperture(&self) -> Result<Option<hl_memory::HostAperture<Self::Projection>>, MemoryError> {
         // Serialize sparse publication with the direct pin. Once installed,
         // the aperture-wide pin rejects every overlapping host transition.
-        let _stages = self.stages.lock().unwrap_or_else(|error| error.into_inner());
+        let _stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !self.sparse.is_empty() {
             return Ok(None);
         }
@@ -485,7 +485,7 @@ impl MemoryAccessHost for MappingHostAdapter {
     }
 
     fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
-        let mut state = self.writes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let token = Self::token(&mut state);
         state.plain.insert(token, range);
         Ok(token)
@@ -495,7 +495,7 @@ impl MemoryAccessHost for MappingHostAdapter {
         let range = self
             .writes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plain
             .remove(&reservation)
             .ok_or(MemoryError::InvariantViolation)?;
@@ -520,7 +520,7 @@ impl MemoryAccessHost for MappingHostAdapter {
         let range = self
             .writes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plain
             .remove(&reservation)
             .ok_or(MemoryError::InvariantViolation)?;
@@ -533,7 +533,7 @@ impl MemoryAccessHost for MappingHostAdapter {
     fn rollback_write(&self, reservation: u64) {
         self.writes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .plain
             .remove(&reservation);
     }
@@ -541,7 +541,7 @@ impl MemoryAccessHost for MappingHostAdapter {
 
 impl AtomicWriteBatchHost for MappingHostAdapter {
     fn prepare_u32_batch(&self, writes: &[AtomicU32Write]) -> Result<u64, MemoryError> {
-        let mut state = self.writes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let token = Self::token(&mut state);
         state.atomic.insert(token, writes.to_vec());
         Ok(token)
@@ -551,7 +551,7 @@ impl AtomicWriteBatchHost for MappingHostAdapter {
         let writes = self
             .writes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .atomic
             .remove(&reservation)
             .ok_or(MemoryError::InvariantViolation)?;
@@ -563,7 +563,7 @@ impl AtomicWriteBatchHost for MappingHostAdapter {
     fn rollback_u32_batch(&self, reservation: u64) {
         self.writes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .atomic
             .remove(&reservation);
     }
