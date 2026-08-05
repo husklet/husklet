@@ -10,6 +10,7 @@ const ENTRY_LIMIT: usize = 65_536;
 pub(super) struct State {
     path: PathBuf,
     terminals: Option<Arc<hl_runtime::TerminalCatalog>>,
+    overlay: Option<Vec<PathBuf>>,
     entries: Option<Vec<OfdDirectoryEntry>>,
     cursor: usize,
     generation: u64,
@@ -20,10 +21,18 @@ impl State {
         Self {
             path,
             terminals: None,
+            overlay: None,
             entries: None,
             cursor: 0,
             generation: 1,
         }
+    }
+
+    pub(super) fn with_overlay(mut self, paths: Vec<PathBuf>) -> Self {
+        if paths.len() > 1 {
+            self.overlay = Some(paths);
+        }
+        self
     }
 
     pub(super) fn with_terminals(mut self, terminals: Arc<hl_runtime::TerminalCatalog>) -> Self {
@@ -71,6 +80,9 @@ impl State {
     }
 
     fn load(&self) -> Result<Vec<OfdDirectoryEntry>, ObjectError> {
+        if let Some(paths) = &self.overlay {
+            return self.load_overlay(paths);
+        }
         let mut entries = std::fs::read_dir(&self.path)
             .map_err(Self::object)?
             .take(ENTRY_LIMIT - 1)
@@ -93,6 +105,65 @@ impl State {
             entry.cookie = i64::try_from(index + 1).map_err(|_| ObjectError::ResourceLimit)?;
         }
         Ok(entries)
+    }
+
+    fn load_overlay(&self, paths: &[PathBuf]) -> Result<Vec<OfdDirectoryEntry>, ObjectError> {
+        let layers = paths.iter().map(Self::overlay_layer).collect::<Result<Vec<_>, _>>()?;
+        let merged = super::overlay_entries::merge(&layers, &[]).map_err(Self::object)?;
+        merged
+            .into_iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let metadata = if entry.name == b"." {
+                    std::fs::symlink_metadata(&self.path)
+                } else if entry.name == b".." {
+                    std::fs::symlink_metadata(self.path.join(".."))
+                } else {
+                    paths
+                        .iter()
+                        .map(|path| std::fs::symlink_metadata(path.join(std::ffi::OsStr::from_bytes(&entry.name))))
+                        .find_map(Result::ok)
+                        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+                }
+                .map_err(Self::object)?;
+                Ok(OfdDirectoryEntry {
+                    inode: metadata.ino(),
+                    cookie: i64::try_from(index + 1).map_err(|_| ObjectError::ResourceLimit)?,
+                    file_type: entry.kind,
+                    name: entry.name,
+                })
+            })
+            .collect()
+    }
+
+    fn overlay_layer(path: &PathBuf) -> Result<super::overlay_entries::LayerDirectory, ObjectError> {
+        let mut opaque = false;
+        let mut entries = Vec::new();
+        let directory = match std::fs::read_dir(path) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(super::overlay_entries::LayerDirectory::default());
+            }
+            Err(error) => return Err(Self::object(error)),
+        };
+        for value in directory.take(ENTRY_LIMIT) {
+            let value = value.map_err(Self::object)?;
+            let raw = value.file_name();
+            let raw = raw.as_bytes();
+            if raw == b".wh..wh..opq" {
+                opaque = true;
+                continue;
+            }
+            let (name, whiteout) = raw.strip_prefix(b".wh.").map_or((raw, false), |name| (name, true));
+            let name = hl_runtime::GuestName::new(name).map_err(|_| ObjectError::Io)?;
+            let metadata = std::fs::symlink_metadata(value.path()).map_err(Self::object)?;
+            entries.push(super::overlay_entries::Candidate {
+                name,
+                kind: Self::kind(metadata.mode()),
+                whiteout,
+            });
+        }
+        Ok(super::overlay_entries::LayerDirectory { entries, opaque })
     }
 
     fn retain_native(entry: &OfdDirectoryEntry) -> bool {

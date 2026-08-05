@@ -206,6 +206,20 @@ impl Host {
         let directory = Self::descriptor_path(parent.as_raw_fd()).map_err(super::HostError::map)?;
         Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
     }
+
+    pub(super) fn layer_paths(parent: &ParentLease, name: &CString) -> Result<Vec<PathBuf>, RuntimePathError> {
+        let mut paths = Vec::new();
+        let selected = Self::descriptor_path(parent.selected().as_raw_fd()).map_err(super::HostError::map)?;
+        paths.push(selected.join(OsStr::from_bytes(name.as_bytes())));
+        for lower in parent.lower_parents() {
+            let directory = Self::descriptor_path(lower.as_raw_fd()).map_err(super::HostError::map)?;
+            let path = directory.join(OsStr::from_bytes(name.as_bytes()));
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        Ok(paths)
+    }
 }
 
 #[cfg(test)]

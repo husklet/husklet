@@ -234,7 +234,8 @@ impl PreparedPathOpen for PendingOpen {
         }
         drop(paths);
         if metadata.is_dir() {
-            let mut directory = directory::State::new(self.path.clone());
+            let layers = pin::Host::layer_paths(&self.parent, &self.name)?;
+            let mut directory = directory::State::new(self.path.clone()).with_overlay(layers);
             if guest.as_str() == "/dev/pts" {
                 directory = directory.with_terminals(Arc::clone(&self.terminals));
             }

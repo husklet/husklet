@@ -97,6 +97,7 @@ impl MountPaths {
 /// Native root, resolver, mount table, and reverse mount projection for one engine.
 pub(crate) struct OrdinaryContext {
     root: PathBuf,
+    layer_roots: Vec<PathBuf>,
     host: pin::Host,
     mounts: Arc<MountNamespace>,
     paths: Arc<MountPaths>,
@@ -123,7 +124,7 @@ impl OrdinaryContext {
         let root = PathBuf::from(std::ffi::OsStr::from_bytes(root));
         let root = root.canonicalize().map_err(HostError::map)?;
         let root_pin = Arc::new(File::open(&root).map_err(HostError::map)?);
-        let lower_pins = lowers
+        let lower_roots = lowers
             .iter()
             .map(|lower| {
                 let lower = PathBuf::from(std::ffi::OsStr::from_bytes(lower));
@@ -131,7 +132,8 @@ impl OrdinaryContext {
                 if !lower.is_dir() {
                     return Err(RuntimePathError::NotDirectory);
                 }
-                File::open(lower).map(Arc::new).map_err(HostError::map)
+                let pin = File::open(&lower).map(Arc::new).map_err(HostError::map)?;
+                Ok((lower, pin))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let shared = super::tmpfs::PosixShm::create(&root, &root_pin)?;
@@ -150,16 +152,20 @@ impl OrdinaryContext {
             host: shared.path().to_owned(),
             root: shared.root(),
         });
-        let host = if lower_pins.is_empty() {
+        let host = if lower_roots.is_empty() {
             pin::Host::new(Arc::clone(&root_pin), Arc::clone(&paths))
         } else {
-            let mut roots = Vec::with_capacity(lower_pins.len() + 1);
+            let mut roots = Vec::with_capacity(lower_roots.len() + 1);
             roots.push(Arc::clone(&root_pin));
-            roots.extend(lower_pins);
+            roots.extend(lower_roots.iter().map(|(_, pin)| Arc::clone(pin)));
             pin::Host::layered(roots, Arc::clone(&paths))
         };
+        let mut layer_roots = Vec::with_capacity(lower_roots.len() + 1);
+        layer_roots.push(root.clone());
+        layer_roots.extend(lower_roots.into_iter().map(|(path, _)| path));
         Ok(Self {
             root,
+            layer_roots,
             host,
             mounts,
             paths,
@@ -403,7 +409,12 @@ impl OrdinaryContext {
         if let Some(guest) = self.paths.guest(path)? {
             return Ok(guest);
         }
-        let relative = path.strip_prefix(&self.root).map_err(|_| RuntimePathError::Access)?;
+        let (_, relative) = self
+            .layer_roots
+            .iter()
+            .filter_map(|root| path.strip_prefix(root).ok().map(|relative| (root, relative)))
+            .max_by_key(|(root, _)| root.components().count())
+            .ok_or(RuntimePathError::Access)?;
         MountPaths::join(&GuestPath::new("/").map_err(|_| RuntimePathError::Invalid)?, relative)
     }
 }
