@@ -134,13 +134,24 @@ static int rep_decode(const uint8_t *bytes, size_t size, x86_rep *rep) {
     return 1;
 }
 
-static const hl_native_projection_view *rep_view(const x86_run_views *cache, uint64_t address,
-                                                  size_t width, uint32_t permissions) {
-    if (cache == NULL) return NULL;
-    for (size_t index = 0; index < cache->count; ++index) {
-        const hl_native_projection_view *view = &cache->entries[index];
-        if (view_contains(view, address, width, permissions))
-            return view;
+static const hl_native_projection_view *rep_view(const x86_run_views *cache,
+                                                  const hl_native_projection *projection,
+                                                  uint64_t address, size_t width,
+                                                  uint32_t permissions) {
+    if (cache != NULL) {
+        for (size_t index = 0; index < cache->count; ++index) {
+            const hl_native_projection_view *view = &cache->entries[index];
+            if (view_contains(view, address, width, permissions)) return view;
+        }
+    }
+    /* The synchronous ProjectionLease authenticates the complete bounded
+     * table for the whole run. The four-entry generated-code cache is only a
+     * locality accelerator and must not limit bulk REP correctness. */
+    if (projection != NULL) {
+        for (size_t index = 0; index < projection->count; ++index) {
+            const hl_native_projection_view *view = &projection->views[index];
+            if (view_contains(view, address, width, permissions)) return view;
+        }
     }
     return NULL;
 }
@@ -193,6 +204,7 @@ static void rep_fill(void *destination, uint64_t value, size_t count, size_t wid
  * views fail closed to the ordinary scalar instruction, which owns resolver
  * callbacks and precise fault exits. */
 static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache,
+                                  const hl_native_projection *full_projection,
                                   hl_native_x86_64_cpu *cpu, uint64_t *budget) {
     uint64_t count = cpu->registers[1];
     uint64_t source = cpu->registers[6];
@@ -212,12 +224,12 @@ static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache
         return X86_REP_COMPLETE;
     }
     if (*budget == 0 || destination > UINT64_MAX - rep->width) return X86_REP_SCALAR;
-    destination_view = rep_view(cache, destination, rep->width, 2u);
+    destination_view = rep_view(cache, full_projection, destination, rep->width, 2u);
     if (destination_view == NULL) return X86_REP_SCALAR;
     destination_span = rep_span(destination_view, destination, rep->width, backward);
     if (rep->move) {
         if (source > UINT64_MAX - rep->width) return X86_REP_SCALAR;
-        source_view = rep_view(cache, source, rep->width, 1u);
+        source_view = rep_view(cache, full_projection, source, rep->width, 1u);
         if (source_view == NULL) return X86_REP_SCALAR;
         source_span = rep_span(source_view, source, rep->width, backward);
     }
@@ -226,13 +238,14 @@ static x86_rep_result rep_execute(const x86_rep *rep, const x86_run_views *cache
     if ((uint64_t)elements > count) elements = (size_t)count;
     if ((uint64_t)elements > *budget) elements = (size_t)*budget;
     if (elements == 0) return X86_REP_SCALAR;
-    hl_native_projection projection = {destination_view, 1,
-                                       destination_view->mapping_incarnation, 0};
+    hl_native_projection destination_projection = {
+        destination_view, 1, destination_view->mapping_incarnation, 0};
     size_t bytes = elements * rep->width;
     uint64_t first = backward ? destination - (bytes - rep->width) : destination;
     if (!hl_x86_projection_switch_writable(cpu, destination_view->guest_first, first + bytes))
         return X86_REP_EPOCH;
-    if (!hl_x86_projection_resolve(&projection, cpu, first, bytes, 2u)) return X86_REP_SCALAR;
+    if (!hl_x86_projection_resolve(&destination_projection, cpu, first, bytes, 2u))
+        return X86_REP_SCALAR;
     uint8_t *destination_host = (uint8_t *)(uintptr_t)
         (destination_view->host_first + destination - destination_view->guest_first);
     if (rep->move) {
@@ -638,7 +651,8 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         size = source_bytes(source, pc, &bytes);
         x86_rep rep;
         x86_rep_result rep_result = size != 0 && rep_decode(bytes, size, &rep)
-            ? rep_execute(&rep, &operand_views, cpu, &budget) : X86_REP_SCALAR;
+            ? rep_execute(&rep, &operand_views, request->projection, cpu, &budget)
+            : X86_REP_SCALAR;
         if (rep_result == X86_REP_FATAL) return fatal_exit(&execution, output, X86_FATAL_REASON);
         if (rep_result == X86_REP_EPOCH) return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, pc);
         if (rep_result == X86_REP_COMPLETE) {

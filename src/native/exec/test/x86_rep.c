@@ -40,7 +40,7 @@ static int rep_contract(void) {
         {0xe000, 0xe010, (uint64_t)(uintptr_t)source_bytes, 7, HL_NATIVE_ACCESS_READ,
          HL_NATIVE_WRITE_EXACT, 0},
         {0xf000, 0xf010, (uint64_t)(uintptr_t)destination_bytes, 7,
-         HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, HL_NATIVE_WRITE_EXACT, 0},
+          HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, HL_NATIVE_WRITE_EXACT, 1},
     };
     hl_native_projection projection = {views, 2, 7, 1};
     hl_native_x86_64_cpu state = {.program = 0xd000,
@@ -110,6 +110,37 @@ static int rep_contract(void) {
               state.dirty_records[index][3] == 0x4000 + index);
 
     {
+        uint8_t unused[4][16] = {{0}};
+        hl_native_projection_view many_views[] = {
+            {0x1000, 0x1010, (uint64_t)(uintptr_t)source_bytes, 7,
+             HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 0},
+            {0x2000, 0x2010, (uint64_t)(uintptr_t)destination_bytes, 7,
+             HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, HL_NATIVE_WRITE_EXACT, 1},
+            {0x3000, 0x3010, (uint64_t)(uintptr_t)unused[0], 7,
+             HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 2},
+            {0x4000, 0x4010, (uint64_t)(uintptr_t)unused[1], 7,
+             HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 3},
+            {0x5000, 0x5010, (uint64_t)(uintptr_t)unused[2], 7,
+             HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 4},
+            {0x6000, 0x6010, (uint64_t)(uintptr_t)unused[3], 7,
+             HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 5},
+        };
+        projection = (hl_native_projection){many_views, 6, 7, 2};
+        request.projection = &projection;
+        instruction = (hl_native_source_span){0xd080, rep_movsb, sizeof(rep_movsb), 7, 16};
+        memset(destination_bytes, 0, sizeof(destination_bytes));
+        state = (hl_native_x86_64_cpu){.program = 0xd080,
+            .registers = {[1] = 8, [6] = 0x1000, [7] = 0x2000}, .dirty_first = UINT64_MAX};
+        request.budget = 8;
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.program == 0xd082 &&
+              state.registers[1] == 0 && state.registers[6] == 0x1008 &&
+              state.registers[7] == 0x2008 && state.executed == 8 &&
+              state.dirty_first == 0x2000 && state.dirty_last == 0x2008 &&
+              memcmp(destination_bytes, source_bytes, 8) == 0);
+    }
+
+    {
         static const struct {
             uint8_t code[4];
             uint8_t length;
@@ -120,6 +151,8 @@ static int rep_contract(void) {
             {{0xf3, 0xaa}, 2, 1}, {{0xf3, 0x66, 0xab}, 3, 2},
             {{0xf3, 0xab}, 2, 4}, {{0xf3, 0x48, 0xab}, 3, 8},
         };
+        projection = (hl_native_projection){views, 2, 7, 1};
+        request.projection = &projection;
         for (size_t index = 0; index < sizeof(forms) / sizeof(forms[0]); ++index) {
             uint64_t pc = 0xd100 + index * 0x10;
             instruction = (hl_native_source_span){pc, forms[index].code, forms[index].length, 7, 16};
@@ -173,7 +206,7 @@ static int rep_contract(void) {
         views[0] = (hl_native_projection_view){0xe000, 0xe010, (uint64_t)(uintptr_t)source_bytes, 7,
                                                HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 0};
         views[1] = (hl_native_projection_view){0xf000, 0xf010, (uint64_t)(uintptr_t)destination_bytes, 7,
-                                               HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 0};
+                                                HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 1};
         projection = (hl_native_projection){views, 2, 7, 1};
         request.projection = &projection;
         instruction = (hl_native_source_span){0xd300, rep_movsb, sizeof(rep_movsb), 7, 16};
@@ -199,9 +232,9 @@ static int rep_contract(void) {
             {0xe000, 0xe010, (uint64_t)(uintptr_t)source_bytes, 7, HL_NATIVE_ACCESS_READ,
              HL_NATIVE_WRITE_EXACT, 0},
             {0xf000, 0xf004, (uint64_t)(uintptr_t)destination_bytes, 7,
-             HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, HL_NATIVE_WRITE_EXACT, 0},
-            {0xf004, 0xf010, (uint64_t)(uintptr_t)(destination_bytes + 4), 7,
-             HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 0},
+              HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, HL_NATIVE_WRITE_EXACT, 1},
+             {0xf004, 0xf010, (uint64_t)(uintptr_t)(destination_bytes + 4), 7,
+              HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 2},
         };
         projection = (hl_native_projection){boundary_views, 3, 7, 1};
         request.projection = &projection;
@@ -223,7 +256,7 @@ static int rep_contract(void) {
                                                HL_NATIVE_ACCESS_READ, HL_NATIVE_WRITE_EXACT, 0};
         views[1] = (hl_native_projection_view){0xf000, 0xf010, (uint64_t)(uintptr_t)destination_bytes, 7,
                                                HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
-                                               HL_NATIVE_WRITE_EXACT, 0};
+                                                HL_NATIVE_WRITE_EXACT, 1};
         projection = (hl_native_projection){views, 2, 7, 1};
         request.projection = &projection;
         request.budget = 1;
