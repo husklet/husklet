@@ -39,3 +39,52 @@ retained engine has no corresponding portable nested artifact builder: its
 relevant oracle remains `cmake/Phase2Production.cmake:hl_linux_production` and
 `cmake/Phase3Gates.cmake:nested-foreign-engines`, which build each host-native
 engine using a separate static cross toolchain.
+
+## Runtime construction and image-launch audit
+
+The retained launch domain was studied directly in:
+
+- `../engine/src/core/launch.c`: `hl_read_config_file` and
+  `hl_run_config_file_with` own bounded wire ingestion, launch-scoped option and
+  argv storage, private-descriptor registration, and teardown after the selected
+  runner returns;
+- `../engine/src/core/target/aarch64.c`: `container_init`,
+  `engine_global_init`, `load_program`, `run_loaded`, and
+  `hl_run_linux_guest`;
+- `../engine/src/core/target/x86_64.c`: the corresponding five entry points;
+- `../engine/src/linux_abi/elf.c:load_elf` and
+  `../engine/src/linux_abi/x86.c:load_elf`, which own ISA-specific ELF mapping,
+  interpreter loading, segment protection, entry/base publication, and failure
+  diagnostics;
+- `../engine/src/core/dispatch.c:run_guest`, which owns the synchronous guest
+  execution lifetime after image and CPU publication.
+
+The C order is config validation -> per-launch options/argv -> host-service and
+Linux-state binding -> container/root identity -> process-global engine/cache
+initialization -> main/interpreter mapping -> heap/stack/CPU publication ->
+`run_guest` -> thread/sentry join and launch storage teardown. Short reads retry
+on `EINTR`; malformed/truncated configuration returns 78. Construction failures
+return 70 or a phase-specific nonzero result, and ELF mapping failures emit the
+failing image/host status before execution. AArch64 and AMD64 have separate
+loader and CPU entry paths; macOS and Windows branches differ in mapping, fault,
+and cold-process launch mechanisms, while the Linux launch order remains the
+same. Process-global initialization is idempotent; per-launch image, stack,
+thread, and option ownership is retired only after guest execution and peer
+thread/sentry teardown.
+
+| C capability | Rust owner | Status |
+|---|---|---|
+| bounded config/options/argv ingestion | `launch_plan`, `options`, `Program` | implemented with typed errors before composition |
+| host services and runtime-domain assembly | `runtime/api.rs`, `runtime/machine.rs`, `ffi/linux/execution/mod.rs` | implemented, but construction errors are flattened |
+| ISA inspection and main/interpreter load | `hl-loader`, `ffi/linux/execution/mod.rs` | implemented; `EngineError::Load` preserves loader errors |
+| memory, IPC, task, descriptor, exec/fork/clone registration | `ffi/linux/execution/mod.rs` and `routing/*` | implemented; dozens of distinct failures collapse to `LaunchFailed` |
+| CPU publication and bounded worker scheduling | `threads`, `waiter`, `GuestExecutor` | implemented; start failures collapse to `LaunchFailed` |
+| ordered cancellation, peer join, and teardown | `ThreadSet`, waiter pool, `EngineBackend` | implemented |
+| phase-specific construction evidence | retained return codes and loader stderr | divergent: Rust preserves only loader errors; the remaining construction graph loses its owner/error at the API boundary |
+
+After correcting the manifest ISA edges, structured nested reports advance from
+`WrongArchitecture` to the inner AArch64 engine's `Engine(LaunchFailed)`. That
+result does not identify which construction capability diverged. A behavior fix
+is therefore not source-justified until `GuestExecutor::run` and `routing::create`
+return a typed construction phase/error instead of mapping every domain failure
+to `EngineError::LaunchFailed`.
