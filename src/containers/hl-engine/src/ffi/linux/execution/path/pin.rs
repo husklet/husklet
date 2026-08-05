@@ -184,7 +184,7 @@ impl Host {
         let parent = if intent.bits() & mutation != 0 {
             parent.mutation()?
         } else {
-            parent.selected()
+            Self::visible_parent(parent, name)?
         };
         let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, mode as libc::mode_t) };
         if descriptor < 0 {
@@ -195,7 +195,8 @@ impl Host {
     }
 
     pub(super) fn path(parent: &ParentLease, name: &CString) -> Result<PathBuf, RuntimePathError> {
-        let directory = Self::descriptor_path(parent.selected().as_raw_fd()).map_err(super::HostError::map)?;
+        let parent = Self::visible_parent(parent, name)?;
+        let directory = Self::descriptor_path(parent.as_raw_fd()).map_err(super::HostError::map)?;
         Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
     }
 
@@ -217,6 +218,64 @@ impl Host {
             }
         }
         Ok(paths)
+    }
+
+    fn visible_parent<'lease>(parent: &'lease ParentLease, name: &CStr) -> Result<&'lease OwnedFd, RuntimePathError> {
+        let mut candidates = Vec::with_capacity(parent.lower_parents().len() + 1);
+        candidates.push(parent.selected());
+        candidates.extend(parent.lower_parents());
+        for candidate in candidates {
+            if Self::whiteout_at(candidate.as_raw_fd(), name)? {
+                return Err(RuntimePathError::NotFound);
+            }
+            let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+            // SAFETY: candidate and name remain live and status is writable.
+            let result = unsafe {
+                libc::fstatat(
+                    candidate.as_raw_fd(),
+                    name.as_ptr(),
+                    status.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == 0 {
+                return Ok(candidate);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ENOENT) {
+                return Err(super::HostError::map(error));
+            }
+        }
+        if parent.layer() == super::overlay_lease::SelectedLayer::Upper {
+            Ok(parent.selected())
+        } else {
+            Err(RuntimePathError::NotFound)
+        }
+    }
+
+    fn whiteout_at(parent: RawFd, name: &CStr) -> Result<bool, RuntimePathError> {
+        let mut marker = b".wh.".to_vec();
+        marker.extend_from_slice(name.to_bytes());
+        let marker = CString::new(marker).map_err(|_| RuntimePathError::Invalid)?;
+        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: parent and marker remain live and status is writable.
+        let result = unsafe {
+            libc::fstatat(
+                parent,
+                marker.as_ptr(),
+                status.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if result == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(false)
+        } else {
+            Err(super::HostError::map(error))
+        }
     }
 }
 
