@@ -470,6 +470,14 @@ pub enum Instruction {
         wide: bool,
         count: u8,
     },
+    VexScalarCountShift {
+        operation: VexImmediateShift,
+        destination: u8,
+        source: u8,
+        count: VectorSource,
+        lane: u8,
+        wide: bool,
+    },
     VexGather {
         destination: u8,
         mask: u8,

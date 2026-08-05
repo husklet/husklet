@@ -14816,6 +14816,87 @@ fn vex_immediate_shift_family() {
 }
 
 #[test]
+fn vex_scalar_count_packed_shift_family() {
+    for (opcode, operation, lane) in [
+        (0xd1, VexImmediateShift::LogicalRight, 2),
+        (0xd2, VexImmediateShift::LogicalRight, 4),
+        (0xd3, VexImmediateShift::LogicalRight, 8),
+        (0xe1, VexImmediateShift::ArithmeticRight, 2),
+        (0xe2, VexImmediateShift::ArithmeticRight, 4),
+        (0xf1, VexImmediateShift::LogicalLeft, 2),
+        (0xf2, VexImmediateShift::LogicalLeft, 4),
+        (0xf3, VexImmediateShift::LogicalLeft, 8),
+    ] {
+        for (wide, prefix) in [(false, 0xe9), (true, 0xed)] {
+            let decoded = X86ScalarDecoder::decode(&[0xc5, prefix, opcode, 0xca], 0xa000).unwrap();
+            assert!(matches!(decoded.instruction, ScalarInstruction::VexScalarCountShift {
+                operation: actual, destination: 1, source: 2, count: VectorSource::Register(2),
+                lane: actual_lane, wide: actual_wide,
+            } if actual == operation && actual_lane == lane && actual_wide == wide));
+        }
+    }
+    assert!(X86ScalarDecoder::decode(&[0xc5, 0xec, 0xd1, 0xca], 0).is_err());
+
+    let flags = FlagState::from_bits(0x8d5);
+    let source_low = 0x8000_7fff_ffff_0001_1234_5678_abcd_ef01_u128;
+    let source_high = 0xffff_8000_7fff_0001_aaaa_5555_1357_2468_u128;
+    let mut cpu = CpuState {
+        rip: 0xa100,
+        flags,
+        ..Default::default()
+    };
+    cpu.vectors[2] = source_low;
+    cpu.vector_upper[2] = source_high;
+    cpu.vectors[3] = 4;
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    let wide = X86ScalarDecoder::decode(&[0xc5, 0xed, 0xe1, 0xcb], cpu.rip).unwrap();
+    assert_eq!(
+        ScalarInterpreter::execute(&mut cpu, &mut memory, wide),
+        ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vectors[2], source_low);
+    assert_eq!(cpu.vector_upper[2], source_high);
+    assert_eq!(cpu.flags, flags);
+    assert_eq!(cpu.vectors[1] as u16, 0xfef0);
+    assert_eq!((cpu.vector_upper[1] >> 112) as u16, 0xffff);
+
+    cpu.rip = 0xa110;
+    cpu.vectors[3] = 64;
+    cpu.vector_upper[1] = u128::MAX;
+    let narrow = X86ScalarDecoder::decode(&[0xc5, 0xe9, 0xf2, 0xcb], cpu.rip).unwrap();
+    assert_eq!(
+        ScalarInterpreter::execute(&mut cpu, &mut memory, narrow),
+        ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vectors[1], 0);
+    assert_eq!(cpu.vector_upper[1], 0);
+    assert_eq!(cpu.flags, flags);
+
+    cpu.rip = 0xa120;
+    cpu.registers[3] = 0x1000;
+    let original = cpu.clone();
+    let from_memory = X86ScalarDecoder::decode(&[0xc4, 0xe1, 0x6d, 0xd3, 0x0b], cpu.rip).unwrap();
+    let mut faulting = ModelMemory {
+        base: 0x1000,
+        bytes: vec![0; 16],
+        fail_read: true,
+        fail_write: false,
+        commits: 0,
+    };
+    assert!(matches!(
+        ScalarInterpreter::execute(&mut cpu, &mut faulting, from_memory),
+        ExecutionExit::OperandFault(access) if access.length() == 16
+    ));
+    assert_eq!(cpu, original);
+}
+
+#[test]
 fn vex_f16c_startup_prerequisites_decode() {
     for bytes in [
         &[0xc5, 0xf9, 0x6e, 0xc0][..],

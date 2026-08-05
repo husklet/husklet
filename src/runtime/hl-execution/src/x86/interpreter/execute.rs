@@ -997,6 +997,21 @@ impl ScalarInterpreter {
                 staged.vector_upper[usize::from(destination)] = if wide { result[1] } else { 0 };
                 Ok(Staged::Cpu(staged))
             }
+            ScalarInstruction::VexScalarCountShift {
+                operation,
+                destination,
+                source,
+                count,
+                lane,
+                wide,
+            } => {
+                let count = Self::vex_read_bytes(cpu, memory, count, 16, next, instruction)?[0] as u64;
+                let input = [cpu.vectors[usize::from(source)], cpu.vector_upper[usize::from(source)]];
+                let result = Self::vex_scalar_count_shift(input, operation, lane, wide, count);
+                staged.vectors[usize::from(destination)] = result[0];
+                staged.vector_upper[usize::from(destination)] = if wide { result[1] } else { 0 };
+                Ok(Staged::Cpu(staged))
+            }
             ScalarInstruction::VexExtract128 {
                 source,
                 destination,
@@ -2716,6 +2731,50 @@ impl ScalarInterpreter {
                     VexImmediateShift::ArithmeticRight => {
                         let signed = ((value << (64 - bits)) as i64) >> (64 - bits);
                         (signed >> u32::from(count).min(bits - 1)) as u64 & mask
+                    }
+                    VexImmediateShift::ByteRight | VexImmediateShift::ByteLeft => unreachable!(),
+                };
+                output[half] |= u128::from(shifted) << offset;
+            }
+        }
+        output
+    }
+
+    fn vex_scalar_count_shift(
+        input: [u128; 2],
+        operation: VexImmediateShift,
+        lane: u8,
+        wide: bool,
+        count: u64,
+    ) -> [u128; 2] {
+        debug_assert!(!matches!(
+            operation,
+            VexImmediateShift::ByteRight | VexImmediateShift::ByteLeft
+        ));
+        let mut output = [0_u128; 2];
+        let bits = u32::from(lane) * 8;
+        let mask = if bits == 64 { u64::MAX } else { (1_u64 << bits) - 1 };
+        for half in 0..if wide { 2 } else { 1 } {
+            for offset in (0..128).step_by(bits as usize) {
+                let value = ((input[half] >> offset) as u64) & mask;
+                let shifted = match operation {
+                    VexImmediateShift::LogicalRight => {
+                        if count >= u64::from(bits) {
+                            0
+                        } else {
+                            value >> count
+                        }
+                    }
+                    VexImmediateShift::LogicalLeft => {
+                        if count >= u64::from(bits) {
+                            0
+                        } else {
+                            (value << count) & mask
+                        }
+                    }
+                    VexImmediateShift::ArithmeticRight => {
+                        let signed = ((value << (64 - bits)) as i64) >> (64 - bits);
+                        (signed >> count.min(u64::from(bits - 1))) as u64 & mask
                     }
                     VexImmediateShift::ByteRight | VexImmediateShift::ByteLeft => unreachable!(),
                 };

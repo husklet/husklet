@@ -715,6 +715,26 @@ impl Decoder {
             (3, 0x18 | 0x38, 1) if length != 0 && !w => Self::binary(decoded, source, length, VexOperation::Insert128),
             (2, 0x25, 1) => Self::binary(decoded, source, length, VexOperation::WidenSignedDword),
             (1, 0x76, 1) => Self::binary(decoded, source, length, VexOperation::EqualDword),
+            (1, 0xd1..=0xd3 | 0xe1..=0xe2 | 0xf1..=0xf3, 1) => {
+                let operation = match decoded.opcode {
+                    0xd1..=0xd3 => VexImmediateShift::LogicalRight,
+                    0xe1..=0xe2 => VexImmediateShift::ArithmeticRight,
+                    0xf1..=0xf3 => VexImmediateShift::LogicalLeft,
+                    _ => unreachable!(),
+                };
+                Ok(ScalarInstruction::VexScalarCountShift {
+                    operation,
+                    destination: decoded.register.ok_or(ScalarIrError::Invalid)?,
+                    source,
+                    count: Self::source(decoded)?,
+                    lane: match decoded.opcode {
+                        0xd1 | 0xe1 | 0xf1 => 2,
+                        0xd2 | 0xe2 | 0xf2 => 4,
+                        _ => 8,
+                    },
+                    wide: length != 0,
+                })
+            }
             (1, 0x71..=0x73, 1) => {
                 let extension = decoded.raw_reg.ok_or(ScalarIrError::Invalid)?;
                 let operation = match (decoded.opcode, extension) {
