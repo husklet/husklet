@@ -15,6 +15,12 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
+#if defined(__linux__)
+/* Strict C11 hides this non-POSIX Linux interface unless feature macros are
+ * set before the build's forced toolchain header.  Keep the Linux ABI local. */
+extern int madvise(void *, size_t, int);
+#define HL_MADV_DONTNEED 4
+#endif
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "executor admission requires lock-free uint64 atomics");
 
@@ -182,8 +188,15 @@ void hl_native_interrupt_destroy(hl_native_interrupt_token *token) {
 }
 
 static void ibtc_clear(hl_native_executor *executor) {
-    if (executor != NULL && executor->ibtc != NULL)
-        memset(executor->ibtc, 0, HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc));
+    if (executor == NULL || executor->ibtc == NULL) return;
+    const size_t bytes = HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc);
+#if defined(__linux__)
+    /* The table is page-aligned anonymous storage.  Discarding its pages gives
+     * the next reader zero-filled entries without faulting every page into the
+     * process during construction, reset, or fork repair. */
+    if (madvise(executor->ibtc, bytes, HL_MADV_DONTNEED) == 0) return;
+#endif
+    memset(executor->ibtc, 0, bytes);
 }
 
 static void cache_observe(void *context, hl_native_cache_event event) {
