@@ -106,6 +106,24 @@ static int budget_contract(void) {
         CHECK(state.flags == ((UINT64_C(0xad7) & ~comparison) |
                               UINT64_C(1) | UINT64_C(1) << 6 | UINT64_C(1) << 7));
     }
+    {
+        static const uint8_t nan_loop[] = {
+            0x0f, 0x59, 0xc0,       /* mulps xmm0,xmm0 */
+            0x48, 0xff, 0xc9,       /* dec rcx */
+            0x75, 0xf8,             /* jne nan_loop */
+        };
+        hl_native_source_span span = {0x7400, nan_loop, sizeof(nan_loop), 7, 16};
+        hl_native_source source = {&span, 1, 7, 16};
+
+        request.source = &source;
+        request.budget = 8;
+        state = (hl_native_x86_64_cpu){.program = 0x7400, .registers = {[1] = 2}};
+        state.vectors[0] = UINT64_C(0x7fc000007fc00000);
+        state.vectors[1] = UINT64_C(0x7fc000007fc00000);
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == 0x7400 &&
+              state.executed == 0 && state.registers[1] == 2);
+    }
     hl_native_destroy(executor);
     return 0;
 }

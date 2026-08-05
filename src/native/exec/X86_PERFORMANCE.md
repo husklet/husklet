@@ -122,3 +122,35 @@ commit median. It remains 16.72 times slower than the retained-C median of
 `a180e48ca2381618d1e4960fd2a8d7a4c73f6f46d625ac57869fa85b7a2e8132`;
 the exact `testing` SHA-256 was
 `aabeaf49d56f784abc7ecced06a22443267ae6dd14bd14a3371687a1f65428b2`.
+## Self-loop fallback continuation
+
+The retained-C SIMD and chaining audit covered
+`../engine/src/translator/guest/x86_64/translate.c` (`translate_block`, the
+legacy `0f 58/59/5c/5e` matrix, guarded memory, and the tiered self-loop path),
+`emit.c` (direct-edge publication), `cache.c` (pending-edge ownership and hot
+loop promotion), and `interp.c` (exact arithmetic fallback). The cache owns
+published translations and pending edges; the CPU owns architectural vector
+state and progress. Arithmetic commits only after guarded reads, and an
+unordered result leaves the destination untouched before exact interpreter
+fallback. No retained-C lock, allocation, errno, or cancellation behavior is
+involved in this domain.
+
+The Rust frontend already emits the exact seven-instruction benchmark loop
+(`movaps; mulps; addps; movaps; add; cmp; jne`) as one conditional self-loop.
+The nonprogress was instead in `run.c`: any return from folded-loop code was
+treated as successful loop completion. A memory-guard or unordered-arithmetic
+fallback therefore cleared loop state and immediately re-entered the same PC
+without resolving the operand or returning to the typed interpreter; zero
+instructions could be charged forever.
+
+Folded-loop exits now add the current partial iteration's checkpoint count to
+completed full iterations on fallback, then follow the ordinary fallback or
+operand-resolution path. Only a completed non-fallback loop return re-enters
+the folded body. `x86_budget` covers a NaN `mulps` self-loop and proves bounded,
+zero-progress fallback without changing RCX. The complete warning-strict
+`x86_translation` and `x86_budget` binaries pass. With the coherent SSE
+arithmetic admission enabled, the previously nonterminating `float_simd`
+workload completes: the divisor-2000 diagnostic run reported 172273 us instead
+of timing out beyond 120 seconds. This is a correctness/unblocking result, not
+a native-parity claim; diagnostics were enabled and the remaining fallback
+rate requires a separate production-mode performance lane.

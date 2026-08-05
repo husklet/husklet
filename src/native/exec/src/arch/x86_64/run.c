@@ -745,6 +745,14 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
                 return fatal_exit(&execution, output, X86_FATAL_LOOP_STATE);
             }
             completed = cpu->loop_completed * code.instruction_count;
+            if (cpu->reason == HL_NATIVE_EXIT_FALLBACK) {
+                if (cpu->scratch[0] > UINT64_MAX - completed) {
+                    cpu->loop_remaining = cpu->loop_completed = cpu->loop_block_count =
+                        cpu->loop_pc = 0;
+                    return fatal_exit(&execution, output, X86_FATAL_LOOP_STATE);
+                }
+                completed += cpu->scratch[0];
+            }
             cpu->loop_remaining = cpu->loop_completed = cpu->loop_block_count = cpu->loop_pc = 0;
         }
         if (completed > budget) return fatal_exit(&execution, output, X86_FATAL_BUDGET);
@@ -765,7 +773,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
         if (cpu->interrupt != 0)
             return leave_exit(&execution, output, HL_NATIVE_EXIT_INTERRUPT, cpu->program);
-        if (loop_active) {
+        if (loop_active && cpu->reason != HL_NATIVE_EXIT_FALLBACK) {
             continue;
         }
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&

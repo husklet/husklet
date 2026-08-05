@@ -116,7 +116,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             !(semantic_prefix == 0xf3u && opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0x6fu || request->guest_bytes[cursor] == 0x7eu ||
                request->guest_bytes[cursor] == 0x7fu || request->guest_bytes[cursor] == 0x58u ||
-               request->guest_bytes[cursor] == 0x5cu ||
+               request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
+               request->guest_bytes[cursor] == 0x5eu ||
                request->guest_bytes[cursor] == 0xbcu || request->guest_bytes[cursor] == 0xbdu ||
                (cursor + 1u < request->guest_size && request->guest_bytes[cursor] == 0x1eu &&
                 (request->guest_bytes[cursor + 1u] == 0xfau || request->guest_bytes[cursor + 1u] == 0xfbu ||
@@ -225,9 +226,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         } else if (opcode == 0x0fu && cursor < request->guest_size &&
                    (request->guest_bytes[cursor] == 0x58u || request->guest_bytes[cursor] == 0x59u ||
                     request->guest_bytes[cursor] == 0x5cu || request->guest_bytes[cursor] == 0x5eu) &&
-                   (semantic_prefix == 0xf2u ||
-                    ((request->guest_bytes[cursor] == 0x58u || request->guest_bytes[cursor] == 0x5cu) &&
-                     (semantic_prefix == 0u || semantic_prefix == 0xf3u)))) {
+                   (semantic_prefix == 0xf2u || semantic_prefix == 0u || semantic_prefix == 0xf3u)) {
             uint8_t extension = request->guest_bytes[cursor++];
             uint8_t modrm;
             if (cursor >= request->guest_size || cursor - start >= 15u) {

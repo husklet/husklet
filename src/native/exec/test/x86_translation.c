@@ -790,7 +790,7 @@ static int floating_arithmetic(void) {
         static const struct {
             uint8_t bytes[4];
             size_t size;
-        } unsupported[] = {
+        } additional[] = {
             {{0x0f, 0x59, 0xc1, 0}, 3},       /* mulps */
             {{0x66, 0x0f, 0x59, 0xc1}, 4},   /* mulpd */
             {{0xf3, 0x0f, 0x59, 0xc1}, 4},   /* mulss */
@@ -807,11 +807,12 @@ static int floating_arithmetic(void) {
         hl_x86_a64_result boundary_result;
         unsigned index;
 
-        for (index = 0; index < sizeof unsupported / sizeof unsupported[0]; ++index) {
-            hl_x86_a64_request rejected = request_for(unsupported[index].bytes,
-                                                      unsupported[index].size,
+        for (index = 0; index < sizeof additional / sizeof additional[0]; ++index) {
+            hl_x86_a64_request admitted = request_for(additional[index].bytes,
+                                                      additional[index].size,
                                                       boundary_host, boundary_provenance);
-            CHECK(hl_x86_a64_emit(&rejected, &boundary_result) == HL_X86_A64_UNSUPPORTED);
+            CHECK(hl_x86_a64_emit(&admitted, &boundary_result) == HL_X86_A64_OK);
+            CHECK(boundary_result.instruction_count == 1);
         }
         request = request_for(scalar_double, sizeof scalar_double,
                               boundary_host, boundary_provenance);
@@ -1749,6 +1750,32 @@ static int executable_store_stops_self_loop(void) {
     CHECK(storage == 42 && cpu.memory_written == 1 && (cpu.executable_written & 4u) != 0);
     CHECK(cpu.loop_completed == 1 && cpu.loop_remaining == 9);
     CHECK(cpu.program == request.guest_pc && cpu.registers[1] == 9);
+    return 0;
+}
+
+static int vector_arithmetic_self_loop(void) {
+    const uint8_t loop[] = {
+        0x0f, 0x28, 0x04, 0x01,       /* movaps (rcx,rax),xmm0 */
+        0x0f, 0x59, 0x04, 0x02,       /* mulps (rdx,rax),xmm0 */
+        0x0f, 0x58, 0xc1,             /* addps xmm1,xmm0 */
+        0x0f, 0x29, 0x04, 0x06,       /* movaps xmm0,(rsi,rax) */
+        0x48, 0x83, 0xc0, 0x10,       /* add $16,rax */
+        0x48, 0x3d, 0x00, 0x40, 0, 0, /* cmp $16384,rax */
+        0x75, 0xe5,                   /* jne loop */
+    };
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[8] = {0};
+    hl_x86_a64_request request = request_for(loop, sizeof loop, host, provenance);
+    hl_x86_a64_result emitted;
+
+    request.host_capacity = sizeof host / sizeof host[0];
+    request.flags = HL_X86_A64_CHECKPOINTS | HL_X86_A64_CONDITIONAL_SELF_LOOP |
+                    HL_X86_A64_LIVE_CHAIN;
+    CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+    CHECK(emitted.instruction_count == 7);
+    CHECK(emitted.source_end == request.guest_pc + sizeof loop);
+    CHECK(emitted.exit == HL_X86_A64_CONDITIONAL_BRANCH);
+    CHECK(emitted.branch_target == request.guest_pc);
     return 0;
 }
 
@@ -4400,6 +4427,8 @@ int main(void) {
     if (status != 0) return status;
 #if defined(__aarch64__)
     status = executable_store_stops_self_loop();
+    if (status != 0) return status;
+    status = vector_arithmetic_self_loop();
     if (status != 0) return status;
     status = executable_self_loop_preserves_indirect_target();
     if (status != 0) return status;
