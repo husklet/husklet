@@ -42,7 +42,11 @@ struct SpliceCancellationWake(Arc<SpliceGate>);
 
 impl hl_descriptor::CancellationNotification for SpliceCancellationWake {
     fn notify(&self) {
-        let _reserved = self.0.reserved.lock().unwrap_or_else(|error| error.into_inner());
+        let _reserved = self
+            .0
+            .reserved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.0.changed.notify_all();
     }
 }
@@ -63,7 +67,7 @@ impl NativeFile {
         if self
             .directory
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_none()
         {
             return Err(ObjectError::InvalidArgument);
@@ -75,7 +79,7 @@ impl NativeFile {
         self.io()?;
         self.file
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .ok_or(ObjectError::BadDescriptor)?
             .try_clone()
@@ -139,13 +143,16 @@ impl NativeFile {
     pub(super) fn read_link(&self) -> Result<Vec<u8>, super::RuntimePathError> {
         self.link_target
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
             .ok_or(super::RuntimePathError::Invalid)
     }
 
     pub(super) fn retain_link(&self, target: Option<Vec<u8>>) {
-        *self.link_target.lock().unwrap_or_else(|error| error.into_inner()) = target;
+        *self
+            .link_target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = target;
     }
 }
 
@@ -160,14 +167,14 @@ impl Drop for NativeFile {
         let links = self
             .file
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(|file| file.metadata().ok())
             .map_or(0, |value| value.nlink());
         if let Some(lease) = self
             .shm_lease
             .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         {
             lease.close(links);
@@ -185,7 +192,12 @@ impl PreparedSpliceRead for PreparedNativeSpliceRead {
             return Err(ObjectError::InvalidArgument);
         }
         if let Some(cursor) = self.cursor.as_mut() {
-            if !*self.gate.reserved.lock().unwrap_or_else(|error| error.into_inner()) {
+            if !*self
+                .gate
+                .reserved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+            {
                 return Err(ObjectError::Interrupted);
             }
             let end = self
@@ -193,7 +205,11 @@ impl PreparedSpliceRead for PreparedNativeSpliceRead {
                 .checked_add(count as u64)
                 .ok_or(ObjectError::InvalidArgument)?;
             let result = cursor.seek(SeekFrom::Start(end)).map_err(NativeFile::object);
-            *self.gate.reserved.lock().unwrap_or_else(|error| error.into_inner()) = false;
+            *self
+                .gate
+                .reserved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
             self.gate.changed.notify_all();
             self.cursor = None;
             result?;
@@ -205,7 +221,11 @@ impl PreparedSpliceRead for PreparedNativeSpliceRead {
 impl Drop for PreparedNativeSpliceRead {
     fn drop(&mut self) {
         if self.cursor.is_some() {
-            *self.gate.reserved.lock().unwrap_or_else(|error| error.into_inner()) = false;
+            *self
+                .gate
+                .reserved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
             self.gate.changed.notify_all();
         }
     }
@@ -300,7 +320,7 @@ impl OpenFileDescription for NativeFile {
         };
 
         let result = if std::ptr::eq(self, target) {
-            let mut input = self.file.lock().unwrap_or_else(|error| error.into_inner());
+            let mut input = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let clone = input
                 .as_ref()
                 .ok_or(ObjectError::BadDescriptor)?
@@ -308,12 +328,12 @@ impl OpenFileDescription for NativeFile {
                 .map_err(Self::object)?;
             transfer(&mut input, &mut Some(clone))
         } else if (self as *const Self as usize) < (target as *const Self as usize) {
-            let mut input = self.file.lock().unwrap_or_else(|error| error.into_inner());
-            let mut output = target.file.lock().unwrap_or_else(|error| error.into_inner());
+            let mut input = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut output = target.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             transfer(&mut input, &mut output)
         } else {
-            let mut output = target.file.lock().unwrap_or_else(|error| error.into_inner());
-            let mut input = self.file.lock().unwrap_or_else(|error| error.into_inner());
+            let mut output = target.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut input = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             transfer(&mut input, &mut output)
         }?;
         target.publish_modified(result.0);
@@ -324,7 +344,7 @@ impl OpenFileDescription for NativeFile {
         if self
             .directory
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_some()
         {
             hl_descriptor::ObjectKind::Directory
@@ -337,7 +357,7 @@ impl OpenFileDescription for NativeFile {
         let file = self
             .file
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .ok_or(ObjectError::BadDescriptor)?
             .try_clone()
@@ -354,15 +374,15 @@ impl OpenFileDescription for NativeFile {
             .splice_gate
             .reserved
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *reserved {
             reserved = self
                 .splice_gate
                 .changed
                 .wait(reserved)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        let mut opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let mut opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(reserved);
         opened
             .as_mut()
@@ -377,18 +397,18 @@ impl OpenFileDescription for NativeFile {
             .splice_gate
             .reserved
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *reserved {
             reserved = self
                 .splice_gate
                 .changed
                 .wait(reserved)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        let mut opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let mut opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(reserved);
         let file = opened.as_mut().ok_or(ObjectError::BadDescriptor)?;
-        let lease = self.shm_lease.lock().unwrap_or_else(|error| error.into_inner());
+        let lease = self.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = if let Some(lease) = lease.as_ref() {
             lease.write(file, input)
         } else {
@@ -401,7 +421,7 @@ impl OpenFileDescription for NativeFile {
         self.io()?;
         self.file
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .ok_or(ObjectError::BadDescriptor)?
             .read_at(output, offset)
@@ -410,9 +430,9 @@ impl OpenFileDescription for NativeFile {
 
     fn write_at(&self, offset: u64, input: &[u8]) -> Result<usize, ObjectError> {
         self.io()?;
-        let opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = opened.as_ref().ok_or(ObjectError::BadDescriptor)?;
-        let lease = self.shm_lease.lock().unwrap_or_else(|error| error.into_inner());
+        let lease = self.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let result = lease.as_ref().map_or_else(
             || file.write_at(input, offset).map_err(Self::object),
             |lease| lease.write_at(file, offset, input),
@@ -423,7 +443,7 @@ impl OpenFileDescription for NativeFile {
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
         self.io()?;
         if let SeekPosition::Start(cookie) = position {
-            let mut directory = self.directory.lock().unwrap_or_else(|error| error.into_inner());
+            let mut directory = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(directory) = directory.as_mut() {
                 return directory.seek(cookie);
             }
@@ -443,15 +463,15 @@ impl OpenFileDescription for NativeFile {
             .splice_gate
             .reserved
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *reserved {
             reserved = self
                 .splice_gate
                 .changed
                 .wait(reserved)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        let mut opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let mut opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(reserved);
         let file = opened.as_mut().ok_or(ObjectError::BadDescriptor)?;
         if let Some((offset, whence)) = sparse {
@@ -496,7 +516,7 @@ impl OpenFileDescription for NativeFile {
             .splice_gate
             .reserved
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while implicit && *reserved {
             if _nonblocking {
                 return Err(ObjectError::WouldBlock);
@@ -508,7 +528,7 @@ impl OpenFileDescription for NativeFile {
                 .splice_gate
                 .changed
                 .wait(reserved)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         if implicit {
             *reserved = true;
@@ -516,7 +536,7 @@ impl OpenFileDescription for NativeFile {
         drop(reserved);
         drop(subscription);
         let prepared = (|| {
-            let mut opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+            let mut opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let file = opened.as_mut().ok_or(ObjectError::BadDescriptor)?;
             let start = offset.map_or_else(|| file.stream_position().map_err(Self::object), Ok)?;
             let mut bytes = vec![0_u8; maximum.min(65_536)];
@@ -538,7 +558,7 @@ impl OpenFileDescription for NativeFile {
                         .splice_gate
                         .reserved
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner()) = false;
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
                     self.splice_gate.changed.notify_all();
                 }
                 Err(error)
@@ -550,7 +570,7 @@ impl OpenFileDescription for NativeFile {
         let value = self
             .file
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .ok_or(ObjectError::BadDescriptor)?
             .metadata()
@@ -565,7 +585,7 @@ impl OpenFileDescription for NativeFile {
             kind: if self
                 .link_target
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_some()
             {
                 10
@@ -593,9 +613,9 @@ impl OpenFileDescription for NativeFile {
         if self.path_only.load(Ordering::Acquire) {
             return Err(ObjectError::BadDescriptor);
         }
-        let opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = opened.as_ref().ok_or(ObjectError::BadDescriptor)?;
-        let lease = self.shm_lease.lock().unwrap_or_else(|error| error.into_inner());
+        let lease = self.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         lease.as_ref().map_or_else(
             || file.set_len(size).map_err(Self::object),
             |lease| lease.truncate(file, size),
@@ -603,12 +623,12 @@ impl OpenFileDescription for NativeFile {
     }
 
     fn add_seals(&self, seals: u8) -> Result<u8, ObjectError> {
-        let lease = self.shm_lease.lock().unwrap_or_else(|error| error.into_inner());
+        let lease = self.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         lease.as_ref().ok_or(ObjectError::NotSupported)?.add_seals(seals)
     }
 
     fn seals(&self) -> Result<u8, ObjectError> {
-        let lease = self.shm_lease.lock().unwrap_or_else(|error| error.into_inner());
+        let lease = self.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         lease.as_ref().ok_or(ObjectError::NotSupported)?.seals()
     }
 
@@ -616,7 +636,7 @@ impl OpenFileDescription for NativeFile {
         if self.path_only.load(Ordering::Acquire) {
             return Err(ObjectError::BadDescriptor);
         }
-        let opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = opened.as_ref().ok_or(ObjectError::BadDescriptor)?;
         #[cfg(target_os = "linux")]
         {
@@ -686,7 +706,7 @@ impl OpenFileDescription for NativeFile {
         operation: u32,
         cancellation: &dyn hl_descriptor::OperationCancellation,
     ) -> Result<(), ObjectError> {
-        let opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = opened.as_ref().ok_or(ObjectError::BadDescriptor)?;
         let nonblocking = operation & libc::LOCK_NB as u32 != 0;
         loop {
@@ -718,20 +738,20 @@ impl OpenFileDescription for NativeFile {
         if self.path_only.load(Ordering::Acquire) {
             return Err(ObjectError::BadDescriptor);
         }
-        let opened = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let opened = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = opened.as_ref().ok_or(ObjectError::BadDescriptor)?;
         if data_only { file.sync_data() } else { file.sync_all() }.map_err(Self::object)
     }
 
     fn read_directory(&self, maximum: usize) -> Result<DirectoryBatch, ObjectError> {
         self.io()?;
-        let mut directory = self.directory.lock().unwrap_or_else(|error| error.into_inner());
+        let mut directory = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         directory.as_mut().ok_or(ObjectError::NotSupported)?.read(maximum)
     }
 
     fn commit_directory(&self, token: DirectoryBatchToken, count: usize) -> Result<(), ObjectError> {
         self.io()?;
-        let mut directory = self.directory.lock().unwrap_or_else(|error| error.into_inner());
+        let mut directory = self.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         directory
             .as_mut()
             .ok_or(ObjectError::NotSupported)?
