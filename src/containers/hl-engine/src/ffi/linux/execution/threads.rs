@@ -20,6 +20,7 @@ struct SetState {
     control_epochs: BTreeMap<ProcessId, u64>,
     reserved: usize,
     next_generation: u64,
+    cancellation: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -242,6 +243,7 @@ impl ThreadSet {
                 control_epochs: BTreeMap::new(),
                 reserved: 0,
                 next_generation: 1,
+                cancellation: None,
             })),
         })
     }
@@ -532,8 +534,15 @@ impl ThreadSet {
     }
 
     pub(super) fn cancel_all(&self, signal: i32) {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let signal = *state.cancellation.get_or_insert(signal);
         for run in state.machines.values() {
+            // Cancellation has two independently blocking execution domains.
+            // The readiness token releases host syscalls, while the native
+            // interrupt forces translated code back to the scheduler where
+            // the terminal signal is observed.  Waking only one domain can
+            // leave a compute-bound guest running forever.
+            let _ = run.interrupt.set(true);
             run.cancellation.request(signal);
         }
     }
@@ -684,10 +693,12 @@ impl ThreadSet {
             ) {
                 state.ownership.insert(thread, RunOwnership::Retired);
                 if let Some(run) = state.machines.get(&thread) {
+                    let _ = run.interrupt.set(true);
                     run.cancellation.request(9);
                 }
             } else {
                 if let Some(run) = state.machines.remove(&thread) {
+                    let _ = run.interrupt.set(true);
                     run.cancellation.request(9);
                     removed.push(thread);
                 }
@@ -792,9 +803,12 @@ impl PreparedImage {
             state.syscall_parked.remove(&thread);
             self.previous.push((run, ownership));
         }
-        state
-            .machines
-            .insert(self.target, self.candidate.take().ok_or(RuntimeThreadError::Missing)?);
+        let candidate = self.candidate.take().ok_or(RuntimeThreadError::Missing)?;
+        if let Some(signal) = state.cancellation {
+            let _ = candidate.interrupt.set(true);
+            candidate.cancellation.request(signal);
+        }
+        state.machines.insert(self.target, candidate);
         state.ownership.insert(self.target, RunOwnership::Ready);
         state.previous = None;
         state.reserved -= 1;
@@ -882,6 +896,10 @@ impl PreparedThread for ThreadStage {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.reserved -= 1;
         let run = self.run.take().expect("staged runnable");
+        if let Some(signal) = state.cancellation {
+            let _ = run.interrupt.set(true);
+            run.cancellation.request(signal);
+        }
         if let Some(epoch) = state.stop_gates.get(&run.process).copied() {
             state.parked.insert(run.thread);
             state.gated.insert(run.thread, (run.process, run.generation, epoch));

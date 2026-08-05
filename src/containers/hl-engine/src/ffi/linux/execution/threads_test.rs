@@ -423,6 +423,8 @@ fn context_isolation() {
     threads.cancel_all(9);
     assert_eq!(first_run.cancellation.signal(), Some(9));
     assert_eq!(second_run.cancellation.signal(), Some(9));
+    assert!(first_run.interrupt.is_set());
+    assert!(second_run.interrupt.is_set());
     threads.terminate(first).unwrap();
     assert!(!threads.is_empty());
     threads.terminate_all();
@@ -430,6 +432,31 @@ fn context_isolation() {
     threads.release(&first_run).unwrap();
     threads.release(&second_run).unwrap();
     assert!(threads.is_empty());
+}
+
+#[test]
+fn cancellation_before_first_machine_is_inherited() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, thread) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let threads = ThreadSet::new(1).unwrap();
+
+    // GuestExecutor publishes the empty ThreadSet before routing and staging
+    // the initial machine. A concurrent stop in this window must be durable.
+    threads.cancel_all(9);
+    publish(&threads, process, thread, 0x1000, space());
+
+    let run = threads.find(thread).unwrap();
+    assert_eq!(run.cancellation.signal(), Some(9));
+    assert!(run.interrupt.is_set());
+
+    // Cancellation is idempotent and the first terminal signal wins.
+    threads.cancel_all(15);
+    assert_eq!(run.cancellation.signal(), Some(9));
 }
 
 #[test]

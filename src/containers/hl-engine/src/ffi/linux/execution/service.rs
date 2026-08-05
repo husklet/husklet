@@ -33,18 +33,27 @@ impl GuestExecutionPort for GuestExecutor {
         let result = self.run(isa, plan, assembly, services, cancellation, threads);
         let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
         state.running.remove(&key);
-        state.exits.insert(key, result?);
-        Ok(())
+        match result {
+            Ok(exit) => {
+                state.exits.insert(key, exit);
+                Ok(())
+            }
+            Err(error) => {
+                // Removing the live execution and returning before recording
+                // its failure leaves every later waiter seeing Busy forever.
+                state.failures.insert(key, error);
+                Err(error)
+            }
+        }
     }
 
     fn wait(&self, assembly: &RuntimeAssembly) -> Result<EngineExit, EngineError> {
-        self.state
-            .lock()
-            .map_err(|_| EngineError::Synchronization)?
-            .exits
-            .get(&(assembly as *const RuntimeAssembly as usize))
-            .copied()
-            .ok_or(EngineError::Busy)
+        let state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
+        let key = assembly as *const RuntimeAssembly as usize;
+        if let Some(exit) = state.exits.get(&key) {
+            return Ok(*exit);
+        }
+        Err(state.failures.get(&key).copied().unwrap_or(EngineError::Busy))
     }
 
     fn stop(&self, assembly: &RuntimeAssembly, request: StopRequest) -> Result<(), EngineError> {
