@@ -55,7 +55,7 @@ fn aarch64_stat_padding() {
     );
     assert_eq!(StatFixture::u64(&output, 0), metadata.identity.device);
     assert_eq!(StatFixture::u64(&output, 8), metadata.identity.inode);
-    assert_eq!(StatFixture::u32(&output, 16), 0o020000 | 0o6754);
+    assert_eq!(StatFixture::u32(&output, 16), 0o020_000 | 0o6754);
     assert_eq!(StatFixture::u32(&output, 20), 7);
     assert_eq!(StatFixture::u64(&output, 32), metadata.special_device);
     assert_eq!(&output[40..48], &[0; 8]);
@@ -77,7 +77,7 @@ fn x86_64_padding() {
         Ok(144)
     );
     assert_eq!(StatFixture::u64(&output, 16), metadata.links);
-    assert_eq!(StatFixture::u32(&output, 24), 0o020000 | 0o6754);
+    assert_eq!(StatFixture::u32(&output, 24), 0o020_000 | 0o6754);
     assert_eq!(StatFixture::u32(&output, 28), metadata.user);
     assert_eq!(StatFixture::u32(&output, 32), metadata.group);
     assert_eq!(&output[36..40], &[0; 4]);
@@ -107,7 +107,7 @@ fn statx_linux_split() {
     assert_eq!(StatFixture::u32(&output, 4), 4096);
     assert_eq!(&output[8..16], &[0; 8]);
     assert_eq!(StatFixture::u32(&output, 16), 7);
-    assert_eq!(StatFixture::u16(&output, 28), 0o020000 | 0o6754);
+    assert_eq!(StatFixture::u16(&output, 28), 0o020_000 | 0o6754);
     assert_eq!(StatFixture::u64(&output, 32), metadata.identity.inode);
     assert_eq!(StatFixture::u64(&output, 80), 9);
     assert_eq!(StatFixture::u32(&output, 88), 17);

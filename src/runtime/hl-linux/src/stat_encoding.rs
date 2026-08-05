@@ -168,13 +168,13 @@ impl StatEncoder {
 
     fn mode(metadata: &FileMetadata) -> u32 {
         let kind = match metadata.kind {
-            FileKind::Fifo => 0o010000,
-            FileKind::Character => 0o020000,
-            FileKind::Directory => 0o040000,
-            FileKind::Block => 0o060000,
-            FileKind::Regular => 0o100000,
-            FileKind::Symlink => 0o120000,
-            FileKind::Socket => 0o140000,
+            FileKind::Fifo => 0o010_000,
+            FileKind::Character => 0o020_000,
+            FileKind::Directory => 0o040_000,
+            FileKind::Block => 0o060_000,
+            FileKind::Regular => 0o100_000,
+            FileKind::Symlink => 0o120_000,
+            FileKind::Socket => 0o140_000,
         };
         kind | u32::from(metadata.permissions.bits())
     }
