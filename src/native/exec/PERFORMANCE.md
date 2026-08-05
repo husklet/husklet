@@ -1381,3 +1381,119 @@ The candidate is rejected. Active-view selection means that the view certified
 at ingress rarely matches the views actually read by this workload, so paying
 the certificate machinery cannot remove enough complete selections to offset
 its cost. No production source from this candidate is accepted.
+
+## Consolidated AArch64 call, fallback, and floating-point evidence (2026-08-05)
+
+## AArch64 call and return fallback audit
+
+Baseline: `067f91763415c54ef0f5d0bc5f7226bade17523b`. The measured calls workload
+completed 9,422 instructions with 180 fallback boundaries (152 classified
+other and 11 control), 572 builds, 560 branch boundaries, and 61 IBTC misses.
+
+### Retained oracle
+
+The read-only implementation studied was
+`../engine/src/translator/guest/aarch64/translate.c` (`translate`, direct
+`b`/`bl`, `br`/`blr`/`ret`, PAC-hint and `retaa`/`retab` cases), `stubs.c`
+(`emit_ibranch*`, `emit_shadow_ret`, `emit_bl_ras`, and chain exits), and
+`dispatch.h` (`G_IBTC_FILL`). `cache.c` supplies the map and arena lifetime used
+by those paths. Translation and cache state are process-owned; the JIT lock
+serializes publication, while generated readers are lock-free. Misses spill the
+target and site before dispatcher return. Shared entries publish body before
+target in the single-thread path and as one atomic pair in the threaded path.
+Cache flush tears down shared reachability; once SMC is observed, retained code
+does not publish caller-owned monomorphic sites. Direct calls publish guest x30
+before transfer. Indirect calls read the target before replacing guest x30.
+
+### Capability map
+
+| Retained capability | Rust owner | Status |
+|---|---|---|
+| direct `b`/`bl`, x30 update, patchable edge | `direct.c`, `trace.c` relocations | implemented |
+| `br`/`blr`/`ret`, including `blr x30` ordering | `indirect.c` | implemented |
+| per-site monomorphic and shared 64K IBTC | `indirect.c`, `executor.c::ibtc_fill` | implemented |
+| generation-safe invalidation/publication | native cache and executor admission | implemented |
+| PAC hints as no-op; `retaa`/`retab` as `ret x30` | `system.c`, `indirect.c` | implemented here |
+| shadow return stack / host RAS call-return pairing | none | missing optimization |
+| megamorphic interpreter-dispatch shared-only probe | none | missing optimization |
+
+The two remaining items are speculative performance mechanisms, not missing
+architectural call/return behavior. A shadow stack adds lifetime, mismatch,
+signal, fork, and unwind state and is not justified by the observed 61 IBTC
+misses without a separately measured return-heavy A/B workload.
+
+## AArch64 fallback attribution
+
+The retained diagnostic ownership was audited in
+`../engine/src/core/dispatch.c::run_guest` and the AArch64 translation refusal
+paths in `../engine/src/translator/guest/aarch64/translate.c`. Retained code
+keeps diagnostics outside signal handlers and attributes dispatcher reasons
+after architectural state is fully published. The Rust owner is
+`src/executor.c::run_aarch64`; cache-build declines and guard-resolver exits are
+the two bounded points where the refusal category is known without logging a
+guest PC or retaining guest data.
+
+The ABI extension appends six monotonic counters, preserving the complete
+336-byte prefix. Guard read/write counters identify projection resolution.
+Terminal declines are categorized as SIMD/FP, memory, control/system, or
+other from the fixed instruction word. Counters are atomic because executor
+instances admit concurrent guest threads. They are initialized, incremented,
+read, and printed only when native diagnostics are enabled; ordinary execution
+does no attribution work.
+
+These are causal categories, not capability claims. In particular, a guard
+fallback means a translated memory operation needs a new projection; it does
+not mean the memory opcode is unsupported. Terminal family counters identify
+where a complete retained family audit should begin before implementation.
+
+## AArch64 scalar conversion audit
+
+The retained C oracle was `/Users/x/dd/engine`. The scalar conversion domain
+studied was `src/translator/guest/aarch64/translate.c` (`gpr_field_mask`, stolen
+register rewriting and vector-dirty classification) and
+`src/translator/guest/aarch64/interp.c` (the scalar FP integer-conversion box,
+rounding modes, widths, invalid encodings, FPCR and FPSR behavior). The retained
+native path emits allocated host-AArch64 conversions directly, rewriting a GPR
+operand through scratch when it names engine-private x16, x17, x18, x28 or x30.
+The interpreter owns exceptional and unavailable forms.
+
+Husklet already owned FMOV in `fp_move.c`, vector conversions in `simd_float.c`,
+FP state entry/exit, and exact guarded memory. It had no native owner for the
+ordinary scalar integer-conversion family. In the combined float-SIMD loop,
+`SCVTF s28,w1` and `FCVTZU x5,s31` therefore terminated native translation.
+The engine completed only 164 native guest instructions and interpreted the
+remaining nested array loop. Mapping lookup and guard selection were downstream
+of that refusal and could not explain the seconds-scale result.
+
+`fp_convert.c` now admits the allocated non-fixed scalar SCVTF, UCVTF, FCVTNS,
+FCVTNU, FCVTPS, FCVTPU, FCVTMS, FCVTMU, FCVTZS, FCVTZU, FCVTAS and FCVTAU
+width/type combinations. It executes the architectural instruction directly so
+the installed guest FPCR/FPSR retain hardware rounding and exception semantics.
+GPR sources and destinations naming stolen registers are loaded from or stored
+to the generated CPU record. Half precision, fixed-point, FMOV and reserved
+rounding combinations remain with their existing owners or fallback.
+
+The structural trace test covers the two benchmark encodings. The focused
+AArch64 FP executable test covers GPR-to-FP, FP-to-GPR, truncation, and stolen
+x28 on both sides. The warning-strict Rust native executor suite passed 63 tests
+with zero failures and two ignored captures; the standalone warning-strict
+`aarch64_fp.c` executable passed on the AArch64 host.
+
+One candidate runner drove both release engines with typed native execution and
+diagnostics, the same guest SHA-256
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`, divisor
+100 and three measured repetitions. Baseline guest time was 3,556,492 us median
+(2,892,879--3,563,191); candidate was 1,805,477 us
+(1,605,320--2,013,783), a 49.23% reduction. All samples produced checksum
+23,027,281,045. Baseline completed only 164 native instructions; candidate
+completed 35,976,315 with stable per-repeat counters. Remaining time is now
+measurably dominated by 13,401,361 exact guards and 4,455,730 successful-store
+dirty publications, which this change deliberately does not weaken.
+
+## 2026-08-05 AArch64 write-publication evidence index
+
+The cached-write, dirty-range, projection-lease, certificate-integration, and
+projected-view-cache measurements and ownership matrices are consolidated in
+`WRITE_PUBLICATION.md`. That record preserves the exact candidate revisions,
+artifact hashes, benchmark samples, and safety prerequisites without repeating
+them in this performance history.
