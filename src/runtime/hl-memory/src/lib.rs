@@ -35,7 +35,7 @@ pub use checkpoint::{
     MemoryMappingSnapshot,
 };
 pub use executable::ExecutableToken;
-pub use ledger::{MemoryLedger, MemoryLedgerSnapshot};
+pub use ledger::{ExecutableAliasEvidence, MemoryLedger, MemoryLedgerSnapshot};
 pub use mapping::TransitionObserver as MappingTransitionObserver;
 pub use mapping::{
     ApertureLease, Batch as MappingBatch, Coordinator as MappingCoordinator, DIRTY_RANGE_MAXIMUM, DirectAuthorityLease,

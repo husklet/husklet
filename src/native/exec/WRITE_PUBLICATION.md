@@ -103,3 +103,38 @@ lease, both native ABIs, generated CPU layouts, emitted AArch64/x86-64 guards,
 and executor result decoding. No partial performance patch is justified until
 that generation-qualified contract is implemented and tested as one coherent
 slice.
+
+## Executable-alias prerequisite audit
+
+The follow-up audit at Husklet `5e58a7104a3754d1b0fcc020f42f37591b11f1d3`
+studied the retained mapping and SMC ownership in:
+
+- `/Users/x/dd/engine/src/core/dispatch.c::run_guest`, which holds mapping and
+  JIT transition synchronization at dispatcher boundaries;
+- `/Users/x/dd/engine/src/translator/guest/aarch64/translate.c::smc_icflush`
+  and `smc_commit`, which retain precise executable-source invalidation until
+  the guest synchronization point;
+- `/Users/x/dd/engine/src/translator/guest/aarch64/dispatch.h`, whose
+  `R_ICFLUSH` and `R_ICCOMMIT` paths consume that state;
+- `/Users/x/dd/engine/src/translator/cache.c::jit_after_fork`, which resets or
+  generation-separates inherited translation ownership after fork.
+
+The Rust comparison covered `ledger.rs` region splitting and protection,
+`mapping/host.rs::{protect,fork_restore}`, `mapping/remap.rs::remap_with_charge`,
+checkpoint snapshot/restore, and the existing shared-backing alias walk in
+`Coordinator::executable_write_ranges`. Mapping mutations are serialized by the
+coordinator transaction and checkpoint admission; `ProjectionLease` retains
+both for its lifetime. The ledger can therefore issue evidence containing its
+current generation and whether any live region with the selected backing
+identity is executable. Split regions, protection changes, remaps, and restored
+fork/checkpoint ledgers are covered because they publish complete region sets
+and advance or preserve the ledger generation as appropriate.
+
+This evidence is deliberately conservative: any executable region sharing the
+identity rejects coarse publication even when backing offsets do not overlap.
+It covers one address-space ledger. It is not proof against aliases in another
+coordinator, so shared backing remains ineligible until the shared-object owner
+provides equivalent global evidence. A future publication classifier must read
+the evidence while already holding the projection lease transaction, retain the
+recorded generation, and fall back to exact publication if either condition is
+not satisfied.

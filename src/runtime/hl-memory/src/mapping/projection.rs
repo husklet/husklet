@@ -29,6 +29,7 @@ pub struct ProjectionLease<'a, H: MemoryAccessHost> {
     _projection: H::Projection,
     protection: Protection,
     authority: Protection,
+    backing: Backing,
     generation: ProjectionGeneration,
     write_reservation: Option<u64>,
     additional: Vec<LiveProjection<H::Projection>>,
@@ -56,6 +57,7 @@ pub struct ProjectionView {
 
 struct LiveProjection<P> {
     view: ProjectionView,
+    backing: Backing,
     write_reservation: Option<u64>,
     _projection: P,
 }
@@ -115,6 +117,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             _projection: projection,
             protection: resolution.region.protection(),
             authority: required,
+            backing: resolution.region.backing(),
             generation: ProjectionGeneration {
                 incarnation,
                 mappings: self.ledger.generation(),
@@ -182,6 +185,26 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         1 + self.additional.len()
     }
 
+    /// Returns executable-alias evidence while this lease keeps mapping and
+    /// checkpoint transitions excluded. The address must belong to one of the
+    /// retained projection views.
+    pub fn executable_aliases(&self, address: GuestAddress) -> Result<crate::ExecutableAliasEvidence, MemoryError> {
+        let backing = if self.range.contains(address) {
+            self.backing
+        } else {
+            self.additional
+                .iter()
+                .find(|projection| projection.view.range.contains(address))
+                .map(|projection| projection.backing)
+                .ok_or(MemoryError::NoAddressSpace)?
+        };
+        let evidence = self.coordinator.ledger.executable_aliases(backing);
+        if evidence.generation != self.generation.mappings {
+            return Err(MemoryError::InvariantViolation);
+        }
+        Ok(evidence)
+    }
+
     pub fn project_additional(
         &mut self,
         address: GuestAddress,
@@ -241,6 +264,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         };
         self.additional.push(LiveProjection {
             view,
+            backing: resolution.region.backing(),
             write_reservation,
             _projection: projection,
         });

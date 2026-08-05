@@ -269,6 +269,15 @@ pub struct MemoryLedger {
     state: RwLock<LedgerState>,
 }
 
+/// Generation-qualified evidence about executable mappings that share one
+/// backing identity. Consumers retain the coordinator mapping transaction
+/// while using this value, so the recorded generation cannot be superseded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExecutableAliasEvidence {
+    pub generation: u64,
+    pub present: bool,
+}
+
 impl MemoryLedger {
     #[must_use]
     pub const fn new() -> Self {
@@ -315,6 +324,16 @@ impl MemoryLedger {
             .mappings
             .regions
             .clone()
+    }
+
+    pub(crate) fn executable_aliases(&self, backing: Backing) -> ExecutableAliasEvidence {
+        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        ExecutableAliasEvidence {
+            generation: state.generation,
+            present: state.mappings.regions.iter().any(|region| {
+                same_backing_identity(region.backing(), backing) && region.protection().contains(Protection::EXECUTE)
+            }),
+        }
     }
 
     pub(crate) fn replace(&self, expected: u64, regions: Vec<Region>) -> Result<u64, MemoryError> {
@@ -527,5 +546,14 @@ impl MemoryLedger {
         live.mappings = staged;
         live.generation = live.generation.wrapping_add(1);
         Ok(())
+    }
+}
+
+fn same_backing_identity(left: Backing, right: Backing) -> bool {
+    match (left, right) {
+        (Backing::Shared(left), Backing::Shared(right)) => left.object == right.object,
+        (Backing::Anonymous { identity: left, .. }, Backing::Anonymous { identity: right, .. }) => left == right,
+        (Backing::File { identity: left, .. }, Backing::File { identity: right, .. }) => left == right,
+        _ => false,
     }
 }

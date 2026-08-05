@@ -127,6 +127,39 @@ fn remap_stage_rollback() {
     }
 }
 
+#[test]
+fn executable_alias_evidence_survives_remap_and_fork_restore() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut writable = request();
+    writable.protection = Protection::READ.union(Protection::WRITE);
+    coordinator.map(writable).unwrap();
+    let initial = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 1)
+        .unwrap()
+        .executable_aliases(GuestAddress::new(0x1000))
+        .unwrap();
+    assert!(!initial.present);
+
+    let mut executable = writable;
+    executable.placement = Placement::Fixed(GuestAddress::new(0x3000));
+    executable.protection = Protection::READ.union(Protection::EXECUTE);
+    coordinator.remap(range(), executable, true).unwrap();
+    let remapped = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 2)
+        .unwrap()
+        .executable_aliases(GuestAddress::new(0x1000))
+        .unwrap();
+    assert!(remapped.present && remapped.generation > initial.generation);
+
+    let child = coordinator.fork_restore(FakeHost::failing(usize::MAX)).unwrap();
+    let child_evidence = child
+        .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 3)
+        .unwrap()
+        .executable_aliases(GuestAddress::new(0x1000))
+        .unwrap();
+    assert_eq!(child_evidence, remapped);
+}
+
 impl MemoryAccessHost for FakeHost {
     type Projection = FakeProjection;
 

@@ -16,6 +16,61 @@ fn range(start: u64, length: u64) -> AddressRange {
     AddressRange::nonempty(address(start), length).unwrap()
 }
 
+#[test]
+fn executable_alias_evidence_tracks_identity_protection_and_generation() {
+    let ledger = MemoryLedger::new();
+    let backing = Backing::Anonymous {
+        identity: 41,
+        shared: false,
+    };
+    let mapping = |start, length, protection, backing| MapRequest {
+        placement: Placement::Fixed(address(start)),
+        length,
+        alignment: PAGE,
+        protection,
+        backing,
+        backing_offset: 0,
+    };
+    ledger
+        .map(mapping(
+            0x1000,
+            PAGE * 2,
+            Protection::READ.union(Protection::WRITE),
+            backing,
+        ))
+        .unwrap();
+    let clean = ledger.executable_aliases(backing);
+    assert!(!clean.present);
+
+    ledger.protect(range(0x2000, PAGE), Protection::EXECUTE).unwrap();
+    let split = ledger.executable_aliases(backing);
+    assert!(split.present && split.generation > clean.generation);
+    ledger.protect(range(0x2000, PAGE), Protection::READ).unwrap();
+    let restored = ledger.executable_aliases(backing);
+    assert!(!restored.present && restored.generation > split.generation);
+
+    let distinct = Backing::Anonymous {
+        identity: 42,
+        shared: false,
+    };
+    ledger
+        .map(mapping(0x4000, PAGE, Protection::EXECUTE, distinct))
+        .unwrap();
+    assert!(!ledger.executable_aliases(backing).present);
+    assert!(ledger.executable_aliases(distinct).present);
+
+    let snapshot = ledger.snapshot();
+    let restored_ledger = MemoryLedger::restore(snapshot.clone()).unwrap();
+    assert_eq!(
+        restored_ledger.executable_aliases(backing).generation,
+        snapshot.generation
+    );
+    assert_eq!(restored_ledger.executable_aliases(distinct).present, true);
+
+    ledger.unmap(range(0x4000, PAGE)).unwrap();
+    assert!(!ledger.executable_aliases(distinct).present);
+}
+
 fn request(start: u64, length: u64, offset: u64, protection: Protection) -> MapRequest {
     MapRequest {
         placement: Placement::Fixed(address(start)),
