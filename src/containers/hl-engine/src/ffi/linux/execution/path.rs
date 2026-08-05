@@ -55,6 +55,9 @@ mod open;
 mod overlay_lease;
 #[path = "path/overlay_entries.rs"]
 mod overlay_entries;
+#[cfg(test)]
+#[path = "path/overlay_bench.rs"]
+mod overlay_bench;
 #[path = "path/overlay_project.rs"]
 #[cfg(test)]
 mod overlay_project;
