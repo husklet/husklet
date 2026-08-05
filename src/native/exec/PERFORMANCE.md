@@ -1,47 +1,5 @@
 # Native memory performance
 
-## 2026-08-05 AArch64 virtual-counter admission
-
-The retained oracle audit covered
-`../engine/src/translator/guest/aarch64/translate.c::translate`, including its
-TLS, CPU-model, SMC, exception, system-register, and final verbatim-emission
-paths, and `../engine/src/translator/guest/aarch64/interp.c::interp`, including
-the exception/system decoder. Retained translated blocks own no separate timer
-state: EL0 `CNTFRQ_EL0` and `CNTVCT_EL0` reads execute on the AArch64 host and
-remain ordered by the translated instruction stream. The interpreter instead
-reads the host monotonic clock and its fixed frequency; exceptions and SMC
-maintenance terminate to dispatcher-owned control paths. Translation is built
-and published under the retained JIT lock, then read lock-free until cache
-teardown. These counter reads have no partial result, blocking, cancellation,
-signal, errno, or host-OS branch; stolen destination registers are spilled to
-the retained CPU record.
-
-The Rust mapping is `src/arch/aarch64/system.c::hl_a64_system_body` for native
-EL0 system-register emission, `trace.c::body` for trace admission, the CPU
-record for stolen-register ownership, and `executor.c::run_aarch64` for the
-fallback/control boundary. Durable diagnostics on exact base `c0ce2ef8419`
-had already reduced the calls-row entry refusals to one and classified that
-last refusal as a system form. The benchmark source identifies the relevant
-pair mechanically: its AArch64 phase timer reads `CNTVCT_EL0`, while startup
-reads `CNTFRQ_EL0`. Neither read is a syscall or SMC transition.
-
-The native system owner now admits that coherent virtual-counter pair and
-emits the host read directly, redirecting stolen destinations through x16 and
-the CPU record. It deliberately does not admit `CNTVCTSS_EL0`, physical-counter
-access, arbitrary MRS/MSR, `ISB`, or cache-maintenance instructions: those are
-optional-host or guest control boundaries and remain outside this change. The
-AArch64 system test executes both reads, covers the stolen x30 destination,
-and checks a nonzero frequency plus monotonic counter values. A trace regression
-requires `CNTVCT_EL0; SVC` to reach the syscall with no entry-rejection or
-system-fallback increment.
-
-On the native AArch64 host, `hl-engine`'s focused native tests passed (94 passed,
-3 ignored), and the directly linked warning-strict AArch64 system executable
-passed. A direct standalone run of the larger trace executable reached its
-pre-existing SIMD assertion (`count=7` while expecting nine admitted words)
-before the new counter regression; therefore no calls-row timing or complete
-standalone trace result is claimed here.
-
 ## 2026-08-05 bounded AArch64 trace admission
 
 The retained oracle audit covered
