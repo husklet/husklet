@@ -3,6 +3,7 @@
 mod bench;
 mod benchmark;
 mod nested;
+mod record;
 mod runtime;
 mod scenario;
 mod suite;

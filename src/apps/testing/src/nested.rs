@@ -1,11 +1,9 @@
 use clap::{Args, Subcommand};
-use fs2::FileExt as _;
 use hl_process::{Capture, Command as ProcessCommand, Outcome as ProcessOutcome};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     fs,
-    fs::OpenOptions,
     os::unix::fs::PermissionsExt,
     path::{Component, Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -258,18 +256,17 @@ fn prepare_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
     validate_build(build)?;
     let identity = build_identity(root, build)?;
     let key = &identity.key;
-    let cache = root.join(".cache/testing/nested/artifacts").join(&key);
-    let cached = cache.join(&build.binary);
-    let receipt = cache.join("sha256");
-    let lock = artifact_lock(root, key)?;
-    lock.lock_exclusive()?;
-    if !verified(&cached, &receipt, key)? {
-        build_artifact(root, build, &identity.cargo, &cache, &cached, &receipt, key)?;
+    let cache = crate::record::Cache::new(root)?;
+    let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+    let record = receipts.artifact(key, &build.binary)?;
+    let _lock = receipts.lock(key)?;
+    if !record.verify()? {
+        build_artifact(root, build, &identity.cargo, &record)?;
         println!("BUILT {} key={key}", artifact.path.display());
     } else {
         println!("REUSED {} key={key}", artifact.path.display());
     }
-    materialize(&cached, &root.join(&artifact.path))?;
+    materialize(record.artifact(), &root.join(&artifact.path))?;
     Ok(())
 }
 
@@ -306,9 +303,7 @@ fn build_key_with_environment(
     cargo: &str,
     values: &[(String, String)],
 ) -> Result<String, Error> {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    hash_field(&mut digest, b"husklet-nested-build-v2")?;
+    let mut digest = crate::record::FramedIdentity::new(b"husklet-nested-build-v2")?;
     for value in [&build.package, &build.target, &build.profile, &build.binary] {
         hash_field(&mut digest, value.as_bytes())?;
     }
@@ -337,7 +332,7 @@ fn build_key_with_environment(
         &["--print", "target-libdir", "--target", &build.target],
     )?;
     hash_tree(&mut digest, root, &root.join("src"))?;
-    Ok(hex(digest.finalize().as_ref()))
+    Ok(digest.finish())
 }
 
 fn environment(name: &str) -> Option<String> {
@@ -378,13 +373,18 @@ fn cargo_configs(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn hash_source_named(digest: &mut impl sha2::Digest, name: &[u8], path: &Path) -> Result<(), Error> {
+fn hash_source_named(digest: &mut crate::record::FramedIdentity, name: &[u8], path: &Path) -> Result<(), Error> {
     hash_field(digest, name)?;
     hash_field(digest, path.as_os_str().as_encoded_bytes())?;
     hash_field(digest, &fs::read(path)?)
 }
 
-fn hash_tool(digest: &mut impl sha2::Digest, name: &str, program: &str, arguments: &[&str]) -> Result<(), Error> {
+fn hash_tool(
+    digest: &mut crate::record::FramedIdentity,
+    name: &str,
+    program: &str,
+    arguments: &[&str],
+) -> Result<(), Error> {
     let mut command = vec![program.to_owned()];
     command.extend(arguments.iter().map(|value| (*value).to_owned()));
     let output = capture(&command, Duration::from_secs(30), 128 * 1024)
@@ -398,17 +398,7 @@ fn hash_tool(digest: &mut impl sha2::Digest, name: &str, program: &str, argument
     hash_field(digest, &output.stderr)
 }
 
-fn artifact_lock(root: &Path, key: &str) -> Result<fs::File, Error> {
-    let directory = root.join(".cache/testing/nested/locks");
-    fs::create_dir_all(&directory)?;
-    Ok(OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .open(directory.join(format!("{key}.lock")))?)
-}
-
-fn hash_tree(digest: &mut impl sha2::Digest, root: &Path, directory: &Path) -> Result<(), Error> {
+fn hash_tree(digest: &mut crate::record::FramedIdentity, root: &Path, directory: &Path) -> Result<(), Error> {
     let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
@@ -425,27 +415,22 @@ fn hash_tree(digest: &mut impl sha2::Digest, root: &Path, directory: &Path) -> R
     Ok(())
 }
 
-fn hash_source(digest: &mut impl sha2::Digest, root: &Path, path: &Path) -> Result<(), Error> {
+fn hash_source(digest: &mut crate::record::FramedIdentity, root: &Path, path: &Path) -> Result<(), Error> {
     let relative = path.strip_prefix(root)?;
     hash_field(digest, relative.as_os_str().as_encoded_bytes())?;
     hash_field(digest, &fs::read(path)?)?;
     Ok(())
 }
 
-fn hash_field(digest: &mut impl sha2::Digest, value: &[u8]) -> Result<(), Error> {
-    digest.update(u64::try_from(value.len())?.to_be_bytes());
-    digest.update(value);
-    Ok(())
+fn hash_field(digest: &mut crate::record::FramedIdentity, value: &[u8]) -> Result<(), Error> {
+    digest.field(value)
 }
 
 fn build_artifact(
     root: &Path,
     build: &Build,
     cargo: &str,
-    cache: &Path,
-    cached: &Path,
-    receipt: &Path,
-    key: &str,
+    record: &crate::record::ArtifactRecord,
 ) -> Result<(), Error> {
     let arguments = vec![
         cargo.into(),
@@ -480,37 +465,7 @@ fn build_artifact(
         .join(&build.binary);
     let bytes = fs::read(&produced)
         .map_err(|error| format!("cannot read built nested artifact {}: {error}", produced.display()))?;
-    let digest = sha256(&bytes);
-    let parent = cache.parent().ok_or("nested cache has no parent")?;
-    fs::create_dir_all(parent)?;
-    let stage = tempfile::tempdir_in(parent)?;
-    fs::write(stage.path().join(&build.binary), &bytes)?;
-    fs::set_permissions(stage.path().join(&build.binary), fs::Permissions::from_mode(0o755))?;
-    fs::write(stage.path().join("sha256"), format!("key={key}\nsha256={digest}\n"))?;
-    if cache.exists() {
-        fs::remove_dir_all(cache)?;
-    }
-    fs::rename(stage.keep(), cache)?;
-    debug_assert_eq!(cached, &cache.join(&build.binary));
-    debug_assert_eq!(receipt, &cache.join("sha256"));
-    Ok(())
-}
-
-fn verified(artifact: &Path, receipt: &Path, key: &str) -> Result<bool, Error> {
-    if !artifact.is_file() || !receipt.is_file() {
-        return Ok(false);
-    }
-    let expected = format!("key={key}\nsha256={}", sha256(&fs::read(artifact)?));
-    Ok(fs::read_to_string(receipt)?.trim() == expected)
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    hex(Sha256::digest(bytes).as_ref())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    record.publish(&bytes, true)
 }
 
 fn materialize(source: &Path, destination: &Path) -> Result<(), Error> {
@@ -523,9 +478,9 @@ fn materialize(source: &Path, destination: &Path) -> Result<(), Error> {
     if temporary.exists() {
         fs::remove_file(&temporary)?;
     }
-    if fs::hard_link(source, &temporary).is_err() {
-        fs::copy(source, &temporary)?;
-    }
+    // The runnable destination needs owner-write mode for atomic replacement,
+    // while cache objects remain immutable and can back several receipts.
+    fs::copy(source, &temporary)?;
     fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
     fs::rename(temporary, destination)?;
     Ok(())
@@ -729,26 +684,31 @@ expect: { exit: 42, stdout: hello.txt }
     #[test]
     fn cache_receipt_rejects_changed_artifact() {
         let directory = tempfile::tempdir().unwrap();
-        let artifact = directory.path().join("hl-engine");
-        let receipt = directory.path().join("sha256");
-        fs::write(&artifact, b"first").unwrap();
-        fs::write(&receipt, format!("key=environment-a\nsha256={}\n", sha256(b"first"))).unwrap();
-        assert!(verified(&artifact, &receipt, "environment-a").unwrap());
-        assert!(!verified(&artifact, &receipt, "environment-b").unwrap());
-        fs::write(&artifact, b"second").unwrap();
-        assert!(!verified(&artifact, &receipt, "environment-a").unwrap());
+        let cache = crate::record::Cache::new(directory.path()).unwrap();
+        let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+        let key = "a".repeat(64);
+        let record = receipts.artifact(&key, "hl-engine").unwrap();
+        let _lock = receipts.lock(&key).unwrap();
+        record.publish(b"first", true).unwrap();
+        assert!(record.verify().unwrap());
+        fs::write(record.artifact(), b"second").unwrap();
+        assert!(!record.verify().unwrap());
     }
 
     #[test]
     fn concurrent_preparation_is_serialized_by_key() {
         let root = tempfile::tempdir().unwrap();
-        let first = artifact_lock(root.path(), "same-key").unwrap();
-        let second = artifact_lock(root.path(), "same-key").unwrap();
-        first.lock_exclusive().unwrap();
-        assert!(second.try_lock_exclusive().is_err());
-        fs2::FileExt::unlock(&first).unwrap();
-        second.lock_exclusive().unwrap();
-        fs2::FileExt::unlock(&second).unwrap();
+        let cache = crate::record::Cache::new(root.path()).unwrap();
+        let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+        let key = "a".repeat(64);
+        let first = receipts.lock(&key).unwrap();
+        let thread = std::thread::spawn(move || {
+            let cache = crate::record::Cache::new(root.path()).unwrap();
+            let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+            receipts.lock(&key).unwrap()
+        });
+        drop(first);
+        drop(thread.join().unwrap());
     }
 
     #[test]
