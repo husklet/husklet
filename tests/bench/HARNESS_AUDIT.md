@@ -1,5 +1,54 @@
 # Benchmark harness provenance audit
 
+## 2026-08-05 quiet native comparison correction
+
+This lane audited retained `../engine/tools/bench_runner.c::{cmd_run,
+run_once,native_build,qemu_build,hl_build,cmd_report}`, its provider contract in
+`../engine/tools/bench/README.md`, and the self-timed producer in
+`../engine/tests/perf/combined_bench.c::{timer_count,timer_freq,main}`. The
+retained runner owns an invocation and its argument strings until each fresh
+child exits, captures one bounded result per repeat, rejects exit/parse/phase or
+checksum drift, and computes medians only after all repeats. Guest phase clocks
+exclude provider build and process setup. AArch64 reads the architectural
+counter; x86 uses `CLOCK_MONOTONIC`. Provider builders select native, QEMU, or
+the retained engine, with host/guest-ISA reachability checked before launch.
+
+The Rust audit covered `benchmark.rs::{Run::validate,Run::execute}`, `matrix.rs`
+(`Matrix::{validate,require_native_options,identity,run,execute_with}`),
+`alternating.rs::{plan,run,load}`, and
+`adapter::{Process::sample,Process::command}`. `Matrix` owns immutable paths and
+typed engine options for its lifetime. Its length-delimited identity includes
+the runner, both engines, guest bytes, ISA, repeats, timeout, environment,
+engine options, and guest arguments. The durable journal admits a resumed proof
+only for that identity. One diagnostics-on Rust step must succeed before the
+balanced timing schedule; each provider then gets a fresh process group,
+concurrent bounded stdout/stderr drains, a per-row timeout, descendant
+termination, wait/reap, and parsed checksum/phase validation. Output records
+guest, engine, runner, options, affinity, and execution identities. Linux adds
+single-CPU admission; native baseline admission requires host/guest ISA parity.
+
+The comparison matrix is:
+
+| Capability | Retained C | Rust before | Rust after |
+|---|---|---|---|
+| Same guest phase timing | Implemented | Implemented | Implemented |
+| Fresh process/repeat and bounded capture | Implemented | Implemented | Implemented |
+| Stable phase/checksum admission | Implemented | Implemented | Implemented |
+| Content-bound proof/resume | Invocation-selected only | Implemented | Implemented |
+| Prove Rust native mode before timing | No corresponding native backend | Implemented | Implemented |
+| Diagnostics-off timed Rust row | Normal retained timing is quiet | Rejected because `Process::sample` required diagnostics from every native-requested row | Accepted only after the identity-bound proof scheduled by `Matrix` |
+| Build/setup excluded consistently | Guest phase clock | Guest phase clock; wall retained separately | Unchanged |
+| Host/ISA branches | Native/QEMU/engine provider checks | host-native baseline plus AArch64/x86 selection | Unchanged |
+
+The defect joined two distinct contracts: native execution selection and
+per-process diagnostic proof. `Matrix::run` correctly removed
+`HL_NATIVE_DIAGNOSTICS` from timing rows, but `Process::sample` still rejected
+their intentionally quiet stderr. The correction requires diagnostics only
+when that typed option is present. A direct native request still has diagnostics
+inserted by `Run::validate`; matrix timing can omit them only through the
+private `diagnostics_proven` construction reached after the content-bound proof.
+No engine option is inferred from the supervisor's ambient environment.
+
 ## Scope and retained oracle
 
 This audit compares Husklet commit `a38d60628fd6339940148b222f6e7947b19b2d27`

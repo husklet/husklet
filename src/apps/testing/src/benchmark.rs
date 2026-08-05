@@ -266,6 +266,14 @@ impl Run {
                 .any(|(name, value)| name == "HL_NATIVE_EXECUTION" && value == "1")
     }
 
+    fn native_diagnostics_requested(&self) -> bool {
+        self.native_requested()
+            && self
+                .engine_options
+                .iter()
+                .any(|(name, value)| name == "HL_NATIVE_DIAGNOSTICS" && value == "1")
+    }
+
     fn execution_mode(&self) -> &'static str {
         match (self.provider, self.native_requested()) {
             (Provider::Native, _) => "host-native",
@@ -570,6 +578,7 @@ mod test {
         .validate()
         .unwrap();
         assert!(run.native_requested());
+        assert!(run.native_diagnostics_requested());
         assert_eq!(run.execution_mode(), "native-verified");
         assert!(
             run.engine_options

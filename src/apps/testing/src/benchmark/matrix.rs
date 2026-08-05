@@ -259,6 +259,8 @@ mod tests {
                 .iter()
                 .any(|(name, _)| name == "HL_NATIVE_DIAGNOSTICS")
         );
+        assert!(!timed.native_diagnostics_requested());
+        assert!(proof.native_diagnostics_requested());
     }
 
     #[test]

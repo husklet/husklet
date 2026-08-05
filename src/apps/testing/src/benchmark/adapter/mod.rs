@@ -93,7 +93,12 @@ impl Process {
             ));
         }
         let diagnostics_text = String::from_utf8_lossy(&stderr);
-        if run.native_requested() {
+        // A matrix first authenticates native execution with a diagnostics-on
+        // proof bound to its complete input identity, then removes diagnostics
+        // from timed rows. Requiring diagnostic text from those quiet rows
+        // both defeats the comparison contract and makes them impossible to
+        // run. Direct native runs still request diagnostics during validation.
+        if run.native_diagnostics_requested() {
             match Self::native_runs(&diagnostics_text) {
                 Some(0) => {
                     return Err("native execution was requested but diagnostics report zero native runs".into());
