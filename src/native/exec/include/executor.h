@@ -103,6 +103,12 @@ typedef struct hl_native_diagnostics {
     uint64_t relocation_invalidations;
     uint64_t ibtc_site_misses;
     uint64_t ibtc_shared_misses;
+    uint64_t a64_fallback_guard_read;
+    uint64_t a64_fallback_guard_write;
+    uint64_t a64_fallback_simd_fp;
+    uint64_t a64_fallback_memory;
+    uint64_t a64_fallback_control;
+    uint64_t a64_fallback_other;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -347,7 +353,9 @@ _Static_assert(offsetof(hl_native_diagnostics, x86_public_exits) == 192,
                "native diagnostics legacy prefix drifted");
 _Static_assert(offsetof(hl_native_diagnostics, relocation_cold_targets) == 288,
                "native diagnostics retained prefix drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 336, "native diagnostics ABI drifted");
+_Static_assert(offsetof(hl_native_diagnostics, a64_fallback_guard_read) == 336,
+               "native diagnostics fallback extension drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 384, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

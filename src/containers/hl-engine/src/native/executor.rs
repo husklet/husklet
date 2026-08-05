@@ -274,6 +274,12 @@ struct Diagnostics {
     relocation_invalidations: u64,
     ibtc_site_misses: u64,
     ibtc_shared_misses: u64,
+    a64_fallback_guard_read: u64,
+    a64_fallback_guard_write: u64,
+    a64_fallback_simd_fp: u64,
+    a64_fallback_memory: u64,
+    a64_fallback_control: u64,
+    a64_fallback_other: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1855,6 +1861,12 @@ impl Executor {
             relocation_invalidations: 0,
             ibtc_site_misses: 0,
             ibtc_shared_misses: 0,
+            a64_fallback_guard_read: 0,
+            a64_fallback_guard_write: 0,
+            a64_fallback_simd_fp: 0,
+            a64_fallback_memory: 0,
+            a64_fallback_control: 0,
+            a64_fallback_other: 0,
         };
         (unsafe { hl_native_diagnose(self.handle.as_ptr(), &raw mut output) } == 0)
             .then_some(output)
@@ -2442,7 +2454,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_slim_exits=0",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_slim_exits=0",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -2471,6 +2483,12 @@ impl Drop for Executor {
                 value.relocation_invalidations,
                 value.ibtc_site_misses,
                 value.ibtc_shared_misses,
+                value.a64_fallback_guard_read,
+                value.a64_fallback_guard_write,
+                value.a64_fallback_simd_fp,
+                value.a64_fallback_memory,
+                value.a64_fallback_control,
+                value.a64_fallback_other,
             );
         }
         // SAFETY: construction transfers unique ownership of the live handle;
@@ -2521,7 +2539,7 @@ const _: () = {
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
     assert!(std::mem::size_of::<Change>() == 40);
-    assert!(std::mem::size_of::<Diagnostics>() == 336);
+    assert!(std::mem::size_of::<Diagnostics>() == 384);
 };
 
 #[cfg(test)]
