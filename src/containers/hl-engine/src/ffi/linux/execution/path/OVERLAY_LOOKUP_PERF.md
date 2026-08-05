@@ -119,6 +119,25 @@ This deliberately follows the retained C `dispatch.c` over-invalidation rule
 and `overlay.c` relocation bumps while narrowing publication to actual visible
 commits.
 
+## Bounded positive directory cache
+
+The layered resolver now retains at most 4,096 positive directory resolutions
+per `Host`. Entries own their pins through `Arc<OwnedFd>` and are therefore
+independent of transient resolver handles. Mounts remain on the direct-handle
+path and never enter this cache. A host instance is the process-local root and
+mount generation: constructing a new host for fork/chroot/root replacement
+starts with an empty cache.
+
+Lookup stamps the shared namespace epoch, borrows owned pins under the cache
+lock, releases the lock, and Acquire-loads the epoch again before accepting
+them. Fill likewise verifies the epoch before and after taking the cache lock;
+a concurrent mutation discards the fill or makes it unreachable on the next
+lookup. Capacity overflow clears the fixed working set and releases every pin.
+
+Warning-strict release measurement after warmup reduced the twelve-component
+deep lower lookup from 31,281.9 ns/op to 7,081.3 ns/op (77.4%). The layered
+result was 0.69x its equally deep ordinary control in that shared-host run.
+
 ### Namespace-mutation oracle audit
 
 The namespace publication lane studied retained

@@ -27,6 +27,12 @@ pub(super) struct Host {
 struct PinRegistry {
     next: AtomicU64,
     entries: Mutex<std::collections::BTreeMap<u64, Arc<PinEntry>>>,
+    paths: Mutex<PathCache>,
+}
+
+struct PathCache {
+    epoch: u64,
+    entries: std::collections::HashMap<Vec<u8>, Vec<LayerPin>>,
 }
 
 struct PinEntry {
@@ -36,8 +42,9 @@ struct PinEntry {
     candidates: Vec<LayerPin>,
 }
 
+#[derive(Clone)]
 struct LayerPin {
-    descriptor: OwnedFd,
+    descriptor: Arc<OwnedFd>,
     /// Zero is upper; positive values preserve lower precedence order.
     layer: usize,
 }
@@ -64,6 +71,10 @@ impl Host {
             pins: Arc::new(PinRegistry {
                 next: AtomicU64::new(1),
                 entries: Mutex::new(std::collections::BTreeMap::new()),
+                paths: Mutex::new(PathCache {
+                    epoch: 1,
+                    entries: std::collections::HashMap::new(),
+                }),
             }),
             epoch: Arc::new(AtomicU64::new(1)),
         }
@@ -113,9 +124,43 @@ impl Host {
             .iter()
             .enumerate()
             .map(|(layer, file)| {
-                Self::duplicate_descriptor(file.as_raw_fd()).map(|descriptor| LayerPin { descriptor, layer })
+                Self::duplicate_descriptor(file.as_raw_fd()).map(|descriptor| LayerPin {
+                    descriptor: Arc::new(descriptor),
+                    layer,
+                })
             })
             .collect()
+    }
+
+    fn cached_directory(&self, guest: &GuestPathBytes, epoch: u64) -> Option<Vec<LayerPin>> {
+        let borrowed = {
+            let mut cache = self.pins.paths.lock().unwrap_or_else(|error| error.into_inner());
+            if cache.epoch != epoch {
+                cache.entries.clear();
+                cache.epoch = epoch;
+            }
+            cache.entries.get(guest.as_bytes()).cloned()
+        };
+        borrowed.filter(|_| self.epoch.load(Ordering::Acquire) == epoch)
+    }
+
+    fn cache_directory(&self, guest: &GuestPathBytes, candidates: &[LayerPin], epoch: u64) {
+        const CAPACITY: usize = 4_096;
+        if self.epoch.load(Ordering::Acquire) != epoch {
+            return;
+        }
+        let mut cache = self.pins.paths.lock().unwrap_or_else(|error| error.into_inner());
+        if cache.epoch != epoch {
+            cache.entries.clear();
+            cache.epoch = epoch;
+        }
+        if self.epoch.load(Ordering::Acquire) != epoch {
+            return;
+        }
+        if cache.entries.len() >= CAPACITY {
+            cache.entries.clear();
+        }
+        cache.entries.insert(guest.as_bytes().to_vec(), candidates.to_vec());
     }
 
     fn child_guest(parent: &GuestPathBytes, child: &GuestName) -> Result<GuestPathBytes, ResolveHostError> {
@@ -420,6 +465,51 @@ mod overlay_tests {
         std::fs::remove_dir_all(upper).unwrap();
         std::fs::remove_dir_all(lower).unwrap();
     }
+
+    #[test]
+    fn directory_cache_is_bounded_and_epoch_invalidated() {
+        let upper = fixture("cache-upper");
+        let lower = fixture("cache-lower");
+        std::fs::create_dir_all(lower.join("a/b")).unwrap();
+        let host = layered_host(&upper, &lower);
+        assert_eq!(resolve(&host, b"/a/b").unwrap(), lower.join("a/b"));
+        let epoch = host.epoch.load(Ordering::Acquire);
+        let guest = GuestPathBytes::new(b"/a").unwrap();
+        assert!(host.cached_directory(&guest, epoch).is_some());
+
+        host.epoch.fetch_add(1, Ordering::Release);
+        assert!(host.cached_directory(&guest, epoch).is_none());
+
+        let current = host.epoch.load(Ordering::Acquire);
+        for index in 0..=4_096 {
+            let path = GuestPathBytes::new(format!("/cached/{index}").as_bytes()).unwrap();
+            host.cache_directory(&path, &[], current);
+        }
+        let cache = host.pins.paths.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(cache.entries.len() <= 4_096);
+        drop(cache);
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn new_root_host_has_an_independent_namespace_generation() {
+        let upper = fixture("generation-upper");
+        let lower = fixture("generation-lower");
+        std::fs::create_dir_all(lower.join("a/b")).unwrap();
+        let first = layered_host(&upper, &lower);
+        assert_eq!(resolve(&first, b"/a/b").unwrap(), lower.join("a/b"));
+        let second = layered_host(&upper, &lower);
+        assert!(second
+            .pins
+            .paths
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entries
+            .is_empty());
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
 }
 
 impl VfsHost for Host {
@@ -454,7 +544,12 @@ impl VfsHost for Host {
             };
             return Ok((Self::direct_handle(child), kind));
         }
+        let epoch = self.epoch.load(Ordering::Acquire);
         let (guest, candidates, kind) = self.with_entry(directory, |entry| {
+            let guest = Self::child_guest(&entry.guest, component)?;
+            if let Some(candidates) = self.cached_directory(&guest, epoch) {
+                return Ok((guest, candidates, NodeKind::Directory));
+            }
             let mut candidates = Vec::new();
             let mut visible = None;
             for parent in &entry.candidates {
@@ -469,7 +564,7 @@ impl VfsHost for Host {
                     if visible == Some(kind) && directory {
                         let opaque = Self::opaque(child.as_raw_fd())?;
                         candidates.push(LayerPin {
-                            descriptor: child,
+                            descriptor: Arc::new(child),
                             layer: parent.layer,
                         });
                         if opaque {
@@ -477,15 +572,18 @@ impl VfsHost for Host {
                         }
                     } else if candidates.is_empty() {
                         candidates.push(LayerPin {
-                            descriptor: child,
+                            descriptor: Arc::new(child),
                             layer: parent.layer,
                         });
                         break;
                     }
                 }
             }
-            let guest = Self::child_guest(&entry.guest, component)?;
-            visible.map(|kind| (guest, candidates, kind)).ok_or(ResolveHostError::NotFound)
+            let kind = visible.ok_or(ResolveHostError::NotFound)?;
+            if kind == NodeKind::Directory {
+                self.cache_directory(&guest, &candidates, epoch);
+            }
+            Ok((guest, candidates, kind))
         })??;
         self.insert(guest, candidates).map(|handle| (handle, kind))
     }
