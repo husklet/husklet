@@ -255,11 +255,14 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp x9,x16: end wrapped */
     active[active_count++] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_TOKEN);
+    /* The release-published token orders the immutable view payload. An LDAR
+     * of that token provides the required acquire without a global DMB on
+     * every translated read. */
+    hl_a64_addi(assembler, 17, CPU, OFFSET_READ_TOKEN);
+    hl_a64_emit32(assembler, UINT32_C(0xc8dffe31)); /* ldar x17,[x17] */
     hl_a64_emit32(assembler, 0xF100023Fu); /* cmp x17,#0 */
     active[active_count++] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
-    hl_a64_emit32(assembler, 0xD50339BFu); /* dmb ishld: acquire published views */
     hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_INCARNATION);
     hl_a64_emit32(assembler, 0xEB12023Fu); /* cmp x17,x18 */
     active[active_count++] = (uint32_t *)assembler->cursor;
@@ -324,11 +327,12 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, const uint8
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp end,address: wrapped */
     inactive[0] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_READ_TOKEN);
+    /* Match read_cache's acquire of the release-published view payload. */
+    hl_a64_addi(assembler, 17, CPU, OFFSET_READ_TOKEN);
+    hl_a64_emit32(assembler, UINT32_C(0xc8dffe31)); /* ldar x17,[x17] */
     hl_a64_emit32(assembler, 0xF100023Fu); /* cmp token,#0 */
     inactive[1] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
-    hl_a64_emit32(assembler, 0xD50339BFu); /* dmb ishld */
     hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_INCARNATION);
     hl_a64_emit32(assembler, 0xEB12023Fu); /* cmp token,incarnation */
     inactive[2] = (uint32_t *)assembler->cursor;

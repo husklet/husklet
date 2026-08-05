@@ -282,3 +282,86 @@ performance governor. This experiment used development-profile binaries, five
 samples within one invocation, sequential A/B/C ordering, and no explicit
 affinity. Only the direction within each internally consistent experiment is
 evidence; their absolute times are not interchangeable.
+
+## Accepted targeted acquire
+
+The exact parent for this experiment was
+`d549362dc` and the retained read-only C oracle was
+`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`. The complete retained paths
+reviewed again were `src/translator/guest_memory.c`, including
+`hl_guest_memory_bind`, `hl_guest_memory_resolve_exec_span`, and the data-pin
+entry points, and `src/linux_abi/thread.c`, including the GNA/GRO writer
+locks, generation readers, `gna_hit`, `gna_prefix`, `gro_hit`,
+`hl_linux_bus_fault`, file-map publication, and exec teardown. Their common
+direct translated-access path does not execute a global read barrier for each
+operand; generation-qualified readers acquire only the state whose
+publication they consume.
+
+In Husklet, `MemoryLedger` owns logical mappings and their generation.
+`Coordinator::project_contiguous` retains checkpoint admission, the mapping
+transaction lock, and projected host storage for the complete native call.
+`ProjectionLease` owns additional views and either publishes successful dirty
+ranges or rolls back reservations. In the native owner,
+`src/executor.c::run_view_publish` writes every bounded view, count, and
+incarnation before release-storing `cpu->read_token`. The CPU record has one
+execution owner; fallback promotion republishes the payload before native
+re-entry. Mapping mutation, fork repair, and teardown cannot retire the
+storage through the retained projection lease.
+
+Previously `read_cache` and `write_cache` loaded `read_token` normally and
+then executed `DMB ISHLD`. The accepted sequence instead forms the token
+address and uses `LDAR` on that exact release-published object. This preserves
+the C11/AArch64 release/acquire edge that orders the immutable payload while
+avoiding a global load barrier on every guarded access. Range, overflow,
+permission, incarnation, fault, write-owner, dirty-publication, and
+executable-write checks are unchanged. The change emits AArch64 code only;
+x86-64 and host-specific mapping adapters are unchanged.
+
+Both trees were warning-strict release builds. The candidate's focused native
+suite passed 91 tests with no failures and two ignored tests. The guest source
+hash was
+`ec97f6f5c598f6fc229231dbf4751fb298ebaf1ae04c530d8aecbc7a1ec926af`;
+the compiled guest hash was
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`.
+Baseline and candidate engine hashes were respectively
+`5af07d5edc3e22f6821dae70232a843d096046db459992a95edbdb5d594b97ec`
+and
+`1f2c8dc19568f518ffd62ae1fe57a57cb4c0ca9d29efc099e2546d23807e615e`.
+One candidate runner drove both engines, eliminating runner differences.
+
+Each row was a separate release-engine invocation pinned to CPU 17. Order
+alternated by pair, and engine options were passed through the typed command
+surface:
+
+```text
+taskset -c 17 testing benchmark run \
+  --provider rust-engine --arch arm64 --binary combined_arm64 \
+  --engine <baseline-or-candidate> --repeats 1 \
+  --engine-option HL_NATIVE_EXECUTION=1 \
+  --engine-option HL_NATIVE_DIAGNOSTICS=1 -- \
+  --divisor <value> --phase <phase>
+```
+
+The required float-SIMD workload was neutral. Its seven baseline samples were
+13,355,503, 13,703,441, 13,587,209, 13,637,522, 13,628,082, 13,665,672,
+and 13,651,953 microseconds. Candidate samples were 13,656,664, 13,604,059,
+13,620,877, 13,576,944, 13,639,683, 13,717,050, and 13,695,242
+microseconds. Medians were 13,637,522 and 13,639,683 microseconds: a 0.016%
+candidate difference within noise, with two of seven pair wins. Every row had
+checksum `115136405225`.
+
+The read-dominant memory control demonstrated the affected path. Baseline
+samples were 31,927, 32,004, 31,893, 33,266, 31,582, 31,820, and 31,883
+microseconds. Candidate samples were 31,492, 31,256, 31,532, 32,429, 31,264,
+31,166, and 31,136 microseconds. Candidate won all seven pairs; medians moved
+from 31,893 to 31,264 microseconds, a 1.972% improvement. Every row had
+checksum `7190` and identical causal diagnostics: 5,962,557 full guards, 819
+guard fallbacks, 645 operand callbacks, 174 operand-cache hits, 11,968,016
+completed instructions, and matching run, build, hit, dirty, relocation, and
+IBTC counters.
+
+At final capture the host had 14 GiB available RAM, 17 GiB free swap, 94 GiB
+free on the repository filesystem, 7.1 GiB free in `/tmp`, and load average
+0.48/3.27/6.02. The targeted acquire is accepted: it materially improves the
+read-heavy control without changing observable results, diagnostics, emitted
+instruction count, or the required float-SIMD workload.
