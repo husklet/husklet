@@ -11,7 +11,7 @@ struct FakeState {
     launch_fails: bool,
     launch_error: Option<EngineError>,
     wait_calls: usize,
-    wait_fails: bool,
+    wait_error: Option<EngineError>,
     stops: Vec<StopRequest>,
 }
 
@@ -57,8 +57,8 @@ impl Launcher for Arc<FakeLauncher> {
     fn wait(&self, _: ProcessId) -> Result<EngineExit, EngineError> {
         let mut state = self.state.lock().unwrap();
         state.wait_calls += 1;
-        if state.wait_fails {
-            return Err(EngineError::WaitFailed);
+        if let Some(error) = state.wait_error {
+            return Err(error);
         }
         let signal = state.stops.last().map_or(0, |request| request.signal());
         Ok(if signal == 0 {
@@ -223,16 +223,16 @@ fn concurrent_waiters_share() {
 }
 
 #[test]
-fn wait_failure_is() {
+fn wait_failure_is_preserved() {
     let (engine, launcher, _) = Fixture::engine(GuestIsa::Aarch64);
     {
         let mut state = launcher.state.lock().unwrap();
         state.launch_released = true;
-        state.wait_fails = true;
+        state.wait_error = Some(EngineError::AuthorityFailed);
     }
     engine.start().unwrap();
-    assert_eq!(engine.wait(), Err(EngineError::WaitFailed));
-    assert_eq!(engine.wait(), Err(EngineError::WaitFailed));
+    assert_eq!(engine.wait(), Err(EngineError::AuthorityFailed));
+    assert_eq!(engine.wait(), Err(EngineError::AuthorityFailed));
     assert_eq!(launcher.state.lock().unwrap().wait_calls, 1);
 }
 

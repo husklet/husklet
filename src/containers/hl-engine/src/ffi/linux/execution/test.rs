@@ -297,6 +297,21 @@ fn rooted_symlink_resolves() {
 }
 
 #[test]
+fn rooted_main_symlink_resolves() {
+    let root = source_root("main-link");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::write(root.join("bin/busybox"), b"main image").unwrap();
+    std::os::unix::fs::symlink("/bin/busybox", root.join("bin/sh")).unwrap();
+    let root_bytes = root.clone().into_os_string().into_vec();
+    let mut source = FileSource::rooted(Some(&root_bytes));
+    assert_eq!(
+        source.read_image(ImageRole::Main, b"/bin/sh", 64).unwrap(),
+        b"main image",
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rooted_bytes_preserved() {
     let base = source_root("bytes");
     let root = base.join(OsString::from_vec(vec![b'r', 0xff]));

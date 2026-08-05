@@ -25,7 +25,8 @@ and signal-context repair; none changes guest-visible ELF addresses.
 | guest pathname/shebang/argv/env bounded capture | `hl-runtime::exec::source` + `hl-linux::ExecPlan` | implemented |
 | exec cross-domain prepare/publish/rollback ordering | `hl-runtime::exec::{SafeRuntimeExec,Runtime}` | implemented |
 | CLOEXEC, sibling retirement, signal reset, IPC teardown | runtime exec participants | implemented by participant contract; production wiring requires evidence |
-| post-load register/TLS installation and first instruction | `hl-engine` execution composition | implemented structurally; failing production launch shows an unresolved gap |
+| root-confined initial main-image resolution, including absolute symlinks | `hl-engine::FileSource::rooted` | implemented; initial launch now uses the same rooted source policy as exec |
+| post-load register/TLS installation and first instruction | `hl-engine` execution composition | implemented structurally; Alpine reaches this boundary after rooted main-image resolution |
 
 Fail-first production evidence used the flake-pinned
 `alpine-minirootfs-3.24.1-aarch64.tar.gz`, SHA-256
@@ -38,3 +39,12 @@ instrumentation there emitted nothing), so the public status is the container su
 ELF execution fault diagnostic. This bound did not establish which construction/start error was discarded; changing
 loader semantics would therefore be speculative. The next lane should expose the stored supervisor failure (or retain
 the engine construction/start error in container state), then repair the identified owning invariant.
+
+Follow-up evidence preserved the launcher's typed wait error and identified
+`Load(Source { role: Main, error: NotFound })`. Alpine's `/bin/sh` is an absolute
+symlink to `/bin/busybox`. Initial launch opened the main image as an ordinary
+host path, while interpreter and later exec image resolution already used
+`openat2(RESOLVE_IN_ROOT)`. Initial rooted launches now select the rooted source
+as well, so absolute guest symlinks remain confined to and resolve within the
+rootfs. Direct host-file launches retain the unrooted behavior when no rootfs is
+configured.

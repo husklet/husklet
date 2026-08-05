@@ -123,16 +123,19 @@ impl GuestExecutor {
         threads: Arc<threads::ThreadSet>,
     ) -> Result<EngineExit, EngineError> {
         crate::runtime_machine::prepare_tasks(assembly).map_err(|_| EngineError::LaunchFailed)?;
-        let path = plan
-            .executable_host
-            .as_deref()
-            .or_else(|| plan.arguments.first().map(Vec::as_slice))
-            .ok_or(EngineError::LaunchFailed)?;
+        let guest_executable = routing::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
+        let path = if plan.rootfs.is_some() {
+            guest_executable.as_slice()
+        } else {
+            plan.executable_host
+                .as_deref()
+                .or_else(|| plan.arguments.first().map(Vec::as_slice))
+                .ok_or(EngineError::LaunchFailed)?
+        };
         let architecture = match isa {
             GuestIsa::Aarch64 => GuestArchitecture::Aarch64,
             GuestIsa::X86_64 => GuestArchitecture::X86_64,
         };
-        let guest_executable = routing::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
         let (shared, shared_backings) = super::shared_backing::Factory::store(hl_memory::SharedLimits::default())
             .map_err(|_| EngineError::LaunchFailed)?;
         assembly
@@ -164,7 +167,10 @@ impl GuestExecutor {
         let image_space = space::AddressSpace::new(Arc::clone(&arena), Arc::clone(&mappings));
         let source = match self.authority.as_ref() {
             Some(authority) => source::Source::Projected(source::ProjectedSource::new(Arc::clone(authority))),
-            None => source::Source::File(source::FileSource::new(plan.rootfs.as_deref())),
+            None => source::Source::File(match plan.rootfs.as_deref() {
+                Some(rootfs) => source::FileSource::rooted(Some(rootfs)),
+                None => source::FileSource::new(None),
+            }),
         };
         let mut loader = Loader::new(source, exec_image::ImageSpace::new(Arc::clone(&image_space)), limits);
         let arguments = plan.arguments.iter().map(Vec::as_slice).collect::<Vec<_>>();

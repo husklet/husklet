@@ -307,7 +307,7 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             lifecycle.wait_in_progress = true;
             process
         };
-        let result = self.shared.launcher.wait(process).map_err(|_| EngineError::WaitFailed);
+        let result = self.shared.launcher.wait(process);
         let workspace = {
             let mut lifecycle = self.lock()?;
             lifecycle.wait_in_progress = false;
