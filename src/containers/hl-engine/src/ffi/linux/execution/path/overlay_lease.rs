@@ -1,4 +1,6 @@
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hl_runtime::GuestPathBytes;
 
@@ -22,6 +24,7 @@ pub(super) struct ParentLease {
     upper: Option<OwnedFd>,
     lower_parents: Vec<OwnedFd>,
     upper_root: Option<OwnedFd>,
+    epoch: Option<Arc<AtomicU64>>,
     layer: SelectedLayer,
 }
 
@@ -33,6 +36,7 @@ impl ParentLease {
             upper: None,
             lower_parents: Vec::new(),
             upper_root: None,
+            epoch: None,
             layer: SelectedLayer::Upper,
         }
     }
@@ -44,6 +48,7 @@ impl ParentLease {
             upper,
             lower_parents: Vec::new(),
             upper_root: None,
+            epoch: None,
             layer: SelectedLayer::Lower(layer),
         }
     }
@@ -88,6 +93,17 @@ impl ParentLease {
     pub(super) fn install_upper(&mut self, upper: OwnedFd) {
         self.upper = Some(upper);
     }
+
+    pub(super) fn with_epoch(mut self, epoch: Arc<AtomicU64>) -> Self {
+        self.epoch = Some(epoch);
+        self
+    }
+
+    pub(super) fn publish(&self) {
+        if let Some(epoch) = &self.epoch {
+            epoch.fetch_add(1, Ordering::Release);
+        }
+    }
 }
 
 impl From<OwnedFd> for ParentLease {
@@ -98,6 +114,7 @@ impl From<OwnedFd> for ParentLease {
             upper: None,
             lower_parents: Vec::new(),
             upper_root: None,
+            epoch: None,
             layer: SelectedLayer::Upper,
         }
     }
@@ -115,6 +132,7 @@ mod tests {
     use std::os::fd::AsRawFd;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
 
     use hl_runtime::GuestPathBytes;
 
@@ -175,5 +193,18 @@ mod tests {
 
         assert_eq!(lease.layer(), SelectedLayer::Upper);
         assert_eq!(lease.selected().as_raw_fd(), lease.mutation().unwrap().as_raw_fd());
+    }
+
+    #[test]
+    fn publication_advances_shared_epoch() {
+        let directories = Directories::new();
+        let epoch = Arc::new(AtomicU64::new(7));
+        let lease = ParentLease::upper(
+            GuestPathBytes::new(b"/").unwrap(),
+            directories.upper.try_clone().unwrap().into(),
+        )
+        .with_epoch(Arc::clone(&epoch));
+        lease.publish();
+        assert_eq!(epoch.load(Ordering::Acquire), 8);
     }
 }

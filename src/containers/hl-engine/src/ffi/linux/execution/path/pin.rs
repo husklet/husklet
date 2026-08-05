@@ -23,6 +23,7 @@ pub(super) struct Host {
     roots: Arc<Vec<Arc<File>>>,
     mounts: Arc<super::source::MountPaths>,
     pins: Arc<PinRegistry>,
+    epoch: Arc<AtomicU64>,
 }
 
 struct PinRegistry {
@@ -66,6 +67,7 @@ impl Host {
                 next: AtomicU64::new(1),
                 entries: Mutex::new(std::collections::BTreeMap::new()),
             }),
+            epoch: Arc::new(AtomicU64::new(1)),
         }
     }
 
@@ -397,7 +399,10 @@ impl VfsHost for Host {
                 ParentLease::lower(entry.guest.clone(), selected.layer - 1, selected_descriptor, upper)
             };
             let upper_root = Self::duplicate_descriptor(self.roots[0].as_raw_fd())?;
-            Ok(lease.with_lower_parents(lowers).with_upper_root(upper_root))
+            Ok(lease
+                .with_lower_parents(lowers)
+                .with_upper_root(upper_root)
+                .with_epoch(Arc::clone(&self.epoch)))
         })?
     }
 

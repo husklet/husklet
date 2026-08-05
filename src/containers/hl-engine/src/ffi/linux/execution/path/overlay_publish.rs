@@ -12,6 +12,7 @@ static NEXT_STAGE: AtomicU64 = AtomicU64::new(1);
 
 /// A copy-up staged under a pinned upper parent and published by one rename.
 pub(super) struct CopyUp<'lease> {
+    lease: &'lease ParentLease,
     parent: &'lease OwnedFd,
     final_name: CString,
     staged_name: CString,
@@ -32,6 +33,7 @@ impl<'lease> CopyUp<'lease> {
             return Err(error);
         }
         Ok(Self {
+            lease,
             parent,
             final_name: name.to_owned(),
             staged_name,
@@ -50,9 +52,9 @@ impl<'lease> CopyUp<'lease> {
             let _ = rename(self.parent, &self.final_name, &self.staged_name);
             return Err(error);
         }
-        sync_directory(self.parent)?;
         self.published = true;
-        Ok(())
+        self.lease.publish();
+        sync_directory(self.parent)
     }
 }
 
