@@ -709,6 +709,17 @@ mod tests {
     }
 
     #[test]
+    fn file_io_definition_exposes_all_typed_phases() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/bench/file_io");
+        let benchmark = Benchmark::load(&directory, &directory.join("test.yaml")).unwrap();
+        assert_eq!(benchmark.cases.len(), 3);
+        let phases =
+            parse_phases(b"PHASE scalar_file us=11 ok=1\nPHASE vector_file us=12 ok=2\nPHASE mapped_file us=13 ok=3\n")
+                .unwrap();
+        assert_eq!(phases.len(), 3);
+    }
+
+    #[test]
     fn combined_capture_is_bounded() {
         let within = hl_container::Logs {
             stdout: vec![0; CAPTURE_LIMIT - 1],

@@ -1,0 +1,25 @@
+image: alpine:3.20
+execution: { native: true, diagnostics: false }
+build:
+  source: main.c
+  compiler: { arm64: aarch64-linux-gnu-gcc, amd64: x86_64-linux-gnu-gcc }
+  flags: [-static-pie, -O2, -std=gnu11, -Wall, -Wextra, -Werror]
+cases:
+  - id: scalar
+    arguments: [--phase, scalar]
+    warmups: 2
+    samples: 7
+    timeout: 120
+    expect: { stdout_contains: golden/scalar.txt }
+  - id: vector
+    arguments: [--phase, vector]
+    warmups: 2
+    samples: 7
+    timeout: 120
+    expect: { stdout_contains: golden/vector.txt }
+  - id: mapping
+    arguments: [--phase, mapping]
+    warmups: 2
+    samples: 7
+    timeout: 120
+    expect: { stdout_contains: golden/mapping.txt }
