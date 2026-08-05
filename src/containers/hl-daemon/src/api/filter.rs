@@ -248,6 +248,7 @@ impl List {
                         | "expose"
                         | "is-task"
                         | "publish"
+                        | "volume"
                         | "before"
                         | "since"
                 )
@@ -367,6 +368,16 @@ impl List {
                         .iter()
                         .any(|publish| (start..=end).contains(&publish.port.guest))
             }),
+            "volume" => container.spec.mounts.iter().any(|mount| {
+                (!mount.target.as_os_str().is_empty() && mount.target == std::path::Path::new(value))
+                    || match &mount.source {
+                        hl_container::MountSource::Bind(source) => source == std::path::Path::new(value),
+                        hl_container::MountSource::Volume(name) | hl_container::MountSource::Anonymous(name) => {
+                            name == value
+                        }
+                        hl_container::MountSource::Tmpfs(_) => value.is_empty(),
+                    }
+            }),
             _ => false,
         }
     }
@@ -442,7 +453,9 @@ impl PreparedList {
 #[cfg(all(test, feature = "runtime"))]
 mod tests {
     use super::{List, PruneCutoff, docker_filter_values};
-    use hl_container::{Container, ContainerSpec, ContainerState, Process};
+    use hl_container::{
+        Access, BindPropagation, Container, ContainerSpec, ContainerState, Mount, MountSource, Process,
+    };
     use std::collections::BTreeMap;
     use std::str::FromStr as _;
 
@@ -602,6 +615,61 @@ mod tests {
         for value in ["", "0", "65536", "90-80", "80-", "-80", "80/icmp", "80/tcp/extra"] {
             assert!(List::parse(true, Some(&format!(r#"{{"publish":["{value}"]}}"#))).is_err());
         }
+    }
+
+    #[test]
+    fn volume_filter_matches_moby_mount_names_sources_and_destinations() {
+        let mut mounted = container();
+        mounted.spec.mounts = vec![
+            Mount::read_write("/host/source", "/bind-target"),
+            Mount::volume_read_write("named-data", "/volume-target"),
+            Mount {
+                source: MountSource::Anonymous("anonymous-data".into()),
+                target: "/anonymous-target".into(),
+                access: Access::ReadWrite,
+                populate: false,
+                subpath: None,
+                propagation: BindPropagation::RecursivePrivate,
+                recursive: true,
+            },
+            Mount {
+                source: MountSource::Tmpfs("tmpfs-storage".into()),
+                target: "/tmpfs-target".into(),
+                access: Access::ReadWrite,
+                populate: false,
+                subpath: None,
+                propagation: BindPropagation::RecursivePrivate,
+                recursive: true,
+            },
+        ];
+        for value in [
+            "/host/source",
+            "/bind-target",
+            "named-data",
+            "/volume-target",
+            "anonymous-data",
+            "/anonymous-target",
+            "/tmpfs-target",
+            "",
+        ] {
+            let selected = List::parse(true, Some(&format!(r#"{{"volume":["{value}"]}}"#))).unwrap();
+            assert!(matches(selected, &mounted, std::slice::from_ref(&mounted)), "{value:?}");
+        }
+        for value in ["tmpfs-storage", "/managed/backing/source", "missing"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"volume":["{value}"]}}"#))).unwrap();
+            assert!(
+                !matches(selected, &mounted, std::slice::from_ref(&mounted)),
+                "{value:?}"
+            );
+        }
+        let alternatives = List::parse(
+            true,
+            Some(r#"{"volume":{"missing":true,"named-data":false},"status":["exited"]}"#),
+        )
+        .unwrap();
+        assert!(matches(alternatives, &mounted, std::slice::from_ref(&mounted)));
+        let conjunction = List::parse(true, Some(r#"{"volume":["named-data"],"name":["missing"]}"#)).unwrap();
+        assert!(!matches(conjunction, &mounted, std::slice::from_ref(&mounted)));
     }
 
     #[test]

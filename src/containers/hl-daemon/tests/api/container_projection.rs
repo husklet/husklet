@@ -371,6 +371,43 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
             "expose filter selected the wrong containers",
         )?;
     }
+    let bind_source_filter = serde_json::to_string(&json!({
+        "volume": [bind_source.to_string_lossy()]
+    }))?;
+    for (version, filters, count) in [
+        ("v1.24", r#"{"volume":["projected-data"]}"#.to_owned(), 1),
+        (
+            "v1.43",
+            r#"{"volume":{"missing":true,"projected-data":false}}"#.to_owned(),
+            1,
+        ),
+        ("v1.43", bind_source_filter, 1),
+        ("v1.43", r#"{"volume":["/bind"]}"#.to_owned(), 1),
+        ("v1.43", r#"{"volume":["/data"]}"#.to_owned(), 1),
+        ("v1.43", r#"{"volume":["/scratch"]}"#.to_owned(), 1),
+        ("v1.43", r#"{"volume":[""]}"#.to_owned(), 1),
+        (
+            "v1.43",
+            r#"{"volume":["projected-data"],"name":["missing"]}"#.to_owned(),
+            0,
+        ),
+    ] {
+        let filtered = exchange(
+            socket,
+            "GET",
+            &format!(
+                "/{version}/containers/json?all=true&filters={}",
+                percent_encode(&filters)
+            ),
+            None,
+        )
+        .await?;
+        require(filtered.0.starts_with("HTTP/1.1 200"), "volume filter was not HTTP 200")?;
+        require(
+            filtered.1.as_array().is_some_and(|items| items.len() == count),
+            "volume filter selected the wrong containers",
+        )?;
+    }
     let malformed = exchange(
         socket,
         "GET",
