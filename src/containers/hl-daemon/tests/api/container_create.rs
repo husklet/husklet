@@ -70,7 +70,10 @@ async fn supported_and_projected(socket: &Path) -> Result<(), Error> {
     let response = create(socket, "supported", request).await?;
     require(
         response.status == 201,
-        &format!("supported create request was HTTP {}: {}", response.status, response.body),
+        &format!(
+            "supported create request was HTTP {}: {}",
+            response.status, response.body
+        ),
     )?;
     let id = response.body["Id"].as_str().ok_or("create response omitted Id")?;
     let inspect = exchange(socket, "GET", &format!("/v1.43/containers/{id}/json"), None).await?;
@@ -90,10 +93,16 @@ async fn supported_and_projected(socket: &Path) -> Result<(), Error> {
         ("HostConfig.NanoCpus", json!(2000000000_i64)),
         ("HostConfig.ReadonlyRootfs", json!(true)),
         ("HostConfig.NetworkMode", json!("none")),
-        ("HostConfig.RestartPolicy", json!({"Name": "on-failure", "MaximumRetryCount": 4})),
+        (
+            "HostConfig.RestartPolicy",
+            json!({"Name": "on-failure", "MaximumRetryCount": 4}),
+        ),
     ];
     for (path, value) in expected {
-        require(at(&inspect.body, path) == Some(&value), &format!("inspect changed {path}"))?;
+        require(
+            at(&inspect.body, path) == Some(&value),
+            &format!("inspect changed {path}"),
+        )?;
     }
     remove_container(socket, id).await
 }
@@ -119,11 +128,23 @@ async fn zero_compatibility_fields_are_inert(socket: &Path) -> Result<(), Error>
     object.extend(inert.into_iter().map(|(name, value)| (name.into(), value)));
     object.insert(
         "HostConfig".into(),
-        Value::Object(host_inert.into_iter().map(|(name, value)| (name.into(), value)).collect()),
+        Value::Object(
+            host_inert
+                .into_iter()
+                .map(|(name, value)| (name.into(), value))
+                .collect(),
+        ),
     );
     let response = create(socket, "inert", request).await?;
-    require(response.status == 201, "zero-valued compatibility fields were not inert")?;
-    remove_container(socket, response.body["Id"].as_str().ok_or("create response omitted Id")?).await
+    require(
+        response.status == 201,
+        "zero-valued compatibility fields were not inert",
+    )?;
+    remove_container(
+        socket,
+        response.body["Id"].as_str().ok_or("create response omitted Id")?,
+    )
+    .await
 }
 
 async fn meaningful_unsupported_fields_are_refused(socket: &Path) -> Result<(), Error> {
@@ -140,12 +161,20 @@ async fn meaningful_unsupported_fields_are_refused(socket: &Path) -> Result<(), 
     for case in cases {
         let before = container_ids(socket).await?;
         let response = create(socket, &format!("refuse-{}", case.field.to_lowercase()), case.request()).await?;
-        require(response.status == 501, &format!("meaningful {} was not HTTP 501", case.field))?;
         require(
-            response.body["message"].as_str().is_some_and(|message| message.contains(case.field)),
+            response.status == 501,
+            &format!("meaningful {} was not HTTP 501", case.field),
+        )?;
+        require(
+            response.body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(case.field)),
             &format!("{} refusal did not identify the field", case.field),
         )?;
-        require(container_ids(socket).await? == before, &format!("{} refusal created a container", case.field))?;
+        require(
+            container_ids(socket).await? == before,
+            &format!("{} refusal created a container", case.field),
+        )?;
     }
     Ok(())
 }
@@ -158,7 +187,10 @@ async fn failed_create_releases_anonymous_volumes(socket: &Path) -> Result<(), E
     request["HostConfig"] = json!({"Binds": ["/anonymous"]});
     let conflict = create(socket, "rollback-owner", request).await?;
     require(conflict.status == 409, "duplicate-name create was not HTTP 409")?;
-    require(volume_names(socket).await? == before, "failed create leaked an anonymous volume")?;
+    require(
+        volume_names(socket).await? == before,
+        "failed create leaked an anonymous volume",
+    )?;
     remove_container(socket, owner.body["Id"].as_str().ok_or("create response omitted Id")?).await
 }
 
@@ -170,11 +202,19 @@ struct Refusal {
 
 impl Refusal {
     fn top(field: &'static str, value: Value) -> Self {
-        Self { field, host: false, value }
+        Self {
+            field,
+            host: false,
+            value,
+        }
     }
 
     fn host(field: &'static str, value: Value) -> Self {
-        Self { field, host: true, value }
+        Self {
+            field,
+            host: true,
+            value,
+        }
     }
 
     fn request(&self) -> Value {
@@ -226,7 +266,13 @@ async fn volume_names(socket: &Path) -> Result<BTreeSet<String>, Error> {
 }
 
 async fn remove_container(socket: &Path, id: &str) -> Result<(), Error> {
-    let response = exchange(socket, "DELETE", &format!("/v1.43/containers/{id}?force=true&v=true"), None).await?;
+    let response = exchange(
+        socket,
+        "DELETE",
+        &format!("/v1.43/containers/{id}?force=true&v=true"),
+        None,
+    )
+    .await?;
     require(response.status == 204, "container cleanup was not HTTP 204")
 }
 
@@ -248,12 +294,18 @@ async fn exchange(socket: &Path, method: &str, target: &str, body: Option<Vec<u8
     .into_bytes();
     request.extend_from_slice(&body);
     let response = raw_http(socket, &request).await?;
-    let (head, body) = response.split_once("\r\n\r\n").ok_or("HTTP response omitted its body")?;
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or("HTTP response omitted its body")?;
     let status = head
         .split_whitespace()
         .nth(1)
         .ok_or("HTTP response omitted status")?
         .parse()?;
-    let body = if body.is_empty() { Value::Null } else { serde_json::from_str(body)? };
+    let body = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(body)?
+    };
     Ok(Response { status, body })
 }
