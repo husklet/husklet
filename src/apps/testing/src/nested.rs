@@ -511,6 +511,7 @@ fn command(root: &Path, chain: &Chain) -> Vec<String> {
     let mut arguments = Vec::new();
     for layer in &chain.layers {
         arguments.push(root.join(&layer.artifact.path).display().to_string());
+        arguments.push("--report-exit".into());
         arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
         layer.options.append(&mut arguments);
     }
@@ -631,9 +632,10 @@ expect: { exit: 42, stdout: hello.txt }
         .unwrap();
         let arguments = command(Path::new("/tree"), &chain);
         assert_eq!(
-            &arguments[..7],
+            &arguments[..8],
             [
                 "/tree/outer",
+                "--report-exit",
                 "--guest-isa",
                 "aarch64",
                 "--engine-option",
@@ -642,7 +644,10 @@ expect: { exit: 42, stdout: hello.txt }
                 "HL_NATIVE_DIAGNOSTICS=1"
             ]
         );
-        assert_eq!(&arguments[7..], ["/tree/inner", "--guest-isa", "x86_64", "/tree/hello"]);
+        assert_eq!(
+            &arguments[8..],
+            ["/tree/inner", "--report-exit", "--guest-isa", "x86_64", "/tree/hello"]
+        );
     }
 
     #[test]
