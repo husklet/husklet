@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct ListQuery {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     all: bool,
     filters: Option<String>,
     limit: Option<String>,

@@ -3,9 +3,13 @@ use super::*;
 #[derive(Deserialize)]
 pub(in super::super) struct ArchiveQuery {
     pub(super) path: String,
-    #[serde(default, rename = "copyUIDGID")]
+    #[serde(default, rename = "copyUIDGID", deserialize_with = "crate::api::http::query::flag")]
     pub(super) copy_uid_gid: bool,
-    #[serde(default, rename = "noOverwriteDirNonDir")]
+    #[serde(
+        default,
+        rename = "noOverwriteDirNonDir",
+        deserialize_with = "crate::api::http::query::flag"
+    )]
     pub(super) no_overwrite_dir_non_dir: bool,
 }
 

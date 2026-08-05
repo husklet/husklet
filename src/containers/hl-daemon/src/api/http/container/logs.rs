@@ -188,14 +188,12 @@ impl FromStr for Flag {
     type Err = ApiError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "1" | "true" | "True" | "TRUE" => Ok(Self(true)),
-            "0" | "false" | "False" | "FALSE" | "" => Ok(Self(false)),
-            value => Err(ApiError::new(
+        crate::api::http::query::parse_flag(value).map(Self).ok_or_else(|| {
+            ApiError::new(
                 StatusCode::BAD_REQUEST,
                 format!("invalid boolean {value:?}"),
-            )),
-        }
+            )
+        })
     }
 }
 

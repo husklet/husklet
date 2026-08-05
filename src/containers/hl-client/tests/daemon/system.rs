@@ -62,6 +62,18 @@ async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit
     assert!(selected_version.starts_with("HTTP/1.1 200"), "{selected_version}");
     assert!(selected_version.contains("\"ApiVersion\":\"1.43\""));
     assert!(selected_version.contains("\"MinAPIVersion\":\"1.24\""));
+    let numeric_flag = raw_http(
+        &socket,
+        b"GET /v1.43/containers/json?all=1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(numeric_flag.starts_with("HTTP/1.1 200"), "{numeric_flag}");
+    let invalid_flag = raw_http(
+        &socket,
+        b"GET /v1.43/containers/json?all=yes HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(invalid_flag.starts_with("HTTP/1.1 400"), "{invalid_flag}");
     let info = client.system().info().await.unwrap();
     assert_eq!(info.architecture, "amd64");
     assert_eq!(info.containers, 1);

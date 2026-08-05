@@ -46,9 +46,9 @@ pub(in super::super) async fn wait(
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct RemoveQuery {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     force: bool,
-    #[serde(default, rename = "v")]
+    #[serde(default, rename = "v", deserialize_with = "crate::api::http::query::flag")]
     volumes: bool,
 }
 

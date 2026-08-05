@@ -20,11 +20,11 @@ pub(super) struct BuildQuery {
     dockerfile: String,
     buildargs: Option<String>,
     target: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     nocache: bool,
-    #[serde(default = "default_remove")]
+    #[serde(default = "default_remove", deserialize_with = "crate::api::http::query::flag")]
     rm: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     forcerm: bool,
     pull: Option<String>,
     #[serde(rename = "q")]

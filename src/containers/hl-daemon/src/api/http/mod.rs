@@ -15,6 +15,7 @@ mod image;
 mod network;
 mod observe;
 mod push;
+mod query;
 mod system;
 mod volume;
 

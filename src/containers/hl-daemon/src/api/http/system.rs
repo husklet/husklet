@@ -138,7 +138,7 @@ pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<Dis
 
 #[derive(Default, Deserialize)]
 pub(super) struct PruneQuery {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     volumes: bool,
     filters: Option<String>,
 }

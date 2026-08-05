@@ -189,6 +189,7 @@ pub(super) async fn inspect(State(state): State<DockerState>, Path(name): Path<S
 
 #[derive(Default, Deserialize)]
 pub(super) struct RemoveQuery {
+    #[serde(default, deserialize_with = "crate::api::http::query::flag")]
     force: bool,
 }
 

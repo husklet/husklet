@@ -92,6 +92,39 @@ The coherent change routes the same truthful version report through every
 already-supported prefix.  It does not admit API 1.44 or later, alter response
 models, or expand product scope.
 
+### Docker 29 default-version blocker and supported workflow follow-up
+
+After the versioned route was added, a bounded `strace` of Docker CLI 29.1.3
+showed this exact sequence with no `DOCKER_API_VERSION` override:
+
+```text
+HEAD /_ping
+HTTP/1.1 200 ... api-version: 1.43 ...
+HEAD /_ping
+HTTP/1.1 200 ... api-version: 1.43 ...
+GET /v1.52/version
+HTTP/1.1 404 Not Found
+```
+
+Both `/version` and `/v1.43/version` independently returned 200 with
+`ApiVersion=1.43` and `MinAPIVersion=1.24`.  The Docker 29 client binary contains
+an explicit compiled minimum-API refusal and will not negotiate down to 1.43;
+`DOCKER_API_VERSION=1.43` is required for this older server contract.  Advertising
+or aliasing v1.52 would claim response and request semantics this daemon has not
+implemented, so the router continues to reject it.
+
+The supported-version workflow then exposed a generic wire-format divergence:
+Docker CLI spells query booleans as `1` and `0` (for example `docker ps -a`
+sends `all=1`), while several handlers deserialized directly to Rust `bool` and
+accepted only `true` and `false`.  The HTTP query owner now consistently accepts
+Docker's `1`, `0`, case-compatible true/false spellings, and an empty false value,
+while rejecting every other spelling.  The inventory covers build `nocache`,
+`rm`, and `forcerm`; archive `copyUIDGID` and `noOverwriteDirNonDir`; container
+list `all`; container removal `force` and `v`; system prune `volumes`; and volume
+removal `force`.  Log, stats, inspect-size, image-list, and image-removal options
+already pass through explicit string parsers rather than direct bool
+deserialization and retain their existing validation.
+
 ## Previous domain: daemon readiness and negotiation
 
 The route existed but returned only the `OK` body. Docker-compatible clients use
