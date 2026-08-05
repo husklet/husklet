@@ -52,18 +52,46 @@ impl OpenFiles {
     }
 
     pub(super) fn prepare() -> std::io::Result<()> {
-        let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
-        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        let mut limit = Self::read_limit()?;
         let Some(target) = Self::target(limit.rlim_cur, limit.rlim_max)? else {
             return Ok(());
         };
         limit.rlim_cur = target;
-        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } < 0 {
-            return Err(std::io::Error::last_os_error());
+        Self::write_limit(&limit)
+    }
+}
+
+/// Private Unix resource-limit boundary implemented by its existing owner.
+mod ffi {
+    use super::OpenFiles;
+
+    impl OpenFiles {
+        pub(super) fn read_limit() -> std::io::Result<libc::rlimit> {
+            // SAFETY: `rlimit` is a C integer aggregate with no invalid bit patterns, references, or
+            // destructor obligations. The kernel receives exclusive writable access for this call,
+            // retains no pointer, invokes no callback, and cannot unwind across the ABI.
+            let (status, limit) = unsafe {
+                let mut limit: libc::rlimit = std::mem::zeroed();
+                let status = libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit);
+                (status, limit)
+            };
+            if status == 0 {
+                Ok(limit)
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
         }
-        Ok(())
+
+        pub(super) fn write_limit(limit: &libc::rlimit) -> std::io::Result<()> {
+            // SAFETY: `limit` is a valid, immutably borrowed integer aggregate for the duration of the
+            // call. The kernel retains no pointer, accesses no aliased mutable Rust storage, invokes no
+            // callback, and cannot unwind across the ABI.
+            if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, limit) } == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        }
     }
 }
 
