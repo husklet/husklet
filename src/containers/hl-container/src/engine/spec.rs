@@ -122,6 +122,11 @@ impl Spec {
         }
         if let Some(overlay) = &launch.overlay {
             Self::set(options, "HL_LOWER", overlay.lower.as_os_str().as_encoded_bytes())?;
+            Self::set(
+                options,
+                "HL_OVERLAY_UPPER",
+                overlay.upper.as_os_str().as_encoded_bytes(),
+            )?;
             Self::set(options, "HL_OVERLAY_WORK", overlay.work.as_os_str().as_encoded_bytes())?;
         }
         let owners = launch

@@ -105,7 +105,7 @@ impl Service {
                                 upper: handle.upper().to_owned(),
                                 work: handle.work().to_owned(),
                             };
-                            (overlay.lower.clone(), Some(overlay), owners)
+                            (overlay.upper.clone(), Some(overlay), owners)
                         });
                     }
                     manager.open(&reference).map(|handle| {
