@@ -683,7 +683,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
              * Let the generation-qualified poll admit the following quantum
              * here so exact-quantum completion does not force a public run
              * round-trip before the next instruction. */
-            rep_boundary = 1;
+            rep_boundary = budget == 0;
             if ((cpu->executable_written & 4u) != 0)
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
             continue;
