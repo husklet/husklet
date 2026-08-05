@@ -20,5 +20,9 @@ the package contracts above, not separate reusable API behavior. Repository
 application and multi-package scenarios belong in direct child folders with a
 discoverable `test.yaml`, local inputs, and local goldens.
 
-`observe.rs` remains pending. Its proposed live successful `top` and one-shot
-`stats` replacement is not accepted until that focused package test passes.
+`observe.rs` is closed. Inspect, list, logs, archive, publication, prune, inactive
+observability, and option-validation contracts were already package-owned. The
+remaining live successful `top` and one-shot `stats` behavior now runs through
+the typed client and daemon against a real pinned Alpine process in
+`hl-client/tests/daemon/observability.rs`. The detached `groups/` registry and
+runner have therefore been deleted.

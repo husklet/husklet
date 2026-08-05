@@ -43,6 +43,48 @@ async fn observability_client_exposes_stats_and_rejects_top_for_inactive_process
 }
 
 #[tokio::test]
+async fn observability_client_reports_a_live_process_and_resource_sample() {
+    let root = TempDir::new().unwrap();
+    let containers = containers(&root).await;
+    Archive::load(
+        &runnable_archive()[..],
+        &containers.images().unwrap(),
+        Limits::default(),
+    )
+    .unwrap();
+    let socket = root.path().join("live-observe.sock");
+    let daemon = TestDaemon::start(containers, &socket).await;
+    let client = &daemon.client;
+    let created = client
+        .containers()
+        .create(
+            &hl_client::model::CreateContainer {
+                image: "scenario/runnable:v1".into(),
+                entrypoint: Some(vec!["/bin/sleep".into()]),
+                cmd: Some(vec!["60".into()]),
+                ..Default::default()
+            },
+            Some("live-observe"),
+        )
+        .await
+        .unwrap();
+    client.containers().start(&created.id).await.unwrap();
+
+    let top = client.containers().top(&created.id).await.unwrap();
+    assert!(top.titles.iter().any(|title| title == "PID"));
+    assert_eq!(top.processes.len(), 1);
+    assert!(top.processes[0].iter().any(|field| field.contains("sleep")));
+    let stats = client.containers().stats(&created.id).await.unwrap();
+    assert_eq!(stats.id, created.id);
+    assert_eq!(stats.name, "/live-observe");
+    assert_eq!(stats.pids_stats.current, 1);
+    assert_eq!(stats.num_procs, 1);
+
+    client.containers().remove(&created.id, true, false).await.unwrap();
+    daemon.stop().await;
+}
+
+#[tokio::test]
 async fn container_archive_round_trip_streams_through_typed_client() {
     let root = TempDir::new().unwrap();
     let rootfs = root.path().join("rootfs");
