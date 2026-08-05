@@ -31,9 +31,9 @@ pub(super) fn action(
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
 ) -> Result<Process, Error> {
-    let process = match action {
-        ScenarioAction::Argv(argv) => argv_process(argv)?,
-        ScenarioAction::Shell(script) => Process::new("/bin/sh").args(["-c", script]),
+    let (process, terminal) = match action {
+        ScenarioAction::Argv(argv) => (argv_process(argv)?, None),
+        ScenarioAction::Shell(script) => (Process::new("/bin/sh").args(["-c", script]), None),
         ScenarioAction::Entrypoint => return Err("entrypoint is the container initial process".into()),
         ScenarioAction::Host(script) => {
             return Err(format!(
@@ -50,8 +50,32 @@ pub(super) fn action(
             )
             .into());
         }
+        ScenarioAction::Terminal(terminal) => (
+            argv_process(&terminal.argv)?,
+            Some(Size::new(terminal.rows, terminal.columns)?),
+        ),
     };
-    configure(process, case, runtime, rootfs)
+    let process = configure(process, case, runtime, rootfs)?;
+    Ok(match terminal {
+        Some(size) => process.console(Console {
+            stdin: true,
+            terminal: Some(size),
+        }),
+        None => process,
+    })
+}
+
+pub(super) fn terminal(
+    case: &ScenarioCase,
+    action: &super::terminal::Action,
+    runtime: &RuntimeConfig,
+    rootfs: &std::path::Path,
+) -> Result<Process, Error> {
+    let process = configure(argv_process(&action.argv)?, case, runtime, rootfs)?;
+    Ok(process.console(Console {
+        stdin: true,
+        terminal: Some(Size::new(action.rows, action.columns)?),
+    }))
 }
 
 fn argv_process(argv: &[String]) -> Result<Process, Error> {

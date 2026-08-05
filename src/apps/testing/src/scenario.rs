@@ -6,6 +6,7 @@ mod options;
 mod process;
 mod report;
 mod scheduler;
+mod terminal;
 
 use crate::suite::Error;
 use definition::Scenario;

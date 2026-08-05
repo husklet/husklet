@@ -1,4 +1,75 @@
 cases:
+- id: terminal/node-repl-backspace
+  image: node:20-alpine
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv: [node]
+      steps:
+      - write: { text: "128\u007f3\r.exit\r" }
+      - reject_output: { text: "\u007f" }
+      - close: {}
+  expect:
+    stdout_contains: golden/node_repl.txt
+- id: terminal/python-repl-backspace
+  image: python:3.12-alpine
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv: [python3]
+      steps:
+      - write: { text: "128\u007f3\rexit()\r" }
+      - reject_output: { text: "\u007f" }
+      - close: {}
+  expect:
+    stdout_contains: golden/python_repl.txt
+- id: terminal/bash-line-backspace
+  image: ubuntu:latest
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv: [bash]
+      steps:
+      - write: { text: "echo 128\u007f3\rexit\r" }
+      - reject_output: { text: "\u007f" }
+      - close: {}
+  expect:
+    stdout_contains: golden/bash_line.txt
+- id: terminal/raw-noecho-no-doubleecho
+  image: python:3.12-alpine
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv:
+      - python3
+      - -c
+      - |-
+        import termios,os,sys
+        t=termios.tcgetattr(0); t[3]&=~(termios.ICANON|termios.ECHO); t[6][termios.VMIN]=1; t[6][termios.VTIME]=0
+        termios.tcsetattr(0,termios.TCSANOW,t); sys.stdout.write('RDY\r\n'); sys.stdout.flush()
+        b=os.read(0,3); sys.stdout.write('GOT=%r\r\n'%b); sys.stdout.flush()
+      steps:
+      - await_output: { contains: RDY, timeout_ms: 5000 }
+      - write: { text: abc }
+      - close: {}
+  expect:
+    stdout_contains: golden/raw_input.txt
+- id: terminal/interactive-term-xterm
+  image: ubuntu:latest
+  resources: [pty]
+  timeout: 60
+  actions:
+  - terminal:
+      argv: [bash, --norc]
+      steps:
+      - write: { text: "echo T=[$TERM]\rexit\r" }
+      - close: {}
+  expect:
+    stdout_contains: golden/interactive_term.txt
 - id: terminal/ubuntu-isatty
   image: ubuntu:latest
   resources:

@@ -205,6 +205,9 @@ async fn execute(
     for action in &case.actions {
         let outcome = match action {
             super::definition::ScenarioAction::Api(operation) => run_api(containers, name, operation).await?,
+            super::definition::ScenarioAction::Terminal(action) => {
+                super::terminal::run(containers, case, runtime, rootfs, name, action).await?
+            }
             _ => run_exec(containers, case, runtime, rootfs, name, action).await?,
         };
         status = outcome.0;

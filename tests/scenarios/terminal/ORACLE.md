@@ -1,6 +1,6 @@
 # Terminal scenario oracle
 
-These 43 end-to-end cases preserve the IDs, images, shell or argv commands,
+These 48 end-to-end cases preserve the IDs, images, shell or argv commands,
 timeouts, class, targets, expected failures, resources, environments, exit
 status, and substring contracts from
 the retired legacy terminal fixture. The 36 cases that used the
@@ -129,13 +129,20 @@ its input sender alive; a backpressured writer observes the same close as
 write to the existing log chunk bound, and labels all terminal output as the
 merged stdout stream. This does not yet allocate or attach a PTY.
 
-## Interactive-input workflow holdout
+## Interactive-input workflows
 
-The remaining `workflows/pty.rs` is intentionally retained. Its five sessions
-write ordered byte fragments after container start, including DEL editing,
-canonical carriage returns, raw-mode input, and explicit session close. The
-current YAML action vocabulary can request a PTY but cannot drive timed input
-into the attached session or assert absence of a raw byte in the merged
-transcript. Pipe-fed shell commands do not prove the same contract. Removing
-the workflow requires typed interactive-input actions and transcript byte
-assertions; neither is part of this static ownership migration.
+The five former `workflows/pty.rs` sessions are now directory-owned YAML cases.
+A `terminal` action defines one argv process, its initial dimensions, and an
+ordered bounded sequence of `write`, `resize`, `await_output`, `reject_output`,
+and `close` operations. `await_output` has an explicit deadline and consumes the
+same durable ordered session stream used for final output verification;
+`reject_output` checks the completed raw transcript. This preserves DEL editing,
+canonical carriage returns, raw-mode synchronization, explicit EOF, and the
+absence-of-DEL assertion without sleeping or invoking a host command.
+
+The runner creates one additional process through `Containers::executions`,
+opens stdin explicitly, starts the terminal at its declared size, and performs
+resizes through the execution API. Input uses the session's bounded writer and
+output remains subject to the runner's one-MiB capture bound. Schema validation
+limits each terminal action to 64 steps, each text field to 64 KiB, each wait to
+60 seconds, nonzero dimensions, one close, and no write after close.

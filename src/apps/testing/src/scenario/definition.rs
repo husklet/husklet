@@ -86,6 +86,7 @@ struct Action {
     entrypoint: Option<EmptyAction>,
     host: Option<ScriptAction>,
     api: Option<ApiAction>,
+    terminal: Option<super::terminal::Definition>,
 }
 
 #[derive(Deserialize)]
@@ -226,6 +227,7 @@ pub enum ScenarioAction {
     Entrypoint,
     Host(String),
     Api(ScenarioApiAction),
+    Terminal(super::terminal::Action),
 }
 
 #[derive(Debug)]
@@ -320,6 +322,13 @@ fn load_case(
     }
     let resources = unique(case.resources, &case.id, "resource")?;
     let (working_directory, actions) = load_actions(directory, &case.id, case.run, case.actions)?;
+    if actions
+        .iter()
+        .any(|action| matches!(action, ScenarioAction::Terminal(_)))
+        && !resources.contains(&Resource::Pty)
+    {
+        return Err(format!("{} terminal action requires the pty resource", case.id).into());
+    }
     let entrypoints = actions
         .iter()
         .filter(|action| matches!(action, ScenarioAction::Entrypoint))
@@ -402,6 +411,7 @@ fn load_actions(
         entrypoint: None,
         host: None,
         api: None,
+        terminal: None,
     };
     Ok((run.working_directory, vec![validate_action(directory, id, action)?]))
 }
@@ -429,9 +439,13 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
         + usize::from(action.shell.is_some())
         + usize::from(action.entrypoint.is_some())
         + usize::from(action.host.is_some())
-        + usize::from(action.api.is_some());
+        + usize::from(action.api.is_some())
+        + usize::from(action.terminal.is_some());
     if count != 1 {
         return Err(format!("{id} action must select exactly one operation").into());
+    }
+    if let Some(terminal) = action.terminal {
+        return Ok(ScenarioAction::Terminal(terminal.validate(id)?));
     }
     match (action.argv, action.shell, action.entrypoint, action.host, action.api) {
         (Some(ArgvAction { argv }), None, None, None, None)

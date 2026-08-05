@@ -1,4 +1,5 @@
 use super::{Class, Resource, Scenario, ScenarioAction};
+use crate::scenario::terminal::Step;
 use std::{collections::BTreeSet, fs, path::Path};
 
 fn load(document: &str) -> Result<Scenario, Box<dyn std::error::Error>> {
@@ -70,6 +71,59 @@ fn entrypoint_action_is_distinct_from_empty_argv() {
     assert!(
         load("cases:\n  - id: sample/empty\n    image: alpine\n    actions: [{ argv: { argv: [] } }]\n    expect: { stdout_contains: golden/contains.txt }\n").is_err()
     );
+}
+
+#[test]
+fn terminal_action_preserves_ordered_bounded_operations() {
+    let scenario = load(
+        r#"cases:
+  - id: sample/terminal
+    image: alpine
+    resources: [pty]
+    actions:
+      - terminal:
+          argv: [/bin/sh]
+          rows: 30
+          columns: 100
+          steps:
+            - await_output: { contains: ready, timeout_ms: 250 }
+            - write: { text: "abc\r" }
+            - resize: { rows: 40, columns: 120 }
+            - reject_output: { text: "\u007f" }
+            - close: {}
+    expect: { stdout_contains: golden/contains.txt }
+"#,
+    )
+    .unwrap();
+    let ScenarioAction::Terminal(action) = &scenario.cases[0].actions[0] else {
+        panic!("terminal action was not retained");
+    };
+    assert_eq!((action.rows, action.columns), (30, 100));
+    assert_eq!(
+        action.steps,
+        [
+            Step::AwaitOutput {
+                contains: b"ready".to_vec(),
+                timeout_ms: 250,
+            },
+            Step::Write(b"abc\r".to_vec()),
+            Step::Resize { rows: 40, columns: 120 },
+            Step::RejectOutput(vec![0x7f]),
+            Step::Close,
+        ]
+    );
+}
+
+#[test]
+fn terminal_actions_require_pty_and_reject_invalid_lifecycle() {
+    for document in [
+        "cases:\n  - id: sample/no-pty\n    image: alpine\n    actions: [{ terminal: { argv: [/bin/sh], steps: [{ close: {} }] } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
+        "cases:\n  - id: sample/zero-size\n    image: alpine\n    resources: [pty]\n    actions: [{ terminal: { argv: [/bin/sh], rows: 0, steps: [{ close: {} }] } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
+        "cases:\n  - id: sample/write-after-close\n    image: alpine\n    resources: [pty]\n    actions: [{ terminal: { argv: [/bin/sh], steps: [{ close: {} }, { write: { text: late } }] } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
+        "cases:\n  - id: sample/unbounded-wait\n    image: alpine\n    resources: [pty]\n    actions: [{ terminal: { argv: [/bin/sh], steps: [{ await_output: { contains: x, timeout_ms: 60001 } }] } }]\n    expect: { stdout_contains: golden/contains.txt }\n",
+    ] {
+        assert!(load(document).is_err(), "accepted invalid document: {document}");
+    }
 }
 
 #[test]
