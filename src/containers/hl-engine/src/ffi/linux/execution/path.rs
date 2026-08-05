@@ -51,6 +51,8 @@ mod namespace;
 mod native;
 #[path = "path/open.rs"]
 mod open;
+#[path = "path/overlay_lease.rs"]
+mod overlay_lease;
 #[path = "path/pin.rs"]
 mod pin;
 mod proc;
