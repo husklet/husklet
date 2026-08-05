@@ -357,3 +357,389 @@ checksum and `native-verified` proof and report public exits, median, and p90
 against both the 119,295-us accepted Rust row and the 6,531-us retained-C row.
 Until that measurement exists, public-exit reduction remains the only expected
 effect and no end-to-end performance improvement is claimed.
+
+## REP bulk lifecycle and capability audit
+
+This audit records the retained-C oracle studied before changing the Rust/native
+REP path. The retained tree is read-only at `/Users/x/dd/engine`.
+
+### Retained implementation studied
+
+- `src/translator/guest/x86_64/rep_runtime.c`: `hl_x86_rep_movs`,
+  `hl_x86_rep_stos`, the scalar and pinned MOVS/STOS loops,
+  `rep_element_read`, `rep_element_write`, and `rep_fault`.
+- `src/translator/guest/x86_64/lower/repstr.c`:
+  `hl_x86_lower_repstr` and `emit_rep_string`.
+- `src/translator/guest/x86_64/rep.c`: `hl_x86_rep_compare`.
+- `src/translator/guest/x86_64/interp.c`: string instruction cases and
+  `run_block` dispatch.
+- `src/translator/guest_memory.c`: indirect read, write, pin, and unpin seams.
+- `src/core/target/x86_64.c`: guest-memory adapters, validator binding,
+  soft-TLB misses, and store observation.
+- `src/linux_abi/logical_vma.c`: `hl_logical_vma_pin_data` and
+  `hl_logical_vma_unpin`.
+- `src/translator/guest/x86_64/emit.c`: deferred executable-store observation
+  and drain.
+
+### Oracle contract
+
+The AArch64-host translator lowers REP MOVS and STOS, opcodes A4/A5 and AA/AB,
+at widths 1, 2, 4, and 8 into bulk helpers when there is no segment override or
+32-bit address size. Non-REP forms and LODS remain scalar. CMPS and SCAS have a
+separate flag- and early-stop-aware helper and are not blind bulk copies.
+Non-AArch64 hosts execute MOVS/STOS/LODS elementwise.
+
+The emitted helper spills architectural state and passes original RDI, RSI or
+RAX, RCX, direction, and the faulting RIP. It returns completed elements. The
+epilogue advances RDI and RSI by signed `completed * width`, subtracts completed
+from RCX, and leaves flags unchanged. A partial fault records the current guest
+address, width, access, REP RIP, and soft-miss reason before those exact register
+updates. Retry therefore resumes the same instruction with residual RCX. MOVS
+orders each element's source read before destination write. Zero count completes
+without touching memory.
+
+Forward indirect MOVS pins source READ before destination WRITE, copies only the
+minimum contiguous whole-element span, then unpins destination and source.
+Forward STOS similarly pins a write span. Pin lookup holds the VMA mutex only
+while validating and acquiring a backing reference; copy/fill runs unlocked;
+unpin reacquires the mutex and releases the reference. Every error path unpins.
+Pins stop at a VMA boundary and the outer loop reacquires the next span. Unsafe
+overlap and backward indirect operations use exact scalar element order.
+
+The direct bulk path validates the complete source range before the destination
+range. Guest-memory indirection performs permission checks in the resolver;
+otherwise the direct validator runs before raw access. A malformed or denied
+pin faults at the current element. Forward overlap deliberately smears at the
+architectural element width rather than using `memmove`; backward operations
+copy or fill highest-to-lowest. STOS writes the low width bytes of RAX.
+Non-PIE rebasing affects host dereferences only, never guest register values.
+
+Successful scalar stores are observed per element. Bulk stores publish one
+range only after the memory operation and after pins are released. Executable
+alias work is drained only after RDI, RSI, and RCX describe completed progress,
+so an SMC exit cannot replay or skip stores.
+
+The retained helper has no instruction-budget accounting and does not poll
+signals or cancellation inside a large operation. Signals are handled at block
+or dispatcher boundaries. Rust intentionally improves bounded responsiveness:
+it caps chunks, charges completed elements to the budget, and observes interrupt
+state before each chunk while preserving the same partial-progress contract.
+
+### Rust ownership and capability map
+
+`src/native/exec/src/arch/x86_64/run.c` owns the bounded MOVS/STOS fast path.
+`rep_decode` admits the relevant REP widths, `rep_span` bounds work to the current
+view and one MiB, `rep_copy` and `rep_fill` preserve overlap and direction, and
+`hl_x86_projection_resolve` plus `hl_x86_projection_written` own permission and
+dirty publication. The synchronous Rust `ProjectionLease` holds authenticated
+mapping state stable for the run; this replaces retained repeated VMA pinning.
+No allocation or lock acquisition occurs in the native bulk loop.
+
+The four-entry `x86_run_views` table is a generated-code locality cache, not a
+mapping-capability boundary. The request projection is already validated,
+bounded to `HL_X86_PROJECTION_MAX_VIEWS`, incarnation-checked, and held by the
+lease. Bulk lookup must therefore search the cache first and then the complete
+projection. Resolver-acquired dynamic views remain reachable through the cache.
+Missing or denied views still fail closed to the scalar path, which owns precise
+resolver and fault exits.
+
+MOVS/STOS widths 1/2/4/8, zero count, both direction values, overlap semantics,
+view splitting, exact partial progress, budget charging, permission ordering,
+and post-write dirty publication are implemented. LODS remains scalar. CMPS and
+SCAS remain with their distinct compare/scan semantics and must not be folded
+into this copy/fill mechanism.
+
+### Performance attribution
+
+The checksum benchmark's measured phase performs 90 one-MiB copies. With a
+65,536-element run budget, each copy requires 16 native runs: 1,440 REP quanta.
+The measured Rust proof reported 1,489 native runs, so budget boundaries explain
+96.7% of run entries. Against the retained C result, the remaining gap is about
+15.82 microseconds per quantum. This projection-cache correctness change does
+not remove that scheduler/run-boundary cost; changing the architectural budget
+or public-exit contract is a separate lane requiring explicit evidence.
+
+
+## Writable-view fallback and REP reservation evidence
+
+### Scope and retained oracle
+
+This report profiles the alternating writable-view path at `ca6b873ac`, which
+contains `cc4845ca8` (`native: cache x86 writable projections`). The retained
+C oracle was inspected read-only at
+`/Users/x/dd/engine` (`7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc`). The complete
+corresponding domain and entry points are recorded in
+`WRITE_PUBLICATION.md`; this follow-up mechanically checked the hot-path
+ownership and fallback behavior against:
+
+- `src/translator/guest/x86_64/emit.c`: `emit_memory_guard`,
+  `emit_soft_guard`, `emit_soft_store_observe`, and
+  `emit_soft_store_commit`;
+- `src/translator/guest/x86_64/translate.c`: `rm_load_access`, `rm_store`,
+  `rm_store_after_guard`, and the scalar, SIMD, x87, atomic, and string
+  callers;
+- `src/translator/guest/x86_64/rep_runtime.c`: scalar and pinned `MOVS` and
+  `STOS`, including partial completion;
+- `src/translator/guest_memory.c`: data resolution and pin lifetime;
+- `src/linux_abi/logical_vma.c`: `hl_logical_vma_resolve`,
+  `hl_logical_vma_resolve_data`, `hl_logical_vma_pin_data`, and
+  `hl_logical_vma_unpin`; and
+- `src/core/target/x86_64.c`: direct access admission and executable-alias
+  observation.
+
+The retained engine's immutable logical-VMA snapshot provides lock-free
+binary-search resolution. A pin takes a backing reference under the ledger
+mutex and releases the mutex before accessing bytes. The ordinary direct
+mapping is an identity access; an indirect mapping resolves or pins before
+mutation. A store is observed only after success, and REP preserves partial
+progress. Mapping publication owns generation change and retired-snapshot
+lifetime. The AArch64-host x86 lowering is the optimized implementation; other
+hosts use the interpreter path. There is no fixed per-store dirty journal in
+the retained hot path.
+
+Husklet's corresponding owners are the Rust `ProjectionLease`, x86
+`view_publish`, `frontend/memory.c::emit_write_cache`, the scalar/vector/RMW
+emitters, `projection.c::flush_dirty`, and `NativeX86::writes`. Mapping
+identity, backing lifetime, permission admission, pre-mutation capacity
+failure, post-success publication, executable invalidation, and REP partial
+completion are implemented. The material divergence is the bounded exact
+dirty journal described below.
+
+### Finding
+
+The cached writable-view selector removes resolver callbacks but does not
+remove dispatcher exits for a sustained alternation. Each transition away
+from an active dirty owner appends four words to `dirty_records`:
+
+```text
+view_first, view_last, dirty_first, dirty_last
+```
+
+`HL_X86_DIRTY_CAPACITY` is 16. `emit_write_cache` tests `dirty_count` before
+changing the active owner and deliberately falls through to the ordinary miss
+path when it is full. The dispatcher can resolve the already-cached view, but
+`projection.c::flush_dirty` then sets `dirty_overflow`; the run must return to
+Rust so `NativeX86::writes` can conservatively publish and begin a fresh lease.
+Thus a two-view loop can execute entirely from published views while still
+crossing translated code, C dispatcher, Rust lease publication, and re-entry
+roughly once per 16 owner transitions.
+
+This directly explains a count on the order of 60 million fallback boundaries:
+the count is journal saturation, not 60 million missing projections. The
+diagnostic `boundary_fallback` counts both internally serviced projection
+misses and final unsupported-instruction exits. `operand_callbacks` and
+`operand_cache_hits` must be reported alongside it; the current two-view path
+should have no callback after both views are published.
+
+The focused regression in `test/x86_continue.c`,
+`alternating_writable_views_stay_native`, runs only two loop iterations. It
+expects three archived records, including a duplicate record for the first
+view and exact same range. It therefore proves correct owner attribution but
+cannot reach the 16-record saturation threshold. `test/x86_projection.c`
+explicitly alternates until it expects `dirty_count == 16` and
+`dirty_overflow == 1`, cementing the current expensive behavior rather than
+testing sustained native progress.
+
+### Required generic correction
+
+Do not merely enlarge the array: it divides the exit count by a constant and
+increases every CPU state. The coherent mechanism is an exact interval journal
+that coalesces a completed interval with an existing record only when both
+have the same projection owner and overlap or are adjacent. This preserves the
+`publish_written_ranges` contract: every byte in the union is proven written,
+while repeated writes to the same address consume no new capacity. Disjoint
+ranges remain separate, and a genuinely full journal still fails before the
+guest mutation.
+
+The correction must be shared by emitted `emit_write_cache` archival,
+`projection.c::flush_dirty`, and the REP capacity preflight. Tests must cover:
+
+1. more than 16 repeated alternations between two exact ranges without an
+   internal fallback or overflow;
+2. overlapping and adjacent same-owner intervals coalescing exactly;
+3. disjoint same-owner intervals remaining distinct;
+4. identical guest ranges under distinct projection owners remaining
+   distinct; and
+5. 17 genuinely disjoint intervals preserving pre-mutation capacity failure.
+
+The follow-up implementation applies identical overlap/adjacency coalescing to
+the emitted scalar/vector/RMW transition and dispatcher
+`projection.c::flush_dirty`. The sustained translated test now performs 64
+two-view iterations (128 stores and 127 owner transitions), remains native,
+and retains two archived exact records without overflow. The projection test
+also preserves a full-journal case whose different owner cannot coalesce and
+therefore still fails closed.
+
+The REP bulk preflight remains a separate gap. `rep_dirty_full` sees only the
+full count and prospective owner, not whether the current interval can merge
+with a record. It can therefore request an epoch earlier than necessary. That
+path was not weakened here: REP performs large bulk operations, so its exit
+rate is not the scalar alternating-store amplification measured by this lane.
+Giving it identical coalescing requires factoring one bounded journal
+reservation operation shared by preflight and post-success publication; doing
+only a post-write merge would violate the pre-mutation capacity contract.
+
+### Exact integrated-tree measurement
+
+Root integrated this stack as `a8a49f1cb2fb6e279a68b01ccf7d5896885ac185`.
+The release engine and runner were built from that clean detached tree into
+`/Users/x/dd/husklet-targets/x86-coalesce-a8a49f1`, outside `/tmp`. A single
+CPU-17 diagnostic proof reported `native-verified`, checksum `7190`, 1,489
+runs, 118 builds, 66,810 hits, four final fallbacks, 73,604 completed native
+instructions, 1,236 operand callbacks, and 29 operand-cache hits.
+
+The diagnostics-off comparison then used the same clean-repro x86 guest,
+retained C runner, divisor 100, and memory phase as the `ca6b873ac` baseline.
+Seven cycles rotated QEMU, C, and Rust order on exclusive CPU 17. Every one of
+the 21 rows returned checksum `7190`:
+
+| provider | samples (microseconds, sorted) | median |
+|---|---|---:|
+| retained C | 1580, 1700, 1811, 1831, 1874, 1886, 1902 | 1831 |
+| Rust native | 23833, 24033, 24084, 24610, 25374, 25534, 25644 | 24610 |
+| QEMU | 5960, 6451, 6512, 6609, 6637, 6704, 7160 | 6609 |
+
+Rust is 13.441 times retained C in this run, down from the exact `ca6b873ac`
+ratio of 15.430 times: the relative gap ratio fell 12.89%. The Rust median
+itself fell from 25,892 to 24,610 microseconds, a 4.95% improvement. This
+memory phase is REP-heavy, so the measurable improvement is intentionally
+bounded by the still-conservative REP preflight described above.
+
+Content identities were:
+
+- Rust engine: `44b2bb9f7b537bd16753a53d2189b3e4f536da776d4436d7dc7f592eb4b4e045`;
+- testing runner: `9e770dfff59994088dc3b4161cbb3b2dd0fc677c4bb85913b4897c6aa1c9bde8`;
+- guest: `bda1b267655938e7be77cd2ec0450c7095650437e4a5e7be10db81da3a973b9d`;
+  and
+- retained C runner: `0633ed0f914f666f2127ca1b86a4def69eea65c59f7942f8afd66d2b7a6ebc62`.
+
+Raw evidence is retained in the durable target's `evidence/diagnostics.csv`
+and `evidence/timing-direct-quiet-3/` directory.
+
+### REP reservation completion
+
+The retained REP path was rechecked before changing Husklet's preflight:
+`rep_runtime.c` pins the largest proven source and destination spans, caps work
+at both boundaries, updates RCX/RSI/RDI only for completed elements, and
+returns the first uncompleted element to the dispatcher. A permission failure
+before the first element changes neither bytes nor registers. The existing
+Husklet boundary test has the same partial-fault contract: it completes four
+bytes, advances RCX/RSI/RDI by four, then falls back at the first read-only
+destination byte.
+
+`hl_x86_projection_switch_writable` now performs the shared pre-mutation
+capacity decision used by REP. An unchanged active owner, an empty current
+interval, free capacity, or a same-owner overlapping/adjacent archived record
+authorizes the switch. Otherwise it refuses before `rep_copy` or `rep_fill`.
+The already-shared dispatcher flush performs the matching post-success merge;
+scalar/vector/RMW emitted code implements the identical bounded scan without
+a per-store C call. A new full-journal REP test proves that a mergeable prior
+range permits eight elements and preserves the 16-record bound. Its sibling
+nonmergeable full-journal test still exits epoch with registers and bytes
+unchanged. Existing budget-limited and permission-boundary cases preserve
+partial progress and the first-uncompleted-element contract.
+
+## Residual-exit and continuation evidence
+
+The retained implementation was inspected read-only in
+`../engine/src/core/dispatch.c` (`run_block`, `block_return`, `run_guest`),
+`../engine/src/translator/guest/x86_64/emit.c` (`emit_prologue`,
+`emit_spill_gpr`, `emit_spill`), and
+`../engine/src/translator/guest/x86_64/translate.c` (block entry interrupt and
+budget checks, conditional backedges, and typed returns). The dispatcher owns
+CPU and cache lifetime. A translated block retains guest GPR and XMM state in
+host registers, observes interrupts at bounded entry points, and returns
+completed work before the dispatcher services a boundary. These operations
+allocate no memory, acquire no lock, invoke no host service, and have no errno
+or cancellation behavior. Cache generation and source identity determine
+whether a continuation remains executable; invalidation restores a typed
+dispatcher edge before retirement.
+
+The current owners are `src/arch/x86_64/run.c` (`emit_block` and
+`hl_native_x86_64_run`), `src/arch/x86_64/frontend/output.c`
+(`hl_x86_checkpoint`, `hl_x86_finish_chain`, `hl_x86_emit_exit`), and the
+generic cache relocation layer. Their capability comparison is:
+
+| Capability | Retained C | Native implementation |
+|---|---|---|
+| Entry budget and interrupt check | Before translated entry | Implemented |
+| Exact instruction charging | At dispatcher return | Implemented |
+| Backedge batching | Internal, not guest-visible | Implemented in 256-iteration quanta |
+| Interrupt and executable-write visibility | Bounded translated boundary | Implemented at every quantum |
+| Continuation identity | Live translation generation | Mapping epoch, instruction epoch, identity token, and source interval |
+| Invalidation | Retire matching translation and links | Implemented by generic cache relocation |
+| Public yield | Only when the caller's budget is exhausted | Divergent: leaked every internal 256-iteration quantum |
+
+The divergence made an internal polling quantum observable as a public yield.
+For a three-instruction backward loop with a 1,000-instruction budget, the
+first quantum returned with 232 instructions still available, register state
+at iteration 256, and `executed=768`. The run loop now continues internally
+after a valid quantum. Its next ordinary loop iteration checks the remaining
+budget and interrupt before re-entry, so the 256-iteration bound is unchanged;
+only the premature public boundary is removed.
+
+`test/x86_continue.c` covers register and projected-memory vector operations,
+finite fallthrough, exact counter and completion accounting, exact budget
+exhaustion at one quantum, interrupt-before-entry, and translation
+invalidation. The fail-first state was `kind=YIELD`, `pc=0x8000`, `rax=44`,
+`executed=768`, `budget=232` for the finite 300-iteration control. After the
+change, warning-strict exact-source builds of `x86_continue`, `x86_translation`,
+and `x86_budget` pass.
+
+### Request budget smaller than a block
+
+The retained comparison was extended across the complete execution boundary:
+
+- `../engine/src/core/dispatch.c`: `run_guest`, including cache ownership,
+  translation publication, `run_block`, reason handling, signal polling, and
+  teardown from the thread and stop-the-world registries;
+- `../engine/src/translator/guest/x86_64/translate.c`: `translate_block`,
+  `run_block`, and `block_return`;
+- `../engine/src/translator/guest/x86_64/emit.c`: the typed exit and complete
+  register-spill emitters;
+- `../engine/src/translator/guest/x86_64/dispatch.h`: x86 dispatcher entry,
+  reason, cache, and interrupt hooks; and
+- `../engine/src/translator/guest/x86_64/cpu.h`: dispatcher-owned CPU state and
+  baked assembly offsets.
+
+The retained engine has no request-sized instruction slice: it enters a whole
+decoded block, whose terminal writes the next architectural RIP and reason,
+then `block_return` restores the host callee-saved state. The dispatcher owns
+the CPU for the guest thread's lifetime, holds the cache lock only for lookup
+or publication (never across execution or host service), polls signals at
+spilled block boundaries, and unregisters the CPU only after guest exit. There
+is no partial-result, errno, blocking, or cancellation path inside a translated
+block. AArch64 host assembly is the only working x86 translation backend; other
+hosts abort rather than enter AArch64 code.
+
+The Rust native backend adds a caller-owned instruction budget. A block is an
+atomic admission unit: when `budget < instruction_count`,
+`hl_native_x86_64_run` returns `YIELD` with unchanged RIP and budget and
+`executed == 0`. Retrying that same request cannot make progress. The engine
+scheduler now interprets one instruction at this precise non-progress boundary
+and records the site through the existing generic fallback mechanism. A yield
+after any completed instruction remains an ordinary scheduler yield. This
+preserves the native block's atomic state contract while guaranteeing that a
+supported instruction stream either consumes budget natively or advances via
+the interpreter; it does not manufacture partial native execution.
+
+### Projected dynamic-return progress
+
+The AMD64 SysV shared-memory-lock investigation stopped inside
+`hl_native_x86_64_run` while the architectural PC named a two-instruction tail,
+`mov [r9],rdx; ret`. A stale branch reason or a zero-accounting dynamic-chain
+cycle was considered, but the instruction shape alone does not reproduce that
+failure. `projected_return_progress` executes the exact bytes with an authorized
+write destination and a 64-entry authorized return stack whose entries all
+target the same tail. This warms and then repeatedly uses the indirect-branch
+cache. A 64-instruction budget returns a typed yield with exactly 64 completed
+instructions, zero budget, 32 consumed stack entries, the original PC, and the
+expected committed destination value.
+
+The warning-strict direct native build and a five-second bounded execution pass.
+This proves the exact projected write/return cycle charges progress and reaches
+its public budget boundary. It also proves that converting a branch at this
+site to interpreter fallback would risk replaying an already committed write.
+No production progress guard is justified by this trace alone; the broader
+runtime hang requires a trace that distinguishes time spent inside generated
+code from time spent in the C dispatch loop before either owner is changed.

@@ -51,7 +51,7 @@ is deliberately the AMD64 `addps`/`subl`/`jne` loop.
 | Linux process exit and stdout comparison | `src/containers/hl-engine` composition and runtime inventory harness | implemented by this focused case |
 
 The broader native unit evidence and fail-first account are recorded in
-`src/native/exec/X86_CONTINUE.md`.  This runtime case adds the guest-visible
+`src/native/exec/REP_QUANTA.md`.  This runtime case adds the guest-visible
 composition witness: 300 loop iterations necessarily cross the 256-iteration
 internal quantum, preserve XMM state, fall through, print `continue`, and exit
 zero.
