@@ -1303,7 +1303,7 @@ fn exit_group_cleanup() {
 }
 
 #[test]
-fn stop_interrupts_running() {
+fn force_stop_interrupts_running() {
     let executor = GuestExecutor::default();
     let assembly = RuntimeAssembly::new(hl_runtime::RuntimeAssemblyConfig::default()).unwrap();
     install_test_ipc(&assembly);
@@ -1353,8 +1353,8 @@ fn stop_interrupts_running() {
         .unwrap()
         .publish();
     executor.state.lock().unwrap().running.insert(key, threads);
-    executor.stop(&assembly, StopRequest::Signal(15)).unwrap();
-    assert_eq!(cancellation.signal(), Some(15));
+    executor.stop(&assembly, StopRequest::Force).unwrap();
+    assert_eq!(cancellation.signal(), Some(9));
 }
 
 #[test]
