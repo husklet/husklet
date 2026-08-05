@@ -891,7 +891,7 @@ int main(void) {
     const hl_a64_projection run_projection = {&run_view, 1, 7, 0};
     executable_memory run_host = {0};
     hl_native_memory run_memory = executable_services(&run_host);
-    hl_native_config run_config = test_config(&run_memory, 0);
+    hl_native_config run_config = test_config(&run_memory, HL_NATIVE_DIAGNOSTICS);
     hl_native_executor *run_executor = NULL;
     hl_native_change run_replace = {.abi = HL_NATIVE_ABI, .size = sizeof(run_replace),
                                     .kind = HL_NATIVE_REPLACE, .mapping_epoch = 7};
@@ -910,6 +910,36 @@ int main(void) {
     hl_native_diagnostics warm = cold;
     CHECK(hl_native_create(&run_config, &run_executor) == HL_NATIVE_OK);
     CHECK(hl_native_changed(run_executor, &run_replace, 1) == HL_NATIVE_OK);
+    {
+        const uint32_t entry_words[] = {0};
+        const uint32_t generated_words[] = {UINT32_C(0xd2800021), 0};
+        const hl_a64_source_span entry_span = {
+            0x5800, (const uint8_t *)entry_words, sizeof(entry_words), 7, 8};
+        const hl_a64_source_span generated_span = {
+            0x5900, (const uint8_t *)generated_words, sizeof(generated_words), 7, 8};
+        const hl_a64_source entry_source = {&entry_span, 1, 7, 8};
+        const hl_a64_source generated_source = {&generated_span, 1, 7, 8};
+        hl_native_diagnostics fallback_before = {.abi = HL_NATIVE_ABI, .size = sizeof(fallback_before)};
+        hl_native_diagnostics fallback_after = fallback_before;
+        CHECK(hl_native_diagnose(run_executor, &fallback_before) == HL_NATIVE_OK);
+        run_request.source = &entry_source;
+        run_request.budget = 1;
+        run_state.program = 0x5800;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_FALLBACK);
+        run_request.source = &generated_source;
+        run_request.budget = 2;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x5900;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_FALLBACK && run_state.executed == 1);
+        CHECK(hl_native_diagnose(run_executor, &fallback_after) == HL_NATIVE_OK);
+        CHECK(fallback_after.a64_fallback_entry_rejection ==
+              fallback_before.a64_fallback_entry_rejection + 1);
+        CHECK(fallback_after.a64_fallback_generated == fallback_before.a64_fallback_generated + 1);
+        CHECK(fallback_after.a64_fallback_form_other ==
+              fallback_before.a64_fallback_form_other + 2);
+    }
     {
         const uint32_t literal_words[] = {UINT32_C(0x58000800), UINT32_C(0xd4000001)};
         const hl_a64_source_span literal_span = {

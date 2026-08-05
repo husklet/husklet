@@ -25,9 +25,29 @@ extern int madvise(void *, size_t, int);
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "executor admission requires lock-free uint64 atomics");
 
 #if defined(__aarch64__)
-static void a64_fallback_word(hl_native_executor *executor, uint32_t word) {
+static void a64_fallback_word(hl_native_executor *executor, uint32_t word, int entry_rejection) {
     _Atomic uint64_t *counter;
+    _Atomic uint64_t *form;
     if (!executor->diagnostics) return;
+    atomic_fetch_add_explicit(entry_rejection ? &executor->a64_fallback_entry_rejection
+                                              : &executor->a64_fallback_generated,
+                              1, memory_order_relaxed);
+    if ((word & UINT32_C(0xfc000000)) == UINT32_C(0x94000000) ||
+        (word & UINT32_C(0xfffffc1f)) == UINT32_C(0xd63f0000))
+        form = &executor->a64_fallback_call;
+    else if ((word & UINT32_C(0xfffffc1f)) == UINT32_C(0xd65f0000) ||
+             word == UINT32_C(0xd65f0bff) || word == UINT32_C(0xd65f0fff))
+        form = &executor->a64_fallback_return;
+    else if ((word & UINT32_C(0xfffffc1f)) == UINT32_C(0xd61f0000))
+        form = &executor->a64_fallback_indirect;
+    else if ((word & UINT32_C(0xff000000)) == UINT32_C(0xd4000000) ||
+             (word & UINT32_C(0xff000000)) == UINT32_C(0xd5000000))
+        form = &executor->a64_fallback_system;
+    else if ((word & UINT32_C(0x0a000000)) == UINT32_C(0x08000000))
+        form = &executor->a64_fallback_form_memory;
+    else
+        form = &executor->a64_fallback_form_other;
+    atomic_fetch_add_explicit(form, 1, memory_order_relaxed);
     if ((word & UINT32_C(0x0e000000)) == UINT32_C(0x0e000000))
         counter = &executor->a64_fallback_simd_fp;
     else if ((word & UINT32_C(0x0a000000)) == UINT32_C(0x08000000))
@@ -469,6 +489,14 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->a64_fallback_memory, 0);
     atomic_init(&executor->a64_fallback_control, 0);
     atomic_init(&executor->a64_fallback_other, 0);
+    atomic_init(&executor->a64_fallback_entry_rejection, 0);
+    atomic_init(&executor->a64_fallback_generated, 0);
+    atomic_init(&executor->a64_fallback_call, 0);
+    atomic_init(&executor->a64_fallback_return, 0);
+    atomic_init(&executor->a64_fallback_indirect, 0);
+    atomic_init(&executor->a64_fallback_system, 0);
+    atomic_init(&executor->a64_fallback_form_memory, 0);
+    atomic_init(&executor->a64_fallback_form_other, 0);
     status = hl_native_arena_create(&executor->arena, config);
     if (status != HL_NATIVE_OK) {
         free(executor);
@@ -597,13 +625,23 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->ibtc_site_misses = atomic_load_explicit(&executor->ibtc_site_misses, memory_order_relaxed);
         output->ibtc_shared_misses = atomic_load_explicit(&executor->ibtc_shared_misses, memory_order_relaxed);
     }
-    if (output->size >= sizeof(*output)) {
+    if (output->size >= offsetof(hl_native_diagnostics, a64_fallback_entry_rejection)) {
         output->a64_fallback_guard_read = atomic_load_explicit(&executor->a64_fallback_guard_read, memory_order_relaxed);
         output->a64_fallback_guard_write = atomic_load_explicit(&executor->a64_fallback_guard_write, memory_order_relaxed);
         output->a64_fallback_simd_fp = atomic_load_explicit(&executor->a64_fallback_simd_fp, memory_order_relaxed);
         output->a64_fallback_memory = atomic_load_explicit(&executor->a64_fallback_memory, memory_order_relaxed);
         output->a64_fallback_control = atomic_load_explicit(&executor->a64_fallback_control, memory_order_relaxed);
         output->a64_fallback_other = atomic_load_explicit(&executor->a64_fallback_other, memory_order_relaxed);
+    }
+    if (output->size >= sizeof(*output)) {
+        output->a64_fallback_entry_rejection = atomic_load_explicit(&executor->a64_fallback_entry_rejection, memory_order_relaxed);
+        output->a64_fallback_generated = atomic_load_explicit(&executor->a64_fallback_generated, memory_order_relaxed);
+        output->a64_fallback_call = atomic_load_explicit(&executor->a64_fallback_call, memory_order_relaxed);
+        output->a64_fallback_return = atomic_load_explicit(&executor->a64_fallback_return, memory_order_relaxed);
+        output->a64_fallback_indirect = atomic_load_explicit(&executor->a64_fallback_indirect, memory_order_relaxed);
+        output->a64_fallback_system = atomic_load_explicit(&executor->a64_fallback_system, memory_order_relaxed);
+        output->a64_fallback_form_memory = atomic_load_explicit(&executor->a64_fallback_form_memory, memory_order_relaxed);
+        output->a64_fallback_form_other = atomic_load_explicit(&executor->a64_fallback_form_other, memory_order_relaxed);
     }
     return HL_NATIVE_OK;
 }
@@ -996,7 +1034,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 if (executor->diagnostics) {
                     hl_a64_fetch_result declined;
                     if (hl_a64_source_fetch(active_source, instruction, 1, &declined))
-                        a64_fallback_word(executor, declined.words[0]);
+                        a64_fallback_word(executor, declined.words[0], 1);
                 }
                 status = hl_native_execution_enter(executor, &execution);
                 if (status != HL_NATIVE_OK) return status;
@@ -1089,6 +1127,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                     ? &executor->a64_fallback_guard_write
                     : &executor->a64_fallback_guard_read;
                 atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&executor->a64_fallback_generated, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&executor->a64_fallback_form_memory, 1, memory_order_relaxed);
             }
         }
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&
@@ -1166,7 +1206,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         if (executor->diagnostics && cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access == 0) {
             hl_a64_fetch_result fallback_word;
             if (hl_a64_source_fetch(source, cpu->program, 1, &fallback_word))
-                a64_fallback_word(executor, fallback_word.words[0]);
+                a64_fallback_word(executor, fallback_word.words[0], 0);
         }
         return run_exit(&execution, output, (uint32_t)cpu->reason, cpu->program);
     }

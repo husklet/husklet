@@ -1433,18 +1433,53 @@ after architectural state is fully published. The Rust owner is
 the two bounded points where the refusal category is known without logging a
 guest PC or retaining guest data.
 
-The ABI extension appends six monotonic counters, preserving the complete
+The first ABI extension appended six monotonic counters, preserving the complete
 336-byte prefix. Guard read/write counters identify projection resolution.
-Terminal declines are categorized as SIMD/FP, memory, control/system, or
-other from the fixed instruction word. Counters are atomic because executor
-instances admit concurrent guest threads. They are initialized, incremented,
-read, and printed only when native diagnostics are enabled; ordinary execution
-does no attribution work.
+Terminal declines are categorized as SIMD/FP, memory, control/system, or other
+from the fixed instruction word. The subsequent 64-byte extension preserves the
+complete 384-byte ABI and separates trace-build entry rejection from a fallback
+stub reached after a generated prefix. It also records mutually exclusive call,
+return, indirect branch, system, memory, and other instruction forms. Guard
+resolver exits count as generated memory fallbacks and remain separately divided
+by access direction. Counters are atomic because executor instances admit
+concurrent guest threads. They are initialized, incremented, read, and printed
+only when native diagnostics are enabled; ordinary execution does no attribution
+work.
+
+The retained files inspected for the phase/form extension were
+`../engine/src/translator/guest/aarch64/translate.c` (`translate`, direct branch,
+indirect branch, return, exception, and system decode paths), `stubs.c`
+(`emit_ibranch_ip2_ready`, `emit_ibranch`, and dispatcher exits), `dispatch.h`
+(`G_IBTC_FILL`), and `src/core/dispatch.c::run_guest`. The process owns retained
+translation and cache state; the JIT lock protects build/publication, generated
+readers are lock-free, dispatcher return occurs only after architectural state is
+spilled, and cache teardown removes published reachability. Architecture form
+selection is guest-AArch64-specific; host differences belong to executable-memory
+publication and signal entry, not fallback attribution. Retained translation
+implements these forms rather than exposing an equivalent rejection-phase counter.
+Rust therefore owns the bounded phase/form diagnostic at
+`src/executor.c::run_aarch64`, where both build decline and generated exit are
+fully identified outside asynchronous fault handling.
 
 These are causal categories, not capability claims. In particular, a guard
 fallback means a translated memory operation needs a new projection; it does
 not mean the memory opcode is unsupported. Terminal family counters identify
 where a complete retained family audit should begin before implementation.
+
+On exact base `09e5ed8ca`, pinned guest SHA-256
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9` ran on CPU
+17 with typed native execution and diagnostics and `--divisor 60000 --phase
+calls`. Seven public runs completed 16 builds, 35 hits, seven scheduler
+fallbacks, 15 branch exits, one generated fallback, and 197 instructions. The
+phase/form counters attributed six first-instruction build rejections and one
+generated memory-guard fallback; form totals were three memory and four other,
+with zero call, return, indirect, or system declines. This current-root workload
+is smaller than the historical 9,422-instruction row, so its 152 `other` value
+cannot be relabeled by extrapolation. A diagnostic `--divisor 1000` row confirmed
+the same mechanism at larger scale: 132 entry rejections and two generated guard
+fallbacks, divided into five memory and 129 other forms. The old coarse `other`
+cluster is therefore mechanically an admission cluster on the measured tree, not
+a hidden generated call/return exit.
 
 ## AArch64 scalar conversion audit
 

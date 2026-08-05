@@ -43,6 +43,9 @@ struct hl_native_executor {
     _Atomic uint64_t a64_fallback_guard_read, a64_fallback_guard_write;
     _Atomic uint64_t a64_fallback_simd_fp, a64_fallback_memory;
     _Atomic uint64_t a64_fallback_control, a64_fallback_other;
+    _Atomic uint64_t a64_fallback_entry_rejection, a64_fallback_generated;
+    _Atomic uint64_t a64_fallback_call, a64_fallback_return, a64_fallback_indirect;
+    _Atomic uint64_t a64_fallback_system, a64_fallback_form_memory, a64_fallback_form_other;
 };
 
 typedef struct hl_native_execution {
