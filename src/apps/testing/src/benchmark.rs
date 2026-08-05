@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 mod adapter;
+mod alternating;
 mod matrix;
 pub(crate) mod report;
 
