@@ -21,6 +21,6 @@ pub use plan::{Batch, Operation};
 pub use port::{Host, HostProjection, MemoryAccessHost};
 pub use projection::{
     DIRTY_RANGE_MAXIMUM, DirectAuthorityLease, LIVE_PROJECTION_MAXIMUM, ProjectionGeneration, ProjectionLease,
-    ProjectionView, RequestContinuation,
+    ProjectionView, RequestContinuation, WritePublication,
 };
 pub use transition::TransitionObserver;

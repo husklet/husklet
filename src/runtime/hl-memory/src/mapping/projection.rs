@@ -49,6 +49,42 @@ pub struct DirectAuthorityLease<'a, H: MemoryAccessHost> {
 pub const LIVE_PROJECTION_MAXIMUM: usize = 64;
 pub const DIRTY_RANGE_MAXIMUM: usize = 64;
 
+/// Publication granularity proven for a writable projected view.
+///
+/// Production native views remain [`Self::Exact`] until the versioned native
+/// result contract can carry a generation-qualified view identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u16)]
+pub enum WritePublication {
+    Exact = 0,
+    WholeView = 1,
+}
+
+impl WritePublication {
+    /// Classifies source evidence without enabling the candidate in production.
+    ///
+    /// The result is advisory until the native ABI can return the matching
+    /// generation-qualified view identity. Callers must use
+    /// [`ProjectionLease::write_publication`] for the active contract.
+    /// This pure value classifier allocates nothing and retains no token,
+    /// backing, reservation, or host state.
+    pub fn classify_candidate(
+        backing: Backing,
+        protection: Protection,
+        coherent_shared_projection: bool,
+        executable_alias: bool,
+    ) -> Self {
+        if protection.contains(Protection::EXECUTE) || executable_alias {
+            return Self::Exact;
+        }
+        match backing {
+            Backing::Anonymous { shared: false, .. } => Self::WholeView,
+            Backing::Shared(_) if coherent_shared_projection => Self::WholeView,
+            Backing::Anonymous { shared: true, .. } | Backing::Shared(_) | Backing::File { .. } => Self::Exact,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectionView {
     pub range: AddressRange,
@@ -198,6 +234,16 @@ impl RequestContinuation {
 }
 
 impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
+    /// Returns the publication contract currently exposed to native consumers.
+    ///
+    /// Stage one deliberately keeps every production view exact. The
+    /// source-evidence classifier records narrower future eligibility without
+    /// changing write reconciliation, executable invalidation, or native ABI.
+    /// This constant query performs no allocation or host operation.
+    pub const fn write_publication(&self, _address: GuestAddress) -> WritePublication {
+        WritePublication::Exact
+    }
+
     pub fn allows(&self, protection: Protection) -> bool {
         protection != Protection::NONE && self.authority.contains(protection)
     }
@@ -569,4 +615,77 @@ impl<H: MemoryAccessHost> Drop for ProjectionLease<'_, H> {
 
 fn contains(view: ProjectionView, requested: AddressRange, required: Protection) -> bool {
     view.range.start() <= requested.start() && view.range.end() >= requested.end() && view.protection.contains(required)
+}
+
+#[cfg(test)]
+mod publication_test {
+    use super::{Backing, Protection, WritePublication};
+    use crate::FileIdentity;
+
+    #[test]
+    fn private_candidate() {
+        assert_eq!(WritePublication::Exact as u16, 0);
+        assert_eq!(WritePublication::WholeView as u16, 1);
+        assert_eq!(
+            WritePublication::classify_candidate(
+                Backing::Anonymous {
+                    identity: 1,
+                    shared: false,
+                },
+                Protection::READ.union(Protection::WRITE),
+                false,
+                false,
+            ),
+            WritePublication::WholeView
+        );
+    }
+
+    #[test]
+    fn executable_candidate() {
+        let backing = Backing::Anonymous {
+            identity: 2,
+            shared: false,
+        };
+        assert_eq!(
+            WritePublication::classify_candidate(
+                backing,
+                Protection::WRITE.union(Protection::EXECUTE),
+                true,
+                false,
+            ),
+            WritePublication::Exact
+        );
+        assert_eq!(
+            WritePublication::classify_candidate(backing, Protection::WRITE, true, true),
+            WritePublication::Exact
+        );
+    }
+
+    #[test]
+    fn unproven_candidate() {
+        assert_eq!(
+            WritePublication::classify_candidate(
+                Backing::Anonymous {
+                    identity: 3,
+                    shared: true,
+                },
+                Protection::WRITE,
+                false,
+                false,
+            ),
+            WritePublication::Exact
+        );
+        assert_eq!(
+            WritePublication::classify_candidate(
+                Backing::File {
+                    identity: FileIdentity { device: 4, object: 5 },
+                    shared: false,
+                },
+                Protection::WRITE,
+                true,
+                false,
+            ),
+            WritePublication::Exact
+        );
+    }
 }

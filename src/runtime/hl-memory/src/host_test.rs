@@ -392,6 +392,38 @@ fn read_projection_keeps_mapped_execute_separate_from_invocation_authority() {
     assert_eq!(projection.protection(), Protection::READ.union(Protection::EXECUTE));
     assert_eq!(projection.authority(), Protection::READ);
     assert!(!projection.allows(Protection::EXECUTE));
+    assert_eq!(
+        projection.write_publication(GuestAddress::new(0x1000)),
+        crate::WritePublication::Exact
+    );
+}
+
+#[test]
+fn publication_remains_exact() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut mapped = request();
+    mapped.backing = Backing::Anonymous {
+        identity: 6,
+        shared: false,
+    };
+    mapped.protection = Protection::READ.union(Protection::WRITE);
+    coordinator.map(mapped).unwrap();
+    let lease = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 16, Protection::WRITE, 1)
+        .unwrap();
+    let before = {
+        let state = coordinator.host.state.lock().unwrap();
+        (state.calls, state.live.clone(), state.transcript.clone(), state.writes.clone())
+    };
+    assert_eq!(
+        lease.write_publication(GuestAddress::new(0x1000)),
+        crate::WritePublication::Exact
+    );
+    let after = {
+        let state = coordinator.host.state.lock().unwrap();
+        (state.calls, state.live.clone(), state.transcript.clone(), state.writes.clone())
+    };
+    assert_eq!(after, before);
 }
 
 #[test]
@@ -719,6 +751,10 @@ fn coherent_shared_projection_preserves_backing_while_direct_projection_reconcil
     let lease = coherent
         .project_contiguous(GuestAddress::new(0x3000), 4, Protection::WRITE, 1)
         .unwrap();
+    assert_eq!(
+        lease.write_publication(GuestAddress::new(0x3000)),
+        crate::WritePublication::Exact
+    );
     coherent
         .host
         .state
