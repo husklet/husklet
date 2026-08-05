@@ -2474,6 +2474,86 @@ static int vex_signed_dword_to_float_contract(void) {
     return 0;
 }
 
+static int vex_packed_add_subtract_contract(void) {
+    static const uint8_t opcodes[] = {0xfc, 0xfd, 0xfe, 0xd4, 0xf8, 0xf9, 0xfa, 0xfb};
+    unsigned operation;
+    unsigned wide;
+
+    for (operation = 0; operation < sizeof opcodes / sizeof opcodes[0]; ++operation) {
+        for (wide = 0; wide < 2u; ++wide) {
+            uint8_t guest[] = {0xc5, (uint8_t)(wide != 0u ? 0xe5u : 0xe1u),
+                               opcodes[operation], 0xc1};
+            uint32_t host[64] = {0};
+            hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+            CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+            CHECK(provenance[0].guest_size == sizeof guest);
+        }
+    }
+    {
+        static const uint8_t forms[][6] = {
+            {0xc4, 0x61, 0x65, 0xfe, 0xc1, 0}, /* WIG, extended destination, YMM */
+            {0xc5, 0xe5, 0xfe, 0x03, 0, 0},    /* YMM memory source */
+        };
+        static const size_t sizes[] = {5, 4};
+        for (operation = 0; operation < 2u; ++operation) {
+            uint32_t host[128] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(forms[operation], sizes[operation], host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+            CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+        }
+    }
+    {
+        static const uint8_t invalid[][6] = {
+            {0xc5, 0xe4, 0xfe, 0xc1, 0, 0},       /* wrong pp */
+            {0xc4, 0xe2, 0x65, 0xfe, 0xc1, 0},    /* wrong map */
+        };
+        static const size_t sizes[] = {4, 5};
+        for (operation = 0; operation < 2u; ++operation) {
+            uint32_t host[64] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(invalid[operation], sizes[operation], host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+            CHECK(result.instruction_count == 0 && result.exit_pc == request.guest_pc);
+        }
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t guest[] = {0xc5, 0xe5, 0xfe, 0xc1}; /* vpaddd ymm0,ymm3,ymm1 */
+        static const uint32_t left[] = {0, 1, UINT32_MAX, 0x7fffffff,
+                                        5, 0x80000000, 100, UINT32_MAX};
+        static const uint32_t right[] = {1, UINT32_MAX, 2, 1, 7, 0x80000000, UINT32_MAX, 1};
+        static const uint32_t expected[] = {1, 0, 1, 0x80000000, 12, 0, 99, 0};
+        uint32_t host[128] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        hl_native_x86_64_cpu cpu = {0};
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[6], left, 16); memcpy(&cpu.vector_upper[6], left + 4, 16);
+        memcpy(&cpu.vectors[2], right, 16); memcpy(&cpu.vector_upper[2], right + 4, 16);
+        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, 16) == 0);
+        CHECK(memcmp(&cpu.vector_upper[0], expected + 4, 16) == 0);
+        CHECK(memcmp(&cpu.vectors[6], left, 16) == 0 &&
+              memcmp(&cpu.vector_upper[6], left + 4, 16) == 0);
+        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int alu_differential(void) {
 #if !defined(__aarch64__)
     return 0;
@@ -4757,6 +4837,8 @@ int main(void) {
     status = vex_shuffle_family_contract();
     if (status != 0) return status;
     status = vex_signed_dword_to_float_contract();
+    if (status != 0) return status;
+    status = vex_packed_add_subtract_contract();
     if (status != 0) return status;
     status = immediate_differential();
     if (status != 0) return status;

@@ -231,6 +231,33 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 block->exit = HL_X86_A64_INTERPRETER; break;
             }
             item->vector_immediate = request->guest_bytes[cursor++];
+        } else if (vex != 0u && vex_map == 1u && vex_pp == 1u &&
+                   (opcode == 0xd4u || (opcode >= 0xf8u && opcode <= 0xfeu))) {
+            uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR; item->vector_vex = 1u;
+            item->width = vex_l != 0u ? 32u : 16u;
+            item->vector_memory_width = item->width;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_source_one = vex_vvvv;
+            if (opcode == 0xd4u || opcode >= 0xfcu) {
+                item->vector_kind = VECTOR_ADD;
+                item->vector_lane = opcode == 0xfcu ? 1u : opcode == 0xfdu ? 2u :
+                                    opcode == 0xfeu ? 4u : 8u;
+            } else {
+                item->vector_kind = VECTOR_SUBTRACT;
+                item->vector_lane = (uint8_t)(1u << (opcode - 0xf8u));
+            }
+            if ((modrm >> 6) == 3u) ++cursor;
+            else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0u, 0u, start, &cursor)) break;
+                item->operation = OP_VECTOR; item->memory_operand = 1u; item->source = 16u;
+            }
         } else if (vex != 0u) {
             cursor = start; block->status = HL_X86_A64_UNSUPPORTED;
             block->exit = HL_X86_A64_INTERPRETER; break;

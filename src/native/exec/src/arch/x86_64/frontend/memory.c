@@ -855,7 +855,9 @@ uint32_t hl_x86_vector_words(const instruction *item) {
     uint32_t operation = vector_operation_words(item);
     if (item->vector_vex != 0u) {
         uint32_t two_source = item->vector_kind == VECTOR_SHUFFLE_FLOAT ||
-                              item->vector_kind == VECTOR_SHUFFLE_DOUBLE;
+                              item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
+                              item->vector_kind == VECTOR_ADD ||
+                              item->vector_kind == VECTOR_SUBTRACT;
         operation += item->width == 32u ? vector_operation_words(item) + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
     }
@@ -1147,7 +1149,7 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         uint32_t base = item->vector_kind == VECTOR_ADD ? UINT32_C(0x4e208400) : UINT32_C(0x6e208400);
         base |= lane == 1u ? 0u : lane == 2u ? UINT32_C(0x00400000) :
                 lane == 4u ? UINT32_C(0x00800000) : UINT32_C(0x00c00000);
-        words[(*cursor)++] = base | source << 16 | destination << 5 | destination;
+        words[(*cursor)++] = base | source << 16 | first << 5 | destination;
     } else if (item->vector_kind == VECTOR_MULTIPLY_LOW_WORD) {
         words[(*cursor)++] = UINT32_C(0x4e609c00) | source << 16 |
                              destination << 5 | destination; /* mul vd.8h,vd.8h,vs.8h */
@@ -1188,7 +1190,8 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
     upper.memory_operand = 0u; upper.destination = 20u;
     if (memory_upper != 0u) upper.source = 17u;
     else { hl_x86_emit_vector_upper_load(words, cursor, 18u, item->source); upper.source = 18u; }
-    if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE) {
+    if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
+        item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT) {
         hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
         upper.vector_source_one = 19u;
     } else upper.vector_source_one = upper.source;
