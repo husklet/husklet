@@ -157,6 +157,14 @@ impl PreparedPathOpen for PendingOpen {
     fn commit(&mut self) -> Result<(), RuntimePathError> {
         let bits = self.intent.bits();
         let temporary = bits & OpenIntent::TEMPORARY != 0;
+        let named_mutation = bits & (OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE | OpenIntent::APPEND)
+            != 0
+            && bits & OpenIntent::PATH_ONLY == 0
+            && !temporary;
+        if named_mutation {
+            super::overlay_publish::prepare_write(&mut self.parent, &self.name).map_err(HostError::map)?;
+            self.path = pin::Host::mutation_path(&self.parent, &self.name)?;
+        }
         let created = temporary || bits & OpenIntent::CREATE != 0 && !self.exists()?;
         let opened = pin::Host::open(&self.parent, &self.name, self.intent, self.mode)?;
         let metadata = opened.metadata().map_err(HostError::map)?;

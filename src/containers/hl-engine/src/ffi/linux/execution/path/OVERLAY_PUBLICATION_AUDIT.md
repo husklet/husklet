@@ -27,7 +27,16 @@ opaque markers are likewise staged and renamed. Parent materialization rejects
 a symlink or non-directory collision. Directory fsync makes each publication
 durable before a caller advances its resolution epoch.
 
+Named write opens now retain every lower parent candidate in their resolver
+lease. Before the host open, `prepare_write` materializes the missing upper
+parent chain, detects an existing upper entry, or copies the first visible
+lower regular file into the upper. The subsequent host open and reported host
+path are both forced through that upper mutation capability. Ordinary roots
+carry no lower candidates and retain their direct path.
+
 Recursive removal of a non-empty upper directory, recursive directory copy-up,
 ownership virtualization, lower-directory metadata selection, and cache-epoch
-publication remain with the overlay resolver/mutation owner. This adapter does
+publication remain with the overlay resolver/mutation owner. Non-regular
+copy-up and unlink/rename whiteout integration must land before activating the
+layered root for containers. This adapter does
 not infer a guest path from a host descriptor and does not route bind mounts.

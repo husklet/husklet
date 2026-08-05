@@ -20,6 +20,8 @@ pub(super) struct ParentLease {
     guest: Option<GuestPathBytes>,
     selected: OwnedFd,
     upper: Option<OwnedFd>,
+    lower_parents: Vec<OwnedFd>,
+    upper_root: Option<OwnedFd>,
     layer: SelectedLayer,
 }
 
@@ -29,6 +31,8 @@ impl ParentLease {
             guest: Some(guest),
             selected: parent,
             upper: None,
+            lower_parents: Vec::new(),
+            upper_root: None,
             layer: SelectedLayer::Upper,
         }
     }
@@ -38,6 +42,8 @@ impl ParentLease {
             guest: Some(guest),
             selected,
             upper,
+            lower_parents: Vec::new(),
+            upper_root: None,
             layer: SelectedLayer::Lower(layer),
         }
     }
@@ -60,6 +66,28 @@ impl ParentLease {
             SelectedLayer::Lower(_) => self.upper.as_ref().ok_or(hl_runtime::RuntimePathError::NotFound),
         }
     }
+
+    pub(super) fn with_lower_parents(mut self, lower_parents: Vec<OwnedFd>) -> Self {
+        self.lower_parents = lower_parents;
+        self
+    }
+
+    pub(super) fn lower_parents(&self) -> &[OwnedFd] {
+        &self.lower_parents
+    }
+
+    pub(super) fn with_upper_root(mut self, upper_root: OwnedFd) -> Self {
+        self.upper_root = Some(upper_root);
+        self
+    }
+
+    pub(super) fn upper_root(&self) -> Option<&OwnedFd> {
+        self.upper_root.as_ref()
+    }
+
+    pub(super) fn install_upper(&mut self, upper: OwnedFd) {
+        self.upper = Some(upper);
+    }
 }
 
 impl From<OwnedFd> for ParentLease {
@@ -68,6 +96,8 @@ impl From<OwnedFd> for ParentLease {
             guest: None,
             selected,
             upper: None,
+            lower_parents: Vec::new(),
+            upper_root: None,
             layer: SelectedLayer::Upper,
         }
     }

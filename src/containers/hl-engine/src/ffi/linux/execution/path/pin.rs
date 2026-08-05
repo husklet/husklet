@@ -198,6 +198,12 @@ impl Host {
         let directory = Self::descriptor_path(parent.selected().as_raw_fd()).map_err(super::HostError::map)?;
         Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
     }
+
+    pub(super) fn mutation_path(parent: &ParentLease, name: &CString) -> Result<PathBuf, RuntimePathError> {
+        let parent = parent.mutation()?;
+        let directory = Self::descriptor_path(parent.as_raw_fd()).map_err(super::HostError::map)?;
+        Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
+    }
 }
 
 #[cfg(test)]
@@ -373,16 +379,25 @@ impl VfsHost for Host {
         self.with_entry(parent, |entry| {
             let selected = &entry.candidates[0];
             let selected_descriptor = Self::duplicate_descriptor(selected.descriptor.as_raw_fd())?;
-            if selected.layer == 0 {
-                return Ok(ParentLease::upper(entry.guest.clone(), selected_descriptor));
-            }
             let upper = entry
                 .candidates
                 .iter()
                 .find(|candidate| candidate.layer == 0)
                 .map(|candidate| Self::duplicate_descriptor(candidate.descriptor.as_raw_fd()))
                 .transpose()?;
-            Ok(ParentLease::lower(entry.guest.clone(), selected.layer - 1, selected_descriptor, upper))
+            let lowers = entry
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.layer != 0)
+                .map(|candidate| Self::duplicate_descriptor(candidate.descriptor.as_raw_fd()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let lease = if selected.layer == 0 {
+                ParentLease::upper(entry.guest.clone(), selected_descriptor)
+            } else {
+                ParentLease::lower(entry.guest.clone(), selected.layer - 1, selected_descriptor, upper)
+            };
+            let upper_root = Self::duplicate_descriptor(self.roots[0].as_raw_fd())?;
+            Ok(lease.with_lower_parents(lowers).with_upper_root(upper_root))
         })?
     }
 

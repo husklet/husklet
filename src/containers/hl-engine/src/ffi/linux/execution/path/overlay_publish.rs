@@ -64,6 +64,98 @@ impl Drop for CopyUp<'_> {
     }
 }
 
+/// Makes a lower-backed regular file writable in the upper before host open.
+/// A create for a name absent from every layer only materializes its parent.
+pub(super) fn prepare_write(lease: &mut ParentLease, name: &CStr) -> io::Result<bool> {
+    validate_name(name)?;
+    if lease.mutation().is_err() {
+        let parent = materialize_guest_parent(lease)?;
+        lease.install_upper(parent);
+    }
+    let upper = lease
+        .mutation()
+        .map_err(|_| io::Error::from_raw_os_error(libc::ENOENT))?;
+    if entry_exists(upper, name)? {
+        return Ok(false);
+    }
+    for lower in lease.lower_parents() {
+        let source = match open_regular(lower, name)? {
+            Some(source) => source,
+            None => continue,
+        };
+        CopyUp::stage(lease, name, &source)?.commit()?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn materialize_guest_parent(lease: &ParentLease) -> io::Result<OwnedFd> {
+    let root = lease
+        .upper_root()
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::ENOENT))?;
+    let mut current = root.try_clone()?;
+    let guest = lease
+        .guest()
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
+    for component in guest.as_bytes().split(|byte| *byte == b'/').filter(|component| !component.is_empty()) {
+        let name = CString::new(component).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+        materialize_parent(&current, &name, 0o755)?;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: current and name remain live and success returns a new descriptor.
+        let descriptor = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: successful openat returned one unowned descriptor.
+        current = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    }
+    Ok(current)
+}
+
+fn entry_exists(parent: &impl AsRawFd, name: &CStr) -> io::Result<bool> {
+    let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: parent and name remain live and status is writable.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            status.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+fn open_regular(parent: &impl AsRawFd, name: &CStr) -> io::Result<Option<File>> {
+    let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    // SAFETY: parent and name remain live and success returns a new descriptor.
+    let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if descriptor < 0 {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    // SAFETY: successful openat returned one unowned descriptor.
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    if metadata.is_file() {
+        Ok(Some(file))
+    } else {
+        Err(io::Error::from_raw_os_error(libc::EISDIR))
+    }
+}
+
 /// Materializes one already-validated upper ancestor without following links.
 pub(super) fn materialize_parent(parent: &impl AsRawFd, name: &CStr, mode: u32) -> io::Result<()> {
     validate_name(name)?;
