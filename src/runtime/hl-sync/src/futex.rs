@@ -15,10 +15,18 @@ mod lifecycle;
 mod multiple;
 
 pub trait FutexMemory: Send + Sync {
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the key cannot be read.
     fn load(&self, key: FutexKey) -> Result<u32, FutexError>;
 
     /// Compares the word and publishes the waiter while guest stores and wake
     /// observation are excluded by the memory owner's atomicity mechanism.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the key cannot be read, the value does not
+    /// match, or the supplied operation fails.
     fn compare_and_apply(
         &self,
         key: FutexKey,
@@ -27,14 +35,24 @@ pub trait FutexMemory: Send + Sync {
         apply: &mut dyn FnMut() -> Result<(), FutexError>,
     ) -> Result<(), FutexError>;
 
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when a target cannot be read or the supplied
+    /// operation fails.
     fn compare_apply_many(
         &self,
         targets: &[FutexWaitTarget],
         apply: &mut dyn FnMut() -> Result<(), FutexError>,
     ) -> Result<Option<usize>, FutexError>;
 
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the key cannot be updated atomically.
     fn atomic_update(&self, key: FutexKey, operation: FutexAtomicOperation) -> Result<i32, FutexError>;
 
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the key cannot be compared and updated atomically.
     fn compare_exchange(&self, key: FutexKey, expected: u32, replacement: u32) -> Result<u32, FutexError>;
 }
 
@@ -106,6 +124,10 @@ impl std::fmt::Debug for FutexTable {
 }
 
 impl FutexTable {
+    /// # Errors
+    ///
+    /// Returns `FutexError::InvalidArgument` for zero limits, or
+    /// `FutexError::ResourceLimit` when bucket storage cannot be reserved.
     pub fn new(limits: FutexLimits, memory: Arc<dyn FutexMemory>) -> Result<Self, FutexError> {
         if limits.buckets == 0 || limits.keys == 0 || limits.waiters == 0 {
             return Err(FutexError::InvalidArgument);
@@ -126,6 +148,10 @@ impl FutexTable {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the request is invalid, memory access or
+    /// waiter registration fails, or the clock cannot be read.
     pub fn wait<C: Clock + ?Sized>(
         &self,
         key: FutexKey,
@@ -152,6 +178,9 @@ impl FutexTable {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns `FutexError::InvalidArgument` when `bitset` is zero.
     pub fn wake(&self, key: FutexKey, count: usize, bitset: u32) -> Result<usize, FutexError> {
         if bitset == 0 {
             return Err(FutexError::InvalidArgument);
@@ -170,6 +199,10 @@ impl FutexTable {
         Ok(selected.len())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the keys are identical, comparison or
+    /// memory access fails, or the destination exceeds its key limit.
     pub fn requeue(
         &self,
         source: FutexKey,
@@ -235,6 +268,9 @@ impl FutexTable {
         Ok(woken.len())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the atomic memory update fails.
     pub fn wake_op(
         &self,
         first: FutexKey,

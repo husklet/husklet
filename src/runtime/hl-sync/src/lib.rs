@@ -190,6 +190,10 @@ impl WaitQueue {
     /// A deadline equal to or earlier than the current clock reading polls and
     /// returns [`WaitOutcome::TimedOut`]. Spurious condition-variable wakeups
     /// recheck every condition and recompute the true deadline remainder.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaitError::Clock`] when the monotonic clock cannot be read.
     pub fn wait<C: MonotonicClock + ?Sized>(
         &self,
         observed: u64,

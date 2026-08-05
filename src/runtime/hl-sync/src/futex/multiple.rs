@@ -9,6 +9,10 @@ use crate::{
 };
 
 impl FutexTable {
+    /// # Errors
+    ///
+    /// Returns [`FutexError`] when the target list is invalid, memory access
+    /// or waiter registration fails, or the clock cannot be read.
     pub fn wait_multiple<C: Clock + ?Sized>(
         &self,
         targets: &[FutexWaitTarget],

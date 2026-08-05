@@ -70,6 +70,10 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`PiFutexError`] when deadline conversion, memory access,
+    /// ownership validation, or waiter registration fails.
     pub fn lock<C: Clock + ?Sized>(
         &self,
         key: FutexKey,
@@ -108,6 +112,10 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`PiFutexError`] when the caller does not own the futex, memory
+    /// access fails, or the key limit is exhausted.
     pub fn unlock(&self, key: FutexKey, caller: O) -> Result<(), PiFutexError> {
         let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !states.contains_key(&key) && states.len() >= self.limits.keys {
@@ -143,6 +151,9 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`PiFutexError`] when an owned futex word cannot be read or updated.
     pub fn owner_exit(&self, owner: O) -> Result<usize, PiFutexError> {
         let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut released = 0;
@@ -177,6 +188,9 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
         Ok(released)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`PiFutexError`] when a private futex owner word cannot be cleared.
     pub fn reset_private(&self) -> Result<usize, PiFutexError> {
         let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let keys = states
