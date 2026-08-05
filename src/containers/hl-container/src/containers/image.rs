@@ -169,7 +169,7 @@ impl Containers {
                 "image configuration must not replace its owned rootfs".into(),
             ));
         }
-        if rootfs.overlay().is_some() && !spec.mounts.is_empty() {
+        if rootfs.overlay().is_some() && requires_materialized_root(&spec.mounts) {
             root_store.release(&rootfs)?;
             rootfs = images.rootfs(image)?;
             spec.rootfs = crate::Rootfs::Image(rootfs.clone());
@@ -194,6 +194,28 @@ impl Containers {
                 Err(error)
             }
         }
+    }
+}
+
+fn requires_materialized_root(mounts: &[crate::Mount]) -> bool {
+    mounts.iter().any(|mount| mount.populate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_materialized_root;
+    use crate::{Access, Mount};
+
+    #[test]
+    fn ordinary_mounts_keep_the_overlay_root() {
+        let mounts = [Mount::volume("data", "/data", Access::ReadWrite)];
+        assert!(!requires_materialized_root(&mounts));
+    }
+
+    #[test]
+    fn volume_population_requests_a_materialized_root() {
+        let mounts = [Mount::volume("data", "/data", Access::ReadWrite).populate()];
+        assert!(requires_materialized_root(&mounts));
     }
 }
 
