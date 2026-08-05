@@ -34,6 +34,7 @@ pub struct Daemon {
     directory: PathBuf,
     socket: PathBuf,
     images: PathBuf,
+    platform: hl_images::Platform,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +50,10 @@ impl Daemon {
             directory: root.join("docker"),
             socket: root.join("runtime/docker.sock"),
             images: root.join("images"),
+            platform: match workspace.arch {
+                hl_ws::Arch::Arm64 => hl_images::Platform::linux_arm64(),
+                hl_ws::Arch::Amd64 => hl_images::Platform::linux_amd64(),
+            },
         }
     }
 
@@ -99,6 +104,8 @@ impl Daemon {
             .arg(paths::images_dir())
             .arg("--socket")
             .arg(&sock)
+            .arg("--platform")
+            .arg(self.platform.to_string())
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(log))
             .stderr(std::process::Stdio::from(errlog));
@@ -235,6 +242,23 @@ mod tests {
         assert!(question.directory.ends_with("a%3Fb/docker"));
         assert!(slash.images.ends_with("a%2Fb/images"));
         assert!(slash.socket.ends_with("a%2Fb/runtime/docker.sock"));
+    }
+
+    #[test]
+    fn workspace_architecture_selects_the_daemon_platform() {
+        let arm = Daemon::new(&crate::config::WorkspaceConfig::new(
+            "arm",
+            "ubuntu",
+            hl_ws::Arch::Arm64,
+        ));
+        let amd = Daemon::new(&crate::config::WorkspaceConfig::new(
+            "amd",
+            "ubuntu",
+            hl_ws::Arch::Amd64,
+        ));
+
+        assert_eq!(arm.platform, hl_images::Platform::linux_arm64());
+        assert_eq!(amd.platform, hl_images::Platform::linux_amd64());
     }
 
     #[test]
