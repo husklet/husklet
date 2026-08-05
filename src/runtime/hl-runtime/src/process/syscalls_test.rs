@@ -15,6 +15,8 @@ mod signal_wait_tests;
 struct FixedClock;
 struct FixedCpuClock;
 struct InterruptedSleep;
+struct ExpectedSleep(Arc<hl_sync::Interruption>);
+struct FixedWait(Arc<hl_sync::Interruption>);
 #[derive(Default)]
 struct AlarmClock(Mutex<u64>);
 #[derive(Default)]
@@ -68,6 +70,27 @@ impl crate::RuntimeSleepPort for InterruptedSleep {
         Ok(crate::RuntimeSleepOutcome::Interrupted {
             remaining: hl_time::Timespec::new(1, 5).unwrap(),
         })
+    }
+}
+
+impl crate::RuntimeSleepPort for ExpectedSleep {
+    fn sleep(
+        &self,
+        _: hl_linux::ClockIdentity,
+        _: bool,
+        _: hl_time::Timespec,
+        interruption: &hl_sync::Interruption,
+    ) -> Result<crate::RuntimeSleepOutcome, ()> {
+        assert!(std::ptr::eq(interruption, self.0.as_ref()));
+        Ok(crate::RuntimeSleepOutcome::Interrupted {
+            remaining: hl_time::Timespec::ZERO,
+        })
+    }
+}
+
+impl crate::BlockingWait for FixedWait {
+    fn interruption(&self) -> Arc<hl_sync::Interruption> {
+        Arc::clone(&self.0)
     }
 }
 
@@ -1136,6 +1159,22 @@ fn injected_remaining_time() {
     assert_eq!(
         &fixture.memory.0.lock().unwrap()[64..80],
         &[1, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0],
+    );
+}
+
+#[test]
+fn sleep_uses_callers_cancellation() {
+    let fixture = Fixture::new();
+    fixture.memory.put(16, &[0; 16]);
+    let interruption = Arc::new(hl_sync::Interruption::new());
+    let mut runtime = fixture
+        .runtime(GuestArchitecture::Aarch64, fixture.thread)
+        .with_sleep_port(Arc::new(ExpectedSleep(Arc::clone(&interruption))))
+        .with_blocking_wait(Arc::new(FixedWait(interruption)));
+
+    assert_eq!(
+        runtime.handle(Fixture::operation("nanosleep"), [16, 0, 0, 0, 0, 0]),
+        LinuxResult::Error(hl_linux::Errno::EINTR),
     );
 }
 

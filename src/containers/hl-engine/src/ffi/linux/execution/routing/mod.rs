@@ -349,6 +349,7 @@ impl ProcessContext {
                 .with_cpu_clock(self.clock.clone())
                 .with_system(Arc::clone(&self.system))
                 .with_sleep_port(Arc::new(task::SleepPort(Arc::clone(&self.deadlines))))
+                .with_blocking_wait(cancellation.clone())
                 .with_yield_port(Arc::new(task::CooperativeYield))
                 .with_futex_port(self.futex.clone())
                 .with_robust_exit(robust.clone())

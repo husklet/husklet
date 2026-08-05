@@ -262,7 +262,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(sleep) = &self.sleep else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let interruption = Arc::new(Interruption::new());
+        let interruption = self.blocking_interruption();
         let wake: Arc<dyn hl_task::SignalActivityWake> = Arc::new(SleepWake {
             tasks: self.tasks.clone(),
             thread: self.thread,

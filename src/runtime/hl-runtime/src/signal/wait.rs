@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use hl_linux::{Errno, GuestMemory, LinuxResult, SignalAbi};
-use hl_sync::{Interruption, WaitOutcome, WaitQueue};
+use hl_sync::{WaitOutcome, WaitQueue};
 use hl_task::SignalActivityWake;
 use hl_time::{ClockError, Deadline, Duration, MonotonicClock, MonotonicInstant};
 
@@ -44,6 +44,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let queue = Arc::new(WaitQueue::new());
         let wake: Arc<dyn SignalActivityWake> = Arc::new(WaitWake(queue.clone()));
         let _subscription = self.tasks.subscribe_signal_activity(wake);
+        let interruption = self.blocking_interruption();
         let deadline = match self.wait_deadline(plan.timeout) {
             Ok(value) => value,
             Err(result) => return result,
@@ -64,7 +65,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 return LinuxResult::Error(Errno::EAGAIN);
             }
             let clock: &dyn MonotonicClock = self.clock.as_deref().map_or(&NoDeadlineClock, |clock| clock);
-            match queue.wait(observed, &Interruption::new(), deadline, clock) {
+            match queue.wait(observed, &interruption, deadline, clock) {
                 Ok(WaitOutcome::Notified) => {}
                 Ok(WaitOutcome::TimedOut) => {
                     return LinuxResult::Error(Errno::EAGAIN);
@@ -112,6 +113,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let queue = Arc::new(WaitQueue::new());
         let wake: Arc<dyn SignalActivityWake> = Arc::new(WaitWake(queue.clone()));
         let _subscription = self.tasks.subscribe_signal_activity(wake);
+        let interruption = self.blocking_interruption();
         let old_mask = match temporary {
             Some(mask) => match self.tasks.replace_signal_mask(self.thread, mask) {
                 Ok(previous) => Some(previous),
@@ -127,7 +129,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 Err(error) => break LinuxResult::Error(error),
             }
             let clock: &dyn MonotonicClock = self.clock.as_deref().map_or(&NoDeadlineClock, |clock| clock);
-            match queue.wait(observed, &Interruption::new(), None, clock) {
+            match queue.wait(observed, &interruption, None, clock) {
                 Ok(WaitOutcome::Notified) => {}
                 Ok(WaitOutcome::Interrupted) => {
                     break LinuxResult::Error(Errno::EINTR);

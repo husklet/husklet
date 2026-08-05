@@ -497,6 +497,11 @@ mod tests {
         lifecycle("remove_force.begin");
         containers.remove_force("terminal-public-api").await.unwrap();
         lifecycle("remove_force.end");
+        assert!(matches!(
+            containers.inspect("terminal-public-api").await,
+            Err(hl_container::Error::NotFound(_))
+        ));
+        assert!(containers.executions().list().await.unwrap().is_empty());
         lifecycle("image_release.begin");
         image.release().unwrap();
         lifecycle("image_release.end");

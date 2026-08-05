@@ -22,6 +22,7 @@ pub struct RuntimeProcessSyscalls<M: GuestMemory> {
     pub(crate) clock: Option<Arc<dyn hl_time::Clock>>,
     pub(crate) cpu_clock: Option<Arc<dyn crate::CpuClockPort>>,
     pub(crate) sleep: Option<Arc<dyn crate::RuntimeSleepPort>>,
+    pub(crate) blocking_wait: Option<Arc<dyn crate::BlockingWait>>,
     pub(crate) futex: Option<Arc<dyn crate::RuntimeFutexPort>>,
     pub(crate) robust_exit: Option<Arc<dyn crate::RobustExitPort>>,
     pub(crate) exit_runtime: Option<Arc<crate::ExitRuntime>>,
@@ -40,6 +41,12 @@ pub struct RuntimeProcessSyscalls<M: GuestMemory> {
 }
 
 impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
+    pub(crate) fn blocking_interruption(&self) -> Arc<hl_sync::Interruption> {
+        self.blocking_wait
+            .as_ref()
+            .map_or_else(|| Arc::new(hl_sync::Interruption::new()), |wait| wait.interruption())
+    }
+
     #[must_use]
     pub fn new(
         tasks: Arc<TaskRegistry>,
@@ -61,6 +68,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             clock: None,
             cpu_clock: None,
             sleep: None,
+            blocking_wait: None,
             futex: None,
             robust_exit: None,
             exit_runtime: None,
@@ -130,6 +138,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     #[must_use]
     pub fn with_sleep_port(mut self, sleep: Arc<dyn crate::RuntimeSleepPort>) -> Self {
         self.sleep = Some(sleep);
+        self
+    }
+
+    #[must_use]
+    pub fn with_blocking_wait(mut self, wait: Arc<dyn crate::BlockingWait>) -> Self {
+        self.blocking_wait = Some(wait);
         self
     }
 
