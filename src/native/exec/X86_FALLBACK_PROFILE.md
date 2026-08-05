@@ -116,3 +116,40 @@ rate is not the scalar alternating-store amplification measured by this lane.
 Giving it identical coalescing requires factoring one bounded journal
 reservation operation shared by preflight and post-success publication; doing
 only a post-write merge would violate the pre-mutation capacity contract.
+
+## Exact integrated-tree measurement
+
+Root integrated this stack as `a8a49f1cb2fb6e279a68b01ccf7d5896885ac185`.
+The release engine and runner were built from that clean detached tree into
+`/Users/x/dd/husklet-targets/x86-coalesce-a8a49f1`, outside `/tmp`. A single
+CPU-17 diagnostic proof reported `native-verified`, checksum `7190`, 1,489
+runs, 118 builds, 66,810 hits, four final fallbacks, 73,604 completed native
+instructions, 1,236 operand callbacks, and 29 operand-cache hits.
+
+The diagnostics-off comparison then used the same clean-repro x86 guest,
+retained C runner, divisor 100, and memory phase as the `ca6b873ac` baseline.
+Seven cycles rotated QEMU, C, and Rust order on exclusive CPU 17. Every one of
+the 21 rows returned checksum `7190`:
+
+| provider | samples (microseconds, sorted) | median |
+|---|---|---:|
+| retained C | 1580, 1700, 1811, 1831, 1874, 1886, 1902 | 1831 |
+| Rust native | 23833, 24033, 24084, 24610, 25374, 25534, 25644 | 24610 |
+| QEMU | 5960, 6451, 6512, 6609, 6637, 6704, 7160 | 6609 |
+
+Rust is 13.441 times retained C in this run, down from the exact `ca6b873ac`
+ratio of 15.430 times: the relative gap ratio fell 12.89%. The Rust median
+itself fell from 25,892 to 24,610 microseconds, a 4.95% improvement. This
+memory phase is REP-heavy, so the measurable improvement is intentionally
+bounded by the still-conservative REP preflight described above.
+
+Content identities were:
+
+- Rust engine: `44b2bb9f7b537bd16753a53d2189b3e4f536da776d4436d7dc7f592eb4b4e045`;
+- testing runner: `9e770dfff59994088dc3b4161cbb3b2dd0fc677c4bb85913b4897c6aa1c9bde8`;
+- guest: `bda1b267655938e7be77cd2ec0450c7095650437e4a5e7be10db81da3a973b9d`;
+  and
+- retained C runner: `0633ed0f914f666f2127ca1b86a4def69eea65c59f7942f8afd66d2b7a6ebc62`.
+
+Raw evidence is retained in the durable target's `evidence/diagnostics.csv`
+and `evidence/timing-direct-quiet-3/` directory.
