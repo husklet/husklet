@@ -24,6 +24,7 @@
 #include "ordered.h"
 #include "pair_arithmetic.h"
 #include "pcrel.h"
+#include "projection.h"
 #include "reverse.h"
 #include "pair.h"
 #include "select.h"
@@ -426,7 +427,8 @@ hl_a64_loop_preflight_status hl_a64_trace_loop_preflight(const hl_native_aarch64
             if ((view[3] & UINT64_C(4)) != 0) entry.executable = 1;
             /* With no reserved journal slot, even a presently adjacent
              * envelope may fault after changing the active owner. */
-            if (cpu->dirty_first != UINT64_MAX && cpu->dirty_count >= 16)
+            if (cpu->dirty_first != UINT64_MAX && cpu->dirty_count >= 16 &&
+                !hl_a64_dirty_can_archive(cpu))
                 return HL_A64_LOOP_PREFLIGHT_EPOCH;
         }
     }

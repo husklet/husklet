@@ -2,10 +2,32 @@
 
 #define HL_A64_DIRTY_CAPACITY 16u
 
+static int mergeable(const hl_native_aarch64_cpu *cpu) {
+    if (cpu == NULL || cpu->dirty_first == UINT64_MAX || cpu->dirty_first >= cpu->dirty_last ||
+        cpu->dirty_view_first >= cpu->dirty_view_last)
+        return -1;
+    for (uint64_t index = cpu->dirty_count; index != 0; --index) {
+        const uint64_t *record = cpu->dirty_records[index - 1];
+        if (record[0] == cpu->dirty_view_first && record[1] == cpu->dirty_view_last &&
+            record[3] >= cpu->dirty_first && cpu->dirty_last >= record[2])
+            return (int)(index - 1);
+    }
+    return -1;
+}
+
+int hl_a64_dirty_can_archive(const hl_native_aarch64_cpu *cpu) {
+    return mergeable(cpu) >= 0;
+}
+
 static void flush_dirty(hl_native_aarch64_cpu *cpu) {
+    int index = mergeable(cpu);
     uint64_t *record;
     if (cpu->dirty_first == UINT64_MAX) return;
-    if (cpu->dirty_count >= HL_A64_DIRTY_CAPACITY) {
+    if (index >= 0) {
+        record = cpu->dirty_records[index];
+        if (cpu->dirty_first < record[2]) record[2] = cpu->dirty_first;
+        if (cpu->dirty_last > record[3]) record[3] = cpu->dirty_last;
+    } else if (cpu->dirty_count >= HL_A64_DIRTY_CAPACITY) {
         cpu->dirty_overflow = 1;
     } else {
         record = cpu->dirty_records[cpu->dirty_count++];

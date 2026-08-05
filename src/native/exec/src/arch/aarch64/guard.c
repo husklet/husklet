@@ -77,8 +77,123 @@ static void condition(hl_a64_assembler *assembler, uint32_t *instruction,
 
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
 
+/* Archive the live exact interval, reusing an existing same-owner record when
+ * the ranges overlap or touch. x16 carries the current guest address and is
+ * retained in fault_address while x16/x17/x18/x9 execute the bounded reverse
+ * scan. The caller has already saved guest x9 and NZCV. */
+static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc) {
+    uint32_t *none, *empty, *different[2], *before, *after, *keep_first, *keep_last,
+        *merged, *overflow, *success;
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_movconst(assembler, 18, UINT64_MAX);
+    hl_a64_emit32(assembler, UINT32_C(0xeb12023f));
+    none = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_str(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
+    hl_a64_ldr(assembler, 16, CPU, OFFSET_DIRTY_COUNT);
+    uint8_t *scan = assembler->cursor;
+    hl_a64_emit32(assembler, UINT32_C(0xf100021f)); /* cmp x16,#0 */
+    empty = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_subi(assembler, 16, 16, 1);
+    hl_a64_addi(assembler, 18, CPU, OFFSET_DIRTY_RECORDS);
+    hl_a64_emit32(assembler, UINT32_C(0x8b000000) | (16u << 16) | (5u << 10) |
+                                 (18u << 5) | 18u); /* add x18,x18,x16,lsl#5 */
+    hl_a64_ldr(assembler, 17, 18, 0);
+    hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_VIEW_FIRST);
+    hl_a64_emit32(assembler, UINT32_C(0xeb09023f));
+    different[0] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, 18, 8);
+    hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_VIEW_LAST);
+    hl_a64_emit32(assembler, UINT32_C(0xeb09023f));
+    different[1] = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, 18, 24);
+    hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_emit32(assembler, UINT32_C(0xeb09023f)); /* cmp record_last,active_first */
+    before = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+    hl_a64_ldr(assembler, 9, 18, 16);
+    hl_a64_emit32(assembler, UINT32_C(0xeb09023f)); /* cmp active_last,record_first */
+    after = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    hl_a64_ldr(assembler, 17, 18, 16);
+    hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_emit32(assembler, UINT32_C(0xeb11013f)); /* cmp active_first,record_first */
+    keep_first = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_str(assembler, 9, 18, 16);
+    uint8_t *first_done = assembler->cursor;
+    hl_a64_ldr(assembler, 17, 18, 24);
+    hl_a64_ldr(assembler, 9, CPU, OFFSET_DIRTY_LAST);
+    hl_a64_emit32(assembler, UINT32_C(0xeb11013f)); /* cmp active_last,record_last */
+    keep_last = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_str(assembler, 9, 18, 24);
+    uint8_t *last_done = assembler->cursor;
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_merged));
+    merged = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    uint8_t *next = assembler->cursor;
+    uint32_t *again = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    uint8_t *append = assembler->cursor;
+    hl_a64_ldr(assembler, 16, CPU, OFFSET_DIRTY_COUNT);
+    hl_a64_emit32(assembler, UINT32_C(0xf100421f)); /* cmp count,#16 */
+    overflow = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_addi(assembler, 18, CPU, OFFSET_DIRTY_RECORDS);
+    hl_a64_emit32(assembler, UINT32_C(0x8b000000) | (16u << 16) | (5u << 10) |
+                                 (18u << 5) | 18u);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_VIEW_FIRST);
+    hl_a64_str(assembler, 17, 18, 0);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_VIEW_LAST);
+    hl_a64_str(assembler, 17, 18, 8);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_str(assembler, 17, 18, 16);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+    hl_a64_str(assembler, 17, 18, 24);
+    hl_a64_addi(assembler, 16, 16, 1);
+    hl_a64_str(assembler, 16, CPU, OFFSET_DIRTY_COUNT);
+
+    uint8_t *done = assembler->cursor;
+    hl_a64_movconst(assembler, 17, UINT64_MAX);
+    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
+    hl_a64_movz(assembler, 17, 0, 0);
+    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+    hl_a64_ldr(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
+    success = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    uint8_t *overflow_target = assembler->cursor;
+    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
+    hl_a64_ldr(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
+    hl_a64_emit32(assembler, UINT32_C(0xd51b4211));
+    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
+    uint8_t *resume = assembler->cursor;
+    if (!hl_a64_assembler_ok(assembler)) return;
+    condition(assembler, none, resume, 0u);
+    condition(assembler, empty, append, 0u);
+    condition(assembler, different[0], next, 1u);
+    condition(assembler, different[1], next, 1u);
+    condition(assembler, before, next, 3u); /* record_last < active_first */
+    condition(assembler, after, next, 3u);  /* active_last < record_first */
+    condition(assembler, keep_first, first_done, 2u);
+    condition(assembler, keep_last, last_done, 9u);
+    branch(assembler, merged, done);
+    branch(assembler, again, scan);
+    condition(assembler, overflow, overflow_target, 2u);
+    branch(assembler, success, resume);
+}
+
 void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc) {
-    uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *overflow, *safe;
+    uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *safe;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
@@ -124,10 +239,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     condition(assembler, different_view[1], disjoint, 1u);
     condition(assembler, above, disjoint, 8u);
     condition(assembler, below, disjoint, 3u);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
-    hl_a64_emit32(assembler, 0xF100423Fu); /* cmp count,#16 */
-    overflow = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
+    archive_dirty(assembler, pc);
     uint8_t *safe_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, empty, safe_target, 0u);
@@ -139,21 +251,6 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u); /* msr nzcv,x17 */
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    uint32_t *after_overflow = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    uint8_t *overflow_target = assembler->cursor;
-    if (!hl_a64_assembler_ok(assembler)) return;
-    condition(assembler, overflow, overflow_target, 2u);
-    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
-    /* The journal-capacity exit occurs before the guest store. Restore the
-     * non-stolen scratch register and architectural flags exactly as every
-     * other guard exit does before the common stub spills guest state. */
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
-    hl_a64_emit32(assembler, 0xD51B4200u | 17u); /* msr nzcv,x17 */
-    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
-    if (!hl_a64_assembler_ok(assembler)) return;
-    branch(assembler, after_overflow, assembler->cursor);
 }
 
 void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
@@ -416,40 +513,13 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     uint32_t *to_miss = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     uint8_t *selected_target = assembler->cursor;
-    /* A cache hit can switch away from an owner with completed stores. Retain
-     * that exact owner before changing any active-view field. Capacity is
-     * decided before the retried host store, so overflow cannot lose either
-     * the old interval or partially publish the new one. x9 keeps the selected
-     * immutable-view index while x17/x18 archive the old owner. */
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
-    hl_a64_movconst(assembler, 18, UINT64_MAX);
-    hl_a64_emit32(assembler, UINT32_C(0xeb12023f)); /* cmp dirty_first,#UINT64_MAX */
-    uint32_t *empty = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
-    hl_a64_emit32(assembler, UINT32_C(0xf100423f)); /* cmp dirty_count,#16 */
-    uint32_t *overflow = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, 0);
-    hl_a64_addi(assembler, 18, CPU, OFFSET_DIRTY_RECORDS);
-    hl_a64_addlsl4(assembler, 18, 18, 17);
-    hl_a64_addlsl4(assembler, 18, 18, 17);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_VIEW_FIRST);
-    hl_a64_str(assembler, 17, 18, 0);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_VIEW_LAST);
-    hl_a64_str(assembler, 17, 18, 8);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
-    hl_a64_str(assembler, 17, 18, 16);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_LAST);
-    hl_a64_str(assembler, 17, 18, 24);
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
-    hl_a64_addi(assembler, 17, 17, 1);
-    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_COUNT);
-    hl_a64_movconst(assembler, 17, UINT64_MAX);
-    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
-    hl_a64_movz(assembler, 17, 0, 0);
-    hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_LAST);
+    /* archive_dirty uses x9 while scanning records. Preserve the selected
+     * read-view slot in cold fault metadata; every actual fault path replaces
+     * this field before exposing it to the dispatcher. */
+    hl_a64_str(assembler, 9, CPU, OFFSET_FAULT_SIZE);
+    archive_dirty(assembler, pc);
+    hl_a64_ldr(assembler, 9, CPU, OFFSET_FAULT_SIZE);
 
-    uint8_t *activate = assembler->cursor;
     hl_a64_addi(assembler, 18, CPU, OFFSET_READ_VIEWS);
     hl_a64_emit32(assembler, UINT32_C(0x8b000000) | (9u << 16) | (5u << 10) |
                                  (18u << 5) | 18u); /* add x18,x18,x9,lsl#5 */
@@ -474,19 +544,10 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     uint32_t *retry = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
 
-    uint8_t *overflow_target = assembler->cursor;
-    diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
-    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
-    hl_a64_emit32(assembler, UINT32_C(0xd51b4211)); /* msr nzcv,x17 */
-    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
-
     uint8_t *miss = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     branch(assembler, to_miss, miss);
     for (unsigned index = 0; index < 4; ++index) branch(assembler, selected[index], selected_target);
-    condition(assembler, empty, activate, 0u);
-    condition(assembler, overflow, overflow_target, 2u);
     branch(assembler, retry, resume);
     condition(assembler, inactive[0], miss, 3u);
     condition(assembler, inactive[1], miss, 0u);

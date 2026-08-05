@@ -1472,6 +1472,40 @@ int main(void) {
           run_state.dirty_first == views.guests[1] &&
           run_state.dirty_last == views.guests[1] + sizeof(uint64_t));
 
+    const uint32_t saturated_write_words[] = {STR_X(1, 11), STR_X(1, 10), UINT32_C(0xd4000001)};
+    const hl_a64_source_span saturated_write_span = {
+        0xb700, (const uint8_t *)saturated_write_words, sizeof(saturated_write_words), 7, 8};
+    const hl_a64_source saturated_write_source = {&saturated_write_span, 1, 7, 8};
+    views.calls = 0;
+    run_request.source = &saturated_write_source;
+    run_request.budget = sizeof(saturated_write_words) / sizeof(saturated_write_words[0]);
+    memset(&run_state, 0, sizeof(run_state));
+    run_state.program = saturated_write_span.guest_first;
+    run_state.registers[10] = views.guests[0];
+    run_state.registers[11] = views.guests[1];
+    run_state.registers[1] = UINT64_C(0x5555555555555555);
+    run_state.dirty_first = UINT64_MAX;
+    run_state.dirty_count = 16;
+    for (size_t index = 0; index < run_state.dirty_count; index++) {
+        run_state.dirty_records[index][0] = UINT64_C(0x10000000) + index * 0x100;
+        run_state.dirty_records[index][1] = run_state.dirty_records[index][0] + sizeof(uint64_t);
+        run_state.dirty_records[index][2] = run_state.dirty_records[index][0];
+        run_state.dirty_records[index][3] = run_state.dirty_records[index][1];
+    }
+    run_state.dirty_records[14][0] = views.guests[0];
+    run_state.dirty_records[14][1] = views.guests[0] + views.lengths[0];
+    run_state.dirty_records[14][2] = views.guests[0];
+    run_state.dirty_records[14][3] = views.guests[0] + sizeof(uint64_t);
+    run_state.dirty_records[15][0] = views.guests[1];
+    run_state.dirty_records[15][1] = views.guests[1] + sizeof(uint64_t);
+    run_state.dirty_records[15][2] = views.guests[1];
+    run_state.dirty_records[15][3] = views.guests[1] + sizeof(uint64_t);
+    CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+    CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && views.calls == 2);
+    CHECK(run_state.dirty_overflow == 0 && run_state.dirty_count == 16);
+    CHECK(views.values[0][0] == run_state.registers[1]);
+    CHECK(views.values[1][0] == run_state.registers[1]);
+
     const uint32_t boundary_words[] = {LDR_X(0, 10), LDR_X(1, 11), 0xd4000001u};
     const hl_a64_source_span boundary_span = {
         0xb600, (const uint8_t *)boundary_words, sizeof(boundary_words), 7, 8};
