@@ -103,6 +103,16 @@ static void patch_condition(uint32_t *branch, const uint8_t *target) {
     *branch |= (distance & UINT32_C(0x7ffff)) << 5;
 }
 
+void hl_a64_stub_publish_execution_identity(hl_a64_assembler *assembler) {
+    /* Cache execution lookup accepts any address inside the executing entry,
+     * tagged in bit zero.  AArch64 instructions are four-byte aligned, so the
+     * tag cannot alias an instruction address. */
+    hl_a64_emit32(assembler, UINT32_C(0x10000011)); /* adr x17,. */
+    hl_a64_addi(assembler, 17, 17, 1);
+    hl_a64_str(assembler, 17, 28,
+               (int)offsetof(hl_native_aarch64_cpu, indirect_site));
+}
+
 void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_budget_guard *guard) {
     memset(guard, 0, sizeof(*guard));
     guard->pc = pc;

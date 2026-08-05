@@ -706,5 +706,9 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     hl_a64_movconst(assembler, 17, guard->bytes);
     hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_SIZE);
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fallback));
+    /* Only an operand-resolution fallback needs the executing cache identity
+     * to refund the uncompleted suffix.  Publish it on that cold path instead
+     * of charging every trace and chained entry. */
+    hl_a64_stub_publish_execution_identity(assembler);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_FALLBACK, guard->pc);
 }

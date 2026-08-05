@@ -554,13 +554,6 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     assembler.diagnostics = diagnostics != 0;
     hl_a64_stub_prologue(&assembler);
     output->body_offset = hl_a64_assembler_size(&assembler);
-    /* Every entry path, including direct chains and IBTC hits, publishes a
-     * position-independent pointer into the exact executing cache entry.  Bit
-     * zero distinguishes it from the aligned indirect-patch site carried in
-     * the same transient CPU field. */
-    hl_a64_emit32(&assembler, 0x10000011u); /* adr x17,. */
-    hl_a64_addi(&assembler, 17, 17, 1);
-    hl_a64_str(&assembler, 17, 28, (int)offsetof(hl_native_aarch64_cpu, indirect_site));
     hl_a64_stub_budget_begin(&assembler, pc, &budget_guard);
     output->source_first = pc;
     for (size_t index = 0; index < count; index++) {

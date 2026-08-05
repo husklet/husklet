@@ -22,5 +22,6 @@ void hl_a64_stub_exit(hl_a64_assembler *, uint32_t, uint64_t);
 void hl_a64_stub_exit_register(hl_a64_assembler *, uint32_t, int);
 void hl_a64_stub_budget_begin(hl_a64_assembler *, uint64_t, hl_a64_budget_guard *);
 void hl_a64_stub_budget_finish(hl_a64_assembler *, hl_a64_budget_guard *, uint32_t);
+void hl_a64_stub_publish_execution_identity(hl_a64_assembler *);
 
 #endif
