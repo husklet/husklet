@@ -376,15 +376,19 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             protection: self.authority,
             index: 0,
         };
-        let views = std::iter::once(primary)
-            .chain(self.additional.iter().map(|entry| entry.view))
-            .collect::<Vec<_>>();
-        let mut journals = vec![Vec::new(); views.len()];
+        // Native exits already retain every view in this lease. Do not copy
+        // that table merely to classify the bounded dirty journal.
+        let mut journals = vec![Vec::new(); self.additional.len() + 1];
         for range in dirty {
-            let index = views
-                .iter()
-                .position(|view| contains(*view, *range, Protection::WRITE))
-                .ok_or(MemoryError::NoAddressSpace)?;
+            let index = if contains(primary, *range, Protection::WRITE) {
+                0
+            } else {
+                self.additional
+                    .iter()
+                    .position(|entry| contains(entry.view, *range, Protection::WRITE))
+                    .map(|index| index + 1)
+                    .ok_or(MemoryError::NoAddressSpace)?
+            };
             journals[index].push(*range);
         }
         let mut executable = Vec::new();
