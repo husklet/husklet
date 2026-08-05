@@ -4,6 +4,10 @@ use crate::{
 };
 pub(crate) struct Aarch64SimdDecoder;
 impl Aarch64SimdDecoder {
+    fn register(word: u32, shift: u32) -> u8 {
+        u8::try_from(word >> shift & 31).expect("masked register field fits in u8")
+    }
+
     pub(crate) fn decode(word: u32) -> Option<Result<Aarch64Instruction, Aarch64DecodeError>> {
         if let Some(decoded) = crate::aarch64_simd_crypto::Crypto::decode(word) {
             return Some(Ok(decoded));
@@ -124,8 +128,8 @@ impl Aarch64SimdDecoder {
         if format == crate::FpFormat::Double && !wide {
             return Some(Err(Aarch64DecodeError::Reserved));
         }
-        let source = (word >> 5 & 31) as u8;
-        let destination = (word & 31) as u8;
+        let source = Self::register(word, 5);
+        let destination = Self::register(word, 0);
         let lanes = if format == crate::FpFormat::Double {
             2
         } else if wide {
@@ -170,7 +174,7 @@ impl Aarch64SimdDecoder {
     }
     fn copy(word: u32) -> Result<Aarch64Instruction, Aarch64DecodeError> {
         let imm4 = (word >> 11 & 15) as u8;
-        let imm5 = (word >> 16 & 31) as u8;
+        let imm5 = Self::register(word, 16);
         let (lane_bits, lane) = Self::element(imm5)?;
         let size = lane_bits.trailing_zeros() - 3;
         let operation = if word >> 29 & 1 != 0 {
@@ -187,8 +191,8 @@ impl Aarch64SimdDecoder {
                 _ => return Err(Aarch64DecodeError::Reserved),
             }
         };
-        let destination = (word & 31) as u8;
-        let source = (word >> 5 & 31) as u8;
+        let destination = Self::register(word, 0);
+        let source = Self::register(word, 5);
         Ok(Aarch64Instruction::SimdCopy {
             operation,
             lane_bits,
@@ -206,9 +210,9 @@ impl Aarch64SimdDecoder {
             return Err(Aarch64DecodeError::Reserved);
         }
         Ok(Aarch64Instruction::SimdExtract {
-            first: (word >> 5 & 31) as u8,
-            second: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            first: Self::register(word, 5),
+            second: Self::register(word, 16),
+            destination: Self::register(word, 0),
             position,
             wide,
         })
@@ -216,10 +220,10 @@ impl Aarch64SimdDecoder {
 
     fn table(word: u32) -> Aarch64Instruction {
         Aarch64Instruction::SimdTable {
-            first_table: (word >> 5 & 31) as u8,
+            first_table: Self::register(word, 5),
             table_count: ((word >> 13 & 3) + 1) as u8,
-            indexes: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            indexes: Self::register(word, 16),
+            destination: Self::register(word, 0),
             extend: word >> 12 & 1 != 0,
             wide: word >> 30 & 1 != 0,
         }
