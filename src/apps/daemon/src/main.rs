@@ -62,9 +62,17 @@ fn cpu_seconds(value: &str) -> u64 {
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Arguments {
-    #[arg(long)]
+    /// Durable container and image state.
+    #[arg(long = "data-root", visible_alias = "root", default_value = "/var/lib/docker")]
     root: PathBuf,
-    #[arg(long)]
+    /// Unix socket serving the Docker-compatible API.
+    #[arg(
+        short = 'H',
+        long = "host",
+        visible_alias = "socket",
+        default_value = "unix:///var/run/docker.sock",
+        value_parser = unix_socket
+    )]
     socket: PathBuf,
     #[arg(long, requires = "external_images")]
     images: Option<PathBuf>,
@@ -73,6 +81,17 @@ struct Arguments {
     /// Linux guest platform used to resolve images and create containers.
     #[arg(long, default_value_t = default_platform())]
     platform: Platform,
+}
+
+fn unix_socket(value: &str) -> Result<PathBuf, String> {
+    let path = value.strip_prefix("unix://").unwrap_or(value);
+    if path.is_empty() {
+        return Err("the Unix socket path must not be empty".into());
+    }
+    if value.contains("://") && !value.starts_with("unix://") {
+        return Err("only unix:// daemon hosts are supported".into());
+    }
+    Ok(PathBuf::from(path))
 }
 
 fn default_platform() -> Platform {
@@ -255,6 +274,34 @@ mod tests {
         assert_eq!(arguments.images, Some(PathBuf::from("/images")));
         assert_eq!(arguments.external_images, Some(PathBuf::from("/external")));
         assert_eq!(arguments.platform, default_platform());
+    }
+
+    #[test]
+    fn docker_defaults_and_flags_match_the_unix_daemon_contract() {
+        let defaults = Arguments::try_parse_from(["dockerd"]).unwrap();
+        assert_eq!(defaults.root, PathBuf::from("/var/lib/docker"));
+        assert_eq!(defaults.socket, PathBuf::from("/var/run/docker.sock"));
+
+        let configured = Arguments::try_parse_from([
+            "dockerd",
+            "--data-root",
+            "/srv/docker",
+            "--host",
+            "unix:///run/custom.sock",
+        ])
+        .unwrap();
+        assert_eq!(configured.root, PathBuf::from("/srv/docker"));
+        assert_eq!(configured.socket, PathBuf::from("/run/custom.sock"));
+
+        let short = Arguments::try_parse_from(["dockerd", "-H", "/run/short.sock"]).unwrap();
+        assert_eq!(short.socket, PathBuf::from("/run/short.sock"));
+    }
+
+    #[test]
+    fn unsupported_daemon_transports_fail_before_runtime_construction() {
+        let error = Arguments::try_parse_from(["dockerd", "--host", "tcp://127.0.0.1:2375"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("only unix:// daemon hosts are supported"));
     }
 
     #[test]
