@@ -36,7 +36,7 @@ static int cache_and_provenance(void) {
     uint64_t guest = 0;
 
     CHECK(hl_native_arena_create(&arena, &config) == HL_NATIVE_OK);
-    CHECK(hl_native_cache_create(&cache, &arena, 16, 16, 2, 7) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_create(&cache, &arena, 16, 16, 2, 7, NULL) == HL_NATIVE_OK);
     CHECK(hl_native_cache_lookup(cache, 0x4000, 7, &code) == HL_NATIVE_MISS);
     CHECK(hl_native_arena_begin(&arena) == HL_NATIVE_OK);
     CHECK(hl_native_cache_reserve(cache, 0x4000, 7, 0x4000, 0x4008, 32, &block) == HL_NATIVE_OK);

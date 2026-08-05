@@ -61,7 +61,10 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
     displacement = target->body_offset >= source_offset
         ? (int64_t)((target->body_offset - source_offset) / 4)
         : -(int64_t)((source_offset - target->body_offset) / 4);
-    if (displacement < -(1 << 25) || displacement >= (1 << 25)) return HL_NATIVE_CAPACITY;
+    if (displacement < -(1 << 25) || displacement >= (1 << 25)) {
+        hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
+        return HL_NATIVE_CAPACITY;
+    }
     *patched = UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
     *word = *patched;
     hl_native_status status = cache->arena->memory.publish(
@@ -73,7 +76,10 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
 static hl_native_status remember(hl_native_cache *cache, const cache_entry *source,
                                  const hl_native_relocation *relocation, uint32_t patched,
                                  uint32_t target_epoch_wildcard) {
-    if (cache->resolved_count == cache->resolved_capacity) return HL_NATIVE_CAPACITY;
+    if (cache->resolved_count == cache->resolved_capacity) {
+        hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
+        return HL_NATIVE_CAPACITY;
+    }
     cache->resolved[cache->resolved_count++] = (resolved_relocation){
         source->guest, source->instruction_epoch, source->code_offset,
         *relocation, patched, cache->generation, target_epoch_wildcard};
@@ -140,7 +146,10 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
         cache->entries[target_slot].token != target_identity)
         return HL_NATIVE_STATE;
     if (cache->entries[target_slot].conditional_self_loop != 0) return HL_NATIVE_OK;
-    if (cycle_requires_exit(cache, source, &cache->entries[target_slot])) return HL_NATIVE_OK;
+    if (cycle_requires_exit(cache, source, &cache->entries[target_slot])) {
+        hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CYCLE);
+        return HL_NATIVE_OK;
+    }
     hl_native_relocation relocation = {
         .code_offset = branch_offset - source->code_offset,
         .target_guest = target_guest,
@@ -197,9 +206,13 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
                 cache->poisoned = 1;
                 return status;
             }
+            hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_INVALIDATION);
         }
         if (!source_removed && target_removed) {
-            if (cache->relocation_count == cache->relocation_capacity) return HL_NATIVE_CAPACITY;
+            if (cache->relocation_count == cache->relocation_capacity) {
+                hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
+                return HL_NATIVE_CAPACITY;
+            }
             hl_native_relocation pending = resolved.relocation;
             if (resolved.target_epoch_wildcard) {
                 pending.target_instruction_epoch = 0;
@@ -230,8 +243,10 @@ hl_native_status hl_native_cache_relocate(hl_native_cache *cache, uint64_t sourc
         int target_slot = hl_native_cache_find(cache, relocation->target_guest);
         if (target_slot >= 0 && cache->entries[target_slot].conditional_self_loop != 0)
             continue;
-        if (target_slot >= 0 && cycle_requires_exit(cache, source, &cache->entries[target_slot]))
+        if (target_slot >= 0 && cycle_requires_exit(cache, source, &cache->entries[target_slot])) {
+            hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CYCLE);
             continue;
+        }
         if (target_slot >= 0 &&
             (!relocation->target_epoch_known ||
              cache->entries[target_slot].instruction_epoch == relocation->target_instruction_epoch)) {
@@ -239,16 +254,23 @@ hl_native_status hl_native_cache_relocate(hl_native_cache *cache, uint64_t sourc
             bound.target_instruction_epoch = cache->entries[target_slot].instruction_epoch;
             bound.target_epoch_known = 1;
             uint32_t patched;
-            if (cache->resolved_count == cache->resolved_capacity) return HL_NATIVE_CAPACITY;
+            if (cache->resolved_count == cache->resolved_capacity) {
+                hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
+                return HL_NATIVE_CAPACITY;
+            }
             hl_native_status status = patch(cache, source, &cache->entries[target_slot], &bound, &patched);
             if (status == HL_NATIVE_OK)
                 status = remember(cache, source, &bound, patched, !relocation->target_epoch_known);
             if (status != HL_NATIVE_OK) return status;
             continue;
         }
-        if (cache->relocation_count == cache->relocation_capacity) return HL_NATIVE_CAPACITY;
+        if (cache->relocation_count == cache->relocation_capacity) {
+            hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
+            return HL_NATIVE_CAPACITY;
+        }
         cache->relocations[cache->relocation_count++] = (pending_relocation){
             source_guest, source_instruction_epoch, source->code_offset, *relocation, cache->generation};
+        hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_COLD_TARGET);
     }
     return HL_NATIVE_OK;
 }
@@ -286,9 +308,14 @@ hl_native_status hl_native_cache_resolve(hl_native_cache *cache, uint64_t target
         if (source_slot < 0 || cache->entries[source_slot].instruction_epoch != pending.source_instruction_epoch ||
             cache->entries[source_slot].code_offset != pending.source_code_offset)
             continue;
-        if (cycle_requires_exit(cache, &cache->entries[source_slot], &cache->entries[target_slot]))
+        if (cycle_requires_exit(cache, &cache->entries[source_slot], &cache->entries[target_slot])) {
+            hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CYCLE);
             continue;
-        if (cache->resolved_count == cache->resolved_capacity) return HL_NATIVE_CAPACITY;
+        }
+        if (cache->resolved_count == cache->resolved_capacity) {
+            hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
+            return HL_NATIVE_CAPACITY;
+        }
         hl_native_relocation bound = pending.relocation;
         bound.target_instruction_epoch = target_instruction_epoch;
         bound.target_epoch_known = 1;

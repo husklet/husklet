@@ -5,6 +5,18 @@
 
 typedef struct hl_native_cache hl_native_cache;
 
+typedef enum hl_native_cache_event {
+    HL_NATIVE_CACHE_RELOCATION_COLD_TARGET = 1,
+    HL_NATIVE_CACHE_RELOCATION_CYCLE = 2,
+    HL_NATIVE_CACHE_RELOCATION_CAPACITY = 3,
+    HL_NATIVE_CACHE_RELOCATION_INVALIDATION = 4,
+} hl_native_cache_event;
+
+typedef struct hl_native_cache_observer {
+    void *context;
+    void (*observe)(void *, hl_native_cache_event);
+} hl_native_cache_observer;
+
 typedef enum hl_native_lookup {
     HL_NATIVE_MISS = 0,
     HL_NATIVE_HIT = 1,
@@ -71,7 +83,7 @@ typedef struct hl_native_relocation {
 } hl_native_relocation;
 
 hl_native_status hl_native_cache_create(hl_native_cache **, hl_native_arena *, uint32_t, uint32_t, uint32_t,
-                                        uint64_t);
+                                        uint64_t, const hl_native_cache_observer *);
 hl_native_lookup hl_native_cache_lookup(hl_native_cache *, uint64_t, uint64_t, hl_native_code *);
 hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *, uint64_t, uint64_t, uint64_t,
                                              uint64_t, uint64_t, hl_native_code *);

@@ -186,6 +186,20 @@ static void ibtc_clear(hl_native_executor *executor) {
         memset(executor->ibtc, 0, HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc));
 }
 
+static void cache_observe(void *context, hl_native_cache_event event) {
+    hl_native_executor *executor = context;
+    _Atomic uint64_t *counter = NULL;
+    if (executor == NULL) return;
+    switch (event) {
+        case HL_NATIVE_CACHE_RELOCATION_COLD_TARGET: counter = &executor->relocation_cold_targets; break;
+        case HL_NATIVE_CACHE_RELOCATION_CYCLE: counter = &executor->relocation_cycles; break;
+        case HL_NATIVE_CACHE_RELOCATION_CAPACITY: counter = &executor->relocation_capacity; break;
+        case HL_NATIVE_CACHE_RELOCATION_INVALIDATION: counter = &executor->relocation_invalidations; break;
+        default: return;
+    }
+    atomic_fetch_add_explicit(counter, 1, memory_order_relaxed);
+}
+
 static void ibtc_publish(hl_native_ibtc_entry *, uint64_t, void *);
 
 static void ibtc_invalidate(hl_native_executor *executor, uint64_t first, uint64_t last) {
@@ -224,6 +238,8 @@ static hl_native_status ibtc_fill(hl_native_executor *executor, hl_native_aarch6
         memcpy(&previous, executor->arena.writable + (site - rx), sizeof(previous));
         shared = &executor->ibtc[(target >> 2) & (HL_NATIVE_IBTC_COUNT - 1)];
         executor->ibtc_fills++;
+        atomic_fetch_add_explicit(&executor->ibtc_site_misses, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&executor->ibtc_shared_misses, 1, memory_order_relaxed);
         if (previous != 0 && previous != target) executor->ibtc_site_collisions++;
         if (shared->target != 0 && shared->target != target) executor->ibtc_shared_collisions++;
     }
@@ -409,12 +425,20 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->a64_dirty_overflow, 0);
     atomic_init(&executor->a64_dirty_committed, 0);
     atomic_init(&executor->a64_dirty_merged, 0);
+    atomic_init(&executor->relocation_cold_targets, 0);
+    atomic_init(&executor->relocation_cycles, 0);
+    atomic_init(&executor->relocation_capacity, 0);
+    atomic_init(&executor->relocation_invalidations, 0);
+    atomic_init(&executor->ibtc_site_misses, 0);
+    atomic_init(&executor->ibtc_shared_misses, 0);
     status = hl_native_arena_create(&executor->arena, config);
     if (status != HL_NATIVE_OK) {
         free(executor);
         return status;
     }
-    status = hl_native_cache_create(&executor->cache, &executor->arena, 1u << 19, 1u << 18, 0, 0);
+    hl_native_cache_observer observer = {executor, executor->diagnostics ? cache_observe : NULL};
+    status = hl_native_cache_create(&executor->cache, &executor->arena, 1u << 19, 1u << 18, 0, 0,
+                                    &observer);
     if (status != HL_NATIVE_OK) {
         hl_native_arena_destroy(&executor->arena);
         free(executor);
@@ -516,7 +540,7 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
     if (output->size >= offsetof(hl_native_diagnostics, a64_guard_fast)) {
         output->x86_syscall_vector_dirty = executor->x86_syscall_vector_dirty;
     }
-    if (output->size >= sizeof(*output)) {
+    if (output->size >= offsetof(hl_native_diagnostics, relocation_cold_targets)) {
         output->a64_guard_fast = atomic_load_explicit(&executor->a64_guard_fast, memory_order_relaxed);
         output->a64_guard_full = atomic_load_explicit(&executor->a64_guard_full, memory_order_relaxed);
         output->a64_guard_fallback = atomic_load_explicit(&executor->a64_guard_fallback, memory_order_relaxed);
@@ -526,6 +550,14 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->a64_dirty_merged = atomic_load_explicit(&executor->a64_dirty_merged, memory_order_relaxed);
         output->x86_cold_builds = atomic_load_explicit(&executor->x86_cold_builds, memory_order_relaxed);
         output->x86_cold_quota_exits = atomic_load_explicit(&executor->x86_cold_quota_exits, memory_order_relaxed);
+    }
+    if (output->size >= sizeof(*output)) {
+        output->relocation_cold_targets = atomic_load_explicit(&executor->relocation_cold_targets, memory_order_relaxed);
+        output->relocation_cycles = atomic_load_explicit(&executor->relocation_cycles, memory_order_relaxed);
+        output->relocation_capacity = atomic_load_explicit(&executor->relocation_capacity, memory_order_relaxed);
+        output->relocation_invalidations = atomic_load_explicit(&executor->relocation_invalidations, memory_order_relaxed);
+        output->ibtc_site_misses = atomic_load_explicit(&executor->ibtc_site_misses, memory_order_relaxed);
+        output->ibtc_shared_misses = atomic_load_explicit(&executor->ibtc_shared_misses, memory_order_relaxed);
     }
     return HL_NATIVE_OK;
 }

@@ -56,7 +56,7 @@ int main(void) {
 
     CHECK(reconstruction() == 0);
     CHECK(hl_native_arena_create(&arena, &config) == HL_NATIVE_OK);
-    CHECK(hl_native_cache_create(&cache, &arena, 8, 2, 2, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_create(&cache, &arena, 8, 2, 2, 1, NULL) == HL_NATIVE_OK);
     CHECK(hl_native_arena_begin(&arena) == HL_NATIVE_OK);
     CHECK(hl_native_cache_reserve(cache, 0x4000, 1, 0x4000, 0x4008, 16, &block) == HL_NATIVE_OK);
     memset(arena.writable + block.code_offset, 0xd5, 8);

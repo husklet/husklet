@@ -20,16 +20,32 @@ typedef struct fixture {
     hl_native_cache *cache;
 } fixture;
 
-static int fixture_create(fixture *fixture, uint32_t capacity, uint64_t epoch) {
+typedef struct observed_events {
+    uint64_t counts[5];
+} observed_events;
+
+static void observe(void *context, hl_native_cache_event event) {
+    observed_events *events = context;
+    if (events != NULL && event >= HL_NATIVE_CACHE_RELOCATION_COLD_TARGET &&
+        event <= HL_NATIVE_CACHE_RELOCATION_INVALIDATION)
+        events->counts[event]++;
+}
+
+static int fixture_create_observed(fixture *fixture, uint32_t capacity, uint64_t epoch,
+                                   const hl_native_cache_observer *observer) {
     memset(fixture, 0, sizeof(*fixture));
     fixture->memory = test_services(&fixture->state);
     fixture->config = test_config(&fixture->memory, HL_NATIVE_DUAL_REQUIRED);
     if (hl_native_arena_create(&fixture->arena, &fixture->config) != HL_NATIVE_OK) return 1;
-    if (hl_native_cache_create(&fixture->cache, &fixture->arena, capacity, 8, 0, epoch) != HL_NATIVE_OK) {
+    if (hl_native_cache_create(&fixture->cache, &fixture->arena, capacity, 8, 0, epoch, observer) != HL_NATIVE_OK) {
         hl_native_arena_destroy(&fixture->arena);
         return 1;
     }
     return 0;
+}
+
+static int fixture_create(fixture *fixture, uint32_t capacity, uint64_t epoch) {
+    return fixture_create_observed(fixture, capacity, epoch, NULL);
 }
 
 static void fixture_destroy(fixture *fixture) {
@@ -206,8 +222,36 @@ static int authority_identity(void) {
     return 0;
 }
 
+static int relocation_observer(void) {
+    fixture fixture;
+    observed_events events = {0};
+    hl_native_cache_observer observer = {&events, observe};
+    hl_native_relocation relocation = {
+        .code_offset = 0,
+        .target_guest = 0x9000,
+        .target_epoch_known = 0,
+        .expected = UINT32_C(0xa5a5a5a5),
+    };
+    CHECK(fixture_create_observed(&fixture, 8, 5, &observer) == 0);
+    CHECK(publish(&fixture, 0x8000, 5, 0x8000, 0x8004) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocate(fixture.cache, 0x8000, 0, &relocation, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(events.counts[HL_NATIVE_CACHE_RELOCATION_COLD_TARGET] == 1);
+    fixture_destroy(&fixture);
+    CHECK(fixture_create(&fixture, 8, 5) == 0);
+    CHECK(publish(&fixture, 0x8000, 5, 0x8000, 0x8004) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocate(fixture.cache, 0x8000, 0, &relocation, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(events.counts[HL_NATIVE_CACHE_RELOCATION_COLD_TARGET] == 1);
+    fixture_destroy(&fixture);
+    return 0;
+}
+
 int main(void) {
     if (reuse() != 0 || invalidation() != 0 || epoch() != 0 || capacity() != 0 || isolation() != 0 ||
-        instruction_epoch() != 0 || execution_identity() != 0 || authority_identity() != 0) return 1;
+        instruction_epoch() != 0 || execution_identity() != 0 || authority_identity() != 0 ||
+        relocation_observer() != 0) return 1;
     return 0;
 }

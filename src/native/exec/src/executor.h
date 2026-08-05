@@ -38,6 +38,8 @@ struct hl_native_executor {
     _Atomic uint64_t a64_dirty_reserved, a64_dirty_overflow, a64_dirty_committed;
     _Atomic uint64_t a64_dirty_merged;
     _Atomic uint64_t x86_cold_builds, x86_cold_quota_exits;
+    _Atomic uint64_t relocation_cold_targets, relocation_cycles, relocation_capacity;
+    _Atomic uint64_t relocation_invalidations, ibtc_site_misses, ibtc_shared_misses;
 };
 
 typedef struct hl_native_execution {

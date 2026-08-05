@@ -705,6 +705,10 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             return fatal_exit(&execution, output, X86_FATAL_EMPTY_BLOCK);
         if (budget < code.instruction_count) return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
         if (cpu->indirect_site != 0) {
+            if (executor->diagnostics) {
+                atomic_fetch_add_explicit(&executor->ibtc_site_misses, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&executor->ibtc_shared_misses, 1, memory_order_relaxed);
+            }
             if (code.conditional_self_loop == 0)
                 hl_native_ibtc_fill_shared(executor, pc, code.body);
             cpu->indirect_site = 0;

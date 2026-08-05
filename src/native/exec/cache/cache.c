@@ -72,7 +72,8 @@ static int insertion(const hl_native_cache *cache, uint64_t guest) {
 }
 
 hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_arena *arena, uint32_t capacity,
-                                        uint32_t provenance_capacity, uint32_t hash_shift, uint64_t mapping_epoch) {
+                                        uint32_t provenance_capacity, uint32_t hash_shift, uint64_t mapping_epoch,
+                                        const hl_native_cache_observer *observer) {
     hl_native_cache *cache;
     if (output == NULL) return HL_NATIVE_ARGUMENT;
     *output = NULL;
@@ -96,6 +97,7 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     cache->provenance_capacity = provenance_capacity;
     cache->relocation_capacity = RELOCATION_CAPACITY;
     cache->resolved_capacity = RELOCATION_CAPACITY;
+    if (observer != NULL) cache->observer = *observer;
     cache->generation = 1;
     atomic_init(&cache->published_generation, 1);
     atomic_init(&cache->provenance_epoch, 0);

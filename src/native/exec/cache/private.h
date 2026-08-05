@@ -54,7 +54,12 @@ struct hl_native_cache {
     uint32_t relocation_count, relocation_capacity;
     resolved_relocation *resolved;
     uint32_t resolved_count, resolved_capacity;
+    hl_native_cache_observer observer;
 };
+
+static inline void hl_native_cache_observe(hl_native_cache *cache, hl_native_cache_event event) {
+    if (cache->observer.observe != NULL) cache->observer.observe(cache->observer.context, event);
+}
 
 static inline int hl_native_cache_live(const hl_native_cache *cache, uint32_t slot) {
     return cache->entries[slot].generation == cache->generation && cache->entries[slot].state == ENTRY_LIVE;
