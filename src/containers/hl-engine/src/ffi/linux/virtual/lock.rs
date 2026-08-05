@@ -234,21 +234,21 @@ impl super::virtual_memory::Memory {
     }
 
     pub(super) fn lock_candidate(&self, range: AddressRange, limit: u64) -> Result<Locks, MemoryError> {
-        let locks = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut candidate = locks.clone();
         candidate.add(range, limit)?;
         Ok(candidate)
     }
 
     pub(super) fn unlock_candidate(&self, range: AddressRange) -> Locks {
-        let locks = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut candidate = locks.clone();
         candidate.remove(range);
         candidate
     }
 
     pub(super) fn publish_locks(&self, candidate: Locks) {
-        *self.locks.lock().unwrap_or_else(|error| error.into_inner()) = candidate;
+        *self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = candidate;
     }
 
     pub(super) fn lock_all_candidate(
@@ -258,7 +258,7 @@ impl super::virtual_memory::Memory {
         future: bool,
         on_fault: bool,
     ) -> Result<Locks, MemoryError> {
-        let locks = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut candidate = locks.clone();
         for range in ranges {
             candidate.add(*range, limit)?;
@@ -270,7 +270,7 @@ impl super::virtual_memory::Memory {
     }
 
     pub(super) fn install_all_locks(&self, candidate: Locks) {
-        let mut locks = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let mut locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for range in locks.added(&candidate) {
             let _ = self.unwire(range);
         }
@@ -281,7 +281,7 @@ impl super::virtual_memory::Memory {
     }
 
     pub(super) fn clear_all_locks(&self) {
-        let mut locks = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let mut locks = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let empty = Locks::default();
         for range in locks.added(&empty) {
             let _ = self.unwire(range);
