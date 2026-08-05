@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "PascalCase")]
 pub struct CreateContainer {
     pub image: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub labels: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<Vec<String>>,
@@ -27,9 +27,9 @@ pub struct CreateContainer {
     pub stop_timeout: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<Healthcheck>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub volumes: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub exposed_ports: crate::api::ExposedPorts,
     #[serde(flatten)]
     pub attach: Attachment,
@@ -47,7 +47,7 @@ pub struct CreateContainer {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct NetworkingConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub endpoints_config: EndpointsConfig,
 }
 
@@ -80,19 +80,19 @@ impl EndpointsConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct HostConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub binds: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub mounts: Vec<DockerMount>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub tmpfs: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub extra_hosts: Vec<String>,
-    #[serde(default, rename = "Dns")]
+    #[serde(default, rename = "Dns", deserialize_with = "crate::api::null_default")]
     pub dns: Vec<std::net::IpAddr>,
-    #[serde(default, rename = "DnsOptions")]
+    #[serde(default, rename = "DnsOptions", deserialize_with = "crate::api::null_default")]
     pub dns_options: Vec<String>,
-    #[serde(default, rename = "DnsSearch")]
+    #[serde(default, rename = "DnsSearch", deserialize_with = "crate::api::null_default")]
     pub dns_search: Vec<String>,
     #[serde(default)]
     pub memory: i64,
@@ -104,13 +104,13 @@ pub struct HostConfig {
     pub readonly_rootfs: bool,
     #[serde(default)]
     pub network_mode: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub links: Vec<String>,
     #[serde(default)]
     pub restart_policy: RestartPolicy,
     #[serde(default)]
     pub auto_remove: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub port_bindings: crate::api::PortBindings,
     #[serde(flatten, default)]
     pub unsupported: BTreeMap<String, serde_json::Value>,
@@ -180,9 +180,10 @@ pub struct VolumeOptions {
 pub struct DriverConfig {
     #[serde(default)]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub options: BTreeMap<String, String>,
 }
+
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -210,7 +211,7 @@ impl CreateContainer {
 
 #[cfg(all(test, feature = "runtime"))]
 mod stop_timeout_tests {
-    use super::{CreateContainer, HostConfig};
+    use super::{CreateContainer, DriverConfig, HostConfig, NetworkingConfig};
 
     #[test]
     fn resolver_fields_use_docker_wire_names_and_typed_addresses() {
@@ -249,6 +250,69 @@ mod stop_timeout_tests {
             };
             assert!(request.stop_timeout_seconds().is_err());
         }
+    }
+
+    #[test]
+    fn nullable_docker_collections_share_missing_and_empty_semantics() {
+        let request: CreateContainer = serde_json::from_value(serde_json::json!({
+            "Image": "alpine",
+            "Labels": null,
+            "Volumes": null,
+            "ExposedPorts": null,
+            "Healthcheck": {"Test": null},
+            "NetworkingConfig": {"EndpointsConfig": null},
+            "HostConfig": {
+                "Binds": null,
+                "Mounts": null,
+                "Tmpfs": null,
+                "ExtraHosts": null,
+                "Dns": null,
+                "DnsOptions": null,
+                "DnsSearch": null,
+                "Links": null,
+                "PortBindings": null
+            }
+        }))
+        .unwrap();
+        assert!(request.labels.is_empty());
+        assert!(request.volumes.is_empty());
+        assert!(request.exposed_ports.0.is_empty());
+        assert!(request.healthcheck.unwrap().test.is_empty());
+        assert!(request.networking_config.unwrap().endpoints_config.is_empty());
+        let host = request.host_config.unwrap();
+        assert!(host.binds.is_empty());
+        assert!(host.mounts.is_empty());
+        assert!(host.tmpfs.is_empty());
+        assert!(host.extra_hosts.is_empty());
+        assert!(host.dns.is_empty());
+        assert!(host.dns_options.is_empty());
+        assert!(host.dns_search.is_empty());
+        assert!(host.links.is_empty());
+        assert!(host.port_bindings.0.is_empty());
+
+        let network: NetworkingConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(network.endpoints_config.is_empty());
+        let driver: DriverConfig = serde_json::from_value(serde_json::json!({"Options": null})).unwrap();
+        assert!(driver.options.is_empty());
+    }
+
+    #[test]
+    fn nullable_collections_still_reject_wrong_non_null_shapes() {
+        for value in [
+            serde_json::json!({"Binds": "not-a-list"}),
+            serde_json::json!({"Mounts": {}}),
+            serde_json::json!({"Tmpfs": []}),
+            serde_json::json!({"Dns": [42]}),
+            serde_json::json!({"PortBindings": []}),
+        ] {
+            assert!(serde_json::from_value::<HostConfig>(value.clone()).is_err(), "accepted {value}");
+        }
+        assert!(serde_json::from_value::<CreateContainer>(serde_json::json!({
+            "Image": "alpine",
+            "Labels": []
+        }))
+        .is_err());
+        assert!(serde_json::from_str::<HostConfig>(r#"{"Binds":null,"Binds":[]}"#).is_err());
     }
 }
 

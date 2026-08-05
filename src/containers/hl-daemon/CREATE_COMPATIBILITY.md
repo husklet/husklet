@@ -1,5 +1,31 @@
 # Docker create compatibility
 
+## Nullable collection wire contract
+
+Docker CLI 29.1.3 serializes empty create collections inconsistently as omitted,
+`null`, empty arrays, or empty objects.  A captured v1.43 `docker create` request
+included `HostConfig.Binds=null`, `Dns=null`, `ExtraHosts=null`, `Links=null`,
+and endpoint `Links=null`/`Aliases=null`, while adjacent empty fields used arrays
+or objects.  These spellings all mean “no values” in Docker's create schema.
+
+The API model now owns one null-or-value deserializer for required/default
+collections.  It covers top-level labels, declared volumes, and exposed ports;
+healthcheck test commands; networking endpoint maps, links, aliases, and
+link-local addresses; host binds, structured mounts, tmpfs, extra hosts, DNS
+lists, legacy links, and port bindings; and volume-driver options.  Missing,
+`null`, and the correctly typed empty collection produce the same empty value.
+Wrong non-null shapes and duplicate fields remain decoding errors.  Optional
+collections retain `None` because their absence is identity-bearing rather than
+an empty required/default value.
+
+This is a bounded JSON wire-model change.  It performs no image, container,
+filesystem, network, or engine operation, so no retained-C runtime domain is
+implicated.  With the change, the same real Docker request advances beyond
+`Binds=null` and reaches the next independent compatibility-policy gap:
+`ConsoleSize=[0,0]` is currently classified as a meaningful unsupported field.
+That policy domain is not changed here, and create/inspect/remove are therefore
+not claimed as successful in this lane.
+
 This matrix describes the request contract implemented by
 `POST /v1.43/containers/create`. It is based on Moby 24.0.9, whose Engine API is
 1.43:

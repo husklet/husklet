@@ -152,9 +152,9 @@ pub struct NetworkConnect {
 pub struct EndpointConfig {
     #[serde(default, rename = "IPAMConfig", skip_serializing_if = "Option::is_none")]
     pub ipam: Option<EndpointIpam>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub links: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver_opts: Option<BTreeMap<String, String>>,
@@ -170,7 +170,7 @@ pub struct EndpointIpam {
     pub ipv4_address: String,
     #[serde(default, rename = "IPv6Address")]
     pub ipv6_address: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub link_local_ips: Vec<String>,
     #[serde(flatten, default)]
     pub unsupported: BTreeMap<String, serde_json::Value>,

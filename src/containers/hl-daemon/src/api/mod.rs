@@ -1,5 +1,15 @@
 //! Docker-compatible wire types and HTTP implementation.
 
+use serde::Deserialize as _;
+
+fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 mod event;
 mod filter;
 mod model;

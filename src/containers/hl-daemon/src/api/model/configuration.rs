@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Healthcheck {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::api::null_default")]
     pub test: Vec<String>,
     #[serde(default)]
     pub interval: i64,
