@@ -1,7 +1,6 @@
 //! Lifecycle control for a process owning a Unix socket.
 
 use std::io;
-use std::os::fd::AsRawFd;
 
 pub(super) struct Peer {
     process: libc::pid_t,
@@ -10,7 +9,7 @@ pub(super) struct Peer {
 impl Peer {
     pub(super) fn new(connection: std::os::unix::net::UnixStream) -> io::Result<Self> {
         Ok(Self {
-            process: Self::process(&connection)?,
+            process: ffi::process(&connection)?,
         })
     }
 
@@ -76,17 +75,7 @@ impl Peer {
     }
 
     fn signal(&self, signal: libc::c_int) -> io::Result<()> {
-        // SAFETY: the kernel supplied this positive peer PID for the connected Unix socket.
-        if unsafe { libc::kill(self.process, signal) } == 0 {
-            Ok(())
-        } else {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::ESRCH) {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        }
+        ffi::signal(self.process, signal)
     }
 
     pub(super) fn offline(error: &io::Error) -> bool {
@@ -95,13 +84,34 @@ impl Peer {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused | io::ErrorKind::ConnectionReset
         )
     }
+}
+
+/// Private Unix process-control boundary consumed through safe owned values.
+mod ffi {
+    use std::io;
+    use std::os::fd::AsRawFd;
+
+    pub(super) fn signal(process: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
+        // SAFETY: the kernel supplied this positive peer PID for a connected Unix socket. `kill`
+        // receives values only, retains no Rust storage, invokes no callback, and cannot unwind.
+        if unsafe { libc::kill(process, signal) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
 
     #[cfg(target_os = "macos")]
-    fn process(connection: &std::os::unix::net::UnixStream) -> io::Result<libc::pid_t> {
+    pub(super) fn process(connection: &std::os::unix::net::UnixStream) -> io::Result<libc::pid_t> {
         let mut process: libc::pid_t = 0;
         let mut length = std::mem::size_of_val(&process) as libc::socklen_t;
         // SAFETY: `process` and `length` describe writable storage of the exact size expected by
-        // `LOCAL_PEERPID`; `connection` owns a live Unix-domain socket descriptor.
+        // `LOCAL_PEERPID`; `connection` owns the descriptor through the call. The kernel retains no
+        // pointer, Rust has no concurrent alias, no callback is invoked, and the ABI cannot unwind.
         let status = unsafe {
             libc::getsockopt(
                 connection.as_raw_fd(),
@@ -119,12 +129,14 @@ impl Peer {
     }
 
     #[cfg(target_os = "linux")]
-    fn process(connection: &std::os::unix::net::UnixStream) -> io::Result<libc::pid_t> {
-        // SAFETY: `ucred` is a plain C value and zero is valid initialization before `getsockopt`.
+    pub(super) fn process(connection: &std::os::unix::net::UnixStream) -> io::Result<libc::pid_t> {
+        // SAFETY: `ucred` is a plain C value with no invalid bit patterns, and zero initialization
+        // creates no references, aliases, or destructor obligations.
         let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
         let mut length = std::mem::size_of_val(&credentials) as libc::socklen_t;
         // SAFETY: `credentials` and `length` describe writable storage of the exact size expected by
-        // `SO_PEERCRED`; `connection` owns a live Unix-domain socket descriptor.
+        // `SO_PEERCRED`; `connection` owns the descriptor through the call. The kernel retains no
+        // pointer, Rust has no concurrent alias, no callback is invoked, and the ABI cannot unwind.
         let status = unsafe {
             libc::getsockopt(
                 connection.as_raw_fd(),
