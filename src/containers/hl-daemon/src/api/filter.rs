@@ -446,6 +446,7 @@ impl PreparedList {
                         .flatten()
                         .any(|reference| &List::ordering_key(container) > reference)
             }
+            "label" => values.iter().all(|value| List::matches_label(container, value)),
             "label!" => values.iter().all(|value| !List::matches_label(container, value)),
             _ => {
                 values.is_empty()
@@ -472,6 +473,7 @@ mod tests {
             ContainerSpec::from_directory("/rootfs", Process::new("/bin/true"))
                 .name("build-worker")
                 .label("role", "build")
+                .label("tier", "worker")
                 .image(hl_images::Reference::from_str("registry.test/team/tool:7").unwrap()),
             ContainerState::Exited {
                 result: hl_container::ExitStatus::Code(0),
@@ -565,6 +567,30 @@ mod tests {
         .unwrap();
 
         assert_eq!(current, legacy);
+    }
+
+    #[test]
+    fn label_filter_requires_every_key_or_key_value_term() {
+        let container = container();
+        for filters in [
+            r#"{"label":["role"]}"#,
+            r#"{"label":["role=build"]}"#,
+            r#"{"label":["role=build","tier=worker"]}"#,
+            r#"{"label":["role=build","role=build"]}"#,
+            r#"{"label":{"role=build":false,"tier":true}}"#,
+            r#"{"label":["role=build"],"status":["exited"]}"#,
+        ] {
+            let selected = List::parse(true, Some(filters)).unwrap();
+            assert!(matches(selected, &container, std::slice::from_ref(&container)), "{filters}");
+        }
+        for filters in [
+            r#"{"label":["role=build","missing"]}"#,
+            r#"{"label":["role=other"]}"#,
+            r#"{"label":["role=build"],"status":["running"]}"#,
+        ] {
+            let selected = List::parse(true, Some(filters)).unwrap();
+            assert!(!matches(selected, &container, std::slice::from_ref(&container)), "{filters}");
+        }
     }
 
     #[test]
