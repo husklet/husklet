@@ -190,7 +190,7 @@ pub struct ProcessLauncher<S: ProcessSyscalls> {
 }
 
 enum Child<S: ProcessSyscalls> {
-    Process(ProcessHandle<S>),
+    Process(Arc<ProcessHandle<S>>),
     Immediate(EngineExit),
 }
 
@@ -334,22 +334,24 @@ impl<S: ProcessSyscalls> Launcher for ProcessLauncher<S> {
         self.children
             .lock()
             .map_err(|_| EngineError::Synchronization)?
-            .insert(identifier, Child::Process(process));
+            .insert(identifier, Child::Process(Arc::new(process)));
         Ok(EngineProcessId(identifier))
     }
 
     fn wait(&self, process: EngineProcessId) -> Result<EngineExit, EngineError> {
-        let child = self
-            .children
-            .lock()
-            .map_err(|_| EngineError::Synchronization)?
-            .remove(&process.0)
-            .ok_or(EngineError::WaitFailed)?;
-        let child = match child {
-            Child::Process(child) => child,
-            Child::Immediate(exit) => return Ok(exit),
+        let child = {
+            let mut children = self.children.lock().map_err(|_| EngineError::Synchronization)?;
+            match children.get(&process.0) {
+                Some(Child::Process(child)) => Arc::clone(child),
+                Some(Child::Immediate(exit)) => {
+                    let exit = *exit;
+                    children.remove(&process.0);
+                    return Ok(exit);
+                }
+                None => return Err(EngineError::WaitFailed),
+            }
         };
-        match child.wait_blocking().map_err(|_| EngineError::WaitFailed)? {
+        let exit = match child.wait_blocking().map_err(|_| EngineError::WaitFailed)? {
             ChildExit::Code(code) => Ok(EngineExit {
                 kind: ExitKind::Code,
                 guest_status: i32::from(code),
@@ -362,7 +364,12 @@ impl<S: ProcessSyscalls> Launcher for ProcessLauncher<S> {
                 detail: 0,
                 fault: None,
             }),
-        }
+        };
+        self.children
+            .lock()
+            .map_err(|_| EngineError::Synchronization)?
+            .remove(&process.0);
+        exit
     }
 
     fn terminate(&self, process: EngineProcessId, request: StopRequest) -> Result<(), EngineError> {

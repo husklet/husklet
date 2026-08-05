@@ -538,3 +538,31 @@ async fn shutdown_stops_every_active_container_and_preserves_inactive_records() 
     );
     assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Terminate, Signal::Kill]);
 }
+
+#[tokio::test]
+async fn force_removal_reaps_attached_executions_before_returning() {
+    let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
+    runtime.delay = Duration::from_millis(80);
+    let runtime = Arc::new(runtime);
+    let containers = service(Arc::clone(&runtime)).await;
+    containers.create(spec("force-tree")).await.unwrap();
+    containers.start("force-tree").await.unwrap();
+    let execution = containers
+        .executions()
+        .create("force-tree", ExecSpec::new(Process::new("fake")))
+        .await
+        .unwrap();
+    let _session = containers.executions().start(&execution.id).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(1), containers.remove_force("force-tree"))
+        .await
+        .expect("force removal must remain bounded")
+        .unwrap();
+
+    assert!(containers.executions().list().await.unwrap().is_empty());
+    assert!(matches!(
+        containers.executions().inspect(&execution.id).await,
+        Err(Error::ExecNotFound(_))
+    ));
+    assert!(runtime.signals.lock().unwrap().contains(&Signal::Kill));
+}

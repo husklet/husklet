@@ -19,6 +19,7 @@ impl Service {
                 }
                 self.wait(reference, WaitCondition::NotRunning).await?;
             }
+            self.stop_and_wait_executions(&container.id).await?;
         }
         let _guard = self.operations.lock().await;
         let container = self.resolve(reference).await?;
@@ -89,6 +90,37 @@ impl Service {
             io.finish();
         }
         Ok(container)
+    }
+
+    /// Force-stops every attached execution and waits until each completion task
+    /// has published its durable terminal state. This runs without the operation
+    /// lock because completion needs that lock to finish ownership teardown.
+    async fn stop_and_wait_executions(&self, container: &crate::ContainerId) -> Result<()> {
+        let executions = self
+            .execs
+            .list()
+            .await?
+            .into_iter()
+            .filter(|exec| &exec.container == container && exec.state.is_active())
+            .map(|exec| exec.id)
+            .collect::<Vec<_>>();
+        let mut failure = None;
+        for id in &executions {
+            let process = self.exec_live.lock().await.get(id).cloned();
+            let result = match process {
+                Some(process) => process.signal(Signal::Kill).await,
+                None => Err(Error::Runtime(format!("running exec {id} has no runtime process"))),
+            };
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+            }
+        }
+        for id in executions {
+            if let Err(error) = self.wait_exec(&id).await {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     pub(crate) async fn prune(&self, selection: &crate::Prune) -> Result<Vec<Container>> {
