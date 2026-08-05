@@ -43,7 +43,7 @@ pub use stack::{
     StackPlanner, StackRequest,
 };
 pub use tls::{InitialTlsPlan, ThreadLocalStorage, TlsModulePlacement, TlsModuleRequest, TlsPlanError, TlsVariant};
-pub use transaction::{LoadError, LoadRequest, LoadedMapping, LoadedProcess, Loader};
+pub use transaction::{LoadError, LoadRequest, LoadedMapping, LoadedProcess, Loader, LoaderDiagnostic, LoaderPhase};
 
 #[cfg(test)]
 mod dynamic_test;

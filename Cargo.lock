@@ -1278,6 +1278,7 @@ name = "hl-loader"
 version = "0.1.0"
 dependencies = [
  "hl-isa",
+ "hl-log",
 ]
 
 [[package]]

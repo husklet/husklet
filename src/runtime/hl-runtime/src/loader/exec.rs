@@ -4,7 +4,7 @@ use hl_isa::GuestArchitecture;
 use hl_linux::ExecPlan;
 use hl_loader::{
     GuestCredentials, GuestFeatures, ImageProtectionRegistry, ImageSource, LoadError, LoadLimits, LoadRequest,
-    LoadedProcess, Loader, ThreadLocalStorage, TransactionalAddressSpace,
+    LoadedProcess, Loader, LoaderDiagnostic, ThreadLocalStorage, TransactionalAddressSpace,
 };
 use hl_task::{ProcessId, ThreadId};
 
@@ -78,6 +78,7 @@ where
     tls: Mutex<T>,
     execution: E,
     failures: Arc<dyn LoadFailureReporter>,
+    diagnostics: Option<hl_log::Channel<LoaderDiagnostic>>,
     images: ProcessImage<Image<A::AddressSpace, T::Prepared, E::Image>>,
 }
 
@@ -139,6 +140,7 @@ where
             tls: Mutex::new(tls),
             execution,
             failures: Arc::new(LogLoadFailure),
+            diagnostics: None,
             images: ProcessImage::new(initial),
         }
     }
@@ -146,6 +148,12 @@ where
     /// Replaces the default release-safe log reporter, primarily for embedding and tests.
     pub fn with_failure_reporter(mut self, failures: Arc<dyn LoadFailureReporter>) -> Self {
         self.failures = failures;
+        self
+    }
+
+    #[must_use]
+    pub fn with_loader_diagnostics(mut self, diagnostics: hl_log::Channel<LoaderDiagnostic>) -> Self {
+        self.diagnostics = Some(diagnostics);
         self
     }
 
@@ -184,6 +192,9 @@ where
         let source = self.sources.open(process, plan)?;
         let address_space = self.address_spaces.create(process)?;
         let mut loader = Loader::new(source, address_space, self.limits);
+        if let Some(diagnostics) = &self.diagnostics {
+            loader = loader.with_diagnostics(diagnostics.clone());
+        }
         let arguments = plan.arguments.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let environment = plan.environment.iter().map(Vec::as_slice).collect::<Vec<_>>();
         let loaded = loader

@@ -25,6 +25,32 @@ fn with_pure_bss(mut image: Vec<u8>) -> Vec<u8> {
 }
 
 #[test]
+fn diagnostics_publish_one_bounded_record_per_loader_phase() {
+    let (diagnostics, receiver) = hl_log::Channel::bounded(7).unwrap();
+    let mut loader = TransactionFixture::loader(GuestArchitecture::Aarch64, ImageKind::Executable, None)
+        .with_diagnostics(diagnostics);
+    loader
+        .load(TransactionFixture::request(GuestArchitecture::Aarch64))
+        .unwrap();
+    let phases = std::iter::from_fn(|| receiver.try_receive().ok())
+        .map(|diagnostic| diagnostic.phase)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        phases,
+        vec![
+            LoaderPhase::MainRead,
+            LoaderPhase::MainInspect,
+            LoaderPhase::InterpreterPrepare,
+            LoaderPhase::MainStage,
+            LoaderPhase::InterpreterStage,
+            LoaderPhase::StackPlan,
+            LoaderPhase::Commit,
+        ]
+    );
+    assert_eq!(receiver.lost(), 0);
+}
+
+#[test]
 fn aarch64_fixed_executable() {
     let mut loader = TransactionFixture::loader(GuestArchitecture::Aarch64, ImageKind::Executable, None);
     let loaded = loader

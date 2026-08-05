@@ -6,7 +6,25 @@ use crate::{
     TlsModuleRequest, TlsPlanError, TransactionalAddressSpace, mapping_transaction::MappingTransaction,
 };
 use hl_isa::GuestArchitecture;
-use std::{error::Error, fmt};
+use hl_log::Channel;
+use std::{error::Error, fmt, time::Instant};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoaderPhase {
+    MainRead,
+    MainInspect,
+    InterpreterPrepare,
+    MainStage,
+    InterpreterStage,
+    StackPlan,
+    Commit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LoaderDiagnostic {
+    pub phase: LoaderPhase,
+    pub elapsed_us: u64,
+}
 
 /// Complete host-neutral input to one process-image transaction.
 pub struct LoadRequest<'a> {
@@ -137,6 +155,7 @@ pub struct Loader<S, A> {
     source: S,
     address_space: A,
     limits: LoadLimits,
+    diagnostics: Option<Channel<LoaderDiagnostic>>,
 }
 
 impl<S, A> Loader<S, A>
@@ -150,13 +169,43 @@ where
             source,
             address_space,
             limits,
+            diagnostics: None,
         }
     }
 
+    #[must_use]
+    pub fn with_diagnostics(mut self, diagnostics: Channel<LoaderDiagnostic>) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
+    }
+
+    fn phase_start(diagnostics: &Option<Channel<LoaderDiagnostic>>) -> Option<Instant> {
+        diagnostics.as_ref().map(|_| Instant::now())
+    }
+
+    fn phase_finish(
+        diagnostics: &Option<Channel<LoaderDiagnostic>>,
+        phase: LoaderPhase,
+        started: Option<Instant>,
+    ) {
+        let (Some(diagnostics), Some(started)) = (diagnostics, started) else {
+            return;
+        };
+        let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let _ = diagnostics.try_publish(LoaderDiagnostic { phase, elapsed_us });
+    }
+
     pub fn load(&mut self, request: LoadRequest<'_>) -> Result<LoadedProcess, LoadError> {
+        let diagnostics = self.diagnostics.clone();
+        let started = Self::phase_start(&diagnostics);
         let main_bytes = self.read(ImageRole::Main, request.image_path)?;
+        Self::phase_finish(&diagnostics, LoaderPhase::MainRead, started);
+        let started = Self::phase_start(&diagnostics);
         let main_plan = self.inspect(ImageRole::Main, request.architecture, &main_bytes)?;
+        Self::phase_finish(&diagnostics, LoaderPhase::MainInspect, started);
+        let started = Self::phase_start(&diagnostics);
         let interpreter_image = self.prepare_interpreter(request.architecture, &main_plan)?;
+        Self::phase_finish(&diagnostics, LoaderPhase::InterpreterPrepare, started);
         let interpreter_plan = interpreter_image.as_ref().map(|(_, plan)| plan.clone());
         let mut transaction = MappingTransaction::new(&mut self.address_space);
         let main = Self::reserve_main(
@@ -166,6 +215,7 @@ where
             self.limits.pie_hint,
         )?;
         Self::validate_reservation(&main, main_plan.image_span())?;
+        let started = Self::phase_start(&diagnostics);
         Self::stage_image(
             &mut transaction,
             &main,
@@ -173,7 +223,9 @@ where
             &main_bytes,
             self.limits.host_page_size,
         )?;
+        Self::phase_finish(&diagnostics, LoaderPhase::MainStage, started);
 
+        let started = Self::phase_start(&diagnostics);
         let interpreter = if let Some((bytes, plan)) = interpreter_image {
             let mapping = transaction.reserve(
                 MappingKind::Interpreter,
@@ -186,6 +238,7 @@ where
         } else {
             None
         };
+        Self::phase_finish(&diagnostics, LoaderPhase::InterpreterStage, started);
         let stack_overread_size = match request.architecture {
             GuestArchitecture::Aarch64 => 0,
             GuestArchitecture::X86_64 => self.limits.x86_stack_overread_size,
@@ -240,6 +293,7 @@ where
             &tls,
         )?;
         let main_projection = ImageProjection::build(&main_plan, &main)?;
+        let started = Self::phase_start(&diagnostics);
         let initial_stack = StackPlanner::new(self.limits.stack).plan(StackRequest {
             image: &main_plan,
             load_bias: main_bias,
@@ -277,6 +331,7 @@ where
                 .ok_or(LoadError::InvalidReservation)?,
             Protection::from_bits(Protection::READ | Protection::WRITE),
         )?;
+        Self::phase_finish(&diagnostics, LoaderPhase::StackPlan, started);
         let usable_stack = LoadedMapping {
             address: stack_mapping
                 .address()
@@ -292,7 +347,9 @@ where
                 size: stack_overread_size,
             })
         };
+        let started = Self::phase_start(&diagnostics);
         transaction.commit()?;
+        Self::phase_finish(&diagnostics, LoaderPhase::Commit, started);
         Ok(LoadedProcess {
             main: LoadedMapping::from_reserved(&main),
             interpreter: interpreter.as_ref().map(LoadedMapping::from_reserved),
