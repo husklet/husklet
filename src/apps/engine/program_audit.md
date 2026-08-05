@@ -36,3 +36,21 @@ This audit found two stale tests rather than product defects: their handcrafted
 wire still used the former 184-byte header, and their undefined opcode expected
 an engine fault even though both the retained C engine and the Rust scheduler
 correctly classify it as a guest signal.
+
+## Executable ownership
+
+The migrated `../engine_rust/src/app/hl-engine` tree placed its library and all
+three production executables in one crate. Husklet deliberately separates the
+reusable composition crate at `src/containers/hl-engine` from the packaged
+process adapters at `src/apps/engine`. That split is sound: daemon and container
+callers reuse the composition API without depending on executable policy.
+
+The initial split copied the AArch64 and x86-64 worker mains independently. Both
+owned the same environment capture, authority-descriptor conversion, logging,
+event, program invocation, and exit-status adapter, with only the executable
+identity and an existing x86 opt-in error print differing. The shared worker now
+lives in the application crate library; each binary supplies only its fixed
+guest identity. `hl_engine::program::Program` remains the sole owner of launch,
+runtime, and Linux exit semantics, and the x86 diagnostic difference is retained
+exactly. No retained C runtime behavior is changed by this application-only
+deduplication.

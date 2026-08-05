@@ -19,6 +19,9 @@ hl-log = { path = "../../packages/hl-log" }
 name = "hl-engine"
 path = "src/main.rs"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "hl-aarch64"
 path = "src/bin/aarch64.rs"
