@@ -1,4 +1,5 @@
 use hl_isa::GuestArchitecture;
+use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::test_support::{
@@ -24,15 +25,28 @@ fn with_pure_bss(mut image: Vec<u8>) -> Vec<u8> {
     image
 }
 
+#[derive(Default)]
+struct Diagnostics(Mutex<Vec<LoaderDiagnostic>>);
+
+impl LoaderDiagnostics for Diagnostics {
+    fn try_publish(&self, diagnostic: LoaderDiagnostic) {
+        self.0.lock().unwrap().push(diagnostic);
+    }
+}
+
 #[test]
-fn diagnostics_publish_one_bounded_record_per_loader_phase() {
-    let (diagnostics, receiver) = hl_log::Channel::bounded(7).unwrap();
+fn diagnostics_cover_phases() {
+    let diagnostics = Arc::new(Diagnostics::default());
     let mut loader = TransactionFixture::loader(GuestArchitecture::Aarch64, ImageKind::Executable, None)
-        .with_diagnostics(diagnostics);
+        .with_diagnostics(diagnostics.clone());
     loader
         .load(TransactionFixture::request(GuestArchitecture::Aarch64))
         .unwrap();
-    let phases = std::iter::from_fn(|| receiver.try_receive().ok())
+    let phases = diagnostics
+        .0
+        .lock()
+        .unwrap()
+        .iter()
         .map(|diagnostic| diagnostic.phase)
         .collect::<Vec<_>>();
     assert_eq!(
@@ -47,7 +61,6 @@ fn diagnostics_publish_one_bounded_record_per_loader_phase() {
             LoaderPhase::Commit,
         ]
     );
-    assert_eq!(receiver.lost(), 0);
 }
 
 #[test]

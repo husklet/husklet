@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 hl-isa = { path = "../hl-isa" }
-hl-log = { path = "../../packages/hl-log" }
 
 [lints]
 workspace = true

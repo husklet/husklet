@@ -6,8 +6,7 @@ use crate::{
     TlsModuleRequest, TlsPlanError, TransactionalAddressSpace, mapping_transaction::MappingTransaction,
 };
 use hl_isa::GuestArchitecture;
-use hl_log::Channel;
-use std::{error::Error, fmt, time::Instant};
+use std::{error::Error, fmt, sync::Arc, time::Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoaderPhase {
@@ -24,6 +23,14 @@ pub enum LoaderPhase {
 pub struct LoaderDiagnostic {
     pub phase: LoaderPhase,
     pub elapsed_us: u64,
+}
+
+/// Consumer-owned destination for optional loader phase diagnostics.
+///
+/// Implementations must return promptly. Diagnostics are observational and a
+/// destination cannot alter or fail an image transaction.
+pub trait LoaderDiagnostics: Send + Sync {
+    fn try_publish(&self, diagnostic: LoaderDiagnostic);
 }
 
 /// Complete host-neutral input to one process-image transaction.
@@ -155,7 +162,7 @@ pub struct Loader<S, A> {
     source: S,
     address_space: A,
     limits: LoadLimits,
-    diagnostics: Option<Channel<LoaderDiagnostic>>,
+    diagnostics: Option<Arc<dyn LoaderDiagnostics>>,
 }
 
 impl<S, A> Loader<S, A>
@@ -174,25 +181,21 @@ where
     }
 
     #[must_use]
-    pub fn with_diagnostics(mut self, diagnostics: Channel<LoaderDiagnostic>) -> Self {
+    pub fn with_diagnostics(mut self, diagnostics: Arc<dyn LoaderDiagnostics>) -> Self {
         self.diagnostics = Some(diagnostics);
         self
     }
 
-    fn phase_start(diagnostics: &Option<Channel<LoaderDiagnostic>>) -> Option<Instant> {
+    fn phase_start(diagnostics: &Option<Arc<dyn LoaderDiagnostics>>) -> Option<Instant> {
         diagnostics.as_ref().map(|_| Instant::now())
     }
 
-    fn phase_finish(
-        diagnostics: &Option<Channel<LoaderDiagnostic>>,
-        phase: LoaderPhase,
-        started: Option<Instant>,
-    ) {
+    fn phase_finish(diagnostics: &Option<Arc<dyn LoaderDiagnostics>>, phase: LoaderPhase, started: Option<Instant>) {
         let (Some(diagnostics), Some(started)) = (diagnostics, started) else {
             return;
         };
         let elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        let _ = diagnostics.try_publish(LoaderDiagnostic { phase, elapsed_us });
+        diagnostics.try_publish(LoaderDiagnostic { phase, elapsed_us });
     }
 
     pub fn load(&mut self, request: LoadRequest<'_>) -> Result<LoadedProcess, LoadError> {
