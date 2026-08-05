@@ -9,6 +9,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 
+use crate::api::filter::docker_filter_values;
 use crate::api::{EventFilter, EventQuery};
 
 use super::{ApiError, ApiResult, DockerState};
@@ -22,24 +23,6 @@ pub(super) struct QueryParameters {
     unsupported: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum FilterValues {
-    Current(BTreeMap<String, bool>),
-    Legacy(Vec<String>),
-}
-
-impl FilterValues {
-    fn terms(self) -> Vec<String> {
-        match self {
-            // Docker's current encoding is a string set. The boolean values are
-            // retained for compatibility but do not enable or disable keys.
-            Self::Current(values) => values.into_keys().collect(),
-            Self::Legacy(values) => values,
-        }
-    }
-}
-
 impl QueryParameters {
     fn event_query(self) -> ApiResult<EventQuery> {
         if let Some(key) = self.unsupported.keys().next() {
@@ -50,13 +33,10 @@ impl QueryParameters {
         }
         let filters = self
             .filters
-            .map(|value| serde_json::from_str::<BTreeMap<String, FilterValues>>(&value))
+            .map(|value| docker_filter_values(&value))
             .transpose()
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(name, values)| (name, values.terms()))
-            .collect::<BTreeMap<_, _>>();
+            .unwrap_or_default();
         for key in filters.keys() {
             if !matches!(
                 key.as_str(),

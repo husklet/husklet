@@ -1,6 +1,58 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DockerFilterValues {
+    Current(BTreeMap<String, bool>),
+    Legacy(Vec<String>),
+}
+
+impl DockerFilterValues {
+    fn terms(self) -> Vec<String> {
+        match self {
+            // Docker's current encoding is a string set. The boolean values are
+            // retained for compatibility but do not enable or disable keys.
+            Self::Current(values) => values.into_keys().collect(),
+            Self::Legacy(values) => values,
+        }
+    }
+}
+
+pub(crate) fn docker_filter_values(raw: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
+    const MAX_ENCODED_BYTES: usize = 64 * 1024;
+    const MAX_FILTERS: usize = 64;
+    const MAX_TERMS: usize = 1_024;
+    const MAX_NAME_BYTES: usize = 128;
+    const MAX_TERM_BYTES: usize = 4 * 1024;
+
+    if raw.len() > MAX_ENCODED_BYTES {
+        return Err("Docker filters exceed 64 KiB".into());
+    }
+    let encoded =
+        serde_json::from_str::<BTreeMap<String, DockerFilterValues>>(raw).map_err(|error| error.to_string())?;
+    if encoded.len() > MAX_FILTERS {
+        return Err("Docker filters exceed 64 names".into());
+    }
+    let mut total_terms = 0_usize;
+    let mut filters = BTreeMap::new();
+    for (name, values) in encoded {
+        if name.len() > MAX_NAME_BYTES {
+            return Err("Docker filter name exceeds 128 bytes".into());
+        }
+        let values = values.terms();
+        total_terms = total_terms
+            .checked_add(values.len())
+            .filter(|total| *total <= MAX_TERMS)
+            .ok_or_else(|| "Docker filters exceed 1024 values".to_owned())?;
+        if values.iter().any(|value| value.len() > MAX_TERM_BYTES) {
+            return Err("Docker filter value exceeds 4 KiB".into());
+        }
+        filters.insert(name, values);
+    }
+    Ok(filters)
+}
+
 /// Docker container-prune filters converted to domain selection.
 #[cfg(feature = "runtime")]
 pub(crate) struct Prune(hl_container::Prune);
@@ -178,7 +230,7 @@ impl List {
         let Some(filters) = filters.filter(|value| !value.is_empty()) else {
             return Ok(list);
         };
-        list.filters = serde_json::from_str(filters).map_err(|error| format!("invalid container filters: {error}"))?;
+        list.filters = docker_filter_values(filters).map_err(|error| format!("invalid container filters: {error}"))?;
         let unsupported = list
             .filters
             .keys()
@@ -398,6 +450,28 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported")
         );
+    }
+
+    #[test]
+    fn parser_normalizes_current_map_sets_and_legacy_arrays() {
+        let current = List::parse(
+            true,
+            Some(r#"{"name":{"worker":true},"status":{"exited":false},"label":{"role=build":true}}"#),
+        )
+        .unwrap();
+        let legacy = List::parse(
+            true,
+            Some(r#"{"name":["worker"],"status":["exited"],"label":["role=build"]}"#),
+        )
+        .unwrap();
+
+        assert_eq!(current, legacy);
+    }
+
+    #[test]
+    fn parser_bounds_filter_wire_input() {
+        let oversized = format!(r#"{{"name":{{"{}":true}}}}"#, "x".repeat(64 * 1024));
+        assert!(List::parse(true, Some(&oversized)).unwrap_err().contains("64 KiB"));
     }
 
     #[test]
