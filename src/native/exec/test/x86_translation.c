@@ -2302,6 +2302,72 @@ static int vector_immediate_staging_contract(void) {
     return 0;
 }
 
+static int shuffle_family_contract(void) {
+    static const uint8_t forms[][6] = {
+        {0x66, 0x0f, 0x70, 0xc1, 0x1b, 0}, /* pshufd xmm0,xmm1,0x1b */
+        {0xf2, 0x0f, 0x70, 0xc1, 0x1b, 0}, /* pshuflw */
+        {0xf3, 0x0f, 0x70, 0xc1, 0x1b, 0}, /* pshufhw */
+        {0x0f, 0xc6, 0xc1, 0x4e, 0, 0},    /* shufps */
+        {0x66, 0x0f, 0xc6, 0xc1, 0x01, 0}, /* shufpd */
+        {0x66, 0x0f, 0x70, 0x03, 0x39, 0}, /* pshufd xmm0,[rbx],0x39 */
+        {0x0f, 0xc6, 0x43, 0x10, 0xe4, 0}, /* shufps xmm0,[rbx+16],0xe4 */
+    };
+    static const size_t sizes[] = {5, 5, 5, 4, 5, 5, 5};
+    unsigned index;
+    for (index = 0; index < sizeof forms / sizeof forms[0]; ++index) {
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(forms[index], sizes[index], host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.exit == HL_X86_A64_FALLTHROUGH && result.instruction_count == 1);
+        CHECK(provenance[0].guest_size == sizes[index]);
+        CHECK(provenance[0].word_end > provenance[0].word_start);
+    }
+    {
+        static const uint8_t truncated[][4] = {
+            {0x66, 0x0f, 0x70, 0xc1}, {0x0f, 0xc6, 0xc1, 0},
+        };
+        static const size_t sizes_short[] = {4, 3};
+        for (index = 0; index < 2u; ++index) {
+            uint32_t host[32] = {0};
+            hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(truncated[index], sizes_short[index], host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_TRUNCATED);
+            CHECK(result.instruction_count == 0 && result.exit_pc == request.guest_pc);
+        }
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t guest[] = {0x66, 0x0f, 0x70, 0xc1, 0x1b};
+        static const uint32_t source[] = {0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00};
+        static const uint32_t expected[] = {0xddeeff00, 0x99aabbcc, 0x55667788, 0x11223344};
+        uint32_t host[256] = {0};
+        hl_x86_a64_provenance provenance[8] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        hl_native_x86_64_cpu cpu = {0};
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[2], source, sizeof source);
+        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, sizeof expected) == 0);
+        CHECK(memcmp(&cpu.vectors[2], source, sizeof source) == 0);
+        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int alu_differential(void) {
 #if !defined(__aarch64__)
     return 0;
@@ -4514,6 +4580,8 @@ int main(void) {
     status = byte_alu_memory_differential();
     if (status != 0) return status;
     status = vector_immediate_staging_contract();
+    if (status != 0) return status;
+    status = shuffle_family_contract();
     if (status != 0) return status;
     status = immediate_differential();
     if (status != 0) return status;

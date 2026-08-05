@@ -115,7 +115,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                opcode == 0xacu || opcode == 0xadu)) &&
             !(semantic_prefix == 0xf3u && opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0x6fu || request->guest_bytes[cursor] == 0x7eu ||
-               request->guest_bytes[cursor] == 0x7fu || request->guest_bytes[cursor] == 0x58u ||
+               request->guest_bytes[cursor] == 0x7fu || request->guest_bytes[cursor] == 0x70u ||
+               request->guest_bytes[cursor] == 0x58u ||
                request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
                request->guest_bytes[cursor] == 0x5eu ||
                request->guest_bytes[cursor] == 0xbcu || request->guest_bytes[cursor] == 0xbdu ||
@@ -126,7 +127,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             !(semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0x51u || request->guest_bytes[cursor] == 0x58u ||
                request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
-               request->guest_bytes[cursor] == 0x5eu || request->guest_bytes[cursor] == 0x2cu)) &&
+               request->guest_bytes[cursor] == 0x5eu || request->guest_bytes[cursor] == 0x2cu ||
+               request->guest_bytes[cursor] == 0x70u)) &&
             !((semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) && opcode == 0x0fu &&
               cursor < request->guest_size && request->guest_bytes[cursor] == 0xc3u)) {
             cursor = start;
@@ -323,6 +325,41 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->memory_operand = 1u;
                 item->source = 16u;
             }
+        } else if (opcode == 0x0fu && cursor < request->guest_size &&
+                   ((request->guest_bytes[cursor] == 0x70u &&
+                     (operand_16 != 0u || semantic_prefix == 0xf2u || semantic_prefix == 0xf3u)) ||
+                    (request->guest_bytes[cursor] == 0xc6u &&
+                     semantic_prefix == 0u))) {
+            uint8_t extension = request->guest_bytes[cursor++];
+            uint8_t modrm;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = 16u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = extension == 0xc6u ?
+                                    (operand_16 != 0u ? VECTOR_SHUFFLE_DOUBLE : VECTOR_SHUFFLE_FLOAT) :
+                                operand_16 != 0u ? VECTOR_SHUFFLE_DWORD : VECTOR_SHUFFLE_WORD;
+            item->condition = semantic_prefix == 0xf3u;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32,
+                                           start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = 16u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            item->vector_immediate = request->guest_bytes[cursor++];
         } else if (opcode == 0x0fu && cursor < request->guest_size &&
                    request->guest_bytes[cursor] == 0x1fu) {
             ++cursor;
