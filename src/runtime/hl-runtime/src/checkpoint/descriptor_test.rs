@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use hl_checkpoint::{Section, SectionKind};
+use hl_checkpoint::{
+    CheckpointImage, CheckpointReader, CheckpointWriter, ImageLimits, MemorySink, MemorySource, Section, SectionKind,
+};
 use hl_descriptor::{
     DescriptorCheckpointError, DescriptorFlags, DescriptorObjectCheckpoint, DescriptorTable, ObjectKind,
     OpenDescriptionImage, OpenFileDescription, StatusFlags,
@@ -9,6 +11,7 @@ use hl_descriptor::{
 use crate::{
     CheckpointDescriptorTable, CheckpointParticipant, DescriptorCheckpointParticipant, DescriptorObjectCatalog,
 };
+use std::time::Instant;
 
 #[derive(Debug)]
 struct File;
@@ -60,6 +63,52 @@ fn fixture() -> (
         Arc::new(DescriptorObjectCatalog::rejecting().bind(ObjectKind::File, Arc::new(Objects))),
     );
     (handle, participant, first, alias)
+}
+
+fn checkpoint_image(bytes: Vec<u8>) -> CheckpointImage {
+    let mut writer = CheckpointWriter::new(ImageLimits::default());
+    writer
+        .push(Section::new(SectionKind::new(2).unwrap(), 1, bytes))
+        .unwrap();
+    let mut sink = MemorySink::new();
+    writer.publish(&mut sink).unwrap();
+    let mut source = MemorySource::new(sink.committed().unwrap().to_vec());
+    CheckpointReader::new(ImageLimits::default()).read(&mut source).unwrap()
+}
+
+fn checkpoint_fixture(count: usize) -> (DescriptorCheckpointParticipant, CheckpointImage) {
+    let table = Arc::new(DescriptorTable::new(count as i32).unwrap());
+    for _ in 0..count {
+        table.install(0, Arc::new(File), DescriptorFlags::default()).unwrap();
+    }
+    let handle = Arc::new(CheckpointDescriptorTable::new(table));
+    let participant = DescriptorCheckpointParticipant::new(
+        handle,
+        Arc::new(DescriptorObjectCatalog::rejecting().bind(ObjectKind::File, Arc::new(Objects))),
+    );
+    participant.freeze().unwrap();
+    let bytes = participant.snapshot().unwrap();
+    participant.thaw().unwrap();
+    (participant, checkpoint_image(bytes))
+}
+
+#[test]
+#[ignore = "performance diagnostic"]
+fn validated_stage_benchmark() {
+    for (count, rounds) in [(2, 200), (4_096, 8)] {
+        let (participant, image) = checkpoint_fixture(count);
+        let section = image.section(SectionKind::new(2).unwrap()).unwrap();
+        let started = Instant::now();
+        for _ in 0..rounds {
+            participant.validate(&image, section).unwrap();
+            let reservation = participant.stage_bound(image.digest(), section).unwrap();
+            participant.rollback(reservation);
+        }
+        println!(
+            "descriptor_checkpoint_count={count} ns={}",
+            started.elapsed().as_nanos() / rounds as u128
+        );
+    }
 }
 
 #[test]

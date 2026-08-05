@@ -135,6 +135,7 @@ pub struct Participant {
     table: Arc<Table>,
     objects: Arc<dyn DescriptorObjectCheckpoint>,
     frozen: Mutex<Option<Arc<HostDescriptorTable>>>,
+    validated: Mutex<Option<([u8; 32], DescriptorTableImage)>>,
     staged: Mutex<BTreeMap<u64, RestoreState>>,
     next: AtomicU64,
 }
@@ -146,6 +147,7 @@ impl Participant {
             table,
             objects,
             frozen: Mutex::new(None),
+            validated: Mutex::new(None),
             staged: Mutex::new(BTreeMap::new()),
             next: AtomicU64::new(1),
         }
@@ -193,49 +195,26 @@ impl CheckpointParticipant for Participant {
         Ok(())
     }
 
-    fn validate(&self, _: &CheckpointImage, section: &Section) -> Result<(), ()> {
-        Codec::decode(section.bytes()).map(|_| ()).map_err(|_| ())
+    fn validate(&self, image: &CheckpointImage, section: &Section) -> Result<(), ()> {
+        let decoded = Codec::decode(section.bytes()).map_err(|_| ())?;
+        *self.validated.lock().map_err(|_| ())? = Some((image.digest(), decoded));
+        Ok(())
     }
 
     fn stage(&self, section: &Section) -> Result<u64, ()> {
-        let (generation, previous) = self.table.slot.current();
-        previous.freeze_checkpoint();
-        let result = (|| {
-            let image = Codec::decode(section.bytes()).map_err(|_| ())?;
-            let replacement =
-                Arc::new(HostDescriptorTable::restore_checkpoint(&image, self.objects.as_ref()).map_err(|_| ())?);
-            replacement.freeze_checkpoint();
-            self.table.stage(replacement.clone())?;
-            let publication = self.table.slot.prepare_checkpoint(generation, Arc::clone(&replacement));
-            let reservation = self.next.fetch_add(1, Ordering::Relaxed);
-            if reservation == 0 {
-                self.table.clear_stage(&replacement);
-                replacement.thaw_checkpoint();
-                return Err(());
-            }
-            let mut staged = match self.staged.lock() {
-                Ok(staged) => staged,
-                Err(_) => {
-                    self.table.clear_stage(&replacement);
-                    replacement.thaw_checkpoint();
-                    return Err(());
-                }
-            };
-            staged.insert(
-                reservation,
-                RestoreState {
-                    previous: previous.clone(),
-                    replacement,
-                    publication,
-                    committed: false,
-                },
-            );
-            Ok(reservation)
-        })();
-        if result.is_err() {
-            previous.thaw_checkpoint();
-        }
-        result
+        self.stage_image(Codec::decode(section.bytes()).map_err(|_| ())?)
+    }
+
+    fn stage_bound(&self, digest: [u8; 32], section: &Section) -> Result<u64, ()> {
+        let image = self
+            .validated
+            .lock()
+            .map_err(|_| ())?
+            .take()
+            .filter(|(validated, _)| *validated == digest)
+            .map(|(_, image)| image)
+            .map_or_else(|| Codec::decode(section.bytes()).map_err(|_| ()), Ok)?;
+        self.stage_image(image)
     }
 
     fn commit(&self, reservation: u64) -> Result<(), ()> {
@@ -273,6 +252,48 @@ impl CheckpointParticipant for Participant {
         state.replacement.thaw_checkpoint();
         state.previous.thaw_checkpoint();
         Ok(())
+    }
+}
+
+impl Participant {
+    fn stage_image(&self, image: DescriptorTableImage) -> Result<u64, ()> {
+        let (generation, previous) = self.table.slot.current();
+        previous.freeze_checkpoint();
+        let result = (|| {
+            let replacement =
+                Arc::new(HostDescriptorTable::restore_checkpoint(&image, self.objects.as_ref()).map_err(|_| ())?);
+            replacement.freeze_checkpoint();
+            self.table.stage(replacement.clone())?;
+            let publication = self.table.slot.prepare_checkpoint(generation, Arc::clone(&replacement));
+            let reservation = self.next.fetch_add(1, Ordering::Relaxed);
+            if reservation == 0 {
+                self.table.clear_stage(&replacement);
+                replacement.thaw_checkpoint();
+                return Err(());
+            }
+            let mut staged = match self.staged.lock() {
+                Ok(staged) => staged,
+                Err(_) => {
+                    self.table.clear_stage(&replacement);
+                    replacement.thaw_checkpoint();
+                    return Err(());
+                }
+            };
+            staged.insert(
+                reservation,
+                RestoreState {
+                    previous: previous.clone(),
+                    replacement,
+                    publication,
+                    committed: false,
+                },
+            );
+            Ok(reservation)
+        })();
+        if result.is_err() {
+            previous.thaw_checkpoint();
+        }
+        result
     }
 }
 
