@@ -550,7 +550,11 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
                                     .relocation_count = relocation_count,
                                     .instruction_count = result.instruction_count,
                                     .conditional_self_loop = (uint32_t)self_loop,
-                                    .loop_pc = self_loop ? pc : 0};
+                                    .loop_pc = self_loop ? pc : 0,
+                                    /* Direct targets enter at word two.  That skips BTI and the
+                                     * redundant budget reload, but preserves the interrupt load and
+                                     * live x26 budget comparison at every block boundary. */
+                                    .cycle_safe = 1};
     hl_native_status status = hl_native_translation_publish(executor, &key, &emission);
     if (status == HL_NATIVE_OK) *supported = 1;
     return status;

@@ -76,8 +76,8 @@ static int chain_contract(void) {
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_HIT);
     uint32_t *first_tail = direct_exit_site(&first);
     uint32_t *second_tail = direct_exit_site(&second);
-    CHECK((*first_tail == UINT32_C(0x14000001)) !=
-          (*second_tail == UINT32_C(0x14000001)));
+    CHECK(*first_tail != UINT32_C(0x14000001));
+    CHECK(*second_tail != UINT32_C(0x14000001));
 
     state = (hl_native_x86_64_cpu){.program = 0x7000, .budget = 4, .interrupt = 1};
     hl_native_x86_64_enter(&state, first.entry);
@@ -96,8 +96,8 @@ static int chain_contract(void) {
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 1 && state.budget == 0);
     CHECK(hl_native_translation_lookup(executor, &second_key, &second) == HL_NATIVE_HIT);
     second_tail = direct_exit_site(&second);
-    CHECK((*first_tail == UINT32_C(0x14000001)) !=
-          (*second_tail == UINT32_C(0x14000001)));
+    CHECK(*first_tail != UINT32_C(0x14000001));
+    CHECK(*second_tail != UINT32_C(0x14000001));
 
     invalidate.first = 0x7000;
     invalidate.last = 0x7002;
@@ -177,7 +177,8 @@ static int chain_contract(void) {
         hl_native_source call_source = {call_spans, 3, 7, 16};
         hl_native_projection_view stack_view = {0xa000, 0xa008, (uint64_t)(uintptr_t)&stack, 7,
             HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
-        hl_native_projection projection = {&stack_view, 1, 7};
+        hl_native_projection projection = {
+            .views = &stack_view, .count = 1, .mapping_incarnation = 7};
         hl_native_translation_key caller_key = {0x9000, 7, 16, 0x9000, 0x9005, 0, 0};
         hl_native_code caller_code;
         hl_native_diagnostics before = {.abi = HL_NATIVE_ABI, .size = sizeof(before)};
@@ -286,7 +287,8 @@ static int chain_contract(void) {
         hl_native_source nested_source = {nested_spans, 5, 7, 16};
         hl_native_projection_view nested_view = {0xc000, 0xc010, (uint64_t)(uintptr_t)stack, 7,
             HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
-        hl_native_projection nested_projection = {&nested_view, 1, 7};
+        hl_native_projection nested_projection = {
+            .views = &nested_view, .count = 1, .mapping_incarnation = 7};
 
         request.source = &nested_source;
         request.projection = &nested_projection;
@@ -358,7 +360,8 @@ static int rewritten_callee_contract(void) {
     hl_native_source source = {spans, 3, 7, 16};
     hl_native_projection_view stack_view = {0xe000, 0xe008, (uint64_t)(uintptr_t)&stack, 7,
         HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
-    hl_native_projection projection = {&stack_view, 1, 7};
+    hl_native_projection projection = {
+        .views = &stack_view, .count = 1, .mapping_incarnation = 7};
     hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
         .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .source = &source,
         .projection = &projection};
