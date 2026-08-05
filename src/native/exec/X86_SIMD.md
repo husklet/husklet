@@ -344,6 +344,41 @@ before `avx_put`, VEX.128 upper clearing, and flags/MXCSR preservation.
 Focused translation tests cover all twelve opcodes, register/memory sources,
 VEX.128/256, and both VEX prefix lengths where representable.
 
+## VEX packed sign and absolute-value slice
+
+The retained read-only audit covered
+`../engine/src/translator/guest/x86_64/decode.c::hl_x86_decode`, the `R_AVX`
+dispatch, and `avx.c::hl_x86_avx_run`, `do_avx`, `avx_get`, `avx_get_rm`, and
+`avx_put`, including the complete legacy SSSE3 `do_sse3b` definitions used as
+the two-operand semantic cross-check. Map-two, mandatory-prefix-66 opcodes
+`08/09/0A` are VPSIGNB/W/D: VEX.vvvv supplies the value and ModRM r/m supplies
+the signed control. Opcodes `1C/1D/1E` are VPABSB/W/D, read only ModRM r/m, and
+require the reserved encoded VEX.vvvv field. W is ignored and L selects 16 or
+32 bytes. Negative control negates modulo the element width, zero control
+produces zero, and positive control preserves the value. Absolute value also
+negates modulo width, so each signed minimum remains its original bit pattern.
+
+The dispatcher owns CPU/XMM/YMM-high state and translated-block lifetime. These
+operations allocate and lock nothing and have no identity, blocking,
+cancellation, errno, signal, or teardown behavior. `avx_get_rm` completes the
+entire register or memory read before `avx_put` commits either destination half;
+there is no partial result on a memory fault. Destination aliases are safe
+because sources are captured first. VEX.128 clears the destination YMM-high
+half; VEX.256 publishes both halves. EFLAGS and MXCSR are unchanged, and the
+only host-specific distinction is the retained portable loop versus the Rust
+AArch64 NEON lowering.
+
+| Retained capability | Rust native owner | State |
+|---|---|---|
+| VPSIGNB/W/D, VEX.128/256, register/memory | frontend admission + vector emitter | implemented |
+| VPABSB/W/D, VEX.128/256, register/memory | same | implemented |
+| full-width fault-before-commit, alias safety, VEX upper handling | generic vector guard/completion | implemented |
+
+Focused tests cover the full opcode/width/register-memory matrix, invalid
+map/prefix/reserved-vvvv encodings, exact and one-word-short capacity contracts,
+and live AArch64 sign zero/negative/minimum behavior, absolute signed minima,
+aliasing, upper clearing, flags/MXCSR preservation, and guarded memory faults.
+
 ## Consolidated retained-oracle evidence (2026-08-05)
 
 ### Legacy SSE shuffle

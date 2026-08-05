@@ -654,6 +654,7 @@ static int pcmpistri_equal_each(void) {
                         : (unsigned)__builtin_ctz(expected);
                 guest[4] = 0xc0;
                 request = request_for(guest, sizeof guest, host, provenance);
+                request.max_instructions = 1u;
                 CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
                 CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
                 memcpy(code, host, result.word_count * sizeof(uint32_t));
@@ -2694,6 +2695,156 @@ static int vex_packed_compare_contract(void) {
         CHECK(memcmp(&cpu.vector_upper[0], expected + 4, 16) == 0);
         CHECK(memcmp(&cpu.vectors[4], left, 16) == 0 && memcmp(&cpu.vectors[2], right, 16) == 0);
         CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
+static int vex_packed_sign_absolute_contract(void) {
+    static const uint8_t opcodes[] = {0x08, 0x09, 0x0a, 0x1c, 0x1d, 0x1e};
+    unsigned operation;
+
+    for (operation = 0; operation < sizeof opcodes; ++operation) {
+        unsigned wide;
+        for (wide = 0; wide < 2u; ++wide) {
+            unsigned memory;
+            for (memory = 0; memory < 2u; ++memory) {
+                uint8_t prefix = operation < 3u ? (wide != 0u ? 0x6du : 0x69u) :
+                                                  (wide != 0u ? 0x7du : 0x79u);
+                uint8_t guest[] = {0xc4, 0xe2, prefix, opcodes[operation],
+                                   memory != 0u ? 0x0bu : 0xcbu};
+                uint32_t host[256]; uint32_t exact[256]; uint32_t short_host[256];
+                hl_x86_a64_provenance provenance[2]; hl_x86_a64_provenance exact_provenance[2];
+                hl_x86_a64_provenance short_provenance[2];
+                hl_x86_a64_result emitted; hl_x86_a64_result exact_result; hl_x86_a64_result short_result;
+                hl_x86_a64_request request;
+                memset(host, 0xa5, sizeof host); memset(provenance, 0x5a, sizeof provenance);
+                request = request_for(guest, sizeof guest, host, provenance);
+                request.max_instructions = 1u;
+                CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+                CHECK(emitted.exit == HL_X86_A64_FALLTHROUGH && emitted.instruction_count == 1u);
+                CHECK(provenance[0].guest_size == sizeof guest && provenance[0].word_end > provenance[0].word_start);
+                {
+                    uint32_t capacity;
+                    for (capacity = 0u; capacity < sizeof exact / sizeof exact[0]; ++capacity) {
+                        memset(exact, 0xa5, sizeof exact);
+                        memset(exact_provenance, 0x5a, sizeof exact_provenance);
+                        memset(&exact_result, 0x3c, sizeof exact_result);
+                        request.host_words = exact; request.host_capacity = capacity;
+                        request.provenance = exact_provenance;
+                        if (hl_x86_a64_emit(&request, &exact_result) == HL_X86_A64_OK) break;
+                        { uint32_t sentinel[256]; hl_x86_a64_provenance ps[2]; hl_x86_a64_result rs;
+                          memset(sentinel, 0xa5, sizeof sentinel); memset(ps, 0x5a, sizeof ps); memset(&rs, 0x3c, sizeof rs);
+                          CHECK(memcmp(exact, sentinel, sizeof sentinel) == 0);
+                          CHECK(memcmp(exact_provenance, ps, sizeof ps) == 0);
+                          CHECK(memcmp(&exact_result, &rs, sizeof rs) == 0); }
+                    }
+                    CHECK(capacity < sizeof exact / sizeof exact[0] && capacity > 0u);
+                    CHECK(exact_result.instruction_count == 1u && exact_result.exit == HL_X86_A64_FALLTHROUGH);
+                    request.host_capacity = capacity - 1u;
+                }
+                memset(short_host, 0xa5, sizeof short_host); memset(short_provenance, 0x5a, sizeof short_provenance);
+                memset(&short_result, 0x3c, sizeof short_result);
+                request.host_words = short_host;
+                request.provenance = short_provenance;
+                CHECK(hl_x86_a64_emit(&request, &short_result) == HL_X86_A64_CAPACITY);
+                { uint32_t sentinel[256]; hl_x86_a64_provenance ps[2]; hl_x86_a64_result rs;
+                  memset(sentinel, 0xa5, sizeof sentinel); memset(ps, 0x5a, sizeof ps); memset(&rs, 0x3c, sizeof rs);
+                  CHECK(memcmp(short_host, sentinel, sizeof sentinel) == 0);
+                  CHECK(memcmp(short_provenance, ps, sizeof ps) == 0);
+                  CHECK(memcmp(&short_result, &rs, sizeof rs) == 0); }
+            }
+        }
+    }
+    {
+        static const uint8_t invalid[][5] = {
+            {0xc4, 0xe2, 0x6c, 0x08, 0xcb}, /* pp != 66 */
+            {0xc4, 0xe1, 0x69, 0x08, 0xcb}, /* wrong map */
+            {0xc4, 0xe2, 0x71, 0x1c, 0xcb}, /* vpabs reserved vvvv != 1111 */
+        };
+        unsigned index;
+        for (index = 0; index < sizeof invalid / sizeof invalid[0]; ++index) {
+            uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(invalid[index], sizeof invalid[index], host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+            CHECK(result.exit == HL_X86_A64_INTERPRETER && result.instruction_count == 0u);
+        }
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t guest[] = {0xc4, 0xe2, 0x6d, 0x0a, 0xc1};
+        static const int32_t values[8] = {INT32_MIN, -9, -1, 0, 1, 7, INT32_MAX, 31};
+        static const int32_t controls[8] = {-1, 0, 1, INT32_MIN, INT32_MAX, -7, 0, 1};
+        static const int32_t expected[8] = {INT32_MIN, 0, -1, 0, 1, -7, 0, 31};
+        uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[4], values, 16); memcpy(&cpu.vector_upper[4], values + 4, 16);
+        memcpy(&cpu.vectors[2], controls, 16); memcpy(&cpu.vector_upper[2], controls + 4, 16);
+        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, 16) == 0);
+        CHECK(memcmp(&cpu.vector_upper[0], expected + 4, 16) == 0);
+        CHECK(memcmp(&cpu.vectors[4], values, 16) == 0 && memcmp(&cpu.vectors[2], controls, 16) == 0);
+        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+    {
+        static const uint8_t guest[] = {0xc4, 0xe2, 0x79, 0x1c, 0xc0};
+        static const int8_t input[16] = {INT8_MIN, -127, -2, -1, 0, 1, 2, 127,
+                                         -9, 9, -64, 64, -3, 3, -100, 100};
+        static const uint8_t expected[16] = {128, 127, 2, 1, 0, 1, 2, 127,
+                                             9, 9, 64, 64, 3, 3, 100, 100};
+        uint32_t host[128] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[0], input, sizeof input);
+        cpu.vector_upper[0] = UINT64_MAX; cpu.vector_upper[1] = UINT64_MAX;
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, sizeof expected) == 0);
+        CHECK(cpu.vector_upper[0] == 0 && cpu.vector_upper[1] == 0);
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+    {
+        static const uint8_t guest[] = {0xc4, 0xe2, 0x7d, 0x1e, 0x03};
+        uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0}; uint8_t data[32] = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        cpu.registers[3] = 0x4000; cpu.memory_first = 0x4000; cpu.memory_last = 0x401f;
+        cpu.memory_delta = (uint64_t)(uintptr_t)data - 0x4000; cpu.memory_permissions = 1u;
+        cpu.vectors[0] = UINT64_C(0xfeedfacecafebeef);
+        cpu.vector_upper[0] = UINT64_C(0x0123456789abcdef);
+        hl_x86_test_enter(&cpu, code);
+        CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.fault_access == HL_NATIVE_ACCESS_READ);
+        CHECK(cpu.fault_address == 0x4000 && cpu.fault_size == 32u);
+        CHECK(cpu.vectors[0] == UINT64_C(0xfeedfacecafebeef));
+        CHECK(cpu.vector_upper[0] == UINT64_C(0x0123456789abcdef));
         CHECK(munmap(code, (size_t)page) == 0);
     }
 #endif
@@ -5643,6 +5794,8 @@ int main(void) {
     status = vex_signed_dword_to_float_contract();
     if (status != 0) return status;
     status = vex_packed_compare_contract();
+    if (status != 0) return status;
+    status = vex_packed_sign_absolute_contract();
     if (status != 0) return status;
     status = vex_packed_extrema_contract();
     if (status != 0) return status;
