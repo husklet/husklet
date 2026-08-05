@@ -1337,3 +1337,47 @@ candidate was 219/222/252 ms. Candidate medians regressed by 4.39% guest and
 selector executions but its added per-access identity/range checks and static
 code outweighed that saving. The production candidate was therefore reverted;
 no performance claim is accepted.
+
+## Rejected ingress-scoped AArch64 view certificate
+
+A follow-up measured the corrected ingress-scoped certificate from exact clean
+baseline `ad5dc3b4264174eb8e9c3ece1390c7a83b5608b2` against candidate
+`a21de7906891de1dda2564d6a14bc7cb732365c8`. The complete evidence is
+`/Users/x/dd/.performance/a64_certificate/20260805T001935Z`; its provenance and
+resource-record SHA-256 values are respectively
+`42347ce3f1bd3f03004cd7b37042f4a5ec951f4eb36d1cd42f879dd28173661f`
+and `1dfd0c1f70d0bdbd25db8a4dba45bd56c9d79578df0c078edc807a7adcdc3395`.
+The guarded harness SHA-256 was
+`69e58a1049c6c03a5c771f122c025604b71f7192632a94986c3bac3f0037b7e7`.
+
+The baseline testing/engine artifact SHA-256 values were
+`3416aaf003e45455ae4d86139092d242167c7e9ddab5137d9431a865e2277b07`
+and `7571fc7ab995273a4f734ac018dd28587c7af8626267cab46520db8134d1b962`;
+the candidate values were
+`7baa08ecaf807349c27d3fcc4ae7836dc4bdede057f3c7625d0f61bd28892fd7`
+and `ddff6868c19f91e6439a2c72b6045cc34266899d0a6ca0fdda496b9a09da0375`.
+Every run used guest artifact
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`.
+
+Five alternating CPU-17-pinned, native-verified pairs produced these guest
+times:
+
+| Pair | Baseline | Candidate |
+| ---: | ---: | ---: |
+| 1 | 186845 us | 192360 us |
+| 2 | 186470 us | 193866 us |
+| 3 | 187340 us | 194255 us |
+| 4 | 187242 us | 195578 us |
+| 5 | 186402 us | 193667 us |
+
+The medians were 186845 us and 193866 us: the candidate regressed by 3.758%
+and lost every pair. All samples returned checksum 36526. Runs, builds, cache
+hits, fallbacks, sites, services, completed instructions, operand callbacks,
+operand-cache hits, dirty reservations, overflows, commits, merges, and guard
+fallbacks were identical. Only 2,320 of 29,021,179 ordinary guard selections
+used the certificate fast path, approximately 0.008%.
+
+The candidate is rejected. Active-view selection means that the view certified
+at ingress rarely matches the views actually read by this workload, so paying
+the certificate machinery cannot remove enough complete selections to offset
+its cost. No production source from this candidate is accepted.
