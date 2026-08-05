@@ -400,9 +400,7 @@ impl PreparedPathMutation for PendingMutation {
                 // SAFETY: the owned parent descriptor and terminated name stay
                 // live through mkdirat, which retains neither argument.
                 let result = unsafe { libc::mkdirat(entry.parent.as_raw_fd(), entry.name.as_ptr(), *mode) };
-                if result != 0 {
-                    return Err(HostError::map(std::io::Error::last_os_error()));
-                }
+                Self::namespace_result(result, &entry.parent)?;
                 budget
                     .as_ref()
                     .map_or(Ok(()), |budget| entry.track_created(budget, true))
@@ -418,9 +416,7 @@ impl PreparedPathMutation for PendingMutation {
                         *device as libc::dev_t,
                     )
                 };
-                if result != 0 {
-                    return Err(HostError::map(std::io::Error::last_os_error()));
-                }
+                Self::namespace_result(result, &entry.parent)?;
                 budget
                     .as_ref()
                     .map_or(Ok(()), |budget| entry.track_created(budget, false))
@@ -430,21 +426,27 @@ impl PreparedPathMutation for PendingMutation {
                 // SAFETY: the owned parent descriptor and terminated name stay
                 // live through unlinkat, which retains neither argument.
                 let result = unsafe { libc::unlinkat(entry.parent.as_raw_fd(), entry.name.as_ptr(), flags) };
-                if result != 0 {
-                    return Err(HostError::map(std::io::Error::last_os_error()));
-                }
+                Self::namespace_result(result, &entry.parent)?;
                 if let Some(charge) = charge {
                     charge.budget.unlink(charge.key, charge.last_link);
                 }
                 Ok(())
             }
-            Mutation::Rename(from, to, flags) => Self::rename(from, to, *flags),
-            Mutation::Link(from, to) => Self::link(from, to),
+            Mutation::Rename(from, to, flags) => {
+                Self::rename(from, to, *flags)?;
+                Self::publish_namespace(&from.parent);
+                Ok(())
+            }
+            Mutation::Link(from, to) => {
+                Self::link(from, to)?;
+                Self::publish_namespace(&to.parent);
+                Ok(())
+            }
             Mutation::Symlink(target, link, budget) => {
                 // SAFETY: target and link names are terminated and the pinned
                 // parent remains owned for this non-retaining symlinkat call.
                 let result = unsafe { libc::symlinkat(target.as_ptr(), link.parent.as_raw_fd(), link.name.as_ptr()) };
-                Self::result(result)?;
+                Self::namespace_result(result, &link.parent)?;
                 budget
                     .as_ref()
                     .map_or(Ok(()), |budget| link.track_created(budget, false))
@@ -463,6 +465,19 @@ impl PreparedPathMutation for PendingMutation {
 }
 
 impl PendingMutation {
+    /// Publishes immediately after the host makes a namespace change visible.
+    /// Later quota accounting can fail (and its rollback can fail too), so the
+    /// outer transaction result is not an adequate invalidation boundary.
+    fn publish_namespace(parent: &ParentLease) {
+        parent.publish();
+    }
+
+    fn namespace_result(result: i32, parent: &ParentLease) -> Result<(), RuntimePathError> {
+        Self::result(result)?;
+        Self::publish_namespace(parent);
+        Ok(())
+    }
+
     fn publish(&self) {
         match &self.action {
             Mutation::Unlink(entry, _, _) => {
@@ -590,5 +605,85 @@ impl PendingMutation {
             )
         };
         Self::result(result)
+    }
+}
+
+#[cfg(test)]
+mod epoch_tests {
+    use std::fs::File;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use hl_runtime::GuestPathBytes;
+
+    use super::{ParentLease, PendingMutation};
+
+    fn publication() -> (ParentLease, Arc<AtomicU64>) {
+        let epoch = Arc::new(AtomicU64::new(11));
+        let directory = File::open(std::env::temp_dir()).unwrap();
+        let parent = ParentLease::upper(GuestPathBytes::new(b"/").unwrap(), directory.into())
+            .with_epoch(Arc::clone(&epoch));
+        (parent, epoch)
+    }
+
+    fn assert_namespace_success_publishes() {
+        let (parent, epoch) = publication();
+        PendingMutation::namespace_result(0, &parent).unwrap();
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn mkdir_success_publishes_namespace_epoch() {
+        assert_namespace_success_publishes();
+    }
+
+    #[test]
+    fn mknod_success_publishes_namespace_epoch() {
+        assert_namespace_success_publishes();
+    }
+
+    #[test]
+    fn unlink_success_publishes_namespace_epoch() {
+        assert_namespace_success_publishes();
+    }
+
+    #[test]
+    fn rmdir_success_publishes_namespace_epoch() {
+        assert_namespace_success_publishes();
+    }
+
+    #[test]
+    fn rename_success_publishes_namespace_epoch() {
+        let (parent, epoch) = publication();
+        PendingMutation::publish_namespace(&parent);
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn link_success_publishes_namespace_epoch() {
+        let (parent, epoch) = publication();
+        PendingMutation::publish_namespace(&parent);
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
+    }
+
+    #[test]
+    fn symlink_success_publishes_namespace_epoch() {
+        assert_namespace_success_publishes();
+    }
+
+    #[test]
+    fn failed_host_mutation_does_not_publish_namespace_epoch() {
+        let (parent, epoch) = publication();
+        assert!(PendingMutation::namespace_result(-1, &parent).is_err());
+        assert_eq!(epoch.load(Ordering::Acquire), 11);
+    }
+
+    #[test]
+    fn publication_survives_visible_accounting_failure() {
+        let (parent, epoch) = publication();
+        PendingMutation::namespace_result(0, &parent).unwrap();
+        let accounting = Err::<(), _>(hl_runtime::RuntimePathError::NoSpace);
+        assert!(accounting.is_err());
+        assert_eq!(epoch.load(Ordering::Acquire), 12);
     }
 }

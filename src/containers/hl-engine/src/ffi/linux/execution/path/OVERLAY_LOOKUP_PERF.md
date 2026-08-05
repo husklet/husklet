@@ -107,3 +107,23 @@ and discard a fill if the epoch changes during resolution. Fork, chroot, root,
 and mount changes additionally require a process-local namespace generation,
 matching the retained C `fgen` model. These invalidation tests are prerequisites
 to implementation, not follow-up hardening.
+
+### Namespace-mutation oracle audit
+
+The namespace publication lane studied retained
+`../engine/src/linux_abi/syscall/fs.c`, entry dispatch cases `mknodat`,
+`mkdirat`, `unlinkat`, `symlinkat`, `linkat`, and `renameat`/`renameat2`, plus
+their overlay whiteout/copy-up calls. The C dispatcher owns no durable mutation
+transaction: each syscall pins its parent descriptors, performs the host
+namespace operation, then evicts pathname/access/readlink or inode metadata
+state after success. Overlay unlink and rename can make a whiteout visible after
+an earlier host operation, so invalidation is tied to each visible namespace
+commit rather than the final syscall return alone. Rust ownership maps to
+`PendingMutation` (operation lifetime and syscall ordering), `ParentLease`
+(pinned selected/upper parent and shared epoch), and `overlay_publish`
+(copy-up, parent materialization, and whiteout publication). Linux supplies
+`renameat2` and descriptor-based `linkat`; macOS uses `renameat` and does not
+support the pinned-inode hard-link path. The Rust mutation publication now
+covers mkdir, mknod, unlink/rmdir, rename, link, and symlink immediately after
+host success, including a later tmpfs-accounting error. `open(O_CREAT)`, upper
+parent materialization, and descriptor/inode publication remain separate gaps.
