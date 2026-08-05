@@ -1070,3 +1070,72 @@ fn group_ownership_does_not_follow_space_pointer() {
     assert!(threads.find(first).is_none());
     assert!(threads.find(second).is_some());
 }
+
+#[test]
+fn scheduler_continuation_is_generation_qualified_and_solo() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let second = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    let shared = space();
+    publish(&threads, process, first, 0x1000, Arc::clone(&shared));
+    let owner = threads.next().unwrap();
+    let continuation = threads.continuation(&owner).unwrap();
+    assert!(continuation.is_current());
+
+    publish(&threads, process, second, 0x2000, shared);
+    assert!(!continuation.is_current());
+    assert!(threads.continuation(&owner).is_none());
+}
+
+#[test]
+fn scheduler_continuation_denies_peer_resume_signal_cancel_control_and_retire() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let second = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    let shared = space();
+    publish(&threads, process, first, 0x1000, Arc::clone(&shared));
+    publish(&threads, process, second, 0x2000, shared);
+    let first_run = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
+    let _second_run = threads.claim(second, threads.find(second).unwrap().generation).unwrap();
+    threads.park(second).unwrap();
+    let peer_token = threads.continuation(&first_run).unwrap();
+    threads.resume(second).unwrap();
+    assert!(!peer_token.is_current());
+
+    threads.terminate(second).unwrap();
+    let signal_token = threads.continuation(&first_run).unwrap();
+    first_run.interrupt.set(true).unwrap();
+    assert!(!signal_token.is_current());
+    first_run.interrupt.set(false).unwrap();
+
+    let control_token = threads.continuation(&first_run).unwrap();
+    threads.process_control(control_event(process, 1, hl_task::ProcessControlAction::Continue));
+    assert!(!control_token.is_current());
+
+    let cancel_token = threads.continuation(&first_run).unwrap();
+    threads.cancel_all(9);
+    assert!(!cancel_token.is_current());
+
+    let retired = ThreadSet::new(1).unwrap();
+    publish(&retired, process, first, 0x3000, space());
+    let run = retired.next().unwrap();
+    let retire_token = retired.continuation(&run).unwrap();
+    retired.terminate(first).unwrap();
+    assert!(!retire_token.is_current());
+}

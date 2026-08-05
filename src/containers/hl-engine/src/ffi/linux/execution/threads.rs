@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::ops::Bound::{Excluded, Unbounded};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hl_execution::{ExecutionMachine, ExecutionSnapshot};
@@ -50,11 +51,82 @@ pub(super) struct ThreadRun {
     pub(super) interrupt: Arc<crate::native::InterruptToken>,
 }
 
+struct ContinuationEpoch {
+    value: AtomicU64,
+    pending: AtomicU64,
+}
+
+impl ContinuationEpoch {
+    const fn new() -> Self {
+        Self {
+            value: AtomicU64::new(1),
+            pending: AtomicU64::new(0),
+        }
+    }
+
+    fn invalidate(&self) {
+        let _ = self
+            .value
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| epoch.checked_add(1));
+    }
+
+    fn capture(&self) -> Option<u64> {
+        if self.pending.load(Ordering::Acquire) != 0 {
+            return None;
+        }
+        let epoch = self.value.load(Ordering::Acquire);
+        (epoch != u64::MAX && self.pending.load(Ordering::Acquire) == 0).then_some(epoch)
+    }
+
+    fn request(&self) -> ContinuationRequest<'_> {
+        let active = self
+            .pending
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| pending.checked_add(1))
+            .is_ok();
+        self.invalidate();
+        ContinuationRequest { epoch: self, active }
+    }
+}
+
+struct ContinuationRequest<'a> {
+    epoch: &'a ContinuationEpoch,
+    active: bool,
+}
+
+impl Drop for ContinuationRequest<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.epoch.invalidate();
+            self.epoch.pending.fetch_sub(1, Ordering::Release);
+        }
+    }
+}
+
+/// Lock-free evidence that one exact running thread remained the sole runnable
+/// generation after the scheduler admitted its native activation.
+#[must_use = "a scheduler continuation must be checked before extending an activation"]
+pub(super) struct SchedulerContinuation {
+    epoch: Arc<ContinuationEpoch>,
+    captured: u64,
+    cancellation: Arc<super::readiness::Cancellation>,
+    interrupt: Arc<crate::native::InterruptToken>,
+}
+
+impl SchedulerContinuation {
+    pub(super) fn is_current(&self) -> bool {
+        self.epoch.value.load(Ordering::Acquire) == self.captured
+            && self.epoch.pending.load(Ordering::Acquire) == 0
+            && self.cancellation.signal().is_none()
+            && !self.interrupt.is_set()
+    }
+}
+
 pub(super) struct ThreadSet {
     capacity: usize,
     state: Arc<Mutex<SetState>>,
     tasks: Option<Arc<hl_task::TaskRegistry>>,
     counter: Option<Arc<dyn hl_execution::ArchitecturalCounter>>,
+    continuation: Arc<ContinuationEpoch>,
 }
 
 pub(super) struct ThreadStage {
@@ -63,6 +135,7 @@ pub(super) struct ThreadStage {
     thread: ThreadId,
     run: Option<ThreadRun>,
     registered: bool,
+    continuation: Arc<ContinuationEpoch>,
 }
 
 pub(super) struct PreparedImage {
@@ -74,9 +147,14 @@ pub(super) struct PreparedImage {
     previous: Vec<(ThreadRun, RunOwnership)>,
     published: bool,
     complete: bool,
+    continuation: Arc<ContinuationEpoch>,
 }
 
 impl ThreadSet {
+    fn continuation_request(&self) -> ContinuationRequest<'_> {
+        self.continuation.request()
+    }
+
     pub(super) fn stage_fork(
         &self,
         plan: &ForkProcessPlan,
@@ -130,6 +208,7 @@ impl ThreadSet {
             thread,
             run: Some(run),
             registered: register && self.tasks.is_some(),
+            continuation: Arc::clone(&self.continuation),
         })
     }
 
@@ -153,6 +232,28 @@ impl ThreadSet {
             .machines
             .keys()
             .all(|candidate| *candidate == thread || state.parked.contains(candidate))
+    }
+
+    pub(super) fn continuation(&self, run: &ThreadRun) -> Option<SchedulerContinuation> {
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = state.machines.get(&run.thread)?;
+        if current.process != run.process
+            || current.generation != run.generation
+            || state.ownership.get(&run.thread) != Some(&RunOwnership::Running)
+            || state
+                .machines
+                .keys()
+                .any(|candidate| *candidate != run.thread && !state.parked.contains(candidate))
+        {
+            return None;
+        }
+        let captured = self.continuation.capture()?;
+        Some(SchedulerContinuation {
+            epoch: Arc::clone(&self.continuation),
+            captured,
+            cancellation: Arc::clone(&run.cancellation),
+            interrupt: Arc::clone(&run.interrupt),
+        })
     }
 
     pub(super) fn acknowledge_interrupt(&self, thread: ThreadId) -> Result<bool, RuntimeThreadError> {
@@ -211,6 +312,7 @@ impl ThreadSet {
             previous: Vec::new(),
             published: false,
             complete: false,
+            continuation: Arc::clone(&self.continuation),
         })
     }
 
@@ -224,7 +326,9 @@ impl ThreadSet {
         thread: ThreadId,
         router: Arc<RuntimeSyscallRouter>,
     ) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let run = state.machines.get_mut(&thread).ok_or(RuntimeThreadError::Missing)?;
         run.router = router;
         Ok(())
@@ -238,6 +342,7 @@ impl ThreadSet {
             capacity,
             tasks: None,
             counter: None,
+            continuation: Arc::new(ContinuationEpoch::new()),
             state: Arc::new(Mutex::new(SetState {
                 machines: BTreeMap::new(),
                 ownership: BTreeMap::new(),
@@ -315,7 +420,9 @@ impl ThreadSet {
     }
 
     pub(super) fn next(&self) -> Option<ThreadRun> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _request = self.continuation_request();
         let selected_thread = state
             .previous
             .and_then(|previous| {
@@ -344,7 +451,9 @@ impl ThreadSet {
 
     #[cfg(test)]
     pub(super) fn claim(&self, thread: ThreadId, generation: u64) -> Result<ThreadRun, RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let run = state.machines.get(&thread).ok_or(RuntimeThreadError::Missing)?;
         if run.generation != generation
             || state.parked.contains(&thread)
@@ -358,7 +467,9 @@ impl ThreadSet {
     }
 
     pub(super) fn release(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process || current.generation != run.generation {
             return Err(RuntimeThreadError::Missing);
@@ -394,7 +505,9 @@ impl ThreadSet {
     }
 
     pub(super) fn terminate_run(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process
             || current.generation != run.generation
@@ -415,7 +528,9 @@ impl ThreadSet {
     }
 
     pub(super) fn park(&self, thread: ThreadId) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         if !state.machines.contains_key(&thread)
             || state.ownership.get(&thread) != Some(&RunOwnership::Running)
             || !state.parked.insert(thread)
@@ -427,7 +542,9 @@ impl ThreadSet {
     }
 
     pub(super) fn resume(&self, thread: ThreadId) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         if !state.machines.contains_key(&thread)
             || state.ownership.get(&thread) != Some(&RunOwnership::Ready)
             || !state.parked.remove(&thread)
@@ -445,7 +562,9 @@ impl ThreadSet {
     }
 
     pub(super) fn resume_run(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process
             || current.generation != run.generation
@@ -469,7 +588,9 @@ impl ThreadSet {
     /// Only the exact generation-qualified waiter can be returned to Running;
     /// a stale token or an active execution owner is never reclaimed.
     pub(super) fn abort_waiter(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process
             || current.generation != run.generation
@@ -488,7 +609,9 @@ impl ThreadSet {
     }
 
     pub(super) fn park_syscall(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process
             || current.generation != run.generation
@@ -541,7 +664,9 @@ impl ThreadSet {
     }
 
     pub(super) fn cancel_all(&self, signal: i32) {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _request = self.continuation_request();
         let signal = *state.cancellation.get_or_insert(signal);
         for run in state.machines.values() {
             // Cancellation has two independently blocking execution domains.
@@ -555,6 +680,7 @@ impl ThreadSet {
     }
 
     pub(super) fn deliver_process_signal(&self, signal: i32) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let signal = hl_task::SignalNumber::new(u8::try_from(signal).map_err(|_| RuntimeThreadError::Invalid)?)
             .map_err(|_| RuntimeThreadError::Invalid)?;
         let (tasks, process) = {
@@ -623,7 +749,9 @@ impl ThreadSet {
     }
 
     pub(super) fn install_stop_gate(&self, run: &ThreadRun, epoch: u64) -> Result<bool, RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process || current.generation != run.generation {
             return Err(RuntimeThreadError::Missing);
@@ -661,7 +789,9 @@ impl ThreadSet {
         let hl_task::SignalActivityKind::ProcessControl { process, action } = event.kind else {
             return;
         };
+        let _request = self.continuation_request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _request = self.continuation_request();
         state
             .control_epochs
             .entry(process)
@@ -713,7 +843,9 @@ impl ThreadSet {
     }
 
     pub(super) fn terminate_all(&self) {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _request = self.continuation_request();
         let threads = state.machines.keys().copied().collect::<Vec<_>>();
         let mut removed = Vec::new();
         for thread in threads {
@@ -750,7 +882,9 @@ impl ThreadSet {
     }
 
     pub(super) fn terminate_group(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _request = self.continuation_request();
         let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
         if current.process != run.process
             || current.generation != run.generation
@@ -806,7 +940,9 @@ impl PreparedImage {
         if self.published {
             return Err(RuntimeThreadError::Duplicate);
         }
+        let _request = self.continuation.request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation.request();
         let current = state.machines.get(&self.caller).ok_or(RuntimeThreadError::Missing)?;
         if current.generation != self.caller_generation
             || state.ownership.get(&self.caller) != Some(&RunOwnership::Running)
@@ -850,7 +986,9 @@ impl PreparedImage {
         if !self.published {
             return;
         }
+        let _request = self.continuation.request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.continuation.invalidate();
         self.candidate = state.machines.remove(&self.target);
         state.ownership.remove(&self.target);
         for (run, ownership) in self.previous.drain(..) {
@@ -893,7 +1031,9 @@ impl RuntimeThreadPort for ThreadSet {
     }
 
     fn terminate(&self, thread: ThreadId) -> Result<(), RuntimeThreadError> {
+        let _request = self.continuation_request();
         let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let _request = self.continuation_request();
         if state.ownership.get(&thread) == Some(&RunOwnership::Running) {
             // A thread id alone is not proof that its active generation has
             // returned from execution. Defer reclamation to release().
@@ -923,7 +1063,9 @@ impl RuntimeThreadPort for ThreadSet {
 
 impl PreparedThread for ThreadStage {
     fn publish(mut self: Box<Self>) {
+        let _request = self.continuation.request();
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.continuation.invalidate();
         state.reserved -= 1;
         let run = self.run.take().expect("staged runnable");
         if let Some(signal) = state.cancellation {
