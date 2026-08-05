@@ -62,7 +62,7 @@ impl CpuTimerPublication {
             self.generation.store(u64::MAX, Ordering::Release);
             return;
         }
-        self.generation.store(generation + 1, Ordering::Release);
+        self.generation.store(generation + 1, Ordering::SeqCst);
         self.virtual_deadline
             .store(virtual_deadline.unwrap_or(0), Ordering::Relaxed);
         self.virtual_armed.store(virtual_deadline.is_some(), Ordering::Relaxed);
@@ -200,11 +200,13 @@ impl AlarmRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let timers = timers.entry(process).or_default();
-        Arc::clone(
-            timers
-                .publication
-                .get_or_insert_with(|| Arc::new(CpuTimerPublication::new())),
-        )
+        if let Some(publication) = &timers.publication {
+            return Arc::clone(publication);
+        }
+        let publication = Arc::new(CpuTimerPublication::new());
+        publication.publish(timers.virtual_timer.deadline, timers.prof_timer.deadline);
+        timers.publication = Some(Arc::clone(&publication));
+        publication
     }
 
     fn publish_cpu(timers: &ProcessCpuTimers) {
@@ -584,5 +586,22 @@ mod tests {
         assert_eq!(retired.prof_deadline, None);
         let replacement = alarms.cpu_timer_publication(process);
         assert!(!Arc::ptr_eq(&publication, &replacement));
+    }
+
+    #[test]
+    fn cpu_timer_publication_includes_already_armed_timers() {
+        let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+        let credentials = ProcessCredentials::new(0, 0, &[], 65_536).unwrap();
+        let (process, _) = tasks.create_init(credentials, ProcessLimits::default()).unwrap();
+        let alarms = AlarmRegistry::new(tasks, Arc::new(Scheduler));
+        let timer = IntervalTimer {
+            interval: hl_time::Timespec::default(),
+            value: hl_time::Timespec::new(0, 20_000_000).unwrap(),
+        };
+        alarms.replace_cpu(process, 1, 100_000_000, timer).unwrap();
+
+        let publication = alarms.cpu_timer_publication(process);
+
+        assert_eq!(publication.snapshot().virtual_deadline, Some(120_000_000));
     }
 }
