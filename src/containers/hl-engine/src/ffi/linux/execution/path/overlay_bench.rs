@@ -76,13 +76,18 @@ fn resolve_once(host: &Host, mounts: &MountNamespace, path: &GuestPathBytes, exp
         no_symlinks: false,
         allow_missing_final: false,
     });
-    assert_eq!(result.is_ok(), expected);
     match result {
         Ok(resolved) => {
             let lease = resolved.duplicate_parent().unwrap();
-            black_box(lease.selected().as_raw_fd());
+            let name = resolved
+                .final_name()
+                .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
+            let path = Host::path(&lease, &name);
+            assert_eq!(path.is_ok(), expected);
+            black_box((lease.selected().as_raw_fd(), path.is_ok()));
         }
         Err(error) => {
+            assert!(!expected);
             black_box(error);
         }
     }
@@ -139,17 +144,20 @@ fn overlay_resolution_microbench() {
     std::fs::write(lower.join(deep).join("leaf"), b"lower").unwrap();
 
     let ordinary_host = host(&ordinary);
-    let layered_host = layered(&upper, &lower);
     let ordinary_hit = measure(&ordinary_host, b"/hit", true);
     let ordinary_deep = measure(&ordinary_host, b"/a/b/c/d/e/f/g/h/i/j/k/l/leaf", true);
     report("ordinary_upper_control", ordinary_hit, ordinary_hit);
-    report("upper_hit", measure(&layered_host, b"/hit", true), ordinary_hit);
-    report("lower_hit", measure(&layered_host, b"/lower", true), ordinary_hit);
-    report("whiteout_miss", measure(&layered_host, b"/hidden", false), ordinary_hit);
+    report("upper_hit", measure(&layered(&upper, &lower), b"/hit", true), ordinary_hit);
+    report("lower_hit", measure(&layered(&upper, &lower), b"/lower", true), ordinary_hit);
+    report(
+        "whiteout_miss",
+        measure(&layered(&upper, &lower), b"/hidden", false),
+        ordinary_hit,
+    );
     report(
         "deep_lower_hit",
-        measure(&layered_host, b"/a/b/c/d/e/f/g/h/i/j/k/l/leaf", true),
+        measure(&layered(&upper, &lower), b"/a/b/c/d/e/f/g/h/i/j/k/l/leaf", true),
         ordinary_deep,
     );
-    black_box((ordinary_host, layered_host));
+    black_box(ordinary_host);
 }

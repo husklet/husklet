@@ -127,6 +127,33 @@ impl Host {
         GuestPathBytes::new(&path).map_err(|_| ResolveHostError::ResourceLimit)
     }
 
+    #[cfg(target_os = "linux")]
+    fn child(directory: RawFd, name: &CString) -> Result<Option<(OwnedFd, NodeKind)>, ResolveHostError> {
+        // O_PATH can pin every Linux inode kind without knowing the kind first.
+        // Opening before inspecting therefore avoids a redundant fstatat on
+        // every component while retaining the same no-follow contract.
+        let flags = Self::pin_flags(NodeKind::File);
+        // SAFETY: name is terminated and directory remains pinned for openat.
+        let child = unsafe { libc::openat(directory, name.as_ptr(), flags) };
+        if child < 0 {
+            return match Self::error() {
+                ResolveHostError::NotFound => Ok(None),
+                error => Err(error),
+            };
+        }
+        let observed = match Self::metadata_kind(child) {
+            Ok(kind) => kind,
+            Err(error) => {
+                // SAFETY: successful openat returned one uniquely owned descriptor.
+                unsafe { libc::close(child) };
+                return Err(error);
+            }
+        };
+        // SAFETY: successful openat returned one uniquely owned descriptor.
+        Ok(Some((unsafe { OwnedFd::from_raw_fd(child) }, observed)))
+    }
+
+    #[cfg(target_os = "macos")]
     fn child(directory: RawFd, name: &CString) -> Result<Option<(OwnedFd, NodeKind)>, ResolveHostError> {
         let observed = match Self::child_kind(directory, name) {
             Ok(kind) => kind,

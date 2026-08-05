@@ -65,3 +65,26 @@ Release command:
 ```text
 cargo test --release -p hl-engine overlay_resolution_microbench -- --ignored --nocapture
 ```
+
+## Linux component-pin A/B (2026-08-04)
+
+The first bounded optimization removes the `fstatat` performed before every
+Linux `O_PATH | O_NOFOLLOW` pin. Linux does not select pin flags from the inode
+kind: `openat` can pin first and the existing `fstat` supplies the kind. Missing
+opens retain the same `NotFound` result. macOS retains its type-first sequence.
+
+Alternating warning-strict release runs on the same host and target directory:
+
+| sample | baseline ns/op | candidate ns/op | change |
+|---|---:|---:|---:|
+| ordinary control | 1,560.6 | 1,526.7 | -2.2% |
+| layered upper hit | 2,683.5 | 2,581.1 | -3.8% |
+| layered lower hit | 3,419.8 | 3,219.4 | -5.9% |
+| whiteout miss | 1,810.8 | 1,719.5 | -5.0% |
+| deep lower hit | 33,217.5 | 31,281.9 | -5.8% |
+
+The machine was shared, so the syscall removal is the stronger mechanism
+evidence and the timings are bounded A/B evidence rather than a stable-host
+certificate. The remaining deep-path gap is dominated by the missing C-style
+epoch-gated dentry/full-resolution memo, registry locking, candidate
+allocation, and descriptor duplication.
