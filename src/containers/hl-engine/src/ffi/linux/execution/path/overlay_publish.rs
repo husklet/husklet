@@ -102,7 +102,11 @@ fn materialize_guest_parent(lease: &ParentLease) -> io::Result<OwnedFd> {
         .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
     for component in guest.as_bytes().split(|byte| *byte == b'/').filter(|component| !component.is_empty()) {
         let name = CString::new(component).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
-        materialize_parent(&current, &name, 0o755)?;
+        if materialize_parent_created(&current, &name, 0o755)? {
+            // Publish each ancestor immediately: opening the new directory or
+            // a later component can fail after mkdirat has become visible.
+            lease.publish();
+        }
         let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
         // SAFETY: current and name remain live and success returns a new descriptor.
         let descriptor = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
@@ -161,11 +165,16 @@ fn open_regular(parent: &impl AsRawFd, name: &CStr) -> io::Result<Option<File>> 
 
 /// Materializes one already-validated upper ancestor without following links.
 pub(super) fn materialize_parent(parent: &impl AsRawFd, name: &CStr, mode: u32) -> io::Result<()> {
+    materialize_parent_created(parent, name, mode).map(|_| ())
+}
+
+fn materialize_parent_created(parent: &impl AsRawFd, name: &CStr, mode: u32) -> io::Result<bool> {
     validate_name(name)?;
     // SAFETY: the parent descriptor and terminated name remain live, and
     // mkdirat retains neither after returning.
     if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), mode as libc::mode_t) } == 0 {
-        return sync_directory(parent);
+        sync_directory(parent)?;
+        return Ok(true);
     }
     let error = io::Error::last_os_error();
     if error.raw_os_error() != Some(libc::EEXIST) {
@@ -186,7 +195,7 @@ pub(super) fn materialize_parent(parent: &impl AsRawFd, name: &CStr, mode: u32) 
     }
     // SAFETY: successful fstatat initialized status.
     if unsafe { status.assume_init() }.st_mode & libc::S_IFMT == libc::S_IFDIR {
-        Ok(())
+        Ok(false)
     } else {
         Err(io::Error::from_raw_os_error(libc::ENOTDIR))
     }
@@ -400,11 +409,12 @@ mod tests {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hl_runtime::GuestPathBytes;
 
-    use super::{CopyUp, materialize_parent, publish_opaque, publish_whiteout};
+    use super::{CopyUp, materialize_parent, prepare_write, publish_opaque, publish_whiteout};
     use crate::ffi::linux::execution::path::overlay_lease::ParentLease;
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
@@ -480,5 +490,25 @@ mod tests {
                 .raw_os_error(),
             Some(libc::ENOTDIR),
         );
+    }
+
+    #[test]
+    fn parent_materialization_publishes_each_visible_ancestor() {
+        let root = Root::new();
+        fs::create_dir_all(root.0.join("lower/a/b")).unwrap();
+        let epoch = Arc::new(AtomicU64::new(4));
+        let mut lease = ParentLease::lower(
+            GuestPathBytes::new(b"/a/b").unwrap(),
+            0,
+            File::open(root.0.join("lower/a/b")).unwrap().into(),
+            None,
+        )
+        .with_upper_root(File::open(root.0.join("upper")).unwrap().into())
+        .with_epoch(Arc::clone(&epoch));
+
+        assert!(!prepare_write(&mut lease, c"new").unwrap());
+
+        assert!(root.0.join("upper/a/b").is_dir());
+        assert_eq!(epoch.load(Ordering::Acquire), 6);
     }
 }

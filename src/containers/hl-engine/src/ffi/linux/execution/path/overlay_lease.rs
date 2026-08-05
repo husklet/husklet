@@ -208,4 +208,26 @@ mod tests {
         lease.publish();
         assert_eq!(epoch.load(Ordering::Acquire), 8);
     }
+
+    #[test]
+    fn concurrent_observer_acquires_visible_namespace_change() {
+        let directories = Directories::new();
+        let epoch = Arc::new(AtomicU64::new(3));
+        let visible = Arc::new(AtomicU64::new(0));
+        let lease = ParentLease::upper(
+            GuestPathBytes::new(b"/").unwrap(),
+            directories.upper.try_clone().unwrap().into(),
+        )
+        .with_epoch(Arc::clone(&epoch));
+        let published = Arc::clone(&visible);
+        let writer = std::thread::spawn(move || {
+            published.store(41, Ordering::Relaxed);
+            lease.publish();
+        });
+        while epoch.load(Ordering::Acquire) == 3 {
+            std::hint::spin_loop();
+        }
+        assert_eq!(visible.load(Ordering::Relaxed), 41);
+        writer.join().unwrap();
+    }
 }

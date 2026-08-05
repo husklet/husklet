@@ -114,7 +114,9 @@ impl PendingOpen {
         // open after quota admission failed; arguments are retained nowhere.
         if let Ok(parent) = self.parent.mutation() {
             // SAFETY: the mutation parent and terminated name remain live.
-            unsafe { libc::unlinkat(parent.as_raw_fd(), self.name.as_ptr(), 0) };
+            if unsafe { libc::unlinkat(parent.as_raw_fd(), self.name.as_ptr(), 0) } == 0 {
+                self.parent.publish();
+            }
         }
     }
 
@@ -167,6 +169,12 @@ impl PreparedPathOpen for PendingOpen {
         }
         let created = temporary || bits & OpenIntent::CREATE != 0 && !self.exists()?;
         let opened = pin::Host::open(&self.parent, &self.name, self.intent, self.mode)?;
+        if created && !temporary {
+            // The name is visible before quota admission and descriptor-table
+            // publication. Invalidate immediately so a later admission error
+            // cannot leave a pre-create pathname answer alive.
+            self.parent.publish();
+        }
         let metadata = opened.metadata().map_err(HostError::map)?;
         if metadata.file_type().is_fifo() {
             // The final name changed after the prepare-time kind check. The

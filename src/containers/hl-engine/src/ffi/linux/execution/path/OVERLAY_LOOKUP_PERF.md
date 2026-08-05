@@ -108,6 +108,17 @@ and mount changes additionally require a process-local namespace generation,
 matching the retained C `fgen` model. These invalidation tests are prerequisites
 to implementation, not follow-up hardening.
 
+The prerequisite publication contract now invalidates immediately after the
+host syscall makes a name visible or removes it, before quota/accounting work
+that can still fail. `open(O_CREAT)` publishes after the successful named open;
+quota rollback publishes again after a successful unlink. Upper-parent
+materialization publishes each successful ancestor mkdir separately, so a
+later open or component failure cannot suppress invalidation. Copy-up already
+publishes after rename and whiteout removal, before its final directory sync.
+This deliberately follows the retained C `dispatch.c` over-invalidation rule
+and `overlay.c` relocation bumps while narrowing publication to actual visible
+commits.
+
 ### Namespace-mutation oracle audit
 
 The namespace publication lane studied retained
