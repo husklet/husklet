@@ -256,14 +256,32 @@ completion path provides upper-zero or upper-store semantics.
 | 16/32-byte unaligned memory source with full-span fault-before-commit | implemented by the shared guarded vector-load owner |
 | MXCSR rounding and accumulated precision exception | implemented through FPCR/FPSR projection and `SCVTF` |
 | reserved-vvvv, wrong map, and nonzero-pp rejection for this family | implemented |
-| `VCVTPS2DQ` and `VCVTTPS2DQ` sharing opcode `5B` under other pp values | remaining separate conversion families |
+| `VCVTPS2DQ` (`66`) and `VCVTTPS2DQ` (`F3`) sharing opcode `5B` | implemented for VEX.128/256 register and memory forms |
+
+The retained conversion oracle is
+`../engine/src/translator/guest/x86_64/avx.c::do_avx` (opcode `5B`) and
+`../engine/src/translator/guest/x86_64/translate.c::emit_avx_inline`,
+`emit_ps2dq_128`. Per-CPU `v`/`vhi` storage owns register identity and lifetime;
+the operation allocates no state, takes no lock, and has no teardown or blocking
+transition. VEX `vvvv` must be reserved, C4.W is ignored, `L` selects four or
+eight independent lanes, and pp selects signed-dword-to-float, MXCSR-rounded
+float-to-dword, or truncating float-to-dword. The rounded path uses `FRINTX` so
+inexact in-range inputs accumulate precision, while both paths replace NaN and
+positive overflow saturation with `0x80000000`; negative overflow already has
+that representation. Memory reads use the common whole-span 16/32-byte guard,
+stage before publication, and therefore preserve atomic fault and destination
+alias behavior. VEX.128 clears the CPU-owned upper half; VEX.256 publishes both
+halves. The AArch64 lowering is the host-specific branch; architectural results
+and accumulated MXCSR exception state remain x86-defined.
 
 `test/x86_translation.c::vex_signed_dword_to_float_contract` checks C4/C5,
-WIG, both vector lengths, register and memory admission, wrong-map/pp/vvvv
-rejection, all eight signed lanes, source preservation, YMM-high publication,
-unchanged integer flags, and accumulated inexact status. The shared vector
-memory tests remain the authoritative exact fault-state and whole-span atomicity
-coverage used by this operation.
+WIG, all three valid pp values, both vector lengths, register and memory
+admission, reserved-pp/wrong-map/vvvv rejection, all eight signed source lanes,
+source preservation, YMM-high publication, unchanged integer flags, and
+accumulated inexact status. The completeness `cvt_flags` cohort supplies the
+rounding, truncation, NaN, infinity, range-boundary, integer-indefinite, invalid,
+and precision matrix. Shared vector-memory tests remain the authoritative exact
+fault-state, alias, and whole-span atomicity coverage used by these operations.
 
 ### 256-bit vector memory
 

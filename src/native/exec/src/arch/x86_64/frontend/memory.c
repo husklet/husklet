@@ -841,6 +841,10 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_SHUFFLE_WORD: return 6u;
     case VECTOR_SHUFFLE_DOUBLE: return 3u;
     case VECTOR_SIGNED_DWORD_TO_FLOAT: return 1u;
+    case VECTOR_FLOAT_TO_SIGNED_DWORD:
+    case VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD:
+        return 11u + constant_words(UINT64_C(0x4f000000)) +
+               constant_words(UINT64_C(0x80000000));
     case VECTOR_STRING_EQUAL_EACH: return 96u;
     case VECTOR_INSERT_WORD: return 1u;
     default: return 1u;
@@ -1055,6 +1059,26 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
                              destination << 16 | 2u << 12 | 20u << 5 | destination; /* csel result,indef,result,cs */
     } else if (item->vector_kind == VECTOR_SIGNED_DWORD_TO_FLOAT) {
         words[(*cursor)++] = UINT32_C(0x4e21d800) | source << 5 | destination; /* scvtf .4s */
+    } else if (item->vector_kind == VECTOR_FLOAT_TO_SIGNED_DWORD ||
+               item->vector_kind == VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD) {
+        /* Capture before writing so an in-place conversion still compares the float source. */
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | source << 16 | source << 5 | 17u;
+        emit_constant(words, cursor, 16u, UINT64_C(0x4f000000));
+        words[(*cursor)++] = UINT32_C(0x4e040c00) | 16u << 5 | 18u; /* dup 2^31 */
+        emit_constant(words, cursor, 16u, UINT64_C(0x80000000));
+        words[(*cursor)++] = UINT32_C(0x4e040c00) | 16u << 5 | 19u; /* dup indefinite */
+        if (item->vector_kind == VECTOR_FLOAT_TO_SIGNED_DWORD) {
+            words[(*cursor)++] = UINT32_C(0x6e219800) | 17u << 5 | destination; /* frintx */
+            words[(*cursor)++] = UINT32_C(0x4ea1b800) | destination << 5 | destination;
+        } else {
+            words[(*cursor)++] = UINT32_C(0x4ea1b800) | 17u << 5 | destination; /* fcvtzs */
+        }
+        words[(*cursor)++] = UINT32_C(0x6e20e400) | 18u << 16 | 17u << 5 | 21u; /* >= 2^31 */
+        words[(*cursor)++] = UINT32_C(0x4e20e400) | 17u << 16 | 17u << 5 | 22u; /* ordered */
+        words[(*cursor)++] = UINT32_C(0x6e205800) | 22u << 5 | 22u; /* NaN mask */
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | 22u << 16 | 21u << 5 | 21u;
+        words[(*cursor)++] = UINT32_C(0x6e601c00) | destination << 16 | 19u << 5 | 21u;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | 21u << 16 | 21u << 5 | destination;
     } else if (item->vector_kind == VECTOR_SHUFFLE_DWORD) {
         unsigned output;
         for (output = 0; output < 4u; ++output) {

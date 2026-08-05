@@ -2412,11 +2412,15 @@ static int vex_signed_dword_to_float_contract(void) {
         {0xc5, 0xfc, 0x5b, 0xc1, 0, 0},       /* vcvtdq2ps ymm0,ymm1 */
         {0xc4, 0xe1, 0xf8, 0x5b, 0xc1, 0},    /* C4 WIG */
         {0xc5, 0xfc, 0x5b, 0x03, 0, 0},       /* vcvtdq2ps ymm0,[rbx] */
+        {0xc5, 0xf9, 0x5b, 0xc1, 0, 0},       /* vcvtps2dq xmm0,xmm1 */
+        {0xc5, 0xfd, 0x5b, 0xc1, 0, 0},       /* vcvtps2dq ymm0,ymm1 */
+        {0xc4, 0xe1, 0x7a, 0x5b, 0xc1, 0},    /* C4 WIG vcvttps2dq */
+        {0xc5, 0xfe, 0x5b, 0x03, 0, 0},       /* vcvttps2dq ymm0,[rbx] */
     };
-    static const size_t sizes[] = {4, 4, 5, 4};
+    static const size_t sizes[] = {4, 4, 5, 4, 4, 4, 5, 4};
     static const uint8_t invalid[][6] = {
         {0xc5, 0xe8, 0x5b, 0xc1, 0, 0},       /* reserved vvvv */
-        {0xc5, 0xf9, 0x5b, 0xc1, 0, 0},       /* different pp family */
+        {0xc5, 0xfb, 0x5b, 0xc1, 0, 0},       /* reserved F2 pp */
         {0xc4, 0xe2, 0x78, 0x5b, 0xc1, 0},    /* invalid map */
     };
     unsigned index;

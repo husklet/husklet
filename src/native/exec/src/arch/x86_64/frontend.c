@@ -176,7 +176,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         item->pc = block->next_pc;
         item->segment = segment;
         item->live_chain = (request->flags & HL_X86_A64_LIVE_CHAIN) != 0u;
-        if (vex != 0u && vex_map == 1u && opcode == 0x5bu && vex_pp == 0u &&
+        if (vex != 0u && vex_map == 1u && opcode == 0x5bu && vex_pp <= 2u &&
             vex_vvvv == 0u) {
             uint8_t modrm;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
@@ -190,7 +190,9 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
             item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
             item->vector_source_one = item->source;
-            item->vector_kind = VECTOR_SIGNED_DWORD_TO_FLOAT;
+            item->vector_kind = vex_pp == 0u ? VECTOR_SIGNED_DWORD_TO_FLOAT :
+                                vex_pp == 1u ? VECTOR_FLOAT_TO_SIGNED_DWORD :
+                                              VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD;
             if ((modrm >> 6) == 3u) ++cursor;
             else {
                 if (!hl_x86_decode_address(request, block, item, rex, 0u, 0u, start, &cursor)) break;
