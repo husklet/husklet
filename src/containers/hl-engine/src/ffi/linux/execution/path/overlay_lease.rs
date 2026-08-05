@@ -57,6 +57,7 @@ impl ParentLease {
         self.guest.as_ref()
     }
 
+    #[cfg(test)]
     pub(super) const fn layer(&self) -> SelectedLayer {
         self.layer
     }

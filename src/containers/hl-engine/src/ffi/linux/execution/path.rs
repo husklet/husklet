@@ -56,6 +56,7 @@ mod overlay_lease;
 #[path = "path/overlay_entries.rs"]
 mod overlay_entries;
 #[path = "path/overlay_project.rs"]
+#[cfg(test)]
 mod overlay_project;
 #[path = "path/overlay_publish.rs"]
 mod overlay_publish;

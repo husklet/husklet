@@ -224,7 +224,7 @@ impl Host {
 mod overlay_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver, VfsHost};
+    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver};
 
     use super::Host;
 
@@ -240,7 +240,7 @@ mod overlay_tests {
         path
     }
 
-    fn host(upper: &std::path::Path, lower: &std::path::Path) -> Host {
+    fn layered_host(upper: &std::path::Path, lower: &std::path::Path) -> Host {
         Host::layered(
             vec![
                 std::sync::Arc::new(std::fs::File::open(upper).unwrap()),
@@ -262,7 +262,7 @@ mod overlay_tests {
             no_symlinks: false,
             allow_missing_final: false,
         })?;
-        let parent = resolved.duplicate_parent()?;
+        let parent = resolved.duplicate_parent().map_err(hl_runtime::ResolveError::Host)?;
         let name = resolved
             .final_name()
             .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
@@ -277,7 +277,7 @@ mod overlay_tests {
         std::fs::create_dir(lower.join("etc")).unwrap();
         std::fs::write(lower.join("etc/lower"), b"lower").unwrap();
         std::fs::write(upper.join("etc/upper"), b"upper").unwrap();
-        let host = host(&upper, &lower);
+        let host = layered_host(&upper, &lower);
         assert_eq!(resolve(&host, b"/etc/lower").unwrap(), lower.join("etc/lower"));
         assert_eq!(resolve(&host, b"/etc/upper").unwrap(), upper.join("etc/upper"));
         std::fs::remove_dir_all(upper).unwrap();
@@ -293,10 +293,10 @@ mod overlay_tests {
         std::fs::write(upper.join("dir/.wh.hidden"), b"").unwrap();
         std::fs::write(lower.join("dir/hidden"), b"lower").unwrap();
         std::fs::write(lower.join("dir/cut"), b"lower").unwrap();
-        let host = host(&upper, &lower);
+        let host = layered_host(&upper, &lower);
         assert!(resolve(&host, b"/dir/hidden").is_err());
         std::fs::write(upper.join("dir/.wh..wh..opq"), b"").unwrap();
-        let host = host(&upper, &lower);
+        let host = layered_host(&upper, &lower);
         assert!(resolve(&host, b"/dir/cut").is_err());
         std::fs::remove_dir_all(upper).unwrap();
         std::fs::remove_dir_all(lower).unwrap();

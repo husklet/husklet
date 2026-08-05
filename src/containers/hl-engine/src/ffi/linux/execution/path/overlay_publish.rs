@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::overlay_lease::ParentLease;
 
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
+#[cfg(test)]
 const OPAQUE_NAME: &CStr = c".wh..wh..opq";
 static NEXT_STAGE: AtomicU64 = AtomicU64::new(1);
 
@@ -192,6 +193,7 @@ pub(super) fn materialize_parent(parent: &impl AsRawFd, name: &CStr, mode: u32) 
 }
 
 /// Replaces one upper entry with a marker that hides every lower copy.
+#[cfg(test)]
 pub(super) fn publish_whiteout(lease: &ParentLease, name: &CStr) -> io::Result<()> {
     validate_name(name)?;
     let parent = lease
@@ -212,6 +214,7 @@ pub(super) fn publish_whiteout(lease: &ParentLease, name: &CStr) -> io::Result<(
 }
 
 /// Marks an upper directory opaque so children from lower layers stay hidden.
+#[cfg(test)]
 pub(super) fn publish_opaque(directory: &impl AsRawFd) -> io::Result<()> {
     let staged_name = stage_name("opaque")?;
     let staged = create_exclusive(directory, &staged_name, 0o600)?;
@@ -328,6 +331,7 @@ fn clear_whiteout(parent: &impl AsRawFd, name: &CStr) -> io::Result<()> {
     }
 }
 
+#[cfg(test)]
 fn remove_entry(parent: &impl AsRawFd, name: &CStr) -> io::Result<()> {
     // SAFETY: parent and name remain live and unlinkat retains neither.
     if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), 0) } == 0 {
