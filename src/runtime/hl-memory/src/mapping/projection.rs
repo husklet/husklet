@@ -234,7 +234,9 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         {
             return Ok(existing.view);
         }
-        if self.additional.len() == LIVE_PROJECTION_MAXIMUM {
+        // The primary view consumes one slot. Keep the named public bound true
+        // for the complete lease, not merely for its additional-view vector.
+        if self.projection_count() >= LIVE_PROJECTION_MAXIMUM {
             return Err(MemoryError::ResourceLimit);
         }
         let resolution = self

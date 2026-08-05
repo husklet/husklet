@@ -460,15 +460,15 @@ fn projection_reuse_cap() {
         lease.project_additional(GuestAddress::new(0x2ff8), 16, Protection::READ),
         Err(MemoryError::NoAddressSpace)
     );
-    for page in 2..crate::LIVE_PROJECTION_MAXIMUM {
+    for page in 2..crate::LIVE_PROJECTION_MAXIMUM - 1 {
         lease
             .project_additional(GuestAddress::new(0x1000 + page as u64 * 0x1000), 1, Protection::READ)
             .unwrap();
     }
-    assert_eq!(lease.projection_count(), crate::LIVE_PROJECTION_MAXIMUM + 1);
+    assert_eq!(lease.projection_count(), crate::LIVE_PROJECTION_MAXIMUM);
     assert_eq!(
         lease.project_additional(
-            GuestAddress::new(0x1000 + crate::LIVE_PROJECTION_MAXIMUM as u64 * 0x1000),
+            GuestAddress::new(0x1000 + (crate::LIVE_PROJECTION_MAXIMUM - 1) as u64 * 0x1000),
             1,
             Protection::READ,
         ),
