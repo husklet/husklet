@@ -1,5 +1,19 @@
 use super::support::*;
 
+fn chunked_body(mut bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    loop {
+        let line = bytes.windows(2).position(|value| value == b"\r\n").unwrap();
+        let size = usize::from_str_radix(std::str::from_utf8(&bytes[..line]).unwrap(), 16).unwrap();
+        bytes = &bytes[line + 2..];
+        if size == 0 {
+            return body;
+        }
+        body.extend_from_slice(&bytes[..size]);
+        bytes = &bytes[size + 2..];
+    }
+}
+
 #[tokio::test]
 async fn image_archive_round_trip_uses_shared_wire_contracts() {
     let root = TempDir::new().unwrap();
@@ -69,6 +83,41 @@ async fn image_archive_round_trip_uses_shared_wire_contracts() {
     assert_eq!(history[0].created_by, "/bin/sh -c #(nop) ADD fixture");
     assert_eq!(history[0].comment, "integration fixture");
     assert_eq!(history[0].tags, ["docker.io/scenario/fixture:v1"]);
+    for name in ["scenario/fixture:v1", inspected.id.as_str(), &inspected.id[..19]] {
+        let response = raw_http_bytes(
+            &socket,
+            format!("GET /v1.43/images/{name}/get HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await;
+        let boundary = response.windows(4).position(|bytes| bytes == b"\r\n\r\n").unwrap() + 4;
+        let headers = String::from_utf8_lossy(&response[..boundary]).to_ascii_lowercase();
+        assert!(headers.starts_with("http/1.1 200"), "{headers}");
+        assert!(headers.contains("content-type: application/x-tar"), "{headers}");
+        let body = if headers.contains("transfer-encoding: chunked") {
+            chunked_body(&response[boundary..])
+        } else {
+            response[boundary..].to_vec()
+        };
+        let mut archive = tar::Archive::new(&body[..]);
+        let paths = archive
+            .entries()
+            .unwrap()
+            .map(|entry| entry.unwrap().path().unwrap().into_owned())
+            .collect::<Vec<_>>();
+        assert!(paths.iter().any(|path| path == std::path::Path::new("manifest.json")));
+    }
+    let missing = raw_http(
+        &socket,
+        b"GET /v1.43/images/scenario/missing:v1/get HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+    let wrong_method = raw_http(
+        &socket,
+        b"POST /v1.43/images/scenario/fixture:v1/get HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(wrong_method.starts_with("HTTP/1.1 404"), "{wrong_method}");
     client
         .images()
         .tag("scenario/fixture:v1", "scenario/stable", Some("v1"))
@@ -197,19 +246,11 @@ async fn rootfs_import_publishes_the_requested_repository_tag() {
     }
     let imported = client
         .images()
-        .import(
-            std::io::Cursor::new(rootfs),
-            "scenario/rootfs-import",
-            Some("v1"),
-        )
+        .import(std::io::Cursor::new(rootfs), "scenario/rootfs-import", Some("v1"))
         .await
         .unwrap();
     assert!(imported.stream.contains("scenario/rootfs-import:v1"));
-    let image = client
-        .images()
-        .inspect("scenario/rootfs-import:v1")
-        .await
-        .unwrap();
+    let image = client.images().inspect("scenario/rootfs-import:v1").await.unwrap();
     assert_eq!(image.repo_tags, ["docker.io/scenario/rootfs-import:v1"]);
     let literal_path = raw_http(
         &socket,
@@ -234,11 +275,7 @@ async fn rootfs_import_publishes_the_requested_repository_tag() {
     )
     .await;
     assert!(wrong_method.starts_with("HTTP/1.1 404"), "{wrong_method}");
-    client
-        .containers()
-        .remove(&created.id, false, false)
-        .await
-        .unwrap();
+    client.containers().remove(&created.id, false, false).await.unwrap();
     daemon.stop().await;
 }
 

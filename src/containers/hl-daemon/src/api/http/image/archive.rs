@@ -86,6 +86,15 @@ pub(in super::super) async fn save(
         }
         selected
     };
+    save_selected(state, selected).await
+}
+
+pub(in super::super) async fn save_one(state: DockerState, name: String) -> ApiResult<Response> {
+    let selected = vec![state.find_image(&name).await?];
+    save_selected(state, selected).await
+}
+
+async fn save_selected(state: DockerState, selected: Vec<hl_images::Image>) -> ApiResult<Response> {
     let images = state.containers.images().map_err(ApiError::container)?;
     let file = tokio::task::spawn_blocking(move || {
         let mut file = tempfile::tempfile()?;

@@ -67,11 +67,15 @@ pub(super) async fn wait_for_socket(path: &std::path::Path) {
 }
 
 pub(super) async fn raw_http(path: &std::path::Path, request: &[u8]) -> String {
+    String::from_utf8(raw_http_bytes(path, request).await).unwrap()
+}
+
+pub(super) async fn raw_http_bytes(path: &std::path::Path, request: &[u8]) -> Vec<u8> {
     let mut stream = UnixStream::connect(path).await.unwrap();
     stream.write_all(request).await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
-    String::from_utf8(response).unwrap()
+    response
 }
 
 fn append(builder: &mut tar::Builder<&mut Vec<u8>>, path: &str, bytes: &[u8]) {

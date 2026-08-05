@@ -312,6 +312,9 @@ pub(super) async fn named(State(state): State<DockerState>, Path(path): Path<Str
                     .await
                     .into_response();
             }
+            if let Some(name) = path.strip_suffix("/get").filter(|name| !name.is_empty()) {
+                return archive::save_one(state, name.to_owned()).await.into_response();
+            }
         }
         Method::POST => {
             if let Some(name) = path.strip_suffix("/tag").filter(|name| !name.is_empty()) {
