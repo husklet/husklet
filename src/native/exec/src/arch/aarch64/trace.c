@@ -534,6 +534,11 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     hl_a64_density_family guard_families[HL_A64_SOURCE_MAX_WORDS] = {0};
     hl_a64_trace_density density = {0};
     hl_a64_budget_guard budget_guard;
+    uint32_t *refund_patches[HL_A64_TRACE_MAX_CONDITIONALS] = {0};
+    uint32_t refund_prefixes[HL_A64_TRACE_MAX_CONDITIONALS] = {0};
+    uint32_t stitched = 0;
+    uint32_t charged_prefix = 0;
+    int exclusive = 0;
     size_t guard_count = 0;
     if (output == NULL || expected_authority == 0) return 0;
     memset(output, 0, sizeof(*output));
@@ -560,6 +565,16 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         uint64_t instruction = pc + index * 4;
         size_t begin = hl_a64_assembler_size(&assembler);
         hl_a64_memory_sites memory_sites = {0};
+        uint32_t word = fetched.words[index];
+        /* The exclusive monitor may not cross a stitched block-entry poll.
+         * CASP is self-contained and therefore does not open this interval. */
+        int casp = (word & 0x3fa07c00u) == 0x08207c00u;
+        if (!casp) {
+            if ((word & 0x3fc00000u) == 0x08400000u)
+                exclusive = 1;
+            else if (exclusive && (word & 0x3fc00000u) == 0x08000000u)
+                exclusive = 0;
+        }
         if (fetched.words[index] == 0xD4000001u) {
             output->source_last = instruction + 4;
             output->terminal = HL_NATIVE_EXIT_SYSCALL;
@@ -573,7 +588,21 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         uint32_t *taken_patch = NULL;
         uint64_t direct_target = 0;
         uint64_t taken_target = 0;
-        if (hl_a64_direct_chain(&assembler, fetched.words[index], instruction,
+        if (!exclusive && index + 1 < count && stitched < HL_A64_TRACE_MAX_CONDITIONALS &&
+            hl_a64_conditional_stitch(&assembler, word, instruction, &taken_patch, &taken_target,
+                                      &refund_patches[stitched])) {
+            output->relocations[output->relocation_count++] = (hl_native_relocation){
+                .code_offset = (uint64_t)((uint8_t *)taken_patch - (uint8_t *)buffer),
+                .target_guest = taken_target,
+                .expected = *taken_patch,
+            };
+            if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
+            density_record(&density, HL_A64_DENSITY_CONTROL,
+                           (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
+            refund_prefixes[stitched++] = (uint32_t)(index + 1u);
+            continue;
+        }
+        if (hl_a64_direct_chain(&assembler, word, instruction,
                                 &direct_patch, &direct_target) ||
             hl_a64_indirect_body(&assembler, fetched.words[index], instruction, ibtc) ||
             hl_a64_conditional_chain(&assembler, fetched.words[index], instruction,
@@ -584,20 +613,18 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             density_record(&density, HL_A64_DENSITY_CONTROL,
                            (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
             if (direct_patch != NULL) {
-                output->relocations[0] = (hl_native_relocation){
+                output->relocations[output->relocation_count++] = (hl_native_relocation){
                     .code_offset = (uint64_t)((uint8_t *)direct_patch - (uint8_t *)buffer),
                     .target_guest = direct_target,
                     .expected = *direct_patch,
                 };
-                output->relocation_count = 1;
             }
             if (taken_patch != NULL) {
-                output->relocations[1] = (hl_native_relocation){
+                output->relocations[output->relocation_count++] = (hl_native_relocation){
                     .code_offset = (uint64_t)((uint8_t *)taken_patch - (uint8_t *)buffer),
                     .target_guest = taken_target,
                     .expected = *taken_patch,
                 };
-                output->relocation_count = 2;
             }
             break;
         }
@@ -616,6 +643,9 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                 return 0;
             }
             output->source_last = instruction + 4;
+            /* The unsupported instruction remains in the source interval for
+             * invalidation/provenance, but it is not completed guest work. */
+            charged_prefix = (uint32_t)index;
             output->terminal = HL_NATIVE_EXIT_FALLBACK;
             hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_FALLBACK, instruction);
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
@@ -646,8 +676,14 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         output->terminal = HL_NATIVE_EXIT_BRANCH;
         hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, output->source_last);
     }
-    output->instruction_count = (output->source_last - output->source_first) / 4;
+    output->instruction_count = charged_prefix != 0
+        ? charged_prefix
+        : (output->source_last - output->source_first) / 4;
     hl_a64_stub_budget_finish(&assembler, &budget_guard, (uint32_t)output->instruction_count);
+    for (uint32_t index = 0; index < stitched; index++) {
+        uint32_t refund = (uint32_t)output->instruction_count - refund_prefixes[index];
+        *refund_patches[index] |= refund << 10;
+    }
     if (output->provenance_count + guard_count > HL_NATIVE_PROVENANCE_MAX) {
         memset(buffer, 0, capacity);
         memset(output, 0, sizeof(*output));

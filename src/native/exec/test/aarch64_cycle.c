@@ -77,7 +77,8 @@ int main(void) {
     uint64_t stack_first = (uint64_t)(uintptr_t)stack;
     uint64_t stack_last = (uint64_t)(uintptr_t)(stack + sizeof(stack));
     const hl_a64_view view = {stack_first, stack_last, stack_first, 7,
-                              HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE, 0};
+                              HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE,
+                              HL_NATIVE_WRITE_EXACT, 0};
     const hl_a64_projection projection = {&view, 1, 7, 0};
     hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
                          .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &state};

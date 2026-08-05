@@ -1078,6 +1078,7 @@ int main(void) {
           run_state.loop_budget_iterations == 0 && run_state.loop_executable == 0);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x4018);
     CHECK(run_state.registers[1] == 6 && run_state.registers[30] == 0x4008);
+    CHECK(run_state.executed == 7 && run_state.budget == 9);
     CHECK(hl_native_diagnose(run_executor, &cold) == HL_NATIVE_OK && cold.publications != 0);
     CHECK(cold.publications == 4);
     memset(&run_state, 0, sizeof(run_state));
@@ -1085,8 +1086,30 @@ int main(void) {
     run_state.flags = UINT64_C(0x40000000);
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.registers[1] == 6);
+    CHECK(run_state.executed == 7 && run_state.budget == 9);
     CHECK(hl_native_diagnose(run_executor, &warm) == HL_NATIVE_OK);
     CHECK(warm.publications == cold.publications && warm.cache_hits > cold.cache_hits);
+    {
+        const uint32_t prefix_loop_words[] = {
+            UINT32_C(0x91000421), /* add x1,x1,#1 */
+            UINT32_C(0xeb00003f), /* cmp x1,x0 */
+            UINT32_C(0x54ffffc1), /* b.ne 0x7000 */
+            UINT32_C(0xd4000001), /* svc */
+        };
+        const hl_a64_source_span prefix_loop_span = {
+            0x7000, (const uint8_t *)prefix_loop_words, sizeof(prefix_loop_words), 7, 8};
+        const hl_a64_source prefix_loop_source = {&prefix_loop_span, 1, 7, 8};
+        run_request.source = &prefix_loop_source;
+        run_request.budget = 301;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x7000;
+        run_state.registers[0] = 100;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x700c);
+        CHECK(run_state.registers[1] == 100 && run_state.executed == 301 && run_state.budget == 0);
+        run_request.source = &run_source;
+        run_request.budget = 16;
+    }
     memset(&run_state, 0, sizeof(run_state));
     run_state.program = 0x4000;
     run_state.flags = UINT64_C(0x40000000);
@@ -1094,6 +1117,7 @@ int main(void) {
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_YIELD && run_output.instruction == 0x4010);
     CHECK(run_state.registers[1] == 3 && run_state.registers[30] == 0x4008);
+    CHECK(run_state.executed == 2 && run_state.budget == 0);
     run_state.interrupt = 1;
     run_state.program = 0x4000;
     run_request.budget = 16;

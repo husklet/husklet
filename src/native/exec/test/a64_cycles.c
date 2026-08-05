@@ -176,7 +176,8 @@ static int execution(void) {
     uint64_t stack_first = (uint64_t)(uintptr_t)stack;
     uint64_t stack_last = (uint64_t)(uintptr_t)(stack + sizeof(stack));
     const hl_a64_view view = {stack_first, stack_last, stack_first, 11,
-        HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE, 0};
+                              HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE,
+                              HL_NATIVE_WRITE_EXACT, 0};
     const hl_a64_projection projection = {&view, 1, 11, 0};
     hl_native_aarch64_cpu state = {0};
     hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
