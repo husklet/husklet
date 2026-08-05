@@ -1,5 +1,27 @@
 # Docker API parity inventory
 
+## Named-image path identity
+
+A real Docker v1.43 lifecycle imported the pinned Alpine minirootfs as
+`local/alpine:3.24`, then failed `docker image inspect`: Docker sends repository
+separators literally in `/images/local/alpine:3.24/json`, while the daemon's
+single-segment `:name` route returned 404 before image lookup.  The complete
+named-image route family now uses one terminal wildcard dispatcher.  It retains
+arbitrary repository depth, separates only a method-valid terminal operation
+(`json`, `history`, `tag`, or `push`), and treats the full DELETE tail as the
+reference.  Short names and image IDs use the same path owner, preventing the
+two route shapes from drifting.
+
+This is an HTTP identity/routing domain; no guest execution or retained-C
+runtime domain is involved.  The existing `hl-images::Reference` parser remains
+the value validator and image storage remains the lifetime owner.  Focused wire
+coverage includes a literal deep reference, a reference whose final repository
+component resembles an operation suffix, and wrong-method isolation.  The real
+CLI subsequently passed inspect, history, deep tag, and inspection of the new
+tag.  Container creation then exposed a separate next-domain gap:
+`HostConfig.Binds: null` is rejected where Docker's omitted slice is serialized
+as null.  That create-body defaulting domain is intentionally not changed here.
+
 This inventory compares the local, single-node Docker Engine API v1.43 surface
 with the routes composed in `api::http::router`. Swarm orchestration, plugins,
 secrets, configs, services, nodes, and session transport are outside the

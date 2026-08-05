@@ -1,5 +1,5 @@
 use axum::Router;
-use axum::routing::{delete, get, post};
+use axum::routing::{any, delete, get, post};
 use hl_container::Containers;
 use hl_images::Platform;
 use hl_images::remote::Source;
@@ -102,11 +102,7 @@ pub(crate) fn router(
         .route("/images/create", post(image::pull))
         .route("/images/prune", post(image::prune))
         .route("/images/get", get(image::save))
-        .route("/images/:name/json", get(image::inspect))
-        .route("/images/:name/history", get(image::history))
-        .route("/images/:name/tag", post(image::tag))
-        .route("/images/:name/push", post(push::post))
-        .route("/images/:name", delete(image::remove))
+        .route("/images/*path", any(image::named))
         .route("/networks", get(network::list))
         .route("/networks/create", post(network::create))
         .route("/networks/prune", post(network::prune))

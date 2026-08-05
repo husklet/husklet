@@ -189,6 +189,29 @@ async fn rootfs_import_publishes_the_requested_repository_tag() {
         .await
         .unwrap();
     assert_eq!(image.repo_tags, ["docker.io/scenario/rootfs-import:v1"]);
+    let literal_path = raw_http(
+        &socket,
+        b"GET /v1.43/images/scenario/rootfs-import:v1/json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(literal_path.starts_with("HTTP/1.1 200"), "{literal_path}");
+    client
+        .images()
+        .tag("scenario/rootfs-import:v1", "scenario/json", Some("v2"))
+        .await
+        .unwrap();
+    let suffix_name = raw_http(
+        &socket,
+        b"GET /v1.43/images/scenario/json:v2/json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(suffix_name.starts_with("HTTP/1.1 200"), "{suffix_name}");
+    let wrong_method = raw_http(
+        &socket,
+        b"POST /v1.43/images/scenario/json:v2/json HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(wrong_method.starts_with("HTTP/1.1 404"), "{wrong_method}");
     client
         .containers()
         .remove(&created.id, false, false)

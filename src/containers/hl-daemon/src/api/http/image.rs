@@ -1,7 +1,7 @@
 use axum::Json;
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hl_images::format::docker::{Archive, Limits};
 use hl_images::{Platform, Reference};
@@ -242,11 +242,57 @@ pub(super) use archive::{load, save};
 use fields::{Field, Fields};
 #[cfg(test)]
 use identity::{RemoveQuery, removal_conflicts};
-pub(super) use identity::{history, inspect, remove, tag};
 #[cfg(test)]
 use list::{ImageSelection, ListQuery};
 pub(super) use list::{Prune, list, prune};
 pub(super) use registry::{commit, distribution, pull, search};
+
+/// Dispatches named-image operations whose repository reference contains path separators.
+///
+/// Axum's single-segment `:name` routes own short names and image IDs. Docker sends
+/// repository-qualified names as literal path segments, so this terminal wildcard preserves the
+/// complete reference and separates only the operation suffix.
+pub(super) async fn named(
+    State(state): State<DockerState>,
+    Path(path): Path<String>,
+    request: Request,
+) -> Response {
+    let method = request.method().clone();
+    let uri = request.uri().clone();
+    let headers = request.headers().clone();
+    match method {
+        Method::GET => {
+            if let Some(name) = path.strip_suffix("/json").filter(|name| !name.is_empty()) {
+                return identity::inspect(State(state), Path(name.to_owned())).await.into_response();
+            }
+            if let Some(name) = path.strip_suffix("/history").filter(|name| !name.is_empty()) {
+                return identity::history(State(state), Path(name.to_owned())).await.into_response();
+            }
+        }
+        Method::POST => {
+            if let Some(name) = path.strip_suffix("/tag").filter(|name| !name.is_empty()) {
+                return match Query::<identity::TagQuery>::try_from_uri(&uri) {
+                    Ok(query) => identity::tag(State(state), Path(name.to_owned()), query).await.into_response(),
+                    Err(rejection) => rejection.into_response(),
+                };
+            }
+            if let Some(name) = path.strip_suffix("/push").filter(|name| !name.is_empty()) {
+                return match Query::<super::push::Options>::try_from_uri(&uri) {
+                    Ok(query) => super::push::post(State(state), Path(name.to_owned()), query, headers).await,
+                    Err(rejection) => rejection.into_response(),
+                };
+            }
+        }
+        Method::DELETE if !path.is_empty() => {
+            return match Query::<identity::RemoveQuery>::try_from_uri(&uri) {
+                Ok(query) => identity::remove(State(state), Path(path), query).await.into_response(),
+                Err(rejection) => rejection.into_response(),
+            };
+        }
+        _ => {}
+    }
+    StatusCode::NOT_FOUND.into_response()
+}
 
 #[cfg(test)]
 mod tests;
