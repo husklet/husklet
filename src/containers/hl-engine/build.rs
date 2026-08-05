@@ -51,6 +51,15 @@ fn main() {
     let root = Path::new("../../native/exec");
     let inputs = NativeInputs::discover(root);
     let mut build = cc::Build::new();
+    let allocation_test = std::env::var_os("HL_NATIVE_ALLOCATION_TEST").is_some();
+    if allocation_test {
+        build.file(root.join("test/allocation.c")).flag("-include").flag(
+            root.join("test/allocation.h")
+                .to_str()
+                .expect("allocation test include"),
+        );
+        println!("cargo:rerun-if-env-changed=HL_NATIVE_ALLOCATION_TEST");
+    }
     // Hardened libc headers reject `_FORTIFY_SOURCE` at `-O0`, where it cannot
     // provide fortification. Preserve Cargo's debug semantics and warning
     // strictness by removing only that unusable definition before libc headers.
@@ -69,7 +78,7 @@ fn main() {
         .warnings(true)
         .extra_warnings(true)
         .flag_if_supported("-Werror");
-    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") {
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") && !allocation_test {
         build.files(
             inputs
                 .assembly
@@ -78,6 +87,22 @@ fn main() {
         );
     }
     build.compile("hl_native_execution");
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("aarch64") && allocation_test {
+        let mut assembly = cc::Build::new();
+        assembly
+            .files(
+                inputs
+                    .assembly
+                    .iter()
+                    .filter(|path| path.ends_with("arch/aarch64/entry.S") || path.ends_with("arch/x86_64/entry.S")),
+            )
+            .include(root.join("include"))
+            .include(root.join("src"))
+            .warnings(true)
+            .extra_warnings(true)
+            .flag_if_supported("-Werror")
+            .compile("hl_native_execution_entry");
+    }
     for dependency in &inputs.dependencies {
         println!("cargo:rerun-if-changed={}", dependency.display());
     }

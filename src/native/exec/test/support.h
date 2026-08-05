@@ -17,6 +17,8 @@ typedef struct test_memory {
     uint64_t end_calls;
     uint64_t repair_calls;
     int fail_dual;
+    int corrupt_mapping;
+    int fail_repair;
     int fail_end;
 } test_memory;
 
@@ -41,6 +43,7 @@ static hl_native_status test_reserve(void *opaque, uint64_t capacity, uint64_t a
     output->writable = (uint64_t)(uintptr_t)memory->writable;
     output->executable = (uint64_t)(uintptr_t)memory->executable;
     output->capacity = capacity;
+    if (memory->corrupt_mapping) output->capacity--;
     return HL_NATIVE_OK;
 }
 
@@ -66,7 +69,7 @@ static hl_native_status test_repair(void *opaque, hl_native_mapping *mapping, ui
     (void)mapping;
     (void)preserve;
     memory->repair_calls++;
-    return HL_NATIVE_OK;
+    return memory->fail_repair ? HL_NATIVE_PLATFORM : HL_NATIVE_OK;
 }
 
 static hl_native_status test_begin(void *opaque) {

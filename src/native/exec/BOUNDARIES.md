@@ -107,6 +107,27 @@ faulting PC. The scheduler never switches on retained numeric reason values.
 8. Destroy stops admission, drains native entries, unmaps current and retired
    generations, and releases the instance exactly once.
 
+Allocation ownership follows the same lifecycle. The executor owns its cache,
+indirect-branch table, and arena mapping; the cache owns each lookup,
+provenance, liveness, relocation, and resolved-relocation array. A registered
+direct token owns one allocation until unregister; an interrupt token owns one
+until its explicit destroy; and each attached fault thread owns one alternate
+stack until detach. Executor destroy refuses a live direct token. Constructor
+failure unwinds these owners in reverse order. Fork repairs inherited mappings
+and retires direct authority but does not create a second allocation owner;
+parent and child subsequently release only their private process copies.
+The retained ownership comparison studied
+`src/translator/cache.c::jit_cache_init`, `cache_rotate`, and
+`jit_after_fork`, the exec/fork callers in `src/linux_abi/thread.c` and
+`src/linux_abi/fork.c`, and the alternate-stack/fault publication owners in
+`src/core/dispatch.c` and `src/linux_abi/syscall/proc.c`. Unlike that
+process-global oracle, Rust owns one executor-local arena, cache, IBTC, and
+generation lifecycle; the host callback owns both aliases and its backing
+descriptor. The allocation lifecycle gate injects each heap failure, malformed
+mapping metadata, and repair failure. It also runs 16 post-warmup
+create/fork-repair/destroy cycles and requires unchanged Linux mapping,
+descriptor, and task counts with resident growth bounded to 64 MiB under ASan.
+
 Memory access mode and a descriptor-qualified authority identity are part of
 every translation identity. The identity is reused only when guest range, host
 delta, permissions, and mapping/instruction generations are byte-for-byte
