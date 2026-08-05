@@ -8,7 +8,7 @@ use hl_runtime::{
     Resolver, RuntimePathError, RuntimePathHost,
 };
 
-use super::{HostError, NativePath, pin};
+use super::{HostError, NativePath, overlay_lease::ParentLease, pin};
 
 mod identity;
 mod inode;
@@ -36,7 +36,7 @@ enum Mutation {
 
 #[derive(Debug)]
 struct PinnedEntry {
-    parent: OwnedFd,
+    parent: ParentLease,
     name: CString,
     path: PathBuf,
 }

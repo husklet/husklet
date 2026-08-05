@@ -73,14 +73,26 @@ impl WorkspaceRoot {
         let Some(root) = Self::select(plan) else {
             return Ok((None, None));
         };
+        let overlay_upper = (!projected)
+            .then(|| plan.options.get("HL_OVERLAY_UPPER"))
+            .flatten()
+            .map(|upper| upper.as_bytes().to_vec());
+        let watch_root = overlay_upper.as_deref().unwrap_or(&root);
         let watches = if projected {
             super::super::watch::Hub::projected(&root)
         } else {
-            super::super::watch::Hub::new(&root)
+            super::super::watch::Hub::new(watch_root)
         }
         .map_err(|_| EngineError::LaunchFailed)?;
         let native = if projected {
             super::super::path::NativePath::projected(&root, Arc::clone(&watches))
+        } else if let Some(upper) = overlay_upper {
+            let lowers = plan
+                .options
+                .get("HL_LOWER")
+                .map(|records| records.lines().map(|lower| lower.as_bytes().to_vec()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            super::super::path::NativePath::layered(&upper, &lowers, Arc::clone(&watches))
         } else {
             super::super::path::NativePath::new(&root, Arc::clone(&watches))
         }

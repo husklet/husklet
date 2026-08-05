@@ -38,11 +38,13 @@ directory merging, cache epochs, and mount routing remain outside this focused
 lease slice and must be implemented by their owning overlay resolver and
 mutation domains.
 
-The production boundary is not wired yet: `OrdinaryContext` still constructs
-one root, and the launch composition still ignores `HL_LOWER` and
-`HL_OVERLAY_WORK`. The layered registry and `ParentLease` must next be joined so
-`VfsHost::duplicate_parent` returns the guest/layer-aware lease, copy-up creates
-missing upper ancestors before publication, and read-directory consumes all
-retained directory candidates. Until then the container must continue using
-its durable lower-root fallback; changing rootfs to the empty upper alone would
-make existing images unbootable.
+`OrdinaryContext` and `NativePath` now have an ordered layered constructor, and
+an explicit `HL_OVERLAY_UPPER` launch option activates it with `HL_LOWER` while
+leaving ordinary roots on the direct-descriptor path. `VfsHost` now returns the
+guest/layer-aware lease: write opens use its mutation capability, and a
+lower-only parent without a materialized upper fails rather than falling back
+to a lower descriptor. The container does not emit the activation option yet.
+Copy-up must first create missing upper ancestors and publish the selected
+lower inode; merged read-directory must then consume all retained candidates.
+Until those exist, changing rootfs to the empty upper would make existing
+images unbootable or reject their first mutation.

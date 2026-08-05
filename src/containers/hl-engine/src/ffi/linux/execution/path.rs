@@ -176,8 +176,20 @@ impl NativePath {
     }
 
     pub(super) fn new(root: &[u8], watches: Arc<watch::Hub>) -> Result<Self, RuntimePathError> {
-        Ok(Self {
-            source: source::Source::ordinary(root)?,
+        Ok(Self::from_source(source::Source::ordinary(root)?, watches))
+    }
+
+    pub(super) fn layered(
+        upper: &[u8],
+        lowers: &[Vec<u8>],
+        watches: Arc<watch::Hub>,
+    ) -> Result<Self, RuntimePathError> {
+        Ok(Self::from_source(source::Source::layered(upper, lowers)?, watches))
+    }
+
+    fn from_source(source: source::Source, watches: Arc<watch::Hub>) -> Self {
+        Self {
+            source,
             paths: Arc::new(Mutex::new(BTreeMap::new())),
             synthetic_paths: Arc::new(Mutex::new(BTreeMap::new())),
             projected: projected::Registry::default(),
@@ -203,38 +215,11 @@ impl NativePath {
                 hardware: 0,
                 hardware_second: 0,
             },
-        })
+        }
     }
 
     pub(super) fn projected(root: &[u8], watches: Arc<watch::Hub>) -> Result<Self, RuntimePathError> {
-        Ok(Self {
-            source: source::Source::projected(root)?,
-            paths: Arc::new(Mutex::new(BTreeMap::new())),
-            synthetic_paths: Arc::new(Mutex::new(BTreeMap::new())),
-            projected: projected::Registry::default(),
-            writes: Arc::new(Mutex::new(BTreeMap::new())),
-            ownership: Arc::new(metadata::Registry::default()),
-            watches,
-            executable: Arc::new(Mutex::new(Vec::new())),
-            auxiliary: Arc::new(Mutex::new(Vec::new())),
-            namespace_root: Arc::new(b"/".to_vec()),
-            procfs: None,
-            tasks: None,
-            process: None,
-            thread: None,
-            namespace_handles: None,
-            terminals: Arc::new(hl_runtime::TerminalCatalog::default()),
-            terminal_bindings: Arc::new(hl_runtime::TerminalBindings::default()),
-            terminal_signals: Arc::new(device::DetachedSignals),
-            entropy: Arc::new(super::image_data::Entropy),
-            transfers: Arc::new(transfer::FileTransferRegistry::default()),
-            fifos: Arc::new(fifo::Registry::default()),
-            system: None,
-            cpu_model: hl_runtime::ProcfsCpuModel::Aarch64 {
-                hardware: 0,
-                hardware_second: 0,
-            },
-        })
+        Ok(Self::from_source(source::Source::projected(root)?, watches))
     }
 
     pub(super) fn ordinary(&self) -> Result<&source::OrdinaryContext, RuntimePathError> {
@@ -641,7 +626,9 @@ impl RuntimePathHost for NativePath {
             return Err(RuntimePathError::ReadOnly);
         }
         if let Some(binding) = name_binding {
-            let parent: std::os::fd::OwnedFd = binding.parent.try_clone().map_err(HostError::map)?.into();
+            let parent = overlay_lease::ParentLease::from(std::os::fd::OwnedFd::from(
+                binding.parent.try_clone().map_err(HostError::map)?,
+            ));
             let file = NativeFile::new(
                 Arc::clone(&self.watches),
                 binding.host.clone(),

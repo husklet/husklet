@@ -16,6 +16,8 @@ use hl_runtime::{
     VfsHost,
 };
 
+use super::overlay_lease::ParentLease;
+
 #[derive(Clone)]
 pub(super) struct Host {
     roots: Arc<Vec<Arc<File>>>,
@@ -166,7 +168,7 @@ impl Host {
     }
 
     pub(super) fn open(
-        parent: &OwnedFd,
+        parent: &ParentLease,
         name: &CString,
         intent: OpenIntent,
         mode: u32,
@@ -174,6 +176,16 @@ impl Host {
         let flags = Self::open_flags(intent)?;
         // SAFETY: parent and name remain live for the non-retaining openat;
         // success returns one new descriptor with unique ownership.
+        let mutation = OpenIntent::WRITE
+            | OpenIntent::CREATE
+            | OpenIntent::TRUNCATE
+            | OpenIntent::APPEND
+            | OpenIntent::TEMPORARY;
+        let parent = if intent.bits() & mutation != 0 {
+            parent.mutation()?
+        } else {
+            parent.selected()
+        };
         let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, mode as libc::mode_t) };
         if descriptor < 0 {
             return Err(super::HostError::map(std::io::Error::last_os_error()));
@@ -182,8 +194,8 @@ impl Host {
         Ok(unsafe { File::from_raw_fd(descriptor) })
     }
 
-    pub(super) fn path(parent: &OwnedFd, name: &CString) -> Result<PathBuf, RuntimePathError> {
-        let directory = Self::descriptor_path(parent.as_raw_fd()).map_err(super::HostError::map)?;
+    pub(super) fn path(parent: &ParentLease, name: &CString) -> Result<PathBuf, RuntimePathError> {
+        let directory = Self::descriptor_path(parent.selected().as_raw_fd()).map_err(super::HostError::map)?;
         Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
     }
 }
@@ -272,7 +284,7 @@ mod overlay_tests {
 }
 
 impl VfsHost for Host {
-    type ParentLease = OwnedFd;
+    type ParentLease = ParentLease;
 
     fn pin_root(&self) -> Result<NodeHandle, ResolveHostError> {
         if self.roots.len() == 1 {
@@ -356,10 +368,21 @@ impl VfsHost for Host {
 
     fn duplicate_parent(&self, parent: NodeHandle) -> Result<Self::ParentLease, ResolveHostError> {
         if !Self::is_layered(parent) {
-            return Self::duplicate_descriptor(Self::direct_descriptor(parent));
+            return Self::duplicate_descriptor(Self::direct_descriptor(parent)).map(ParentLease::from);
         }
         self.with_entry(parent, |entry| {
-            Self::duplicate_descriptor(entry.candidates[0].descriptor.as_raw_fd())
+            let selected = &entry.candidates[0];
+            let selected_descriptor = Self::duplicate_descriptor(selected.descriptor.as_raw_fd())?;
+            if selected.layer == 0 {
+                return Ok(ParentLease::upper(entry.guest.clone(), selected_descriptor));
+            }
+            let upper = entry
+                .candidates
+                .iter()
+                .find(|candidate| candidate.layer == 0)
+                .map(|candidate| Self::duplicate_descriptor(candidate.descriptor.as_raw_fd()))
+                .transpose()?;
+            Ok(ParentLease::lower(entry.guest.clone(), selected.layer - 1, selected_descriptor, upper))
         })?
     }
 

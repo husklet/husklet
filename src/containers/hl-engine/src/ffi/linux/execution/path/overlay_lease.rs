@@ -1,6 +1,6 @@
-use std::fs::File;
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
-use hl_runtime::GuestPath;
+use hl_runtime::GuestPathBytes;
 
 /// Rootfs layer that supplied the parent observed during a confined walk.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,46 +15,67 @@ pub(super) enum SelectedLayer {
 /// lower parent, while a mutation is issued only through the corresponding
 /// upper parent after copy-up has materialized its ancestors. The guest path
 /// prevents a host descriptor from becoming the path's namespace identity.
+#[derive(Debug)]
 pub(super) struct ParentLease {
-    guest: GuestPath,
-    selected: File,
-    upper: Option<File>,
+    guest: Option<GuestPathBytes>,
+    selected: OwnedFd,
+    upper: Option<OwnedFd>,
     layer: SelectedLayer,
 }
 
 impl ParentLease {
-    pub(super) fn upper(guest: GuestPath, parent: File) -> Self {
+    pub(super) fn upper(guest: GuestPathBytes, parent: OwnedFd) -> Self {
         Self {
-            guest,
+            guest: Some(guest),
             selected: parent,
             upper: None,
             layer: SelectedLayer::Upper,
         }
     }
 
-    pub(super) fn lower(guest: GuestPath, layer: usize, selected: File, upper: File) -> Self {
+    pub(super) fn lower(guest: GuestPathBytes, layer: usize, selected: OwnedFd, upper: Option<OwnedFd>) -> Self {
         Self {
-            guest,
+            guest: Some(guest),
             selected,
-            upper: Some(upper),
+            upper,
             layer: SelectedLayer::Lower(layer),
         }
     }
 
-    pub(super) fn guest(&self) -> &GuestPath {
-        &self.guest
+    pub(super) fn guest(&self) -> Option<&GuestPathBytes> {
+        self.guest.as_ref()
     }
 
     pub(super) const fn layer(&self) -> SelectedLayer {
         self.layer
     }
 
-    pub(super) const fn selected(&self) -> &File {
+    pub(super) const fn selected(&self) -> &OwnedFd {
         &self.selected
     }
 
-    pub(super) fn mutation(&self) -> &File {
-        self.upper.as_ref().unwrap_or(&self.selected)
+    pub(super) fn mutation(&self) -> Result<&OwnedFd, hl_runtime::RuntimePathError> {
+        match self.layer {
+            SelectedLayer::Upper => Ok(&self.selected),
+            SelectedLayer::Lower(_) => self.upper.as_ref().ok_or(hl_runtime::RuntimePathError::NotFound),
+        }
+    }
+}
+
+impl From<OwnedFd> for ParentLease {
+    fn from(selected: OwnedFd) -> Self {
+        Self {
+            guest: None,
+            selected,
+            upper: None,
+            layer: SelectedLayer::Upper,
+        }
+    }
+}
+
+impl AsRawFd for ParentLease {
+    fn as_raw_fd(&self) -> RawFd {
+        self.mutation().map_or(-1, AsRawFd::as_raw_fd)
     }
 }
 
@@ -65,7 +86,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use hl_runtime::GuestPath;
+    use hl_runtime::GuestPathBytes;
 
     use super::{ParentLease, SelectedLayer};
 
@@ -103,23 +124,26 @@ mod tests {
     fn lower_selection_retains_upper_mutation_parent() {
         let directories = Directories::new();
         let lease = ParentLease::lower(
-            GuestPath::new("/var/cache").unwrap(),
+            GuestPathBytes::new(b"/var/cache").unwrap(),
             2,
-            directories.lower.try_clone().unwrap(),
-            directories.upper.try_clone().unwrap(),
+            directories.lower.try_clone().unwrap().into(),
+            Some(directories.upper.try_clone().unwrap().into()),
         );
 
-        assert_eq!(lease.guest().as_str(), "/var/cache");
+        assert_eq!(lease.guest().unwrap().as_bytes(), b"/var/cache");
         assert_eq!(lease.layer(), SelectedLayer::Lower(2));
-        assert_ne!(lease.selected().as_raw_fd(), lease.mutation().as_raw_fd());
+        assert_ne!(lease.selected().as_raw_fd(), lease.mutation().unwrap().as_raw_fd());
     }
 
     #[test]
     fn upper_selection_mutates_selected_parent() {
         let directories = Directories::new();
-        let lease = ParentLease::upper(GuestPath::new("/etc").unwrap(), directories.upper.try_clone().unwrap());
+        let lease = ParentLease::upper(
+            GuestPathBytes::new(b"/etc").unwrap(),
+            directories.upper.try_clone().unwrap().into(),
+        );
 
         assert_eq!(lease.layer(), SelectedLayer::Upper);
-        assert_eq!(lease.selected().as_raw_fd(), lease.mutation().as_raw_fd());
+        assert_eq!(lease.selected().as_raw_fd(), lease.mutation().unwrap().as_raw_fd());
     }
 }

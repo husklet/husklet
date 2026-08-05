@@ -68,6 +68,7 @@ pub const DEFINITIONS: &[Definition] = &[
     launch!("HL_HOSTNAME", "Linux guest hostname", Text),
     launch!("HL_IP", "guest virtual IPv4 address paired with HL_NETBR", Text),
     launch!("HL_LOWER", "ordered root filesystem lower layers", Records),
+    launch!("HL_OVERLAY_UPPER", "writable root filesystem overlay layer", Path),
     launch!(
         "HL_OVERLAY_WORK",
         "launch-private portable overlay work directory",

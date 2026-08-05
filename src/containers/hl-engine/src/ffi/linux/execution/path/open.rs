@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::fmt;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use hl_descriptor::{DescriptionIdentity, OpenFileDescription};
 use hl_runtime::{GuestPath, OpenIntent, PreparedPathOpen, RuntimePathError};
 
-use super::{FileTransferRegistry, HostError, NativeFile, directory, filesystem, lease, pin};
+use super::{FileTransferRegistry, HostError, NativeFile, directory, filesystem, lease, overlay_lease::ParentLease, pin};
 
 pub(super) struct PendingOpen {
     object: Arc<NativeFile>,
@@ -23,7 +23,7 @@ pub(super) struct PendingOpen {
     guest: Option<GuestPath>,
     paths: Arc<Mutex<BTreeMap<(u64, u64), lease::LeaseEntry>>>,
     terminals: Arc<hl_runtime::TerminalCatalog>,
-    parent: OwnedFd,
+    parent: ParentLease,
     name: CString,
     transfers: Arc<FileTransferRegistry>,
 }
@@ -37,7 +37,7 @@ impl PendingOpen {
         root: PathBuf,
         paths: Arc<Mutex<BTreeMap<(u64, u64), lease::LeaseEntry>>>,
         terminals: Arc<hl_runtime::TerminalCatalog>,
-        parent: OwnedFd,
+        parent: ParentLease,
         name: CString,
         transfers: Arc<FileTransferRegistry>,
     ) -> Self {
@@ -66,7 +66,7 @@ impl PendingOpen {
         mode: u32,
         paths: Arc<Mutex<BTreeMap<(u64, u64), lease::LeaseEntry>>>,
         terminals: Arc<hl_runtime::TerminalCatalog>,
-        parent: OwnedFd,
+        parent: ParentLease,
         name: CString,
         transfers: Arc<FileTransferRegistry>,
     ) -> Self {
@@ -92,7 +92,7 @@ impl PendingOpen {
         // writable, and fstatat retains no pointer or descriptor.
         let result = unsafe {
             libc::fstatat(
-                self.parent.as_raw_fd(),
+                self.parent.selected().as_raw_fd(),
                 self.name.as_ptr(),
                 status.as_mut_ptr(),
                 libc::AT_SYMLINK_NOFOLLOW,
@@ -112,7 +112,10 @@ impl PendingOpen {
     fn discard(&self) {
         // SAFETY: this removes only the final name created by this pending
         // open after quota admission failed; arguments are retained nowhere.
-        unsafe { libc::unlinkat(self.parent.as_raw_fd(), self.name.as_ptr(), 0) };
+        if let Ok(parent) = self.parent.mutation() {
+            // SAFETY: the mutation parent and terminated name remain live.
+            unsafe { libc::unlinkat(parent.as_raw_fd(), self.name.as_ptr(), 0) };
+        }
     }
 
     fn discard_created(&self, created: bool, temporary: bool) {

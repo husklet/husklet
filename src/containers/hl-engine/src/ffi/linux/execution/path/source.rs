@@ -112,9 +112,28 @@ pub(crate) struct OrdinaryContext {
 
 impl OrdinaryContext {
     pub(super) fn new(root: &[u8]) -> Result<Self, RuntimePathError> {
+        Self::with_lowers(root, &[])
+    }
+
+    pub(super) fn layered(upper: &[u8], lowers: &[Vec<u8>]) -> Result<Self, RuntimePathError> {
+        Self::with_lowers(upper, lowers)
+    }
+
+    fn with_lowers(root: &[u8], lowers: &[Vec<u8>]) -> Result<Self, RuntimePathError> {
         let root = PathBuf::from(std::ffi::OsStr::from_bytes(root));
         let root = root.canonicalize().map_err(HostError::map)?;
         let root_pin = Arc::new(File::open(&root).map_err(HostError::map)?);
+        let lower_pins = lowers
+            .iter()
+            .map(|lower| {
+                let lower = PathBuf::from(std::ffi::OsStr::from_bytes(lower));
+                let lower = lower.canonicalize().map_err(HostError::map)?;
+                if !lower.is_dir() {
+                    return Err(RuntimePathError::NotDirectory);
+                }
+                File::open(lower).map(Arc::new).map_err(HostError::map)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let shared = super::tmpfs::PosixShm::create(&root, &root_pin)?;
         let shm_path = shared.path().to_owned();
         let shm_budget = shared.budget();
@@ -131,9 +150,17 @@ impl OrdinaryContext {
             host: shared.path().to_owned(),
             root: shared.root(),
         });
+        let host = if lower_pins.is_empty() {
+            pin::Host::new(Arc::clone(&root_pin), Arc::clone(&paths))
+        } else {
+            let mut roots = Vec::with_capacity(lower_pins.len() + 1);
+            roots.push(Arc::clone(&root_pin));
+            roots.extend(lower_pins);
+            pin::Host::layered(roots, Arc::clone(&paths))
+        };
         Ok(Self {
             root,
-            host: pin::Host::new(root_pin, Arc::clone(&paths)),
+            host,
             mounts,
             paths,
             shm_path,
@@ -428,6 +455,10 @@ impl Source {
 
     pub(super) fn projected(root: &[u8]) -> Result<Self, RuntimePathError> {
         ProjectedContext::new(root).map(Self::Projected)
+    }
+
+    pub(super) fn layered(upper: &[u8], lowers: &[Vec<u8>]) -> Result<Self, RuntimePathError> {
+        OrdinaryContext::layered(upper, lowers).map(Arc::new).map(Self::Ordinary)
     }
 
     pub(super) fn native(&self) -> Result<&OrdinaryContext, RuntimePathError> {

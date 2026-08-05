@@ -1,5 +1,5 @@
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd};
 
 use hl_descriptor::LinkableInode;
 use hl_linux::PathOperand;
@@ -7,7 +7,7 @@ use hl_runtime::{
     DirectoryBaseLease, GuestPathBytes, PreparedPathMutation, ResolveError, ResolveRequest, Resolver, RuntimePathError,
 };
 
-use super::super::{HostError, NativePath, pin};
+use super::super::{HostError, NativePath, overlay_lease::ParentLease, pin};
 
 #[derive(Debug)]
 pub(in crate::ffi::linux::execution::path) struct NativeLink {
@@ -103,7 +103,7 @@ pub(in crate::ffi::linux::execution::path) fn prepare_inode_link(
 #[derive(Debug)]
 struct PendingInodeLink {
     source: std::fs::File,
-    parent: OwnedFd,
+    parent: ParentLease,
     name: CString,
     anonymous_exclusive: bool,
 }
@@ -121,7 +121,7 @@ impl PreparedPathMutation for PendingInodeLink {
 
 impl PendingInodeLink {
     #[cfg(target_os = "linux")]
-    fn publish(source: &std::fs::File, parent: &OwnedFd, name: &CString) -> Result<(), RuntimePathError> {
+    fn publish(source: &std::fs::File, parent: &ParentLease, name: &CString) -> Result<(), RuntimePathError> {
         // SAFETY: both descriptors and the terminated target name remain live
         // for the non-retaining atomic linkat operation. The empty source name
         // selects the descriptor-owned inode through AT_EMPTY_PATH.
@@ -141,7 +141,7 @@ impl PendingInodeLink {
     }
 
     #[cfg(target_os = "linux")]
-    fn copy_publish(source: &std::fs::File, parent: &OwnedFd, name: &CString) -> Result<(), RuntimePathError> {
+    fn copy_publish(source: &std::fs::File, parent: &ParentLease, name: &CString) -> Result<(), RuntimePathError> {
         // A constrained authority may lack the host capability required by
         // linkat(AT_EMPTY_PATH), even though the guest was admitted to publish
         // this inode. Match the retained engine's capability-independent
@@ -199,7 +199,7 @@ impl PendingInodeLink {
     }
 
     #[cfg(target_os = "macos")]
-    fn publish(_: &std::fs::File, _: &OwnedFd, _: &CString) -> Result<(), RuntimePathError> {
+    fn publish(_: &std::fs::File, _: &ParentLease, _: &CString) -> Result<(), RuntimePathError> {
         Err(RuntimePathError::Unsupported)
     }
 }

@@ -1,5 +1,5 @@
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use hl_runtime::{
@@ -7,7 +7,7 @@ use hl_runtime::{
     ResolveRequest, Resolver, RuntimePathError, RuntimePathHost, UnixSocketPathPort,
 };
 
-use super::{HostError, NativePath};
+use super::{HostError, NativePath, overlay_lease::ParentLease};
 
 pub(in crate::ffi::linux::execution) struct UnixSocketPaths {
     host: Arc<NativePath>,
@@ -59,7 +59,7 @@ impl UnixSocketPaths {
 
 #[derive(Debug)]
 struct Entry {
-    parent: OwnedFd,
+    parent: ParentLease,
     name: CString,
 }
 

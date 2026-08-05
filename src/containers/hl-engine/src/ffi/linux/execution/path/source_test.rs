@@ -232,7 +232,7 @@ fn create_rollback() {
         root.path().to_owned(),
         Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         Arc::new(hl_runtime::TerminalCatalog::default()),
-        parent,
+        parent.into(),
         std::ffi::CString::new("blocked").expect("target name"),
         Arc::new(super::FileTransferRegistry::default()),
     );
@@ -263,7 +263,7 @@ fn path_only_symlink_retains_inode_semantics_after_unlink() {
         root.path().to_owned(),
         Arc::new(Mutex::new(std::collections::BTreeMap::new())),
         Arc::new(hl_runtime::TerminalCatalog::default()),
-        parent,
+        parent.into(),
         std::ffi::CString::new("link").unwrap(),
         Arc::new(super::FileTransferRegistry::default()),
     );
