@@ -1124,7 +1124,7 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
             vector_marked = 1;
         }
         if (checkpoints && may_fallback(&block.instructions[index])) {
-            words += (live_chain ? 2u : bit_count(dirty) + 4u);
+            words += (live_chain ? 1u : bit_count(dirty) + 3u);
             dirty = 0;
         }
         if (block.instructions[index].operation == OP_MOV_IMMEDIATE) {
@@ -1241,7 +1241,7 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
                 dirty |= UINT32_C(1) << 4 | UINT32_C(1) << block.instructions[index].destination;
         }
     }
-    words += (live_chain ? 0u : bit_count(dirty)) + (checkpoints ? (live_chain ? 2u : 4u) : 0u);
+    words += (live_chain ? 0u : bit_count(dirty)) + (checkpoints ? (live_chain ? 1u : 3u) : 0u);
     if (block.exit == HL_X86_A64_CONDITIONAL_BRANCH &&
         (request->flags & HL_X86_A64_CONDITIONAL_SELF_LOOP) != 0u && block.target == request->guest_pc)
         words += (live_chain ? 64u : 26u) + constant_words(block.next_pc);

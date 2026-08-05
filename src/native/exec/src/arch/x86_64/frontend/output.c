@@ -22,13 +22,24 @@ void hl_x86_spill_all(uint32_t *words, uint32_t *cursor) {
 
 void hl_x86_checkpoint(uint32_t *words, uint32_t *cursor, uint32_t delta, int live_chain) {
     if (live_chain) {
-        emit_constant(words, cursor, 17, delta);
-        words[(*cursor)++] = UINT32_C(0xcb11035a); /* sub x26,x26,x17 */
+        /* A decoded block contains at most 64 instructions, so its checkpoint
+         * delta always fits AArch64's immediate form.  Keep the generic
+         * register form as a fail-closed encoding path if that bound grows. */
+        if (delta < UINT32_C(4096)) {
+            words[(*cursor)++] = UINT32_C(0xd100035a) | delta << 10; /* sub x26,x26,#delta */
+        } else {
+            emit_constant(words, cursor, 17, delta);
+            words[(*cursor)++] = UINT32_C(0xcb11035a); /* sub x26,x26,x17 */
+        }
         return;
     }
     words[(*cursor)++] = load_word(16, offsetof(hl_native_x86_64_cpu, scratch));
-    emit_constant(words, cursor, 17, delta);
-    words[(*cursor)++] = UINT32_C(0x8b110210); /* add x16,x16,x17 */
+    if (delta < UINT32_C(4096)) {
+        words[(*cursor)++] = UINT32_C(0x91000210) | delta << 10; /* add x16,x16,#delta */
+    } else {
+        emit_constant(words, cursor, 17, delta);
+        words[(*cursor)++] = UINT32_C(0x8b110210); /* add x16,x16,x17 */
+    }
     words[(*cursor)++] = store_word(16, offsetof(hl_native_x86_64_cpu, scratch));
 }
 

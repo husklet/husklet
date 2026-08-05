@@ -83,3 +83,47 @@ branch boundaries fell from 61,793 to 161; relocation-cycle refusals fell from
 9 to 0. The retained C row was 230 us and QEMU was 1,463 us. This closes a real
 avoidable crossing but does not claim x86 parity: instruction lowering and
 remaining boundary costs still dominate.
+
+## Immediate checkpoint accounting
+
+The follow-up audit read the complete retained dispatcher and cache path in
+`../engine/src/core/dispatch.c` (`run_guest`, `run_block`, and
+`block_return`), `../engine/src/translator/cache.c` (`map_host`, `map_put`,
+pending-link resolution, IBTC publication, cache rotation, stop-the-world
+admission, and fork repair), and the x86 frontend in
+`../engine/src/translator/guest/x86_64/{translate.c,emit.c,dispatch.h}`. The
+dispatcher owns CPU registration and teardown; the cache owns translation
+identity, arena generation, locking, W^X publication, pending edges, and
+invalidation. Generated blocks own no locks, allocations, host calls, errno,
+or cancellation paths. Fault-capable instructions commit only after their
+guard succeeds, while every emitted block reaches an interrupt-visible
+boundary.
+
+The Rust owners are `src/arch/x86_64/run.c`,
+`src/arch/x86_64/frontend.c`, `src/arch/x86_64/frontend/output.c`,
+`src/translation.c`, and `cache/{cache.c,relocation.c}`. Translation identity,
+publication, direct and indirect links, invalidation, rollover, and teardown
+are implemented. Unlike the retained engine, Rust admits work with an exact
+instruction budget. Before every instruction that may fault or fall back, the
+frontend accounts the preceding segment so replay cannot double-commit
+architectural state.
+
+That accounting formerly materialised the segment length in x17 and then
+added or subtracted x17. A decoded block is bounded by
+`HL_X86_A64_MAX_INSTRUCTIONS == 64`, so every segment length fits AArch64's
+12-bit add/sub immediate. The emitter now uses one immediate instruction; the
+old register form remains as a fail-closed path if the frontend bound ever
+grows beyond 4095. Live-chain checkpoints shrink from two host instructions
+to one, and dispatcher-return checkpoints from four to three. Budget,
+partial-result, fault-before-commit, interrupt, cache lifetime, and locking
+semantics are unchanged.
+
+Exact-tree warning-strict direct builds and executions of `x86_budget` and the
+complete `x86_translation` contract passed. The warning-strict `hl-engine`
+suite completed 478 passing tests and two ignored tests; its sole failure was
+the independently changing retained option registry (`41` retained entries
+versus the test's expected `40`), not native execution. This change has exact
+structural evidence (one fewer emitted host instruction at every checkpoint),
+but makes no wall-time claim: the existing benchmark artifacts do not retain
+per-checkpoint counts, and a timing claim without identical counters would be
+false precision.
