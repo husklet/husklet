@@ -337,10 +337,11 @@ mod tests {
         let credentials = hl_task::ProcessCredentials::new(1000, 1000, &[], 8).unwrap();
         let (process, _) = tasks.create_init(credentials, hl_task::ProcessLimits::empty()).unwrap();
         let session = tasks.session_id(process).unwrap();
-        tasks
+        let prepared = tasks
             .prepare_terminal_transition(process, hl_task::TerminalTransition::Detach)
-            .unwrap()
-            .commit();
+            .unwrap();
+        let effects = prepared.effects();
+        assert_eq!(prepared.commit(), effects);
         assert_eq!(tasks.terminal_session(process).unwrap(), None);
         assert!(matches!(
             TerminalOpen::prepare(

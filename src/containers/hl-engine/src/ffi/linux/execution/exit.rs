@@ -120,7 +120,9 @@ fn release_terminal(
     });
     let prepared = prepared.target_foreground(foreground);
     if terminals.detach(session.number(), terminal.id()).is_ok() {
-        prepared.commit();
+        let effects = prepared.effects();
+        let committed = prepared.commit();
+        debug_assert_eq!(committed, effects);
     }
 }
 
