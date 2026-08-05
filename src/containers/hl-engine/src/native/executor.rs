@@ -844,7 +844,7 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
             if let Some(capture) = provider.boundary_capture {
                 capture
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .append_view(&projected);
             }
             unsafe {
@@ -883,11 +883,10 @@ unsafe extern "C" fn resolve_source(
     let observation = (guest_pc, guest_pc + size as u64, token);
     #[cfg(test)]
     if let Some(capture) = provider.boundary_capture {
-        capture.lock().unwrap_or_else(|error| error.into_inner()).append_source(
-            guest_pc,
-            &provider.bytes[..size],
-            token,
-        );
+        capture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append_source(guest_pc, &provider.bytes[..size], token);
     }
     if let Some(existing) = provider
         .observed
@@ -1459,7 +1458,7 @@ fn arm_live_capture(ordinal: usize, maximum: usize) -> Result<(), &'static str> 
     if ordinal == 0 || maximum == 0 {
         return Err("invalid live capture configuration");
     }
-    *live_capture().lock().unwrap_or_else(|error| error.into_inner()) = LiveCaptureState {
+    *live_capture().lock().unwrap_or_else(std::sync::PoisonError::into_inner) = LiveCaptureState {
         ordinal,
         maximum,
         calls: 0,
@@ -1472,14 +1471,14 @@ fn arm_live_capture(ordinal: usize, maximum: usize) -> Result<(), &'static str> 
 fn take_live_capture() -> Option<Result<BoundaryCapture, &'static str>> {
     live_capture()
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .result
         .take()
 }
 
 #[cfg(test)]
 fn begin_live_capture() -> Option<usize> {
-    let mut state = live_capture().lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = live_capture().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     state.calls = state.calls.saturating_add(1);
     (state.ordinal != 0 && state.calls == state.ordinal).then_some(state.maximum)
 }
@@ -1487,7 +1486,10 @@ fn begin_live_capture() -> Option<usize> {
 #[cfg(test)]
 fn finish_live_capture(result: Option<Result<BoundaryCapture, &'static str>>) {
     if let Some(result) = result {
-        live_capture().lock().unwrap_or_else(|error| error.into_inner()).result = Some(result);
+        live_capture()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .result = Some(result);
     }
 }
 
@@ -1695,7 +1697,10 @@ impl Executor {
         if ordinal == 0 || maximum == 0 {
             return Err("invalid boundary capture configuration");
         }
-        *self.boundary_capture.lock().unwrap_or_else(|error| error.into_inner()) = BoundaryCaptureState {
+        *self
+            .boundary_capture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = BoundaryCaptureState {
             ordinal,
             maximum,
             used: 0,
@@ -1709,7 +1714,7 @@ impl Executor {
     fn take_boundary_capture(&self) -> Option<Result<BoundaryCapture, &'static str>> {
         self.boundary_capture
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .result
             .take()
     }
@@ -1722,7 +1727,10 @@ impl Executor {
         views: &[ProjectionView],
         token: ExecutableToken,
     ) {
-        let mut state = self.boundary_capture.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .boundary_capture
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.calls = state.calls.saturating_add(1);
         if state.ordinal == 0 || state.calls != state.ordinal || state.result.is_some() {
             return;
@@ -1773,7 +1781,10 @@ impl Executor {
     }
 
     pub(crate) fn reset(&self, mapping_epoch: u64) -> Result<(), ()> {
-        *self.view_hints.lock().unwrap_or_else(|error| error.into_inner()) = ViewHints::default();
+        *self
+            .view_hints
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = ViewHints::default();
         let change = Change {
             abi: ABI,
             size: std::mem::size_of::<Change>() as u32,
@@ -1924,7 +1935,10 @@ impl Executor {
             write_index: 0,
         };
         let hints = {
-            let mut retained = self.view_hints.lock().unwrap_or_else(|error| error.into_inner());
+            let mut retained = self
+                .view_hints
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             retained.begin(hint_epoch);
             retained.entries.clone()
         };
@@ -2037,7 +2051,10 @@ impl Executor {
         #[cfg(test)]
         finish_live_capture(self.take_boundary_capture());
         {
-            let mut retained = self.view_hints.lock().unwrap_or_else(|error| error.into_inner());
+            let mut retained = self
+                .view_hints
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             retained.begin(hint_epoch);
             retained.entries.retain(|hint| live_hints.contains(hint));
             for (address, required) in observed.entries.into_iter().rev() {
@@ -2252,7 +2269,10 @@ impl Executor {
         };
         let hint_epoch = [generation.incarnation, generation.mappings, token.version, 0];
         let hints = {
-            let mut retained = self.view_hints.lock().unwrap_or_else(|error| error.into_inner());
+            let mut retained = self
+                .view_hints
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             retained.begin(hint_epoch);
             retained.entries.clone()
         };
@@ -2309,7 +2329,10 @@ impl Executor {
         )?;
         drop(operand);
         if !observed.entries.is_empty() {
-            let mut retained = self.view_hints.lock().unwrap_or_else(|error| error.into_inner());
+            let mut retained = self
+                .view_hints
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             retained.begin(hint_epoch);
             for (address, required) in observed.entries.into_iter().rev() {
                 retained.observe(address, required);
