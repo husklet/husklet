@@ -80,7 +80,7 @@ owner (`x86::vector`, `x86::scalar`, `x86::fxsave`, and so on), and the private
 snapshot codec no longer carries a redundant `Execution` prefix inside the
 `execution` noun.
 
-`execution::dispatch` now owns the architecture-neutral cache observation and
+`execution::dispatch` owns the architecture-neutral cache observation and
 translation-admission policy that previously lived in transitional
 `src/native/execution/src/dispatch/dispatch.c`. A mechanism adapter may report
 only missing, available immutable identity, or mapping-epoch mismatch. Rust
@@ -88,13 +88,18 @@ selects translate/enter/retry and validates that a frontend's nonempty emission,
 body offset, provenance count, source identity, and byte count fit the bounded
 request before native W^X publication.
 
-This is not native-DBT production reachability. Repository searches found no
-Cargo build, application FFI, or runtime caller for `src/native/execution`; the
-production engine still uses `ExecutionMachine::run_slice`. That live path now
-routes its AArch64 decoded-block cache observation through `DispatchDecision`,
-so the Rust policy owns production hit/miss selection as well as the future
-native contract. A coarse native adapter, reusable machine-code entry, lifecycle
-integration, and both-ISA differential proof remain required.
+The C and assembly implementation under `src/native/exec` is a permanent native
+execution mechanism. It owns machine-code entry and return, translated-code
+publication and chaining, W^X mutation, host fault-context reconstruction, and
+signal-safe and fork-critical repair. Those responsibilities do not migrate into
+safe Rust merely because Rust owns the surrounding execution policy.
+
+The Rust interpreter, correctness fallback, and pointer-free execution snapshot
+are also permanent production mechanisms. `ExecutionMachine::run_slice`, the
+AArch64 and x86 interpreters, `DispatchDecision`, and `ExecutionSnapshot` remain
+the safe execution and recovery path. Deleting unused translated-artifact
+persistence scaffolding does not delete, weaken, or make temporary any of those
+Rust owners.
 
 The retained comparison for this ownership step read
 `../engine/src/core/dispatch.c:run_guest`, `run_block`, and `block_return`;
@@ -135,9 +140,8 @@ The Rust `x86` noun corresponds only to C's guest architectural frontend:
 decoder, typed instruction model and correctness execution. Rust `execution`
 corresponds to the safe machine/snapshot/step contract. C cache publication,
 machine-code lowering, signal/ucontext entry, executable-memory mutation and
-fork-critical repair correctly remain outside this safe module, assigned to
-artifact/persistence domains and the retained C native kernel until a proven
-coarse boundary is imported. Loaded-image,
+fork-critical repair permanently remain outside this safe module in the C and
+assembly native kernel. Loaded-image,
 Linux ABI, task and teardown composition belong above this crate rather than in
 either facade.
 

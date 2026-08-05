@@ -1,7 +1,6 @@
-//! Safe CPU execution contracts and validated immutable execution artifacts.
+//! Safe CPU execution contracts, interpreters, and snapshots.
 
 mod aarch64;
-mod artifact;
 pub(crate) use aarch64::*;
 mod digest;
 mod execution;
@@ -9,8 +8,6 @@ mod identity;
 mod operand_memory;
 mod persistence;
 mod projection;
-mod relocation;
-mod retained_cache;
 mod trace_register;
 mod x86;
 
@@ -44,7 +41,6 @@ pub use aarch64::softfloat::Aarch64SoftFloat;
 pub use aarch64::state::{Aarch64CpuState, Nzcv};
 pub use aarch64::system::{Barrier as BarrierKind, Port as GuestSystemPort, Register as SystemRegister};
 pub use aarch64::{Aarch64ExecutionExit, interpreter::Aarch64Interpreter};
-pub use artifact::{ArenaRequest, CodeArtifact, CodePublisher, Publication, PublicationError, ValidatedCodeArtifact};
 pub use digest::{ArtifactDigest, DIGEST_SEED};
 pub use execution::{
     ArchitecturalCounter, BlockIdentity, CacheObservation, DispatchDecision, DispatchError, EXECUTION_SNAPSHOT_VERSION,
@@ -59,8 +55,6 @@ pub use persistence::{
     PersistenceError, X86_64_CACHE_ABI,
 };
 pub use projection::{MemoryProjection, ProjectionControl, ProjectionTransition};
-pub use relocation::{Materialization, RelocationError, RelocationRecord, RelocationTable};
-pub use retained_cache::{CacheExpectations, RetainedCache, RetainedCacheError};
 pub use trace_register::{
     Aarch64Prstatus, StoppedRegisterImage, StoppedRegisters, TRACE_REGISTER_VERSION, TraceRegisterError,
     TraceSafepointPort, X86Prstatus,
