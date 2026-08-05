@@ -30,20 +30,14 @@ impl TaskRegistry {
             return Ok(caller);
         }
         let number = u32::try_from(number).map_err(|_| TaskError::InvalidThread)?;
-        if let Some((slot, entry)) = state
-            .threads
-            .iter()
-            .enumerate()
-            .find(|(slot, entry)| entry.value.is_some() && *slot as u32 + 1 == number)
-        {
+        let slot = usize::try_from(number - 1).map_err(|_| TaskError::InvalidThread)?;
+        if let Some(entry) = state.threads.get(slot).filter(|entry| entry.value.is_some()) {
             return Ok(ThreadId::new(slot as u32, entry.generation));
         }
         state
             .processes
-            .iter()
-            .enumerate()
-            .find(|(slot, entry)| entry.value.is_some() && *slot as u32 + 1 == number)
-            .and_then(|(_, entry)| entry.value.as_ref().map(|process| process.leader))
+            .get(slot)
+            .and_then(|entry| entry.value.as_ref().map(|process| process.leader))
             .ok_or(TaskError::InvalidThread)
     }
 }
