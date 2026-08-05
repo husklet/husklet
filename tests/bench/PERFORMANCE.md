@@ -1,5 +1,50 @@
 # Engine performance checkpoint
 
+## 2026-08-04: exact-head float-SIMD attribution
+
+Clean detached commit `fbfe10df8dc21b1c4827580a624da54c67416585`
+was built warning-strict in release mode and measured seven times on CPU 17 with
+the same ARM64 guest (`--divisor 1000 --phase float_simd`). The guest SHA-256 was
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`;
+the retained-C runner was
+`0633ed0f914f666f2127ca1b86a4def69eea65c59f7942f8afd66d2b7a6ebc62`,
+the Rust engine was
+`8c7dd39e3cf3e776f6a22edfeb535b7a39e594f434007ed28b988de6493e8497`,
+and the matrix runner was
+`7e6a7f251a7358c6fa665e2353e63cac58499bcecc8397fea6d26aca4f8c2f2f`.
+Host load at admission was 7.74/5.69/4.64 with 9.2 GiB available memory and
+23.9 GiB free swap.
+
+| provider | median us | range us | versus native | checksum |
+|---|---:|---:|---:|---:|
+| host native | 124 | 123--129 | 1.000x | 2,302,728,000 |
+| retained C | 123 | 122--129 | 0.992x | 2,302,728,000 |
+| Rust native-verified | 282,375 | 279,009--286,296 | 2,277.218x | 2,302,728,000 |
+
+The retained oracle audit covered
+`../engine/src/translator/guest/aarch64/translate.c` (`gpr_field_mask`,
+`uses_x18`, ordinary same-ISA emission, optional I8MM/BF16 policy, memory
+folding, and vector-dirty classification) and `stubs.c` (`emit_prologue`, full
+and GPR-only spill, runtime vector currency, and block-return ownership).
+Baseline vector-only arithmetic is emitted verbatim; cross-file GPR forms are
+rewritten around stolen registers; optional host features are probed or lowered.
+The CPU record owns all GPR/vector/FP state for the engine lifetime, translated
+blocks borrow it synchronously, full exits republish it, and asynchronous faults
+reconstruct pre-operation architectural state.
+
+The corresponding Rust owners are `simd_float.c` and the other typed SIMD
+families for opcode admission, `trace.c` for chained translation and provenance,
+`single.c`/`pair.c` for transactional memory guards, and `stub.c`/`fault.c` for
+CPU publication and fault reconstruction. Every Rust repeat reported identical
+diagnostics: 12 runs, 21 builds, 59 hits, 12 fallbacks, 27 fallback exits, 9,133
+completed instructions, **3,356 full guards, zero fast guards**, and 17 guard
+fallbacks. Thus current float-SIMD time is no longer evidence that FMLA itself is
+interpreted; it is dominated by guarded accesses to the benchmark's static
+arrays. The previously rejected broad view/projection certificate cannot be
+revived: it did not prove per-access mapping identity, permissions, invalidation,
+or fault ordering. No production shortcut is justified until a bounded authority
+mechanism preserves those contracts for every guarded address.
+
 ## 2026-08-04: retained C versus Rust native execution
 
 This checkpoint measures the folder-owned `combined/main.c`, which is byte-for-byte
