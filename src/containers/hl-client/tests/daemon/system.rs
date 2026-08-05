@@ -24,7 +24,33 @@ async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit
     let socket = root.path().join("run/docker.sock");
     wait_for_socket(&socket).await;
 
+    let ping = raw_http(
+        &socket,
+        b"GET /_ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    for header in [
+        "api-version: 1.43",
+        "builder-version: 2",
+        "docker-experimental: false",
+        "ostype: linux",
+        "swarm: inactive",
+    ] {
+        assert!(ping.to_ascii_lowercase().contains(header), "missing {header}: {ping}");
+    }
+    assert!(ping.ends_with("\r\n\r\nOK"));
+
+    let head = raw_http(
+        &socket,
+        b"HEAD /_ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(head.to_ascii_lowercase().contains("api-version: 1.43"));
+    assert!(head.ends_with("\r\n\r\n"));
+    assert!(!head.ends_with("OK"));
+
     let client = Client::unix(&socket).unwrap();
+    client.ping().await.unwrap();
     let version = client.version().await.unwrap();
     assert_eq!(version.os, "linux");
     assert_eq!(version.arch, "amd64");

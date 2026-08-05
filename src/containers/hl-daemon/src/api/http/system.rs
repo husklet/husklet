@@ -1,6 +1,7 @@
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::IntoResponse;
 use hl_container::ContainerState;
 use hl_images::content::Store;
 
@@ -12,8 +13,18 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 #[hl_design::adapter]
-pub(super) async fn ping() -> &'static str {
-    "OK"
+pub(super) async fn ping() -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    for (name, value) in [
+        ("api-version", "1.43"),
+        ("builder-version", "2"),
+        ("docker-experimental", "false"),
+        ("ostype", "linux"),
+        ("swarm", "inactive"),
+    ] {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    (headers, "OK")
 }
 
 #[hl_design::adapter]
