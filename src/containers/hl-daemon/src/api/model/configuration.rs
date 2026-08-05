@@ -149,6 +149,9 @@ impl Update {
         let Some(value) = self.memory else {
             return Ok(None);
         };
+        if value == 0 {
+            return Ok(None);
+        }
         u64::try_from(value)
             .map(Some)
             .map_err(|_| "Memory must be nonnegative".to_owned())
@@ -171,6 +174,9 @@ impl Update {
         let Some(value) = self.nano_cpus else {
             return Ok(None);
         };
+        if value == 0 {
+            return Ok(None);
+        }
         let value = u64::try_from(value).map_err(|_| "NanoCpus must be nonnegative".to_owned())?;
         u32::try_from(value.div_ceil(1_000_000_000))
             .map(Some)
@@ -298,5 +304,28 @@ mod tests {
             update.settings().unwrap_err(),
             "unsupported container update field CpuShares"
         );
+    }
+
+    #[test]
+    fn docker_update_zero_resource_defaults_do_not_clear_limits() {
+        let update: Update = serde_json::from_value(serde_json::json!({
+            "Memory": 0,
+            "NanoCpus": 0,
+            "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}
+        }))
+        .unwrap();
+        let settings = update.settings().unwrap();
+        assert_eq!(settings.memory_bytes, None);
+        assert_eq!(settings.cpu_count, None);
+        assert_eq!(settings.restart, Some(hl_container::RestartPolicy::Never));
+
+        let effective: Update = serde_json::from_value(serde_json::json!({
+            "Memory": 1048576,
+            "NanoCpus": 1500000000
+        }))
+        .unwrap();
+        let settings = effective.settings().unwrap();
+        assert_eq!(settings.memory_bytes, Some(1048576));
+        assert_eq!(settings.cpu_count, Some(2));
     }
 }
