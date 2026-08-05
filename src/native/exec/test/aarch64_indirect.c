@@ -1,5 +1,6 @@
 #include "../src/arch/aarch64/entry.h"
 #include "../src/arch/aarch64/indirect.h"
+#include "../src/arch/aarch64/trace.h"
 #include "../include/executor.h"
 
 #include <stdio.h>
@@ -77,6 +78,8 @@ int main(void) {
     CHECK(hl_a64_assembler_begin(&assembler, short_buffer, short_buffer, sizeof(short_buffer)));
     CHECK(!hl_a64_indirect_emit(&assembler, 0xd61f03e0u, 0x9000)); /* reserved br x31 */
     CHECK(hl_a64_assembler_size(&assembler) == 0);
+    CHECK(hl_a64_trace_effect(0xd65f0bffu, 0x9000).control); /* retaa terminates trace */
+    CHECK(hl_a64_trace_effect(0xd65f0fffu, 0x9000).control); /* retab terminates trace */
     return 0;
 #endif
 }

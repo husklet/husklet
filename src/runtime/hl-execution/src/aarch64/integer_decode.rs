@@ -274,6 +274,13 @@ impl Aarch64Decoder {
     }
 
     pub(super) fn branch_register(word: u32) -> Result<Aarch64Instruction, Aarch64DecodeError> {
+        // Match the retained translated-engine policy: because the guest does
+        // not observe pointer-authentication keys, RETAA and RETAB consume the
+        // unsigned link register exactly like `ret x30`. PAC/AUT hint forms
+        // are independently decoded as NOPs by the system decoder.
+        if word & 0xffff_fbff == 0xd65f_0bff {
+            return Ok(Aarch64Instruction::Return { source: 30 });
+        }
         if word >> 16 & 31 != 31 || word >> 10 & 63 != 0 || word & 31 != 0 {
             return Err(Aarch64DecodeError::Reserved);
         }

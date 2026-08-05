@@ -591,6 +591,20 @@ fn indirect_branch_alignment() {
 }
 
 #[test]
+fn authenticated_returns_use_unsigned_link_register() {
+    for word in [0xd65f_0bff, 0xd65f_0fff] {
+        let mut cpu = Aarch64CpuState {
+            pc: 0x4000,
+            ..Default::default()
+        };
+        cpu.set_register(30, 0x8000);
+        assert_eq!(cpu.execute_word(word), Aarch64ExecutionExit::Branch { target: 0x8000 });
+        assert_eq!(cpu.pc, 0x8000);
+        assert_eq!(cpu.register(30), 0x8000);
+    }
+}
+
+#[test]
 fn reserved_encoding_sweeps() {
     for index in 0_u32..32 {
         let wide = index / 16 != 0;
