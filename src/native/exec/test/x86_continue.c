@@ -161,6 +161,73 @@ static int projected_return_progress(void) {
     return 0;
 }
 
+static int alternating_writable_views_stay_native(void) {
+    static const uint8_t loop[] = {
+        0x89, 0x03,             /* mov [rbx],eax */
+        0x89, 0x11,             /* mov [rcx],edx */
+        0x48, 0xff, 0xce,       /* dec rsi */
+        0x75, 0xf7,             /* jne loop */
+        0xcc,                   /* typed fallback after finite completion */
+    };
+    uint32_t first = 0;
+    uint32_t second = 0;
+    test_memory host = {0};
+    hl_native_memory memory = test_services(&host);
+    hl_native_executor *executor = NULL;
+    hl_native_x86_64_cpu state = {0};
+    hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
+    hl_native_diagnostics diagnostic = {.abi = HL_NATIVE_ABI, .size = sizeof(diagnostic)};
+    hl_native_projection_view views[] = {
+        {.guest_first = 0x9000, .guest_last = 0x9004,
+         .host_first = (uint64_t)(uintptr_t)&first, .mapping_incarnation = 7,
+         .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+         .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 0},
+        {.guest_first = 0xa000, .guest_last = 0xa004,
+         .host_first = (uint64_t)(uintptr_t)&second, .mapping_incarnation = 7,
+         .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+         .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 1},
+    };
+    hl_native_projection projection = {views, 2, 7, 0};
+    hl_native_source_span span = {0x8300, loop, sizeof loop, 7, 16};
+    hl_native_source source = {&span, 1, 7, 16};
+    hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
+        .architecture = HL_NATIVE_X86_64, .state.x86_64 = &state};
+    hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
+        .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .budget = 16,
+        .source = &source, .projection = &projection};
+
+    memory.write_begin = executable_begin;
+    memory.write_end = executable_end;
+    hl_native_config config = test_config(&memory, HL_NATIVE_DIAGNOSTICS);
+    CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    state.program = 0x8300;
+    state.registers[0] = UINT64_C(0x11223344);
+    state.registers[2] = UINT64_C(0x55667788);
+    state.registers[3] = 0x9000;
+    state.registers[1] = 0xa000;
+    state.registers[6] = 2;
+    state.dirty_first = UINT64_MAX;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == 0x8309);
+    CHECK(first == UINT32_C(0x11223344) && second == UINT32_C(0x55667788));
+    CHECK(state.executed == 8 && state.budget == 8 && state.registers[6] == 0);
+    CHECK(state.dirty_count == 3 && state.dirty_overflow == 0);
+    CHECK(state.dirty_records[0][0] == 0x9000 && state.dirty_records[0][1] == 0x9004 &&
+          state.dirty_records[0][2] == 0x9000 && state.dirty_records[0][3] == 0x9004);
+    CHECK(state.dirty_records[1][0] == 0xa000 && state.dirty_records[1][1] == 0xa004 &&
+          state.dirty_records[1][2] == 0xa000 && state.dirty_records[1][3] == 0xa004);
+    CHECK(state.dirty_records[2][0] == 0x9000 && state.dirty_records[2][1] == 0x9004 &&
+          state.dirty_records[2][2] == 0x9000 && state.dirty_records[2][3] == 0x9004);
+    CHECK(state.dirty_view_first == 0xa000 && state.dirty_view_last == 0xa004 &&
+          state.dirty_first == 0xa000 && state.dirty_last == 0xa004);
+    CHECK(state.fault_access == 0 && state.fault_size == 0);
+    CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK);
+    CHECK(diagnostic.operand_cache_hits == 0 && diagnostic.operand_callbacks == 0 &&
+          diagnostic.boundary_fallback == 1);
+    hl_native_destroy(executor);
+    return 0;
+}
+
 static int cold_dynamic_chain_is_bounded(void) {
     enum { BLOCKS = 66, STRIDE = 16 };
     uint8_t bytes[BLOCKS * STRIDE];
@@ -212,6 +279,7 @@ int main(void) {
 #if defined(__aarch64__)
     if (continuation_contract() != 0) return 1;
     if (projected_return_progress() != 0) return 1;
+    if (alternating_writable_views_stay_native() != 0) return 1;
     return cold_dynamic_chain_is_bounded();
 #else
     return 0;
