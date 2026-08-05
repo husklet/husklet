@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::extract::{OriginalUri, Query, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
 use hl_container::ContainerState;
 use hl_images::content::Store;
@@ -15,6 +15,17 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[hl_design::adapter]
 pub(super) async fn ping() -> impl IntoResponse {
+    (ping_headers(), "OK")
+}
+
+#[hl_design::adapter]
+pub(super) async fn ping_head() -> impl IntoResponse {
+    let mut headers = ping_headers();
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+    (headers, StatusCode::OK)
+}
+
+fn ping_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     for (name, value) in [
         ("api-version", "1.43"),
@@ -25,7 +36,12 @@ pub(super) async fn ping() -> impl IntoResponse {
     ] {
         headers.insert(name, HeaderValue::from_static(value));
     }
-    (headers, "OK")
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-store, must-revalidate"),
+    );
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers
 }
 
 #[hl_design::adapter]

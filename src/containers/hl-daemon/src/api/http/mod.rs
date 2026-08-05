@@ -52,6 +52,7 @@ pub(crate) fn router(
         sampler,
     };
     let api = Router::new()
+        .route("/_ping", get(system::ping).head(system::ping_head))
         .route("/version", get(system::version))
         .route("/build", post(build::create))
         .route("/build/prune", post(build::prune))
@@ -114,9 +115,7 @@ pub(crate) fn router(
         .route("/volumes/create", post(volume::create))
         .route("/volumes/prune", post(volume::prune))
         .route("/volumes/:name", get(volume::inspect).delete(volume::remove));
-    let mut router = Router::new()
-        .route("/_ping", get(system::ping))
-        .merge(api.clone());
+    let mut router = Router::new().merge(api.clone());
     for minor in 24..=43 {
         router = router.nest(&format!("/v1.{minor}"), api.clone());
     }
