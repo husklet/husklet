@@ -6,8 +6,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const HEADER: &str =
-    "id\ttarget\tsample\tstatus\telapsed_ms\tsetup_us\texecution_us\tpayload_us\tteardown_us\tdiagnostic\n";
+const HEADER: &str = "id\ttarget\tsample\tstatus\telapsed_ms\tsetup_us\texecution_us\tpayload_us\tteardown_us\tterminal_steps\tdiagnostic\n";
 const ROW_LIMIT: usize = 16 * 1024;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -142,7 +141,7 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
     for line in lines.filter(|line| !line.is_empty()) {
         require(line.len() <= ROW_LIMIT, "scenario resume row exceeds its byte bound")?;
         let fields = line.split('\t').collect::<Vec<_>>();
-        require(fields.len() == 10, "invalid scenario resume row")?;
+        require(fields.len() == 11, "invalid scenario resume row")?;
         let target = match fields[1] {
             "arm64" => Target::Arm64,
             "amd64" => Target::Amd64,
@@ -174,8 +173,9 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
                     execution_us: fields[6].parse()?,
                     payload_us: (fields[7] != "unavailable").then(|| fields[7].parse()).transpose()?,
                     teardown_us: fields[8].parse()?,
+                    terminal_steps: parse_terminal_metrics(fields[9])?,
                 },
-                diagnostic: fields[9].to_owned(),
+                diagnostic: fields[10].to_owned(),
             },
         );
     }
@@ -188,7 +188,7 @@ fn format_row(row: &Row) -> Result<String, Error> {
         "scenario result contains an unsafe delimiter",
     )?;
     let text = format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         row.key.id,
         row.key.target.name(),
         row.key.sample,
@@ -200,10 +200,67 @@ fn format_row(row: &Row) -> Result<String, Error> {
             .payload_us
             .map_or_else(|| "unavailable".to_owned(), |value| value.to_string()),
         row.timing.teardown_us,
+        format_terminal_metrics(&row.timing.terminal_steps),
         row.diagnostic
     );
     require(text.len() <= ROW_LIMIT, "scenario result row exceeds its byte bound")?;
     Ok(text)
+}
+
+fn format_terminal_metrics(metrics: &[super::terminal::Metric]) -> String {
+    metrics
+        .iter()
+        .enumerate()
+        .map(|(index, metric)| {
+            format!(
+                "{index}:{}:{}:{}:{}:{}",
+                metric.operation,
+                metric.elapsed_us,
+                metric.bytes_written,
+                metric.bytes_read,
+                u8::from(metric.succeeded)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn parse_terminal_metrics(value: &str) -> Result<Vec<super::terminal::Metric>, Error> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    value
+        .split(';')
+        .enumerate()
+        .map(|(expected_index, value)| {
+            let fields = value.split(':').collect::<Vec<_>>();
+            require(fields.len() == 6, "invalid terminal metric")?;
+            require(
+                fields[0].parse::<usize>()? == expected_index,
+                "unordered terminal metric",
+            )?;
+            let operation = match fields[1] {
+                "write" => "write",
+                "resize" => "resize",
+                "close" => "close",
+                "await_output" => "await_output",
+                "reject_output" => "reject_output",
+                "drain" => "drain",
+                _ => return Err("invalid terminal metric operation".into()),
+            };
+            Ok(super::terminal::Metric {
+                operation,
+                elapsed_us: fields[2].parse()?,
+                bytes_written: fields[3].parse()?,
+                bytes_read: fields[4].parse()?,
+                succeeded: match fields[5] {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err("invalid terminal metric outcome".into()),
+                },
+            })
+        })
+        .collect()
 }
 
 fn require(condition: bool, message: &'static str) -> Result<(), Error> {
@@ -248,6 +305,13 @@ mod tests {
                         execution_us: 3,
                         payload_us: Some(1),
                         teardown_us: 4,
+                        terminal_steps: vec![crate::scenario::terminal::Metric {
+                            operation: "write",
+                            elapsed_us: 5,
+                            bytes_written: 3,
+                            bytes_read: 0,
+                            succeeded: true,
+                        }],
                     },
                     diagnostic: String::new(),
                 })
@@ -256,7 +320,7 @@ mod tests {
         opened.ledger.finish().unwrap();
         let text = std::fs::read_to_string(report).unwrap();
         assert!(text.find("scenario/a").unwrap() < text.find("scenario/b").unwrap());
-        assert!(text.contains("\t2\t3\t1\t4\t"));
+        assert!(text.contains("\t2\t3\t1\t4\t0:write:5:3:0:1\t"));
     }
 
     #[test]

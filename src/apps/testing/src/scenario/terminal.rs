@@ -3,7 +3,10 @@ use crate::suite::Error;
 use hl_container::{Containers, ExecSpec, ExitStatus, Size, Stream, Streams};
 use hl_images::RuntimeConfig;
 use serde::Deserialize;
-use std::{path::Path, time::Duration};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 
 const MAX_ARGUMENTS: usize = 256;
 const MAX_FIELD: usize = 4096;
@@ -74,6 +77,27 @@ pub enum Step {
     RejectOutput(Vec<u8>),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Metric {
+    pub operation: &'static str,
+    pub elapsed_us: u64,
+    pub bytes_written: u64,
+    pub bytes_read: u64,
+    pub succeeded: bool,
+}
+
+trait Clock {
+    fn now_us(&self) -> u64;
+}
+
+struct MonotonicClock(Instant);
+
+impl Clock for MonotonicClock {
+    fn now_us(&self) -> u64 {
+        u64::try_from(self.0.elapsed().as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
 pub(super) async fn run(
     containers: &Containers,
     case: &ScenarioCase,
@@ -81,6 +105,7 @@ pub(super) async fn run(
     rootfs: &Path,
     name: &str,
     action: &Action,
+    metrics: &mut Vec<Metric>,
 ) -> Result<(ExitStatus, Vec<u8>, Vec<u8>), Error> {
     let process = process::terminal(case, action, runtime, rootfs)?;
     let executions = containers.executions();
@@ -100,32 +125,69 @@ pub(super) async fn run(
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut rejected = Vec::new();
+    let clock = MonotonicClock(Instant::now());
 
     for step in &action.steps {
+        let started = clock.now_us();
+        let read_before = transcript_bytes(&stdout, &stderr);
         match step {
-            Step::Write(bytes) => input.write(bytes.clone()).await?,
-            Step::Resize { rows, columns } => {
-                executions.resize(&execution.id, Size::new(*rows, *columns)?).await?;
+            Step::Write(bytes) => {
+                let result = input.write(bytes.clone()).await;
+                record(metrics, &clock, started, "write", bytes.len(), 0, result.is_ok());
+                result?;
             }
-            Step::Close => input.close().await,
+            Step::Resize { rows, columns } => {
+                let result = executions.resize(&execution.id, Size::new(*rows, *columns)?).await;
+                record(metrics, &clock, started, "resize", 0, 0, result.is_ok());
+                result?;
+            }
+            Step::Close => {
+                input.close().await;
+                record(metrics, &clock, started, "close", 0, 0, true);
+            }
             Step::AwaitOutput { contains, timeout_ms } => {
-                await_output(
+                let result = await_output(
                     &mut session,
                     &mut stdout,
                     &mut stderr,
                     contains,
                     Duration::from_millis(*timeout_ms),
                 )
-                .await?;
+                .await;
+                record(
+                    metrics,
+                    &clock,
+                    started,
+                    "await_output",
+                    0,
+                    transcript_bytes(&stdout, &stderr).saturating_sub(read_before),
+                    result.is_ok(),
+                );
+                result?;
             }
-            Step::RejectOutput(bytes) => rejected.push(bytes.as_slice()),
+            Step::RejectOutput(bytes) => {
+                rejected.push((bytes.as_slice(), metrics.len()));
+                record(metrics, &clock, started, "reject_output", 0, 0, true);
+            }
         }
     }
+    let started = clock.now_us();
+    let read_before = transcript_bytes(&stdout, &stderr);
     while let Some(entry) = session.next().await? {
         capture(entry.stream, entry.bytes, &mut stdout, &mut stderr)?;
     }
-    for bytes in rejected {
+    record(
+        metrics,
+        &clock,
+        started,
+        "drain",
+        0,
+        transcript_bytes(&stdout, &stderr).saturating_sub(read_before),
+        true,
+    );
+    for (bytes, metric_index) in rejected {
         if transcript_contains(&stdout, &stderr, bytes) {
+            metrics[metric_index].succeeded = false;
             return Err(format!(
                 "{} terminal transcript unexpectedly contains {:?}",
                 case.id,
@@ -136,6 +198,28 @@ pub(super) async fn run(
     }
     let status = executions.wait(&execution.id).await?;
     Ok((status, stdout, stderr))
+}
+
+fn record(
+    metrics: &mut Vec<Metric>,
+    clock: &impl Clock,
+    started: u64,
+    operation: &'static str,
+    bytes_written: usize,
+    bytes_read: usize,
+    succeeded: bool,
+) {
+    metrics.push(Metric {
+        operation,
+        elapsed_us: clock.now_us().saturating_sub(started),
+        bytes_written: u64::try_from(bytes_written).unwrap_or(u64::MAX),
+        bytes_read: u64::try_from(bytes_read).unwrap_or(u64::MAX),
+        succeeded,
+    });
+}
+
+fn transcript_bytes(stdout: &[u8], stderr: &[u8]) -> usize {
+    stdout.len().saturating_add(stderr.len())
 }
 
 async fn await_output(
@@ -285,4 +369,98 @@ const fn default_rows() -> u16 {
 
 const fn default_columns() -> u16 {
     80
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Clock, Metric, record};
+    use std::cell::Cell;
+
+    struct FakeClock(Cell<u64>);
+
+    impl Clock for FakeClock {
+        fn now_us(&self) -> u64 {
+            self.0.get()
+        }
+    }
+
+    #[test]
+    fn step_metrics_use_injected_monotonic_time_and_byte_counts() {
+        let clock = FakeClock(Cell::new(17));
+        let mut metrics = Vec::new();
+        record(&mut metrics, &clock, 10, "write", 3, 5, true);
+        assert_eq!(
+            metrics,
+            [Metric {
+                operation: "write",
+                elapsed_us: 7,
+                bytes_written: 3,
+                bytes_read: 5,
+                succeeded: true,
+            }]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn alpine_terminal_flows_through_public_container_session_apis() {
+        use crate::{runtime::image::TestImage, suite::Target};
+        use hl_container::{Config, Console, ContainerSpec, ExecSpec, ExitStatus, Process, Size, Streams};
+
+        let image = TestImage::materialize("alpine", &Target::Arm64.platform())
+            .await
+            .unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let containers = hl_container::Containers::builder(Config::new(state.path()))
+            .build()
+            .await
+            .unwrap();
+        let initial = Process::new("/bin/sh").args(["-c", "while :; do sleep 3600; done"]);
+        containers
+            .create(
+                ContainerSpec::from_directory(image.path(), initial)
+                    .name("terminal-public-api")
+                    .guest(Target::Arm64.guest()),
+            )
+            .await
+            .unwrap();
+        containers.start("terminal-public-api").await.unwrap();
+        let process = Process::new("/bin/sh")
+            .args(["-c", "printf READY; IFS= read -r line; printf 'GOT=%s' \"$line\""])
+            .console(Console {
+                stdin: true,
+                terminal: Some(Size::new(24, 80).unwrap()),
+            });
+        let execution = containers
+            .executions()
+            .create(
+                "terminal-public-api",
+                ExecSpec::new(process).streams(Streams {
+                    stdin: true,
+                    stdout: true,
+                    stderr: true,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut session = containers
+            .executions()
+            .start_at(&execution.id, Size::new(24, 80).unwrap())
+            .await
+            .unwrap();
+        session.write(b"hello\r".to_vec()).await.unwrap();
+        session.close().await;
+        let mut transcript = Vec::new();
+        while let Some(entry) = session.next().await.unwrap() {
+            transcript.extend(entry.bytes);
+        }
+        assert_eq!(
+            containers.executions().wait(&execution.id).await.unwrap(),
+            ExitStatus::Code(0)
+        );
+        assert!(transcript.windows(5).any(|bytes| bytes == b"READY"));
+        assert!(transcript.windows(9).any(|bytes| bytes == b"GOT=hello"));
+        containers.remove_force("terminal-public-api").await.unwrap();
+        image.release().unwrap();
+    }
 }

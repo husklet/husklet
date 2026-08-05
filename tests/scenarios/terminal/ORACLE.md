@@ -146,3 +146,11 @@ resizes through the execution API. Input uses the session's bounded writer and
 output remains subject to the runner's one-MiB capture bound. Schema validation
 limits each terminal action to 64 steps, each text field to 64 KiB, each wait to
 60 seconds, nonzero dimensions, one close, and no write after close.
+
+Each operation also emits a bounded durable ledger record after container
+startup: ordered step index and operation, elapsed microseconds, bytes written,
+bytes read from the transcript, and success or failure. The final transcript
+drain is named separately. These values exclude image, provider, and container
+startup and preserve failed resize, timed wait, write, close, and negative
+assertion evidence in the partial result journal as well as the finalized TSV.
+Scenarios without terminal actions retain an empty `terminal_steps` field.

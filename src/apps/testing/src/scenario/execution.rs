@@ -21,12 +21,13 @@ pub enum CaseResult {
     NotRun(String),
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PhaseTiming {
     pub setup_us: u64,
     pub execution_us: u64,
     pub payload_us: Option<u64>,
     pub teardown_us: u64,
+    pub terminal_steps: Vec<super::terminal::Metric>,
 }
 
 pub struct CaseOutcome {
@@ -182,6 +183,7 @@ async fn execute_image(
     );
     let spec = specification(case, target, image, runtime, &name)?;
     let timeout = Duration::from_secs(case.timeout);
+    let mut terminal_steps = Vec::new();
     let (action, cleanup) = execute_phases(
         timing,
         async {
@@ -189,10 +191,13 @@ async fn execute_image(
             containers.start(&name).await
         },
         || async {
-            tokio::time::timeout(timeout, execute_actions(containers, case, runtime, image, &name))
-                .await
-                .map_err(|_| format!("timed out after {} milliseconds", timeout.as_millis()))
-                .and_then(|result| result.map_err(|error| error.to_string()))
+            tokio::time::timeout(
+                timeout,
+                execute_actions(containers, case, runtime, image, &name, &mut terminal_steps),
+            )
+            .await
+            .map_err(|_| format!("timed out after {} milliseconds", timeout.as_millis()))
+            .and_then(|result| result.map_err(|error| error.to_string()))
         },
         async {
             tokio::time::timeout(CLEANUP_TIMEOUT, containers.remove_force(&name))
@@ -202,6 +207,7 @@ async fn execute_image(
         },
     )
     .await;
+    timing.terminal_steps = terminal_steps;
     let outcome = action.and_then(|output| {
         verify(case, output.status, &output.stdout, &output.stderr).map_err(|error| error.to_string())
     });
@@ -279,6 +285,7 @@ async fn execute_actions(
     runtime: &RuntimeConfig,
     rootfs: &std::path::Path,
     name: &str,
+    terminal_metrics: &mut Vec<super::terminal::Metric>,
 ) -> Result<ActionOutput, Error> {
     if matches!(
         case.actions.first(),
@@ -339,7 +346,7 @@ async fn execute_actions(
         let outcome = match action {
             super::definition::ScenarioAction::Api(operation) => run_api(containers, name, operation).await?,
             super::definition::ScenarioAction::Terminal(action) => {
-                super::terminal::run(containers, case, runtime, rootfs, name, action).await?
+                super::terminal::run(containers, case, runtime, rootfs, name, action, terminal_metrics).await?
             }
             _ => run_exec(containers, case, runtime, rootfs, name, action).await?,
         };

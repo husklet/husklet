@@ -102,7 +102,7 @@ fn spawn(
                         key,
                         elapsed_ms: 0,
                         result: execution::CaseResult::Failed("scenario warmup did not pass".to_owned()),
-                        timing: warmup.timing,
+                        timing: warmup.timing.clone(),
                     })
                     .collect());
             }
@@ -294,7 +294,7 @@ impl Completed {
             key: self.key.clone(),
             status,
             elapsed_ms: self.elapsed_ms,
-            timing: self.timing,
+            timing: self.timing.clone(),
             diagnostic,
         }
     }
