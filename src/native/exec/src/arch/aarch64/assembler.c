@@ -12,7 +12,6 @@ int hl_a64_assembler_begin(hl_a64_assembler *state, void *writable, void *execut
     state->limit = state->cursor + capacity;
     state->failed = 0;
     state->diagnostics = 0;
-    state->execution_identity_pending = 0;
     return 1;
 }
 

@@ -9,6 +9,8 @@ enum {
     CPU = 28,
 };
 
+static void publish_execution_identity(hl_a64_assembler *assembler, int scratch);
+
 #define OFFSET_STACK ((int)offsetof(hl_native_aarch64_cpu, stack))
 #define OFFSET_PROGRAM ((int)offsetof(hl_native_aarch64_cpu, program))
 #define OFFSET_REASON ((int)offsetof(hl_native_aarch64_cpu, reason))
@@ -72,10 +74,8 @@ static void spill(hl_a64_assembler *assembler) {
 }
 
 void hl_a64_stub_exit(hl_a64_assembler *assembler, uint32_t kind, uint64_t pc) {
-    if (assembler->diagnostics && kind == HL_NATIVE_EXIT_BRANCH &&
-        !assembler->execution_identity_pending)
+    if (assembler->diagnostics && kind == HL_NATIVE_EXIT_BRANCH)
         hl_a64_stub_publish_execution_identity(assembler);
-    assembler->execution_identity_pending = 0;
     spill(assembler);
     hl_a64_movconst(assembler, 9, pc);
     hl_a64_str(assembler, 9, 0, OFFSET_PROGRAM);
@@ -91,22 +91,14 @@ void hl_a64_stub_exit(hl_a64_assembler *assembler, uint32_t kind, uint64_t pc) {
 
 uint32_t *hl_a64_stub_edge_reserve(hl_a64_assembler *assembler) {
     uint32_t *span = assembler == NULL ? NULL : (uint32_t *)assembler->cursor;
-    uint32_t index = 0;
-    if (assembler != NULL && assembler->diagnostics) {
-        hl_a64_stub_publish_execution_identity(assembler);
-        assembler->execution_identity_pending = 1;
-        index = 3;
-    }
-    for (; index < HL_A64_EDGE_SPAN_WORDS; index++)
+    for (uint32_t index = 0; index < HL_A64_EDGE_SPAN_WORDS; index++)
         hl_a64_emit32(assembler, UINT32_C(0xd503201f));
     return span;
 }
 
 void hl_a64_stub_exit_register(hl_a64_assembler *assembler, uint32_t kind, int target) {
-    if (assembler->diagnostics && kind == HL_NATIVE_EXIT_BRANCH &&
-        !assembler->execution_identity_pending)
-        hl_a64_stub_publish_execution_identity(assembler);
-    assembler->execution_identity_pending = 0;
+    if (assembler->diagnostics && kind == HL_NATIVE_EXIT_BRANCH)
+        publish_execution_identity(assembler, target == 17 ? 16 : 17);
     spill(assembler);
     hl_a64_str(assembler, target, 0, OFFSET_PROGRAM);
     hl_a64_movconst(assembler, 9, kind);
@@ -124,14 +116,18 @@ static void patch_condition(uint32_t *branch, const uint8_t *target) {
     *branch |= (distance & UINT32_C(0x7ffff)) << 5;
 }
 
-void hl_a64_stub_publish_execution_identity(hl_a64_assembler *assembler) {
+static void publish_execution_identity(hl_a64_assembler *assembler, int scratch) {
     /* Cache execution lookup accepts any address inside the executing entry,
      * tagged in bit zero.  AArch64 instructions are four-byte aligned, so the
      * tag cannot alias an instruction address. */
-    hl_a64_emit32(assembler, UINT32_C(0x10000011)); /* adr x17,. */
-    hl_a64_addi(assembler, 17, 17, 1);
-    hl_a64_str(assembler, 17, 28,
+    hl_a64_emit32(assembler, UINT32_C(0x10000000) | (uint32_t)scratch); /* adr scratch,. */
+    hl_a64_addi(assembler, scratch, scratch, 1);
+    hl_a64_str(assembler, scratch, 28,
                (int)offsetof(hl_native_aarch64_cpu, indirect_site));
+}
+
+void hl_a64_stub_publish_execution_identity(hl_a64_assembler *assembler) {
+    publish_execution_identity(assembler, 17);
 }
 
 void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_budget_guard *guard) {

@@ -1,4 +1,7 @@
 #include "../include/executor.h"
+#include "../src/arch/aarch64/entry.h"
+#include "../src/executor.h"
+#include "../cache/private.h"
 #include "../src/arch/aarch64/projection.h"
 #include "../src/translation.h"
 
@@ -7,6 +10,15 @@
 #include <sys/mman.h>
 
 #define CHECK(value) do { if (!(value)) { fprintf(stderr, "a64_cycles:%d: %s\n", __LINE__, #value); return 1; } } while (0)
+
+#if defined(__aarch64__)
+void enter_register_16(void);
+__asm__(".type enter_register_16,%function\n"
+        "enter_register_16:\n"
+        "mov x28,x0\n"
+        "ldr x16,[x0,#128]\n"
+        "br x16\n");
+#endif
 
 typedef struct executable_memory {
     uint8_t *address;
@@ -204,7 +216,10 @@ static int execution(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 10 && state.registers[0] == 95);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.boundary_branch == before.boundary_branch && after.boundary_yield == before.boundary_yield + 1);
+    /* The first unresolved self edge returns once before relocation closes
+     * the cycle; only the remaining iterations stay inside native code. */
+    CHECK(after.boundary_branch == before.boundary_branch + 1 &&
+          after.boundary_yield == before.boundary_yield);
     request.budget = 10;
     state.interrupt = 1;
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
@@ -229,7 +244,7 @@ static int execution(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 6);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.boundary_branch == before.boundary_branch);
+    CHECK(after.boundary_branch == before.boundary_branch + 1);
 
     const hl_native_change invalidate = {.abi = HL_NATIVE_ABI, .size = sizeof(invalidate),
         .kind = HL_NATIVE_INVALIDATE, .first = 0x4008, .last = 0x400c, .mapping_epoch = 11};
@@ -245,7 +260,7 @@ static int execution(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 6);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
-    CHECK(after.boundary_branch == before.boundary_branch + 1);
+    CHECK(after.boundary_branch == before.boundary_branch + 2);
 
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK && host.address == NULL);
     return 0;
@@ -343,6 +358,76 @@ static int branch_diagnostics(void) {
           after.a64_branch_sample_form == HL_NATIVE_A64_BRANCH_FORM_COLD_RELOCATION);
     state.program = 0x6000;
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    before = after;
+    state.program = 0x6000;
+    request.budget = 1;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 1);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.a64_branch_unidentified == before.a64_branch_unidentified);
+    request.budget = 2;
+
+    hl_native_code hot_code;
+    cache_entry *hot_entry = NULL;
+    for (uint32_t index = 0; index < executor->cache->capacity; index++)
+        if (executor->cache->entries[index].state == ENTRY_LIVE &&
+            executor->cache->entries[index].guest == 0x6000)
+            hot_entry = &executor->cache->entries[index];
+    CHECK(hot_entry != NULL);
+    hot_code = (hl_native_code){
+        .entry = (void *)(uintptr_t)(executor->cache->arena->mapping.executable + hot_entry->code_offset),
+        .body = (void *)(uintptr_t)(executor->cache->arena->mapping.executable + hot_entry->body_offset),
+        .code_size = hot_entry->code_size};
+    resolved_relocation *hot_edge = NULL;
+    for (uint32_t index = 0; index < executor->cache->resolved_count; index++)
+        if (executor->cache->resolved[index].source_guest == 0x6000)
+            hot_edge = &executor->cache->resolved[index];
+    CHECK(hot_edge != NULL);
+    void *hot_admission = (void *)(uintptr_t)(executor->cache->arena->mapping.executable +
+        hot_edge->source_code_offset + hot_edge->relocation.code_offset);
+    const hl_native_aarch64_cpu saved_state = state;
+    state.program = 0x6000;
+    state.budget = 2;
+    state.registers[16] = (uint64_t)(uintptr_t)hot_admission;
+    state.interrupt = 1;
+    state.indirect_site = 0;
+    hl_native_aarch64_enter(&state, enter_register_16);
+    CHECK(state.reason == HL_NATIVE_EXIT_BRANCH && state.program == 0x6004 &&
+          state.indirect_site > (uint64_t)(uintptr_t)hot_code.entry &&
+          state.indirect_site - 1 < (uint64_t)(uintptr_t)hot_code.entry + hot_code.code_size);
+    state = saved_state;
+
+    hl_native_interrupt_token *interrupt_token = NULL;
+    CHECK(hl_native_interrupt_create(&interrupt_token) == HL_NATIVE_OK);
+    CHECK(hl_native_interrupt_set(interrupt_token, 1) == HL_NATIVE_OK);
+    state.program = 0x6000;
+    state.budget = 2;
+    state.registers[16] = (uint64_t)(uintptr_t)hot_admission;
+    state.interrupt_token = (uint64_t)(uintptr_t)interrupt_token;
+    state.indirect_site = 0;
+    hl_native_aarch64_enter(&state, enter_register_16);
+    CHECK(state.reason == HL_NATIVE_EXIT_BRANCH && state.program == 0x6004 &&
+          state.indirect_site > (uint64_t)(uintptr_t)hot_code.entry &&
+          state.indirect_site - 1 < (uint64_t)(uintptr_t)hot_code.entry + hot_code.code_size);
+    state = saved_state;
+    hl_native_interrupt_destroy(interrupt_token);
+
+    const hl_native_change invalidate_target = {.abi = HL_NATIVE_ABI,
+        .size = sizeof(invalidate_target), .kind = HL_NATIVE_INVALIDATE,
+        .first = 0x6004, .last = 0x6008, .mapping_epoch = 22};
+    CHECK(hl_native_changed(executor, &invalidate_target, 1) == HL_NATIVE_OK);
+    before = after;
+    state.program = 0x6000;
+    request.budget = 2;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 2);
+    state.program = 0x6000;
+    request.budget = 1;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.executed == 1);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.a64_branch_unidentified == before.a64_branch_unidentified);
+    request.budget = 2;
     const hl_native_change cold_reset = {.abi = HL_NATIVE_ABI, .size = sizeof(cold_reset),
         .kind = HL_NATIVE_REPLACE, .mapping_epoch = 23};
     CHECK(hl_native_changed(executor, &cold_reset, 1) == HL_NATIVE_OK);
