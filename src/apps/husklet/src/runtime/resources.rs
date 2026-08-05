@@ -5,6 +5,7 @@
 use crate::config::WorkspaceConfig;
 use crate::ffi::ExclusiveFileLock;
 use crate::paths;
+use crate::runtime::process::CommandSession as _;
 use std::path::PathBuf;
 
 pub struct Daemon {
@@ -87,16 +88,7 @@ impl Daemon {
             .stdout(std::process::Stdio::from(log))
             .stderr(std::process::Stdio::from(errlog));
         // Detach into its own session so it outlives the launching command.
-        unsafe {
-            use std::os::unix::process::CommandExt;
-            cmd.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            });
-        }
+        cmd.start_session();
         let child = cmd.spawn()?;
         self.wait_for_start(child, std::time::Duration::from_secs(15))
     }

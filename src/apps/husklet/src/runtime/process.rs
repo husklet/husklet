@@ -2,6 +2,8 @@
 
 use std::io;
 
+pub(super) use ffi::CommandSession;
+
 pub(super) struct Peer {
     process: libc::pid_t,
 }
@@ -90,6 +92,29 @@ impl Peer {
 mod ffi {
     use std::io;
     use std::os::fd::AsRawFd;
+
+    pub trait CommandSession {
+        fn start_session(&mut self);
+    }
+
+    impl CommandSession for std::process::Command {
+        fn start_session(&mut self) {
+            use std::os::unix::process::CommandExt;
+
+            // SAFETY: the hook runs in the child after `fork` and before `exec`. It invokes only
+            // async-signal-safe `setsid`, retains no Rust storage, acquires no lock, allocates
+            // nothing, invokes no destructor, and cannot unwind across the ABI.
+            unsafe {
+                self.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
+    }
 
     pub(super) fn signal(process: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
         // SAFETY: the kernel supplied this positive peer PID for a connected Unix socket. `kill`

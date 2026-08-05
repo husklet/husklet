@@ -13,7 +13,7 @@ mod publication;
 mod restore;
 mod runtime;
 
-use crate::runtime::process::Peer;
+use crate::runtime::process::{CommandSession as _, Peer};
 use close::ResultFile;
 use configuration::Configuration;
 use identity::RuntimeIdentity;
@@ -102,18 +102,7 @@ impl Domain {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(output))
             .stderr(std::process::Stdio::from(errors));
-        // SAFETY: the hook runs after `fork` and before `exec` in the child. It only invokes
-        // the async-signal-safe `setsid` syscall and converts its errno into an I/O error.
-        unsafe {
-            use std::os::unix::process::CommandExt;
-            command.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            });
-        }
+        command.start_session();
         let child = command.spawn()?;
         self.wait_for_start(child, std::time::Duration::from_secs(180))
     }
