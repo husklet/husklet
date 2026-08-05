@@ -38,8 +38,19 @@ impl FileSource {
             if role == ImageRole::Interpreter || self.root_primary {
                 return Self::open_rooted(rootfs, path);
             }
+            if role == ImageRole::Main
+                && let Some(guest) = Self::inside_root(rootfs, path)
+            {
+                return Self::open_rooted(rootfs, guest);
+            }
         }
         File::open(OsString::from_vec(path.to_vec())).map_err(Self::map_io)
+    }
+
+    fn inside_root<'a>(rootfs: &[u8], path: &'a [u8]) -> Option<&'a [u8]> {
+        let root = rootfs.strip_suffix(b"/").unwrap_or(rootfs);
+        let suffix = path.strip_prefix(root)?;
+        (suffix.first() == Some(&b'/')).then_some(suffix)
     }
 
     fn open_rooted(rootfs: &[u8], path: &[u8]) -> Result<File, ImageSourceError> {

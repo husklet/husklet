@@ -358,6 +358,19 @@ fn main_ignores_root() {
 }
 
 #[test]
+fn main_inside_root_resolves_absolute_symlink_in_guest_namespace() {
+    let root = source_root("main-internal-link");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::write(root.join("bin/busybox"), b"main image").unwrap();
+    std::os::unix::fs::symlink("/bin/busybox", root.join("bin/sh")).unwrap();
+    let root_bytes = root.clone().into_os_string().into_vec();
+    let main = root.join("bin/sh").into_os_string().into_vec();
+    let mut source = FileSource::new(Some(&root_bytes));
+    assert_eq!(source.read_image(ImageRole::Main, &main, 64).unwrap(), b"main image");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rooted_errors_precede() {
     let root = source_root("errors");
     fs::create_dir_all(root.join("lib")).unwrap();

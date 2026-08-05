@@ -58,7 +58,7 @@ impl PendingOpen {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn projected(
+    pub(super) fn at_guest(
         file: Arc<NativeFile>,
         path: PathBuf,
         guest: GuestPath,

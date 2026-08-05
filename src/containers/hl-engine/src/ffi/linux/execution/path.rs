@@ -647,7 +647,7 @@ impl RuntimePathHost for NativePath {
                 Arc::clone(&self.ownership),
                 None,
             );
-            return Ok(Box::new(open::PendingOpen::projected(
+            return Ok(Box::new(open::PendingOpen::at_guest(
                 file,
                 binding.host,
                 binding.guest,
@@ -684,8 +684,8 @@ impl RuntimePathHost for NativePath {
         let name = CString::new(resolved.final_name().map_or(b".".as_slice(), |name| name.as_bytes()))
             .map_err(|_| RuntimePathError::Invalid)?;
         let path = pin::Host::path(&parent, &name)?;
-        let guest =
-            GuestPathBytes::new(self.guest_path(&path)?.as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
+        let guest_path = self.guest_path(&path)?;
+        let guest = GuestPathBytes::new(guest_path.as_str().as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
         resolution::Policy::writable(
             ordinary.mounts(),
             ordinary.read_only(),
@@ -721,18 +721,33 @@ impl RuntimePathHost for NativePath {
                 return self.fifos.prepare(key, plan);
             }
         }
-        Ok(Box::new(open::PendingOpen::new(
-            file,
-            path,
-            plan.intent,
-            plan.mode,
-            ordinary.root().to_path_buf(),
-            Arc::clone(&self.paths),
-            Arc::clone(&self.terminals),
-            parent,
-            name,
-            Arc::clone(&self.transfers),
-        )))
+        if path.starts_with(ordinary.root()) {
+            Ok(Box::new(open::PendingOpen::new(
+                file,
+                path,
+                plan.intent,
+                plan.mode,
+                ordinary.root().to_path_buf(),
+                Arc::clone(&self.paths),
+                Arc::clone(&self.terminals),
+                parent,
+                name,
+                Arc::clone(&self.transfers),
+            )))
+        } else {
+            Ok(Box::new(open::PendingOpen::at_guest(
+                file,
+                path,
+                guest_path,
+                plan.intent,
+                plan.mode,
+                Arc::clone(&self.paths),
+                Arc::clone(&self.terminals),
+                parent,
+                name,
+                Arc::clone(&self.transfers),
+            )))
+        }
     }
 
     fn open_may_block(&self, base: &DirectoryBaseLease, plan: &OpenAbiPlan) -> Result<bool, RuntimePathError> {

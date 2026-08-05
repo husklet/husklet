@@ -114,6 +114,45 @@ fn open_wait_classification() {
 }
 
 #[test]
+fn writable_bind_open_retains_guest_identity() {
+    let path = std::env::temp_dir().join(format!(
+        "hl-bind-open-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed),
+    ));
+    let root = path.join("root");
+    let backing = path.join("backing");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir(&backing).unwrap();
+    let root_bytes = root.as_os_str().as_encoded_bytes();
+    let host = NativePath::new(root_bytes, watch::Hub::new(root_bytes).unwrap()).unwrap();
+    host.ordinary()
+        .unwrap()
+        .mount_directory("/data", backing.to_str().unwrap(), false)
+        .unwrap();
+    let plan = OpenAbiPlan {
+        operand: PathOperand {
+            directory: OpenDirectory::default(),
+            path: GuestPathBytes::new(b"/data/value").unwrap(),
+            allow_empty: false,
+            nofollow: false,
+        },
+        intent: OpenIntent::from_bits(OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE),
+        mode: 0o644,
+        close_on_exec: false,
+        nonblocking: false,
+        no_controlling_terminal: false,
+        resolve: ResolveFlags::default(),
+    };
+    let mut opened = host.prepare_open(&host.root_base().unwrap(), &plan).unwrap();
+    let object = opened.object();
+    opened.commit().unwrap();
+    assert_eq!(object.write(b"mounted"), Ok(7));
+    assert_eq!(std::fs::read(backing.join("value")).unwrap(), b"mounted");
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[test]
 fn builtin_descriptor_preserves_filesystem() {
     let path = std::env::temp_dir().join(format!(
         "hl-builtin-filesystem-{}-{}",
