@@ -20,11 +20,20 @@ an empty required/default value.
 
 This is a bounded JSON wire-model change.  It performs no image, container,
 filesystem, network, or engine operation, so no retained-C runtime domain is
-implicated.  With the change, the same real Docker request advances beyond
-`Binds=null` and reaches the next independent compatibility-policy gap:
-`ConsoleSize=[0,0]` is currently classified as a meaningful unsupported field.
-That policy domain is not changed here, and create/inspect/remove are therefore
-not claimed as successful in this lane.
+implicated.
+
+## Console size admission
+
+API 1.43 represents `HostConfig.ConsoleSize` as exactly two unsigned dimensions,
+height then width. Docker CLI 29.1.3 sends `[0,0]` when no initial terminal size
+was requested. Missing, `null`, and `[0,0]` therefore have the same inert create
+meaning and are accepted. Any nonzero dimension receives `501 Not Implemented`
+because create does not yet project an initial console size into the container
+runtime. Wrong array widths, wrong types, and negative dimensions remain JSON
+decoding errors.
+
+This admission rule is create preflight policy only. It invokes no terminal,
+container, or engine behavior, so no retained-C runtime domain is implicated.
 
 This matrix describes the request contract implemented by
 `POST /v1.43/containers/create`. It is based on Moby 24.0.9, whose Engine API is
@@ -75,7 +84,8 @@ request has no create-time side effects.
 | `PortBindings` | effective | Validated publications are applied, except host networking discards them with a create warning as Moby does. |
 | `Dns`, `DnsOptions`, `DnsSearch` | effective | Validated resolver policy is persisted, projected through inspect, and used to generate the container's `/etc/resolv.conf`; see `DNS_COMPATIBILITY.md`. |
 | `Links` | capability refusal | Any entry refuses explicitly; an empty list is inert. |
-| `ContainerIDFile`, `LogConfig`, `VolumeDriver`, `VolumesFrom`, `ConsoleSize`, `Annotations` | capability refusal | Default values are inert; meaningful values receive `501`. |
+| `ConsoleSize` | capability refusal | Missing, `null`, and `[0,0]` are inert; any nonzero dimension receives `501`. |
+| `ContainerIDFile`, `LogConfig`, `VolumeDriver`, `VolumesFrom`, `Annotations` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `CapAdd`, `CapDrop`, `CgroupnsMode`, `GroupAdd` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `IpcMode`, `Cgroup`, `OomScoreAdj`, `PidMode`, `Privileged`, `PublishAllPorts` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `SecurityOpt`, `StorageOpt`, `UTSMode`, `UsernsMode`, `ShmSize`, `Sysctls`, `Runtime` | capability refusal | Default values are inert; meaningful values receive `501`. |

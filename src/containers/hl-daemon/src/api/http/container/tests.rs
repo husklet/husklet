@@ -305,6 +305,7 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
         links: Vec::new(),
         restart_policy: RestartPolicy::default(),
         auto_remove: true,
+        console_size: None,
         port_bindings: PortBindings::default(),
         unsupported: BTreeMap::new(),
     };

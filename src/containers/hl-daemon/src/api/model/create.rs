@@ -110,6 +110,8 @@ pub struct HostConfig {
     pub restart_policy: RestartPolicy,
     #[serde(default)]
     pub auto_remove: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub console_size: Option<[u64; 2]>,
     #[serde(default, deserialize_with = "crate::api::null_default")]
     pub port_bindings: crate::api::PortBindings,
     #[serde(flatten, default)]

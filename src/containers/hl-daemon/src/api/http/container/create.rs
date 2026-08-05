@@ -131,6 +131,12 @@ impl HostConfig {
     }
 
     pub(super) fn validate_unsupported(&self) -> ApiResult<()> {
+        if self.console_size.is_some_and(|size| size != [0, 0]) {
+            return Err(ApiError::new(
+                StatusCode::NOT_IMPLEMENTED,
+                "HostConfig.ConsoleSize is not implemented for nonzero dimensions",
+            ));
+        }
         if !self.links.is_empty() {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
@@ -189,6 +195,8 @@ impl CreateContainer {
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
+
     use super::CreateContainer;
 
     #[test]
@@ -206,5 +214,35 @@ mod tests {
         }))
         .unwrap();
         assert!(meaningful.validate_unsupported().is_err());
+    }
+
+    #[test]
+    fn console_size_accepts_only_absent_null_or_zero_default() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"ConsoleSize": null}),
+            serde_json::json!({"ConsoleSize": [0, 0]}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            assert!(host.validate_unsupported().is_ok());
+        }
+        for value in [
+            serde_json::json!({"ConsoleSize": [1, 0]}),
+            serde_json::json!({"ConsoleSize": [0, 1]}),
+            serde_json::json!({"ConsoleSize": [24, 80]}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            let error = host.validate_unsupported().unwrap_err();
+            assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
+        }
+        for value in [
+            serde_json::json!({"ConsoleSize": []}),
+            serde_json::json!({"ConsoleSize": [0]}),
+            serde_json::json!({"ConsoleSize": [0, 0, 0]}),
+            serde_json::json!({"ConsoleSize": "0,0"}),
+            serde_json::json!({"ConsoleSize": [-1, 0]}),
+        ] {
+            assert!(serde_json::from_value::<crate::api::HostConfig>(value).is_err());
+        }
     }
 }
