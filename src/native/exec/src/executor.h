@@ -21,6 +21,9 @@ struct hl_native_executor {
     /* High 32 bits are mutation state; low 32 bits are execution leases.  One
      * atomic word makes close versus admission a race-free transition. */
     _Atomic uint64_t admission;
+    /* Monotonic activation identity. Zero means certificate-ineligible. Once
+     * exhausted it stays at UINT64_MAX and execution continues uncertified. */
+    _Atomic uint64_t activation_generation;
     struct hl_native_direct_token *direct_authority;
     uint64_t direct_generation;
     uint64_t next_authority_identity;
@@ -55,6 +58,8 @@ struct hl_native_executor {
 
 typedef struct hl_native_execution {
     hl_native_executor *owner;
+    uint64_t generation;
+    uint64_t *certificate_token;
 } hl_native_execution;
 
 /* Internal admission groundwork. An execution lease pins the current arena,
@@ -63,6 +68,8 @@ typedef struct hl_native_execution {
 hl_native_status hl_native_executor_gate_enter(hl_native_executor *);
 void hl_native_executor_gate_leave(hl_native_executor *);
 hl_native_status hl_native_execution_enter(hl_native_executor *, hl_native_execution *);
+uint64_t hl_native_execution_generation(const hl_native_execution *);
+hl_native_status hl_native_execution_bind_certificate(hl_native_execution *, uint64_t *);
 hl_native_status hl_native_execution_leave(hl_native_execution *);
 hl_native_status hl_native_execution_exit(hl_native_execution *, hl_native_exit *, uint32_t, uint32_t,
                                           uint64_t, uint64_t, uint64_t, uint64_t);

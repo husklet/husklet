@@ -345,6 +345,20 @@ void hl_native_executor_gate_leave(hl_native_executor *executor) {
     atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
 }
 
+static uint64_t activation_generation(hl_native_executor *executor) {
+    uint64_t current = atomic_load_explicit(&executor->activation_generation,
+                                            memory_order_relaxed);
+    for (;;) {
+        if (current == UINT64_MAX) return 0;
+        uint64_t desired = current + 1;
+        if (atomic_compare_exchange_weak_explicit(&executor->activation_generation,
+                                                  &current, desired,
+                                                  memory_order_relaxed,
+                                                  memory_order_relaxed))
+            return desired;
+    }
+}
+
 hl_native_status hl_native_execution_enter(hl_native_executor *executor, hl_native_execution *execution) {
     if (executor == NULL || execution == NULL || execution->owner != NULL) return HL_NATIVE_ARGUMENT;
     uint64_t current = atomic_load_explicit(&executor->admission, memory_order_acquire);
@@ -356,7 +370,22 @@ hl_native_status hl_native_execution_enter(hl_native_executor *executor, hl_nati
                                                   memory_order_acquire, memory_order_relaxed))
             break;
     }
+    execution->generation = activation_generation(executor);
+    execution->certificate_token = NULL;
     execution->owner = executor;
+    return HL_NATIVE_OK;
+}
+
+uint64_t hl_native_execution_generation(const hl_native_execution *execution) {
+    return execution != NULL && execution->owner != NULL ? execution->generation : 0;
+}
+
+hl_native_status hl_native_execution_bind_certificate(hl_native_execution *execution,
+                                                       uint64_t *token) {
+    if (execution == NULL || execution->owner == NULL || token == NULL)
+        return HL_NATIVE_ARGUMENT;
+    __atomic_store_n(token, 0, __ATOMIC_RELEASE);
+    execution->certificate_token = token;
     return HL_NATIVE_OK;
 }
 
@@ -364,6 +393,10 @@ hl_native_status hl_native_execution_leave(hl_native_execution *execution) {
     hl_native_executor *executor;
     if (execution == NULL || execution->owner == NULL) return HL_NATIVE_ARGUMENT;
     executor = execution->owner;
+    if (execution->certificate_token != NULL)
+        __atomic_store_n(execution->certificate_token, 0, __ATOMIC_RELEASE);
+    execution->certificate_token = NULL;
+    execution->generation = 0;
     execution->owner = NULL;
     uint64_t current = atomic_load_explicit(&executor->admission, memory_order_relaxed);
     for (;;) {
@@ -469,6 +502,7 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     /* Dynamically allocated atomic state is initialized with atomic_init before
      * its first operation; zeroed storage alone is not a C11 initializer. */
     atomic_init(&executor->admission, ADMISSION(MUTATION_OPEN, 0));
+    atomic_init(&executor->activation_generation, 0);
     executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
     atomic_init(&executor->a64_guard_fast, 0);
     atomic_init(&executor->a64_guard_full, 0);
@@ -902,6 +936,16 @@ static void active_view_publish(hl_native_aarch64_cpu *cpu, uint64_t mapping_inc
     cpu->active_view_authority = authority;
 }
 
+static hl_native_status a64_execution_enter(hl_native_executor *executor,
+                                            hl_native_execution *execution,
+                                            hl_native_aarch64_cpu *cpu) {
+    hl_native_status status = hl_native_execution_enter(executor, execution);
+    if (status != HL_NATIVE_OK) return status;
+    status = hl_native_execution_bind_certificate(execution, &cpu->certificate_token);
+    if (status != HL_NATIVE_OK) (void)hl_native_execution_leave(execution);
+    return status;
+}
+
 static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu *cpu_handle,
                                     hl_native_aarch64_cpu *cpu,
                                     const hl_native_run_request *request, hl_native_exit *output) {
@@ -1005,7 +1049,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         hl_native_status status;
         uint64_t instruction = cpu->program;
         if (execution.owner == NULL) {
-            status = hl_native_execution_enter(executor, &execution);
+            status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             if (memory_mode != 0 && !hl_native_direct_request_snapshot(
                     executor, direct_token, authority_generation, authority_identity, projection,
@@ -1059,11 +1103,11 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                     if (hl_a64_source_fetch(active_source, instruction, 1, &declined))
                         a64_fallback_word(executor, declined.words[0], 1);
                 }
-                status = hl_native_execution_enter(executor, &execution);
+                status = a64_execution_enter(executor, &execution, cpu);
                 if (status != HL_NATIVE_OK) return status;
                 return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
             }
-            status = hl_native_execution_enter(executor, &execution);
+            status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             /* Publication and reset both require exclusive mutation admission.
              * Resolve only after re-admission, so no pointer selected before
@@ -1077,7 +1121,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             if (status != HL_NATIVE_OK) return status;
             status = ibtc_fill(executor, cpu, instruction, &code);
             if (status != HL_NATIVE_OK) return status;
-            status = hl_native_execution_enter(executor, &execution);
+            status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
                 code.source_last > key.source_last)
@@ -1230,7 +1274,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 run_view_publish(&operand_views, cpu, source->mapping_incarnation);
                 continue;
             }
-            status = hl_native_execution_enter(executor, &execution);
+            status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             if (result == HL_NATIVE_OPERAND_FAULT)
                 return hl_native_execution_exit(&execution, output, HL_NATIVE_EXIT_FAULT,
@@ -1312,6 +1356,14 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
 
     status = hl_native_execution_enter(executor, &execution);
     if (status != HL_NATIVE_OK) return status;
+    uint64_t *certificate_token = cpu->architecture == HL_NATIVE_AARCH64
+        ? &cpu->state.aarch64->certificate_token
+        : &cpu->state.x86_64->certificate_token;
+    status = hl_native_execution_bind_certificate(&execution, certificate_token);
+    if (status != HL_NATIVE_OK) {
+        (void)hl_native_execution_leave(&execution);
+        return status;
+    }
     if (request->size >= offsetof(hl_native_run_request, direct_token) &&
         ((request->memory_mode == 0) != (request->authority_generation == 0))) {
         (void)hl_native_execution_leave(&execution);

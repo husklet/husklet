@@ -47,7 +47,7 @@ int main(void) {
     hl_native_projection_view view = {
         .guest_first = expected.guest_first, .guest_last = expected.guest_last,
         .host_first = expected.host_first, .mapping_incarnation = expected.mapping_incarnation,
-        .permissions = expected.permissions,
+        .permissions = expected.permissions, .write_policy = HL_NATIVE_WRITE_EXACT,
     };
     hl_native_projection projection = {&view, 1, expected.mapping_incarnation, 0};
     uint64_t first_generation = hl_native_direct_generation(executor, first);
@@ -94,11 +94,21 @@ int main(void) {
     CHECK(second == NULL);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_STATE);
 
+    hl_native_execution before_fork_execution = {0};
+    CHECK(hl_native_execution_enter(executor, &before_fork_execution) == HL_NATIVE_OK);
+    uint64_t before_fork_generation = hl_native_execution_generation(&before_fork_execution);
+    CHECK(before_fork_generation != 0);
+    CHECK(hl_native_execution_leave(&before_fork_execution) == HL_NATIVE_OK);
+
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
     pid_t child = fork();
     CHECK(child >= 0);
     if (child == 0) {
         CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+        hl_native_execution child_execution = {0};
+        CHECK(hl_native_execution_enter(executor, &child_execution) == HL_NATIVE_OK);
+        CHECK(hl_native_execution_generation(&child_execution) > before_fork_generation);
+        CHECK(hl_native_execution_leave(&child_execution) == HL_NATIVE_OK);
         CHECK(executor->memory_mode == 0 && executor->authority_generation == 0);
         CHECK(!hl_native_direct_validate(executor, first, &observed));
 #if defined(__aarch64__)
@@ -112,6 +122,10 @@ int main(void) {
     int status;
     CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
     CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+    hl_native_execution parent_execution = {0};
+    CHECK(hl_native_execution_enter(executor, &parent_execution) == HL_NATIVE_OK);
+    CHECK(hl_native_execution_generation(&parent_execution) > before_fork_generation);
+    CHECK(hl_native_execution_leave(&parent_execution) == HL_NATIVE_OK);
     CHECK(executor->memory_mode == 0 && executor->authority_generation == 0);
     CHECK(!hl_native_direct_validate(executor, first, &observed));
     CHECK(hl_native_direct_register(executor, &expected, &second) == HL_NATIVE_OK);

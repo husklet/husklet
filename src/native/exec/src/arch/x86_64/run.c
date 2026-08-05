@@ -568,6 +568,16 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
     return status;
 }
 
+static hl_native_status execution_enter(hl_native_executor *executor,
+                                        hl_native_execution *execution,
+                                        hl_native_x86_64_cpu *cpu) {
+    hl_native_status status = hl_native_execution_enter(executor, execution);
+    if (status != HL_NATIVE_OK) return status;
+    status = hl_native_execution_bind_certificate(execution, &cpu->certificate_token);
+    if (status != HL_NATIVE_OK) (void)hl_native_execution_leave(execution);
+    return status;
+}
+
 hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x86_64_cpu *cpu,
                                       const hl_native_run_request *request, hl_native_exit *output) {
     const hl_native_source *source = request->source;
@@ -650,7 +660,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         int supported;
         uint64_t pc = cpu->program;
         if (execution.owner == NULL) {
-            status = hl_native_execution_enter(executor, &execution);
+            status = execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             if (memory_mode != 0 && !hl_native_direct_request_valid(
                     executor, direct_token, authority_generation, authority_identity,
@@ -721,7 +731,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
                 if (cold_builds == X86_COLD_BUILD_QUOTA) {
                     if (executor->diagnostics)
                         atomic_fetch_add_explicit(&executor->x86_cold_quota_exits, 1, memory_order_relaxed);
-                    if ((status = hl_native_execution_enter(executor, &execution)) != HL_NATIVE_OK) return status;
+                    if ((status = execution_enter(executor, &execution, cpu)) != HL_NATIVE_OK) return status;
                     return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
                 }
                 cold_builds++;
@@ -734,11 +744,11 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             }
             if (size != 0 && status != HL_NATIVE_OK) return status;
             if (size == 0 || !supported) {
-                if ((status = hl_native_execution_enter(executor, &execution)) != HL_NATIVE_OK) return status;
+                if ((status = execution_enter(executor, &execution, cpu)) != HL_NATIVE_OK) return status;
                 if (size == 0) return target_fallback(&execution, output, cpu);
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, pc);
             }
-            if ((status = hl_native_execution_enter(executor, &execution)) != HL_NATIVE_OK) return status;
+            if ((status = execution_enter(executor, &execution, cpu)) != HL_NATIVE_OK) return status;
             if (hl_native_translation_lookup(executor, &lookup, &code) != HL_NATIVE_HIT)
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, pc);
         }
@@ -841,7 +851,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
                 cpu->reason = 0;
                 continue;
             }
-            if ((status = hl_native_execution_enter(executor, &execution)) != HL_NATIVE_OK) return status;
+            if ((status = execution_enter(executor, &execution, cpu)) != HL_NATIVE_OK) return status;
             if (result == HL_NATIVE_OPERAND_FAULT)
             {
                 if (execution.owner != NULL && execution.owner->diagnostics)
