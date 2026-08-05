@@ -88,3 +88,33 @@ result does not identify which construction capability diverged. A behavior fix
 is therefore not source-justified until `GuestExecutor::run` and `routing::create`
 return a typed construction phase/error instead of mapping every domain failure
 to `EngineError::LaunchFailed`.
+
+### Typed construction-error boundary
+
+A mechanical inventory found 124 `LaunchFailed` construction sites across the
+engine composition path: 33 in `ffi/linux/execution/mod.rs`, 29 in
+`routing/composition.rs`, 18 in `routing/image.rs`, 10 each in
+`routing/mod.rs` and `native/launcher.rs`, six each in `runtime/api.rs` and
+`execution/transfer.rs`, five in `execution/scheduler.rs`, four in
+`runtime/machine.rs`, two in `execution/service.rs`, and one in
+`composition.rs`. The public `EngineError` appears at 714 source locations and
+448 variant construction/match sites. Adding domain payloads directly to that
+public `Copy` enum would widen a stable cross-adapter API while still leaving
+the construction traits unable to carry the original error.
+
+The coherent owner is therefore an internal, bounded `ConstructionError` in the
+runtime-construction boundary, with exhaustive phase/domain variants for
+configuration, assembly, task, memory, loader image publication, routing,
+descriptor, IPC, exec, clone, fork, thread, checkpoint, transfer, waiter, and
+scheduler construction. `RuntimeFactory::construct`, `GuestMachine::start`, and
+the Linux machine adapter must preserve it until one explicit engine-boundary
+projection emits the bounded structured phase/domain and converts to the
+existing public `EngineError::LaunchFailed`. Representative failure injection
+must cover memory, task, IPC, descriptor, and start owners. Changing only
+`GuestExecutor::run`, or only the currently observed nested path, would leave
+the other admission paths silently flattened and would not be an exhaustive
+typed contract.
+
+That refactor spans every concrete `GuestMachine`/`RuntimeFactory` adapter and
+their public-contract tests. It is larger than this bounded continuation and no
+partial taxonomy was committed as if it covered the domain.
