@@ -112,8 +112,22 @@ pub struct HostConfig {
     pub auto_remove: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub console_size: Option<[u64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_config: Option<LogConfig>,
     #[serde(default, deserialize_with = "crate::api::null_default")]
     pub port_bindings: crate::api::PortBindings,
+    #[serde(flatten, default)]
+    pub unsupported: BTreeMap<String, serde_json::Value>,
+}
+
+/// Docker's per-container logging driver selection.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LogConfig {
+    #[serde(default, rename = "Type")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "crate::api::null_default")]
+    pub config: BTreeMap<String, String>,
     #[serde(flatten, default)]
     pub unsupported: BTreeMap<String, serde_json::Value>,
 }

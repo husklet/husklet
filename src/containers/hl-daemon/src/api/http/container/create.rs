@@ -131,6 +131,21 @@ impl HostConfig {
     }
 
     pub(super) fn validate_unsupported(&self) -> ApiResult<()> {
+        if let Some(config) = &self.log_config {
+            if !config.kind.is_empty() || !config.config.is_empty() {
+                return Err(ApiError::new(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "HostConfig.LogConfig is not implemented for configured logging drivers",
+                ));
+            }
+            let fields = crate::api::CompatibilityFields::from(&config.unsupported);
+            if let Some(field) = fields.first_meaningful() {
+                return Err(ApiError::new(
+                    StatusCode::NOT_IMPLEMENTED,
+                    format!("HostConfig.LogConfig field is not implemented: {field}"),
+                ));
+            }
+        }
         if self.console_size.is_some_and(|size| size != [0, 0]) {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
@@ -241,6 +256,37 @@ mod tests {
             serde_json::json!({"ConsoleSize": [0, 0, 0]}),
             serde_json::json!({"ConsoleSize": "0,0"}),
             serde_json::json!({"ConsoleSize": [-1, 0]}),
+        ] {
+            assert!(serde_json::from_value::<crate::api::HostConfig>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn log_config_accepts_only_unconfigured_logging() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"LogConfig": null}),
+            serde_json::json!({"LogConfig": {}}),
+            serde_json::json!({"LogConfig": {"Type": "", "Config": {}}}),
+            serde_json::json!({"LogConfig": {"Type": "", "Config": null}}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            assert!(host.validate_unsupported().is_ok());
+        }
+        for value in [
+            serde_json::json!({"LogConfig": {"Type": "json-file", "Config": {}}}),
+            serde_json::json!({"LogConfig": {"Type": "", "Config": {"max-size": "10m"}}}),
+            serde_json::json!({"LogConfig": {"Future": true}}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            let error = host.validate_unsupported().unwrap_err();
+            assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
+        }
+        for value in [
+            serde_json::json!({"LogConfig": []}),
+            serde_json::json!({"LogConfig": {"Type": 1}}),
+            serde_json::json!({"LogConfig": {"Config": []}}),
+            serde_json::json!({"LogConfig": {"Config": {"max-size": 10}}}),
         ] {
             assert!(serde_json::from_value::<crate::api::HostConfig>(value).is_err());
         }

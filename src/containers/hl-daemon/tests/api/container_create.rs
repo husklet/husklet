@@ -109,7 +109,7 @@ async fn zero_compatibility_fields_are_inert(socket: &Path) -> Result<(), Error>
         ("CpuShares", json!(0)),
         ("CapAdd", json!([])),
         ("SecurityOpt", json!([])),
-        ("LogConfig", json!({})),
+        ("LogConfig", json!({"Type": "", "Config": {}})),
     ];
     let mut request = base_request();
     let object = request.as_object_mut().ok_or("base request was not an object")?;

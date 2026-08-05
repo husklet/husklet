@@ -35,6 +35,20 @@ decoding errors.
 This admission rule is create preflight policy only. It invokes no terminal,
 container, or engine behavior, so no retained-C runtime domain is implicated.
 
+## Logging configuration admission
+
+API 1.43 models `HostConfig.LogConfig` as a driver type plus string-valued
+options. Docker CLI 29.1.3 sends `{"Type":"","Config":{}}` when no
+per-container logging policy was requested. Missing, `null`, an empty object,
+and that fully expanded empty shape are therefore inert and accepted. A nonempty
+driver type or any option receives `501 Not Implemented`; malformed field types
+remain JSON decoding errors.
+
+Husklet captures container output for its existing logs API, but it does not own
+Docker logging-driver selection or driver options. This rule changes admission
+only and invokes no container or engine behavior, so no retained-C runtime
+domain is implicated.
+
 This matrix describes the request contract implemented by
 `POST /v1.43/containers/create`. It is based on Moby 24.0.9, whose Engine API is
 1.43:
@@ -85,7 +99,8 @@ request has no create-time side effects.
 | `Dns`, `DnsOptions`, `DnsSearch` | effective | Validated resolver policy is persisted, projected through inspect, and used to generate the container's `/etc/resolv.conf`; see `DNS_COMPATIBILITY.md`. |
 | `Links` | capability refusal | Any entry refuses explicitly; an empty list is inert. |
 | `ConsoleSize` | capability refusal | Missing, `null`, and `[0,0]` are inert; any nonzero dimension receives `501`. |
-| `ContainerIDFile`, `LogConfig`, `VolumeDriver`, `VolumesFrom`, `Annotations` | capability refusal | Default values are inert; meaningful values receive `501`. |
+| `LogConfig` | capability refusal | Missing, `null`, `{}`, and an empty type/options shape are inert; a driver or option receives `501`. |
+| `ContainerIDFile`, `VolumeDriver`, `VolumesFrom`, `Annotations` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `CapAdd`, `CapDrop`, `CgroupnsMode`, `GroupAdd` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `IpcMode`, `Cgroup`, `OomScoreAdj`, `PidMode`, `Privileged`, `PublishAllPorts` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `SecurityOpt`, `StorageOpt`, `UTSMode`, `UsernsMode`, `ShmSize`, `Sysctls`, `Runtime` | capability refusal | Default values are inert; meaningful values receive `501`. |
