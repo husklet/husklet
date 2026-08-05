@@ -3,8 +3,8 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use hl_linux::{
-    BpfInstruction, BpfProgram, GuestAccess, GuestFault, GuestMemory, LinuxResult, SeccompAction, SeccompData,
-    SeccompDecision, SeccompPolicy, SeccompSyscalls, SyscallOperation,
+    BpfInstruction, BpfProgram, GuestAccess, GuestArchitecture, GuestFault, GuestMemory, LinuxResult, SeccompAction,
+    SeccompData, SeccompDecision, SeccompPolicy, SeccompSyscalls, SyscallFrame, SyscallOperation,
 };
 use hl_task::{ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry, ThreadId};
 
@@ -73,6 +73,14 @@ impl Fixture {
             arguments: [0; 6],
         }
     }
+
+    fn frame() -> SyscallFrame {
+        SyscallFrame {
+            architecture: GuestArchitecture::X86_64,
+            raw_number: 10,
+            arguments: [0; 6],
+        }
+    }
 }
 
 #[test]
@@ -90,6 +98,12 @@ fn tsync_thread_atomically() {
             control.evaluate(*thread, Fixture::data()).unwrap(),
             SeccompDecision::Continue,
         );
+        assert_eq!(
+            control
+                .evaluate_registered_syscall(*thread, &Fixture::frame(), 0x1234)
+                .unwrap(),
+            SeccompDecision::Continue,
+        );
     }
     control.commit_install(transaction).unwrap();
     for thread in &threads {
@@ -97,7 +111,27 @@ fn tsync_thread_atomically() {
             control.evaluate(*thread, Fixture::data()).unwrap(),
             SeccompDecision::ReturnErrno(7),
         );
+        assert_eq!(
+            control
+                .evaluate_registered_syscall(*thread, &Fixture::frame(), 0x1234)
+                .unwrap(),
+            SeccompDecision::ReturnErrno(7),
+        );
     }
+}
+
+#[test]
+fn failed_activation_permanently_restores_registration_checks() {
+    let (_registry, threads) = Fixture::task_threads(2);
+    let control = Control::new(1).unwrap();
+    control.register(threads[0]).unwrap();
+    let missing = threads[1];
+
+    assert_eq!(control.enable_strict(missing), Err(ControlError::MissingThread));
+    assert_eq!(
+        control.evaluate_registered_syscall(missing, &Fixture::frame(), 0x1234),
+        Err(ControlError::MissingThread),
+    );
 }
 
 #[test]

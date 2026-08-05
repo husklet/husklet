@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use hl_linux::{FilterInstallPlan, SeccompData, SeccompDecision, SeccompPolicy, SeccompPolicyError, SyscallFrame};
@@ -61,6 +62,7 @@ struct State {
 
 pub struct Control {
     maximum_threads: usize,
+    ever_active: AtomicBool,
     state: Mutex<State>,
 }
 
@@ -71,6 +73,7 @@ impl Control {
         }
         Ok(Self {
             maximum_threads,
+            ever_active: AtomicBool::new(false),
             state: Mutex::new(State {
                 version: 1,
                 policies: BTreeMap::new(),
@@ -161,6 +164,10 @@ impl Control {
     }
 
     pub fn enable_strict(&self, thread: ThreadId) -> Result<(), ControlError> {
+        // Publish before taking the policy lock. A concurrent evaluator must
+        // either observe the old disabled state before this operation starts,
+        // or enter the locked path and serialize with the installation.
+        self.ever_active.store(true, Ordering::Release);
         let mut state = self.lock();
         Self::mutable(&state)?;
         state
@@ -205,6 +212,9 @@ impl Control {
     }
 
     pub fn commit_install(&self, transaction: InstallTransaction) -> Result<Option<ListenerRequest>, ControlError> {
+        // This bit is deliberately monotonic. Failed or later-retired filters
+        // only make evaluation conservative; they can never bypass policy.
+        self.ever_active.store(true, Ordering::Release);
         let mut state = self.lock();
         Self::mutable(&state)?;
         if state.version != transaction.version {
@@ -241,6 +251,26 @@ impl Control {
                 arguments: frame.arguments,
             },
         )
+    }
+
+    /// Evaluates a syscall for a thread whose registration is held by the
+    /// caller's runtime lifetime.
+    ///
+    /// Before any seccomp policy has ever been activated, all registered
+    /// policies are necessarily disabled, so ordinary syscall admission does
+    /// not need the global policy lock or thread-map lookup. Once activation
+    /// starts this permanently takes the exact locked path above, including
+    /// after rollback or retirement.
+    pub fn evaluate_registered_syscall(
+        &self,
+        thread: ThreadId,
+        frame: &SyscallFrame,
+        instruction_pointer: u64,
+    ) -> Result<SeccompDecision, ControlError> {
+        if !self.ever_active.load(Ordering::Acquire) {
+            return Ok(SeccompDecision::Continue);
+        }
+        self.evaluate_syscall(thread, frame, instruction_pointer)
     }
 
     pub fn fork(&self, source: ThreadId, child: ThreadId) -> Result<(), ControlError> {
@@ -324,6 +354,10 @@ impl Control {
             return Err(ControlError::Conflict);
         }
         let replacement = transaction.policies.take().ok_or(ControlError::Conflict)?;
+        // A restored snapshot may contain an active policy. Conservatively
+        // disable the fast path even when it does not; correctness does not
+        // depend on inspecting policy contents here.
+        self.ever_active.store(true, Ordering::Release);
         let mut state = self.lock();
         if state.version != transaction.version {
             transaction.policies = Some(replacement);

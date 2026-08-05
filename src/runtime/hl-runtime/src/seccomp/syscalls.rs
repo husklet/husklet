@@ -208,7 +208,7 @@ impl<M: GuestMemory> SeccompSyscalls for RuntimeSyscalls<M> {
 
     fn evaluate(&self, frame: &hl_linux::SyscallFrame, instruction_pointer: u64) -> hl_linux::SeccompDecision {
         self.control
-            .evaluate_syscall(self.thread, frame, instruction_pointer)
+            .evaluate_registered_syscall(self.thread, frame, instruction_pointer)
             .unwrap_or(hl_linux::SeccompDecision::Kill {
                 scope: hl_linux::SeccompKillScope::Thread,
                 signal: 31,

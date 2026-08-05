@@ -177,6 +177,40 @@ justify an application-specific fast path.
 
 ## Candidate evidence after the checkpoint
 
+### Dormant seccomp admission
+
+The retained syscall boundary in
+`../engine/src/linux_abi/syscall/dispatch.c` (`service`, `service_local`, and
+`svc_done`) performs seccomp work only when a guest policy is active, while
+retaining ptrace ordering, signal selection, restart, and errno publication at
+the common boundary. The Rust owner is
+`hl-runtime/src/seccomp/{control,syscalls}.rs`, called from the per-thread
+router. It previously acquired the global seccomp-control mutex and searched
+the thread-policy `BTreeMap` on every syscall even before any policy had ever
+been activated.
+
+The correction publishes a monotonic `ever_active` bit. A registered runtime
+can return `Continue` without the global policy lock only while that bit has
+never been set. Strict mode, filter commit, checkpoint restore, and even a
+failed activation set it before policy mutation, permanently selecting the
+exact locked evaluation path. Thus TSYNC, rollback, thread retirement,
+checkpoint, missing-registration errors after activation, and active filter
+decisions retain their existing ownership and ordering. The optimization is
+process- and workload-independent.
+
+On CPU 17, seven ARM64 native-verified syscall-phase repeats compared the
+clean identity-routing engine (`d5c48a6351f96e5a793f42580c1e8c997442278f8f3f5c65b4ce7356fcd733c0`)
+with the candidate engine
+(`ea19ecc5f9b92a8b3cb436cfa6eba376b7830678b7132e92eb020e293df5ed11`).
+The same guest and runner were used for both. Median in-guest time decreased
+from 179,375 us (175,740--180,033) to 176,842 us
+(175,471--178,572), a 1.41% reduction. Every repeat reported 24,999 syscall
+exits, two fallbacks, zero yields, 475,012 completed instructions, and checksum
+1,000,000. Native and retained-C medians in the candidate cell were 41,792 us
+and 41,702 us respectively, so syscall dispatch remains about 4.24 times the
+retained C path; the next owner is the outer router mutex and common boundary,
+not dormant seccomp evaluation.
+
 ### Syscall and descriptor hot-path audit
 
 The retained implementation audit for the syscall/descriptor lane covered
