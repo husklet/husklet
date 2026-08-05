@@ -45,6 +45,76 @@ revived: it did not prove per-access mapping identity, permissions, invalidation
 or fault ordering. No production shortcut is justified until a bounded authority
 mechanism preserves those contracts for every guarded address.
 
+## 2026-08-04: current ARM64 compute boundary audit
+
+Exact detached Husklet commit `fbfe10df8dc21b1c4827580a624da54c67416585`
+was built in release mode and measured five times on inherited CPU 17.  The
+same content-bound guest ran host-native, through the retained C engine, and
+through Rust with native execution and diagnostics required.  The command was:
+
+```sh
+taskset -c 17 target/release/testing benchmark matrix \
+  --arch arm64 \
+  --binary target/testing/a64-ab/combined_bench_aarch64 \
+  --c-engine /Users/x/dd/engine/build/unit-audit/bin/hl-engine-runner \
+  --rust-engine target/release/hl-engine \
+  --out target/testing/compute-before --repeats 5 --timeout 60 \
+  -- --divisor 1000 --phase compute
+```
+
+All three rows produced checksum `9349119015121845085`.  Host-native was
+46 us median (44--53), retained C was 46 us (46--47), and Rust was 2,111 us
+(2,059--2,591): Rust remains 45.891 times host-native on this fixed work.
+Every Rust repeat was `native-verified` and reported the same counters:
+seven native runs, nine builds, 24 hits, two fallbacks, seven branch exits,
+five yields, and 337,288 completed guest instructions.  The engine, runner,
+guest, and retained engine SHA-256 values were respectively
+`f96f044a4189dff40fa3d03c40f35511ba791427da8514ae508c6bbd826d1727`,
+`33bdc527d552d1ee009c1be2a1c925301ad896cf075c3eb7ada48e563c62d930`,
+`a8f403013de972313b6c4f3450a82f5e7222690cf05610636155b0c56526d5f9`,
+and `0633ed0f914f666f2127ca1b86a4def69eea65c59f7942f8afd66d2b7a6ebc62`.
+Host load at admission was 5.93/5.48/4.61, so this is focused causal evidence,
+not a release performance claim.
+
+The retained-domain audit covered `../engine/src/core/dispatch.c`
+(`run_block`, `block_return`, and `run_guest`) and
+`../engine/src/translator/guest/aarch64/stubs.c` (`emit_prologue`,
+`emit_spill`, and `emit_chain_exit_from`) together with
+`translate.c` (`stitch_cond`, `translate_block`, the IRQ-slim entry anchors,
+and conditional stitching).  Retained C keeps architectural registers live
+across direct edges, stitches bounded conditional fall-through into one
+superblock, and polls interruption at backward/indirect cycle edges.  Slow
+exits spill full state before returning to the dispatcher; invalidation and
+publication occur under the JIT lock, and signals are selected after a fully
+published boundary.  The AArch64 host branch is the relevant same-ISA path;
+other hosts do not execute this transliterator.
+
+The Rust owners are `src/native/exec/src/arch/aarch64/trace.c`
+(`trace_build` and `hl_a64_conditional_chain`), `stub.c`
+(`hl_a64_stub_budget_begin` and `hl_a64_stub_exit`), `entry.S`, cache
+`relocation.c`, and `src/native/exec/src/executor.c::run_aarch64`, with the
+safe call/lifetime owner in `src/containers/hl-engine/src/native/executor.rs`.
+Rust relocation correctly targets `body_offset`, skipping the full register
+reload on a chained edge.  It nevertheless terminates every conditional basic
+block.  Each destination body republishes its executing-cache identity, polls
+both interrupt sources, loads and checks budget, and loads/stores both budget
+and completed count.  The benchmark loop has two hot conditional block edges,
+so this fixed admission is paid repeatedly even though only seven public
+native calls occur.
+
+That makes bounded conditional trace stitching, not another opcode fast path,
+the largest generic compute gap.  The dormant loop/certificate structures are
+not authority to bypass these checks: the rejected run-scoped view certificate
+does not safely cover mapping-owner transitions, and simply chaining past the
+entry guard would weaken interrupt and checkpoint latency.  No production
+optimization was made in this lane.  A valid implementation must port the
+retained bounded conditional-stitch domain as a unit, preserve a polling edge
+on every cycle, retain exact instruction accounting, and invalidate every
+stitched edge with its source epochs.  Acceptance needs branch-shape tests
+(taken, fall-through, nested conditions, backward cycles), mid-cycle interrupt
+and budget exhaustion, mapping/instruction epoch invalidation, fork/cache
+retirement, and same-base pinned before/after evidence.
+
 ## 2026-08-04: retained C versus Rust native execution
 
 This checkpoint measures the folder-owned `combined/main.c`, which is byte-for-byte
