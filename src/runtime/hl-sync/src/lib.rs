@@ -58,7 +58,7 @@ struct Waiter {
 
 impl Waiter {
     fn notify(&self) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.notified {
             return false;
         }
@@ -70,12 +70,12 @@ impl Waiter {
     fn signal(&self) {
         // Taking the waiter's mutex makes the pending-flag check and entry into
         // Condvar::wait atomic with respect to this wake.
-        let _state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let _state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.wake.notify_one();
     }
 
     fn wait<'wait>(&'wait self, state: MutexGuard<'wait, WaiterState>) -> MutexGuard<'wait, WaiterState> {
-        self.wake.wait(state).unwrap_or_else(|error| error.into_inner())
+        self.wake.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn wait_for<'wait>(
@@ -85,7 +85,7 @@ impl Waiter {
     ) -> MutexGuard<'wait, WaiterState> {
         self.wake
             .wait_timeout(state, duration)
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .0
     }
 
@@ -139,7 +139,10 @@ impl WaitQueue {
     /// Captures the current notification sequence.
     #[must_use]
     pub fn observation(&self) -> u64 {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).sequence
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .sequence
     }
 
     /// Wakes one currently registered waiter.
@@ -149,7 +152,7 @@ impl WaitQueue {
     /// The return value is the number of waiters actually selected: zero or
     /// one.
     pub fn notify_one(&self) -> usize {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.sequence = state.sequence.wrapping_add(1);
         let mut selected = 0;
         state.waiters.retain(|weak| {
@@ -168,7 +171,7 @@ impl WaitQueue {
     ///
     /// Returns the number of waiters actually selected.
     pub fn notify_all(&self) -> usize {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.sequence = state.sequence.wrapping_add(1);
         let mut selected = 0;
         state.waiters.retain(|weak| {
@@ -197,7 +200,7 @@ impl WaitQueue {
         let waiter = Arc::new(Waiter::default());
 
         {
-            let mut queue = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut queue = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if queue.sequence != observed {
                 return Ok(WaitOutcome::Notified);
             }
@@ -212,7 +215,7 @@ impl WaitQueue {
         let interruption_registration = interruption.register(&waiter);
 
         let outcome = {
-            let mut state = waiter.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = waiter.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             loop {
                 if state.notified {
                     break Ok(WaitOutcome::Notified);
@@ -235,7 +238,7 @@ impl WaitQueue {
     }
 
     fn unregister(&self, waiter: &Weak<Waiter>) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .waiters
             .retain(|entry| !Weak::ptr_eq(entry, waiter) && entry.strong_count() != 0);
@@ -304,7 +307,11 @@ impl Interruption {
     pub fn interrupt(&self) {
         self.state.pending.store(true, Ordering::Release);
         let waiters: Vec<Arc<Waiter>> = {
-            let mut entries = self.state.waiters.lock().unwrap_or_else(|error| error.into_inner());
+            let mut entries = self
+                .state
+                .waiters
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut live = Vec::new();
             entries.retain(|(_, weak)| {
                 let Some(waiter) = weak.upgrade() else {
@@ -319,7 +326,11 @@ impl Interruption {
             waiter.signal();
         }
         let observers: Vec<Arc<dyn InterruptionWake>> = {
-            let mut entries = self.state.observers.lock().unwrap_or_else(|error| error.into_inner());
+            let mut entries = self
+                .state
+                .observers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut live = Vec::new();
             entries.retain(|(_, weak)| {
                 let Some(observer) = weak.upgrade() else {
@@ -351,7 +362,7 @@ impl Interruption {
         self.state
             .observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push((identifier, Arc::downgrade(&observer)));
         InterruptionObservation {
             state: self.state.clone(),
@@ -368,7 +379,7 @@ impl Interruption {
         self.state
             .waiters
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push((identifier, Arc::downgrade(waiter)));
         InterruptionRegistration {
             state: Arc::clone(&self.state),
@@ -382,7 +393,7 @@ impl Drop for InterruptionObservation {
         self.state
             .observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|(identifier, weak)| *identifier != self.identifier && weak.strong_count() != 0);
     }
 }
@@ -397,7 +408,7 @@ impl Drop for InterruptionRegistration {
         self.state
             .waiters
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|(identifier, weak)| *identifier != self.identifier && weak.strong_count() != 0);
     }
 }

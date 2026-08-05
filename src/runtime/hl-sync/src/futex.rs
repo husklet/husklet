@@ -157,7 +157,10 @@ impl FutexTable {
             return Err(FutexError::InvalidArgument);
         }
         let selected = {
-            let mut bucket = self.bucket(key).lock().unwrap_or_else(|error| error.into_inner());
+            let mut bucket = self
+                .bucket(key)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::take_matching(&mut bucket, key, count, bitset)
         };
         self.waiter_count.fetch_sub(selected.len(), Ordering::AcqRel);
@@ -203,15 +206,15 @@ impl FutexTable {
         if first_index == second_index {
             let mut bucket = self.buckets[first_index]
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             return self.requeue_locked(&mut bucket, source, target, wake_count, requeue_count);
         }
         let mut first = self.buckets[first_index]
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut second = self.buckets[second_index]
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (source_bucket, target_bucket) = if self.bucket_index(source) == first_index {
             (&mut first, &mut second)
         } else {
@@ -247,7 +250,7 @@ impl FutexTable {
         let selected = if first_index == second_index {
             let mut bucket = self.buckets[first_index]
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut selected = Self::take_matching(&mut bucket, first, first_count, u32::MAX);
             if predicate(old) {
                 selected.extend(Self::take_matching(&mut bucket, second, second_count, u32::MAX));
@@ -258,10 +261,10 @@ impl FutexTable {
             let high_index = first_index.max(second_index);
             let mut low = self.buckets[low_index]
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut high = self.buckets[high_index]
                 .lock()
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let (first_bucket, second_bucket) = if first_index == low_index {
                 (&mut low, &mut high)
             } else {
@@ -293,7 +296,10 @@ impl FutexTable {
             winner: Arc::new(AtomicUsize::new(usize::MAX)),
         });
         let mut publish = || {
-            let mut bucket = self.bucket(key).lock().unwrap_or_else(|error| error.into_inner());
+            let mut bucket = self
+                .bucket(key)
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::append(&mut bucket, key, vec![Arc::clone(&waiter)], self.limits.keys)
         };
         if let Err(error) = self

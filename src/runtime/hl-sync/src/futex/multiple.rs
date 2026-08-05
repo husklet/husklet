@@ -86,7 +86,11 @@ impl FutexTable {
         bucket_indices.dedup();
         let mut buckets = bucket_indices
             .iter()
-            .map(|index| self.buckets[*index].lock().unwrap_or_else(|error| error.into_inner()))
+            .map(|index| {
+                self.buckets[*index]
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            })
             .collect::<Vec<_>>();
         let mut keys = targets.iter().map(|target| target.key).collect::<Vec<_>>();
         keys.sort_unstable();

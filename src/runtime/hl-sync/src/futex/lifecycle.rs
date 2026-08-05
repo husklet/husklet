@@ -8,7 +8,7 @@ impl FutexTable {
         let mut buckets = self
             .buckets
             .iter()
-            .map(|bucket| bucket.lock().unwrap_or_else(|error| error.into_inner()))
+            .map(|bucket| bucket.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
             .collect::<Vec<_>>();
         let removed = buckets
             .iter_mut()
@@ -31,7 +31,7 @@ impl FutexTable {
     pub fn snapshot(&self) -> FutexSnapshot {
         let mut waits = Vec::new();
         for bucket in &self.buckets {
-            let bucket = bucket.lock().unwrap_or_else(|error| error.into_inner());
+            let bucket = bucket.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             waits.extend(bucket.snapshots());
         }
         waits.sort_by_key(|wait| (wait.key, wait.bitset));
@@ -44,7 +44,7 @@ impl FutexTable {
     fn remove_where(&self, predicate: impl Fn(FutexKey) -> bool) -> usize {
         let mut removed = Vec::new();
         for bucket in &self.buckets {
-            let mut bucket = bucket.lock().unwrap_or_else(|error| error.into_inner());
+            let mut bucket = bucket.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             removed.extend(bucket.drain_matching(&predicate));
         }
         self.waiter_count.fetch_sub(removed.len(), Ordering::AcqRel);

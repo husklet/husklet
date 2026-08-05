@@ -14,7 +14,7 @@ impl Memory {
     pub(super) fn store(&self, key: FutexKey, value: u32) {
         self.words
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(key, value);
     }
 }
@@ -23,7 +23,7 @@ impl FutexMemory for Memory {
     fn load(&self, key: FutexKey) -> Result<u32, FutexError> {
         self.words
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
             .copied()
             .ok_or(FutexError::Fault)
@@ -48,7 +48,7 @@ impl FutexMemory for Memory {
         targets: &[FutexWaitTarget],
         apply: &mut dyn FnMut() -> Result<(), FutexError>,
     ) -> Result<Option<usize>, FutexError> {
-        let values = self.words.lock().unwrap_or_else(|error| error.into_inner());
+        let values = self.words.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for (index, target) in targets.iter().enumerate() {
             let Some(observed) = values.get(&target.key) else {
                 return Err(FutexError::Fault);
@@ -62,7 +62,7 @@ impl FutexMemory for Memory {
     }
 
     fn atomic_update(&self, key: FutexKey, operation: FutexAtomicOperation) -> Result<i32, FutexError> {
-        let mut words = self.words.lock().unwrap_or_else(|error| error.into_inner());
+        let mut words = self.words.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let word = words.get_mut(&key).ok_or(FutexError::Fault)?;
         let old = *word as i32;
         let next = match operation {
@@ -77,7 +77,7 @@ impl FutexMemory for Memory {
     }
 
     fn compare_exchange(&self, key: FutexKey, expected: u32, replacement: u32) -> Result<u32, FutexError> {
-        let mut words = self.words.lock().unwrap_or_else(|error| error.into_inner());
+        let mut words = self.words.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let word = words.get_mut(&key).ok_or(FutexError::Fault)?;
         let observed = *word;
         if observed == expected {

@@ -89,7 +89,7 @@ fn interruption_wakes_a() {
         .state
         .waiters
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .iter()
         .any(|(_, waiter)| waiter.strong_count() != 0)
     {
@@ -126,7 +126,7 @@ fn notify_one_releases() {
     while queue
         .state
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .waiters
         .iter()
         .filter(|waiter| waiter.strong_count() != 0)
@@ -174,7 +174,7 @@ fn notify_all_releases() {
         let count = queue
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .waiters
             .iter()
             .filter(|waiter| waiter.strong_count() != 0)
@@ -246,7 +246,7 @@ fn manual_clock_deadline() {
     while queue
         .state
         .lock()
-        .unwrap_or_else(|error| error.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .waiters
         .is_empty()
     {
@@ -254,7 +254,11 @@ fn manual_clock_deadline() {
     }
     clock.set(20);
     // A spurious wake must re-read the injected clock and observe expiry.
-    let waiter = queue.state.lock().unwrap_or_else(|error| error.into_inner()).waiters[0]
+    let waiter = queue
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .waiters[0]
         .upgrade()
         .unwrap();
     waiter.signal();

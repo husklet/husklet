@@ -109,7 +109,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
     }
 
     pub fn unlock(&self, key: FutexKey, caller: O) -> Result<(), PiFutexError> {
-        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !states.contains_key(&key) && states.len() >= self.limits.keys {
             return Err(PiFutexError::ResourceLimit);
         }
@@ -144,7 +144,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
     }
 
     pub fn owner_exit(&self, owner: O) -> Result<usize, PiFutexError> {
-        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut released = 0;
         for (key, state) in states.iter_mut() {
             if state.owner != Some(owner) {
@@ -178,7 +178,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
     }
 
     pub fn reset_private(&self) -> Result<usize, PiFutexError> {
-        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let keys = states
             .keys()
             .copied()
@@ -196,7 +196,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
 
     #[must_use]
     pub fn is_quiescent(&self) -> bool {
-        let states = self.states.lock().unwrap_or_else(|error| error.into_inner());
+        let states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         states
             .values()
             .all(|state| state.owner.is_none() && state.waiters.is_empty())
@@ -210,7 +210,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
         try_only: bool,
         registered: Option<&Arc<PiWaiter<O>>>,
     ) -> Result<PiAttempt<O>, PiFutexError> {
-        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !states.contains_key(&key) && states.len() >= self.limits.keys {
             return Err(PiFutexError::ResourceLimit);
         }
@@ -343,7 +343,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
     }
 
     fn remove_waiter(&self, key: FutexKey, owner: O) {
-        let mut states = self.states.lock().unwrap_or_else(|error| error.into_inner());
+        let mut states = self.states.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(state) = states.get_mut(&key) {
             let removed_front = state.waiters.front().is_some_and(|waiter| waiter.owner == owner);
             state.waiters.retain(|waiter| waiter.owner != owner);
@@ -361,7 +361,7 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
     pub(crate) fn waiter_observations(&self, key: FutexKey) -> Vec<u64> {
         self.states
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
             .map(|state| state.waiters.iter().map(|waiter| waiter.queue.observation()).collect())
             .unwrap_or_default()
