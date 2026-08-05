@@ -36,6 +36,34 @@ macro_rules! definitions {
                 canonical_number: $canonical,
             }),+
         ];
+
+        fn canonical_definition(number: u16) -> Option<Definition> {
+            match number {
+                $($canonical => Some(Definition {
+                    operation: Operation {
+                        canonical_number: $canonical,
+                        name: $name,
+                        family: Family::$family,
+                    },
+                    x86_number: $x86,
+                }),)+
+                _ => None,
+            }
+        }
+
+        fn x86_definition(number: u16) -> Option<Definition> {
+            match number {
+                $($x86 => Some(Definition {
+                    operation: Operation {
+                        canonical_number: $canonical,
+                        name: $name,
+                        family: Family::$family,
+                    },
+                    x86_number: $x86,
+                }),)+
+                _ => None,
+            }
+        }
     };
 }
 
@@ -509,10 +537,8 @@ impl Table {
             return route;
         }
         let definition = match architecture {
-            GuestArchitecture::Aarch64 => CANONICAL_SYSCALLS
-                .iter()
-                .find(|entry| entry.operation.canonical_number == raw_number),
-            GuestArchitecture::X86_64 => CANONICAL_SYSCALLS.iter().find(|entry| entry.x86_number == raw_number),
+            GuestArchitecture::Aarch64 => canonical_definition(raw_number),
+            GuestArchitecture::X86_64 => x86_definition(raw_number),
         };
         if let Some(definition) = definition {
             let canonical_number = definition.operation.canonical_number;

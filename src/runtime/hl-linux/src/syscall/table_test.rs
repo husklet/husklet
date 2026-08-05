@@ -419,3 +419,30 @@ fn dispatcher_routes_family() {
     assert!(filesystem.calls.is_empty());
     assert!(task.calls.is_empty());
 }
+
+#[test]
+#[ignore = "microbenchmark; run explicitly on an idle pinned host"]
+fn route_lookup_benchmark() {
+    let started = std::time::Instant::now();
+    let mut checksum = 0_u64;
+    for iteration in 0..20_000_000_u64 {
+        let architecture = if iteration & 1 == 0 {
+            GuestArchitecture::Aarch64
+        } else {
+            GuestArchitecture::X86_64
+        };
+        let number = match iteration % 5 {
+            0 => 172,
+            1 => 39,
+            2 => 178,
+            3 => 186,
+            _ => 999,
+        };
+        let route = std::hint::black_box(SyscallDispatcher::route(architecture, number));
+        checksum ^= u64::from(route.translation.canonical_number);
+    }
+    eprintln!(
+        "route_lookup elapsed_ns={} checksum={checksum}",
+        started.elapsed().as_nanos()
+    );
+}
