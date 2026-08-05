@@ -460,6 +460,43 @@ fn immutable_task_identity_bypasses_mutable_process_port() {
 }
 
 #[test]
+fn dormant_seccomp_identity_bypass_closes_permanently_on_activation() {
+    let (process, thread) = task_identity();
+    let control = Arc::new(crate::SeccompControl::new(4).unwrap());
+    control.register(thread).unwrap();
+    let fixture = Fixture {
+        calls: Arc::new(Mutex::new(Vec::new())),
+    };
+    let kills = Arc::new(Mutex::new(Vec::new()));
+    let router = fixture
+        .kill_router(
+            hl_linux::SeccompDecision::Kill {
+                scope: hl_linux::SeccompKillScope::Thread,
+                signal: 31,
+            },
+            Arc::clone(&kills),
+        )
+        .with_seccomp_control(Arc::clone(&control))
+        .with_task_identity(process, thread);
+
+    let mut cpu = Fixture::cpu(GuestArchitecture::Aarch64, 172, 0);
+    assert_eq!(
+        router.dispatch(GuestArchitecture::Aarch64, &mut cpu),
+        RuntimeTrapOutcome::Continue,
+    );
+    assert_eq!(Fixture::result(&cpu), u64::from(process.number()));
+    assert!(kills.lock().unwrap().is_empty());
+
+    control.enable_strict(thread).unwrap();
+    let mut cpu = Fixture::cpu(GuestArchitecture::Aarch64, 172, 0);
+    assert_eq!(
+        router.dispatch(GuestArchitecture::Aarch64, &mut cpu),
+        RuntimeTrapOutcome::Exit(159),
+    );
+    assert_eq!(*kills.lock().unwrap(), [(hl_linux::SeccompKillScope::Thread, 31)]);
+}
+
+#[test]
 fn seccomp_kill_scope() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
         let syscall = match architecture {

@@ -572,6 +572,7 @@ impl ProcessContext {
                 .with_baseline(self.seccomp_baseline),
             ),
         })
+        .with_seccomp_control(Arc::clone(&self.seccomp))
         .with_task_identity(self.process, thread);
         let router = router.with_exec_queue(thread, Arc::clone(&self.exec_queue));
         let router = match self.ptrace.safepoint(Arc::clone(&self.tasks), self.process) {

@@ -82,6 +82,14 @@ impl Control {
         })
     }
 
+    /// Reports whether any policy installation has made the admission path
+    /// observable. The flag is monotonic so a false result permits an
+    /// ordinary syscall to bypass policy storage without racing installation.
+    #[must_use]
+    pub fn requires_evaluation(&self) -> bool {
+        self.ever_active.load(Ordering::Acquire)
+    }
+
     pub fn register(&self, thread: ThreadId) -> Result<(), ControlError> {
         let mut state = self.lock();
         Self::mutable(&state)?;
@@ -267,7 +275,7 @@ impl Control {
         frame: &SyscallFrame,
         instruction_pointer: u64,
     ) -> Result<SeccompDecision, ControlError> {
-        if !self.ever_active.load(Ordering::Acquire) {
+        if !self.requires_evaluation() {
             return Ok(SeccompDecision::Continue);
         }
         self.evaluate_syscall(thread, frame, instruction_pointer)

@@ -63,6 +63,7 @@ pub struct RuntimeSyscallRouter {
     signal_boundary: Option<Mutex<Box<dyn SignalBoundaryPort>>>,
     exec: Option<(hl_task::ThreadId, Arc<crate::ExecQueue>)>,
     ptrace: Option<Arc<crate::RuntimeSafepoint>>,
+    seccomp_control: Option<Arc<crate::SeccompControl>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,7 +101,16 @@ impl RuntimeSyscallRouter {
             signal_boundary: None,
             exec: None,
             ptrace: None,
+            seccomp_control: None,
         }
+    }
+
+    /// Supplies the policy owner used to prove that identity-only syscalls
+    /// cannot yet be observed by seccomp.
+    #[must_use]
+    pub fn with_seccomp_control(mut self, control: Arc<crate::SeccompControl>) -> Self {
+        self.seccomp_control = Some(control);
+        self
     }
 
     /// Publishes the immutable Linux task identity owned by this per-thread
@@ -427,13 +437,26 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
             Err(_) => return RuntimeTrapOutcome::Fault,
         };
         let route = SyscallDispatcher::route(architecture, frame.raw_number);
-        let mut dependencies = self.ports.lock().unwrap_or_else(|error| error.into_inner());
-        let enforced = match self.seccomp_result(dependencies.seccomp.evaluate(&frame, pc)) {
-            Ok(value) => value,
-            Err(()) => return RuntimeTrapOutcome::Fault,
+        let direct_identity = self
+            .seccomp_control
+            .as_ref()
+            .filter(|control| !control.requires_evaluation())
+            .and_then(|_| self.task_identity_result(route.disposition));
+        let mut dependencies = direct_identity
+            .is_none()
+            .then(|| self.ports.lock().unwrap_or_else(|error| error.into_inner()));
+        let enforced = if let Some(dependencies) = dependencies.as_mut() {
+            match self.seccomp_result(dependencies.seccomp.evaluate(&frame, pc)) {
+                Ok(value) => value,
+                Err(()) => return RuntimeTrapOutcome::Fault,
+            }
+        } else {
+            None
         };
         let killed = enforced.and_then(|value| value.1);
-        let result = if let Some((result, _)) = enforced {
+        let result = if let Some(result) = direct_identity {
+            result
+        } else if let Some((result, _)) = enforced {
             result
         } else if let Some(result) = self.task_identity_result(route.disposition) {
             result
@@ -442,17 +465,31 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
         {
             let clone3 = matches!(route.disposition,
                 SyscallDisposition::Operation(operation) if operation.name == "clone3");
-            Self::clone_result(&dependencies, cpu, frame, clone3)
+            Self::clone_result(
+                dependencies.as_deref().expect("non-identity dispatch owns ports"),
+                cpu,
+                frame,
+                clone3,
+            )
         } else if matches!(route.disposition,
             SyscallDisposition::Operation(operation) if matches!(operation.name, "fork" | "vfork"))
         {
             let vfork = matches!(route.disposition,
                 SyscallDisposition::Operation(operation) if operation.name == "vfork");
-            Self::fork_result(&dependencies, cpu, architecture, vfork)
+            Self::fork_result(
+                dependencies.as_deref().expect("non-identity dispatch owns ports"),
+                cpu,
+                architecture,
+                vfork,
+            )
         } else if architecture == GuestArchitecture::X86_64 && frame.raw_number == 158 {
             crate::architecture_thread::arch_prctl(
                 cpu,
-                dependencies.architecture_memory.as_ref(),
+                dependencies
+                    .as_deref()
+                    .expect("non-identity dispatch owns ports")
+                    .architecture_memory
+                    .as_ref(),
                 frame.arguments[0],
                 frame.arguments[1],
             )
@@ -470,7 +507,7 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
                 task_signal_time,
                 ipc,
                 seccomp,
-            } = &mut *dependencies;
+            } = &mut **dependencies.as_mut().expect("non-identity dispatch owns ports");
             let mut ports = SyscallPorts {
                 aio: aio.as_mut(),
                 filesystem: filesystem.as_mut(),
