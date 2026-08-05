@@ -239,10 +239,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_matches_retained() {
-        assert_eq!(DEFINITIONS.len(), 40);
+    fn registry_has_unique_names_and_debug_tail() {
+        let mut names = DEFINITIONS.iter().map(|definition| definition.name).collect::<Vec<_>>();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), DEFINITIONS.len());
         assert_eq!(DEFINITIONS[0].name, "HL_CHECKPOINT");
-        assert_eq!(DEFINITIONS[39].ownership, Ownership::DebugOnly);
+        assert_eq!(DEFINITIONS.last().unwrap().ownership, Ownership::DebugOnly);
     }
 
     #[test]
