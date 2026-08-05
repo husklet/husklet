@@ -65,6 +65,20 @@ pub struct Aarch64Cpu {
     pub read_view_publication: [[u64; 2]; 4],
     pub memory_write_policy: u64,
     pub memory_write_index: u64,
+    pub certificate_guest_first: u64,
+    pub certificate_guest_last: u64,
+    pub certificate_host_first: u64,
+    pub certificate_data_permissions: u64,
+    pub certificate_mapped_executable: u64,
+    pub certificate_mapping_incarnation: u64,
+    pub certificate_mapping_generation: u64,
+    pub certificate_instruction_generation: u64,
+    pub certificate_authority_identity: u64,
+    pub certificate_authority_generation: u64,
+    pub certificate_run_generation: u64,
+    pub certificate_view_index: u64,
+    pub certificate_write_policy: u64,
+    pub certificate_token: u64,
 }
 
 #[repr(C)]
@@ -115,6 +129,20 @@ pub struct X86_64Cpu {
     pub host_fpsr: u64,
     pub vector_dirty: u64,
     pub vector_upper: [u64; 32],
+    pub certificate_guest_first: u64,
+    pub certificate_guest_last: u64,
+    pub certificate_host_first: u64,
+    pub certificate_data_permissions: u64,
+    pub certificate_mapped_executable: u64,
+    pub certificate_mapping_incarnation: u64,
+    pub certificate_mapping_generation: u64,
+    pub certificate_instruction_generation: u64,
+    pub certificate_authority_identity: u64,
+    pub certificate_authority_generation: u64,
+    pub certificate_run_generation: u64,
+    pub certificate_view_index: u64,
+    pub certificate_write_policy: u64,
+    pub certificate_token: u64,
 }
 
 const _: () = {
@@ -181,7 +209,21 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, read_view_publication) == 2144);
     assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_policy) == 2208);
     assert!(std::mem::offset_of!(Aarch64Cpu, memory_write_index) == 2216);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2224);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_guest_first) == 2224);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_guest_last) == 2232);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_host_first) == 2240);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_data_permissions) == 2248);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapped_executable) == 2256);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapping_incarnation) == 2264);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_mapping_generation) == 2272);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_instruction_generation) == 2280);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_authority_identity) == 2288);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_authority_generation) == 2296);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_run_generation) == 2304);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_view_index) == 2312);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_write_policy) == 2320);
+    assert!(std::mem::offset_of!(Aarch64Cpu, certificate_token) == 2328);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2336);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 
@@ -231,7 +273,21 @@ const _: () = {
     assert!(std::mem::offset_of!(X86_64Cpu, host_fpsr) == 1552);
     assert!(std::mem::offset_of!(X86_64Cpu, vector_dirty) == 1560);
     assert!(std::mem::offset_of!(X86_64Cpu, vector_upper) == 1568);
-    assert!(std::mem::size_of::<X86_64Cpu>() == 1824);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_guest_first) == 1824);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_guest_last) == 1832);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_host_first) == 1840);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_data_permissions) == 1848);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_mapped_executable) == 1856);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_mapping_incarnation) == 1864);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_mapping_generation) == 1872);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_instruction_generation) == 1880);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_authority_identity) == 1888);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_authority_generation) == 1896);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_run_generation) == 1904);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_view_index) == 1912);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_write_policy) == 1920);
+    assert!(std::mem::offset_of!(X86_64Cpu, certificate_token) == 1928);
+    assert!(std::mem::size_of::<X86_64Cpu>() == 1936);
 
     assert!(std::mem::align_of::<X86_64Cpu>() == 8);
 

@@ -947,7 +947,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     }
     if (request->size >= offsetof(hl_native_run_request, authority_identity))
         direct_token = request->direct_token;
-    if (request->size >= sizeof(*request)) authority_identity = request->authority_identity;
+    if (request->size >= offsetof(hl_native_run_request, certificate))
+        authority_identity = request->authority_identity;
     if ((fault_publish == NULL) != (fault_unpublish == NULL)) return HL_NATIVE_ARGUMENT;
     if (source == NULL || !hl_a64_source_validate(source) ||
         source->mapping_incarnation != request->mapping_epoch ||
@@ -1270,7 +1271,8 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
     if (request->size >= offsetof(hl_native_run_request, direct_token) && request->memory_mode != 0) {
         const hl_native_direct_token *token = request->size >= offsetof(hl_native_run_request, authority_identity)
             ? request->direct_token : NULL;
-        uint64_t identity = request->size >= sizeof(*request) ? request->authority_identity : 0;
+        uint64_t identity = request->size >= offsetof(hl_native_run_request, certificate)
+            ? request->authority_identity : 0;
         if (!hl_native_direct_request_valid(executor, token, request->authority_generation,
                                             identity, request->projection)) {
             (void)hl_native_execution_leave(&execution);

@@ -976,6 +976,30 @@ struct RunRequest {
     quantum_context: *mut c_void,
     quantum_poll: Option<unsafe extern "C" fn(*mut c_void, u64, u64) -> u32>,
     quantum_grant: u64,
+    certificate: *const RunCertificate,
+}
+
+#[repr(C)]
+struct RunCertificate {
+    abi: u32,
+    size: u32,
+    architecture: u32,
+    data_permissions: u32,
+    mapped_executable: u32,
+    view_index: u32,
+    write_policy: u16,
+    reserved: u16,
+    reserved2: u32,
+    guest_first: u64,
+    guest_last: u64,
+    host_first: u64,
+    mapping_incarnation: u64,
+    mapping_generation: u64,
+    instruction_generation: u64,
+    authority_identity: u64,
+    authority_generation: u64,
+    run_generation: u64,
+    direct_token: *const DirectToken,
 }
 
 unsafe extern "C" fn poll_quantum(context: *mut c_void, executed: u64, admitted: u64) -> u32 {
@@ -1217,6 +1241,20 @@ impl NativeAarch64 {
             read_view_publication: [[0; 2]; 4],
             memory_write_policy: 0,
             memory_write_index: 0,
+            certificate_guest_first: 0,
+            certificate_guest_last: 0,
+            certificate_host_first: 0,
+            certificate_data_permissions: 0,
+            certificate_mapped_executable: 0,
+            certificate_mapping_incarnation: 0,
+            certificate_mapping_generation: 0,
+            certificate_instruction_generation: 0,
+            certificate_authority_identity: 0,
+            certificate_authority_generation: 0,
+            certificate_run_generation: 0,
+            certificate_view_index: 0,
+            certificate_write_policy: 0,
+            certificate_token: 0,
         })
     }
 
@@ -1410,6 +1448,20 @@ impl NativeX86 {
             host_fpcr: 0,
             host_fpsr: 0,
             vector_dirty: 0,
+            certificate_guest_first: 0,
+            certificate_guest_last: 0,
+            certificate_host_first: 0,
+            certificate_data_permissions: 0,
+            certificate_mapped_executable: 0,
+            certificate_mapping_incarnation: 0,
+            certificate_mapping_generation: 0,
+            certificate_instruction_generation: 0,
+            certificate_authority_identity: 0,
+            certificate_authority_generation: 0,
+            certificate_run_generation: 0,
+            certificate_view_index: 0,
+            certificate_write_policy: 0,
+            certificate_token: 0,
         })
     }
 
@@ -2212,6 +2264,7 @@ impl Executor {
             quantum_context: std::ptr::null_mut(),
             quantum_poll: None,
             quantum_grant: 0,
+            certificate: std::ptr::null(),
         };
         let mut output = RunExit {
             abi: ABI,
@@ -2525,6 +2578,7 @@ impl Executor {
             quantum_context,
             quantum_poll,
             quantum_grant,
+            certificate: std::ptr::null(),
         };
         let mut output = RunExit {
             abi: ABI,
@@ -2663,7 +2717,10 @@ const _: () = {
     assert!(std::mem::size_of::<Source>() == 32);
     assert!(std::mem::size_of::<ProjectionView>() == 40);
     assert!(std::mem::size_of::<Projection>() == 32);
-    assert!(std::mem::size_of::<RunRequest>() == 160);
+    assert!(std::mem::size_of::<RunCertificate>() == 112);
+    assert!(std::mem::offset_of!(RunCertificate, direct_token) == 104);
+    assert!(std::mem::offset_of!(RunRequest, certificate) == 160);
+    assert!(std::mem::size_of::<RunRequest>() == 168);
     assert!(std::mem::size_of::<CpuHandle>() == 24);
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
@@ -2979,6 +3036,16 @@ mod test {
         native.0.dirty_count = 1;
         native.0.dirty_records[0] = [0x1000, 0x2000, 0x0ff8, 0x1000];
         assert!(matches!(native.writes(), NativeWrites::Full));
+    }
+
+    #[test]
+    fn certificate_schema_is_dormant() {
+        let aarch64 = NativeAarch64::capture(&Aarch64CpuState::default());
+        let x86 = NativeX86::capture(&X86CpuState::default(), false);
+        assert_eq!(aarch64.0.certificate_token, 0);
+        assert_eq!(x86.0.certificate_token, 0);
+        assert_eq!(std::mem::size_of::<RunCertificate>(), 112);
+        assert_eq!(std::mem::offset_of!(RunRequest, certificate), 160);
     }
 
     #[test]

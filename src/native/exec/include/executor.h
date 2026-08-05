@@ -276,6 +276,28 @@ typedef uint32_t (*hl_native_fault_publish)(void *, const hl_native_fault_scope 
 typedef void (*hl_native_fault_unpublish)(void *, const hl_native_fault_scope *);
 typedef struct hl_native_direct_token hl_native_direct_token;
 
+typedef struct hl_native_run_certificate {
+    uint32_t abi;
+    uint32_t size;
+    uint32_t architecture;
+    uint32_t data_permissions;
+    uint32_t mapped_executable;
+    uint32_t view_index;
+    uint16_t write_policy;
+    uint16_t reserved;
+    uint32_t reserved2;
+    uint64_t guest_first;
+    uint64_t guest_last;
+    uint64_t host_first;
+    uint64_t mapping_incarnation;
+    uint64_t mapping_generation;
+    uint64_t instruction_generation;
+    uint64_t authority_identity;
+    uint64_t authority_generation;
+    uint64_t run_generation;
+    const hl_native_direct_token *direct_token;
+} hl_native_run_certificate;
+
 /* A run request is deliberately bounded. The optional source resolver is
  * called only after a translated control transfer leaves the immutable batch;
  * its borrowed span remains owned by the caller for the duration of the run.
@@ -306,6 +328,7 @@ typedef struct hl_native_run_request {
     void *quantum_context;
     hl_native_quantum_poll quantum_poll;
     uint64_t quantum_grant;
+    const hl_native_run_certificate *certificate;
 } hl_native_run_request;
 
 typedef struct hl_native_cpu {
@@ -389,7 +412,12 @@ _Static_assert(sizeof(hl_native_projection_view) == 40, "native projection view 
 _Static_assert(sizeof(hl_native_projection) == 32, "native projection ABI drifted");
 _Static_assert(offsetof(hl_native_run_request, source) == 32, "native run prefix ABI drifted");
 _Static_assert(offsetof(hl_native_run_request, operand_context) == 64, "native resolver prefix ABI drifted");
-_Static_assert(sizeof(hl_native_run_request) == 160, "native run request ABI drifted");
+_Static_assert(sizeof(hl_native_run_certificate) == 112, "native run certificate ABI drifted");
+_Static_assert(offsetof(hl_native_run_certificate, direct_token) == 104,
+               "native run certificate token offset drifted");
+_Static_assert(offsetof(hl_native_run_request, certificate) == 160,
+               "native run certificate pointer offset drifted");
+_Static_assert(sizeof(hl_native_run_request) == 168, "native run request ABI drifted");
 _Static_assert(sizeof(hl_native_cpu) == 24, "native CPU handle ABI drifted");
 _Static_assert(sizeof(hl_native_fault_scope) == 32, "native fault scope ABI drifted");
 _Static_assert(sizeof(hl_native_direct_authority) == 64, "native direct authority ABI drifted");

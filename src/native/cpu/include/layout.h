@@ -69,6 +69,20 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t read_view_publication[4][2];
     uint64_t memory_write_policy;
     uint64_t memory_write_index;
+    uint64_t certificate_guest_first;
+    uint64_t certificate_guest_last;
+    uint64_t certificate_host_first;
+    uint64_t certificate_data_permissions;
+    uint64_t certificate_mapped_executable;
+    uint64_t certificate_mapping_incarnation;
+    uint64_t certificate_mapping_generation;
+    uint64_t certificate_instruction_generation;
+    uint64_t certificate_authority_identity;
+    uint64_t certificate_authority_generation;
+    uint64_t certificate_run_generation;
+    uint64_t certificate_view_index;
+    uint64_t certificate_write_policy;
+    uint64_t certificate_token;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -118,6 +132,20 @@ typedef struct hl_native_x86_64_cpu {
     uint64_t host_fpsr;
     uint64_t vector_dirty;
     uint64_t vector_upper[32];
+    uint64_t certificate_guest_first;
+    uint64_t certificate_guest_last;
+    uint64_t certificate_host_first;
+    uint64_t certificate_data_permissions;
+    uint64_t certificate_mapped_executable;
+    uint64_t certificate_mapping_incarnation;
+    uint64_t certificate_mapping_generation;
+    uint64_t certificate_instruction_generation;
+    uint64_t certificate_authority_identity;
+    uint64_t certificate_authority_generation;
+    uint64_t certificate_run_generation;
+    uint64_t certificate_view_index;
+    uint64_t certificate_write_policy;
+    uint64_t certificate_token;
 } hl_native_x86_64_cpu;
 
 #define HL_CPU_ASSERT(type, field, expected) \
@@ -186,7 +214,21 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_dirty_merged, 2136);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, read_view_publication, 2144);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_write_policy, 2208);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, memory_write_index, 2216);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2224, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_guest_first, 2224);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_guest_last, 2232);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_host_first, 2240);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_data_permissions, 2248);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_mapped_executable, 2256);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_mapping_incarnation, 2264);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_mapping_generation, 2272);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_instruction_generation, 2280);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_authority_identity, 2288);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_authority_generation, 2296);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_run_generation, 2304);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_view_index, 2312);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_write_policy, 2320);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_token, 2328);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2336, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 
@@ -236,7 +278,21 @@ HL_CPU_ASSERT(hl_native_x86_64_cpu, host_fpcr, 1544);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, host_fpsr, 1552);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, vector_dirty, 1560);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, vector_upper, 1568);
-_Static_assert(sizeof(hl_native_x86_64_cpu) == 1824, "x86_64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_guest_first, 1824);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_guest_last, 1832);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_host_first, 1840);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_data_permissions, 1848);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_mapped_executable, 1856);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_mapping_incarnation, 1864);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_mapping_generation, 1872);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_instruction_generation, 1880);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_authority_identity, 1888);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_authority_generation, 1896);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_run_generation, 1904);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_view_index, 1912);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_write_policy, 1920);
+HL_CPU_ASSERT(hl_native_x86_64_cpu, certificate_token, 1928);
+_Static_assert(sizeof(hl_native_x86_64_cpu) == 1936, "x86_64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_x86_64_cpu) == 8, "x86_64 native CPU prefix alignment drifted");
 
