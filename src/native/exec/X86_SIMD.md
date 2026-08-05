@@ -30,8 +30,8 @@ selection.
 | PUNPCKL/H B/W/D/Q | all four widths, register/memory | implemented | retained memory fault-before-commit contract |
 | PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | legacy SSE and VEX 128/256 non-destructive forms implemented | broader AVX families remain separate |
 | PAND/PANDN/POR/PXOR | full 128-bit register/memory | implemented | none known |
-| PCMPEQB/W/D, PMOVMSKB | all lane widths; mask to GPR | implemented | PCMPEQQ and wider compare families remain absent |
-| PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | missing | coherent integer comparison/minmax slice |
+| PCMPEQB/W/D, PMOVMSKB | all lane widths; mask to GPR | implemented; VEX equal B/W/D/Q implemented | legacy PCMPEQQ remains absent |
+| PCMPGTB/W/D, min/max, average | signed compare; signed/unsigned min/max and rounded average | VEX signed B/W/D/Q implemented | legacy compare and min/max/average remain separate |
 | PADDB/W/D/Q, PSUBB/W/D/Q | wrapping lane arithmetic, no flags or exceptions | implemented by this lane | saturating forms remain separate |
 | PADDS/PADDUS/PSUBS/PSUBUS | signed/unsigned saturating byte/word arithmetic | missing | QC must not leak into guest-visible state |
 | PMULLW/PMULHW/PMULHUW/PMULUDQ | low/high and widening products with exact lane selection | missing | coherent packed multiply slice |
@@ -143,6 +143,39 @@ interpreter is portable. MMX and VEX forms remain separate branches.
 `test/x86_translation.c::packed_integer_multiply` exercises every register and
 unaligned guarded-memory form, checks every lane against a software oracle,
 verifies source/EFLAGS/MXCSR preservation, and rejects the MMX spelling.
+
+## VEX packed integer compare slice
+
+The retained read-only audit covered
+`../engine/src/translator/guest/x86_64/decode.c::hl_x86_decode` and the `R_AVX`
+dispatch, `avx.c::hl_x86_avx_run`, `do_avx`, `avx_get`, `avx_get_rm`, and
+`avx_put`, plus `translate.c::translate_avx_inline`. Map-one opcodes `64/65/66`
+and `74/75/76` own signed greater-than and equality for byte, word, and dword
+lanes; map-two opcodes `37` and `29` provide the corresponding qword forms.
+Every form requires mandatory prefix `66`, takes its non-destructive first
+source from decoded VEX.vvvv, and accepts C4 or C5 where the selected map is
+representable. W is ignored and L selects a 16- or 32-byte operation.
+
+The CPU owns XMM state and the YMM-high tail for the dispatcher lifetime. The
+operation allocates and locks nothing and has no independent identity,
+blocking, cancellation, errno, signal, or teardown behavior. Register operands
+cannot fail. `avx_get_rm` validates and reads an entire memory operand before
+`avx_put` publishes either destination half, so faults have no partial result.
+Equality compares bits; greater-than is signed at every lane width. Each true
+lane becomes all ones and each false lane zero. VEX.128 clears the destination
+YMM high half; VEX.256 commits both halves without changing EFLAGS or MXCSR.
+The retained portable loop and AArch64 inline path have the same state contract.
+
+Rust ownership maps C4/C5 inversion, map, pp, L, W, vvvv, and ModRM admission to
+`frontend.c`; the complete 16/32-byte guarded read and destination publication
+belong to `frontend/memory.c`; generated CPU layout owns YMM-high lifetime.
+`VECTOR_COMPARE_EQUAL` and `VECTOR_COMPARE_GREATER_SIGNED` select AArch64 CMEQ
+and CMGT at all four widths. Focused tests admit register and memory forms for
+VPCMPEQ{B,W,D,Q} and VPCMPGT{B,W,D,Q}, both vector widths, and both VEX prefix
+lengths; reject wrong map and mandatory-prefix encodings; execute signed values
+at the sign boundaries; check all-ones masks, non-destructive sources,
+unchanged flags/MXCSR, VEX.128 upper-zeroing, YMM results, and full-width memory
+fault-before-commit behavior.
 
 ## Consolidated retained-oracle evidence (2026-08-05)
 

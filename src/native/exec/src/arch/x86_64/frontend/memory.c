@@ -1133,10 +1133,16 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         uint32_t insert_lane = item->vector_immediate & 7u;
         words[(*cursor)++] = UINT32_C(0x4e001c00) | ((insert_lane << 2) | 2u) << 16 |
                              source << 5 | destination;
-    } else if (item->vector_kind == VECTOR_COMPARE_EQUAL) {
-        uint32_t base = lane == 1u ? UINT32_C(0x6e208c00) : lane == 2u ? UINT32_C(0x6e608c00) :
-                                                                        UINT32_C(0x6ea08c00);
-        words[(*cursor)++] = base | source << 16 | destination << 5 | destination;
+    } else if (item->vector_kind == VECTOR_COMPARE_EQUAL ||
+               item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED) {
+        uint32_t base;
+        if (item->vector_kind == VECTOR_COMPARE_EQUAL)
+            base = lane == 1u ? UINT32_C(0x6e208c00) : lane == 2u ? UINT32_C(0x6e608c00) :
+                   lane == 4u ? UINT32_C(0x6ea08c00) : UINT32_C(0x6ee08c00);
+        else
+            base = lane == 1u ? UINT32_C(0x4e203400) : lane == 2u ? UINT32_C(0x4e603400) :
+                   lane == 4u ? UINT32_C(0x4ea03400) : UINT32_C(0x4ee03400);
+        words[(*cursor)++] = base | source << 16 | first << 5 | destination;
     } else if (item->vector_kind == VECTOR_XOR) {
         words[(*cursor)++] = UINT32_C(0x6e201c00) | source << 16 | destination << 5 | destination;
     } else if (item->vector_kind == VECTOR_AND) {
@@ -1191,7 +1197,9 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
     if (memory_upper != 0u) upper.source = 17u;
     else { hl_x86_emit_vector_upper_load(words, cursor, 18u, item->source); upper.source = 18u; }
     if (item->vector_kind == VECTOR_SHUFFLE_FLOAT || item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
-        item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT) {
+        item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT ||
+        item->vector_kind == VECTOR_COMPARE_EQUAL ||
+        item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED) {
         hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
         upper.vector_source_one = 19u;
     } else upper.vector_source_one = upper.source;

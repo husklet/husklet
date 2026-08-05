@@ -2474,6 +2474,113 @@ static int vex_signed_dword_to_float_contract(void) {
     return 0;
 }
 
+static int vex_packed_compare_contract(void) {
+    static const uint8_t forms[][6] = {
+        {0xc5, 0xe9, 0x74, 0xc1, 0, 0}, {0xc5, 0xed, 0x75, 0xc1, 0, 0},
+        {0xc5, 0xe9, 0x76, 0x03, 0, 0}, {0xc5, 0xed, 0x64, 0xc1, 0, 0},
+        {0xc5, 0xe9, 0x65, 0xc1, 0, 0}, {0xc5, 0xed, 0x66, 0x03, 0, 0},
+        {0xc4, 0xe2, 0x69, 0x29, 0xc1, 0}, {0xc4, 0xe2, 0x6d, 0x29, 0x03, 0},
+        {0xc4, 0xe2, 0x69, 0x37, 0xc1, 0}, {0xc4, 0xe2, 0x6d, 0x37, 0x03, 0},
+    };
+    static const size_t sizes[] = {4, 4, 4, 4, 4, 4, 5, 5, 5, 5};
+    static const uint8_t invalid[][6] = {
+        {0xc5, 0xe8, 0x74, 0xc1, 0, 0},
+        {0xc4, 0xe3, 0x69, 0x29, 0xc1, 0},
+        {0xc4, 0xe2, 0x6a, 0x37, 0xc1, 0},
+    };
+    unsigned index;
+    for (index = 0; index < sizeof forms / sizeof forms[0]; ++index) {
+        uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(forms[index], sizes[index], host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+        CHECK(provenance[0].guest_size == sizes[index]);
+    }
+    for (index = 0; index < sizeof invalid / sizeof invalid[0]; ++index) {
+        uint32_t host[64] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(invalid[index], index == 0u ? 4u : 5u,
+                                                  host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+        CHECK(result.instruction_count == 0 && result.exit_pc == request.guest_pc);
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t guest[] = {0xc5, 0xed, 0x76, 0x03};
+        uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0}; uint8_t data[32] = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        cpu.registers[3] = 0x4000; cpu.memory_first = 0x4000; cpu.memory_last = 0x401f;
+        cpu.memory_delta = (uint64_t)(uintptr_t)data - 0x4000; cpu.memory_permissions = 1u;
+        cpu.vectors[0] = UINT64_C(0xfeedfacecafebeef);
+        cpu.vector_upper[0] = UINT64_C(0x0123456789abcdef);
+        hl_x86_test_enter(&cpu, code);
+        CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.fault_access == HL_NATIVE_ACCESS_READ);
+        CHECK(cpu.fault_address == 0x4000 && cpu.fault_size == 32u);
+        CHECK(cpu.vectors[0] == UINT64_C(0xfeedfacecafebeef));
+        CHECK(cpu.vector_upper[0] == UINT64_C(0x0123456789abcdef));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+    {
+        static const uint8_t guest[] = {0xc4, 0xe2, 0x69, 0x29, 0xc1};
+        uint32_t host[128] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        cpu.vectors[4] = 7; cpu.vectors[5] = 8; cpu.vectors[2] = 7; cpu.vectors[3] = 9;
+        cpu.vector_upper[0] = UINT64_MAX; cpu.vector_upper[1] = UINT64_MAX;
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(cpu.vectors[0] == UINT64_MAX && cpu.vectors[1] == 0);
+        CHECK(cpu.vector_upper[0] == 0 && cpu.vector_upper[1] == 0);
+        CHECK(cpu.vectors[4] == 7 && cpu.vectors[5] == 8 && cpu.vectors[2] == 7 && cpu.vectors[3] == 9);
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+    {
+        static const uint8_t guest[] = {0xc5, 0xed, 0x66, 0xc1};
+        static const int32_t left[8] = {INT32_MIN, -1, 0, 1, 7, 9, INT32_MAX, -8};
+        static const int32_t right[8] = {-1, -1, -1, 2, 6, 10, INT32_MIN, -9};
+        static const uint32_t expected[8] = {0, 0, UINT32_MAX, 0, UINT32_MAX, 0, UINT32_MAX, UINT32_MAX};
+        uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[4], left, 16); memcpy(&cpu.vector_upper[4], left + 4, 16);
+        memcpy(&cpu.vectors[2], right, 16); memcpy(&cpu.vector_upper[2], right + 4, 16);
+        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], expected, 16) == 0);
+        CHECK(memcmp(&cpu.vector_upper[0], expected + 4, 16) == 0);
+        CHECK(memcmp(&cpu.vectors[4], left, 16) == 0 && memcmp(&cpu.vectors[2], right, 16) == 0);
+        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int vex_packed_add_subtract_contract(void) {
     static const uint8_t opcodes[] = {0xfc, 0xfd, 0xfe, 0xd4, 0xf8, 0xf9, 0xfa, 0xfb};
     unsigned operation;
@@ -4837,6 +4944,8 @@ int main(void) {
     status = vex_shuffle_family_contract();
     if (status != 0) return status;
     status = vex_signed_dword_to_float_contract();
+    if (status != 0) return status;
+    status = vex_packed_compare_contract();
     if (status != 0) return status;
     status = vex_packed_add_subtract_contract();
     if (status != 0) return status;
