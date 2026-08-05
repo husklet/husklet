@@ -8,31 +8,161 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use hl_runtime::{
-    GuestName, MountSourceId, NodeHandle, NodeKind, OpenIntent, ResolveHostError, RuntimePathError, VfsHost,
+    GuestName, GuestPathBytes, MountSourceId, NodeHandle, NodeKind, OpenIntent, ResolveHostError, RuntimePathError,
+    VfsHost,
 };
 
 #[derive(Clone)]
 pub(super) struct Host {
-    root: Arc<File>,
+    roots: Arc<Vec<Arc<File>>>,
     mounts: Arc<super::source::MountPaths>,
+    pins: Arc<PinRegistry>,
 }
+
+struct PinRegistry {
+    next: AtomicU64,
+    entries: Mutex<std::collections::BTreeMap<u64, PinEntry>>,
+}
+
+struct PinEntry {
+    guest: GuestPathBytes,
+    /// The first candidate is the visible node. Directory candidates after it
+    /// retain lower directories which may contribute children to the union.
+    candidates: Vec<LayerPin>,
+}
+
+struct LayerPin {
+    descriptor: OwnedFd,
+    /// Zero is upper; positive values preserve lower precedence order.
+    layer: usize,
+}
+
+const LAYERED_HANDLE_BIT: u64 = 1 << 63;
 
 impl Host {
     pub(super) fn new(root: Arc<File>, mounts: Arc<super::source::MountPaths>) -> Self {
-        Self { root, mounts }
+        Self::layered(vec![root], mounts)
     }
 
-    fn duplicate(node: NodeHandle) -> Result<OwnedFd, ResolveHostError> {
+    /// Builds a resolver host whose roots are ordered upper then lower.
+    ///
+    /// Resolver handles retain every directory candidate. This is the
+    /// load-bearing distinction from a raw descriptor handle: when an upper
+    /// directory exists but one of its children exists only in a lower layer,
+    /// `inspect_child` can select that lower child without losing the upper
+    /// directory's precedence.
+    pub(super) fn layered(roots: Vec<Arc<File>>, mounts: Arc<super::source::MountPaths>) -> Self {
+        debug_assert!(!roots.is_empty());
+        Self {
+            roots: Arc::new(roots),
+            mounts,
+            pins: Arc::new(PinRegistry {
+                next: AtomicU64::new(1),
+                entries: Mutex::new(std::collections::BTreeMap::new()),
+            }),
+        }
+    }
+
+    fn duplicate_descriptor(descriptor: RawFd) -> Result<OwnedFd, ResolveHostError> {
         // SAFETY: fcntl observes a live resolver-owned descriptor and returns
         // an independently owned descriptor without retaining pointers.
-        let descriptor = unsafe { libc::fcntl(Self::descriptor(node), libc::F_DUPFD_CLOEXEC, 0) };
+        let descriptor = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
         if descriptor < 0 {
             return Err(Self::error());
         }
         // SAFETY: successful F_DUPFD_CLOEXEC created one unowned descriptor.
         Ok(unsafe { OwnedFd::from_raw_fd(descriptor) })
+    }
+
+    fn insert(&self, guest: GuestPathBytes, candidates: Vec<LayerPin>) -> Result<NodeHandle, ResolveHostError> {
+        if candidates.is_empty() {
+            return Err(ResolveHostError::NotFound);
+        }
+        let identity = self.pins.next.fetch_add(1, Ordering::Relaxed);
+        if identity == 0 {
+            return Err(ResolveHostError::ResourceLimit);
+        }
+        self.pins
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(identity, PinEntry { guest, candidates });
+        Ok(NodeHandle::from_raw(LAYERED_HANDLE_BIT | identity))
+    }
+
+    fn with_entry<T>(&self, node: NodeHandle, operation: impl FnOnce(&PinEntry) -> T) -> Result<T, ResolveHostError> {
+        let entries = self.pins.entries.lock().unwrap_or_else(|error| error.into_inner());
+        entries
+            .get(&(node.raw() & !LAYERED_HANDLE_BIT))
+            .map(operation)
+            .ok_or(ResolveHostError::NotFound)
+    }
+
+    fn duplicate_candidates(files: &[Arc<File>]) -> Result<Vec<LayerPin>, ResolveHostError> {
+        files
+            .iter()
+            .enumerate()
+            .map(|(layer, file)| {
+                Self::duplicate_descriptor(file.as_raw_fd()).map(|descriptor| LayerPin { descriptor, layer })
+            })
+            .collect()
+    }
+
+    fn child_guest(parent: &GuestPathBytes, child: &GuestName) -> Result<GuestPathBytes, ResolveHostError> {
+        let mut path = parent.as_bytes().to_vec();
+        if path != b"/" {
+            path.push(b'/');
+        }
+        path.extend_from_slice(child.as_bytes());
+        GuestPathBytes::new(&path).map_err(|_| ResolveHostError::ResourceLimit)
+    }
+
+    fn child(directory: RawFd, name: &CString) -> Result<Option<(OwnedFd, NodeKind)>, ResolveHostError> {
+        let observed = match Self::child_kind(directory, name) {
+            Ok(kind) => kind,
+            Err(ResolveHostError::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let flags = Self::pin_flags(observed);
+        // SAFETY: name is terminated and directory remains pinned for openat.
+        let child = unsafe { libc::openat(directory, name.as_ptr(), flags) };
+        if child < 0 {
+            return Err(Self::error());
+        }
+        let observed = match Self::metadata_kind(child) {
+            Ok(kind) => kind,
+            Err(error) => {
+                // SAFETY: successful openat returned one uniquely owned descriptor.
+                unsafe { libc::close(child) };
+                return Err(error);
+            }
+        };
+        // SAFETY: successful openat returned one uniquely owned descriptor.
+        Ok(Some((unsafe { OwnedFd::from_raw_fd(child) }, observed)))
+    }
+
+    fn marker(directory: RawFd, name: &GuestName) -> Result<bool, ResolveHostError> {
+        let mut marker = b".wh.".to_vec();
+        marker.extend_from_slice(name.as_bytes());
+        let marker = CString::new(marker).map_err(|_| ResolveHostError::Io)?;
+        match Self::child_kind(directory, &marker) {
+            Ok(_) => Ok(true),
+            Err(ResolveHostError::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn opaque(directory: RawFd) -> Result<bool, ResolveHostError> {
+        let marker = c".wh..wh..opq";
+        match Self::child_kind(directory, marker) {
+            Ok(_) => Ok(true),
+            Err(ResolveHostError::NotFound) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn open(
@@ -58,18 +188,98 @@ impl Host {
     }
 }
 
+#[cfg(test)]
+mod overlay_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver, VfsHost};
+
+    use super::Host;
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "hl-overlay-pin-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn host(upper: &std::path::Path, lower: &std::path::Path) -> Host {
+        Host::layered(
+            vec![
+                std::sync::Arc::new(std::fs::File::open(upper).unwrap()),
+                std::sync::Arc::new(std::fs::File::open(lower).unwrap()),
+            ],
+            std::sync::Arc::new(super::super::source::MountPaths::default()),
+        )
+    }
+
+    fn resolve(host: &Host, path: &[u8]) -> Result<std::path::PathBuf, hl_runtime::ResolveError> {
+        let mounts = MountNamespace::new();
+        let resolver = Resolver::new(host.clone(), &mounts);
+        let root = GuestPathBytes::new(b"/").unwrap();
+        let path = GuestPathBytes::new(path).unwrap();
+        let resolved = resolver.resolve(ResolveRequest {
+            path: &path,
+            base: &root,
+            nofollow_final: true,
+            no_symlinks: false,
+            allow_missing_final: false,
+        })?;
+        let parent = resolved.duplicate_parent()?;
+        let name = resolved
+            .final_name()
+            .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
+        Host::path(&parent, &name).map_err(|_| hl_runtime::ResolveError::Host(hl_runtime::ResolveHostError::Io))
+    }
+
+    #[test]
+    fn layered_directory_retains_lower_candidates() {
+        let upper = fixture("upper");
+        let lower = fixture("lower");
+        std::fs::create_dir(upper.join("etc")).unwrap();
+        std::fs::create_dir(lower.join("etc")).unwrap();
+        std::fs::write(lower.join("etc/lower"), b"lower").unwrap();
+        std::fs::write(upper.join("etc/upper"), b"upper").unwrap();
+        let host = host(&upper, &lower);
+        assert_eq!(resolve(&host, b"/etc/lower").unwrap(), lower.join("etc/lower"));
+        assert_eq!(resolve(&host, b"/etc/upper").unwrap(), upper.join("etc/upper"));
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn upper_whiteout_and_opaque_directory_hide_lower_children() {
+        let upper = fixture("whiteout-upper");
+        let lower = fixture("whiteout-lower");
+        std::fs::create_dir(upper.join("dir")).unwrap();
+        std::fs::create_dir(lower.join("dir")).unwrap();
+        std::fs::write(upper.join("dir/.wh.hidden"), b"").unwrap();
+        std::fs::write(lower.join("dir/hidden"), b"lower").unwrap();
+        std::fs::write(lower.join("dir/cut"), b"lower").unwrap();
+        let host = host(&upper, &lower);
+        assert!(resolve(&host, b"/dir/hidden").is_err());
+        std::fs::write(upper.join("dir/.wh..wh..opq"), b"").unwrap();
+        let host = host(&upper, &lower);
+        assert!(resolve(&host, b"/dir/cut").is_err());
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+}
+
 impl VfsHost for Host {
     type ParentLease = OwnedFd;
 
     fn pin_root(&self) -> Result<NodeHandle, ResolveHostError> {
-        let descriptor = self.root.as_raw_fd();
-        // SAFETY: fcntl duplicates the live root descriptor and retains no pointer.
-        let pin = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
-        if pin < 0 {
-            Err(Self::error())
-        } else {
-            Ok(Self::handle(pin))
+        if self.roots.len() == 1 {
+            return Self::duplicate_descriptor(self.roots[0].as_raw_fd()).map(Self::direct_handle);
         }
+        let root = GuestPathBytes::new(b"/").map_err(|_| ResolveHostError::Io)?;
+        self.insert(root, Self::duplicate_candidates(&self.roots)?)
     }
 
     fn pin_mount(&self, source: MountSourceId) -> Result<NodeHandle, ResolveHostError> {
@@ -77,14 +287,7 @@ impl VfsHost for Host {
             RuntimePathError::NotFound => ResolveHostError::NotFound,
             _ => ResolveHostError::Io,
         })?;
-        let descriptor = root.as_raw_fd();
-        // SAFETY: fcntl duplicates the live mount-root descriptor and retains no pointer.
-        let pin = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
-        if pin < 0 {
-            Err(Self::error())
-        } else {
-            Ok(Self::handle(pin))
-        }
+        Self::duplicate_descriptor(root.as_raw_fd()).map(Self::direct_handle)
     }
 
     fn inspect_child(
@@ -93,50 +296,109 @@ impl VfsHost for Host {
         component: &GuestName,
     ) -> Result<(NodeHandle, NodeKind), ResolveHostError> {
         let name = CString::new(component.as_bytes()).map_err(|_| ResolveHostError::Io)?;
-        let observed = Self::child_kind(Self::descriptor(directory), &name)?;
-        let flags = Self::pin_flags(observed);
-        // SAFETY: name is terminated and the pinned directory remains live for
-        // this non-retaining relative open.
-        let child = unsafe { libc::openat(Self::descriptor(directory), name.as_ptr(), flags) };
-        if child < 0 {
-            return Err(Self::error());
+        if !Self::is_layered(directory) {
+            let descriptor = Self::direct_descriptor(directory);
+            let Some((child, kind)) = Self::child(descriptor, &name)? else {
+                return Err(ResolveHostError::NotFound);
+            };
+            return Ok((Self::direct_handle(child), kind));
         }
-        let kind = Self::metadata_kind(child);
-        match kind {
-            Ok(kind) => Ok((Self::handle(child), kind)),
-            Err(error) => {
-                // SAFETY: child is uniquely owned after successful openat.
-                unsafe { libc::close(child) };
-                Err(error)
+        let (guest, candidates, kind) = self.with_entry(directory, |entry| {
+            let mut candidates = Vec::new();
+            let mut visible = None;
+            for parent in &entry.candidates {
+                if visible.is_none() && Self::marker(parent.descriptor.as_raw_fd(), component)? {
+                    break;
+                }
+                if let Some((child, kind)) = Self::child(parent.descriptor.as_raw_fd(), &name)? {
+                    let directory = kind == NodeKind::Directory;
+                    if visible.is_none() {
+                        visible = Some(kind);
+                    }
+                    if visible == Some(kind) && directory {
+                        let opaque = Self::opaque(child.as_raw_fd())?;
+                        candidates.push(LayerPin {
+                            descriptor: child,
+                            layer: parent.layer,
+                        });
+                        if opaque {
+                            break;
+                        }
+                    } else if candidates.is_empty() {
+                        candidates.push(LayerPin {
+                            descriptor: child,
+                            layer: parent.layer,
+                        });
+                        break;
+                    }
+                }
             }
-        }
+            let guest = Self::child_guest(&entry.guest, component)?;
+            visible.map(|kind| (guest, candidates, kind)).ok_or(ResolveHostError::NotFound)
+        })??;
+        self.insert(guest, candidates).map(|handle| (handle, kind))
     }
 
     fn read_link(&self, link: NodeHandle, output: &mut [u8]) -> Result<usize, ResolveHostError> {
-        Self::read_link(Self::descriptor(link), output)
+        if !Self::is_layered(link) {
+            return Self::read_link(Self::direct_descriptor(link), output);
+        }
+        self.with_entry(link, |entry| {
+            Self::read_link(entry.candidates[0].descriptor.as_raw_fd(), output)
+        })?
     }
 
     fn crosses_mount(&self, directory: NodeHandle, child: NodeHandle) -> Result<bool, ResolveHostError> {
-        Ok(Self::device(Self::descriptor(directory))? != Self::device(Self::descriptor(child))?)
+        let directory = self.selected_descriptor(directory)?;
+        let child = self.selected_descriptor(child)?;
+        Ok(Self::device(directory)? != Self::device(child)?)
     }
 
     fn duplicate_parent(&self, parent: NodeHandle) -> Result<Self::ParentLease, ResolveHostError> {
-        Self::duplicate(parent)
+        if !Self::is_layered(parent) {
+            return Self::duplicate_descriptor(Self::direct_descriptor(parent));
+        }
+        self.with_entry(parent, |entry| {
+            Self::duplicate_descriptor(entry.candidates[0].descriptor.as_raw_fd())
+        })?
     }
 
     fn close(&self, node: NodeHandle) {
-        // SAFETY: each resolver pin is transferred once and closed once.
-        unsafe { libc::close(Self::descriptor(node)) };
+        if !Self::is_layered(node) {
+            // SAFETY: direct resolver pins transfer one descriptor and close it once.
+            unsafe { libc::close(Self::direct_descriptor(node)) };
+            return;
+        }
+        self.pins
+            .entries
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&(node.raw() & !LAYERED_HANDLE_BIT));
     }
 }
 
 impl Host {
-    fn handle(descriptor: RawFd) -> NodeHandle {
+    fn is_layered(handle: NodeHandle) -> bool {
+        handle.raw() & LAYERED_HANDLE_BIT != 0
+    }
+
+    fn direct_handle(descriptor: OwnedFd) -> NodeHandle {
+        use std::os::fd::IntoRawFd;
+        let descriptor = descriptor.into_raw_fd();
         NodeHandle::from_raw(u64::try_from(descriptor).expect("descriptor is nonnegative") + 1)
     }
 
-    fn descriptor(handle: NodeHandle) -> RawFd {
+    fn direct_descriptor(handle: NodeHandle) -> RawFd {
+        debug_assert!(!Self::is_layered(handle));
         i32::try_from(handle.raw() - 1).expect("native descriptor handle")
+    }
+
+    fn selected_descriptor(&self, handle: NodeHandle) -> Result<RawFd, ResolveHostError> {
+        if Self::is_layered(handle) {
+            self.with_entry(handle, |entry| entry.candidates[0].descriptor.as_raw_fd())
+        } else {
+            Ok(Self::direct_descriptor(handle))
+        }
     }
 
     #[cfg(target_os = "linux")]
