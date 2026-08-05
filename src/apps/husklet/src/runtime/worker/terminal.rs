@@ -74,6 +74,17 @@ mod ffi {
                 libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t);
             }
         }
+
+        pub(super) fn pace() {
+            let duration = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 10_000_000,
+            };
+            // SAFETY: `duration` is an initialized integer aggregate borrowed for this call.
+            // `nanosleep` retains no pointer, accesses no aliased mutable Rust storage, invokes no
+            // callback, and cannot unwind across the ABI. Interruption remains intentionally ignored.
+            unsafe { libc::nanosleep(&duration, std::ptr::null_mut()) };
+        }
     }
 
     impl OpenFiles {
@@ -230,13 +241,6 @@ impl<'a> TerminalSession<'a> {
         Ok(())
     }
 
-    fn pace() {
-        let duration = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 10_000_000,
-        };
-        unsafe { libc::nanosleep(&duration, std::ptr::null_mut()) };
-    }
 }
 
 /// Query the controlling terminal's size (cols, rows).
