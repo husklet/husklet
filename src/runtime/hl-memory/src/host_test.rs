@@ -270,6 +270,8 @@ fn projection_blocks_mapping_transitions_and_checks_access() {
     let lease = coordinator
         .project_contiguous(GuestAddress::new(0x1000), 16, Protection::READ, 7)
         .unwrap();
+    let continuation = lease.request_continuation();
+    assert!(continuation.is_current());
     assert_eq!(lease.storage_address(), 0x1000_1000);
     assert_eq!(
         lease.range(),
@@ -285,6 +287,11 @@ fn projection_blocks_mapping_transitions_and_checks_access() {
         done_tx.send(result).unwrap();
     });
     started_rx.recv().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while continuation.is_current() && std::time::Instant::now() < deadline {
+        thread::yield_now();
+    }
+    assert!(!continuation.is_current());
     assert!(done_rx.recv_timeout(Duration::from_millis(20)).is_err());
     drop(lease);
     assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
@@ -294,6 +301,24 @@ fn projection_blocks_mapping_transitions_and_checks_access() {
             .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 7)
             .is_err()
     );
+    assert!(!continuation.is_current());
+}
+
+#[test]
+fn saturated_mapping_request_epoch_permanently_denies_continuation() {
+    use std::sync::atomic::Ordering;
+
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(request()).unwrap();
+    coordinator.mapping_requests.store(u64::MAX, Ordering::Release);
+    let projection = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 1, Protection::READ, 1)
+        .unwrap();
+    let continuation = projection.request_continuation();
+    assert!(!continuation.is_current());
+    drop(projection);
+    coordinator.protect(range(), Protection::READ).unwrap();
+    assert!(!continuation.is_current());
 }
 
 #[test]

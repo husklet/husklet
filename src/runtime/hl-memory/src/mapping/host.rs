@@ -67,6 +67,7 @@ pub struct Coordinator<H> {
     pub(crate) shared: Option<Arc<SharedObjectStore>>,
     pub(crate) pins: Mutex<Vec<PinnedRegion>>,
     pub(crate) transaction: Mutex<()>,
+    pub(crate) mapping_requests: Arc<AtomicU64>,
     pub(crate) activity: Arc<crate::CheckpointActivity>,
     address_space: Option<crate::AddressSpaceId>,
     pub(crate) observer: RwLock<Arc<dyn TransitionObserver>>,
@@ -79,6 +80,14 @@ pub(crate) struct PinnedRegion {
 }
 
 impl<H: Host> Coordinator<H> {
+    pub(crate) fn request_mapping_change(&self) {
+        let _ = self
+            .mapping_requests
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |requests| {
+                Some(requests.saturating_add(1))
+            });
+    }
+
     pub(crate) fn executable_write_ranges(
         &self,
         address: GuestAddress,
@@ -139,6 +148,7 @@ impl<H: Host> Coordinator<H> {
             shared: None,
             pins: Mutex::new(Vec::new()),
             transaction: Mutex::new(()),
+            mapping_requests: Arc::new(AtomicU64::new(0)),
             activity: Arc::new(crate::CheckpointActivity::default()),
             address_space: None,
             observer: RwLock::new(Arc::new(NoopObserver)),
@@ -152,6 +162,7 @@ impl<H: Host> Coordinator<H> {
             shared: Some(shared),
             pins: Mutex::new(Vec::new()),
             transaction: Mutex::new(()),
+            mapping_requests: Arc::new(AtomicU64::new(0)),
             activity: Arc::new(crate::CheckpointActivity::default()),
             address_space: None,
             observer: RwLock::new(Arc::new(NoopObserver)),
@@ -176,6 +187,7 @@ impl<H: Host> Coordinator<H> {
                     .collect(),
             ),
             transaction: Mutex::new(()),
+            mapping_requests: Arc::new(AtomicU64::new(0)),
             activity: Arc::new(crate::CheckpointActivity::default()),
             address_space: None,
             observer: RwLock::new(Arc::new(NoopObserver)),
@@ -228,6 +240,7 @@ impl<H: Host> Coordinator<H> {
         inherited: bool,
     ) -> Result<GuestAddress, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|e| e.into_inner());
         let mut transition = self.transition();
         let result = self
@@ -247,6 +260,7 @@ impl<H: Host> Coordinator<H> {
 
     pub fn unmap(&self, range: AddressRange) -> Result<(), MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|e| e.into_inner());
         let mut transition = self.transition();
         let result = self.ledger.unmap_transaction(range, |regions| {
@@ -264,6 +278,7 @@ impl<H: Host> Coordinator<H> {
 
     pub fn protect(&self, range: AddressRange, protection: Protection) -> Result<(), MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|e| e.into_inner());
         let mut transition = self.transition();
         let result = self.ledger.protect_transaction(range, protection, |regions| {
@@ -281,6 +296,7 @@ impl<H: Host> Coordinator<H> {
 
     pub fn apply(&self, batch: &Batch) -> Result<Vec<GuestAddress>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|e| e.into_inner());
         let mut transition = self.transition();
         let result = self.ledger.batch_transaction(&batch.operations, |plan, regions| {
@@ -348,6 +364,7 @@ impl<H: Host> Coordinator<H> {
                     .collect(),
             ),
             transaction: Mutex::new(()),
+            mapping_requests: Arc::new(AtomicU64::new(0)),
             activity: Arc::new(crate::CheckpointActivity::default()),
             address_space: None,
             observer: RwLock::new(Arc::clone(
@@ -561,6 +578,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
 
     pub fn commit_write_spans(&self, mut prepared: WriteSpanTransaction<H>, input: &[u8]) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
         if input.len() != prepared.length
             || prepared.transactions.is_empty()
@@ -619,6 +637,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
 
     pub fn commit_write(&self, mut prepared: WriteTransaction<H>, input: &[u8]) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
         if input.len() as u64 != prepared.range.length()
             || self.ledger.generation() != prepared.generation

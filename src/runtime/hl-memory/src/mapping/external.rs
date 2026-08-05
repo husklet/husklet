@@ -42,6 +42,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         operation: impl FnOnce() -> Result<usize, E>,
     ) -> Result<Result<usize, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
         let total = self.validate(spans, Protection::WRITE)?;
         let mut prepared = Vec::with_capacity(spans.len());
@@ -109,6 +110,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         operation: impl FnOnce() -> Result<usize, E>,
     ) -> Result<Result<usize, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
+        self.request_mapping_change();
         let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self

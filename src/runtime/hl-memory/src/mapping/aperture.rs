@@ -52,8 +52,10 @@ impl<P: HostProjection> HostAperture<P> {
 /// valid. Access permissions, dirty publication, shared reconciliation, and
 /// instruction invalidation are intentionally outside this capability.
 pub struct ApertureLease<'a, H: MemoryAccessHost> {
+    coordinator: &'a Coordinator<H>,
     _admission: crate::checkpoint_activity::ActivityAdmission,
     _transaction: MutexGuard<'a, ()>,
+    mapping_requests: u64,
     aperture: HostAperture<H::Projection>,
     generation: ProjectionGeneration,
 }
@@ -62,12 +64,15 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     pub fn project_aperture(&self, incarnation: u64) -> Result<Option<ApertureLease<'_, H>>, MemoryError> {
         let admission = self.activity.admit_memory()?;
         let transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let mapping_requests = self.mapping_requests.load(std::sync::atomic::Ordering::Acquire);
         let Some(aperture) = self.host.host.project_aperture()? else {
             return Ok(None);
         };
         Ok(Some(ApertureLease {
+            coordinator: self,
             _admission: admission,
             _transaction: transaction,
+            mapping_requests,
             aperture,
             generation: ProjectionGeneration {
                 incarnation,
@@ -79,6 +84,11 @@ impl<H: MemoryAccessHost> Coordinator<H> {
 }
 
 impl<H: MemoryAccessHost> ApertureLease<'_, H> {
+    /// Captures whether a mapping mutation has queued behind this aperture.
+    #[must_use]
+    pub fn request_continuation(&self) -> crate::RequestContinuation {
+        crate::RequestContinuation::new(&self.coordinator.mapping_requests, self.mapping_requests)
+    }
     #[must_use]
     pub const fn range(&self) -> AddressRange {
         self.aperture.range()

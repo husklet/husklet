@@ -1,5 +1,5 @@
-use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, MutexGuard};
 
 use hl_isa::{AddressRange, GuestAddress};
 
@@ -24,6 +24,7 @@ pub struct ProjectionLease<'a, H: MemoryAccessHost> {
     coordinator: &'a Coordinator<H>,
     _admission: crate::checkpoint_activity::ActivityAdmission,
     _transaction: MutexGuard<'a, ()>,
+    mapping_requests: u64,
     range: AddressRange,
     storage_address: u64,
     _projection: H::Projection,
@@ -92,6 +93,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     ) -> Result<ProjectionLease<'_, H>, MemoryError> {
         let admission = self.activity.admit_memory()?;
         let transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let mapping_requests = self.mapping_requests.load(Ordering::Acquire);
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self
             .ledger
@@ -115,6 +117,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             coordinator: self,
             _admission: admission,
             _transaction: transaction,
+            mapping_requests,
             range,
             storage_address,
             _projection: projection,
@@ -163,6 +166,34 @@ impl<H: MemoryAccessHost> ProjectionLease<'_, H> {
     /// Mapping and scheduler validity remain separate continuation gates.
     pub fn checkpoint_continuation(&self) -> crate::CheckpointContinuation {
         self._admission.continuation()
+    }
+
+    /// Captures whether a mapping or externally published write has requested
+    /// this projection's transaction authority since it was admitted.
+    pub fn request_continuation(&self) -> RequestContinuation {
+        RequestContinuation::new(&self.coordinator.mapping_requests, self.mapping_requests)
+    }
+}
+
+/// Lock-free evidence that no mapping transition is queued behind a projection.
+#[must_use = "a mapping continuation must be checked before extending projected execution"]
+#[derive(Clone, Debug)]
+pub struct RequestContinuation {
+    requests: Arc<std::sync::atomic::AtomicU64>,
+    observed: u64,
+}
+
+impl RequestContinuation {
+    pub(crate) fn new(requests: &Arc<std::sync::atomic::AtomicU64>, observed: u64) -> Self {
+        Self {
+            requests: Arc::clone(requests),
+            observed,
+        }
+    }
+
+    #[must_use]
+    pub fn is_current(&self) -> bool {
+        self.observed != u64::MAX && self.requests.load(Ordering::Acquire) == self.observed
     }
 }
 
