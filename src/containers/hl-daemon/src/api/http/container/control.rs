@@ -104,10 +104,10 @@ pub(in super::super) async fn stop(
     Query(query): Query<TimeoutQuery>,
 ) -> ApiResult<StatusCode> {
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
-    query.validate_signal(container.spec.stop_signal)?;
     if !container.state.is_active() {
         return Ok(StatusCode::NO_CONTENT);
     }
+    query.validate_signal(container.spec.stop_signal)?;
     match state
         .containers
         .stop(&id, query.duration(container.spec.stop_timeout_seconds)?)
@@ -124,8 +124,8 @@ pub(in super::super) async fn restart(
     Query(query): Query<TimeoutQuery>,
 ) -> ApiResult<StatusCode> {
     let container = state.containers.inspect(&id).await.map_err(ApiError::container)?;
-    query.validate_signal(container.spec.stop_signal)?;
     if container.state.is_active() {
+        query.validate_signal(container.spec.stop_signal)?;
         match state
             .containers
             .stop(&id, query.duration(container.spec.stop_timeout_seconds)?)

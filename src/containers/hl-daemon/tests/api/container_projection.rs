@@ -69,6 +69,20 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         "container create was not HTTP 201",
     )?;
     let id = created.1["Id"].as_str().ok_or("container create omitted Id")?;
+    let restart_probe = exchange(
+        socket,
+        "POST",
+        "/v1.43/containers/create?name=restart-signal-probe",
+        Some(serde_json::to_vec(&request)?),
+    )
+    .await?;
+    require(
+        restart_probe.0.starts_with("HTTP/1.1 201"),
+        "restart signal probe create was not HTTP 201",
+    )?;
+    let restart_id = restart_probe.1["Id"]
+        .as_str()
+        .ok_or("restart signal probe omitted Id")?;
 
     let legacy_stop = exchange(
         socket,
@@ -89,8 +103,8 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )
     .await?;
     require(
-        malformed_stop.0.starts_with("HTTP/1.1 400"),
-        "container stop accepted a malformed signal override",
+        malformed_stop.0.starts_with("HTTP/1.1 204"),
+        "inactive container stop validated an unused malformed signal",
     )?;
     let unsupported_stop = exchange(
         socket,
@@ -100,31 +114,63 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )
     .await?;
     require(
-        unsupported_stop.0.starts_with("HTTP/1.1 501"),
-        "container stop silently ignored a custom signal override",
+        unsupported_stop.0.starts_with("HTTP/1.1 204"),
+        "inactive container stop validated an unused signal override",
+    )?;
+    let inactive_restart = exchange(
+        socket,
+        "POST",
+        &format!("/v1.42/containers/{restart_id}/restart?signal=SIGBOGUS"),
+        None,
+    )
+    .await?;
+    require(
+        !inactive_restart.0.starts_with("HTTP/1.1 400") && !inactive_restart.0.starts_with("HTTP/1.1 501"),
+        "inactive container restart validated an unused malformed signal",
     )?;
     let unsupported_restart = exchange(
         socket,
         "POST",
-        &format!("/v1.42/containers/{id}/restart?signal=KILL"),
+        &format!("/containers/{restart_id}/restart?signal=KILL"),
         None,
     )
     .await?;
     require(
         unsupported_restart.0.starts_with("HTTP/1.1 501"),
-        "container restart silently ignored a custom signal override",
+        "active container restart silently ignored a custom signal override",
     )?;
-    let malformed_restart = exchange(
+    let stopped_probe = exchange(
         socket,
         "POST",
-        &format!("/containers/{id}/restart?signal=SIGBOGUS"),
+        &format!("/v1.43/containers/{restart_id}/stop?signal="),
         None,
     )
     .await?;
     require(
-        malformed_restart.0.starts_with("HTTP/1.1 400"),
-        "unversioned container restart accepted a malformed signal override",
+        stopped_probe.0.starts_with("HTTP/1.1 204"),
+        "restart signal probe stop was not HTTP 204",
     )?;
+    let removed_probe = exchange(
+        socket,
+        "DELETE",
+        &format!("/v1.43/containers/{restart_id}?force=true"),
+        None,
+    )
+    .await?;
+    require(
+        removed_probe.0.starts_with("HTTP/1.1 204"),
+        "restart signal probe cleanup was not HTTP 204",
+    )?;
+    for target in [
+        "/v1.42/containers/missing/stop?signal=SIGBOGUS",
+        "/v1.43/containers/missing/restart?signal=KILL",
+    ] {
+        let response = exchange(socket, "POST", target, None).await?;
+        require(
+            response.0.starts_with("HTTP/1.1 404"),
+            "missing container did not take precedence over signal validation",
+        )?;
+    }
     let empty_stop = exchange(socket, "POST", &format!("/v1.42/containers/{id}/stop?signal="), None).await?;
     require(
         empty_stop.0.starts_with("HTTP/1.1 204"),
