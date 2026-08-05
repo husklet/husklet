@@ -91,7 +91,7 @@ impl hl_linux::DescriptorIoSyscalls for DescriptorPort {
         }
         if operation.name == "dup3" {
             let flags = arguments[2] as u32;
-            if flags & !0o2000000 != 0 {
+            if flags & !0o2_000_000 != 0 {
                 return hl_linux::LinuxResult::Error(hl_linux::Errno::EINVAL);
             }
             let local = DescriptorFlags::from_bits(if flags == 0 { 0 } else { DescriptorFlags::CLOSE_ON_EXEC });

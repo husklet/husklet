@@ -95,14 +95,14 @@ struct Metadata;
 
 impl Metadata {
     fn project(stat: &hl_provider::TreeStat) -> Result<FileMetadata, RuntimePathError> {
-        let kind = match stat.mode & 0o170000 {
-            0o010000 => FileKind::Fifo,
-            0o020000 => FileKind::Character,
-            0o040000 => FileKind::Directory,
-            0o060000 => FileKind::Block,
-            0o100000 => FileKind::Regular,
-            0o120000 => FileKind::Symlink,
-            0o140000 => FileKind::Socket,
+        let kind = match stat.mode & 0o170_000 {
+            0o010_000 => FileKind::Fifo,
+            0o020_000 => FileKind::Character,
+            0o040_000 => FileKind::Directory,
+            0o060_000 => FileKind::Block,
+            0o100_000 => FileKind::Regular,
+            0o120_000 => FileKind::Symlink,
+            0o140_000 => FileKind::Socket,
             _ => return Err(RuntimePathError::Invalid),
         };
         let zero = FileTimestamp {

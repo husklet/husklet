@@ -604,7 +604,7 @@ fn pidfd_fstat() {
         };
         assert_eq!(
             u32::from_le_bytes(first[mode_offset..mode_offset + 4].try_into().unwrap()),
-            0o100600
+            0o100_600
         );
         assert_eq!(route_call(&router, architecture, close, [descriptor, 0, 0, 0, 0, 0]), 0);
         assert_eq!(route_call(&router, architecture, close, [alias, 0, 0, 0, 0, 0]), 0);
@@ -1039,7 +1039,10 @@ fn descriptor_routes_isas() {
         assert_eq!(route_call(&router, architecture, dup, [0; 6]), 3);
         assert_eq!(route_call(&router, architecture, fcntl, [3, 2, 1, 0, 0, 0]), 0,);
         assert_eq!(route_call(&router, architecture, fcntl, [3, 1, 0, 0, 0, 0]), 1,);
-        assert_eq!(route_call(&router, architecture, dup3, [3, 7, 0o2000000, 0, 0, 0],), 7,);
+        assert_eq!(
+            route_call(&router, architecture, dup3, [3, 7, 0o2_000_000, 0, 0, 0],),
+            7,
+        );
     }
 }
 
@@ -1144,7 +1147,7 @@ fn pipe_routes_isas() {
             GuestArchitecture::Aarch64 => (59, 63, 64, 57, 23),
             GuestArchitecture::X86_64 => (293, 0, 1, 3, 32),
         };
-        let flags = 0o02004000;
+        let flags = 0o02_004_000;
         assert_eq!(route_call(&router, architecture, pipe2, [64, flags, 0, 0, 0, 0]), 0);
         let mut numbers = [0; 8];
         arena.read(64, &mut numbers).unwrap();

@@ -82,7 +82,7 @@ impl Open {
                 return Err(error);
             }
         };
-        if stat.mode & 0o170000 == 0o120000 && plan.intent.bits() & OpenIntent::PATH_ONLY == 0 {
+        if stat.mode & 0o170_000 == 0o120_000 && plan.intent.bits() & OpenIntent::PATH_ONLY == 0 {
             let _ = tree.lock().map(|mut worker| worker.tree_close(handle));
             return Err(RuntimePathError::Loop);
         }
@@ -365,7 +365,7 @@ impl OpenFileDescription for File {
         Ok(OfdMetadata {
             device: stat.device,
             inode: stat.inode,
-            kind: if stat.mode & 0o170000 == 0o040000 { 4 } else { 8 },
+            kind: if stat.mode & 0o170_000 == 0o040_000 { 4 } else { 8 },
             permissions: (stat.mode & 0o7777) as u16,
             links: 1,
             user: 0,

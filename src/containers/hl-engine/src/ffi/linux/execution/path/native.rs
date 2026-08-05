@@ -1,12 +1,12 @@
 pub(super) mod mode {
-    pub const TYPE_MASK: u32 = 0o170000;
-    pub const FIFO: u32 = 0o010000;
-    pub const CHARACTER: u32 = 0o020000;
-    pub const DIRECTORY: u32 = 0o040000;
-    pub const BLOCK: u32 = 0o060000;
-    pub const REGULAR: u32 = 0o100000;
-    pub const SYMLINK: u32 = 0o120000;
-    pub const SOCKET: u32 = 0o140000;
+    pub const TYPE_MASK: u32 = 0o170_000;
+    pub const FIFO: u32 = 0o010_000;
+    pub const CHARACTER: u32 = 0o020_000;
+    pub const DIRECTORY: u32 = 0o040_000;
+    pub const BLOCK: u32 = 0o060_000;
+    pub const REGULAR: u32 = 0o100_000;
+    pub const SYMLINK: u32 = 0o120_000;
+    pub const SOCKET: u32 = 0o140_000;
 }
 
 #[cfg(target_os = "linux")]

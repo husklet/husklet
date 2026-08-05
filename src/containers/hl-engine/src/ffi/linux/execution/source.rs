@@ -209,7 +209,7 @@ impl ProjectedSource {
         maximum: usize,
     ) -> Result<Vec<u8>, ImageSourceError> {
         let stat = authority.tree_stat(handle).map_err(Self::map)?;
-        if stat.mode & 0o170000 != 0o100000 {
+        if stat.mode & 0o170_000 != 0o100_000 {
             return Err(ImageSourceError::AccessDenied);
         }
         if stat.size > maximum as u64 {
