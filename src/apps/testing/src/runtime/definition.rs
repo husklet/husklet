@@ -117,14 +117,14 @@ impl App {
                 if !outputs.insert(output.clone()) || !destinations.insert(destination.clone()) {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
-                safe_relative(&case.expect.stdout)?;
+                let golden = validate_golden(directory, &case.expect.stdout)?;
                 Ok(RuntimeCase {
                     id: case.id,
                     arguments: case.run,
                     environment: case.environment,
                     timeout: case.timeout,
                     exit: case.expect.exit,
-                    golden: directory.join(case.expect.stdout),
+                    golden,
                     destination,
                     source,
                     output,
@@ -259,6 +259,23 @@ fn safe_relative(path: &Path) -> Result<(), Error> {
     }
 }
 
+fn validate_golden(directory: &Path, relative: &Path) -> Result<PathBuf, Error> {
+    safe_relative(relative)?;
+    let golden = directory.join(relative);
+    let canonical_directory = directory.canonicalize()?;
+    let canonical_golden = golden
+        .canonicalize()
+        .map_err(|error| format!("golden {} is unavailable: {error}", golden.display()))?;
+    if !canonical_golden.starts_with(&canonical_directory) || !canonical_golden.is_file() {
+        return Err(format!(
+            "golden {} must be a file contained by its runtime category",
+            golden.display()
+        )
+        .into());
+    }
+    Ok(golden)
+}
+
 fn safe_absolute(path: &str) -> Result<(), Error> {
     let path = Path::new(path);
     if !path.is_absolute() || path.components().any(|value| matches!(value, Component::ParentDir)) {
@@ -310,6 +327,10 @@ mod tests {
     fn category_at(directory: &Path, case_rows: &str) -> Result<App, super::Error> {
         fs::write(directory.join("one.c"), "one").unwrap();
         fs::write(directory.join("two.c"), "two").unwrap();
+        fs::create_dir_all(directory.join("golden")).unwrap();
+        for name in ["one", "two", "unsafe", "default"] {
+            fs::write(directory.join(format!("golden/{name}.out")), []).unwrap();
+        }
         let definition = directory.join("test.yaml");
         fs::write(
             &definition,
@@ -346,6 +367,24 @@ mod tests {
     }
 
     #[test]
+    fn category_requires_a_contained_golden_file() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("one.c"), "one").unwrap();
+        let row = "  - id: runtime/one\n    build: { source: one.c, output: one, flags: [] }\n    artifact: { destination: /opt/one }\n    status: active\n    compat: { class: compatibility }\n    run: []\n    expect: { exit: 0, stdout: golden/missing.out }\n";
+        let Err(error) = category_at(directory.path(), row) else {
+            panic!("missing golden unexpectedly loaded");
+        };
+        assert!(error.to_string().contains("golden/missing.out is unavailable"));
+
+        fs::create_dir(directory.path().join("golden/directory.out")).unwrap();
+        let directory_row = row.replace("missing.out", "directory.out");
+        let Err(error) = category_at(directory.path(), &directory_row) else {
+            panic!("golden directory unexpectedly loaded");
+        };
+        assert!(error.to_string().contains("must be a file contained"));
+    }
+
+    #[test]
     fn build_inputs_are_normalized_sorted_contained_files() {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join("include")).unwrap();
@@ -367,6 +406,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("main.c"), "main").unwrap();
         fs::write(directory.path().join("layout.ld"), "layout").unwrap();
+        fs::create_dir(directory.path().join("golden")).unwrap();
+        fs::write(directory.path().join("golden/default.out"), []).unwrap();
         let definition = directory.path().join("test.yaml");
         fs::write(
             &definition,

@@ -56,6 +56,26 @@ relocated.
 | `src/apps/testing/tests/{inventory,compat}.rs` | entire centralized legacy inventory | the 36 YAML categories are the intended replacement | delete only after a mechanical case/ISA/disposition comparison reports no lost row |
 | `flake.nix` | `legacy/{corpus,fixture_schema,priority}.py` and their tests | no current YAML-native equivalent is called by the flake | replace with the typed manifest validation and full case-ID/ISA/disposition inventory gate before removing the Python tools |
 
+### `fixture_schema.py` replacement map
+
+The legacy fixture-schema check performs four mechanically distinct jobs. Its
+build-plan/artifact key join, bootstrap-artifact existence check, and exact
+inventory-key equality still describe the retained TSV corpus; current YAML
+loading cannot replace those checks until the full legacy-to-YAML identity and
+ISA comparison exists. Its dependency-token classification is a report, not a
+validator, and several capabilities it identifies (multi-program services,
+projected trees, special devices, and network sandboxes) remain explicit schema
+gaps below.
+
+The YAML loader already gives typed, unknown-field-denying validation to targets,
+status/disposition, environment, build inputs, output identity, artifact
+destination, and case IDs. It now also resolves every declared stdout golden at
+load time, requires a regular file, and proves its canonical path remains inside
+the owning category. This replaces the fixture script's weaker assertion that a
+retained row merely contains a stdout pathname. It does not justify deleting the
+Python gate: the three retained-TSV joins above still have no mechanically proven
+YAML equivalent.
+
 The projected-root source files remain centralized at
 `legacy/projected_{read,directory,write}.c`. They cannot be moved safely yet:
 the current runtime schema stages one executable into a container image but
