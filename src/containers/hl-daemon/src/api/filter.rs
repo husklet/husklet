@@ -261,6 +261,11 @@ impl List {
                     Self::exposed_port(value)?;
                 }
             }
+            for value in list.filters.get("health").into_iter().flatten() {
+                if !matches!(value.as_str(), "starting" | "healthy" | "unhealthy" | "none") {
+                    return Err(format!("invalid health filter {value:?}"));
+                }
+            }
             let mut task = None;
             for value in list.filters.get("is-task").into_iter().flatten() {
                 let value = Self::task_filter(value)?;
@@ -524,6 +529,9 @@ mod tests {
                 .unwrap_err()
                 .contains("unsupported")
         );
+        for filters in [r#"{"health":["bogus"]}"#, r#"{"health!":["healthy"]}"#] {
+            assert!(List::parse(false, Some(filters)).is_err(), "accepted {filters}");
+        }
     }
 
     #[test]

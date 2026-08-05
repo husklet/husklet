@@ -326,6 +326,17 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         conflicting.0.starts_with("HTTP/1.1 400"),
         "conflicting is-task filters were accepted",
     )?;
+    let invalid_health = exchange(
+        socket,
+        "GET",
+        "/v1.43/containers/json?all=true&filters=%7B%22health%22%3A%5B%22bogus%22%5D%7D",
+        None,
+    )
+    .await?;
+    require(
+        invalid_health.0.starts_with("HTTP/1.1 400"),
+        "invalid health filter was accepted",
+    )?;
     let summary = &summaries[0];
     require(summary["Id"] == id, "container list changed Id")?;
     require(
