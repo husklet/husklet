@@ -5,6 +5,14 @@ use crate::{
 };
 
 impl Aarch64Decoder {
+    fn field_u8(word: u32, shift: u32, mask: u32) -> u8 {
+        u8::try_from(word >> shift & mask).expect("masked instruction field fits in u8")
+    }
+
+    fn field_u16(word: u32, shift: u32, mask: u32) -> u16 {
+        u16::try_from(word >> shift & mask).expect("masked instruction field fits in u16")
+    }
+
     pub(super) fn ir(word: u32, instruction: Aarch64Instruction) -> Aarch64Ir {
         Aarch64Ir {
             word,
@@ -19,22 +27,22 @@ impl Aarch64Decoder {
             return Err(Aarch64DecodeError::Reserved);
         }
         Ok(Aarch64Instruction::ByteReverse {
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            destination: Self::field_u8(word, 0, 31),
             container_bytes: 1 << operation,
         })
     }
 
     pub(super) fn extract(word: u32, wide: bool) -> Result<Aarch64Instruction, Aarch64DecodeError> {
         let n = word >> 22 & 1 != 0;
-        let amount = (word >> 10 & 0x3f) as u8;
+        let amount = Self::field_u8(word, 10, 0x3f);
         if n != wide || (!wide && amount >= 32) {
             return Err(Aarch64DecodeError::Reserved);
         }
         Ok(Aarch64Instruction::Extract {
-            high: (word >> 5 & 31) as u8,
-            low: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            high: Self::field_u8(word, 5, 31),
+            low: Self::field_u8(word, 16, 31),
+            destination: Self::field_u8(word, 0, 31),
             amount,
         })
     }
@@ -42,7 +50,7 @@ impl Aarch64Decoder {
     pub(super) fn address(word: u32) -> Aarch64Instruction {
         let immediate = u64::from((word >> 5 & 0x7ffff) << 2 | (word >> 29 & 3));
         Aarch64Instruction::Address {
-            destination: (word & 31) as u8,
+            destination: Self::field_u8(word, 0, 31),
             displacement: Self::sign_extend(immediate, 21),
             page: word >> 31 != 0,
         }
@@ -56,8 +64,8 @@ impl Aarch64Decoder {
         Aarch64Instruction::AddSubtractImmediate {
             subtract: word >> 30 & 1 != 0,
             set_flags: word >> 29 & 1 != 0,
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            destination: Self::field_u8(word, 0, 31),
             immediate,
         }
     }
@@ -69,24 +77,24 @@ impl Aarch64Decoder {
             2 => Aarch64Shift::Asr,
             _ => return Err(Aarch64DecodeError::Reserved),
         };
-        let amount = (word >> 10 & 63) as u8;
+        let amount = Self::field_u8(word, 10, 63);
         if !wide && amount >= 32 {
             return Err(Aarch64DecodeError::Reserved);
         }
         Ok(Aarch64Instruction::AddSubtractShifted {
             subtract: word >> 30 & 1 != 0,
             set_flags: word >> 29 & 1 != 0,
-            source: (word >> 5 & 31) as u8,
-            operand: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            operand: Self::field_u8(word, 16, 31),
+            destination: Self::field_u8(word, 0, 31),
             shift,
             amount,
         })
     }
 
     pub(super) fn add_extended(word: u32, wide: bool) -> Result<Aarch64Instruction, Aarch64DecodeError> {
-        let option = (word >> 13 & 7) as u8;
-        let amount = (word >> 10 & 7) as u8;
+        let option = Self::field_u8(word, 13, 7);
+        let amount = Self::field_u8(word, 10, 7);
         if amount > 4 || (!wide && option & 2 != 0) {
             return Err(Aarch64DecodeError::Reserved);
         }
@@ -103,9 +111,9 @@ impl Aarch64Decoder {
         Ok(Aarch64Instruction::AddSubtractExtended {
             subtract: word >> 30 & 1 != 0,
             set_flags: word >> 29 & 1 != 0,
-            source: (word >> 5 & 31) as u8,
-            operand: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            operand: Self::field_u8(word, 16, 31),
+            destination: Self::field_u8(word, 0, 31),
             extension,
             amount,
         })
@@ -115,21 +123,21 @@ impl Aarch64Decoder {
         let mask = Self::bit_masks(
             wide,
             word >> 22 & 1 != 0,
-            (word >> 10 & 63) as u8,
-            (word >> 16 & 63) as u8,
+            Self::field_u8(word, 10, 63),
+            Self::field_u8(word, 16, 63),
             true,
         )?
         .0;
         Ok(Aarch64Instruction::LogicalImmediate {
-            operation: Self::logical_operation((word >> 29 & 3) as u8),
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            operation: Self::logical_operation(Self::field_u8(word, 29, 3)),
+            source: Self::field_u8(word, 5, 31),
+            destination: Self::field_u8(word, 0, 31),
             mask,
         })
     }
 
     pub(super) fn logical_shifted(word: u32, wide: bool) -> Result<Aarch64Instruction, Aarch64DecodeError> {
-        let amount = (word >> 10 & 63) as u8;
+        let amount = Self::field_u8(word, 10, 63);
         if !wide && amount >= 32 {
             return Err(Aarch64DecodeError::Reserved);
         }
@@ -140,11 +148,11 @@ impl Aarch64Decoder {
             _ => Aarch64Shift::Ror,
         };
         Ok(Aarch64Instruction::LogicalShifted {
-            operation: Self::logical_operation((word >> 29 & 3) as u8),
+            operation: Self::logical_operation(Self::field_u8(word, 29, 3)),
             invert: word >> 21 & 1 != 0,
-            source: (word >> 5 & 31) as u8,
-            operand: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            operand: Self::field_u8(word, 16, 31),
+            destination: Self::field_u8(word, 0, 31),
             shift,
             amount,
         })
@@ -157,14 +165,14 @@ impl Aarch64Decoder {
             3 => MoveWideOperation::Keep,
             _ => return Err(Aarch64DecodeError::Reserved),
         };
-        let shift = ((word >> 21 & 3) * 16) as u8;
+        let shift = Self::field_u8(word, 21, 3) * 16;
         if !wide && shift >= 32 {
             return Err(Aarch64DecodeError::Reserved);
         }
         Ok(Aarch64Instruction::MoveWide {
             operation,
-            destination: (word & 31) as u8,
-            immediate: (word >> 5 & 0xffff) as u16,
+            destination: Self::field_u8(word, 0, 31),
+            immediate: Self::field_u16(word, 5, 0xffff),
             shift,
         })
     }
@@ -181,10 +189,10 @@ impl Aarch64Decoder {
         Ok(Aarch64Instruction::Multiply {
             operation,
             subtract: word >> 15 & 1 != 0,
-            source: (word >> 5 & 31) as u8,
-            operand: (word >> 16 & 31) as u8,
-            addend: (word >> 10 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            operand: Self::field_u8(word, 16, 31),
+            addend: Self::field_u8(word, 10, 31),
+            destination: Self::field_u8(word, 0, 31),
         })
     }
 
@@ -200,9 +208,9 @@ impl Aarch64Decoder {
         };
         Ok(Aarch64Instruction::VariableShift {
             shift,
-            source: (word >> 5 & 31) as u8,
-            amount: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            amount: Self::field_u8(word, 16, 31),
+            destination: Self::field_u8(word, 0, 31),
         })
     }
 
@@ -216,9 +224,9 @@ impl Aarch64Decoder {
             } else {
                 DivideOperation::Signed
             },
-            source: (word >> 5 & 31) as u8,
-            divisor: (word >> 16 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            divisor: Self::field_u8(word, 16, 31),
+            destination: Self::field_u8(word, 0, 31),
         })
     }
 
@@ -226,17 +234,17 @@ impl Aarch64Decoder {
         if word >> 29 & 1 == 0 || word >> 10 & 1 != 0 || word >> 4 & 1 != 0 {
             return Err(Aarch64DecodeError::Reserved);
         }
-        let value = (word >> 16 & 31) as u8;
+        let value = Self::field_u8(word, 16, 31);
         Ok(Aarch64Instruction::ConditionalCompare {
             subtract: word >> 30 & 1 != 0,
-            source: (word >> 5 & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
             operand: if word >> 11 & 1 != 0 {
                 CompareOperand::Immediate(value)
             } else {
                 CompareOperand::Register(value)
             },
-            condition: Aarch64BranchCondition((word >> 12 & 15) as u8),
-            literal: (word & 15) as u8,
+            condition: Aarch64BranchCondition(Self::field_u8(word, 12, 15)),
+            literal: Self::field_u8(word, 0, 15),
         })
     }
 
@@ -248,16 +256,16 @@ impl Aarch64Decoder {
             _ => return Err(Aarch64DecodeError::Reserved),
         };
         let n = word >> 22 & 1 != 0;
-        let rotate = (word >> 16 & 63) as u8;
-        let sign_bit = (word >> 10 & 63) as u8;
+        let rotate = Self::field_u8(word, 16, 63);
+        let sign_bit = Self::field_u8(word, 10, 63);
         if n != wide || (!wide && (rotate | sign_bit) & 32 != 0) {
             return Err(Aarch64DecodeError::Reserved);
         }
         let (write_mask, top_mask) = Self::bit_masks(wide, n, sign_bit, rotate, false)?;
         Ok(Aarch64Instruction::Bitfield {
             operation,
-            source: (word >> 5 & 31) as u8,
-            destination: (word & 31) as u8,
+            source: Self::field_u8(word, 5, 31),
+            destination: Self::field_u8(word, 0, 31),
             rotate,
             sign_bit,
             write_mask,
@@ -269,7 +277,7 @@ impl Aarch64Decoder {
         if word >> 16 & 31 != 31 || word >> 10 & 63 != 0 || word & 31 != 0 {
             return Err(Aarch64DecodeError::Reserved);
         }
-        let source = (word >> 5 & 31) as u8;
+        let source = Self::field_u8(word, 5, 31);
         match word >> 21 & 15 {
             0 => Ok(Aarch64Instruction::BranchRegister { source, link: false }),
             1 => Ok(Aarch64Instruction::BranchRegister { source, link: true }),
@@ -332,7 +340,8 @@ impl Aarch64Decoder {
         Ok(if wide {
             (mask, top_mask)
         } else {
-            (u64::from(mask as u32), u64::from(top_mask as u32))
+            let narrow_mask = u64::from(u32::MAX);
+            (mask & narrow_mask, top_mask & narrow_mask)
         })
     }
 
