@@ -1,5 +1,5 @@
 use hl_time::{Clock, Deadline};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 pub(crate) mod model;
@@ -48,7 +48,7 @@ struct FutexWaiter {
 
 #[derive(Default)]
 struct FutexBucket {
-    queues: BTreeMap<FutexKey, Vec<Arc<FutexWaiter>>>,
+    queues: BTreeMap<FutexKey, VecDeque<Arc<FutexWaiter>>>,
 }
 
 impl FutexBucket {
@@ -80,7 +80,7 @@ impl FutexBucket {
         let mut removed = Vec::new();
         for key in keys {
             if let Some(mut queue) = self.queues.remove(&key) {
-                removed.append(&mut queue);
+                removed.extend(queue.drain(..));
             }
         }
         removed
@@ -317,7 +317,7 @@ impl FutexTable {
         let source_remaining = bucket
             .queues
             .get(&source)
-            .map_or(0, Vec::len)
+            .map_or(0, VecDeque::len)
             .saturating_sub(wake_count.saturating_add(requeue_count));
         if source_remaining != 0 && !bucket.queues.contains_key(&target) && bucket.queues.len() >= self.limits.keys {
             return Err(FutexError::ResourceLimit);
@@ -375,7 +375,7 @@ impl FutexTable {
         let mut index = 0;
         while index < queue.len() && selected.len() < count {
             if queue[index].bitset & bitset != 0 {
-                selected.push(queue.remove(index));
+                selected.push(queue.remove(index).expect("indexed futex waiter"));
             } else {
                 index += 1;
             }

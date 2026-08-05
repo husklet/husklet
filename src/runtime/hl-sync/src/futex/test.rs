@@ -1,6 +1,8 @@
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::{
     FutexAtomicOperation, FutexError, FutexKey, FutexLimits, FutexMemory, FutexTable, FutexWaitMultipleOutcome,
@@ -8,6 +10,41 @@ use crate::{
 };
 
 use super::test_support::{Clock, Memory, fixture};
+use super::{FutexBucket, FutexWaiter};
+use crate::WaitQueue;
+
+#[test]
+#[ignore = "performance diagnostic"]
+fn bulk_fifo_wake_benchmark() {
+    const WAITERS: usize = 4_096;
+    const ROUNDS: usize = 32;
+    let key = FutexKey::private(1, 0x1000).unwrap();
+    let mut buckets = (0..ROUNDS)
+        .map(|_| {
+            let mut bucket = FutexBucket::default();
+            let queue = bucket.queues.entry(key).or_default();
+            for identifier in 0..WAITERS {
+                queue.extend(std::iter::once(Arc::new(FutexWaiter {
+                    identifier: identifier as u64,
+                    bitset: u32::MAX,
+                    queue: Arc::new(WaitQueue::new()),
+                    vector_index: 0,
+                    winner: Arc::new(AtomicUsize::new(usize::MAX)),
+                })));
+            }
+            bucket
+        })
+        .collect::<Vec<_>>();
+    let started = Instant::now();
+    for bucket in &mut buckets {
+        let selected = FutexTable::take_matching(bucket, key, WAITERS, u32::MAX);
+        assert_eq!(selected.len(), WAITERS);
+        std::hint::black_box(selected);
+    }
+    let elapsed = started.elapsed().as_nanos() / (ROUNDS * WAITERS) as u128;
+    println!("bulk_fifo_wake_ns={elapsed}");
+    assert_eq!(buckets.iter().map(|bucket| bucket.queues.len()).sum::<usize>(), 0);
+}
 
 #[test]
 fn keys_validate_alignment() {

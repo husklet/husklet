@@ -109,7 +109,7 @@ impl FutexTable {
                 .queues
                 .entry(target.key)
                 .or_default()
-                .push(registration.clone());
+                .push_back(registration.clone());
         }
         Ok(())
     }
