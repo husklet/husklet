@@ -3004,6 +3004,133 @@ static int vex_packed_add_subtract_contract(void) {
     return 0;
 }
 
+static int vex_packed_average_sad_contract(void) {
+    static const uint8_t opcodes[] = {0xe0, 0xe3, 0xf6};
+    unsigned operation, wide, memory;
+    for (operation = 0; operation < sizeof opcodes; ++operation) {
+        for (wide = 0; wide < 2u; ++wide) for (memory = 0; memory < 2u; ++memory) {
+            uint8_t guest[] = {0xc5, (uint8_t)(wide != 0u ? 0xe5u : 0xe1u),
+                               opcodes[operation], (uint8_t)(memory != 0u ? 0x03u : 0xc1u)};
+            uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+            CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+            CHECK(provenance[0].guest_size == sizeof guest && provenance[0].word_end != 0u);
+            {
+                size_t capacity;
+                uint32_t required = 0u;
+                for (capacity = 1u; capacity <= 256u; ++capacity) {
+                    request.host_capacity = capacity;
+                    if (hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK &&
+                        result.instruction_count == 1u) { required = (uint32_t)capacity; break; }
+                }
+                CHECK(required != 0u);
+                request.host_capacity = required;
+                CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK &&
+                      result.instruction_count == 1u);
+                request.host_capacity = required - 1u;
+                memset(host, 0xa5, sizeof host); memset(provenance, 0xa5, sizeof provenance);
+                {
+                    hl_x86_a64_status status = hl_x86_a64_emit(&request, &result);
+                    CHECK(status == HL_X86_A64_CAPACITY || result.instruction_count == 0u);
+                    if (status == HL_X86_A64_CAPACITY) CHECK(host[0] == UINT32_C(0xa5a5a5a5));
+                }
+            }
+        }
+    }
+    {
+        static const uint8_t alternatives[][5] = {
+            {0xc4, 0xe1, 0x69, 0xe3, 0xc1}, /* C4 W=0 VPAVGW xmm0,xmm2,xmm1 */
+            {0xc4, 0xe1, 0xed, 0xf6, 0x03}, /* C4 W=1 VPSADBW ymm0,ymm2,[rbx] */
+        };
+        for (operation = 0; operation < sizeof alternatives / sizeof alternatives[0]; ++operation) {
+            uint32_t host[256] = {0};
+            hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(alternatives[operation],
+                                                      sizeof alternatives[operation], host, provenance);
+            size_t capacity;
+            uint32_t required = 0u;
+            for (capacity = 1u; capacity <= 256u; ++capacity) {
+                request.host_capacity = capacity;
+                if (hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK &&
+                    result.instruction_count == 1u) { required = (uint32_t)capacity; break; }
+            }
+            CHECK(required != 0u && provenance[0].guest_size == sizeof alternatives[operation]);
+            request.host_capacity = required - 1u;
+            memset(host, 0xa5, sizeof host);
+            memset(provenance, 0xa5, sizeof provenance);
+            {
+                hl_x86_a64_status status = hl_x86_a64_emit(&request, &result);
+                CHECK(status == HL_X86_A64_CAPACITY || result.instruction_count == 0u);
+                if (status == HL_X86_A64_CAPACITY) {
+                    CHECK(host[0] == UINT32_C(0xa5a5a5a5));
+                    CHECK(provenance[0].guest_pc == UINT64_C(0xa5a5a5a5a5a5a5a5));
+                }
+            }
+        }
+    }
+    {
+        static const uint8_t invalid[][5] = {
+            {0xc5, 0xe0, 0xe0, 0xc1, 0}, /* wrong pp */
+            {0xc4, 0xe2, 0x61, 0xf6, 0xc1}, /* wrong map */
+        };
+        static const size_t sizes[] = {4, 5};
+        for (operation = 0; operation < 2u; ++operation) {
+            uint32_t host[32] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(invalid[operation], sizes[operation], host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+            CHECK(result.instruction_count == 0 && result.exit_pc == request.guest_pc);
+        }
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t guest[] = {
+            0xc5, 0xe5, 0xe0, 0xc1, /* vpavgb ymm0,ymm3,ymm1 */
+            0xc5, 0xed, 0xf6, 0xc9, /* vpsadbw ymm1,ymm2,ymm1 (destination/source alias) */
+        };
+        uint8_t a[32], b[32], average[32], sad[32] = {0};
+        uint32_t host[256] = {0}; hl_x86_a64_provenance provenance[3] = {0};
+        hl_x86_a64_result emitted; hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        hl_native_x86_64_cpu cpu = {0}; long page = sysconf(_SC_PAGESIZE); unsigned i, q;
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED);
+        for (i = 0; i < 32u; ++i) {
+            a[i] = (uint8_t)(i * 9u); b[i] = (uint8_t)(255u - i * 5u);
+            average[i] = (uint8_t)(((unsigned)a[i] + (unsigned)b[i] + 1u) >> 1);
+        }
+        for (q = 0; q < 32u; q += 8u) {
+            uint16_t sum = 0;
+            for (i = 0; i < 8u; ++i)
+                sum = (uint16_t)(sum + (a[q + i] > b[q + i] ?
+                       a[q + i] - b[q + i] : b[q + i] - a[q + i]));
+            memcpy(sad + q, &sum, sizeof sum);
+        }
+        CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+        memcpy(code, host, emitted.word_count * 4u);
+        ((uint32_t *)code)[emitted.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (emitted.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[6], a, 16); memcpy(&cpu.vector_upper[6], a + 16, 16);
+        memcpy(&cpu.vectors[2], b, 16); memcpy(&cpu.vector_upper[2], b + 16, 16);
+        memcpy(&cpu.vectors[4], a, 16); memcpy(&cpu.vector_upper[4], a + 16, 16);
+        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[0], average, 16) == 0 &&
+              memcmp(&cpu.vector_upper[0], average + 16, 16) == 0);
+        CHECK(memcmp(&cpu.vectors[2], sad, 16) == 0 &&
+              memcmp(&cpu.vector_upper[2], sad + 16, 16) == 0);
+        CHECK(memcmp(&cpu.vectors[6], a, 16) == 0 && memcmp(&cpu.vectors[4], a, 16) == 0);
+        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int vex_packed_saturating_contract(void) {
     static const uint8_t opcodes[] = {0x63, 0x67, 0x6b, 0x2b};
     unsigned operation;
@@ -5406,6 +5533,8 @@ int main(void) {
     status = vex_packed_unpack_contract();
     if (status != 0) return status;
     status = vex_packed_add_subtract_contract();
+    if (status != 0) return status;
+    status = vex_packed_average_sad_contract();
     if (status != 0) return status;
     status = vex_packed_saturating_contract();
     if (status != 0) return status;

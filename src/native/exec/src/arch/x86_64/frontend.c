@@ -255,8 +255,9 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->operation = OP_VECTOR; item->memory_operand = 1u; item->source = 16u;
             }
         } else if (vex != 0u && vex_map == 1u && vex_pp == 1u &&
-                   (opcode == 0xd4u || opcode == 0xd5u || opcode == 0xe4u ||
-                    opcode == 0xe5u || opcode == 0xf4u ||
+                   (opcode == 0xd4u || opcode == 0xd5u || opcode == 0xe0u ||
+                    opcode == 0xe3u || opcode == 0xe4u || opcode == 0xe5u ||
+                    opcode == 0xf4u || opcode == 0xf6u ||
                     (opcode >= 0xf8u && opcode <= 0xfeu))) {
             uint8_t modrm;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
@@ -277,6 +278,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             } else if (opcode >= 0xf8u) {
                 item->vector_kind = VECTOR_SUBTRACT;
                 item->vector_lane = (uint8_t)(1u << (opcode - 0xf8u));
+            } else if (opcode == 0xe0u || opcode == 0xe3u) {
+                item->vector_kind = VECTOR_AVERAGE_UNSIGNED;
+                item->vector_lane = opcode == 0xe0u ? 1u : 2u;
+            } else if (opcode == 0xf6u) {
+                item->vector_kind = VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE;
             } else if (opcode == 0xd5u) item->vector_kind = VECTOR_MULTIPLY_LOW_WORD;
             else if (opcode == 0xe4u || opcode == 0xe5u) {
                 item->vector_kind = VECTOR_MULTIPLY_HIGH_WORD;

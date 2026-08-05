@@ -852,6 +852,7 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_INSERT_WORD: return 1u;
     case VECTOR_MULTIPLY_HIGH_WORD:
     case VECTOR_MULTIPLY_EVEN_DWORD: return 3u;
+    case VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE: return 4u;
     default: return 1u;
     }
 }
@@ -875,7 +876,9 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
                               item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD ||
                               item->vector_kind == VECTOR_PACK_SIGNED ||
-                              item->vector_kind == VECTOR_PACK_UNSIGNED;
+                              item->vector_kind == VECTOR_PACK_UNSIGNED ||
+                              item->vector_kind == VECTOR_AVERAGE_UNSIGNED ||
+                              item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE;
         operation += item->width == 32u ? vector_operation_words(item) + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
     }
@@ -1229,6 +1232,14 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
     } else if (item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD) {
         words[(*cursor)++] = UINT32_C(0x4ea09c00) | source << 16 |
                              first << 5 | destination; /* mul vd.4s,vn.4s,vm.4s */
+    } else if (item->vector_kind == VECTOR_AVERAGE_UNSIGNED) {
+        uint32_t base = lane == 1u ? UINT32_C(0x6e201400) : UINT32_C(0x6e601400);
+        words[(*cursor)++] = base | source << 16 | first << 5 | destination;
+    } else if (item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE) {
+        words[(*cursor)++] = UINT32_C(0x6e207400) | source << 16 | first << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0x6e202800) | destination << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0x6e602800) | destination << 5 | destination;
+        words[(*cursor)++] = UINT32_C(0x6ea02800) | destination << 5 | destination;
     } else if (item->vector_kind == VECTOR_BYTE_MASK) {
         words[(*cursor)++] = UINT32_C(0x6f090400) | source << 5 | 17u; /* ushr v17.16b,source,#7 */
         words[(*cursor)++] = UINT32_C(0x6f001400) | 25u << 16 | 17u << 5 | 17u;
@@ -1265,7 +1276,9 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         item->vector_kind == VECTOR_UNPACK_LOW || item->vector_kind == VECTOR_UNPACK_HIGH ||
         item->vector_kind == VECTOR_MULTIPLY_LOW_WORD ||
         item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD ||
-        item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD) {
+        item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD ||
+        item->vector_kind == VECTOR_AVERAGE_UNSIGNED ||
+        item->vector_kind == VECTOR_SUM_ABSOLUTE_DIFFERENCES_BYTE) {
         hl_x86_emit_vector_upper_load(words, cursor, 19u, item->vector_source_one);
         upper.vector_source_one = 19u;
     } else upper.vector_source_one = upper.source;

@@ -259,6 +259,43 @@ both widths with register and memory sources and rejects wrong-map, wrong-pp,
 and misplaced `VPACKUSDW` encodings. The `hl-execution` scalar contract checks
 all saturation boundaries, lane ordering, source selection, upper-zeroing, and
 fault-before-commit behavior.
+## VEX packed unsigned average and byte SAD slice
+
+The read-only oracle audit followed
+`../engine/src/translator/guest/x86_64/decode.c::hl_x86_decode` through the
+`R_AVX` dispatch, `avx.c::hl_x86_avx_run`, `do_avx`, `avx_get`, `avx_get_rm`,
+and `avx_put`, and compared the AArch64 inline owners in
+`translate.c::translate_avx_inline` and `translate_one`. The complete related
+map-one, mandatory-66 family is VPAVGB (`E0`), VPAVGW (`E3`), and VPSADBW
+(`F6`), all WIG and L=0/1. VEX.vvvv is source one; ModRM r/m is a register or
+the complete 16/32-byte source two. Average computes unsigned `(a+b+1)/2` per
+byte or word. SAD sums eight unsigned byte absolute differences independently
+in each qword and zero-extends the at-most-2040 result in its low word.
+
+The dispatcher-owned CPU image supplies XMM/YMM state for the block lifetime.
+These operations have no separate identity, allocation, lock, teardown,
+blocking, cancellation, errno, flags, or MXCSR effect. `avx_get_rm` validates
+the full memory span before `avx_put` publishes any destination lane; register
+aliases are safe because both sources are obtained before publication.
+VEX.128 clears the destination YMM upper half and VEX.256 applies identical
+independent 128-bit lowering to both halves. Portable C owns other hosts; the
+NEON path uses URHADD or UABD followed by three pairwise widening reductions.
+
+| Retained capability | Husklet owner | Status after this lane |
+|---|---|---|
+| VPAVGB/VPAVGW rounded unsigned lanes | `frontend.c` and `frontend/memory.c` | implemented, XMM/YMM register and memory |
+| VPSADBW qword-grouped reductions | same | implemented, XMM/YMM register and memory |
+| full-span fault before destination commit | generic vector read guard | implemented |
+| VEX.128 upper zero and VEX.256 upper result | VEX completion and CPU layout | implemented |
+| VMPSADBW map-three immediate windows | native frontend | separate, still unsupported |
+
+The structural contract enumerates all twelve width/register-memory forms,
+rejects wrong-map and wrong-prefix aliases, and finds the minimum capacity that
+still publishes the instruction before checking required-minus-one. This
+explicit search reflects the frontend's evidenced non-monotonic shorter
+interpreter-exit fallback; it does not claim a global capacity monotonicity
+rule. AArch64 execution tests remain the proportional semantic gate for source
+preservation, upper-lane rules, flags/MXCSR, boundary memory, and exact results.
 
 ## VEX packed integer compare slice
 
