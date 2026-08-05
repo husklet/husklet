@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repository=$(git rev-parse --show-toplevel)
+script_directory=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repository=$(CDPATH= cd -- "$script_directory/../../../.." && pwd)
+cd "$repository"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/hl-native-memory.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT INT TERM
 export CARGO_TARGET_DIR="$scratch/target"
