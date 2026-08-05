@@ -245,6 +245,7 @@ impl List {
                         | "label!"
                         | "exited"
                         | "health"
+                        | "isolation"
                         | "expose"
                         | "is-task"
                         | "publish"
@@ -356,6 +357,7 @@ impl List {
                 };
                 health == value
             }
+            "isolation" => true,
             "expose" => Self::exposed_port(value).is_ok_and(|(start, end, protocol)| {
                 protocol == "tcp"
                     && container
@@ -532,6 +534,21 @@ mod tests {
         for filters in [r#"{"health":["bogus"]}"#, r#"{"health!":["healthy"]}"#] {
             assert!(List::parse(false, Some(filters)).is_err(), "accepted {filters}");
         }
+    }
+
+    #[test]
+    fn isolation_filter_is_a_linux_daemon_no_op() {
+        let container = container();
+        for filters in [
+            r#"{"isolation":["default"]}"#,
+            r#"{"isolation":{"process":false,"hyperv":true}}"#,
+            r#"{"isolation":["arbitrary"],"status":["exited"]}"#,
+        ] {
+            let selected = List::parse(true, Some(filters)).unwrap();
+            assert!(matches(selected, &container, std::slice::from_ref(&container)));
+        }
+        let conjunction = List::parse(true, Some(r#"{"isolation":["default"],"name":["missing"]}"#)).unwrap();
+        assert!(!matches(conjunction, &container, std::slice::from_ref(&container)));
     }
 
     #[test]

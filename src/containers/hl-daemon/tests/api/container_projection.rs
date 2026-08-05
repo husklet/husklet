@@ -281,6 +281,8 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         (r#"{"is-task":["true"]}"#, 0),
         (r#"{"is-task":["false","0"],"name":["truthful"]}"#, 1),
         (r#"{"is-task":["false"],"name":["missing"]}"#, 0),
+        (r#"{"isolation":{"process":false}}"#, 1),
+        (r#"{"isolation":["arbitrary"],"name":["missing"]}"#, 0),
     ] {
         let encoded = filters.bytes().fold(String::new(), |mut encoded, byte| {
             use std::fmt::Write as _;
