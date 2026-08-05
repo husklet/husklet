@@ -64,7 +64,7 @@ impl FutexMemory for Memory {
     fn atomic_update(&self, key: FutexKey, operation: FutexAtomicOperation) -> Result<i32, FutexError> {
         let mut words = self.words.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let word = words.get_mut(&key).ok_or(FutexError::Fault)?;
-        let old = *word as i32;
+        let old = (*word).cast_signed();
         let next = match operation {
             FutexAtomicOperation::Set(value) => value,
             FutexAtomicOperation::Add(value) => old.wrapping_add(value),
@@ -72,7 +72,7 @@ impl FutexMemory for Memory {
             FutexAtomicOperation::AndNot(value) => old & !value,
             FutexAtomicOperation::Xor(value) => old ^ value,
         };
-        *word = next as u32;
+        *word = next.cast_unsigned();
         Ok(old)
     }
 
