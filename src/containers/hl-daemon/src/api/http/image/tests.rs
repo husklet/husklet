@@ -34,7 +34,7 @@ fn image_id_prefix_requires_one_config_identity() {
         "sha256:0123456789abffff",
         "sha256:fedcba9876543210",
     ];
-    assert_eq!(unique_image_id(ids, "sha256:0123456789ab"), Ok(Some(ids[0])));
+    assert_eq!(unique_image_id(ids, "sha256:0123456789ab"), Err(()));
     assert_eq!(unique_image_id(ids, "sha256:111111111111"), Ok(None));
     assert_eq!(unique_image_id(ids, "sha256:"), Err(()));
     assert_eq!(unique_image_id([ids[0], ids[0]], "sha256:0123456789abcdef"), Ok(Some(ids[0])));
