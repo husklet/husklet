@@ -305,7 +305,7 @@ fn projection_blocks_mapping_transitions_and_checks_access() {
 }
 
 #[test]
-fn saturated_mapping_request_epoch_permanently_denies_continuation() {
+fn saturated_epoch_denies() {
     use std::sync::atomic::Ordering;
 
     let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));

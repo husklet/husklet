@@ -661,7 +661,7 @@ mod cpu_account_test {
     use super::CpuAccount;
 
     #[test]
-    fn retired_account_is_independent_from_reused_process_account() {
+    fn retired_account_isolated() {
         let retired = Arc::new(CpuAccount::default());
         let admitted = Arc::clone(&retired);
         let reused = Arc::new(CpuAccount::default());
@@ -673,7 +673,7 @@ mod cpu_account_test {
     }
 
     #[test]
-    fn charge_saturates_without_wrapping() {
+    fn charge_saturates() {
         let account = CpuAccount::restored(u64::MAX - 1);
         account.charge(2);
         assert_eq!(account.nanoseconds(), u64::MAX);
