@@ -11,6 +11,8 @@ use core::fmt;
 /// Number of nanoseconds in one second.
 pub const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
+const SUBSECOND_NANOSECONDS_LIMIT: u32 = 1_000_000_000;
+
 /// A failure reported by an injected clock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClockError {
@@ -56,7 +58,7 @@ impl Timespec {
     /// Returns `None` when `nanoseconds` is outside `0..1_000_000_000`.
     #[must_use]
     pub const fn new(seconds: u64, nanoseconds: u32) -> Option<Self> {
-        if nanoseconds < NANOSECONDS_PER_SECOND as u32 {
+        if nanoseconds < SUBSECOND_NANOSECONDS_LIMIT {
             Some(Self { seconds, nanoseconds })
         } else {
             None
@@ -135,7 +137,7 @@ impl Timespec {
         } else {
             Some(Self {
                 seconds: self.seconds - earlier.seconds - 1,
-                nanoseconds: self.nanoseconds + NANOSECONDS_PER_SECOND as u32 - earlier.nanoseconds,
+                nanoseconds: self.nanoseconds + SUBSECOND_NANOSECONDS_LIMIT - earlier.nanoseconds,
             })
         }
     }
@@ -248,11 +250,22 @@ impl Deadline {
 /// An injectable monotonic clock.
 pub trait MonotonicClock {
     /// Reads the current monotonic time.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClockError`] when the provider cannot read its monotonic
+    /// clock.
     fn monotonic_now(&self) -> Result<MonotonicInstant, ClockError>;
 
     /// Sleeps until an absolute monotonic deadline.
     ///
     /// Clocks that cannot sleep retain the default refusal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClockError`] when the provider cannot sleep until the
+    /// requested deadline. The default implementation returns
+    /// [`ClockError::NotSupported`].
     fn sleep_until(&self, _deadline: Deadline) -> Result<(), ClockError> {
         Err(ClockError::NotSupported)
     }
@@ -261,6 +274,11 @@ pub trait MonotonicClock {
 /// An injectable realtime clock.
 pub trait RealtimeClock {
     /// Reads realtime as a non-negative normalized timespec.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ClockError`] when the provider cannot read its realtime
+    /// clock.
     fn realtime_now(&self) -> Result<Timespec, ClockError>;
 }
 
