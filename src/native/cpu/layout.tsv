@@ -107,3 +107,4 @@ x86_64	fpsr	1536	1	u64
 x86_64	host_fpcr	1544	1	u64
 x86_64	host_fpsr	1552	1	u64
 x86_64	vector_dirty	1560	1	u64
+x86_64	vector_upper	1568	32	u64

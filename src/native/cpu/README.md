@@ -39,3 +39,7 @@ moving the established four-word view ABI. `memory_write_policy` and
 translated blocks set it before their first vector-register write, chains carry
 it, and the dispatcher clears it before every run and after the unconditional
 architectural vector spill. It is never checkpointed or treated as guest state.
+`x86_64.vector_upper` is the append-only architectural tail for YMM0..15 bits
+255:128. It remains memory-resident across native blocks: legacy SSE preserves
+it, while future VEX destination lowerings must implement the encoded-width
+upper-zero rule before returning to Rust.

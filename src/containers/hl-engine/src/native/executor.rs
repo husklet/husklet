@@ -1337,6 +1337,11 @@ impl NativeX86 {
             lanes[0] = value as u64;
             lanes[1] = (value >> 64) as u64;
         }
+        let mut vector_upper = [0; 32];
+        for (lanes, value) in vector_upper.chunks_exact_mut(2).zip(cpu.vector_upper) {
+            lanes[0] = value as u64;
+            lanes[1] = (value >> 64) as u64;
+        }
         let flags = u64::from(cpu.flags.bits())
             | (u64::from(cpu.direction) << 10)
             | (u64::from(cpu.alignment_check) << 18)
@@ -1352,6 +1357,7 @@ impl NativeX86 {
             host_registers: [0; 12],
             host_vectors: [0; 16],
             vectors,
+            vector_upper,
             scratch: [0; 2],
             interrupt: u64::from(interrupt),
             indirect_site: 0,
@@ -1401,6 +1407,9 @@ impl NativeX86 {
         cpu.gs_base = self.0.gs;
         cpu.mxcsr = self.0.mxcsr as u32 & !0x3f | Self::exception_flags(self.0.fpsr);
         for (value, lanes) in cpu.vectors.iter_mut().zip(self.0.vectors.chunks_exact(2)) {
+            *value = u128::from(lanes[0]) | u128::from(lanes[1]) << 64;
+        }
+        for (value, lanes) in cpu.vector_upper.iter_mut().zip(self.0.vector_upper.chunks_exact(2)) {
             *value = u128::from(lanes[0]) | u128::from(lanes[1]) << 64;
         }
     }
@@ -2998,6 +3007,7 @@ mod test {
         let mut cpu = X86CpuState {
             registers: std::array::from_fn(|index| index as u64 * 19),
             vectors: std::array::from_fn(|index| (index as u128) << 80 | index as u128),
+            vector_upper: std::array::from_fn(|index| (index as u128) << 96 | !(index as u128)),
             flags: FlagState::from_bits(0x8d5),
             rip: 0x401000,
             fs_base: 0x7000,
@@ -3881,14 +3891,17 @@ mod test {
         for (index, vector) in cpu.vectors.iter_mut().enumerate() {
             *vector = (index as u128) << 96 | 0x8877_6655_4433_2211_00ff_eedd_ccbb_aa99;
         }
-        let expected = cpu.vectors;
+        for (index, vector) in cpu.vector_upper.iter_mut().enumerate() {
+            *vector = (index as u128) << 96 | 0x99aa_bbcc_ddee_ff00_1122_3344_5566_7788;
+        }
+        let expected = (cpu.vectors, cpu.vector_upper);
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let outcome = executor
             .run_x86(&mut cpu, &source, 1, 1, 2, false, None, &mut resolve)
             .unwrap()
             .0;
         assert_eq!(outcome.exit, Exit::Syscall);
-        assert_eq!(cpu.vectors, expected);
+        assert_eq!((cpu.vectors, cpu.vector_upper), expected);
     }
 
     #[cfg(target_arch = "aarch64")]

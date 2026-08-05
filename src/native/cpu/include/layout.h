@@ -117,6 +117,7 @@ typedef struct hl_native_x86_64_cpu {
     uint64_t host_fpcr;
     uint64_t host_fpsr;
     uint64_t vector_dirty;
+    uint64_t vector_upper[32];
 } hl_native_x86_64_cpu;
 
 #define HL_CPU_ASSERT(type, field, expected) \
@@ -234,7 +235,8 @@ HL_CPU_ASSERT(hl_native_x86_64_cpu, fpsr, 1536);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, host_fpcr, 1544);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, host_fpsr, 1552);
 HL_CPU_ASSERT(hl_native_x86_64_cpu, vector_dirty, 1560);
-_Static_assert(sizeof(hl_native_x86_64_cpu) == 1568, "x86_64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_x86_64_cpu, vector_upper, 1568);
+_Static_assert(sizeof(hl_native_x86_64_cpu) == 1824, "x86_64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_x86_64_cpu) == 8, "x86_64 native CPU prefix alignment drifted");
 
