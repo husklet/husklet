@@ -325,8 +325,10 @@ static size_t source_bytes(const hl_native_source *source, uint64_t pc, const ui
 
 static hl_native_status leave_exit(hl_native_execution *execution, hl_native_exit *output,
                                    uint32_t kind, uint64_t pc) {
-    if (execution->owner != NULL && execution->owner->diagnostics)
+    if (execution->owner != NULL && execution->owner->diagnostics) {
         execution->owner->x86_public_exits++;
+        if (kind == HL_NATIVE_EXIT_EPOCH) execution->owner->x86_public_epochs++;
+    }
     return hl_native_execution_exit(execution, output, kind, HL_NATIVE_ACCESS_UNKNOWN,
                                     pc, pc, 0, 0);
 }

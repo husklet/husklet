@@ -288,6 +288,7 @@ struct Diagnostics {
     a64_fallback_system: u64,
     a64_fallback_form_memory: u64,
     a64_fallback_form_other: u64,
+    x86_public_epochs: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1919,6 +1920,7 @@ impl Executor {
             a64_fallback_system: 0,
             a64_fallback_form_memory: 0,
             a64_fallback_form_other: 0,
+            x86_public_epochs: 0,
         };
         (unsafe { hl_native_diagnose(self.handle.as_ptr(), &raw mut output) } == 0)
             .then_some(output)
@@ -2564,7 +2566,7 @@ impl Drop for Executor {
             && let Ok(value) = self.diagnostics()
         {
             eprintln!(
-                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} a64_slim_exits=0",
+                "hl-native-detail: fills={} site_collisions={} shared_collisions={} branch={} syscall={} fallback={} yield={} completed={} operand_callbacks={} operand_cache_hits={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={} x86_cold_builds={} x86_cold_quota_exits={} a64_guard_fast={} a64_guard_full={} a64_guard_fallback={} a64_dirty_reserved={} a64_dirty_overflow={} a64_dirty_committed={} a64_dirty_merged={} relocation_cold_targets={} relocation_cycles={} relocation_capacity={} relocation_invalidations={} ibtc_site_misses={} ibtc_shared_misses={} a64_fallback_guard_read={} a64_fallback_guard_write={} a64_fallback_simd_fp={} a64_fallback_memory={} a64_fallback_control={} a64_fallback_other={} a64_fallback_entry_rejection={} a64_fallback_generated={} a64_fallback_call={} a64_fallback_return={} a64_fallback_indirect={} a64_fallback_system={} a64_fallback_form_memory={} a64_fallback_form_other={} a64_slim_exits=0",
                 value.ibtc_fills,
                 value.ibtc_site_collisions,
                 value.ibtc_shared_collisions,
@@ -2577,6 +2579,7 @@ impl Drop for Executor {
                 value.operand_cache_hits,
                 value.x86_public_exits,
                 value.x86_public_syscalls,
+                value.x86_public_epochs,
                 value.x86_syscall_vector_dirty,
                 value.x86_cold_builds,
                 value.x86_cold_quota_exits,
@@ -2657,7 +2660,7 @@ const _: () = {
     assert!(std::mem::size_of::<FaultScope>() == 32);
     assert!(std::mem::size_of::<RunExit>() == 48);
     assert!(std::mem::size_of::<Change>() == 40);
-    assert!(std::mem::size_of::<Diagnostics>() == 448);
+    assert!(std::mem::size_of::<Diagnostics>() == 456);
 };
 
 #[cfg(test)]

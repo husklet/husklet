@@ -27,10 +27,19 @@ static hl_native_status executable_end(void *opaque) {
 static int diagnostics_contract(void) {
     static const uint8_t clean[] = {0x0f, 0x05};
     static const uint8_t dirty[] = {0x66, 0x0f, 0xef, 0xc0, 0xeb, 0x02};
+    static const uint8_t executable_store[] = {0x48, 0x87, 0x10, 0x0f, 0x05};
+    static const uint8_t fallback[] = {0xcc};
     hl_native_source_span spans[] = {{0x7000, clean, sizeof(clean), 7, 9},
                                      {0x7100, dirty, sizeof(dirty), 7, 9},
-                                     {0x7108, clean, sizeof(clean), 7, 9}};
-    hl_native_source source = {spans, 3, 7, 9};
+                                     {0x7108, clean, sizeof(clean), 7, 9},
+                                     {0x7200, executable_store, sizeof(executable_store), 7, 9},
+                                     {0x7300, fallback, sizeof(fallback), 7, 9}};
+    hl_native_source source = {spans, 5, 7, 9};
+    uint64_t executable_data = 0;
+    hl_native_projection_view view = {0x8000, 0x8008, (uint64_t)(uintptr_t)&executable_data, 7,
+                                      7,
+                                      HL_NATIVE_WRITE_EXACT, 0};
+    hl_native_projection projection = {&view, 1, 7, 0};
     test_memory host = {0};
     hl_native_memory memory = test_services(&host);
     memory.write_begin = executable_begin;
@@ -50,7 +59,7 @@ static int diagnostics_contract(void) {
           output.kind == HL_NATIVE_EXIT_SYSCALL && state.vector_dirty == 0);
     CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK &&
           diagnostic.x86_public_exits == 1 && diagnostic.x86_public_syscalls == 1 &&
-          diagnostic.x86_syscall_vector_dirty == 0);
+          diagnostic.x86_syscall_vector_dirty == 0 && diagnostic.x86_public_epochs == 0);
     state = (hl_native_x86_64_cpu){.program = 0x7100};
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK &&
           output.kind == HL_NATIVE_EXIT_SYSCALL && state.program == 0x710a && state.vector_dirty == 0);
@@ -63,8 +72,32 @@ static int diagnostics_contract(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK && state.vector_dirty == 0);
     CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK &&
           diagnostic.x86_public_syscalls == 4 && diagnostic.x86_syscall_vector_dirty == 1);
+    state = (hl_native_x86_64_cpu){.program = 0x7200, .registers = {[0] = 0x8000, [2] = 42}};
+    request.projection = &projection;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+    CHECK(output.kind == HL_NATIVE_EXIT_EPOCH);
+    CHECK(executable_data == 42);
+    request.projection = NULL;
+    state = (hl_native_x86_64_cpu){.program = 0x7000};
+    request.budget = 0;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK &&
+          output.kind == HL_NATIVE_EXIT_YIELD);
+    state = (hl_native_x86_64_cpu){.program = 0x7300};
+    request.budget = 1;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK &&
+          output.kind == HL_NATIVE_EXIT_FALLBACK);
+    CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK);
+    CHECK(diagnostic.x86_public_exits == 7);
+    CHECK(diagnostic.x86_public_syscalls == 4);
+    CHECK(diagnostic.x86_public_epochs == 1);
     struct legacy { unsigned abi, size; unsigned char body[184]; } legacy = {HL_NATIVE_ABI, 192, {0}};
     CHECK(hl_native_diagnose(executor, (hl_native_diagnostics *)&legacy) == HL_NATIVE_OK);
+    diagnostic = (hl_native_diagnostics){.abi = HL_NATIVE_ABI, .size = 384,
+        .a64_fallback_guard_read = UINT64_MAX, .a64_fallback_other = UINT64_MAX,
+        .x86_public_epochs = UINT64_C(0xfeedfacecafebeef)};
+    CHECK(hl_native_diagnose(executor, &diagnostic) == HL_NATIVE_OK);
+    CHECK(diagnostic.a64_fallback_guard_read == 0 && diagnostic.a64_fallback_other == 0);
+    CHECK(diagnostic.x86_public_epochs == UINT64_C(0xfeedfacecafebeef));
     hl_native_destroy(executor);
     return 0;
 }

@@ -304,10 +304,11 @@ impl Run {
             walls.push(sample.wall);
             if let Some(diagnostics) = sample.x86_diagnostics {
                 eprint!(
-                    "diagnostic repeat={} x86_public_exits={} x86_public_syscalls={} x86_syscall_vector_dirty={}",
+                    "diagnostic repeat={} x86_public_exits={} x86_public_syscalls={} x86_public_epochs={} x86_syscall_vector_dirty={}",
                     repetition + 1,
                     diagnostics.public_exits,
                     diagnostics.public_syscalls,
+                    diagnostics.public_epochs,
                     diagnostics.syscall_vector_dirty,
                 );
                 if let Some(share) = diagnostics.dirty_share_ppm() {

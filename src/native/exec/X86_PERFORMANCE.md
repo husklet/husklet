@@ -373,3 +373,35 @@ lifetime changes.
 This removes fixed construction/reset memory traffic. The dominant steady-
 state gap remains generated projected-memory guards and write publication; it
 must be addressed separately with exact compatibility evidence.
+
+## Executable-write epoch exit diagnostics
+
+The retained oracle audit covered `../engine/src/translator/guest/x86_64/dispatch.h`
+(`smc_protect`, `smc_on_write`, and `G_DISPATCH_REASON`),
+`../engine/src/translator/guest/x86_64/interp_dispatch.h`
+(`smc_on_write` and `G_DISPATCH_REASON`),
+`../engine/src/core/target/x86_64.c` (`jit86_smc_commit`), and
+`../engine/src/linux_abi/x86.c` (`jit86_lazyguard`). The CPU record owns pending
+SMC ranges until dispatcher commit. The JIT's process-wide protected-page table
+is updated under the existing dispatcher/activation regime; a write fault first
+unprotects and forgets its page, then invalidation retires stale translations.
+The interpreter owns no emitted-code identity and re-decodes instead. Syscalls
+commit queued shared writes before service and copyout writes afterward. Fault
+classification and signal delivery precede the SMC/lazy-map path; there is no
+partial syscall result or errno conversion in the SMC mechanism. Host-specific
+signal-context reconstruction remains in `linux_abi/x86.c`; the x86 guest
+semantics do not vary by host ISA.
+
+The Rust owners are `src/arch/x86_64/projection.c` for bounded dirty and
+executable-write classification, `src/arch/x86_64/run.c` for the typed epoch
+exit and execution-scope teardown, and `src/executor.c` plus the public
+diagnostics ABI for aggregate observation. The retained engine services SMC
+inside its dispatcher, whereas Rust intentionally returns an epoch identity to
+the memory/runtime owner before re-entry. The previously existing aggregate
+`x86_public_exits` and syscall counters could not separate this boundary from
+yield or fallback. `x86_public_epochs` now counts only typed
+`HL_NATIVE_EXIT_EPOCH` returns, once per public return, with diagnostics disabled
+remaining a single predictable branch and no logging or allocation. The ABI
+extension is appended after the retained prefix. Focused coverage drives an
+executable projection store to epoch, then separate yield, fallback, and syscall
+returns, proving only the epoch changes the new counter.

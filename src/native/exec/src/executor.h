@@ -33,7 +33,7 @@ struct hl_native_executor {
     uint64_t ibtc_fills, ibtc_site_collisions, ibtc_shared_collisions;
     uint64_t boundary_branch, boundary_syscall, boundary_fallback, boundary_yield, completed;
     uint64_t operand_callbacks, operand_cache_hits;
-    uint64_t x86_public_exits, x86_public_syscalls, x86_syscall_vector_dirty;
+    uint64_t x86_public_exits, x86_public_syscalls, x86_syscall_vector_dirty, x86_public_epochs;
     _Atomic uint64_t a64_guard_fast, a64_guard_full, a64_guard_fallback;
     _Atomic uint64_t a64_dirty_reserved, a64_dirty_overflow, a64_dirty_committed;
     _Atomic uint64_t a64_dirty_merged;

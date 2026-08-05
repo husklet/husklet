@@ -117,6 +117,7 @@ typedef struct hl_native_diagnostics {
     uint64_t a64_fallback_system;
     uint64_t a64_fallback_form_memory;
     uint64_t a64_fallback_form_other;
+    uint64_t x86_public_epochs;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -370,7 +371,9 @@ _Static_assert(offsetof(hl_native_diagnostics, a64_fallback_guard_read) == 336,
                "native diagnostics fallback extension drifted");
 _Static_assert(offsetof(hl_native_diagnostics, a64_fallback_entry_rejection) == 384,
                "native diagnostics fallback-form extension drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 448, "native diagnostics ABI drifted");
+_Static_assert(offsetof(hl_native_diagnostics, x86_public_epochs) == 448,
+               "native diagnostics epoch extension drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 456, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

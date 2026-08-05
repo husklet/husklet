@@ -633,7 +633,7 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->a64_fallback_control = atomic_load_explicit(&executor->a64_fallback_control, memory_order_relaxed);
         output->a64_fallback_other = atomic_load_explicit(&executor->a64_fallback_other, memory_order_relaxed);
     }
-    if (output->size >= sizeof(*output)) {
+    if (output->size >= offsetof(hl_native_diagnostics, x86_public_epochs)) {
         output->a64_fallback_entry_rejection = atomic_load_explicit(&executor->a64_fallback_entry_rejection, memory_order_relaxed);
         output->a64_fallback_generated = atomic_load_explicit(&executor->a64_fallback_generated, memory_order_relaxed);
         output->a64_fallback_call = atomic_load_explicit(&executor->a64_fallback_call, memory_order_relaxed);
@@ -642,6 +642,9 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
         output->a64_fallback_system = atomic_load_explicit(&executor->a64_fallback_system, memory_order_relaxed);
         output->a64_fallback_form_memory = atomic_load_explicit(&executor->a64_fallback_form_memory, memory_order_relaxed);
         output->a64_fallback_form_other = atomic_load_explicit(&executor->a64_fallback_form_other, memory_order_relaxed);
+    }
+    if (output->size >= sizeof(*output)) {
+        output->x86_public_epochs = executor->x86_public_epochs;
     }
     return HL_NATIVE_OK;
 }

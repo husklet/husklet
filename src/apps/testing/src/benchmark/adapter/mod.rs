@@ -13,6 +13,7 @@ const CAPTURE_LIMIT: usize = 1024 * 1024;
 pub(super) struct X86Diagnostics {
     pub(super) public_exits: u64,
     pub(super) public_syscalls: u64,
+    pub(super) public_epochs: u64,
     pub(super) syscall_vector_dirty: u64,
 }
 
@@ -152,18 +153,22 @@ impl Process {
         {
             let mut exits = None;
             let mut syscalls = None;
+            let mut epochs = None;
             let mut dirty = None;
             for (name, value) in line.split_whitespace().filter_map(|field| field.split_once('=')) {
                 let destination = match name {
                     "x86_public_exits" => &mut exits,
                     "x86_public_syscalls" => &mut syscalls,
+                    "x86_public_epochs" => &mut epochs,
                     "x86_syscall_vector_dirty" => &mut dirty,
                     _ => continue,
                 };
                 *destination = value.parse::<u64>().ok();
             }
-            let observed =
-                usize::from(exits.is_some()) + usize::from(syscalls.is_some()) + usize::from(dirty.is_some());
+            let observed = usize::from(exits.is_some())
+                + usize::from(syscalls.is_some())
+                + usize::from(epochs.is_some())
+                + usize::from(dirty.is_some());
             if observed == 0 {
                 continue;
             }
@@ -171,9 +176,11 @@ impl Process {
             else {
                 return Ok(None);
             };
+            let public_epochs = epochs.unwrap_or(0);
             let current = total.get_or_insert(X86Diagnostics {
                 public_exits: 0,
                 public_syscalls: 0,
+                public_epochs: 0,
                 syscall_vector_dirty: 0,
             });
             current.public_exits = current
@@ -184,6 +191,10 @@ impl Process {
                 .public_syscalls
                 .checked_add(public_syscalls)
                 .ok_or_else(|| "native x86 public syscall diagnostics overflow".to_owned())?;
+            current.public_epochs = current
+                .public_epochs
+                .checked_add(public_epochs)
+                .ok_or_else(|| "native x86 public epoch diagnostics overflow".to_owned())?;
             current.syscall_vector_dirty = current
                 .syscall_vector_dirty
                 .checked_add(syscall_vector_dirty)
@@ -370,12 +381,13 @@ mod test {
         assert_eq!(Process::x86_diagnostics("old detail without counters").unwrap(), None);
         assert_eq!(
             Process::x86_diagnostics(
-                "hl-native-detail: unknown=9 x86_public_syscalls=8 x86_syscall_vector_dirty=3 x86_public_exits=10"
+                "hl-native-detail: unknown=9 x86_public_syscalls=8 x86_public_epochs=2 x86_syscall_vector_dirty=3 x86_public_exits=10"
             )
             .unwrap(),
             Some(X86Diagnostics {
                 public_exits: 10,
                 public_syscalls: 8,
+                public_epochs: 2,
                 syscall_vector_dirty: 3,
             }),
         );
@@ -384,7 +396,7 @@ mod test {
     #[test]
     fn x86_diagnostics_aggregate_complete_executors() {
         let diagnostics = Process::x86_diagnostics(
-            "hl-native-detail: x86_public_exits=10 x86_public_syscalls=8 x86_syscall_vector_dirty=3\n\
+            "hl-native-detail: x86_public_exits=10 x86_public_syscalls=8 x86_public_epochs=2 x86_syscall_vector_dirty=3\n\
              hl-native-detail: x86_syscall_vector_dirty=1 x86_public_exits=5 x86_public_syscalls=2",
         )
         .unwrap()
@@ -394,6 +406,7 @@ mod test {
             X86Diagnostics {
                 public_exits: 15,
                 public_syscalls: 10,
+                public_epochs: 2,
                 syscall_vector_dirty: 4,
             }
         );
@@ -410,6 +423,7 @@ mod test {
             X86Diagnostics {
                 public_exits: 0,
                 public_syscalls: 0,
+                public_epochs: 0,
                 syscall_vector_dirty: 0,
             }
             .dirty_share_ppm(),
@@ -419,6 +433,7 @@ mod test {
             X86Diagnostics {
                 public_exits: u64::MAX,
                 public_syscalls: 1,
+                public_epochs: 0,
                 syscall_vector_dirty: u64::MAX,
             }
             .dirty_share_ppm(),
@@ -426,8 +441,8 @@ mod test {
         );
         assert!(
             Process::x86_diagnostics(
-                "hl-native-detail: x86_public_exits=18446744073709551615 x86_public_syscalls=0 x86_syscall_vector_dirty=0\n\
-                 hl-native-detail: x86_public_exits=1 x86_public_syscalls=0 x86_syscall_vector_dirty=0"
+                "hl-native-detail: x86_public_exits=18446744073709551615 x86_public_syscalls=0 x86_public_epochs=0 x86_syscall_vector_dirty=0\n\
+                 hl-native-detail: x86_public_exits=1 x86_public_syscalls=0 x86_public_epochs=0 x86_syscall_vector_dirty=0"
             )
             .is_err()
         );
@@ -449,8 +464,7 @@ mod test {
             })
         );
         assert_eq!(
-            Process::causal_diagnostics("hl-native-detail: relocation_cold_targets=1 relocation_cycles=2")
-                .unwrap(),
+            Process::causal_diagnostics("hl-native-detail: relocation_cold_targets=1 relocation_cycles=2").unwrap(),
             None
         );
         assert!(Process::causal_diagnostics(
