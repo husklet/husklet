@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 pub(crate) mod model;
 mod ofd;
@@ -57,6 +57,7 @@ impl EpollBatch {
 
 struct EpollState {
     watches: Vec<Watch>,
+    token_index: HashMap<u64, usize>,
     ready: VecDeque<u64>,
     next_token: u64,
     epoch: u64,
@@ -114,6 +115,7 @@ impl Epoll {
                 watch_limit,
                 state: Mutex::new(EpollState {
                     watches: Vec::new(),
+                    token_index: HashMap::new(),
                     ready: VecDeque::new(),
                     next_token: 1,
                     epoch: 0,
@@ -176,8 +178,14 @@ impl Epoll {
                     .ok_or(EpollError::InvalidArgument)
             })
             .collect::<Result<VecDeque<_>, _>>()?;
+        let token_index = watches
+            .iter()
+            .enumerate()
+            .map(|(index, watch)| (watch.token, index))
+            .collect();
         *epoll.inner.state.lock().unwrap_or_else(|error| error.into_inner()) = EpollState {
             watches,
+            token_index,
             ready,
             next_token: snapshot.next_token,
             epoch: snapshot.epoch,
@@ -231,6 +239,7 @@ impl Epoll {
             subscription.quiesce();
             return Err(EpollError::ResourceLimit);
         }
+        let index = state.watches.len();
         state.watches.push(Watch {
             key,
             target,
@@ -244,6 +253,7 @@ impl Epoll {
             queued: false,
             subscription,
         });
+        state.token_index.insert(token, index);
         Self::wake(&self.inner, &mut state);
         drop(state);
         Self::refresh_token(&self.inner, token);
@@ -293,6 +303,8 @@ impl Epoll {
                 .position(|watch| watch.key == key)
                 .ok_or(EpollError::NotFound)?;
             let removed = state.watches.remove(index);
+            state.token_index.remove(&removed.token);
+            Self::reindex_from(&mut state, index);
             state.ready.retain(|token| *token != removed.token);
             Self::wake(&self.inner, &mut state);
             removed
@@ -322,13 +334,7 @@ impl Epoll {
             ready: state
                 .ready
                 .iter()
-                .filter_map(|token| {
-                    state
-                        .watches
-                        .iter()
-                        .find(|watch| watch.token == *token)
-                        .map(|watch| watch.key)
-                })
+                .filter_map(|token| state.token_index.get(token).map(|index| state.watches[*index].key))
                 .collect(),
         }
     }
@@ -392,7 +398,7 @@ impl Epoll {
             if state.retired {
                 return;
             }
-            let Some(watch) = state.watches.iter().find(|watch| watch.token == token) else {
+            let Some(watch) = state.token_index.get(&token).map(|index| &state.watches[*index]) else {
                 return;
             };
             (watch.target.clone(), watch.interests, watch.observed, watch.disabled)
@@ -400,7 +406,7 @@ impl Epoll {
         let (target, interests, observed, disabled) = snapshot;
         let sampled = target.readiness(interests.readiness());
         let mut state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(index) = state.watches.iter().position(|watch| watch.token == token) else {
+        let Some(index) = state.token_index.get(&token).copied() else {
             return;
         };
         let transition = Readiness::from_bits(sampled.bits() & !observed.bits()).bits() != 0;
@@ -423,7 +429,7 @@ impl Epoll {
         if state.retired {
             return;
         }
-        let Some(index) = state.watches.iter().position(|watch| watch.token == token) else {
+        let Some(index) = state.token_index.get(&token).copied() else {
             return;
         };
         if state.watches[index].disabled {
@@ -461,7 +467,19 @@ impl Epoll {
             state.ready.retain(|token| *token != watch.token);
             removed.push(watch);
         }
+        state.token_index = state
+            .watches
+            .iter()
+            .enumerate()
+            .map(|(index, watch)| (watch.token, index))
+            .collect();
         removed
+    }
+
+    fn reindex_from(state: &mut EpollState, first: usize) {
+        for (index, watch) in state.watches.iter().enumerate().skip(first) {
+            state.token_index.insert(watch.token, index);
+        }
     }
 
     fn wake(inner: &EpollInner, state: &mut EpollState) {
@@ -485,7 +503,9 @@ impl Epoll {
             state.retired = true;
             state.epoch = state.epoch.wrapping_add(1);
             self.inner.changed.notify_all();
-            std::mem::take(&mut state.watches)
+            let watches = std::mem::take(&mut state.watches);
+            state.token_index.clear();
+            watches
         };
         self.inner
             .retired_watches

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::MutexGuard;
 use std::time::{Duration, Instant};
 
@@ -47,17 +48,21 @@ impl Epoll {
                 .ready
                 .iter()
                 .filter_map(|token| {
-                    state.watches.iter().find(|watch| watch.token == *token).map(|watch| {
-                        (
-                            watch.token,
-                            watch.revision,
-                            watch.readiness_sequence,
-                            watch.target.clone(),
-                            watch.interests,
-                            watch.data,
-                            watch.disabled,
-                        )
-                    })
+                    state
+                        .token_index
+                        .get(token)
+                        .map(|index| &state.watches[*index])
+                        .map(|watch| {
+                            (
+                                watch.token,
+                                watch.revision,
+                                watch.readiness_sequence,
+                                watch.target.clone(),
+                                watch.interests,
+                                watch.data,
+                                watch.disabled,
+                            )
+                        })
                 })
                 .collect::<Vec<_>>()
         };
@@ -96,15 +101,31 @@ impl Epoll {
         let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
         Self::validate_active(&state)?;
         for selection in &batch.selections {
-            let Some(watch) = state.watches.iter().find(|watch| watch.token == selection.token) else {
+            let Some(watch) = state
+                .token_index
+                .get(&selection.token)
+                .map(|index| &state.watches[*index])
+            else {
                 return Ok(false);
             };
             if watch.revision != selection.revision {
                 return Ok(false);
             }
         }
+        let mut consumed = Vec::with_capacity(batch.selections.len());
         for selection in batch.selections {
-            Self::commit_selection(&mut state, selection);
+            if let Some(requeue) = Self::commit_selection(&mut state, selection) {
+                consumed.push((selection.token, requeue));
+            }
+        }
+        if !consumed.is_empty() {
+            let tokens = consumed.iter().map(|(token, _)| *token).collect::<HashSet<_>>();
+            state.ready.retain(|token| !tokens.contains(token));
+            state.ready.extend(
+                consumed
+                    .into_iter()
+                    .filter_map(|(token, requeue)| requeue.then_some(token)),
+            );
         }
         drop(state);
         if !batch.events.is_empty() {
@@ -113,11 +134,11 @@ impl Epoll {
         Ok(true)
     }
 
-    fn commit_selection(state: &mut EpollState, selection: BatchSelection) {
+    fn commit_selection(state: &mut EpollState, selection: BatchSelection) -> Option<bool> {
         let index = state
-            .watches
-            .iter()
-            .position(|watch| watch.token == selection.token)
+            .token_index
+            .get(&selection.token)
+            .copied()
             .expect("validated selection remains present");
         let watch = &mut state.watches[index];
         watch.observed = selection.sampled;
@@ -130,12 +151,9 @@ impl Epoll {
         } else if unchanged {
             watch.queued = level;
         } else {
-            return;
+            return None;
         }
-        state.ready.retain(|token| *token != selection.token);
-        if level && !oneshot {
-            state.ready.push_back(selection.token);
-        }
+        Some(level && !oneshot)
     }
 
     pub fn wait(&self, maximum: usize, timeout: Option<Duration>) -> Result<Vec<EpollEvent>, EpollError> {

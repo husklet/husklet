@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hl_descriptor::{DescriptorFlags, DescriptorTable, OpenFileDescription, Readiness, StatusFlags};
 
@@ -8,6 +8,33 @@ use crate::{Epoll, EpollError, EpollInterest, EventFd, EventFdFlags};
 
 struct Fixture {
     table: DescriptorTable,
+}
+
+#[test]
+#[ignore = "performance diagnostic"]
+fn large_ready_set_benchmark() {
+    const WATCHES: usize = 4_096;
+    let table = DescriptorTable::new((WATCHES + 1) as i32).unwrap();
+    let epoll = Epoll::new();
+    let mut targets = Vec::with_capacity(WATCHES);
+    for index in 0..WATCHES {
+        let target = Arc::new(EventFd::new(0, EventFdFlags::from_bits(EventFdFlags::NONBLOCKING)).unwrap());
+        let number = table.install(0, target.clone(), DescriptorFlags::default()).unwrap();
+        epoll
+            .add(table.pin(number).unwrap(), Fixture::read_interest(), index as u64)
+            .unwrap();
+        targets.push(target);
+    }
+    let publication = Instant::now();
+    for target in &targets {
+        Fixture::write_one(target);
+    }
+    let publication_ns = publication.elapsed().as_nanos() / WATCHES as u128;
+    let poll = Instant::now();
+    let events = epoll.sample(WATCHES).unwrap();
+    let poll_ns = poll.elapsed().as_nanos() / WATCHES as u128;
+    assert_eq!(events.len(), WATCHES);
+    println!("epoll_publish_ns={publication_ns} epoll_poll_ns={poll_ns}");
 }
 
 impl Fixture {
