@@ -54,6 +54,14 @@ async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit
     let version = client.version().await.unwrap();
     assert_eq!(version.os, "linux");
     assert_eq!(version.arch, "amd64");
+    let selected_version = raw_http(
+        &socket,
+        b"GET /v1.24/version HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    assert!(selected_version.starts_with("HTTP/1.1 200"), "{selected_version}");
+    assert!(selected_version.contains("\"ApiVersion\":\"1.43\""));
+    assert!(selected_version.contains("\"MinAPIVersion\":\"1.24\""));
     let info = client.system().info().await.unwrap();
     assert_eq!(info.architecture, "amd64");
     assert_eq!(info.containers, 1);

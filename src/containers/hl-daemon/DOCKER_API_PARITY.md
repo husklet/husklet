@@ -15,7 +15,84 @@ container daemon's product boundary rather than silent compatibility claims.
 | volumes | list/create/inspect/remove/prune | external drivers and cluster volumes |
 | events and accounting | events, system disk usage, system prune | swarm-scoped event kinds and object classes |
 
-## Selected domain: daemon readiness and negotiation
+## Selected domain: versioned daemon negotiation
+
+Docker CLI 29.1.3 defaults to its current Engine API prefix (`/v1.52`) and does
+not automatically downgrade to this daemon's truthfully advertised v1.43
+contract.  Using Docker's standard `DOCKER_API_VERSION=1.43` compatibility
+selection reaches the implemented API, but `docker version` still failed:
+`/_ping` and unversioned `/version` existed while the versioned API router omitted
+`/v1.43/version`.  Docker's version endpoint is valid both unversioned (for
+negotiation) and under a supported prefix (for the selected contract).
+
+Concrete reproduction from commit `cf15cdd33e538956ef42d37094d877268a9cda4e`:
+
+```text
+DOCKER_API_VERSION=1.43 docker version
+request returned 404 Not Found for API route ... /v1.43/version
+
+curl --unix-socket /tmp/.../docker.sock http://localhost/version
+{"ApiVersion":"1.43","MinAPIVersion":"1.24",...}
+```
+
+### Retained C oracle audit
+
+The retained engine has no Docker HTTP router.  Its corresponding versioned
+admission and readiness protocol is the complete domain in
+`/Users/x/dd/engine/src/core/activation.c`, studied through `transfer`,
+`activation_prepare`, `activation_handshake`, both POSIX and Windows
+`activation_start` arms, `hl_activation_child`, `hl_activation_wait`,
+`hl_activation_try_wait`, `hl_activation_kill`, and
+`hl_activation_process_destroy`.  Supporting declarations were studied in
+`/Users/x/dd/engine/include/hl/activation.h`; there is no assembly entry in this
+protocol domain.
+
+- State and identity: the parent-owned `hl_activation_process` retains the
+  control descriptor, child/process-domain identity, nonce, completion flag,
+  cached terminal status and exit, and Windows process/job handles.  The request
+  and reply carry exact magic, ABI, size, and nonce identity.  State lives until
+  destroy; destroy kills and waits before releasing it.
+- Ordering and partial I/O: `transfer` completes the entire bounded record,
+  retrying `EINTR` and rejecting EOF or other partial termination.  The parent
+  sends the request and attached roles, validates the complete reply, then sends
+  one commit byte.  The child cannot enter the guest before that commit.  Wait
+  validates the terminal reply and host exit together before caching completion.
+- Blocking, cancellation, signals, and teardown: handshake and wait are
+  blocking; `try_wait` polls without blocking and retries `EINTR`.  POSIX kill
+  first targets the process group and then drains the nonce-owned process domain;
+  Windows terminates the job.  Repeated domain termination is successful, while
+  killing a finished activation returns busy.  POSIX signal delivery uses an
+  async-safe self-pipe and a mutex only in the relay thread; no global lock spans
+  transfer or wait.
+- Errors: malformed magic/ABI/size/nonce, truncated transfer, invalid descriptor
+  roles, a missing commit, or inconsistent child exit is corruption, never a
+  readiness claim.  Invalid caller values return invalid argument; host spawn,
+  wait, pipe, and job failures return platform failure; allocation is distinct.
+- Host and architecture branches: POSIX uses socketpair, descriptor passing,
+  process groups, `posix_spawn` (or `fork` for a controlling terminal), and
+  birth-recorded process domains.  Windows uses a named pipe, explicit inherited
+  handles, `CreateProcessW`, and nested job objects, and refuses terminals.  The
+  request admits both AArch64 and x86-64; backend availability remains the engine
+  owner's decision.
+
+### Capability matrix
+
+| Retained C capability | Rust owner | Status before this lane |
+|---|---|---|
+| exact minimum/implemented version validation | `hl-daemon::api::http::router` version prefixes | implemented for 1.24-1.43 |
+| complete bounded protocol transfer before readiness | `hl-daemon::Server` plus Axum request parsing | implemented |
+| version discovery before selecting a contract | unversioned `/_ping` and `/version` | implemented |
+| version report after selecting a supported contract | versioned `/version` | missing: routing 404 |
+| truthful implemented and minimum version report | `http::system::{ping,version}` | implemented (1.43/1.24) |
+| malformed/unknown operation refusal | Axum routing and `ApiError` | implemented |
+| instance-owned lifecycle and teardown | `Server`, `SocketGuard`, and `Containers` | implemented |
+| POSIX/Windows launch mechanism and ISA selection | Rust engine activation/composition | separate owner; no HTTP divergence |
+
+The coherent change routes the same truthful version report through every
+already-supported prefix.  It does not admit API 1.44 or later, alter response
+models, or expand product scope.
+
+## Previous domain: daemon readiness and negotiation
 
 The route existed but returned only the `OK` body. Docker-compatible clients use
 the unversioned ping as the readiness boundary and consume its headers before
