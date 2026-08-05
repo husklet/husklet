@@ -69,6 +69,71 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     )?;
     let id = created.1["Id"].as_str().ok_or("container create omitted Id")?;
 
+    let websocket = exchange(
+        socket,
+        "GET",
+        &format!("/v1.43/containers/{id}/attach/ws?stream=1&stdout=1"),
+        None,
+    )
+    .await?;
+    require(
+        websocket.0.starts_with("HTTP/1.1 501"),
+        "WebSocket attach capability was not truthfully refused",
+    )?;
+    require(
+        websocket.1["message"]
+            == "WebSocket container attach is not implemented; use the Docker raw-stream attach endpoint",
+        "WebSocket attach refusal did not identify the supported alternative",
+    )?;
+    for target in [
+        format!("/containers/{id}/attach/ws?stdout=1"),
+        format!("/v1.24/containers/{id}/attach/ws?stdout=1"),
+        format!("/v1.43/containers/{id}/attach/ws?unknown=ignored"),
+    ] {
+        let response = exchange(socket, "GET", &target, None).await?;
+        require(
+            response.0.starts_with("HTTP/1.1 501"),
+            "WebSocket attach route was inconsistent",
+        )?;
+    }
+    let upgraded = raw_http(
+        socket,
+        format!(
+            "GET /v1.43/containers/{id}/attach/ws?stdin=1&stdout=1 HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await?;
+    require(
+        upgraded.starts_with("HTTP/1.1 501") && upgraded.contains("raw-stream attach endpoint"),
+        "upgraded WebSocket attach was not truthfully refused",
+    )?;
+    for (target, status) in [
+        (format!("/v1.43/containers/{id}/attach/ws?detachKeys=ctrl-!"), "400"),
+        ("/v1.43/containers/missing/attach/ws?detachKeys=ctrl-!".into(), "400"),
+        ("/v1.43/containers/missing/attach/ws?stdout=1".into(), "404"),
+    ] {
+        let response = exchange(socket, "GET", &target, None).await?;
+        require(
+            response.0.starts_with(&format!("HTTP/1.1 {status}")),
+            "WebSocket attach validation ordering changed",
+        )?;
+    }
+    for (method, suffix, status) in [("POST", "/attach/ws", "405"), ("GET", "/attach/ws/extra", "404")] {
+        let response = raw_http(
+            socket,
+            format!(
+                "{method} /v1.43/containers/{id}{suffix} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await?;
+        require(
+            response.starts_with(&format!("HTTP/1.1 {status}")),
+            "WebSocket attach method or suffix isolation changed",
+        )?;
+    }
+
     let listed = exchange(socket, "GET", "/v1.43/containers/json?all=true", None).await?;
     require(listed.0.starts_with("HTTP/1.1 200"), "container list was not HTTP 200")?;
     let summaries = listed.1.as_array().ok_or("container list was not an array")?;

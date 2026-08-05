@@ -46,7 +46,7 @@ use logs::Flag;
 use mount::{LegacyBind, Target};
 
 pub(super) use archive::{archive, extract, stat};
-pub(super) use attach::attach;
+pub(super) use attach::{attach, websocket as websocket_attach};
 pub(super) use control::{checkpoint, pause, rename, resize, restart, start, stop, unpause};
 pub(super) use create::create;
 pub(super) use inspect::{changes, inspect, update};

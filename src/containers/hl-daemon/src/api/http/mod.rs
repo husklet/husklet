@@ -71,6 +71,7 @@ pub(crate) fn router(
         .route("/containers/:id/top", get(observe::top))
         .route("/containers/:id/stats", get(observe::stats))
         .route("/containers/:id/attach", post(container::attach))
+        .route("/containers/:id/attach/ws", get(container::websocket_attach))
         .route("/containers/:id/start", post(container::start))
         .route("/containers/:id/resize", post(container::resize))
         .route("/containers/:id/stop", post(container::stop))

@@ -77,6 +77,19 @@ pub(in super::super) async fn attach(
     )
 }
 
+pub(in super::super) async fn websocket(
+    State(state): State<DockerState>,
+    Path(id): Path<String>,
+    Query(query): Query<AttachQuery>,
+) -> ApiResult<StatusCode> {
+    query.validate_detach_keys()?;
+    state.containers.inspect(&id).await.map_err(ApiError::container)?;
+    Err(ApiError::new(
+        StatusCode::NOT_IMPLEMENTED,
+        "WebSocket container attach is not implemented; use the Docker raw-stream attach endpoint",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
