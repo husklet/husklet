@@ -42,7 +42,7 @@ The read-only oracle is `../engine`.
 | `src/translator/guest/x86_64/{emit,address,translate}.c` and `lower/` | x86-64 decode/lowering to AArch64 | Transferable translator semantics; helper exits require typed ownership |
 | `src/translator/guest/x86_64/translit/` | Same-host x86-64 copied-code blocks | Transfer later for x86 hosts; not used to pretend cross-ISA coverage exists |
 | `src/translator/cache.c` map, provenance, publication, generations | Reusable block identity, W^X publication, lookup, rollover | Extract into instance state; the process globals are not transferable |
-| architecture `cache.c` | Persistent cache format, relocations, ABI validation | Import only after live cache execution; Rust already has a read-only validator |
+| architecture `cache.c` | Persistent cache format, relocations, ABI validation | Native C/assembly ownership is permanent; any future import must use the live executor boundary and its ABI tests, not a parallel safe-Rust parser |
 | `src/core/dispatch.c` `run_guest` | Cache miss, publication, execution, safepoints, and exit selection | Extract the block cycle; do not import Linux/personality policy |
 | `src/core/target/{aarch64,x86_64}.c` | Unity composition of translator, Linux ABI, loader, process, and host policy | Oracle only; never copy as the native boundary |
 
