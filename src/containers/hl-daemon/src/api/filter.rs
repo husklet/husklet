@@ -245,16 +245,20 @@ impl List {
                         | "label!"
                         | "exited"
                         | "health"
+                        | "expose"
                         | "before"
                         | "since"
                 )
             })
             .cloned()
             .collect::<Vec<_>>();
-        if unsupported.is_empty() {
-            Ok(list)
-        } else {
+        if !unsupported.is_empty() {
             Err(format!("unsupported container filters: {}", unsupported.join(", ")))
+        } else {
+            for value in list.filters.get("expose").into_iter().flatten() {
+                Self::exposed_port(value)?;
+            }
+            Ok(list)
         }
     }
 
@@ -334,8 +338,35 @@ impl List {
                 };
                 health == value
             }
+            "expose" => Self::exposed_port(value).is_ok_and(|(start, end, protocol)| {
+                protocol == "tcp"
+                    && container
+                        .spec
+                        .ports
+                        .iter()
+                        .any(|port| (start..=end).contains(&port.guest))
+            }),
             _ => false,
         }
+    }
+
+    fn exposed_port(value: &str) -> Result<(u16, u16, &str), String> {
+        let (ports, protocol) = value.split_once('/').map_or((value, "tcp"), |parts| parts);
+        if !matches!(protocol, "tcp" | "udp" | "sctp") {
+            return Err(format!("invalid expose protocol {protocol:?}"));
+        }
+        let (start, end) = ports.split_once('-').map_or((ports, ports), |parts| parts);
+        let start = start
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or_else(|| format!("invalid exposed port {value:?}"))?;
+        let end = end
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0 && *port >= start)
+            .ok_or_else(|| format!("invalid exposed port {value:?}"))?;
+        Ok((start, end, protocol))
     }
 
     fn matches_label(container: &hl_container::Container, value: &str) -> bool {
@@ -467,6 +498,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(current, legacy);
+    }
+
+    #[test]
+    fn expose_filter_matches_declared_tcp_ports_and_validates_ranges() {
+        let mut container = container();
+        container.spec = container
+            .spec
+            .clone()
+            .expose(hl_container::Port::tcp(80).unwrap())
+            .expose(hl_container::Port::tcp(443).unwrap());
+        for value in ["80", "80/tcp", "79-80", "443-444/tcp"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).unwrap();
+            assert!(matches(selected, &container, std::slice::from_ref(&container)));
+        }
+        for value in ["81", "80/udp", "80/sctp"] {
+            let selected = List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).unwrap();
+            assert!(!matches(selected, &container, std::slice::from_ref(&container)));
+        }
+        let alternatives = List::parse(
+            true,
+            Some(r#"{"expose":{"81":false,"443":true},"status":["exited"]}"#),
+        )
+        .unwrap();
+        assert!(matches(alternatives, &container, std::slice::from_ref(&container)));
+        for value in ["", "0", "65536", "90-80", "80-", "-80", "80/icmp", "80/tcp/extra"] {
+            assert!(List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).is_err());
+        }
+        let empty = container();
+        let selected = List::parse(true, Some(r#"{"expose":["1-65535"]}"#)).unwrap();
+        assert!(!matches(selected, &empty, std::slice::from_ref(&empty)));
     }
 
     #[test]

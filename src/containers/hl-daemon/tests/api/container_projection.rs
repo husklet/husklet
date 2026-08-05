@@ -44,6 +44,7 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         "Entrypoint": ["/bin/process"],
         "Cmd": ["alpha", "two words"],
         "Labels": {"contract": "projection"},
+        "ExposedPorts": {"80/tcp": {}},
         "HostConfig": {"Mounts": [
             {
                 "Type": "bind",
@@ -160,6 +161,38 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         "container list fabricated lifecycle Status",
     )?;
 
+    for (filters, count) in [
+        (r#"{"expose":["80"]}"#, 1),
+        (r#"{"expose":{"79-80/tcp":false}}"#, 1),
+        (r#"{"expose":["80/udp"]}"#, 0),
+        (r#"{"expose":["81","80"],"name":["truthful"]}"#, 1),
+        (r#"{"expose":["80"],"name":["missing"]}"#, 0),
+    ] {
+        let filtered = exchange(
+            socket,
+            "GET",
+            &format!(
+                "/v1.43/containers/json?all=true&filters={}",
+                percent_encode(filters)
+            ),
+            None,
+        )
+        .await?;
+        require(filtered.0.starts_with("HTTP/1.1 200"), "expose filter was not HTTP 200")?;
+        require(filtered.1.as_array().is_some_and(|items| items.len() == count), "expose filter selected the wrong containers")?;
+    }
+    let malformed = exchange(
+        socket,
+        "GET",
+        &format!(
+            "/v1.43/containers/json?all=true&filters={}",
+            percent_encode(r#"{"expose":["90-80"]}"#)
+        ),
+        None,
+    )
+    .await?;
+    require(malformed.0.starts_with("HTTP/1.1 400"), "malformed expose filter was not rejected")?;
+
     let inspected = exchange(socket, "GET", &format!("/v1.43/containers/{id}/json"), None).await?;
     require(
         inspected.0.starts_with("HTTP/1.1 200"),
@@ -234,6 +267,19 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         sized.1[0]["Mounts"] == inspected.1["Mounts"],
         "sized container list projected different mounts",
     )
+}
+
+fn percent_encode(value: &str) -> String {
+    use std::fmt::Write as _;
+
+    value.bytes().fold(String::new(), |mut encoded, byte| {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            write!(encoded, "%{byte:02X}").expect("writing to a string cannot fail");
+        }
+        encoded
+    })
 }
 
 async fn remove(socket: &Path) -> Result<(), Box<dyn std::error::Error>> {
