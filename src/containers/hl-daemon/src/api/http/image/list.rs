@@ -34,7 +34,7 @@ impl ImageSelection {
         let Some(raw) = raw.filter(|value| Field::meaningful(value)) else {
             return Ok(Self::default());
         };
-        let values: BTreeMap<String, Vec<String>> = serde_json::from_str(raw)
+        let values = crate::api::filter::docker_filter_values(raw)
             .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, format!("invalid image list filters: {error}")))?;
         let unsupported = values
             .keys()

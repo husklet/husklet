@@ -1,6 +1,6 @@
 //! Image archive load/list/inspect/tag/save/remove round trip.
 
-use crate::api::support::{require, wait_for_path, write_image_archive};
+use crate::api::support::{raw_http, require, wait_for_path, write_image_archive};
 use hl_client::Client;
 use hl_container::{Config, Containers};
 use hl_daemon::Daemon;
@@ -35,6 +35,15 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     require(
         listed[0].repo_tags == ["docker.io/scenario/fixture:test"],
         "image list did not preserve the imported tag",
+    )?;
+    let filtered = raw_http(
+        &socket,
+        b"GET /v1.43/images/json?filters=%7B%22reference%22%3A%7B%22docker.io%2Fscenario%2Ffixture%3Atest%22%3Atrue%7D%7D HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+    )
+    .await?;
+    require(
+        filtered.starts_with("HTTP/1.1 200") && filtered.contains("docker.io/scenario/fixture:test"),
+        "Docker map-set image filter did not select the loaded image",
     )?;
     let normalized: hl_images::Reference = "scenario/fixture:test".parse()?;
     require(

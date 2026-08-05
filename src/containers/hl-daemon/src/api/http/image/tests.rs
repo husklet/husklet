@@ -264,6 +264,10 @@ fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
     let label = filtered(r#"{"label":["kind=dangling"]}"#);
     assert_eq!(summaries.iter().filter(|summary| reference.matches(summary)).count(), 1);
     assert_eq!(summaries.iter().filter(|summary| label.matches(summary)).count(), 1);
+    let current_reference = filtered(r#"{"reference":{"*example:tagged":false}}"#);
+    let current_label = filtered(r#"{"label":{"kind=dangling":true}}"#);
+    assert_eq!(summaries.iter().filter(|summary| current_reference.matches(summary)).count(), 1);
+    assert_eq!(summaries.iter().filter(|summary| current_label.matches(summary)).count(), 1);
 
     for all in [Some("false".into()), Some("true".into())] {
         let query = ListQuery {
