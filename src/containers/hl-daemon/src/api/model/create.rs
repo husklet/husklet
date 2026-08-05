@@ -114,6 +114,8 @@ pub struct HostConfig {
     pub console_size: Option<[u64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_config: Option<LogConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_swappiness: Option<i64>,
     #[serde(default, deserialize_with = "crate::api::null_default")]
     pub port_bindings: crate::api::PortBindings,
     #[serde(flatten, default)]

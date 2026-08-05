@@ -307,6 +307,7 @@ async fn host_config_maps_effective_resources_isolation_and_mounts() {
         auto_remove: true,
         console_size: None,
         log_config: None,
+        memory_swappiness: None,
         port_bindings: PortBindings::default(),
         unsupported: BTreeMap::new(),
     };

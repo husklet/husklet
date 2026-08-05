@@ -131,6 +131,20 @@ impl HostConfig {
     }
 
     pub(super) fn validate_unsupported(&self) -> ApiResult<()> {
+        if let Some(swappiness) = self.memory_swappiness {
+            if !(-1..=100).contains(&swappiness) {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "HostConfig.MemorySwappiness must be between 0 and 100, or -1 to inherit",
+                ));
+            }
+            if swappiness != -1 {
+                return Err(ApiError::new(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "HostConfig.MemorySwappiness tuning is not implemented",
+                ));
+            }
+        }
         if let Some(config) = &self.log_config {
             if !config.kind.is_empty() || !config.config.is_empty() {
                 return Err(ApiError::new(
@@ -287,6 +301,44 @@ mod tests {
             serde_json::json!({"LogConfig": {"Type": 1}}),
             serde_json::json!({"LogConfig": {"Config": []}}),
             serde_json::json!({"LogConfig": {"Config": {"max-size": 10}}}),
+        ] {
+            assert!(serde_json::from_value::<crate::api::HostConfig>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn memory_swappiness_accepts_only_absent_or_inherited_default() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({"MemorySwappiness": null}),
+            serde_json::json!({"MemorySwappiness": -1}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            assert!(host.validate_unsupported().is_ok());
+        }
+        for value in [
+            serde_json::json!({"MemorySwappiness": 0}),
+            serde_json::json!({"MemorySwappiness": 1}),
+            serde_json::json!({"MemorySwappiness": 50}),
+            serde_json::json!({"MemorySwappiness": 100}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            let error = host.validate_unsupported().unwrap_err();
+            assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
+        }
+        for value in [
+            serde_json::json!({"MemorySwappiness": -2}),
+            serde_json::json!({"MemorySwappiness": 101}),
+            serde_json::json!({"MemorySwappiness": i64::MAX}),
+        ] {
+            let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
+            let error = host.validate_unsupported().unwrap_err();
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        }
+        for value in [
+            serde_json::json!({"MemorySwappiness": "-1"}),
+            serde_json::json!({"MemorySwappiness": 1.5}),
+            serde_json::json!({"MemorySwappiness": []}),
         ] {
             assert!(serde_json::from_value::<crate::api::HostConfig>(value).is_err());
         }

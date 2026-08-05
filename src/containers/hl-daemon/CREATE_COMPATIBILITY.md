@@ -49,6 +49,19 @@ Docker logging-driver selection or driver options. This rule changes admission
 only and invokes no container or engine behavior, so no retained-C runtime
 domain is implicated.
 
+## Memory swappiness admission
+
+API 1.43 uses `HostConfig.MemorySwappiness=-1` to inherit the daemon or host
+default; Docker CLI 29.1.3 emits that value for an ordinary create. Missing,
+`null`, and `-1` are therefore inert and accepted. Values from 0 through 100
+request an actual swappiness policy and receive `501 Not Implemented`. Values
+outside Docker's `-1..=100` contract receive `400 Bad Request`, while malformed
+JSON types remain decoding errors.
+
+The container resource model owns memory-byte, process-count, and CPU ceilings,
+but no swap or swappiness policy. This admission change does not project runtime
+state or invoke the engine, so no retained-C runtime domain is implicated.
+
 This matrix describes the request contract implemented by
 `POST /v1.43/containers/create`. It is based on Moby 24.0.9, whose Engine API is
 1.43:
@@ -107,7 +120,8 @@ request has no create-time side effects.
 | `Isolation`, `MaskedPaths`, `ReadonlyPaths`, `Init` | capability refusal | Default values are inert; meaningful values receive `501`. |
 | `CpuShares`, `CgroupParent`, block-I/O controls, CFS/RT controls, cpusets | capability refusal | Zero/default values are inert; meaningful values receive `501`. |
 | `Devices`, `DeviceCgroupRules`, `DeviceRequests`, `Ulimits` | capability refusal | Empty/default values are inert; meaningful values receive `501`. |
-| `KernelMemory`, `KernelMemoryTCP`, `MemoryReservation`, `MemorySwap`, `MemorySwappiness`, `OomKillDisable` | capability refusal | Zero/default values are inert; meaningful values receive `501`. |
+| `MemorySwappiness` | capability refusal | Missing, `null`, and `-1` inherit defaults; valid tuning values receive `501`; out-of-range values receive `400`. |
+| `KernelMemory`, `KernelMemoryTCP`, `MemoryReservation`, `MemorySwap`, `OomKillDisable` | capability refusal | Zero/default values are inert; meaningful values receive `501`. |
 | Windows CPU and I/O resource controls | capability refusal | Zero/default values are inert; meaningful values receive `501`. |
 | Any later host field | capability refusal | Default values are inert; meaningful values receive `501`. |
 
