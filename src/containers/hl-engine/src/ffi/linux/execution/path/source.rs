@@ -28,6 +28,8 @@ const NAME_ALIAS_MAXIMUM: usize = 8;
 #[derive(Debug)]
 struct NameBind {
     aliases: Vec<GuestName>,
+    exact: Vec<GuestPath>,
+    read_only: bool,
     host: PathBuf,
     parent: Arc<File>,
     leaf: CString,
@@ -41,6 +43,7 @@ pub(super) struct NameBinding {
     pub(super) host: PathBuf,
     pub(super) parent: Arc<File>,
     pub(super) leaf: CString,
+    pub(super) read_only: bool,
 }
 
 /// Bounded reverse registry shared by the native resolver and path projection.
@@ -197,6 +200,9 @@ impl OrdinaryContext {
                 .next()
                 .filter(|value| !value.is_empty())
                 .ok_or(RuntimePathError::Invalid)?;
+            let (host, read_only) = host
+                .strip_prefix("rw:")
+                .map_or_else(|| (host.strip_prefix("ro:").unwrap_or(host), true), |host| (host, false));
             let host = PathBuf::from(host).canonicalize().map_err(HostError::map)?;
             if !host.is_file() {
                 return Err(RuntimePathError::Invalid);
@@ -208,9 +214,18 @@ impl OrdinaryContext {
                 .ok_or(RuntimePathError::Invalid)
                 .and_then(|name| CString::new(name.as_bytes()).map_err(|_| RuntimePathError::Invalid))?;
             let mut aliases = Vec::new();
+            let mut exact = Vec::new();
             for field in fields {
-                if aliases.len() == NAME_ALIAS_MAXIMUM {
+                if aliases.len() + exact.len() == NAME_ALIAS_MAXIMUM {
                     return Err(RuntimePathError::TooLarge);
+                }
+                if field.starts_with('/') {
+                    let path = GuestPath::new(field).map_err(|_| RuntimePathError::Invalid)?;
+                    if exact.contains(&path) {
+                        return Err(RuntimePathError::Invalid);
+                    }
+                    exact.push(path);
+                    continue;
                 }
                 let alias = GuestName::new(field.as_bytes()).map_err(|_| RuntimePathError::Invalid)?;
                 if aliases.contains(&alias) {
@@ -218,11 +233,13 @@ impl OrdinaryContext {
                 }
                 aliases.push(alias);
             }
-            if aliases.is_empty() {
+            if aliases.is_empty() && exact.is_empty() {
                 return Err(RuntimePathError::Invalid);
             }
             parsed.push(NameBind {
                 aliases,
+                exact,
+                read_only,
                 host,
                 parent,
                 leaf,
@@ -249,6 +266,15 @@ impl OrdinaryContext {
             .map(|slash| if slash == 0 { "/" } else { &guest.as_str()[..slash] })
             .ok_or(RuntimePathError::Invalid)?;
         let rules = self.name_binds.read().unwrap_or_else(|error| error.into_inner());
+        if let Some(rule) = rules.iter().find(|rule| rule.exact.contains(&guest)) {
+            return Ok(Some(NameBinding {
+                guest,
+                host: rule.host.clone(),
+                parent: Arc::clone(&rule.parent),
+                leaf: rule.leaf.clone(),
+                read_only: rule.read_only,
+            }));
+        }
         for rule in rules
             .iter()
             .filter(|rule| rule.aliases.iter().any(|alias| alias.as_bytes() == leaf))
@@ -266,6 +292,7 @@ impl OrdinaryContext {
                         host: rule.host.clone(),
                         parent: Arc::clone(&rule.parent),
                         leaf: rule.leaf.clone(),
+                        read_only: rule.read_only,
                     }));
                 }
             }
@@ -510,6 +537,27 @@ mod name_bind_tests {
                 .unwrap()
                 .is_none()
         );
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(host).unwrap();
+    }
+
+    #[test]
+    fn exact_file_bind_preserves_target_and_access() {
+        let root = fixture("exact-root");
+        std::fs::create_dir(root.join("etc")).unwrap();
+        let host = fixture("exact-host");
+        let projected = host.join("hosts");
+        std::fs::write(&projected, b"127.0.0.1 localhost\n").unwrap();
+        let context = OrdinaryContext::new(root.as_os_str().as_bytes()).unwrap();
+        context
+            .add_name_binds(&format!("rw:{}\t/etc/hosts", projected.display()))
+            .unwrap();
+        let base = GuestPath::new("/").unwrap();
+        let binding = context.name_binding(&base, b"/etc/hosts").unwrap().unwrap();
+        assert_eq!(binding.guest.as_str(), "/etc/hosts");
+        assert_eq!(binding.host, projected);
+        assert!(!binding.read_only);
+        assert!(context.name_binding(&base, b"/tmp/hosts").unwrap().is_none());
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(host).unwrap();
     }

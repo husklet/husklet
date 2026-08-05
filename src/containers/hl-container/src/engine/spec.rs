@@ -136,6 +136,7 @@ impl Spec {
         let mounts = launch
             .mounts
             .iter()
+            .filter(|mount| mount.source.is_dir())
             .map(|mount| {
                 let access = match mount.access {
                     crate::Access::ReadOnly => "ro",
@@ -147,6 +148,22 @@ impl Spec {
             .join(",");
         if !mounts.is_empty() {
             Self::set(options, "HL_VOLUMES", mounts)?;
+        }
+        let files = launch
+            .mounts
+            .iter()
+            .filter(|mount| mount.source.is_file())
+            .map(|mount| {
+                let access = match mount.access {
+                    crate::Access::ReadOnly => "ro",
+                    crate::Access::ReadWrite => "rw",
+                };
+                format!("{access}:{}\t{}", mount.source.display(), mount.target.display())
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !files.is_empty() {
+            Self::set(options, "HL_NAME_BINDS", files)?;
         }
         Ok(())
     }

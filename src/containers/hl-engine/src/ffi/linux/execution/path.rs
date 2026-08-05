@@ -631,7 +631,7 @@ impl RuntimePathHost for NativePath {
         }
         let ordinary = self.ordinary()?;
         let name_binding = ordinary.name_binding(base.path(), plan.operand.path.as_bytes())?;
-        if name_binding.is_some()
+        if name_binding.as_ref().is_some_and(|binding| binding.read_only)
             && plan.intent.bits() & (OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE | OpenIntent::APPEND)
                 != 0
             && plan.intent.bits() & OpenIntent::PATH_ONLY == 0
