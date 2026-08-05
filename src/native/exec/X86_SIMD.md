@@ -28,6 +28,7 @@ selection.
 | MOVAPS/MOVUPS, MOVDQA/MOVDQU | aligned/unaligned 128-bit register and guarded memory load/store | implemented | aligned faults and store observation covered by existing projection tests |
 | MOVD/MOVQ, MOVSS/MOVSD | GPR transfer; scalar load merge and scalar register-copy upper-lane rules | partial: integer and broad 128-bit copy forms exist; scalar prefix semantics are incomplete | complete every scalar merge/zero rule |
 | PUNPCKL/H B/W/D/Q | all four widths, register/memory | implemented | retained memory fault-before-commit contract |
+| VPUNPCKL/H B/W/D/Q | map-1/66 byte, word, dword, qword; VEX.128/256 register/memory | implemented | per-128-bit-lane ZIP ordering; non-destructive `vvvv` source |
 | PSHUFD/PSHUFHW/PSHUFLW/SHUFPS | every immediate lane selection, including destructive overlap | legacy SSE and VEX 128/256 non-destructive forms implemented | broader AVX families remain separate |
 | PAND/PANDN/POR/PXOR | full 128-bit register/memory | implemented | none known |
 | PCMPEQB/W/D, PMOVMSKB | all lane widths; mask to GPR | implemented; VEX equal B/W/D/Q implemented | legacy PCMPEQQ remains absent |
@@ -51,6 +52,32 @@ scalar-single conversion/comparison, and packed ADD paths. The `string` phase
 first executes a compiler-vectorized initializer containing PMULUDQ, PADDD/Q,
 packed shifts, and shuffles, then reaches libc REP and PCMPISTRI paths. Neither
 phase is evidence for a one-opcode workaround.
+
+## VEX packed unpack/interleave slice
+
+The retained oracle for this slice is `translate.c::translate_one` (map-1/66
+`60/61/62/6c/68/69/6a/6d` ZIP lowering), `avx.c::do_avx2` (interpreter source
+acquisition and per-128-bit-lane loop), and `interp.c::interp_punpck` (the
+destructive legacy semantic ancestor). Decoder state and XMM/YMM storage belong
+to the per-CPU dispatcher; these operations allocate no state, take no locks,
+cannot block, and have no teardown or host-specific behavior beyond the AArch64
+native lowering. The memory source is acquired across its complete 16- or
+32-byte span before either destination half is published; a miss returns the
+instruction PC and read fault metadata to the existing dispatcher path.
+
+All eight retained integer forms are now native for VEX.128 and VEX.256,
+register and memory operands. Source one is the encoded `vvvv` register and
+source two is ModRM r/m; each 128-bit lane independently interleaves its low or
+high half at 1/2/4/8-byte element width. Aliasing is safe because both inputs
+are consumed before the destination half is stored. VEX.128 clears the
+destination's upper half, while VEX.256 computes both lanes without changing
+EFLAGS or MXCSR. Unsupported map/prefix combinations still fall back at the
+original PC. The focused contract covers the complete opcode/width matrix,
+extended registers, guarded memory admission, exact word capacity and
+required-minus-one atomic rejection, plus executable AArch64 source
+preservation, lane ordering, upper-lane publication, flags, and MXCSR.
+The 128-bit memory form's sizing includes the five words emitted beyond the
+generic vector-memory estimate, so admission cannot begin with a short buffer.
 
 ## Bounded wrapping integer slice
 

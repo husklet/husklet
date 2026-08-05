@@ -867,6 +867,8 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
                               item->vector_kind == VECTOR_MAXIMUM_SIGNED ||
                               item->vector_kind == VECTOR_MAXIMUM_UNSIGNED ||
+                              item->vector_kind == VECTOR_UNPACK_LOW ||
+                              item->vector_kind == VECTOR_UNPACK_HIGH ||
                               item->vector_kind == VECTOR_MULTIPLY_LOW_WORD ||
                               item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD ||
                               item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD ||
@@ -884,12 +886,17 @@ uint32_t hl_x86_vector_words(const instruction *item) {
     uint32_t aligned = item->vector_aligned == 0u ? 0u :
                        6u + constant_words(item->pc) + (item->live_chain != 0u ? 19u : 0u);
     if (item->memory_operand == 0u) return operation;
-    return hl_x86_address_words(item) - 1u + (item->memory_write != 0u ? 42u + HL_X86_WRITE_CACHE_WORDS : 24u) +
+    uint32_t words = hl_x86_address_words(item) - 1u +
+           (item->memory_write != 0u ? 42u + HL_X86_WRITE_CACHE_WORDS : 24u) +
            (item->memory_write == 0u ? hl_x86_read_cache_words(width) : 0u) +
            (item->live_chain != 0u ? 19u : 0u) +
            constant_words(item->pc) +
            (item->vector_kind != VECTOR_COPY && item->memory_write == 0u ? operation : 0u) + aligned +
            (width == 32u ? (item->memory_write != 0u ? 3u : 4u) : 0u);
+    if (item->vector_memory_width == 16u &&
+        (item->vector_kind == VECTOR_UNPACK_LOW || item->vector_kind == VECTOR_UNPACK_HIGH))
+        words += 5u;
+    return words;
 }
 
 static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instruction *item) {
@@ -1147,7 +1154,7 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         uint32_t base = lane == 1u ? UINT32_C(0x4e003800) : lane == 2u ? UINT32_C(0x4e403800) :
                         lane == 4u ? UINT32_C(0x4e803800) : UINT32_C(0x4ec03800);
         if (item->vector_kind == VECTOR_UNPACK_HIGH) base += UINT32_C(0x4000);
-        words[(*cursor)++] = base | source << 16 | destination << 5 | destination;
+        words[(*cursor)++] = base | source << 16 | first << 5 | destination;
     } else if (item->vector_kind == VECTOR_INSERT_WORD) {
         uint32_t insert_lane = item->vector_immediate & 7u;
         words[(*cursor)++] = UINT32_C(0x4e001c00) | ((insert_lane << 2) | 2u) << 16 |
@@ -1255,6 +1262,7 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED ||
         item->vector_kind == VECTOR_MINIMUM_SIGNED || item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||
         item->vector_kind == VECTOR_MAXIMUM_SIGNED || item->vector_kind == VECTOR_MAXIMUM_UNSIGNED ||
+        item->vector_kind == VECTOR_UNPACK_LOW || item->vector_kind == VECTOR_UNPACK_HIGH ||
         item->vector_kind == VECTOR_MULTIPLY_LOW_WORD ||
         item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD ||
         item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD) {
