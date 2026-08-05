@@ -1,5 +1,39 @@
 # Native memory performance
 
+## 2026-08-05 bounded AArch64 trace admission
+
+The retained oracle audit covered
+`../engine/src/translator/guest/aarch64/translate.c` (`translate` and its
+direct-branch, indirect-branch, return, exception, and system decode paths),
+`../engine/src/translator/guest/aarch64/stubs.c` (`emit_ibranch_ip2_ready` and
+`emit_ibranch`), `../engine/src/translator/guest/aarch64/dispatch.h`
+(`G_IBTC_FILL`), and `../engine/src/core/dispatch.c` (`run_guest`). The process
+owns retained translation and cache state; the JIT lock protects build and
+publication, generated readers are lock-free, dispatcher return follows the
+architectural-state spill, and teardown removes published reachability. The C
+engine implements the relevant instruction families rather than an equivalent
+rejection-phase counter. Rust owns bounded build refusal in
+`src/arch/aarch64/trace.c::hl_a64_trace_cache_direct` and attributes it outside
+asynchronous fault handling in `src/executor.c::run_aarch64`.
+
+Temporary word-only instrumentation on exact base `6f62a08ba` identified the
+six small calls-row entry declines as `51000640`, `b90067f2`, `54000720`,
+`6b01027f`, `a906a3eb`, and `510006b3`. These are already implemented integer,
+memory, or conditional forms. The shared cause was speculative admission: a
+32-word source window could exceed bounded code, provenance, or guard metadata
+capacity and discard a valid prefix. The cache builder now retries progressively
+shorter prefixes while retaining a one-word refusal boundary for genuinely
+unsupported instructions. A 32-store regression covers provenance and guard
+pressure and requires a nonempty bounded cached prefix.
+
+On the same CPU-17-pinned calls row with typed native diagnostics and
+`--divisor 60000`, the candidate reduced entry rejections from six to one,
+removed the `other` family, increased completed native instructions from 197 to
+55,131, and reduced the one-sample guest phase from 2,728 us to 1,106 us. The
+remaining entry decline is a system form and belongs to system-instruction
+admission rather than trace capacity. This is a bounded A/B diagnostic, not a
+broad performance claim.
+
 ## 2026-08-04 projected-guard diagnostic benchmark
 
 This measurement used commit `6e7d7b365acf96dc3297d64f88cbe84eef0e0ce1`,

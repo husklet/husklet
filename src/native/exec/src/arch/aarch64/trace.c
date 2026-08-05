@@ -790,9 +790,12 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
         if (gate != HL_NATIVE_OK) return gate;
     }
     *hit = 0;
-    if (!trace_build(source, pc, count, buffer, capacity, &trace, executor->ibtc, authority,
-                     expected_authority, NULL, executor->diagnostics))
-        return HL_NATIVE_STATE;
+    size_t admitted = count;
+    while (!trace_build(source, pc, admitted, buffer, capacity, &trace, executor->ibtc, authority,
+                        expected_authority, NULL, executor->diagnostics)) {
+        if (admitted == 1) return HL_NATIVE_STATE;
+        admitted--;
+    }
     key.source_last = trace.source_last;
     if (trace.provenance_count == 0) return HL_NATIVE_STATE;
     emission = (hl_native_emission){.bytes = buffer, .size = trace.code_size,

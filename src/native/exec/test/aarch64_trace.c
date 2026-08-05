@@ -878,6 +878,19 @@ int main(void) {
     CHECK(hl_a64_trace_cache(executor, &bad, 0x3000, 2, scratch, sizeof(scratch), &cached, &hit) == HL_NATIVE_OK);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
     CHECK(after.publications == before.publications + 1 && after.live_blocks == before.live_blocks + 1);
+    {
+        uint32_t guarded_words[HL_A64_TRACE_MAX_WORDS];
+        for (size_t index = 0; index < HL_A64_TRACE_MAX_WORDS; index++)
+            guarded_words[index] = UINT32_C(0xb9000020); /* str w0,[x1] */
+        const hl_a64_source_span guarded_span = {
+            0x7000, (const uint8_t *)guarded_words, sizeof(guarded_words), 3, 4};
+        const hl_a64_source guarded_source = {&guarded_span, 1, 3, 4};
+        CHECK(hl_a64_trace_cache(executor, &guarded_source, 0x7000,
+                                 HL_A64_TRACE_MAX_WORDS, scratch, sizeof(scratch),
+                                 &cached, &hit) == HL_NATIVE_OK);
+        CHECK(hit == 0 && cached.source_first == 0x7000 &&
+              cached.source_last > 0x7000 && cached.source_last < 0x7080);
+    }
     hl_native_destroy(executor);
 
     const uint32_t unsupported_word = 0;
