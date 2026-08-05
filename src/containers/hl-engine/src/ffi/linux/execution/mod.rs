@@ -172,7 +172,7 @@ impl GuestExecutor {
                     let lowers = plan
                         .options
                         .get("HL_LOWER")
-                        .map(|records| records.lines().map(|lower| lower.as_bytes().to_vec()).collect())
+                        .map(|records| records.lines().map(|lower| lower.as_bytes().to_vec()).collect::<Vec<_>>())
                         .unwrap_or_default();
                     source::FileSource::layered(rootfs, lowers)
                 }
@@ -261,6 +261,16 @@ impl GuestExecutor {
             .map_err(|_| EngineError::LaunchFailed)?;
         routed.process.set_auxiliary(auxiliary)?;
         let execution_root = routing::image::WorkspaceRoot::select(plan);
+        let execution_lowers = if plan.options.get("HL_OVERLAY_UPPER").is_some() {
+            plan.options
+                .get("HL_LOWER")
+                .map(|records| records.lines().map(|lower| lower.as_bytes().to_vec()).collect())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let execution_sources =
+            source::Sources::new(execution_root.as_deref(), execution_lowers, self.authority.clone());
         let load_context = Arc::new(exec_image::LoadContext::new(
             routed.process.tasks(),
             features,
@@ -269,7 +279,7 @@ impl GuestExecutor {
         let loader_exec = Arc::new(hl_runtime::LoaderExecParticipant::new(
             architecture,
             exec_limits,
-            source::Sources::new(execution_root.as_deref(), self.authority.clone()),
+            execution_sources.clone(),
             exec_image::Spaces::new(Arc::clone(&image_space)),
             load_context.clone(),
             exec_image::Tls,
@@ -286,7 +296,7 @@ impl GuestExecutor {
             Arc::clone(&threads),
             loader_exec,
             hl_runtime::TaskExecParticipant::new(routed.process.tasks()),
-            execution_root,
+            execution_sources,
             architecture,
             exec_limits,
             load_context,

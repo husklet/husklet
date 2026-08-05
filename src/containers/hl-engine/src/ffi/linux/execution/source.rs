@@ -11,7 +11,7 @@ use hl_task::ProcessId;
 
 pub(super) struct FileSource {
     rootfs: Option<Vec<u8>>,
-    lowers: Vec<Vec<u8>>,
+    lowers: Arc<Vec<Vec<u8>>>,
     root_primary: bool,
 }
 
@@ -23,7 +23,7 @@ impl FileSource {
     pub(super) fn new(rootfs: Option<&[u8]>) -> Self {
         Self {
             rootfs: rootfs.map(<[u8]>::to_vec),
-            lowers: Vec::new(),
+            lowers: Arc::default(),
             root_primary: false,
         }
     }
@@ -31,15 +31,15 @@ impl FileSource {
     pub(super) fn rooted(rootfs: Option<&[u8]>) -> Self {
         Self {
             rootfs: rootfs.map(<[u8]>::to_vec),
-            lowers: Vec::new(),
+            lowers: Arc::default(),
             root_primary: true,
         }
     }
 
-    pub(super) fn layered(rootfs: &[u8], lowers: Vec<Vec<u8>>) -> Self {
+    pub(super) fn layered(rootfs: &[u8], lowers: impl Into<Arc<Vec<Vec<u8>>>>) -> Self {
         Self {
             rootfs: Some(rootfs.to_vec()),
-            lowers,
+            lowers: lowers.into(),
             root_primary: true,
         }
     }
@@ -51,7 +51,7 @@ impl FileSource {
                 if !matches!(primary, Err(ImageSourceError::NotFound)) {
                     return primary;
                 }
-                for lower in &self.lowers {
+                for lower in self.lowers.iter() {
                     let candidate = Self::open_rooted(lower, path);
                     if !matches!(candidate, Err(ImageSourceError::NotFound)) {
                         return candidate;
@@ -251,15 +251,22 @@ pub(super) enum Source {
     Projected(ProjectedSource),
 }
 
+#[derive(Clone)]
 pub(super) struct Sources {
     rootfs: Option<Vec<u8>>,
+    lowers: Arc<Vec<Vec<u8>>>,
     authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>,
 }
 
 impl Sources {
-    pub(super) fn new(rootfs: Option<&[u8]>, authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>) -> Self {
+    pub(super) fn new(
+        rootfs: Option<&[u8]>,
+        lowers: Vec<Vec<u8>>,
+        authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>,
+    ) -> Self {
         Self {
             rootfs: rootfs.map(<[u8]>::to_vec),
+            lowers: Arc::new(lowers),
             authority,
         }
     }
@@ -274,7 +281,10 @@ impl SourceFactory for Sources {
         }
         Ok(match &self.authority {
             Some(value) => Source::Projected(ProjectedSource::new(Arc::clone(value))),
-            None => Source::File(FileSource::rooted(self.rootfs.as_deref())),
+            None => Source::File(match self.rootfs.as_deref() {
+                Some(rootfs) if !self.lowers.is_empty() => FileSource::layered(rootfs, Arc::clone(&self.lowers)),
+                rootfs => FileSource::rooted(rootfs),
+            }),
         })
     }
 }

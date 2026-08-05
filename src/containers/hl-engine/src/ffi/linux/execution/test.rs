@@ -3,13 +3,14 @@ use std::fs;
 use std::os::unix::ffi::OsStringExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::source::FileSource;
+use super::source::{FileSource, Sources};
 use super::*;
 use crate::composition::{ActivationChannel, CompositionError, RuntimeServices};
 use crate::options::Options;
 use hl_isa::GuestAddress;
 use hl_loader::{ImageRole, ImageSource, ImageSourceError};
 use hl_memory::{Backing, MapRequest, Placement, Protection};
+use hl_runtime::SourceFactory;
 
 static NEXT_FILE: AtomicU64 = AtomicU64::new(1);
 const LINK_BASE: u64 = 0x40_0000;
@@ -309,6 +310,40 @@ fn rooted_main_symlink_resolves() {
         b"main image",
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn exec_source_retains_overlay_lowers() {
+    let upper = source_root("exec-upper");
+    let lower = source_root("exec-lower");
+    fs::create_dir_all(&upper).unwrap();
+    fs::create_dir_all(lower.join("bin")).unwrap();
+    fs::create_dir_all(lower.join("lib")).unwrap();
+    fs::write(lower.join("bin/tool"), b"lower executable").unwrap();
+    fs::write(lower.join("lib/ld.so"), b"lower interpreter").unwrap();
+    let upper_bytes = upper.clone().into_os_string().into_vec();
+    let lower_bytes = lower.clone().into_os_string().into_vec();
+    let sources = Sources::new(Some(&upper_bytes), vec![lower_bytes], None);
+    let plan = hl_linux::ExecPlan {
+        directory: Some(-100),
+        path: b"/bin/tool".to_vec(),
+        arguments: vec![b"/bin/tool".to_vec()],
+        environment: Vec::new(),
+        flags: 0,
+    };
+    let mut source = sources
+        .open(hl_task::ProcessId::from_wire(1, 1).unwrap(), &plan)
+        .unwrap();
+    assert_eq!(
+        source.read_image(ImageRole::Main, b"/bin/tool", 64).unwrap(),
+        b"lower executable",
+    );
+    assert_eq!(
+        source.read_image(ImageRole::Interpreter, b"/lib/ld.so", 64).unwrap(),
+        b"lower interpreter",
+    );
+    fs::remove_dir_all(upper).unwrap();
+    fs::remove_dir_all(lower).unwrap();
 }
 
 #[test]
