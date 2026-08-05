@@ -222,7 +222,7 @@ where
     Identity: FnMut(&hl_images::Descriptor) -> hl_images::Result<String>,
     Labels: FnMut(&hl_images::Descriptor) -> hl_images::Result<BTreeMap<String, String>>,
 {
-    let mut grouped = BTreeMap::<String, (hl_images::Descriptor, Vec<String>)>::new();
+    let mut grouped = BTreeMap::<String, (hl_images::Descriptor, Vec<String>, Option<u64>)>::new();
     for graph in inventory {
         if graph.build_cache {
             continue;
@@ -239,16 +239,16 @@ where
         let id = identity(&graph.target)?;
         match grouped.entry(id) {
             std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert((graph.target, tags));
+                entry.insert((graph.target, tags, graph.created_at_ms));
             }
             std::collections::btree_map::Entry::Occupied(mut entry) => entry.get_mut().1.extend(tags),
         }
     }
-    let unique = grouped.values().map(|(target, _)| target.clone()).collect::<Vec<_>>();
+    let unique = grouped.values().map(|(target, _, _)| target.clone()).collect::<Vec<_>>();
     let usage = include_shared_size.then(|| usage(&unique)).transpose()?;
     grouped
         .into_iter()
-        .map(|(id, (target, mut repo_tags))| {
+        .map(|(id, (target, mut repo_tags, created_at_ms))| {
             repo_tags.sort();
             let (size_bytes, shared_size) = match &usage {
                 Some(usage) => {
@@ -261,11 +261,13 @@ where
                 None => (size(&target)?, -1),
             };
             let size = i64::try_from(size_bytes).unwrap_or(i64::MAX);
+            let created = i64::try_from(created_at_ms.unwrap_or_default() / 1_000)
+                .map_err(|_| hl_images::Error::InvalidMetadata("image creation time exceeds Docker range".into()))?;
             Ok(ImageSummary {
                 id,
                 repo_tags,
                 repo_digests: Vec::new(),
-                created: 0,
+                created,
                 size,
                 shared_size,
                 virtual_size: size,

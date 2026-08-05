@@ -76,7 +76,7 @@ fn summaries_without_shared_size_visit_each_target_once() {
                 "size": 23
             },
             "names": [name.parse::<hl_images::Reference>().unwrap().to_string()],
-            "created_at_ms": null,
+            "created_at_ms": 1250,
             "labels": null,
             "build_cache": false,
             "metadata_known": false
@@ -109,6 +109,7 @@ fn summaries_without_shared_size_visit_each_target_once() {
         ["docker.io/library/example:first", "docker.io/library/example:second"]
     );
     assert_eq!(summaries[0].size, 101);
+    assert_eq!(summaries[0].created, 1);
     assert_eq!(summaries[0].shared_size, -1);
     assert_eq!(summaries[0].labels.get("tier").map(String::as_str), Some("test"));
 }
@@ -285,6 +286,68 @@ fn image_reference_wildcards_match_complete_names() {
     assert!(ImageSelection::wildcard("*/api:?", "team/api:1"));
     assert!(!ImageSelection::wildcard("alpine", "alpine:latest"));
     assert!(!ImageSelection::wildcard("*/api:?", "team/api:10"));
+}
+
+#[test]
+fn image_before_since_resolve_anchors_and_use_strict_creation_order() {
+    let summary = |digit: char, tag: &str, created: i64| crate::api::ImageSummary {
+        id: format!("sha256:{}", digit.to_string().repeat(64)),
+        repo_tags: vec![tag.parse::<hl_images::Reference>().unwrap().to_string()],
+        repo_digests: Vec::new(),
+        created,
+        size: 1,
+        shared_size: -1,
+        virtual_size: 1,
+        labels: BTreeMap::from([("lane".into(), "time".into())]),
+        containers: -1,
+    };
+    let images = vec![
+        summary('1', "example:new", 30),
+        summary('2', "example:tie", 20),
+        summary('3', "example:anchor", 20),
+        summary('4', "example:old", 10),
+    ];
+    let selection = |filters: &str| {
+        ListQuery {
+            filters: Some(filters.into()),
+            ..ListQuery::default()
+        }
+        .selection()
+        .unwrap()
+        .0
+    };
+    let selected = selection(r#"{"before":["example:anchor"]}"#)
+        .select(images.clone())
+        .unwrap();
+    assert_eq!(selected.iter().map(|image| image.created).collect::<Vec<_>>(), [10]);
+    let selected = selection(r#"{"since":{"example:anchor":false}}"#)
+        .select(images.clone())
+        .unwrap();
+    assert_eq!(selected.iter().map(|image| image.created).collect::<Vec<_>>(), [30]);
+    let selected = selection(r#"{"before":["example:tie","example:new"],"since":["444444444444"]}"#)
+        .select(images.clone())
+        .unwrap();
+    assert_eq!(selected.iter().map(|image| image.created).collect::<Vec<_>>(), [20, 20]);
+    let selected = selection(r#"{"before":["example:new"],"label":["lane=time"]}"#)
+        .select(images.clone())
+        .unwrap();
+    assert_eq!(selected.len(), 3);
+    assert_eq!(
+        selection(r#"{"before":["missing:image"]}"#)
+            .select(images.clone())
+            .unwrap_err()
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    let mut ambiguous = images;
+    ambiguous[1].id = format!("sha256:111111111111{}", "a".repeat(52));
+    assert_eq!(
+        selection(r#"{"since":["111111111111"]}"#)
+            .select(ambiguous)
+            .unwrap_err()
+            .status,
+        StatusCode::CONFLICT
+    );
 }
 
 #[test]
