@@ -23,11 +23,22 @@ children are not ordinary runtime categories:
 | `nested` | `testing nested` and `chains.yaml` | move to a top-level nested suite or deliberately extend the common category schema; it is not discovered by `testing runtime` |
 | `terminal` | oracle audit only | add a manifest-backed process/PTY contract or move the audit beside the package tests that own the behavior |
 
-The working tree removes 839 of 1,386 tracked legacy files and has copied the
-large C corpus into category folders. The remaining physical legacy tree still
-contains 551 files, 507 of them historical reports. Generated-artifact
+The working tree removes 841 of 1,386 tracked legacy files and has copied the
+large C corpus into category folders. The remaining tracked legacy tree contains
+545 files, 507 of them historical reports. Generated-artifact
 manifests remain, but the binaries and dynamic-loader files they describe do
 not exist. A manifest is provenance, not an executable fixture.
+
+The detached CMake smoke entry point has been removed. Nothing in the repository
+included it, and all three paths it required (`prebuilt/manifest.tsv`,
+`manifest.tsv`, and `source/abi.h`) were already absent. Its Python replacement
+remains in the flake because the YAML-native inventory test does not yet reproduce
+the corpus verifier's artifact/source/recipe hashing, fixture classification, or
+production-priority analysis. The warning-strict workspace test does load every
+direct-child YAML manifest, validate its inputs and goldens, expand every case/ISA
+row, and prove that the planned active set exactly partitions the declared set;
+that is manifest integrity, not mechanical legacy parity. `LEGACY_PARITY.md`
+records the remaining parity gaps explicitly.
 
 ## Active legacy consumers
 
