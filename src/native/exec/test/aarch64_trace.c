@@ -954,6 +954,24 @@ int main(void) {
               fallback_before.a64_fallback_form_other + 2);
     }
     {
+        const uint32_t counter_words[] = {UINT32_C(0xd53be040), UINT32_C(0xd4000001)};
+        const hl_a64_source_span counter_span = {
+            0x5a00, (const uint8_t *)counter_words, sizeof(counter_words), 7, 8};
+        const hl_a64_source counter_source = {&counter_span, 1, 7, 8};
+        hl_native_diagnostics before = {.abi = HL_NATIVE_ABI, .size = sizeof(before)};
+        hl_native_diagnostics after = before;
+        CHECK(hl_native_diagnose(run_executor, &before) == HL_NATIVE_OK);
+        run_request.source = &counter_source;
+        run_request.budget = 2;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x5a00;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.registers[0] != 0);
+        CHECK(hl_native_diagnose(run_executor, &after) == HL_NATIVE_OK);
+        CHECK(after.a64_fallback_entry_rejection == before.a64_fallback_entry_rejection);
+        CHECK(after.a64_fallback_system == before.a64_fallback_system);
+    }
+    {
         const uint32_t literal_words[] = {UINT32_C(0x58000800), UINT32_C(0xd4000001)};
         const hl_a64_source_span literal_span = {
             0x6000, (const uint8_t *)literal_words, sizeof(literal_words), 7, 8};

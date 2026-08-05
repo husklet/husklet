@@ -26,6 +26,8 @@ int main(void) {
         0xd51bd040u, /* msr tpidr_el0,x0 */
         0xd51bd05eu, /* msr tpidr_el0,x30 */
         0xd51bd05fu, /* msr tpidr_el0,xzr */
+        0xd53be000u, /* mrs x0,cntfrq_el0 */
+        0xd53be05eu, /* mrs x30,cntvct_el0 */
     };
     size_t offsets[sizeof(words) / sizeof(words[0])];
     long page = sysconf(_SC_PAGESIZE);
@@ -51,6 +53,10 @@ int main(void) {
     cpu.registers[30] = UINT64_C(0x8877665544332211);
     execute(&cpu, code + offsets[4]); CHECK(cpu.tls == cpu.registers[30]);
     execute(&cpu, code + offsets[5]); CHECK(cpu.tls == 0);
+    execute(&cpu, code + offsets[6]); CHECK(cpu.registers[0] != 0);
+    execute(&cpu, code + offsets[7]);
+    uint64_t first = cpu.registers[30];
+    execute(&cpu, code + offsets[7]); CHECK(cpu.registers[30] >= first);
     CHECK(munmap(code, capacity) == 0);
     return 0;
 #endif
