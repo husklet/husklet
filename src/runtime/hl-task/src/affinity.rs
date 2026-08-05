@@ -138,6 +138,7 @@ impl CpuAffinity {
 mod tests {
     use crate::{CpuAffinity, ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry};
     use std::sync::Arc;
+    use std::time::Instant;
 
     #[test]
     fn lifecycle_preserves_affinity() {
@@ -182,5 +183,29 @@ mod tests {
         exec.publish().unwrap();
         exec.finish();
         assert_eq!(registry.affinity(leader).unwrap(), worker_mask);
+    }
+
+    #[test]
+    #[ignore = "performance diagnostic"]
+    fn affinity_target_lookup_benchmark() {
+        const LOOKUPS: usize = 200_000;
+        let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
+        let (_, leader) = registry
+            .create_init(
+                ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+                ProcessLimits::default(),
+            )
+            .unwrap();
+        let mut target = leader;
+        for _ in 1..RegistryConfig::default().max_threads {
+            target = registry
+                .commit_clone_thread(registry.begin_clone_thread(leader).unwrap())
+                .unwrap();
+        }
+        let started = Instant::now();
+        for _ in 0..LOOKUPS {
+            std::hint::black_box(registry.affinity_target(leader, target.number() as i32).unwrap());
+        }
+        println!("affinity_target_ns={}", started.elapsed().as_nanos() / LOOKUPS as u128);
     }
 }
