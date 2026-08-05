@@ -842,6 +842,8 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_SHUFFLE_DOUBLE: return 3u;
     case VECTOR_MULTIPLY_EVEN_SIGNED_DWORD: return 3u;
     case VECTOR_SIGNED_DWORD_TO_FLOAT: return 1u;
+    case VECTOR_PACK_SIGNED:
+    case VECTOR_PACK_UNSIGNED: return 3u;
     case VECTOR_FLOAT_TO_SIGNED_DWORD:
     case VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD:
         return 11u + constant_words(UINT64_C(0x4f000000)) +
@@ -869,10 +871,15 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_MULTIPLY_HIGH_WORD ||
                               item->vector_kind == VECTOR_MULTIPLY_EVEN_DWORD ||
                               item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
-                              item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD;
+                              item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD ||
+                              item->vector_kind == VECTOR_PACK_SIGNED ||
+                              item->vector_kind == VECTOR_PACK_UNSIGNED;
         operation += item->width == 32u ? vector_operation_words(item) + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
     }
+    if (item->vector_memory_width == 32u && item->memory_operand != 0u &&
+        (item->vector_kind == VECTOR_PACK_SIGNED || item->vector_kind == VECTOR_PACK_UNSIGNED))
+        operation += 2u;
     uint32_t width = item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
     uint32_t aligned = item->vector_aligned == 0u ? 0u :
                        6u + constant_words(item->pc) + (item->live_chain != 0u ? 19u : 0u);
@@ -1180,6 +1187,16 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         base |= lane == 1u ? 0u : lane == 2u ? UINT32_C(0x00400000) :
                 lane == 4u ? UINT32_C(0x00800000) : UINT32_C(0x00c00000);
         words[(*cursor)++] = base | source << 16 | first << 5 | destination;
+    } else if (item->vector_kind == VECTOR_PACK_SIGNED ||
+               item->vector_kind == VECTOR_PACK_UNSIGNED) {
+        uint32_t size = lane == 4u ? UINT32_C(0x00400000) : 0u;
+        uint32_t low = item->vector_kind == VECTOR_PACK_UNSIGNED ?
+                           UINT32_C(0x2e212800) : UINT32_C(0x0e214800);
+        uint32_t high = item->vector_kind == VECTOR_PACK_UNSIGNED ?
+                            UINT32_C(0x6e212800) : UINT32_C(0x4e214800);
+        words[(*cursor)++] = low | size | first << 5 | scratch;
+        words[(*cursor)++] = high | size | source << 5 | scratch;
+        words[(*cursor)++] = UINT32_C(0x4ea01c00) | scratch << 16 | scratch << 5 | destination;
     } else if (item->vector_kind == VECTOR_MULTIPLY_LOW_WORD) {
         words[(*cursor)++] = UINT32_C(0x4e609c00) | source << 16 |
                              first << 5 | destination; /* mul vd.8h,vfirst.8h,vs.8h */
@@ -1233,6 +1250,7 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
         item->vector_kind == VECTOR_ADD || item->vector_kind == VECTOR_SUBTRACT ||
         item->vector_kind == VECTOR_MULTIPLY_EVEN_SIGNED_DWORD ||
         item->vector_kind == VECTOR_MULTIPLY_LOW_DWORD ||
+        item->vector_kind == VECTOR_PACK_SIGNED || item->vector_kind == VECTOR_PACK_UNSIGNED ||
         item->vector_kind == VECTOR_COMPARE_EQUAL ||
         item->vector_kind == VECTOR_COMPARE_GREATER_SIGNED ||
         item->vector_kind == VECTOR_MINIMUM_SIGNED || item->vector_kind == VECTOR_MINIMUM_UNSIGNED ||

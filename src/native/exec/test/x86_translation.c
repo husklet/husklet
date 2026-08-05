@@ -2918,6 +2918,115 @@ static int vex_packed_add_subtract_contract(void) {
     return 0;
 }
 
+static int vex_packed_saturating_contract(void) {
+    static const uint8_t opcodes[] = {0x63, 0x67, 0x6b, 0x2b};
+    unsigned operation;
+    unsigned wide;
+
+    for (operation = 0; operation < sizeof opcodes / sizeof opcodes[0]; ++operation) {
+        for (wide = 0; wide < 2u; ++wide) {
+            uint8_t guest[] = {0xc4, (uint8_t)(operation == 3u ? 0xe2u : 0xe1u),
+                               (uint8_t)(wide != 0u ? 0x6du : 0x69u),
+                               opcodes[operation], (uint8_t)(wide != 0u ? 0x03u : 0xc3u)};
+            uint32_t host[256] = {0};
+            hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+            CHECK(result.instruction_count == 1 && result.exit == HL_X86_A64_FALLTHROUGH);
+            CHECK(provenance[0].guest_size == sizeof guest);
+            {
+                uint32_t required = result.word_count;
+                uint32_t exact_host[256] = {0};
+                uint32_t short_host[256];
+                hl_x86_a64_provenance exact_provenance[2] = {0};
+                hl_x86_a64_provenance short_provenance[2];
+                hl_x86_a64_result exact_result;
+                hl_x86_a64_result short_result;
+                hl_x86_a64_request exact = request_for(guest, sizeof guest, exact_host,
+                                                        exact_provenance);
+                hl_x86_a64_request short_request = request_for(guest, sizeof guest, short_host,
+                                                                short_provenance);
+                unsigned word;
+
+                exact.host_capacity = required;
+                CHECK(hl_x86_a64_emit(&exact, &exact_result) == HL_X86_A64_OK);
+                CHECK(exact_result.word_count == required);
+                memset(short_host, 0xa5, sizeof short_host);
+                memset(short_provenance, 0xa5, sizeof short_provenance);
+                short_request.host_capacity = required - 1u;
+                CHECK(hl_x86_a64_emit(&short_request, &short_result) == HL_X86_A64_CAPACITY);
+                for (word = 0; word < sizeof short_host / sizeof short_host[0]; ++word)
+                    CHECK(short_host[word] == UINT32_C(0xa5a5a5a5));
+            }
+        }
+    }
+    {
+        static const uint8_t c5[] = {0xc5, 0xe9, 0x63, 0xc3};
+        uint32_t host[64] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result;
+        hl_x86_a64_request request = request_for(c5, sizeof c5, host, provenance);
+        CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        CHECK(result.instruction_count == 1 && provenance[0].guest_size == sizeof c5);
+    }
+    {
+        static const uint8_t invalid[][5] = {
+            {0xc4, 0xe1, 0x68, 0x63, 0xc3}, /* wrong pp */
+            {0xc4, 0xe2, 0x69, 0x63, 0xc3}, /* wrong map */
+            {0xc4, 0xe1, 0x69, 0x2b, 0xc3}, /* PACKUSDW needs map two */
+        };
+        for (operation = 0; operation < sizeof invalid / sizeof invalid[0]; ++operation) {
+            uint32_t host[64] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+            hl_x86_a64_result result;
+            hl_x86_a64_request request = request_for(invalid[operation], sizeof invalid[operation],
+                                                      host, provenance);
+            CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_UNSUPPORTED);
+            CHECK(result.instruction_count == 0 && result.exit_pc == request.guest_pc);
+        }
+    }
+#if defined(__aarch64__)
+    {
+        static const uint8_t guest[] = {0xc4, 0xe1, 0x6d, 0x63, 0xd3};
+        static const int16_t first[16] = {
+            INT16_MIN, -129, -128, -1, 0, 1, 127, 128,
+            255, 256, INT16_MAX, -255, -2, 2, 126, 129,
+        };
+        static const int16_t second[16] = {
+            327, -327, 42, -42, 127, 128, -128, -129,
+            3, 4, 5, 6, 300, -300, INT16_MIN, INT16_MAX,
+        };
+        static const int8_t expected[32] = {
+            -128, -128, -128, -1, 0, 1, 127, 127,
+            127, -128, 42, -42, 127, 127, -128, -128,
+            127, 127, 127, -128, -2, 2, 126, 127,
+            3, 4, 5, 6, 127, -128, -128, 127,
+        };
+        uint32_t host[128] = {0}; hl_x86_a64_provenance provenance[2] = {0};
+        hl_x86_a64_result result; hl_native_x86_64_cpu cpu = {0};
+        hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(code != MAP_FAILED && hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+        memcpy(code, host, result.word_count * sizeof(uint32_t));
+        ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[4], first, 16); memcpy(&cpu.vector_upper[4], first + 8, 16);
+        memcpy(&cpu.vectors[6], second, 16); memcpy(&cpu.vector_upper[6], second + 8, 16);
+        cpu.flags = UINT64_C(0xad7); cpu.mxcsr = UINT32_C(0x5f80);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(memcmp(&cpu.vectors[4], expected, 16) == 0);
+        CHECK(memcmp(&cpu.vector_upper[4], expected + 16, 16) == 0);
+        CHECK(memcmp(&cpu.vectors[6], second, 16) == 0 &&
+              memcmp(&cpu.vector_upper[6], second + 8, 16) == 0);
+        CHECK(cpu.flags == UINT64_C(0xad7) && cpu.mxcsr == UINT32_C(0x5f80));
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int alu_differential(void) {
 #if !defined(__aarch64__)
     return 0;
@@ -5209,6 +5318,8 @@ int main(void) {
     status = vex_map2_multiply_contract();
     if (status != 0) return status;
     status = vex_packed_add_subtract_contract();
+    if (status != 0) return status;
+    status = vex_packed_saturating_contract();
     if (status != 0) return status;
     status = immediate_differential();
     if (status != 0) return status;

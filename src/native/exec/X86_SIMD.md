@@ -196,6 +196,43 @@ layout. Both multiply families, register aliases, both widths, and atomic
 32-byte memory failure are implemented; legacy multiply families remain owned
 by their existing SSE path.
 
+## VEX packed saturating narrow slice
+
+The retained oracle is `../engine/src/translator/guest/x86_64/avx.c::do_avx`
+(map-one opcodes `63`, `67`, and `6B`, and map-two opcode `2B`) together with
+`../engine/src/translator/guest/x86_64/translate.c::emit_avx_inline` and its
+`SQXTN`/`SQXTUN` lowering. `avx_get`, `avx_get_rm`, and `avx_put` own operand
+staging and publication. Per-CPU `v` and `vhi` storage owns register identity
+until task teardown; this family allocates no state, takes no lock, blocks on
+no operation, and changes neither integer flags nor MXCSR. A rejected ordinary
+memory read abandons before publication, while a completed VEX.128 operation
+clears the destination YMM upper half and VEX.256 publishes two independent
+128-bit results.
+
+Each 128-bit lane narrows all signed elements from `vvvv` first and all signed
+elements from r/m second. `VPACKSSWB` and `VPACKSSDW` clamp to the signed target
+range; `VPACKUSWB` and `VPACKUSDW` clamp negative inputs to zero and positive
+overflow to the unsigned target maximum. The Rust native frontend maps these
+operations to a scratch `SQXTN`/`SQXTN2` or `SQXTUN`/`SQXTUN2` pair before
+publishing the destination, preserving non-destructive source and all alias
+forms. The shared vector-memory owner stages the full 16/32-byte source before
+the operation.
+
+| Retained capability | Rust native status |
+|---|---|
+| C4 VEX.128/256, WIG, extended registers, non-destructive `vvvv` | implemented |
+| `VPACKSSWB`, `VPACKSSDW`, `VPACKUSWB`, `VPACKUSDW` | implemented |
+| per-128-lane first/second ordering and signed/unsigned saturation | implemented |
+| register aliases and unchanged flags/MXCSR | implemented by scratch-result publication |
+| whole-span register/memory fault atomicity | implemented by shared guarded vector load |
+| VEX.128 upper-zero and VEX.256 upper publication | implemented |
+
+`test/x86_translation.c::vex_packed_saturating_contract` admits every opcode at
+both widths with register and memory sources and rejects wrong-map, wrong-pp,
+and misplaced `VPACKUSDW` encodings. The `hl-execution` scalar contract checks
+all saturation boundaries, lane ordering, source selection, upper-zeroing, and
+fault-before-commit behavior.
+
 ## VEX packed integer compare slice
 
 The retained read-only audit covered
