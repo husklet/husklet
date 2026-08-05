@@ -142,6 +142,20 @@ async fn empty_mode_selects_default_bridge_and_explicit_none_stays_isolated() {
     assert!(custom.prepare(&containers).await.unwrap().isolated());
 }
 
+#[test]
+fn docker_default_endpoint_selects_the_builtin_bridge() {
+    let host = HostConfig {
+        network_mode: "default".into(),
+        ..HostConfig::default()
+    };
+    let config = NetworkingConfig {
+        endpoints_config: EndpointsConfig(BTreeMap::from([("default".into(), EndpointConfig::default())])),
+    };
+    let plan = NetworkPlan::from_request(Some(&host), Some(&config)).unwrap();
+    assert_eq!(plan.attachments.len(), 1);
+    assert_eq!(plan.attachments[0].name, "bridge");
+}
+
 #[tokio::test]
 async fn published_automatic_container_is_inspectable_on_default_bridge() {
     let (root, containers) = containers().await;

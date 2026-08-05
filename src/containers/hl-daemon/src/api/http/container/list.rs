@@ -67,9 +67,19 @@ pub(super) struct NetworkPlan {
 impl NetworkPlan {
     pub(super) fn from_request(host: Option<&HostConfig>, config: Option<&NetworkingConfig>) -> ApiResult<Self> {
         let mode = host.map_or("", |host| host.network_mode.as_str());
-        let endpoints = config
+        let mut endpoints = config
             .map(|config| config.endpoints_config.0.clone())
             .unwrap_or_default();
+        if matches!(mode, "" | "default" | "bridge") {
+            if let Some(endpoint) = endpoints.remove("default") {
+                if endpoints.insert(DEFAULT_NETWORK.into(), endpoint).is_some() {
+                    return Err(ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "default and bridge endpoints select the same network",
+                    ));
+                }
+            }
+        }
         if mode == "host" {
             if host.is_some_and(|host| !host.links.is_empty()) {
                 return Err(ApiError::new(
@@ -122,7 +132,11 @@ impl NetworkPlan {
             };
             (BTreeMap::from([(name.to_owned(), EndpointConfig::default())]), built_in)
         } else {
-            (endpoints, None)
+            let built_in = endpoints
+                .contains_key(DEFAULT_NETWORK)
+                .then_some(NetworkDriver::Bridge)
+                .or_else(|| endpoints.contains_key("none").then_some(NetworkDriver::None));
+            (endpoints, built_in)
         };
         let attachments = endpoints
             .into_iter()
