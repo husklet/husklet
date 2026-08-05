@@ -465,6 +465,63 @@ incomplete execution. Interrupted work retains a resumable record.
 8. Remove the legacy direct-golden-update and unconditional-recompile paths only
    after inventory and focused parity gates prove every case is represented.
 
+## Scenario workflow migration closure
+
+The former Rust workflow registry under `tests/scenarios/workflows/` was not
+invoked by scenario discovery. Behavior was moved to package public-contract
+tests or direct child YAML scenarios before detached modules were removed.
+
+| Former workflow | Durable owner or remaining typed pipeline requirement |
+|---|---|
+| smoke | `tests/scenarios/smoke-realimage/`, preserving image, ISA, command, marker, timeout, and output rows |
+| software | `tests/scenarios/{databases,languages}/`, with local goldens and oracle mappings |
+| terminal | `tests/scenarios/terminal/`; attached timed input still requires a typed interactive action |
+| network | `hl-container/tests/networks.rs` plus daemon live name routing; live address routing remains a typed integration requirement |
+| compose | package label/volume/endpoint/alias/topology contracts; live two-network routing remains repository E2E work |
+| Docker sweep | typed `hl-client`, `hl-daemon`, and `hl-container` contracts listed below |
+| build | image parsing/model and daemon builder/API tests; full execution, cache reuse, concurrency, multistage copy, run mounts, and result execution remain integration work |
+
+The redundant Docker sweep is covered by typed system ping/version/info/disk
+tests; image archive load/list/inspect/history/tag/save/remove/reload tests;
+headless and daemon runtime stream/exit tests; attach and exec tests; update and
+restart policy; event replay; changes and commit; archive export; volume and
+network CRUD; compatibility metadata; and resource-prune tests. Successful
+root-filesystem import with an explicitly requested repository tag is owned by
+`hl-client/tests/daemon/image.rs`.
+
+| Former Docker workflow behavior | Exact owning public-contract evidence |
+|---|---|
+| ping, version, info, disk usage | `hl-client/tests/daemon/system.rs::system_contract_is_platform_derived_and_unsupported_routes_are_explicit` and `hl-daemon/tests/system_disk.rs::wire_client` |
+| image load, list, inspect, history, tag, save, remove, reload | `hl-client/tests/daemon/image.rs::image_archive_round_trip_uses_shared_wire_contracts`, `image_archive_tag_save_remove_and_prune_share_wire_contracts`, and `hl-daemon/tests/api/image_archive.rs` |
+| foreground exit, stdout/stderr logs | `hl-daemon/tests/api/headless_runtime.rs` and `hl-daemon/tests/api/daemon_runtime.rs` |
+| attach stdin/stdout/stderr and exec exit/output | `hl-daemon/tests/api/daemon_runtime.rs` |
+| update and restart policy | `hl-client/tests/daemon/update.rs::container_update_persists_effective_settings_and_rejects_unknown_fields` |
+| create/start/die/destroy event replay | `hl-client/tests/daemon/event.rs::typed_event_stream_replays_create_and_destroy_from_real_handlers` |
+| container changes and commit | `hl-client/tests/daemon/metadata.rs::container_changes_compare_owned_rootfs_with_immutable_image_baseline` and `hl-client/tests/daemon/filesystem.rs::image_list_shared_size_accounts_executed_child_layers` |
+| container export | `hl-client/tests/daemon/observability.rs::container_archive_round_trip_streams_through_typed_client` and `hl-daemon/tests/container_export.rs::wire_contract` |
+| volume create/list/remove | `hl-client/tests/daemon/volume.rs::volume_crud_is_shared_with_headless_ownership_and_protects_references` |
+| network create/list/remove | `hl-client/tests/daemon/network.rs::network_client_and_server_share_headless_topology` and `forced_network_removal_uses_the_docker_delete_contract` |
+| plugins, authentication, search | `hl-client/tests/daemon/metadata.rs::compatibility_metadata_surfaces_are_typed_and_truthful` |
+| resource prune verbs | `hl-client/tests/system.rs::system_prune_reclaims_unused_resources_and_respects_volume_selection`, plus daemon image/network prune tests |
+
+The final root-filesystem import closure is
+`hl-client/tests/daemon/image.rs::rootfs_import_publishes_the_requested_repository_tag`.
+It exports a real container root filesystem, imports it through
+`POST /images/create?fromSrc=-` with an explicit repository and tag, and
+discovers that requested tag through image inspection.
+
+The remaining E2E action adapters must provide a bounded host workspace and
+shell executor, isolated daemon/socket lifecycle, typed client selection and
+environment substitution, named resources with unconditional cleanup, bounded
+stream capture, per-action diagnostics, readiness, and ordered multi-action
+execution. A generic API string switch would recreate the opaque retired
+runner; package behavior stays in crate tests and only true daemon/client/CLI
+workflows gain typed YAML actions.
+
+The deletion gate is: map one coherent behavior domain, verify its replacement
+from the exact committed tree, remove only its detached module and dispatch
+entry, and remove registry scaffolding only when no named behavior remains.
+
 
 
 # Dead code eliminations
