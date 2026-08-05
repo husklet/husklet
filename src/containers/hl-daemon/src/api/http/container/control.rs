@@ -23,7 +23,7 @@ pub(in super::super) async fn resize(
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct TimeoutQuery {
-    #[serde(default, rename = "t")]
+    #[serde(default, rename = "t", deserialize_with = "crate::api::http::query::optional_u64")]
     seconds: Option<u64>,
     #[serde(default)]
     signal: Option<String>,
@@ -31,14 +31,7 @@ pub(in super::super) struct TimeoutQuery {
 
 impl TimeoutQuery {
     fn duration(&self, configured_seconds: u64) -> ApiResult<std::time::Duration> {
-        const MAXIMUM_SECONDS: u64 = 86_400;
         let seconds = self.seconds.unwrap_or(configured_seconds);
-        if seconds > MAXIMUM_SECONDS {
-            return Err(ApiError::new(
-                StatusCode::BAD_REQUEST,
-                format!("stop timeout must not exceed {MAXIMUM_SECONDS} seconds"),
-            ));
-        }
         Ok(std::time::Duration::from_secs(seconds))
     }
 
@@ -62,7 +55,7 @@ impl TimeoutQuery {
 
 #[derive(Default, Deserialize)]
 pub(in super::super) struct LegacyTimeoutQuery {
-    #[serde(default, rename = "t")]
+    #[serde(default, rename = "t", deserialize_with = "crate::api::http::query::optional_u64")]
     seconds: Option<u64>,
 }
 
@@ -247,14 +240,40 @@ mod stop_timeout_tests {
             .as_secs(),
             7
         );
-        assert!(
+        assert_eq!(
             TimeoutQuery {
                 seconds: Some(86_401),
                 signal: None,
             }
             .duration(23)
-            .is_err()
+            .unwrap()
+            .as_secs(),
+            86_401
         );
+    }
+
+    #[test]
+    fn empty_timeout_is_omitted_for_legacy_and_current_routes() {
+        for path in [
+            "/containers/id/stop",
+            "/containers/id/stop?t=",
+            "/v1.43/containers/id/restart?t=",
+        ] {
+            let uri = path.parse().unwrap();
+            let Query(query) = Query::<TimeoutQuery>::try_from_uri(&uri).unwrap();
+            assert_eq!(query.duration(23).unwrap().as_secs(), 23, "{path}");
+        }
+        let uri = "/v1.41/containers/id/stop?t=".parse().unwrap();
+        let Query(query) = Query::<LegacyTimeoutQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(query.seconds, None);
+        for path in [
+            "/containers/id/stop?t=-1",
+            "/containers/id/stop?t=invalid",
+            "/containers/id/stop?t=18446744073709551616",
+        ] {
+            let uri = path.parse().unwrap();
+            assert!(Query::<TimeoutQuery>::try_from_uri(&uri).is_err(), "{path}");
+        }
     }
 
     #[test]
@@ -288,11 +307,8 @@ mod stop_timeout_tests {
 
     #[test]
     fn legacy_timeout_ignores_newer_signal_query() {
-        let query: LegacyTimeoutQuery = serde_json::from_value(serde_json::json!({
-            "t": 7,
-            "signal": "KILL"
-        }))
-        .unwrap();
+        let uri = "/v1.41/containers/id/stop?t=7&signal=KILL".parse().unwrap();
+        let Query(query) = Query::<LegacyTimeoutQuery>::try_from_uri(&uri).unwrap();
         assert_eq!(query.seconds, Some(7));
     }
 }

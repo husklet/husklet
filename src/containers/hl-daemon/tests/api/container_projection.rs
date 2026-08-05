@@ -119,6 +119,17 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         unsupported_stop.0.starts_with("HTTP/1.1 204"),
         "inactive container stop validated an unused signal override",
     )?;
+    for target in [
+        format!("/v1.24/containers/{id}/stop?t="),
+        format!("/v1.43/containers/{id}/stop?t="),
+        format!("/containers/{id}/stop?t=86401"),
+    ] {
+        let response = exchange(socket, "POST", &target, None).await?;
+        require(
+            response.0.starts_with("HTTP/1.1 204"),
+            "inactive container stop rejected a Docker timeout form",
+        )?;
+    }
     let inactive_restart = exchange(
         socket,
         "POST",
@@ -166,6 +177,8 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
     for target in [
         "/v1.42/containers/missing/stop?signal=SIGBOGUS",
         "/v1.43/containers/missing/restart?signal=KILL",
+        "/v1.24/containers/missing/stop?t=",
+        "/containers/missing/restart?t=",
     ] {
         let response = exchange(socket, "POST", target, None).await?;
         require(
@@ -348,15 +361,15 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         let filtered = exchange(
             socket,
             "GET",
-            &format!(
-                "/v1.43/containers/json?all=true&filters={}",
-                percent_encode(filters)
-            ),
+            &format!("/v1.43/containers/json?all=true&filters={}", percent_encode(filters)),
             None,
         )
         .await?;
         require(filtered.0.starts_with("HTTP/1.1 200"), "expose filter was not HTTP 200")?;
-        require(filtered.1.as_array().is_some_and(|items| items.len() == count), "expose filter selected the wrong containers")?;
+        require(
+            filtered.1.as_array().is_some_and(|items| items.len() == count),
+            "expose filter selected the wrong containers",
+        )?;
     }
     let malformed = exchange(
         socket,
@@ -368,7 +381,10 @@ async fn exercise(socket: &Path, bind_source: &Path) -> Result<(), Box<dyn std::
         None,
     )
     .await?;
-    require(malformed.0.starts_with("HTTP/1.1 400"), "malformed expose filter was not rejected")?;
+    require(
+        malformed.0.starts_with("HTTP/1.1 400"),
+        "malformed expose filter was not rejected",
+    )?;
 
     let inspected = exchange(socket, "GET", &format!("/v1.43/containers/{id}/json"), None).await?;
     require(

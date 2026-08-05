@@ -8,6 +8,18 @@ where
     parse_flag(&value).ok_or_else(|| serde::de::Error::custom(format_args!("invalid boolean {value:?}")))
 }
 
+pub(super) fn optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        value.parse().map(Some).map_err(serde::de::Error::custom)
+    }
+}
+
 pub(super) fn parse_flag(value: &str) -> Option<bool> {
     match value {
         "1" => Some(true),
