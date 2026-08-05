@@ -8,10 +8,15 @@
 int main(void) {
     uint8_t storage[32] = {0};
     hl_native_projection_view views[] = {
-        {0x1000, 0x1010, (uint64_t)(uintptr_t)storage, 7, 7, 0},
-        {0x1010, 0x1020, (uint64_t)(uintptr_t)(storage + 16), 7, 3, 0},
+        {.guest_first = 0x1000, .guest_last = 0x1010,
+         .host_first = (uint64_t)(uintptr_t)storage, .mapping_incarnation = 7,
+         .permissions = 7, .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 0},
+        {.guest_first = 0x1010, .guest_last = 0x1020,
+         .host_first = (uint64_t)(uintptr_t)(storage + 16), .mapping_incarnation = 7,
+         .permissions = 3, .write_policy = HL_NATIVE_WRITE_EXACT, .write_index = 1},
     };
-    hl_native_projection projection = {views, 2, 7};
+    hl_native_projection projection = {.views = views, .count = 2,
+                                       .mapping_incarnation = 7, .active = 0};
     hl_native_x86_64_cpu cpu = {0};
     cpu.dirty_first = UINT64_MAX;
     CHECK(hl_x86_projection_validate(&projection));
@@ -46,6 +51,22 @@ int main(void) {
         CHECK(hl_x86_projection_resolve(&projection, &cpu, address, 1, 2));
         CHECK(hl_x86_projection_written(&cpu, address, 1));
     }
-    CHECK(cpu.dirty_count == 16 && cpu.dirty_overflow == 1);
+    CHECK(cpu.dirty_count == 3 && cpu.dirty_overflow == 0);
+    cpu.dirty_count = HL_X86_DIRTY_CAPACITY;
+    cpu.dirty_overflow = 0;
+    for (unsigned index = 0; index < HL_X86_DIRTY_CAPACITY; ++index) {
+        cpu.dirty_records[index][0] = 0x2000;
+        cpu.dirty_records[index][1] = 0x3000;
+        cpu.dirty_records[index][2] = 0x2000 + 2u * index;
+        cpu.dirty_records[index][3] = 0x2001 + 2u * index;
+    }
+    cpu.dirty_view_first = 0x1000;
+    cpu.dirty_view_last = 0x1010;
+    cpu.dirty_first = 0x1000;
+    cpu.dirty_last = 0x1001;
+    cpu.memory_first = 0x1010;
+    cpu.memory_last = 0x1020;
+    CHECK(hl_x86_projection_resolve(&projection, &cpu, 0x1000, 1, 2));
+    CHECK(cpu.dirty_count == HL_X86_DIRTY_CAPACITY && cpu.dirty_overflow == 1);
     return 0;
 }

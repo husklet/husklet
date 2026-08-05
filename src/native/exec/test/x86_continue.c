@@ -200,7 +200,7 @@ static int alternating_writable_views_stay_native(void) {
     hl_native_cpu cpu = {.abi = HL_NATIVE_ABI, .size = sizeof(cpu),
         .architecture = HL_NATIVE_X86_64, .state.x86_64 = &state};
     hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
-        .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .budget = 16,
+        .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .budget = 257,
         .source = &source, .projection = &projection};
 
     memory.write_begin = executable_begin;
@@ -212,19 +212,17 @@ static int alternating_writable_views_stay_native(void) {
     state.registers[2] = UINT64_C(0x55667788);
     state.registers[3] = 0x9000;
     state.registers[1] = 0xa000;
-    state.registers[6] = 2;
+    state.registers[6] = 64;
     state.dirty_first = UINT64_MAX;
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && state.program == 0x8309);
     CHECK(first == UINT32_C(0x11223344) && second == UINT32_C(0x55667788));
-    CHECK(state.executed == 8 && state.budget == 8 && state.registers[6] == 0);
-    CHECK(state.dirty_count == 3 && state.dirty_overflow == 0);
+    CHECK(state.executed == 256 && state.budget == 1 && state.registers[6] == 0);
+    CHECK(state.dirty_count == 2 && state.dirty_overflow == 0);
     CHECK(state.dirty_records[0][0] == 0x9000 && state.dirty_records[0][1] == 0x9004 &&
           state.dirty_records[0][2] == 0x9000 && state.dirty_records[0][3] == 0x9004);
     CHECK(state.dirty_records[1][0] == 0xa000 && state.dirty_records[1][1] == 0xa004 &&
           state.dirty_records[1][2] == 0xa000 && state.dirty_records[1][3] == 0xa004);
-    CHECK(state.dirty_records[2][0] == 0x9000 && state.dirty_records[2][1] == 0x9004 &&
-          state.dirty_records[2][2] == 0x9000 && state.dirty_records[2][3] == 0x9004);
     CHECK(state.dirty_view_first == 0xa000 && state.dirty_view_last == 0xa004 &&
           state.dirty_first == 0xa000 && state.dirty_last == 0xa004);
     CHECK(state.fault_access == 0 && state.fault_size == 0);

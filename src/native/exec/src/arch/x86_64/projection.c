@@ -3,6 +3,17 @@
 static void flush_dirty(hl_native_x86_64_cpu *cpu) {
     uint64_t *record;
     if (cpu->dirty_first == UINT64_MAX) return;
+    for (uint64_t index = 0; index < cpu->dirty_count; ++index) {
+        record = cpu->dirty_records[index];
+        if (record[0] != cpu->dirty_view_first || record[1] != cpu->dirty_view_last ||
+            record[2] > cpu->dirty_last || record[3] < cpu->dirty_first)
+            continue;
+        if (cpu->dirty_first < record[2]) record[2] = cpu->dirty_first;
+        if (cpu->dirty_last > record[3]) record[3] = cpu->dirty_last;
+        cpu->dirty_first = UINT64_MAX;
+        cpu->dirty_last = 0;
+        return;
+    }
     if (cpu->dirty_count >= HL_X86_DIRTY_CAPACITY) {
         cpu->dirty_overflow = 1;
     } else {

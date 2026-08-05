@@ -100,7 +100,19 @@ The correction must be shared by emitted `emit_write_cache` archival,
    distinct; and
 5. 17 genuinely disjoint intervals preserving pre-mutation capacity failure.
 
-No production edit is included here because implementing only the emitted
-selector would create different journal semantics between scalar/vector/RMW
-stores and REP/dispatcher paths. The complete family-wide change requires a
-single audited owner and a clean diagnostics-off C/Rust/native A/B run.
+The follow-up implementation applies identical overlap/adjacency coalescing to
+the emitted scalar/vector/RMW transition and dispatcher
+`projection.c::flush_dirty`. The sustained translated test now performs 64
+two-view iterations (128 stores and 127 owner transitions), remains native,
+and retains two archived exact records without overflow. The projection test
+also preserves a full-journal case whose different owner cannot coalesce and
+therefore still fails closed.
+
+The REP bulk preflight remains a separate gap. `rep_dirty_full` sees only the
+full count and prospective owner, not whether the current interval can merge
+with a record. It can therefore request an epoch earlier than necessary. That
+path was not weakened here: REP performs large bulk operations, so its exit
+rate is not the scalar alternating-store amplification measured by this lane.
+Giving it identical coalescing requires factoring one bounded journal
+reservation operation shared by preflight and post-success publication; doing
+only a post-write merge would violate the pre-mutation capacity contract.

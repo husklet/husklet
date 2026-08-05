@@ -19,7 +19,7 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
 }
 
 #define HL_X86_READ_VIEWS 4u
-#define HL_X86_WRITE_CACHE_WORDS 71u
+#define HL_X86_WRITE_CACHE_WORDS 105u
 
 static void jump(uint32_t *instruction, uint32_t *target) {
     int64_t distance = target - instruction;
@@ -141,6 +141,48 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, dirty_first));
     words[(*cursor)++] = UINT32_C(0xb100063f); /* cmn first,#1: UINT64_MAX means empty */
     uint32_t *empty = &words[(*cursor)++];
+    words[(*cursor)++] = load_word(18, offsetof(hl_native_x86_64_cpu, dirty_count));
+    words[(*cursor)++] = UINT32_C(0x91000013) |
+                         (uint32_t)offsetof(hl_native_x86_64_cpu, dirty_records) << 10 |
+                         28u << 5; /* x19 = first dirty record */
+    uint32_t *scan = &words[*cursor];
+    uint32_t *append = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9400271); /* ldr x17,[x19] */
+    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_view_first));
+    words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
+    uint32_t *next_owner_first = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9400671); /* ldr x17,[x19,#8] */
+    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_view_last));
+    words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
+    uint32_t *next_owner_last = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9400a71); /* ldr x17,[x19,#16]: recorded first */
+    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp recorded first,current last */
+    uint32_t *next_above = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9400e71); /* ldr x17,[x19,#24]: recorded last */
+    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
+    words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp recorded last,current first */
+    uint32_t *next_below = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9400a71); /* recorded first */
+    words[(*cursor)++] = UINT32_C(0xeb11029f); /* cmp current first,recorded first */
+    uint32_t *keep_first = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9000a74); /* str current first,[x19,#16] */
+    uint32_t *first_done = &words[*cursor];
+    words[(*cursor)++] = UINT32_C(0xf9400e71); /* recorded last */
+    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = UINT32_C(0xeb11029f); /* cmp current last,recorded last */
+    uint32_t *keep_last = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xf9000e74); /* str current last,[x19,#24] */
+    uint32_t *merged = &words[*cursor];
+    emit_constant(words, cursor, 20, UINT64_MAX);
+    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
+    words[(*cursor)++] = store_word(31, offsetof(hl_native_x86_64_cpu, dirty_last));
+    uint32_t *merged_install = &words[(*cursor)++];
+    uint32_t *scan_next = &words[*cursor];
+    words[(*cursor)++] = UINT32_C(0x91008273); /* add record,record,#32 */
+    words[(*cursor)++] = UINT32_C(0xd1000652); /* sub remaining,remaining,#1 */
+    uint32_t *scan_again = &words[(*cursor)++];
+    uint32_t *append_target = &words[*cursor];
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, dirty_count));
     words[(*cursor)++] = UINT32_C(0xf100423f); /* cmp count,#16 */
     uint32_t *full = &words[(*cursor)++];
@@ -190,6 +232,16 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     branch(different_last, archive, 1u);
     jump(already_active, active);
     branch(empty, install, 0u);
+    *append = UINT32_C(0xb4000000) |
+              ((uint32_t)(append_target - append) & UINT32_C(0x7ffff)) << 5 | 18u;
+    branch(next_owner_first, scan_next, 1u);
+    branch(next_owner_last, scan_next, 1u);
+    branch(next_above, scan_next, 8u);
+    branch(next_below, scan_next, 3u);
+    branch(keep_first, first_done, 2u);
+    branch(keep_last, merged, 9u);
+    jump(merged_install, install);
+    jump(scan_again, scan);
     branch(full, active, 2u);
     jump(installed, active);
 }
