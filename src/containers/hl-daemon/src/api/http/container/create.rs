@@ -27,6 +27,16 @@ pub(in super::super) async fn create(
     Json(mut request): Json<CreateContainer>,
 ) -> ApiResult<(StatusCode, Json<ContainerCreation>)> {
     request.validate_unsupported()?;
+    let console_size = crate::api::model::console_size(
+        request.host_config.as_ref().and_then(|host| host.console_size),
+    )
+    .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
+    if console_size.is_some() && !request.console.tty {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "HostConfig.ConsoleSize requires Tty=true",
+        ));
+    }
     let stop_timeout_seconds = request
         .stop_timeout_seconds()
         .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
@@ -72,7 +82,7 @@ pub(in super::super) async fn create(
         .map(Signal::from);
     let console = Console {
         stdin: request.console.open,
-        terminal: request.console.tty.then(hl_container::Size::default),
+        terminal: request.console.tty.then(|| console_size.unwrap_or_default()),
     };
     let anonymous = host.anonymous.clone();
     let container = state
@@ -154,12 +164,6 @@ impl HostConfig {
                 ));
             }
         }
-        if self.console_size.is_some_and(|size| size != [0, 0]) {
-            return Err(ApiError::new(
-                StatusCode::NOT_IMPLEMENTED,
-                "HostConfig.ConsoleSize is not implemented for nonzero dimensions",
-            ));
-        }
         if !self.links.is_empty() {
             return Err(ApiError::new(
                 StatusCode::NOT_IMPLEMENTED,
@@ -240,11 +244,12 @@ mod tests {
     }
 
     #[test]
-    fn console_size_accepts_only_absent_null_or_zero_default() {
+    fn console_size_accepts_wire_shape_before_tty_validation() {
         for value in [
             serde_json::json!({}),
             serde_json::json!({"ConsoleSize": null}),
             serde_json::json!({"ConsoleSize": [0, 0]}),
+            serde_json::json!({"ConsoleSize": [24, 80]}),
         ] {
             let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
             assert!(host.validate_unsupported().is_ok());
@@ -252,11 +257,10 @@ mod tests {
         for value in [
             serde_json::json!({"ConsoleSize": [1, 0]}),
             serde_json::json!({"ConsoleSize": [0, 1]}),
-            serde_json::json!({"ConsoleSize": [24, 80]}),
         ] {
             let host: crate::api::HostConfig = serde_json::from_value(value).unwrap();
-            let error = host.validate_unsupported().unwrap_err();
-            assert_eq!(error.status, StatusCode::NOT_IMPLEMENTED);
+            assert!(host.validate_unsupported().is_ok());
+            assert!(crate::api::model::console_size(host.console_size).is_err());
         }
         for value in [
             serde_json::json!({"ConsoleSize": []}),

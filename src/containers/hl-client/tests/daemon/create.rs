@@ -1,6 +1,60 @@
 use super::support::*;
 
 #[tokio::test]
+async fn create_console_size_is_durable_and_checked() {
+    let root = TempDir::new().unwrap();
+    let containers = containers(&root).await;
+    Archive::load(&docker_archive()[..], &containers.images().unwrap(), Limits::default()).unwrap();
+    let socket = root.path().join("run/docker.sock");
+    let daemon = TestDaemon::start(containers.clone(), &socket).await;
+    let request = |tty, console_size| {
+        let mut request = hl_client::model::CreateContainer {
+            image: "scenario/fixture:v1".into(),
+            host_config: Some(hl_client::model::HostConfig {
+                console_size,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        request.console.tty = tty;
+        request
+    };
+
+    let created = daemon
+        .client
+        .containers()
+        .create(&request(true, Some([37, 119])), Some("sized-console"))
+        .await
+        .unwrap();
+    let expected = Some(hl_container::Size::new(37, 119).unwrap());
+    assert_eq!(
+        containers.inspect(&created.id).await.unwrap().spec.process.console.terminal,
+        expected
+    );
+    for invalid in [
+        request(false, Some([37, 119])),
+        request(true, Some([0, 119])),
+        request(true, Some([65_536, 119])),
+    ] {
+        assert!(matches!(
+            daemon.client.containers().create(&invalid, None).await.unwrap_err(),
+            hl_client::Error::Docker {
+                status: http::StatusCode::BAD_REQUEST,
+                ..
+            }
+        ));
+    }
+    daemon.stop().await;
+
+    let reopened = TestDaemon::start(containers.clone(), &socket).await;
+    assert_eq!(
+        containers.inspect(&created.id).await.unwrap().spec.process.console.terminal,
+        expected
+    );
+    reopened.stop().await;
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     let root = TempDir::new().unwrap();

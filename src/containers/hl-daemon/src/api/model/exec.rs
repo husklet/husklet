@@ -2,6 +2,21 @@
 use super::{CompatibilityFields, EnvVars};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "runtime")]
+pub(crate) fn console_size(value: Option<[u64; 2]>) -> Result<Option<hl_container::Size>, String> {
+    let Some([height, width]) = value else {
+        return Ok(None);
+    };
+    if height == 0 && width == 0 {
+        return Ok(None);
+    }
+    let rows = u16::try_from(height).map_err(|_| "terminal height exceeds 65535".to_owned())?;
+    let columns = u16::try_from(width).map_err(|_| "terminal width exceeds 65535".to_owned())?;
+    hl_container::Size::new(rows, columns)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 /// Process streams selected when Docker creates and attaches in one operation.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 pub struct Attachment {
@@ -107,14 +122,7 @@ impl ExecStart {
         if let Some(name) = CompatibilityFields::from(&self.unsupported).first_meaningful() {
             return Err(format!("unsupported exec start field {name}"));
         }
-        let Some([height, width]) = self.console_size else {
-            return Ok(None);
-        };
-        let rows = u16::try_from(height).map_err(|_| "terminal height exceeds 65535".to_owned())?;
-        let columns = u16::try_from(width).map_err(|_| "terminal width exceeds 65535".to_owned())?;
-        hl_container::Size::new(rows, columns)
-            .map(Some)
-            .map_err(|error| error.to_string())
+        console_size(self.console_size)
     }
 }
 
@@ -307,6 +315,16 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!((size.rows(), size.columns()), (41, 109));
+        assert_eq!(
+            ExecStart {
+                tty: true,
+                console_size: Some([0, 0]),
+                ..Default::default()
+            }
+            .size()
+            .unwrap(),
+            None
+        );
         assert!(
             ExecStart {
                 tty: true,
