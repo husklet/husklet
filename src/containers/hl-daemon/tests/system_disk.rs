@@ -96,6 +96,10 @@ async fn wire_client() -> Result<(), Box<dyn std::error::Error>> {
             "system disk request was not HTTP 200",
         )?;
         let raw = body(&response)?;
+        require(
+            raw["BuildCache"].as_array().is_some_and(Vec::is_empty),
+            "raw build cache projection was not an empty array",
+        )?;
         let raw_volumes = raw["Volumes"]
             .as_array()
             .ok_or("system disk Volumes was not an array")?;
@@ -117,6 +121,10 @@ async fn wire_client() -> Result<(), Box<dyn std::error::Error>> {
 
         let client = Client::with_config(ClientConfig::unix(&socket))?;
         let usage = client.system().disk_usage().await?;
+        require(
+            usage.build_cache.is_empty(),
+            "typed build cache projection was not empty",
+        )?;
         require(
             usage
                 .volumes

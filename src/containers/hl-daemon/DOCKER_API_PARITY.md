@@ -37,6 +37,38 @@ container daemon's product boundary rather than silent compatibility claims.
 | volumes | list/create/inspect/remove/prune | external drivers and cluster volumes |
 | events and accounting | events, system disk usage, system prune | swarm-scoped event kinds and object classes |
 
+### System disk type projection
+
+Docker API 1.42 added repeatable `type` selection to `GET /system/df`. The
+pinned v1.43 wire oracle in `tests/disk_query.rs` requires every complete
+response to include `LayersSize`, `Images`, `Containers`, `Volumes`, and
+`BuildCache`; selected collections remain arrays and unselected collections are
+JSON null. Empty or unknown type values are bad requests, repeated values are
+deduplicated, and API 1.24 through 1.41 ignore the newer query parameter.
+Husklet owns no BuildKit cache objects, so its truthful complete BuildCache
+projection is an empty collection.
+
+The retained C engine has no Docker HTTP model or `/system/df` entry point.
+The relevant retained protocol boundary remains
+`src/core/activation.c::{transfer,activation_prepare,activation_handshake,
+hl_activation_wait,hl_activation_process_destroy}` and
+`include/hl/activation.h`: bounded request/reply transfer precedes readiness,
+the parent owns activation identity and lifetime, partial records and malformed
+identity are errors, `EINTR` is retried, teardown kills and waits before
+release, POSIX and Windows use their respective process/descriptor mechanisms,
+and no ISA assembly owns API response serialization. The daemon HTTP adapter,
+not the engine, therefore owns this shape and version projection.
+
+| Capability | Owner | Status |
+|---|---|---|
+| complete five-field disk response | daemon `api::DiskUsage` and HTTP projection | implemented |
+| truthful empty BuildKit cache catalog | daemon disk accounting adapter | implemented |
+| repeatable v1.42+ type selection | daemon `DiskTypes` query parser | implemented |
+| null for unselected collections | daemon `DiskUsageProjection` wire type | implemented |
+| legacy v1.24-v1.41 query compatibility | request-version projection | implemented |
+| bounded accounting and typed store errors | existing container/image/volume services | implemented |
+| activation ownership, blocking, cancellation and teardown | retained C / Rust engine composition | separate, unchanged |
+
 ## Selected domain: versioned daemon negotiation
 
 Docker CLI 29.1.3 defaults to its current Engine API prefix (`/v1.52`) and does

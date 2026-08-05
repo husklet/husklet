@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{OriginalUri, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use hl_container::ContainerState;
@@ -7,10 +7,11 @@ use hl_images::content::Store;
 
 use super::{ApiError, ApiResult, DockerState};
 use crate::api::{
-    Authentication, Credentials, DiskUsage, Plugin, SystemInfo, SystemPrune, UsageData, Version, VolumeUsage,
+    Authentication, Container, Credentials, ImageSummary, Plugin, SystemInfo, SystemPrune, UsageData, Version,
+    VolumeUsage,
 };
-use serde::Deserialize;
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[hl_design::adapter]
 pub(super) async fn ping() -> impl IntoResponse {
@@ -82,7 +83,11 @@ pub(super) async fn info(State(state): State<DockerState>) -> ApiResult<Json<Sys
 }
 
 #[hl_design::adapter]
-pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<DiskUsage>> {
+pub(super) async fn disk(
+    State(state): State<DockerState>,
+    OriginalUri(uri): OriginalUri,
+    Query(query): Query<Vec<(String, String)>>,
+) -> ApiResult<Json<DiskUsageProjection>> {
     let listed_containers = state.containers.list().await.map_err(ApiError::container)?;
     let containers = super::container::summaries(&state.containers, listed_containers, true).await?;
     let images = state.image_summaries().await?;
@@ -128,12 +133,85 @@ pub(super) async fn disk(State(state): State<DockerState>) -> ApiResult<Json<Dis
     .await
     .map_err(ApiError::task)?
     .map_err(ApiError::image)?;
-    Ok(Json(DiskUsage {
+    let usage = crate::api::DiskUsage {
         layers_size,
         images,
         containers,
         volumes,
-    }))
+        build_cache: Vec::new(),
+    };
+    let selected = DiskTypes::from_request(uri.path(), query)?;
+    Ok(Json(DiskUsageProjection::new(usage, selected.as_ref())))
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum DiskType {
+    Container,
+    Image,
+    Volume,
+    BuildCache,
+}
+
+struct DiskTypes(BTreeSet<DiskType>);
+
+impl DiskTypes {
+    fn from_request(path: &str, query: Vec<(String, String)>) -> Result<Option<Self>, ApiError> {
+        let legacy = path
+            .strip_prefix("/v1.")
+            .and_then(|path| path.split('/').next())
+            .and_then(|minor| minor.parse::<u8>().ok())
+            .is_some_and(|minor| minor <= 41);
+        if legacy {
+            return Ok(None);
+        }
+        let mut selected = BTreeSet::new();
+        for (name, value) in query {
+            if name != "type" {
+                continue;
+            }
+            let object = match value.as_str() {
+                "container" => DiskType::Container,
+                "image" => DiskType::Image,
+                "volume" => DiskType::Volume,
+                "build-cache" => DiskType::BuildCache,
+                _ => {
+                    return Err(ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        format!("unknown object type: {value}"),
+                    ));
+                }
+            };
+            selected.insert(object);
+        }
+        Ok((!selected.is_empty()).then_some(Self(selected)))
+    }
+
+    fn contains(&self, object: DiskType) -> bool {
+        self.0.contains(&object)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(super) struct DiskUsageProjection {
+    layers_size: i64,
+    images: Option<Vec<ImageSummary>>,
+    containers: Option<Vec<Container>>,
+    volumes: Option<Vec<VolumeUsage>>,
+    build_cache: Option<Vec<serde_json::Value>>,
+}
+
+impl DiskUsageProjection {
+    fn new(usage: crate::api::DiskUsage, selected: Option<&DiskTypes>) -> Self {
+        let include = |object| selected.is_none_or(|types| types.contains(object));
+        Self {
+            layers_size: usage.layers_size,
+            images: include(DiskType::Image).then_some(usage.images),
+            containers: include(DiskType::Container).then_some(usage.containers),
+            volumes: include(DiskType::Volume).then_some(usage.volumes),
+            build_cache: include(DiskType::BuildCache).then_some(usage.build_cache),
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]
