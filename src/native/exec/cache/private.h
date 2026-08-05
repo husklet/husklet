@@ -31,7 +31,7 @@ typedef struct pending_relocation {
 typedef struct resolved_relocation {
     uint64_t source_guest, source_instruction_epoch, source_code_offset;
     hl_native_relocation relocation;
-    uint32_t patched;
+    uint32_t patched[HL_NATIVE_RELOCATION_SPAN_WORDS];
     uint32_t generation;
     uint32_t target_epoch_wildcard;
 } resolved_relocation;

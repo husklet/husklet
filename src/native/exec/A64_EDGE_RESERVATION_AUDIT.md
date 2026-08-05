@@ -79,5 +79,37 @@ resolution, preservation of the unused tail, complete invalidation restore, and
 reset retirement. Existing AArch64 trace and cycle tests continue to cover both
 conditional successors, direct edges, cycle retention, capacity paths, and
 source/target invalidation through the same relocation implementation. The
-interrupt/token/budget admission program and its behavioral tests remain the
-next consumer; this prerequisite deliberately does not synthesize that program.
+## Reservation consumer
+
+The follow-on consumer re-read the retained files and entry points listed above,
+including the complete `translate_block` stitching path, dispatcher return path,
+pending-link publication, source-range invalidation, and teardown. The retained
+ownership and host/architecture conclusions are unchanged: live registers cross
+patched edges under the global JIT mutation lock, invalidation restores cold
+ingress before target retirement, and the retained engine has neither Husklet's
+request token nor exact bounded-run accounting.
+
+Rust now replaces a typed sixteen-word span with one indivisible admission
+program. It polls `interrupt`, acquire-loads and polls the optional request
+token, loads the destination budget, preserves NZCV, rejects insufficient
+budget, precharges the target's exact instruction count, publishes the new
+remaining budget, and branches to `cache_entry.admitted_offset`. Interrupt and
+token rejection enter the unchanged cold spill directly; budget rejection first
+restores NZCV. The resolved relocation owns the complete hot image, so dynamic
+rebinding and target/source invalidation validate all sixteen words and restore
+the complete cold image before changing ownership.
+
+The audit exposed one prerequisite handoff gap: `trace_build` computed the exact
+count but `hl_a64_trace_cache_direct` omitted it from `hl_native_emission`, causing
+cache publication to use the compatibility default of one. Publication now
+carries the computed count. This is required for conditional suffix refunds:
+destination precharge minus the already-completed-prefix refund equals exactly
+the newly executed guest work.
+
+`test/cache.c::relocation_span` checks the exact instruction layout, destination
+count immediate, admitted ingress branch, NZCV restoration, and complete
+invalidation rollback. The warning-strict C test passes. On the pinned AArch64
+host, the ten-million conditional branch budget test and asynchronous-token loop
+test each pass in 0.03 seconds; the package's 505-test library cohort passes all
+AArch64 admission tests. One unrelated network timing test returned `WouldBlock`
+in the full concurrent cohort and passed alone in 0.03 seconds.

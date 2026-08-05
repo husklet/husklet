@@ -1,5 +1,10 @@
 #include "private.h"
 
+#include "../../cpu/include/layout.h"
+
+#include <stddef.h>
+#include <string.h>
+
 /* The imported cache closed every resolved cycle. Restrict that existing
  * behavior: an unguarded cycle retains one typed dispatcher exit. Publication
  * cannot allocate, so admission uses a fixed nonrecursive frontier. A guarded
@@ -24,6 +29,58 @@ static int span_matches(const uint32_t *words, const hl_native_relocation *reloc
         uint32_t expected = index == 0 ? first : cold_word(relocation, index);
         if (words[index] != expected) return 0;
     }
+    return 1;
+}
+
+static int hot_span_matches(const uint32_t *words, const resolved_relocation *resolved) {
+    uint32_t count = span_words(&resolved->relocation);
+    for (uint32_t index = 0; index < count; index++)
+        if (words[index] != resolved->patched[index]) return 0;
+    return 1;
+}
+
+static uint32_t a64_imm19(uint32_t instruction, int64_t displacement) {
+    return instruction | (((uint32_t)displacement & UINT32_C(0x7ffff)) << 5);
+}
+
+static uint32_t a64_branch(uint64_t source, uint64_t target) {
+    int64_t displacement = target >= source
+        ? (int64_t)((target - source) / 4)
+        : -(int64_t)((source - target) / 4);
+    return UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
+}
+
+static int a64_edge_admission(uint32_t *hot, uint64_t source_offset,
+                              const cache_entry *target) {
+    const uint32_t count = target->instruction_count;
+    const uint64_t branch_offset = source_offset + 13u * 4u;
+    int64_t displacement = target->admitted_offset >= branch_offset
+        ? (int64_t)((target->admitted_offset - branch_offset) / 4)
+        : -(int64_t)((branch_offset - target->admitted_offset) / 4);
+    if (count == 0 || count > UINT32_C(0xfff) ||
+        ((target->admitted_offset | branch_offset) & 3u) != 0 ||
+        displacement < -(1 << 25) || displacement >= (1 << 25))
+        return 0;
+    hot[0] = UINT32_C(0xf9400000) |
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, interrupt) / 8) << 10) | (28u << 5) | 16u;
+    hot[1] = a64_imm19(UINT32_C(0xb5000010), 15); /* cbnz x16,cold */
+    hot[2] = UINT32_C(0xf9400000) |
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, interrupt_token) / 8) << 10) | (28u << 5) | 16u;
+    hot[3] = a64_imm19(UINT32_C(0xb4000010), 3); /* cbz x16,budget */
+    hot[4] = UINT32_C(0xc8dffe10);              /* ldar x16,[x16] */
+    hot[5] = a64_imm19(UINT32_C(0xb5000010), 11); /* cbnz x16,cold */
+    hot[6] = UINT32_C(0xf9400000) |
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
+    hot[7] = UINT32_C(0xd53b4211); /* mrs x17,nzcv */
+    hot[8] = UINT32_C(0xf100021f) | (count << 10); /* cmp x16,#count */
+    hot[9] = a64_imm19(UINT32_C(0x54000003), 5); /* b.lo restore */
+    hot[10] = UINT32_C(0xd51b4211); /* msr nzcv,x17 */
+    hot[11] = UINT32_C(0xd1000210) | (count << 10); /* sub x16,x16,#count */
+    hot[12] = UINT32_C(0xf9000000) |
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
+    hot[13] = a64_branch(branch_offset, target->admitted_offset);
+    hot[14] = UINT32_C(0xd51b4211); /* budget rejection restores NZCV */
+    hot[15] = UINT32_C(0x14000001); /* b cold */
     return 1;
 }
 
@@ -67,7 +124,7 @@ static int cycle_requires_exit(const hl_native_cache *cache, const cache_entry *
 
 static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
                               const cache_entry *target, const hl_native_relocation *relocation,
-                              uint32_t *patched) {
+                              uint32_t patched[HL_NATIVE_RELOCATION_SPAN_WORDS]) {
     uint64_t source_offset;
     int64_t displacement;
     uint32_t *word;
@@ -91,8 +148,13 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
         hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
         return HL_NATIVE_CAPACITY;
     }
-    *patched = UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
-    *word = *patched;
+    for (uint32_t index = 0; index < words; index++) patched[index] = cold_word(relocation, index);
+    if (words == HL_NATIVE_RELOCATION_SPAN_WORDS) {
+        if (!a64_edge_admission(patched, source_offset, target)) return HL_NATIVE_ARGUMENT;
+    } else {
+        patched[0] = UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
+    }
+    for (uint32_t index = 0; index < words; index++) word[index] = patched[index];
     hl_native_status status = cache->arena->memory.publish(
         cache->arena->memory.context, cache->arena->mapping.handle, source_offset, words * 4u);
     if (status != HL_NATIVE_OK) cache->poisoned = 1;
@@ -100,7 +162,8 @@ static hl_native_status patch(hl_native_cache *cache, const cache_entry *source,
 }
 
 static hl_native_status remember(hl_native_cache *cache, const cache_entry *source,
-                                 const cache_entry *target, const hl_native_relocation *relocation, uint32_t patched,
+                                 const cache_entry *target, const hl_native_relocation *relocation,
+                                 const uint32_t patched[HL_NATIVE_RELOCATION_SPAN_WORDS],
                                  uint32_t target_epoch_wildcard) {
     if (cache->resolved_count == cache->resolved_capacity) {
         hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
@@ -108,7 +171,9 @@ static hl_native_status remember(hl_native_cache *cache, const cache_entry *sour
     }
     cache->resolved[cache->resolved_count++] = (resolved_relocation){
         source->guest, source->instruction_epoch, source->code_offset,
-        *relocation, patched, cache->generation, target_epoch_wildcard};
+        *relocation, {0}, cache->generation, target_epoch_wildcard};
+    memcpy(cache->resolved[cache->resolved_count - 1].patched, patched,
+           sizeof(cache->resolved[cache->resolved_count - 1].patched));
     cache->resolved[cache->resolved_count - 1].relocation.target_instruction_count =
         target->instruction_count;
     return HL_NATIVE_OK;
@@ -161,7 +226,7 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
             old.relocation.code_offset != branch_offset - source->code_offset)
             continue;
         uint32_t *word = (uint32_t *)(cache->arena->writable + branch_offset);
-        if (!span_matches(word, &old.relocation, old.patched)) return HL_NATIVE_STATE;
+        if (!hot_span_matches(word, &old)) return HL_NATIVE_STATE;
         span_restore(word, &old.relocation);
         hl_native_status status = cache->arena->memory.publish(
             cache->arena->memory.context, cache->arena->mapping.handle, branch_offset,
@@ -186,8 +251,8 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
         .target_epoch_known = 1,
         .expected = UINT32_C(0xd503201f),
     };
-    uint32_t value;
-    hl_native_status status = patch(cache, source, &cache->entries[target_slot], &relocation, &value);
+    uint32_t value[HL_NATIVE_RELOCATION_SPAN_WORDS];
+    hl_native_status status = patch(cache, source, &cache->entries[target_slot], &relocation, value);
     if (status == HL_NATIVE_CAPACITY) return HL_NATIVE_OK;
     if (status == HL_NATIVE_OK) status = remember(cache, source, &cache->entries[target_slot], &relocation, value, 0);
     if (status == HL_NATIVE_OK && patched != NULL) *patched = 1;
@@ -229,7 +294,7 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
             resolved.relocation.code_offset <= source->code_size - words * 4u) {
             uint64_t offset = source->code_offset + resolved.relocation.code_offset;
             uint32_t *word = (uint32_t *)(cache->arena->writable + offset);
-            if (!span_matches(word, &resolved.relocation, resolved.patched)) return HL_NATIVE_STATE;
+            if (!hot_span_matches(word, &resolved)) return HL_NATIVE_STATE;
             span_restore(word, &resolved.relocation);
             hl_native_status status = cache->arena->memory.publish(
                 cache->arena->memory.context, cache->arena->mapping.handle, offset, words * 4u);
@@ -285,12 +350,12 @@ hl_native_status hl_native_cache_relocate(hl_native_cache *cache, uint64_t sourc
             hl_native_relocation bound = *relocation;
             bound.target_instruction_epoch = cache->entries[target_slot].instruction_epoch;
             bound.target_epoch_known = 1;
-            uint32_t patched;
+            uint32_t patched[HL_NATIVE_RELOCATION_SPAN_WORDS];
             if (cache->resolved_count == cache->resolved_capacity) {
                 hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CAPACITY);
                 return HL_NATIVE_CAPACITY;
             }
-            hl_native_status status = patch(cache, source, &cache->entries[target_slot], &bound, &patched);
+            hl_native_status status = patch(cache, source, &cache->entries[target_slot], &bound, patched);
             if (status == HL_NATIVE_OK)
                 status = remember(cache, source, &cache->entries[target_slot], &bound, patched,
                                   !relocation->target_epoch_known);
@@ -352,9 +417,9 @@ hl_native_status hl_native_cache_resolve(hl_native_cache *cache, uint64_t target
         hl_native_relocation bound = pending.relocation;
         bound.target_instruction_epoch = target_instruction_epoch;
         bound.target_epoch_known = 1;
-        uint32_t patched;
+        uint32_t patched[HL_NATIVE_RELOCATION_SPAN_WORDS];
         hl_native_status status = patch(cache, &cache->entries[source_slot],
-                                        &cache->entries[target_slot], &bound, &patched);
+                                        &cache->entries[target_slot], &bound, patched);
         if (status == HL_NATIVE_OK)
             status = remember(cache, &cache->entries[source_slot], &cache->entries[target_slot], &bound, patched,
                               !pending.relocation.target_epoch_known);

@@ -70,6 +70,28 @@ static hl_native_status publish(fixture *fixture, uint64_t guest, uint64_t epoch
     return status;
 }
 
+static hl_native_status publish_admitted(fixture *fixture, uint64_t guest, uint64_t epoch,
+                                         uint32_t instruction_count, uint64_t admitted_offset) {
+    hl_native_block block = {0};
+    const hl_native_provenance provenance = {
+        .code_size = 96, .guest = guest, .access = HL_NATIVE_ACCESS_UNKNOWN};
+    hl_native_status status = hl_native_arena_begin(&fixture->arena);
+    if (status != HL_NATIVE_OK) return status;
+    status = hl_native_cache_reserve(fixture->cache, guest, epoch, guest, guest + 4, 96, &block);
+    if (status == HL_NATIVE_OK) {
+        uint32_t *words = (uint32_t *)(fixture->arena.writable + block.code_offset);
+        for (uint32_t index = 0; index < 96 / sizeof(*words); index++)
+            words[index] = UINT32_C(0xd503201f);
+        block.instruction_count = instruction_count;
+        block.admitted_offset = block.code_offset + admitted_offset;
+        status = hl_native_cache_publish_map(fixture->cache, &block, 96, 4, &provenance, 1);
+    }
+    if (status != HL_NATIVE_OK && block.token != 0) hl_native_cache_cancel(fixture->cache, &block);
+    if (hl_native_arena_end(&fixture->arena) != HL_NATIVE_OK && status == HL_NATIVE_OK)
+        return HL_NATIVE_PLATFORM;
+    return status;
+}
+
 static int reuse(void) {
     fixture fixture;
     hl_native_code code;
@@ -293,6 +315,41 @@ static int relocation_span(void) {
     /* Reset retires both pending ownership and the source generation. */
     CHECK(hl_native_cache_reset(fixture.cache, 6) == HL_NATIVE_OK);
     CHECK(hl_native_cache_resolve(fixture.cache, 0x9000, 0) == HL_NATIVE_STATE);
+    fixture_destroy(&fixture);
+
+    /* The AArch64 typed span becomes one complete cross-entry transaction:
+     * polls precede exact precharge, success enters after the target guard,
+     * and budget rejection restores NZCV before the unchanged cold exit. */
+    const uint32_t nop = UINT32_C(0xd503201f);
+    hl_native_relocation admitted = {
+        .code_offset = 0,
+        .target_guest = 0xb000,
+        .span = {.word_count = HL_NATIVE_RELOCATION_SPAN_WORDS,
+                 .cold = {nop, nop, nop, nop, nop, nop, nop, nop,
+                          nop, nop, nop, nop, nop, nop, nop, nop}},
+    };
+    CHECK(fixture_create(&fixture, 8, 5) == 0);
+    CHECK(publish_admitted(&fixture, 0xa000, 5, 7, 0) == HL_NATIVE_OK);
+    CHECK(publish_admitted(&fixture, 0xb000, 5, 23, 20) == HL_NATIVE_OK);
+    source_words = writable_entry(&fixture, 0xa000);
+    CHECK(source_words != NULL);
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocate(fixture.cache, 0xa000, 0, &admitted, 1) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    CHECK(source_words[0] != nop && source_words[1] == UINT32_C(0xb50001f0));
+    CHECK(source_words[3] == UINT32_C(0xb4000070));
+    CHECK(source_words[5] == UINT32_C(0xb5000170));
+    CHECK(source_words[8] == (UINT32_C(0xf100021f) | (23u << 10)));
+    CHECK(source_words[9] == UINT32_C(0x540000a3));
+    CHECK(source_words[11] == (UINT32_C(0xd1000210) | (23u << 10)));
+    CHECK(source_words[14] == UINT32_C(0xd51b4211));
+    CHECK(source_words[15] == UINT32_C(0x14000001));
+    CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_relocations_invalidate(fixture.cache, 0xb000, 0xb004) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_invalidate(fixture.cache, 0xb000, 0xb004, NULL) == HL_NATIVE_OK);
+    CHECK(hl_native_cache_write_end(fixture.cache) == HL_NATIVE_OK);
+    for (uint32_t index = 0; index < HL_NATIVE_RELOCATION_SPAN_WORDS; index++)
+        CHECK(source_words[index] == nop);
     fixture_destroy(&fixture);
     return 0;
 }
