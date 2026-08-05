@@ -240,6 +240,34 @@ impl NativePool {
         Some(())
     }
 
+    fn purge_process_metadata(&mut self, process: hl_task::ProcessId) {
+        self.sources.retain(|(owner, _, _, _), _| *owner != process);
+        self.observations.retain(|(owner, _, _, _, _), _| *owner != process);
+        self.suppressed.retain(|(owner, _, _, _, _)| *owner != process);
+        self.fallbacks.retain(|(owner, _, _, _, _)| *owner != process);
+        self.source_incarnations.remove(&process);
+        self.instruction_epochs.remove(&process);
+        self.boundary_sensitive.remove(&process);
+    }
+
+    fn reset_process(&mut self, process: hl_task::ProcessId) -> Option<()> {
+        self.executor(process)?.reset(0).ok()?;
+        self.purge_process_metadata(process);
+        Some(())
+    }
+
+    fn retain_processes(&mut self, live: &BTreeSet<hl_task::ProcessId>) {
+        self.executors.retain(|process, _| live.contains(process));
+        self.sources.retain(|(process, _, _, _), _| live.contains(process));
+        self.observations
+            .retain(|(process, _, _, _, _), _| live.contains(process));
+        self.suppressed.retain(|(process, _, _, _, _)| live.contains(process));
+        self.fallbacks.retain(|(process, _, _, _, _)| live.contains(process));
+        self.source_incarnations.retain(|process, _| live.contains(process));
+        self.instruction_epochs.retain(|process, _| live.contains(process));
+        self.boundary_sensitive.retain(|process| live.contains(process));
+    }
+
     fn merge_observed_sources(
         &mut self,
         process: hl_task::ProcessId,
@@ -533,6 +561,7 @@ impl GuestExecutor {
         let active_faults = attachment.as_ref().and(host_faults);
         let mut native = NativePool::new(isa, plan, active_faults);
         loop {
+            native.retain_processes(&threads.active_processes());
             if let Some(exit) = Self::cancelled(plan, threads)? {
                 return Ok(exit);
             }
@@ -602,7 +631,7 @@ impl GuestExecutor {
                 return Ok(None);
             }
             TraceBoundary::Dispatch => {
-                return Self::dispatch_ready(isa, plan, threads, waiters, run);
+                return Self::dispatch_ready(isa, plan, threads, waiters, run, native);
             }
             TraceBoundary::Kill => {
                 return Self::finish(plan, threads, run, ThreadTerminal::Thread(Self::signal(9)));
@@ -721,6 +750,7 @@ impl GuestExecutor {
                 plan,
                 threads,
                 waiters,
+                native,
                 TurnResult {
                     run,
                     action: result.action,
@@ -776,6 +806,7 @@ impl GuestExecutor {
         plan: &RuntimeLaunchPlan,
         threads: &threads::ThreadSet,
         waiters: &waiter::Pool,
+        native: &mut NativePool,
         result: TurnResult,
     ) -> Result<Option<EngineExit>, EngineError> {
         let TurnResult { run, action } = result;
@@ -785,6 +816,9 @@ impl GuestExecutor {
             TurnAction::Replace(generation) => {
                 if let Err(error) = Self::replace(&run.router, generation) {
                     return Self::apply_error(threads, run, error);
+                }
+                if native.reset_process(run.process).is_none() {
+                    native.disable();
                 }
                 // Exec publishes a new generation in the ready state and retires
                 // the running image. The old run no longer owns a scheduler slot.
@@ -813,7 +847,7 @@ impl GuestExecutor {
                         return Self::finish(plan, threads, run, ThreadTerminal::Thread(Self::signal(9)));
                     }
                     TraceBoundary::Continue | TraceBoundary::Dispatch => {
-                        return Self::dispatch_ready(isa, plan, threads, waiters, run);
+                        return Self::dispatch_ready(isa, plan, threads, waiters, run, native);
                     }
                     TraceBoundary::Signal(_) => return Self::apply_error(threads, run, EngineError::WaitFailed),
                 },
@@ -841,6 +875,7 @@ impl GuestExecutor {
         threads: &threads::ThreadSet,
         waiters: &waiter::Pool,
         run: threads::ThreadRun,
+        native: &mut NativePool,
     ) -> Result<Option<EngineExit>, EngineError> {
         let solo = threads.is_only_runnable(run.thread) && !threads.has_parked();
         let blocks = match Self::blocks(isa, &run.machine, &run.router, solo) {
@@ -865,6 +900,9 @@ impl GuestExecutor {
             Err(error) => return Self::apply_error(threads, run, error),
         };
         if replaced {
+            if native.reset_process(run.process).is_none() {
+                native.disable();
+            }
             return Ok(None);
         }
         // Vfork dispatch transfers the parent from Running to Ready+parked.
@@ -1797,6 +1835,45 @@ mod tests {
         pool.record_fallback(entry, instruction);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
+    }
+
+    #[test]
+    fn process_metadata_reset_and_retirement_are_exact() {
+        let retired = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let retained = hl_task::ProcessId::from_wire(2, 1).unwrap();
+        let token = hl_memory::ExecutableToken {
+            incarnation: 1,
+            version: 1,
+        };
+        let mut pool = NativePool::new(GuestIsa::Aarch64, &plan(crate::options::Options::default()), None);
+        for process in [retired, retained] {
+            pool.sources.insert((process, 1, 0x1000, 0x1100), token);
+            pool.observations.insert((process, 1, 1, 1, 0x1000), 1);
+            pool.suppressed.insert((process, 1, 1, 1, 0x1000));
+            pool.fallbacks.insert((process, 1, 1, 1, 0x1004));
+            pool.source_incarnations.insert(process, 1);
+            pool.instruction_epochs.insert(process, 1);
+            pool.boundary_sensitive.insert(process);
+        }
+
+        pool.purge_process_metadata(retired);
+        assert!(pool.sources.keys().all(|(process, _, _, _)| *process == retained));
+        assert!(
+            pool.observations
+                .keys()
+                .all(|(process, _, _, _, _)| *process == retained)
+        );
+        assert!(!pool.source_incarnations.contains_key(&retired));
+        assert!(pool.source_incarnations.contains_key(&retained));
+
+        pool.retain_processes(&BTreeSet::new());
+        assert!(pool.sources.is_empty());
+        assert!(pool.observations.is_empty());
+        assert!(pool.suppressed.is_empty());
+        assert!(pool.fallbacks.is_empty());
+        assert!(pool.source_incarnations.is_empty());
+        assert!(pool.instruction_epochs.is_empty());
+        assert!(pool.boundary_sensitive.is_empty());
     }
 
     #[test]

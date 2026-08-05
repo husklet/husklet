@@ -865,11 +865,13 @@ fn replace_error_releases_running_owner() {
     let run = threads.next().unwrap();
     let generation = run.generation;
     let waiters = super::waiter::Pool::new(&tasks).unwrap();
+    let mut native = super::scheduler::NativePool::new(crate::activation::GuestIsa::Aarch64, &turn_plan(), None);
     let result = super::GuestExecutor::apply_turn(
         crate::activation::GuestIsa::Aarch64,
         &turn_plan(),
         &threads,
         &waiters,
+        &mut native,
         super::scheduler::TurnResult {
             run,
             action: super::scheduler::TurnAction::Replace(u64::MAX),
@@ -895,11 +897,13 @@ fn trace_error_releases_running_owner() {
     let generation = run.generation;
     run.machine.freeze().unwrap();
     let waiters = super::waiter::Pool::new(&tasks).unwrap();
+    let mut native = super::scheduler::NativePool::new(crate::activation::GuestIsa::Aarch64, &turn_plan(), None);
     let result = super::GuestExecutor::apply_turn(
         crate::activation::GuestIsa::Aarch64,
         &turn_plan(),
         &threads,
         &waiters,
+        &mut native,
         super::scheduler::TurnResult {
             run,
             action: super::scheduler::TurnAction::Dispatch,
@@ -927,11 +931,13 @@ fn rejected_waiter_submission_restores_owner() {
     let generation = run.generation;
     let waiters = super::waiter::Pool::new(&tasks).unwrap();
     waiters.reject_next();
+    let mut native = super::scheduler::NativePool::new(crate::activation::GuestIsa::Aarch64, &turn_plan(), None);
     let result = super::GuestExecutor::apply_turn(
         crate::activation::GuestIsa::Aarch64,
         &turn_plan(),
         &threads,
         &waiters,
+        &mut native,
         super::scheduler::TurnResult {
             run,
             action: super::scheduler::TurnAction::Dispatch,

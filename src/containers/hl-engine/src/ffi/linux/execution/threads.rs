@@ -151,6 +151,15 @@ pub(super) struct PreparedImage {
 }
 
 impl ThreadSet {
+    pub(super) fn active_processes(&self) -> BTreeSet<ProcessId> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .machines
+            .values()
+            .map(|run| run.process)
+            .collect()
+    }
     #[cfg(test)]
     pub(super) fn with_state_lock_for_test<T>(&self, operation: impl FnOnce() -> T) -> T {
         let _state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
