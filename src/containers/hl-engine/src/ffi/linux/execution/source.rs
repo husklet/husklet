@@ -11,6 +11,7 @@ use hl_task::ProcessId;
 
 pub(super) struct FileSource {
     rootfs: Option<Vec<u8>>,
+    lowers: Vec<Vec<u8>>,
     root_primary: bool,
 }
 
@@ -22,6 +23,7 @@ impl FileSource {
     pub(super) fn new(rootfs: Option<&[u8]>) -> Self {
         Self {
             rootfs: rootfs.map(<[u8]>::to_vec),
+            lowers: Vec::new(),
             root_primary: false,
         }
     }
@@ -29,6 +31,15 @@ impl FileSource {
     pub(super) fn rooted(rootfs: Option<&[u8]>) -> Self {
         Self {
             rootfs: rootfs.map(<[u8]>::to_vec),
+            lowers: Vec::new(),
+            root_primary: true,
+        }
+    }
+
+    pub(super) fn layered(rootfs: &[u8], lowers: Vec<Vec<u8>>) -> Self {
+        Self {
+            rootfs: Some(rootfs.to_vec()),
+            lowers,
             root_primary: true,
         }
     }
@@ -36,7 +47,17 @@ impl FileSource {
     fn open(&self, role: ImageRole, path: &[u8]) -> Result<File, ImageSourceError> {
         if let Some(rootfs) = self.rootfs.as_deref() {
             if role == ImageRole::Interpreter || self.root_primary {
-                return Self::open_rooted(rootfs, path);
+                let primary = Self::open_rooted(rootfs, path);
+                if !matches!(primary, Err(ImageSourceError::NotFound)) {
+                    return primary;
+                }
+                for lower in &self.lowers {
+                    let candidate = Self::open_rooted(lower, path);
+                    if !matches!(candidate, Err(ImageSourceError::NotFound)) {
+                        return candidate;
+                    }
+                }
+                return Err(ImageSourceError::NotFound);
             }
             if role == ImageRole::Main
                 && let Some(guest) = Self::inside_root(rootfs, path)
