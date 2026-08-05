@@ -1,6 +1,7 @@
 use crate::mapping::plan::{Operation, PlannedOperation};
 use crate::model::{Backing, MapRequest, MappingRange, MemoryError, Placement, Protection, Region, Resolution};
 use hl_isa::{AddressRange, GuestAddress};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -267,6 +268,7 @@ pub struct MemoryLedgerSnapshot {
 #[derive(Debug, Default)]
 pub struct MemoryLedger {
     state: RwLock<LedgerState>,
+    generation: AtomicU64,
 }
 
 /// Generation-qualified evidence about executable mappings that share one
@@ -286,6 +288,7 @@ impl MemoryLedger {
                 mappings: RegionSet { regions: Vec::new() },
                 generation: 0,
             }),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -299,6 +302,7 @@ impl MemoryLedger {
                 mappings,
                 generation: snapshot.generation,
             }),
+            generation: AtomicU64::new(snapshot.generation),
         })
     }
 
@@ -313,7 +317,7 @@ impl MemoryLedger {
 
     #[must_use]
     pub fn generation(&self) -> u64 {
-        self.state.read().unwrap_or_else(|error| error.into_inner()).generation
+        self.generation.load(Ordering::Acquire)
     }
 
     #[must_use]
@@ -345,6 +349,7 @@ impl MemoryLedger {
         }
         live.mappings = mappings;
         live.generation = live.generation.wrapping_add(1);
+        self.generation.store(live.generation, Ordering::Release);
         Ok(live.generation)
     }
 
@@ -369,6 +374,7 @@ impl MemoryLedger {
         commit(address, &staged.regions)?;
         live.mappings = staged;
         live.generation = live.generation.wrapping_add(1);
+        self.generation.store(live.generation, Ordering::Release);
         Ok(address)
     }
 
@@ -438,6 +444,7 @@ impl MemoryLedger {
         commit(&plan, &staged.regions)?;
         live.mappings = staged;
         live.generation = live.generation.wrapping_add(1);
+        self.generation.store(live.generation, Ordering::Release);
         Ok(addresses)
     }
 
@@ -545,6 +552,7 @@ impl MemoryLedger {
         commit(&staged.regions)?;
         live.mappings = staged;
         live.generation = live.generation.wrapping_add(1);
+        self.generation.store(live.generation, Ordering::Release);
         Ok(())
     }
 }
