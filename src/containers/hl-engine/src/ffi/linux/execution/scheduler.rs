@@ -237,6 +237,23 @@ impl NativePool {
         }
     }
 
+    /// The observation table is a warm-up heuristic keyed by mapping generation,
+    /// so a remapping workload fills it with keys no lookup can match again.
+    /// Reclaim those instead of giving up native execution for the whole process.
+    fn observe(&mut self, key: NativeSite) -> u8 {
+        let (process, lease, ledger, _, _) = key;
+        if !self.observations.contains_key(&key) && self.observations.len() >= NATIVE_SITE_LIMIT {
+            self.observations
+                .retain(|(owner, held, ledgered, _, _), _| *owner != process || (*held == lease && *ledgered == ledger));
+            if self.observations.len() >= NATIVE_SITE_LIMIT {
+                self.observations.clear();
+            }
+        }
+        let observations = self.observations.entry(key).or_default();
+        *observations = observations.saturating_add(1);
+        *observations
+    }
+
     fn disable(&mut self) {
         self.enabled = false;
         self.executors.clear();
@@ -428,7 +445,7 @@ impl Drop for NativePool {
         if let Some(boundaries) = &self.boundaries {
             boundaries.report(None);
         }
-        if self.enabled && self.diagnostics {
+        if self.diagnostics {
             eprintln!(
                 "hl-native: runs={} builds={} hits={} fallbacks={} sites={} services={}",
                 self.counters.runs,
@@ -1223,13 +1240,7 @@ impl GuestExecutor {
         if pool.suppressed.contains(&fallback_key) {
             return None;
         }
-        if !pool.observations.contains_key(&fallback_key) && pool.observations.len() == NATIVE_SITE_LIMIT {
-            pool.enabled = false;
-            return None;
-        }
-        let observations = pool.observations.entry(fallback_key).or_default();
-        *observations = observations.saturating_add(1);
-        if *observations < 2 {
+        if pool.observe(fallback_key) < 2 {
             return None;
         }
         let mut bytes = [0_u8; 256];
@@ -1433,13 +1444,7 @@ impl GuestExecutor {
             }
             return None;
         }
-        if !pool.observations.contains_key(&key) && pool.observations.len() == NATIVE_SITE_LIMIT {
-            pool.enabled = false;
-            return None;
-        }
-        let observations = pool.observations.entry(key).or_default();
-        *observations = observations.saturating_add(1);
-        if *observations < 2 {
+        if pool.observe(key) < 2 {
             return None;
         }
         let mut bytes = vec![0_u8; length];
@@ -1902,6 +1907,22 @@ mod tests {
         pool.record_fallback(entry, instruction);
         assert_eq!(pool.suppressed, BTreeSet::from([entry]));
         assert_eq!(pool.fallbacks, BTreeSet::from([instruction]));
+    }
+
+    #[test]
+    fn a_full_observation_table_reclaims_stale_generations_instead_of_disabling() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let mut pool = NativePool::new(GuestIsa::X86_64, &plan(crate::options::Options::default()), None);
+        pool.enabled = true;
+        for index in 0..NATIVE_SITE_LIMIT {
+            pool.observations.insert((process, index as u64, 3, 4, 0x400000), 2);
+        }
+        assert_eq!(pool.observations.len(), NATIVE_SITE_LIMIT);
+        let fresh = (process, u64::MAX, 3, 4, 0x403340);
+        assert_eq!(pool.observe(fresh), 1);
+        assert_eq!(pool.observe(fresh), 2);
+        assert!(pool.enabled);
+        assert!(pool.observations.len() < NATIVE_SITE_LIMIT);
     }
 
     #[test]
