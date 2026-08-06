@@ -223,8 +223,14 @@ fn hardlink_resolves_through_a_case_distinct_directory() {
     Layer::new(tar.as_slice())
         .apply_with_metadata(&root, owners, names)
         .unwrap();
-    let upper = draft.names().physical(Path::new("usr/share/terminfo/L/LFT-PC850"));
-    let lower = draft.names().physical(Path::new("usr/share/terminfo/l/lft-pc850"));
+    let upper = draft
+        .names()
+        .physical(Path::new("usr/share/terminfo/L"))
+        .join("LFT-PC850");
+    let lower = draft
+        .names()
+        .physical(Path::new("usr/share/terminfo/l"))
+        .join("lft-pc850");
     assert_eq!(
         fs::metadata(root.join(upper)).unwrap().ino(),
         fs::metadata(root.join(lower)).unwrap().ino()
