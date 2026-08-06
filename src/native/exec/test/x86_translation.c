@@ -2034,6 +2034,79 @@ static uint32_t scalar_read_fragment(uint32_t *host) {
     return cursor;
 }
 
+static uint32_t scalar_write_fragment(uint32_t *host) {
+    instruction item;
+    uint32_t cursor = 0;
+    memset(&item, 0, sizeof item);
+    item.pc = UINT64_C(0x45680000);
+    item.operation = OP_STORE;
+    item.source = 1;
+    item.width = 8;
+    item.address_base = 3;
+    item.address_index = UINT8_MAX;
+    hl_x86_emit_store(host, &cursor, &item);
+    CHECK(cursor == hl_x86_store_words(&item));
+    host[cursor++] = UINT32_C(0xd65f03c0);
+    return cursor;
+}
+
+/* The trampoline hoists the token/incarnation/count proof out of every access,
+ * so the write cache must still refuse an untrusted table on the same terms. */
+static int write_cache_contract(void) {
+    _Alignas(16) uint64_t storage[4] = {0, 0, 0, 0};
+    uint64_t delta = (uint64_t)(uintptr_t)storage - UINT64_C(0x1000);
+    uint32_t host[256] = {0};
+    uint32_t count = scalar_write_fragment(host);
+    hl_native_x86_64_cpu cpu;
+
+    memset(&cpu, 0, sizeof cpu);
+    cpu.registers[3] = UINT64_C(0x1000);
+    cpu.registers[1] = UINT64_C(0x0123456789abcdef);
+    cpu.dirty_first = UINT64_MAX;
+    publish_read_view(&cpu, 7, 7, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 3);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(storage[0] == UINT64_C(0x0123456789abcdef) && cpu.reason == 0);
+    CHECK(cpu.memory_first == UINT64_C(0x1000) && cpu.memory_last == UINT64_C(0x1020));
+    CHECK(cpu.dirty_first == UINT64_C(0x1000) && cpu.dirty_last == UINT64_C(0x1008));
+    CHECK(cpu.memory_written == 1 && (cpu.executable_written & 4u) == 0);
+
+#define EXPECT_WRITE_FALLBACK()                                                                                        \
+    do {                                                                                                               \
+        storage[0] = 0;                                                                                                \
+        cpu.registers[3] = UINT64_C(0x1000);                                                                           \
+        cpu.memory_first = cpu.memory_last = cpu.memory_delta = cpu.memory_permissions = 0;                            \
+        cpu.dirty_first = UINT64_MAX;                                                                                  \
+        cpu.dirty_last = cpu.dirty_count = cpu.memory_written = 0;                                                     \
+        cpu.reason = cpu.fault_access = cpu.fault_size = cpu.fault_address = 0;                                        \
+        CHECK(execute_fragment(host, count, &cpu) == 0);                                                               \
+        CHECK(storage[0] == 0 && cpu.memory_written == 0);                                                             \
+        CHECK(cpu.memory_first == 0 && cpu.memory_last == 0 && cpu.dirty_count == 0);                                  \
+        CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.fault_access == 2 && cpu.fault_size == 8);                  \
+        CHECK(cpu.fault_address == UINT64_C(0x1000) && cpu.program == UINT64_C(0x45680000));                           \
+    } while (0)
+
+    publish_read_view(&cpu, 7, 7, 5, UINT64_C(0x1000), UINT64_C(0x1020), delta, 3);
+    EXPECT_WRITE_FALLBACK(); /* a corrupt count cannot install an unowned entry */
+    publish_read_view(&cpu, 0, 7, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 3);
+    EXPECT_WRITE_FALLBACK(); /* token-last publication is incomplete */
+    publish_read_view(&cpu, 8, 7, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 3);
+    EXPECT_WRITE_FALLBACK(); /* stale incarnation */
+    publish_read_view(&cpu, 7, 7, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
+    EXPECT_WRITE_FALLBACK(); /* read-only view is never selected for a store */
+#undef EXPECT_WRITE_FALLBACK
+
+    /* An executable view still latches the sticky bit through the cached path. */
+    memset(&cpu, 0, sizeof cpu);
+    cpu.registers[3] = UINT64_C(0x1000);
+    cpu.registers[1] = UINT64_C(0xfeedfacecafebeef);
+    cpu.dirty_first = UINT64_MAX;
+    publish_read_view(&cpu, 9, 9, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 7);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(storage[0] == UINT64_C(0xfeedfacecafebeef) && cpu.reason == 0);
+    CHECK((cpu.executable_written & 4u) != 0);
+    return 0;
+}
+
 static int read_cache_contract(void) {
     _Alignas(16) uint64_t storage[4] = {UINT64_C(0x1122334455667788), UINT64_C(0x99aabbccddeeff00)};
     uint64_t delta = (uint64_t)(uintptr_t)storage - UINT64_C(0x1000);
@@ -2129,6 +2202,7 @@ static int read_cache_contract(void) {
 }
 #else
 static int read_cache_contract(void) { return 0; }
+static int write_cache_contract(void) { return 0; }
 #endif
 
 static int cumulative_checkpoint_contract(void) {
@@ -5961,6 +6035,8 @@ int main(void) {
     status = rmw_projection_contract();
     if (status != 0) return status;
     status = read_cache_contract();
+    if (status != 0) return status;
+    status = write_cache_contract();
     if (status != 0) return status;
     status = cumulative_checkpoint_contract();
     if (status != 0) return status;

@@ -19,39 +19,37 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
 }
 
 #define HL_X86_READ_VIEWS 4u
-#define HL_X86_WRITE_CACHE_WORDS 109u
+#define HL_X86_WRITE_CACHE_WORDS 100u
+
+/* The entry trampolines bound the published count against this capacity as a
+ * literal, so it must keep tracking the record. */
+_Static_assert(HL_X86_READ_VIEWS == sizeof(((hl_native_x86_64_cpu *)0)->read_views) /
+                                        sizeof(((hl_native_x86_64_cpu *)0)->read_views[0]),
+               "x86 entry trampolines validate read_count against a literal capacity of four");
 
 static void jump(uint32_t *instruction, uint32_t *target) {
     int64_t distance = target - instruction;
     *instruction = UINT32_C(0x14000000) | ((uint32_t)distance & UINT32_C(0x03ffffff));
 }
 
+/* Token, incarnation and view count are frozen for a whole entry into generated
+ * code, so the trampoline validates them once and leaves the usable view count
+ * in x29 (zero when the table cannot be trusted). */
 uint32_t hl_x86_read_cache_words(unsigned width) {
-    return 12u + HL_X86_READ_VIEWS * (14u + (width == 32u ? 1u : 0u));
+    return 3u + HL_X86_READ_VIEWS * (14u + (width == 32u ? 1u : 0u));
 }
 
 void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
                             unsigned destination, int vector, uint32_t **hits) {
-    uint32_t *overflow, *unpublished, *wrong_incarnation, *excess;
+    uint32_t *overflow;
     uint32_t *next[HL_X86_READ_VIEWS][4];
     words[(*cursor)++] = UINT32_C(0xb1000000) | width << 10 | 16u << 5 | 18u; /* adds x18,x16,#width */
     words[(*cursor)++] = UINT32_C(0xeb10025f); /* cmp x18,x16 */
     overflow = &words[(*cursor)++];
-    /* The release-published token orders the immutable view payload, so an LDAR
-     * of it supplies the acquire without a global DMB on every translated read. */
-    words[(*cursor)++] = UINT32_C(0x91000011) |
-                         (uint32_t)offsetof(hl_native_x86_64_cpu, read_token) << 10 | 28u << 5;
-    words[(*cursor)++] = UINT32_C(0xc8dffe31); /* ldar x17,[x17] */
-    unpublished = &words[(*cursor)++]; /* cbz x17, active */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, read_incarnation));
-    words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
-    wrong_incarnation = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, read_count));
-    words[(*cursor)++] = UINT32_C(0xf100023f) | HL_X86_READ_VIEWS << 10; /* cmp x17,#capacity */
-    excess = &words[(*cursor)++];
     for (unsigned index = 0; index < HL_X86_READ_VIEWS; ++index) {
         size_t base = offsetof(hl_native_x86_64_cpu, read_views) + index * 4u * sizeof(uint64_t);
-        words[(*cursor)++] = UINT32_C(0xf100023f) | (index + 1u) << 10; /* cmp x17,#index+1 */
+        words[(*cursor)++] =
+            UINT32_C(0xf100001f) | (index + 1u) << 10 | 29u << 5; /* cmp x29,#index+1 */
         next[index][0] = &words[(*cursor)++];
         words[(*cursor)++] = load_word(20, base);
         words[(*cursor)++] = UINT32_C(0xeb14021f); /* cmp x16,x20 */
@@ -74,12 +72,7 @@ void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
         hits[index] = &words[(*cursor)++];
     }
     uint32_t *active = &words[*cursor];
-    /* Token is published last and equals the mapping incarnation. */
-    *unpublished = UINT32_C(0xb4000000) |
-                   ((uint32_t)(active - unpublished) & UINT32_C(0x7ffff)) << 5 | 17u;
-    branch(wrong_incarnation, active, 1u);
     branch(overflow, active, 3u);
-    branch(excess, active, 8u);
     for (unsigned index = 0; index < HL_X86_READ_VIEWS; ++index) {
         uint32_t *following = index + 1u < HL_X86_READ_VIEWS ? next[index + 1u][0] - 1 : active;
         branch(next[index][0], active, 3u); /* count below index+1 means no later entry */
@@ -118,26 +111,16 @@ void hl_x86_patch_read_hits(uint32_t **hits, uint32_t *target) {
  * changing active projection state; a full journal falls through to the
  * ordinary miss path before any guest byte is changed. */
 static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) {
-    uint32_t *overflow, *unpublished, *wrong_incarnation, *excess;
+    uint32_t *overflow;
     words[(*cursor)++] = UINT32_C(0xa9be53f3); /* preserve caller temporaries */
     words[(*cursor)++] = UINT32_C(0xa9015bf5);
     words[(*cursor)++] = UINT32_C(0xb1000000) | width << 10 | 16u << 5 | 18u;
     words[(*cursor)++] = UINT32_C(0xeb10025f); /* cmp end,address */
     overflow = &words[(*cursor)++];
-    words[(*cursor)++] = UINT32_C(0x91000011) |
-                         (uint32_t)offsetof(hl_native_x86_64_cpu, read_token) << 10 | 28u << 5;
-    words[(*cursor)++] = UINT32_C(0xc8dffe31); /* ldar x17,[x17]: acquire published views */
-    unpublished = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, read_incarnation));
-    words[(*cursor)++] = UINT32_C(0xeb14023f);
-    wrong_incarnation = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, read_count));
-    words[(*cursor)++] = UINT32_C(0xf100023f) | HL_X86_READ_VIEWS << 10;
-    excess = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0x91000013) |
                          (uint32_t)offsetof(hl_native_x86_64_cpu, read_views) << 10 |
                          28u << 5; /* x19 = first published view */
-    words[(*cursor)++] = UINT32_C(0xaa1103f6); /* x22 = count */
+    words[(*cursor)++] = UINT32_C(0xaa1d03f6); /* x22 = validated count */
     uint32_t *loop = &words[*cursor];
     uint32_t *none = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400274); /* ldr x20,[x19] */
@@ -242,11 +225,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = UINT32_C(0xa9415bf5);
     words[(*cursor)++] = UINT32_C(0xa8c253f3);
 
-    *unpublished = UINT32_C(0xb4000000) |
-        ((uint32_t)(active - unpublished) & UINT32_C(0x7ffff)) << 5 | 17u;
-    branch(wrong_incarnation, active, 1u);
     branch(overflow, active, 3u);
-    branch(excess, active, 8u);
     *none = UINT32_C(0xb4000000) |
             ((uint32_t)(active - none) & UINT32_C(0x7ffff)) << 5 | 22u;
     branch(below, next, 3u);

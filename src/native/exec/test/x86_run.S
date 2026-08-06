@@ -21,7 +21,17 @@ hl_x86_test_enter:
     ldp x10,x11,[x28,#80]
     ldp x12,x13,[x28,#96]
     ldp x14,x15,[x28,#112]
-    blr x27
+    add x17,x28,#1360
+    ldar x17,[x17]
+    cbz x17,1f
+    ldr x16,[x28,#1368]
+    cmp x17,x16
+    b.ne 1f
+    ldr x29,[x28,#1376]
+    cmp x29,#4
+    b.ls 2f
+1:  mov x29,xzr
+2:  blr x27
     ldp x19,x20,[sp,#0]
     ldp x21,x22,[sp,#16]
     ldp x23,x24,[sp,#32]

@@ -42,7 +42,19 @@ hl_native_x86_64_enter:
     ldp x10,x11,[x28,#80]
     ldp x12,x13,[x28,#96]
     ldp x14,x15,[x28,#112]
-    blr x27
+    /* The lease freezes the view table for this whole run and generated code
+     * never re-enters C, so validate the token once and cache the count in x29. */
+    add x17,x28,#1360
+    ldar x17,[x17]
+    cbz x17,1f
+    ldr x16,[x28,#1368]
+    cmp x17,x16
+    b.ne 1f
+    ldr x29,[x28,#1376]
+    cmp x29,#4
+    b.ls 2f
+1:  mov x29,xzr
+2:  blr x27
     mrs x16,fpcr
     str x16,[x28,#1528]
     mrs x16,fpsr
