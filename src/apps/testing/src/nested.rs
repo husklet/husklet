@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::{
     collections::BTreeSet,
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Component, Path, PathBuf},
     sync::atomic::AtomicBool,
     time::Duration,
@@ -413,6 +413,11 @@ fn hash_tree(digest: &mut crate::record::FramedIdentity, root: &Path, directory:
             hash_tree(digest, root, &path)?;
         } else if kind.is_file() {
             hash_source(digest, root, &path)?;
+        } else if kind.is_symlink() {
+            let relative = path.strip_prefix(root)?;
+            hash_field(digest, b"symlink")?;
+            hash_field(digest, relative.as_os_str().as_bytes())?;
+            hash_field(digest, fs::read_link(&path)?.as_os_str().as_bytes())?;
         } else {
             return Err(format!("nested build input is not a regular file: {}", path.display()).into());
         }
@@ -613,6 +618,16 @@ fn capture(arguments: &[String], timeout: Duration, limit: usize) -> Result<Proc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        ffi::OsString,
+        os::unix::{ffi::OsStringExt, fs::symlink},
+    };
+
+    fn tree_key(root: &Path) -> String {
+        let mut digest = crate::record::FramedIdentity::new(b"nested-tree-test").unwrap();
+        hash_tree(&mut digest, root, &root.join("src")).unwrap();
+        digest.finish()
+    }
 
     #[test]
     fn typed_options_are_attached_to_the_layer_they_configure() {
@@ -694,6 +709,48 @@ expect: { exit: 42, stdout: hello.txt }
             initial,
             build_key_with_environment(root.path(), &build, "cargo", &changed_environment).unwrap()
         );
+    }
+
+    #[test]
+    fn build_key_hashes_dangling_symlink_without_following_it() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        symlink("absent-target", root.path().join("src/dangling")).unwrap();
+        assert_eq!(tree_key(root.path()), tree_key(root.path()));
+    }
+
+    #[test]
+    fn build_key_hashes_non_utf8_symlink_target_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        let target = OsString::from_vec(vec![b't', b'a', b'r', b'g', b'e', b't', 0xff]);
+        symlink(&target, root.path().join("src/non-utf8")).unwrap();
+        let first = tree_key(root.path());
+        assert_eq!(first, tree_key(root.path()));
+        assert!(!first.is_empty());
+    }
+
+    #[test]
+    fn build_key_hashes_symlink_loop_as_objects() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        symlink("second", root.path().join("src/first")).unwrap();
+        symlink("first", root.path().join("src/second")).unwrap();
+        assert_eq!(tree_key(root.path()), tree_key(root.path()));
+    }
+
+    #[test]
+    fn build_key_changes_when_raw_symlink_target_changes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        let link = root.path().join("src/link");
+        symlink("first", &link).unwrap();
+        let first = tree_key(root.path());
+        fs::remove_file(&link).unwrap();
+        symlink("second", &link).unwrap();
+        let second = tree_key(root.path());
+        assert_ne!(first, second);
+        assert_eq!(second, tree_key(root.path()));
     }
 
     #[test]
