@@ -13,6 +13,7 @@
 #define OFFSET_FAULT_ADDRESS ((int)offsetof(hl_native_aarch64_cpu, fault_address))
 #define OFFSET_FAULT_ACCESS ((int)offsetof(hl_native_aarch64_cpu, fault_access))
 #define OFFSET_FAULT_SIZE ((int)offsetof(hl_native_aarch64_cpu, fault_size))
+#define OFFSET_FAULT_COMPLETED ((int)offsetof(hl_native_aarch64_cpu, fault_completed))
 #define OFFSET_FLAGS ((int)offsetof(hl_native_aarch64_cpu, flags))
 #define OFFSET_READ_TOKEN ((int)offsetof(hl_native_aarch64_cpu, read_token))
 #define OFFSET_READ_INCARNATION ((int)offsetof(hl_native_aarch64_cpu, read_incarnation))
@@ -705,6 +706,8 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_ACCESS);
     hl_a64_movconst(assembler, 17, guard->bytes);
     hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_SIZE);
+    hl_a64_movconst(assembler, 17, guard->completed);
+    hl_a64_str(assembler, 17, CPU, OFFSET_FAULT_COMPLETED);
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_fallback));
     /* Only an operand-resolution fallback needs the executing cache identity
      * to refund the uncompleted suffix.  Publish it on that cold path instead

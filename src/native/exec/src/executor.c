@@ -1343,15 +1343,14 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         }
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&
             cpu->fault_size != 0 && operand_resolver != NULL) {
-            uint64_t completed, current_first;
+            uint64_t completed;
             hl_a64_view view = {0};
             hl_a64_projection resolved_projection;
             uint32_t result;
             if (!executed_identity) {
                 return run_fatal(&execution, output, 1);
             }
-            current_first = executed_code.source_first;
-            completed = (cpu->program - current_first) / 4;
+            completed = cpu->fault_completed;
             if (completed > budget) return run_fatal(&execution, output, 1);
             uint64_t charged = executed_code.instruction_count;
             if (charged < completed || cpu->executed < charged)

@@ -16,6 +16,7 @@ typedef struct hl_a64_guard {
     uint32_t required;
     uint64_t bytes;
     uint64_t pc;
+    uint32_t completed;
 } hl_a64_guard;
 
 typedef enum hl_a64_guard_mode {

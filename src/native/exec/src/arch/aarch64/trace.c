@@ -729,6 +729,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         density_record(&density, family,
                        (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
         if (guards[guard_count].below != NULL) {
+            guards[guard_count].completed = (uint32_t)index;
             guard_families[guard_count] = family;
             guard_count++;
         }

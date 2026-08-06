@@ -1276,6 +1276,7 @@ impl NativeAarch64 {
             code_arena_lower: 0,
             code_arena_upper: 0,
             entry_certificate_identity: 0,
+            fault_completed: 0,
         })
     }
 
@@ -3096,7 +3097,8 @@ mod test {
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, code_arena_lower), 2368);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, code_arena_upper), 2376);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, entry_certificate_identity), 2384);
-        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2392);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, fault_completed), 2392);
+        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2400);
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity), 1928);
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_token), 1936);
         assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 1944);
