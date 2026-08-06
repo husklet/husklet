@@ -171,8 +171,21 @@ async fn health_grace_threshold_timeout_and_pause_are_generation_safe() {
         .retries(2);
     containers.create(spec("unhealthy").healthcheck(check)).await.unwrap();
     containers.start("unhealthy").await.unwrap();
-    tokio::time::sleep(Duration::from_millis(65)).await;
-    let before_pause = containers.inspect("unhealthy").await.unwrap();
+    let before_pause = tokio::time::timeout(Duration::from_millis(250), async {
+        loop {
+            let container = containers.inspect("unhealthy").await.unwrap();
+            if container
+                .health
+                .as_ref()
+                .is_some_and(|health| health.status == HealthStatus::Unhealthy)
+            {
+                break container;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("health monitor did not reach the retry threshold");
     let health = before_pause.health.as_ref().unwrap();
     assert_eq!(health.status, HealthStatus::Unhealthy);
     assert!(
