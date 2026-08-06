@@ -47,17 +47,34 @@ pub async fn run(options: Options) -> Result<(), Error> {
     work.retain(|item| !prior.contains_key(&item.key));
     let mut running = pool::Pool::new(work, options.jobs);
     let drained = drain(&mut running, &ledger).await;
-    let unattempted = unattempted(&ledger, drained.as_ref().err())?;
-    record_all(&ledger, unattempted).await?;
+    // The report is published even when the sweep aborts, so no case is silently absent.
+    backfill(&ledger, drained.as_ref().err()).await;
+    let published = tokio::task::spawn_blocking({
+        let ledger = Arc::clone(&ledger);
+        move || ledger.finish().map_err(|error| error.to_string())
+    })
+    .await?;
     let mut completed = drained?;
+    published?;
     completed.sort_by(|left, right| left.key.cmp(&right.key));
     let (passed, failed) = summarize(&prior, completed);
-    tokio::task::spawn_blocking(move || ledger.finish().map_err(|error| error.to_string())).await??;
     println!("runtime: {passed} passed; {} failed", failed.len());
     if failed.is_empty() {
         Ok(())
     } else {
         Err(failed.join("\n").into())
+    }
+}
+
+/// Best effort: a backfill failure must never replace the abort that caused it.
+async fn backfill(ledger: &Arc<ledger::Ledger>, aborted: Option<&Error>) {
+    match unattempted(ledger, aborted) {
+        Ok(rows) => {
+            if let Err(error) = record_all(ledger, rows).await {
+                eprintln!("runtime: recording unattempted cases failed: {error}");
+            }
+        }
+        Err(error) => eprintln!("runtime: enumerating unattempted cases failed: {error}"),
     }
 }
 
@@ -458,7 +475,33 @@ pub(crate) struct OracleOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::display_attempt;
+    use super::{WorkKey, display_attempt, ledger, unattempted};
+    use crate::suite::Target;
+
+    #[test]
+    fn an_abort_records_every_unreached_case_rather_than_dropping_it() {
+        let key = |id: &str| WorkKey {
+            id: id.to_owned(),
+            target: Target::Arm64,
+        };
+        let keys = std::collections::BTreeSet::from([key("runtime/a"), key("runtime/b")]);
+        let directory = tempfile::tempdir().unwrap();
+        let opened = ledger::Ledger::open(&directory.path().join("results.tsv"), "stamp", &keys, false).unwrap();
+        opened
+            .ledger
+            .record(ledger::Row {
+                key: key("runtime/a"),
+                status: ledger::PASS,
+                elapsed_ms: 1,
+                diagnostic: String::new(),
+            })
+            .unwrap();
+        let rows = unattempted(&opened.ledger, Some(&"row limit".into())).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key.id, "runtime/b");
+        assert_eq!(rows[0].status, ledger::NOT_RUN);
+        assert!(rows[0].diagnostic.contains("row limit"), "{}", rows[0].diagnostic);
+    }
 
     #[test]
     fn attempt_display_does_not_mutate_the_case_identity() {
