@@ -1743,7 +1743,7 @@ impl ScalarInterpreter {
                     guest = u64::from(guest as u32);
                 }
                 guest = guest.wrapping_add(segment);
-                let value = if let Ok(value) = memory.read(guest, element) { value } else {
+                let Ok(value) = memory.read(guest, element) else {
                     cpu.vectors[usize::from(destination)] = destination_value[0];
                     cpu.vector_upper[usize::from(destination)] = destination_value[1];
                     cpu.vectors[usize::from(mask)] = mask_value[0];

@@ -59,9 +59,8 @@ impl Transport {
             };
         }
         if store {
-            let reservation = match memory.reserve_write(address, bytes) {
-                Ok(value) => value,
-                Err(()) => return Self::fault(instruction, address, access, bytes),
+            let Ok(reservation) = memory.reserve_write(address, bytes) else {
+                return Self::fault(instruction, address, access, bytes)
             };
             if memory
                 .commit_write(reservation, cpu.vectors[usize::from(destination)] as u64)
@@ -72,10 +71,7 @@ impl Transport {
             cpu.rip = next;
             return ExecutionExit::Continue;
         }
-        let value = match memory.read(address, bytes) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address, access, bytes),
-        };
+        let Ok(value) = memory.read(address, bytes) else { return Self::fault(instruction, address, access, bytes) };
         let mut staged = cpu.clone();
         staged.rip = next;
         staged.vectors[usize::from(destination)] = u128::from(value);

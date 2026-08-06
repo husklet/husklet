@@ -16,9 +16,8 @@ impl Aarch64MemoryInterpreter {
         let instruction = cpu.pc;
         let resolved = Self::resolve(cpu, coordinates, address);
         let low_bytes = bytes.min(8);
-        let low = match memory.read(resolved.address, low_bytes) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, resolved.address, AccessKind::Read, low_bytes),
+        let Ok(low) = memory.read(resolved.address, low_bytes) else {
+            return Self::fault(instruction, resolved.address, AccessKind::Read, low_bytes)
         };
         let high = if bytes == 16 {
             match memory.read(resolved.address.wrapping_add(8), 8) {
@@ -61,9 +60,8 @@ impl Aarch64MemoryInterpreter {
                 return Self::fault(instruction, resolved.address, AccessKind::Write, 16_u8);
             }
         } else {
-            let reservation = match memory.reserve_write(resolved.address, bytes) {
-                Ok(reservation) => reservation,
-                Err(()) => return Self::fault(instruction, resolved.address, AccessKind::Write, bytes),
+            let Ok(reservation) = memory.reserve_write(resolved.address, bytes) else {
+                return Self::fault(instruction, resolved.address, AccessKind::Write, bytes)
             };
             if memory.commit_write(reservation, value as u64).is_err() {
                 return Self::fault(instruction, resolved.address, AccessKind::Write, bytes);

@@ -212,13 +212,9 @@ impl ExtendedMemory {
             let mut registers = [ExtendedReal::from_bits(0); 8];
             for (index, value) in registers.iter_mut().enumerate() {
                 let field = address + 28 + (index as u64) * 10;
-                let low = match memory.read(field, 8) {
-                    Ok(value) => value,
-                    Err(()) => return Self::fault(instruction, field, access, 108),
-                };
-                let high = match memory.read(field + 8, 2) {
-                    Ok(value) => value,
-                    Err(()) => return Self::fault(instruction, field + 8, access, 108),
+                let Ok(low) = memory.read(field, 8) else { return Self::fault(instruction, field, access, 108) };
+                let Ok(high) = memory.read(field + 8, 2) else {
+                    return Self::fault(instruction, field + 8, access, 108)
                 };
                 *value = ExtendedReal::from_bits(u128::from(low) | u128::from(high) << 64);
             }
@@ -647,10 +643,7 @@ impl ExtendedMemory {
             };
         }
         if load {
-            let bits = match memory.read(address, bytes) {
-                Ok(value) => value,
-                Err(()) => return Self::fault(instruction, address, access, bytes),
-            };
+            let Ok(bits) = memory.read(address, bytes) else { return Self::fault(instruction, address, access, bytes) };
             let signed = match bytes {
                 2 => i64::from(bits as i16),
                 4 => i64::from(bits as i32),
@@ -670,9 +663,8 @@ impl ExtendedMemory {
             *cpu = staged;
             return ExecutionExit::Continue;
         }
-        let reservation = match memory.reserve_write(address, bytes) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address, access, bytes),
+        let Ok(reservation) = memory.reserve_write(address, bytes) else {
+            return Self::fault(instruction, address, access, bytes)
         };
         let top = usize::from((cpu.x87_status >> 11) & 7);
         let mut staged = cpu.clone();
@@ -742,9 +734,8 @@ impl ExtendedMemory {
         let (right, right_class) = if let Some(effective) = effective {
             let address = effective.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
             let bytes = if format == FloatWidth::Single { 4 } else { 8 };
-            let bits = match memory.read(address, bytes as u8) {
-                Ok(value) => value,
-                Err(()) => return Self::fault(instruction, address, AccessKind::Read, bytes as u8),
+            let Ok(bits) = memory.read(address, bytes as u8) else {
+                return Self::fault(instruction, address, AccessKind::Read, bytes as u8)
             };
             Conversion::expand(bits, format)
         } else {
@@ -819,9 +810,8 @@ impl ExtendedMemory {
                     access: AccessKind::Read,
                 };
             }
-            let bits = match memory.read(address, bytes as u8) {
-                Ok(value) => value,
-                Err(()) => return Self::fault(instruction, address, AccessKind::Read, bytes as u8),
+            let Ok(bits) = memory.read(address, bytes as u8) else {
+                return Self::fault(instruction, address, AccessKind::Read, bytes as u8)
             };
             if integer_bytes != 0 {
                 let signed = if integer_bytes == 2 {
@@ -1031,9 +1021,8 @@ impl ExtendedMemory {
                 access: AccessKind::Write,
             };
         }
-        let reservation = match memory.reserve_write(address, 2) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address, AccessKind::Write, 2),
+        let Ok(reservation) = memory.reserve_write(address, 2) else {
+            return Self::fault(instruction, address, AccessKind::Write, 2)
         };
         if memory.commit_write(reservation, u64::from(cpu.x87_status)).is_err() {
             return Self::fault(instruction, address, AccessKind::Write, 2);
@@ -1291,13 +1280,9 @@ impl ExtendedMemory {
         instruction: u64,
         next: u64,
     ) -> ExecutionExit {
-        let low = match memory.read(address, 8) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address, AccessKind::Read, 10),
-        };
-        let high = match memory.read(address + 8, 2) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address + 8, AccessKind::Read, 10),
+        let Ok(low) = memory.read(address, 8) else { return Self::fault(instruction, address, AccessKind::Read, 10) };
+        let Ok(high) = memory.read(address + 8, 2) else {
+            return Self::fault(instruction, address + 8, AccessKind::Read, 10)
         };
         let source = ExtendedReal::from_bits(u128::from(low) | u128::from(high) << 64);
         let mut staged = cpu.clone();
@@ -1384,9 +1369,8 @@ impl ExtendedMemory {
             FloatWidth::Single => 4,
             FloatWidth::Double => 8,
         };
-        let bits = match memory.read(address, bytes) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address, AccessKind::Read, bytes),
+        let Ok(bits) = memory.read(address, bytes) else {
+            return Self::fault(instruction, address, AccessKind::Read, bytes)
         };
         let (mut value, mut class) = Conversion::expand(bits, format);
         let mut staged = cpu.clone();
@@ -1433,9 +1417,8 @@ impl ExtendedMemory {
             FloatWidth::Single => 4,
             FloatWidth::Double => 8,
         };
-        let reservation = match memory.reserve_write(address, bytes) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, address, AccessKind::Write, bytes),
+        let Ok(reservation) = memory.reserve_write(address, bytes) else {
+            return Self::fault(instruction, address, AccessKind::Write, bytes)
         };
         let mut staged = cpu.clone();
         let converted = if empty {

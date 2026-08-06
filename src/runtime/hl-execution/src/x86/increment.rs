@@ -36,14 +36,12 @@ impl Increment {
                 if let Err(exit) = Self::validate(address, bytes, instruction, AccessKind::Read) {
                     return exit;
                 }
-                let old = match memory.read(address, bytes) {
-                    Ok(value) => value,
-                    Err(()) => return Self::fault(instruction, address, AccessKind::Read, bytes),
+                let Ok(old) = memory.read(address, bytes) else {
+                    return Self::fault(instruction, address, AccessKind::Read, bytes)
                 };
                 let (result, flags) = Self::result(cpu, old, decrement, width);
-                let reservation = match memory.reserve_write(address, bytes) {
-                    Ok(value) => value,
-                    Err(()) => return Self::fault(instruction, address, AccessKind::Write, bytes),
+                let Ok(reservation) = memory.reserve_write(address, bytes) else {
+                    return Self::fault(instruction, address, AccessKind::Write, bytes)
                 };
                 if memory.commit_write(reservation, result).is_err() {
                     return Self::fault(instruction, address, AccessKind::Write, bytes);

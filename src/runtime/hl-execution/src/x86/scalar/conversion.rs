@@ -73,16 +73,13 @@ impl Conversion {
             VectorSource::Register(source) => cpu.vectors[usize::from(source)],
             VectorSource::Memory(address) => {
                 let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
-                let low = match memory.read(address, 8) {
-                    Ok(value) => value,
-                    Err(()) => {
-                        return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                            instruction,
-                            address,
-                            AccessKind::Read,
-                            u64::from(bytes),
-                        ));
-                    }
+                let Ok(low) = memory.read(address, 8) else {
+                    return ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                        instruction,
+                        address,
+                        AccessKind::Read,
+                        u64::from(bytes),
+                    ));
                 };
                 let high = if double {
                     match memory.read(address + 8, 8) {

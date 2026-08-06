@@ -136,9 +136,8 @@ impl Aarch64MemoryInterpreter {
     ) -> Aarch64ExecutionExit {
         let instruction = cpu.pc;
         let resolved = Self::resolve(cpu, coordinates, address);
-        let value = match memory.read(resolved.address, width.bytes()) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes()),
+        let Ok(value) = memory.read(resolved.address, width.bytes()) else {
+            return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes())
         };
         let mut staged = cpu.clone();
         Self::write_load(&mut staged, destination, width, extension, value);
@@ -159,9 +158,8 @@ impl Aarch64MemoryInterpreter {
         let instruction = cpu.pc;
         let resolved = Self::resolve(cpu, coordinates, address);
         let value = cpu.register(source);
-        let reservation = match memory.reserve_write(resolved.address, width.bytes()) {
-            Ok(reservation) => reservation,
-            Err(()) => return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes()),
+        let Ok(reservation) = memory.reserve_write(resolved.address, width.bytes()) else {
+            return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes())
         };
         if memory.commit_write(reservation, value).is_err() {
             return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes());
@@ -185,13 +183,11 @@ impl Aarch64MemoryInterpreter {
         let instruction = cpu.pc;
         let resolved = Self::resolve(cpu, coordinates, address);
         let second_address = resolved.address.wrapping_add(u64::from(width.bytes()));
-        let first = match memory.read(resolved.address, width.bytes()) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes()),
+        let Ok(first) = memory.read(resolved.address, width.bytes()) else {
+            return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes())
         };
-        let second = match memory.read(second_address, width.bytes()) {
-            Ok(value) => value,
-            Err(()) => return Self::fault(instruction, second_address, AccessKind::Read, width.bytes()),
+        let Ok(second) = memory.read(second_address, width.bytes()) else {
+            return Self::fault(instruction, second_address, AccessKind::Read, width.bytes())
         };
         let mut staged = cpu.clone();
         let extension = if sign_extend {
