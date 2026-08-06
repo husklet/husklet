@@ -159,7 +159,9 @@ int main(void) {
     CHECK(hl_native_run(executor, &cpu, &run_request, &run_output) == HL_NATIVE_STATE);
     hl_native_cpu invalid_cpu = cpu;
     invalid_cpu.architecture = UINT32_MAX;
-    CHECK(hl_native_run(executor, &invalid_cpu, &run_request, &run_output) == HL_NATIVE_ARGUMENT);
+    hl_native_run_request invalid_request = run_request;
+    invalid_request.architecture = UINT32_MAX;
+    CHECK(hl_native_run(executor, &invalid_cpu, &invalid_request, &run_output) == HL_NATIVE_ARGUMENT);
     invalid_cpu = cpu;
     invalid_cpu.state.aarch64 = NULL;
     CHECK(hl_native_run(executor, &invalid_cpu, &run_request, &run_output) == HL_NATIVE_ARGUMENT);

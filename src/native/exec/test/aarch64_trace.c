@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "trace:%d: %s\n", __LINE__, #x); return 1; } } while (0)
 #define LDR_X(rt, rn) (0xf9400000u | ((uint32_t)(rn) << 5) | (uint32_t)(rt))
@@ -149,6 +150,10 @@ typedef struct operand_provider {
     uint32_t result;
     uint32_t stale;
     uint64_t expected_epoch;
+    pthread_mutex_t *block_mutex;
+    pthread_cond_t *block_changed;
+    int *block_entered;
+    int *block_released;
 } operand_provider;
 
 #define OPERAND_VIEW_COUNT 6
@@ -159,6 +164,20 @@ typedef struct operand_views {
     uint32_t permissions[OPERAND_VIEW_COUNT];
     uint32_t calls;
 } operand_views;
+
+typedef struct trace_run_worker {
+    hl_native_executor *executor;
+    hl_native_cpu *cpu;
+    hl_native_run_request *request;
+    hl_native_exit *output;
+    hl_native_status status;
+} trace_run_worker;
+
+static void *trace_run_thread(void *opaque) {
+    trace_run_worker *worker = opaque;
+    worker->status = hl_native_run(worker->executor, worker->cpu, worker->request, worker->output);
+    return NULL;
+}
 
 static uint32_t resolve_views(void *opaque, uint64_t address, uint64_t size,
                               uint32_t access, uint64_t mapping, uint64_t epoch,
@@ -187,6 +206,14 @@ static uint32_t resolve_operand(void *opaque, uint64_t address, uint64_t size,
                                 uint32_t access, uint64_t mapping, uint64_t epoch,
                                 hl_native_projection_view *output) {
     operand_provider *provider = opaque;
+    if (provider->block_mutex != NULL) {
+        pthread_mutex_lock(provider->block_mutex);
+        *provider->block_entered = 1;
+        pthread_cond_broadcast(provider->block_changed);
+        while (!*provider->block_released)
+            pthread_cond_wait(provider->block_changed, provider->block_mutex);
+        pthread_mutex_unlock(provider->block_mutex);
+    }
     provider->calls++;
     uint64_t expected_epoch = provider->expected_epoch ? provider->expected_epoch : 8;
     if (provider->stale || mapping != 7 || epoch != expected_epoch) return HL_NATIVE_OPERAND_EPOCH;
@@ -1344,6 +1371,13 @@ int main(void) {
     operand_provider operand_memory = {.value = UINT64_C(0x1122334455667788), .guest = 0x3000,
                                .permissions = HL_A64_PERMISSION_READ | HL_A64_PERMISSION_WRITE,
                                .result = HL_NATIVE_OPERAND_RESOLVED};
+    pthread_mutex_t operand_block_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t operand_block_changed = PTHREAD_COND_INITIALIZER;
+    int operand_block_entered = 0, operand_block_released = 0;
+    operand_memory.block_mutex = &operand_block_mutex;
+    operand_memory.block_changed = &operand_block_changed;
+    operand_memory.block_entered = &operand_block_entered;
+    operand_memory.block_released = &operand_block_released;
     run_request.source = &operand_load_source;
     run_request.operand_context = &operand_memory;
     run_request.operand_resolve = resolve_operand;
@@ -1351,7 +1385,24 @@ int main(void) {
     memset(&run_state, 0, sizeof(run_state));
     run_state.program = 0xb000;
     run_state.registers[0] = operand_memory.guest;
-    CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+    trace_run_worker operand_worker = {run_executor, &run_cpu, &run_request, &run_output, HL_NATIVE_STATE};
+    pthread_t operand_thread;
+    CHECK(pthread_create(&operand_thread, NULL, trace_run_thread, &operand_worker) == 0);
+    pthread_mutex_lock(&operand_block_mutex);
+    while (!operand_block_entered)
+        pthread_cond_wait(&operand_block_changed, &operand_block_mutex);
+    pthread_mutex_unlock(&operand_block_mutex);
+    CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_STATE);
+    pthread_mutex_lock(&operand_block_mutex);
+    operand_block_released = 1;
+    pthread_cond_broadcast(&operand_block_changed);
+    pthread_mutex_unlock(&operand_block_mutex);
+    CHECK(pthread_join(operand_thread, NULL) == 0 && operand_worker.status == HL_NATIVE_OK);
+    CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_OK);
+    CHECK(hl_native_after_fork(run_executor, 1) == HL_NATIVE_OK);
+    operand_memory.block_mutex = NULL;
+    CHECK(pthread_cond_destroy(&operand_block_changed) == 0);
+    CHECK(pthread_mutex_destroy(&operand_block_mutex) == 0);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.registers[1] == operand_memory.value);
     CHECK(operand_memory.calls == 1);
     uint64_t publications = 0;

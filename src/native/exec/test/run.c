@@ -333,6 +333,8 @@ static int x86_native(void) {
     CHECK(pthread_join(source_thread, NULL) == 0 && source_worker.status == HL_NATIVE_OK);
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
     CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+    CHECK(pthread_cond_destroy(&source_gate.changed) == 0);
+    CHECK(pthread_mutex_destroy(&source_gate.mutex) == 0);
     CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && output.instruction == 0x5000 && output.next == 0x5002);
 
     static const uint8_t operand_program[] = {
@@ -359,6 +361,8 @@ static int x86_native(void) {
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
     CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
     operand.gate = NULL;
+    CHECK(pthread_cond_destroy(&operand_gate.changed) == 0);
+    CHECK(pthread_mutex_destroy(&operand_gate.mutex) == 0);
     CHECK(output.kind == HL_NATIVE_EXIT_SYSCALL && output.instruction == 0x6007);
     CHECK(state.registers[0] == 1 && operand.value == 1 && operand.calls == 1);
     CHECK(state.executed == 3 && state.budget == 0);
