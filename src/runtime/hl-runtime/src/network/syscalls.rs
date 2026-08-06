@@ -410,6 +410,11 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             return LinuxResult::Error(Errno::ENOSYS);
         };
         if !self.host_projection && !Self::local_projection(&address) {
+            // Only an address a namespace interface owns is bindable; Linux
+            // reports EADDRNOTAVAIL for every other non-loopback address.
+            if self.bind_route(address.clone()).interface.is_none() {
+                return LinuxResult::Error(Errno::EADDRNOTAVAIL);
+            }
             let mut snapshot = socket
                 .snapshot
                 .lock()

@@ -564,6 +564,47 @@ fn isolated_policy_creates_inet_sockets_and_rejects_only_external_routes() {
 }
 
 #[test]
+fn bind_rejects_an_address_no_namespace_interface_owns() {
+    let sockaddr = |address: [u8; 4]| {
+        let mut value = [0_u8; 16];
+        value[..2].copy_from_slice(&2_u16.to_le_bytes());
+        value[2..4].copy_from_slice(&23_458_u16.to_be_bytes());
+        value[4..8].copy_from_slice(&address);
+        value
+    };
+
+    let fixture = Fixture::new();
+    let policy = hl_network::NetworkPolicy::from_launch(false, b"", b"", b"eth0=172.17.0.2/16").unwrap();
+    let mut runtime = fixture.runtime(GuestArchitecture::X86_64).with_network_policy(policy);
+    let LinuxResult::Value(fd) = runtime.handle(Fixture::operation("socket"), [2, 1, 6, 0, 0, 0]) else {
+        panic!("stream socket creation failed")
+    };
+    fixture.memory.put(64, &sockaddr([1, 2, 3, 4]));
+    assert_eq!(
+        runtime.handle(Fixture::operation("bind"), [fd, 64, 16, 0, 0, 0]),
+        LinuxResult::Error(Errno::EADDRNOTAVAIL),
+    );
+    fixture.memory.put(96, &sockaddr([172, 17, 0, 2]));
+    assert_eq!(
+        runtime.handle(Fixture::operation("bind"), [fd, 96, 16, 0, 0, 0]),
+        LinuxResult::Value(0),
+    );
+
+    let isolated = Fixture::new();
+    let mut runtime = isolated
+        .runtime(GuestArchitecture::X86_64)
+        .with_network_policy(hl_network::NetworkPolicy::from_launch(true, b"", b"", b"").unwrap());
+    let LinuxResult::Value(fd) = runtime.handle(Fixture::operation("socket"), [2, 1, 6, 0, 0, 0]) else {
+        panic!("stream socket creation failed")
+    };
+    isolated.memory.put(64, &sockaddr([172, 17, 0, 2]));
+    assert_eq!(
+        runtime.handle(Fixture::operation("bind"), [fd, 64, 16, 0, 0, 0]),
+        LinuxResult::Error(Errno::EADDRNOTAVAIL),
+    );
+}
+
+#[test]
 fn exit_catalog_ownership() {
     let catalog = Arc::new(NetworkCatalog::new(
         NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),
