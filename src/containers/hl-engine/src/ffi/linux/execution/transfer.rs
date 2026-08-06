@@ -1,7 +1,6 @@
 use hl_checkpoint::{MemorySink, MemorySource};
 use hl_runtime::{AssemblyCheckpointError, RuntimeAssembly};
 
-use super::diagnostics::{self, LaunchPhase};
 use crate::composition::RuntimeServices;
 use crate::engine::EngineError;
 use crate::launch_plan::RuntimeLaunchPlan;
@@ -45,18 +44,16 @@ impl<'a> Operation<'a> {
             .ok_or(EngineError::Unsupported)?;
         let bytes = transport
             .read(MAXIMUM_IMAGE_BYTES + 1)
-            .map_err(|_| diagnostics::launch_failure(self.plan, LaunchPhase::Transfer))?;
+            .map_err(|_| EngineError::LaunchFailed)?;
         if bytes.len() > MAXIMUM_IMAGE_BYTES {
-            return Err(diagnostics::launch_failure(self.plan, LaunchPhase::Transfer));
+            return Err(EngineError::LaunchFailed);
         }
         let mut source = MemorySource::new(bytes);
         self.assembly
             .restore_checkpoint(&mut source)
             .map_err(|error| match error {
                 AssemblyCheckpointError::Missing | AssemblyCheckpointError::Unsupported(_) => EngineError::Unsupported,
-                AssemblyCheckpointError::Transaction(_) => {
-                    diagnostics::launch_failure(self.plan, LaunchPhase::Transfer)
-                }
+                AssemblyCheckpointError::Transaction(_) => EngineError::LaunchFailed,
             })
     }
 
@@ -67,15 +64,10 @@ impl<'a> Operation<'a> {
             .capture_checkpoint(&mut sink)
             .map_err(|error| match error {
                 AssemblyCheckpointError::Missing | AssemblyCheckpointError::Unsupported(_) => EngineError::Unsupported,
-                AssemblyCheckpointError::Transaction(_) => {
-                    diagnostics::launch_failure(self.plan, LaunchPhase::Transfer)
-                }
+                AssemblyCheckpointError::Transaction(_) => EngineError::LaunchFailed,
             })?;
         transport
-            .replace(
-                sink.committed()
-                    .ok_or_else(|| diagnostics::launch_failure(self.plan, LaunchPhase::Transfer))?,
-            )
-            .map_err(|_| diagnostics::launch_failure(self.plan, LaunchPhase::Transfer))
+            .replace(sink.committed().ok_or(EngineError::LaunchFailed)?)
+            .map_err(|_| EngineError::LaunchFailed)
     }
 }
