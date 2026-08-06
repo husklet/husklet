@@ -38,6 +38,47 @@ pub use checkpoint::{
 };
 pub use exec::PreparedTaskExec;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct InitSlots {
+    process: ProcessId,
+    thread: ThreadId,
+    session: SessionId,
+    process_group: ProcessGroupId,
+    transaction: u64,
+}
+
+/// An unpublished reservation for the initial process and its identity graph.
+///
+/// Dropping the reservation aborts it. Reserved identities consume their
+/// generations, but no process, thread, session, group, or namespace mutation
+/// becomes guest-visible before [`InitReservation::commit`].
+#[must_use = "the initial process reservation must be committed or dropped"]
+pub struct InitReservation<'registry> {
+    registry: &'registry TaskRegistry,
+    slots: InitSlots,
+    credentials: Option<ProcessCredentials>,
+    limits: Option<ProcessLimits>,
+    finished: bool,
+}
+
+impl InitReservation<'_> {
+    pub fn commit(mut self) -> Result<(ProcessId, ThreadId), TaskError> {
+        let credentials = self.credentials.take().ok_or(TaskError::InvalidPlan)?;
+        let limits = self.limits.take().ok_or(TaskError::InvalidPlan)?;
+        let result = self.registry.commit_init(self.slots, credentials, limits);
+        self.finished = result.is_ok();
+        result
+    }
+}
+
+impl Drop for InitReservation<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.registry.abort_init(self.slots);
+        }
+    }
+}
+
 struct Slot<T> {
     generation: u16,
     value: Option<T>,
@@ -112,6 +153,7 @@ struct State {
     sessions: Vec<Slot<Session>>,
     process_groups: Vec<Slot<ProcessGroup>>,
     init: Option<ProcessId>,
+    init_reservation: Option<InitSlots>,
     waits: VecDeque<WaitEvent>,
     wait_reservations: BTreeSet<u64>,
     child_events: VecDeque<ChildEvent>,
@@ -158,6 +200,7 @@ impl TaskRegistry {
                 sessions: Self::slots(config.max_processes),
                 process_groups: Self::slots(config.max_processes),
                 init: None,
+                init_reservation: None,
                 waits: VecDeque::new(),
                 wait_reservations: BTreeSet::new(),
                 child_events: VecDeque::new(),
@@ -187,25 +230,89 @@ impl TaskRegistry {
         credentials: ProcessCredentials,
         limits: ProcessLimits,
     ) -> Result<(ProcessId, ThreadId), TaskError> {
+        self.begin_create_init(credentials, limits)?.commit()
+    }
+
+    pub fn begin_create_init(
+        &self,
+        credentials: ProcessCredentials,
+        limits: ProcessLimits,
+    ) -> Result<InitReservation<'_>, TaskError> {
         if credentials.supplementary_groups().len() > self.max_groups {
             return Err(TaskError::GroupLimit);
         }
         let mut state = self.lock();
-        if state.init.is_some() {
+        if state.init.is_some() || state.init_reservation.is_some() {
             return Err(TaskError::InvalidLifecycle);
         }
-        // The initial user namespace is created by the launch identity.  Keep
-        // its owner aligned with that identity so namespace-scoped authority
-        // does not silently assume uid 0 for a rootless launch.
-        let initial_user = crate::NamespaceSet::initial().user;
-        state
-            .user_namespaces
-            .get_mut(&initial_user)
-            .ok_or(TaskError::InvalidSnapshot)?
-            .owner = credentials.effective_user;
         let (process, thread) = Self::allocate_leader(&mut state)?;
-        let session = Self::allocate_session(&mut state, process)?;
-        let process_group = Self::allocate_process_group(&mut state, process)?;
+        let session = match Self::allocate_session(&mut state, process) {
+            Ok(session) => session,
+            Err(error) => return Err(error),
+        };
+        let process_group = match Self::allocate_process_group(&mut state, process) {
+            Ok(group) => group,
+            Err(error) => return Err(error),
+        };
+        let slots = InitSlots {
+            process,
+            thread,
+            session,
+            process_group,
+            transaction: Self::next_transaction(&mut state),
+        };
+        state.init_reservation = Some(slots);
+        Ok(InitReservation {
+            registry: self,
+            slots,
+            credentials: Some(credentials),
+            limits: Some(limits),
+            finished: false,
+        })
+    }
+
+    fn commit_init(
+        &self,
+        slots: InitSlots,
+        credentials: ProcessCredentials,
+        limits: ProcessLimits,
+    ) -> Result<(ProcessId, ThreadId), TaskError> {
+        let mut state = self.lock();
+        if state.init.is_some() || state.init_reservation != Some(slots) {
+            return Err(TaskError::InvalidPlan);
+        }
+        let (process_slot, process_generation) = slots.process.parts().ok_or(TaskError::InvalidPlan)?;
+        let (thread_slot, thread_generation) = slots.thread.parts().ok_or(TaskError::InvalidPlan)?;
+        let (session_slot, session_generation) = slots.session.parts().ok_or(TaskError::InvalidPlan)?;
+        let (group_slot, group_generation) = slots.process_group.parts().ok_or(TaskError::InvalidPlan)?;
+        if state
+            .processes
+            .get(process_slot)
+            .is_none_or(|entry| entry.generation != process_generation || entry.value.is_some())
+            || state
+                .threads
+                .get(thread_slot)
+                .is_none_or(|entry| entry.generation != thread_generation || entry.value.is_some())
+            || state
+                .sessions
+                .get(session_slot)
+                .is_none_or(|entry| entry.generation != session_generation || entry.value.is_some())
+            || state
+                .process_groups
+                .get(group_slot)
+                .is_none_or(|entry| entry.generation != group_generation || entry.value.is_some())
+        {
+            return Err(TaskError::InvalidPlan);
+        }
+        let initial_user = crate::NamespaceSet::initial().user;
+        if !state.user_namespaces.contains_key(&initial_user) {
+            return Err(TaskError::InvalidSnapshot);
+        }
+        let process = slots.process;
+        let thread = slots.thread;
+        let session = slots.session;
+        let process_group = slots.process_group;
+        let initial_user_owner = credentials.effective_user;
         Self::install_thread(
             &mut state,
             thread,
@@ -283,8 +390,21 @@ impl TaskRegistry {
                 orphaned: true,
             },
         )?;
+        state
+            .user_namespaces
+            .get_mut(&initial_user)
+            .expect("initial user namespace validated before publication")
+            .owner = initial_user_owner;
         state.init = Some(process);
+        state.init_reservation = None;
         Ok((process, thread))
+    }
+
+    fn abort_init(&self, slots: InitSlots) {
+        let mut state = self.lock();
+        if state.init_reservation == Some(slots) {
+            state.init_reservation = None;
+        }
     }
 
     /// Publishes the argument vector belonging to the current process image.

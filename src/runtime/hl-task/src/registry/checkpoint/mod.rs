@@ -147,6 +147,7 @@ impl TaskRegistry {
                 sessions,
                 process_groups,
                 init: snapshot.init,
+                init_reservation: None,
                 waits: VecDeque::from(snapshot.wait_events.clone()),
                 wait_reservations: BTreeSet::new(),
                 child_events: VecDeque::from(snapshot.child_events.clone()),

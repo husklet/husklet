@@ -49,6 +49,9 @@ impl TaskRegistry {
             return Err(crate::TaskError::InvalidLifecycle);
         }
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.init_reservation.is_some() {
+            return Err(crate::TaskError::InvalidLifecycle);
+        }
         Ok(self.snapshot_locked(&state))
     }
 

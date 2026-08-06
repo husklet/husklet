@@ -59,3 +59,29 @@ real lifecycle invariants. Exec tests now constrain capacity so recycling is
 required and therefore still prove release. Clone rollback now proves the stale
 generation is absent and rejected while locating the newly committed thread by
 its generation-qualified identity instead of a vector position.
+
+## Initial-process publication audit
+
+The retained initialization path was also inspected read-only in
+`src/core/target/aarch64.c::container_init`,
+`src/core/target/x86_64.c::container_init`, and
+`src/linux_abi/container/state.c::{acct_container_reset,acct_claim_self}`. Both
+architectures establish the container-init host identity before guest execution;
+the shared state owner then publishes the init's live-task accounting slot.
+Failures during root, namespace, credential, or volume preparation return before
+`run_loaded`, so no guest can observe a partially prepared init. The state is
+process-owned, inherited only after fork, and the accounting slot is released by
+the registered exit path. Initialization does not block, cancel, or produce a
+partial syscall result; architecture differences are limited to surrounding
+option and root preparation, while macOS selects host-service mechanisms for
+shared accounting.
+
+In Rust, `TaskRegistry` owns process, thread, session, process-group, user/UTS
+namespace, wait, signal, and generation state under one mutex. `InitReservation`
+owns the four reserved identities and launch inputs outside visible slots.
+Commit publishes the complete graph and initial-user-namespace owner while
+holding that mutex; drop clears only the private reservation. Generations remain
+consumed, matching the registry's stale-identity contract. Checkpoint rejects the
+private transaction, and restore always starts without one. Rootfs, host process,
+descriptor, memory, and execution preparation remain with their respective
+runtime owners and are deliberately absent from `hl-task`.

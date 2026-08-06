@@ -42,6 +42,149 @@ impl Fixture {
 }
 
 #[test]
+fn init_reservation_is_invisible_until_atomic_commit() {
+    let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let original = registry.snapshot();
+    let reservation = registry
+        .begin_create_init(Fixture::credentials(), Fixture::limits())
+        .unwrap();
+
+    let reserved = registry.snapshot();
+    assert_eq!(reserved.init, None);
+    assert!(reserved.processes.is_empty());
+    assert!(reserved.threads.is_empty());
+    assert!(reserved.sessions.is_empty());
+    assert!(reserved.process_groups.is_empty());
+    assert_eq!(reserved.user_namespaces, original.user_namespaces);
+
+    let (process, thread) = reservation.commit().unwrap();
+    let committed = registry.snapshot();
+    assert_eq!(committed.init, Some(process));
+    assert_eq!(committed.processes.len(), 1);
+    assert_eq!(committed.threads.len(), 1);
+    assert_eq!(committed.sessions.len(), 1);
+    assert_eq!(committed.process_groups.len(), 1);
+    assert_eq!(committed.processes[0].leader, thread);
+    assert_eq!(
+        committed
+            .user_namespaces
+            .iter()
+            .find(|namespace| namespace.id == NamespaceSet::initial().user)
+            .unwrap()
+            .owner,
+        Fixture::credentials().effective_user
+    );
+}
+
+#[test]
+fn dropped_init_reservation_consumes_generation_without_state() {
+    let registry = TaskRegistry::new(RegistryConfig {
+        max_processes: 1,
+        max_threads: 1,
+        ..RegistryConfig::default()
+    })
+    .unwrap();
+    let before = registry.snapshot();
+    drop(
+        registry
+            .begin_create_init(Fixture::credentials(), Fixture::limits())
+            .unwrap(),
+    );
+    let aborted = registry.snapshot();
+    assert_eq!(aborted.init, None);
+    assert!(aborted.processes.is_empty());
+    assert!(aborted.threads.is_empty());
+    assert_eq!(aborted.wait_events, before.wait_events);
+    assert_eq!(aborted.child_events, before.child_events);
+
+    let (process, thread) = registry.create_init(Fixture::credentials(), Fixture::limits()).unwrap();
+    assert_eq!(process.wire_parts().1, 2);
+    assert_eq!(thread.wire_parts().1, 2);
+}
+
+#[test]
+fn init_reservation_excludes_competitors_and_checkpoint() {
+    let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let reservation = registry
+        .begin_create_init(Fixture::credentials(), Fixture::limits())
+        .unwrap();
+    assert!(matches!(
+        registry.begin_create_init(Fixture::credentials(), Fixture::limits()),
+        Err(TaskError::InvalidLifecycle)
+    ));
+    registry.freeze_checkpoint();
+    assert_eq!(registry.checkpoint_snapshot(), Err(TaskError::InvalidLifecycle));
+    registry.thaw_checkpoint();
+    drop(reservation);
+    assert!(
+        registry
+            .begin_create_init(Fixture::credentials(), Fixture::limits())
+            .is_ok()
+    );
+}
+
+#[test]
+fn committed_init_token_cannot_publish_twice() {
+    let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let reservation = registry
+        .begin_create_init(Fixture::credentials(), Fixture::limits())
+        .unwrap();
+    let slots = reservation.slots;
+    let committed = reservation.commit().unwrap();
+    assert_eq!(
+        registry.commit_init(slots, Fixture::credentials(), Fixture::limits()),
+        Err(TaskError::InvalidPlan)
+    );
+    assert_eq!(registry.snapshot().init, Some(committed.0));
+    assert_eq!(registry.snapshot().processes.len(), 1);
+}
+
+#[test]
+fn init_allocation_and_commit_failures_publish_nothing() {
+    for stage in 0..4 {
+        let registry = TaskRegistry::new(RegistryConfig {
+            max_processes: 1,
+            max_threads: 1,
+            ..RegistryConfig::default()
+        })
+        .unwrap();
+        {
+            let mut state = registry.lock();
+            match stage {
+                0 => state.processes[0].generation = u16::MAX,
+                1 => state.threads[0].generation = u16::MAX,
+                2 => state.sessions[0].generation = u16::MAX,
+                3 => state.process_groups[0].generation = u16::MAX,
+                _ => unreachable!(),
+            }
+        }
+        assert!(
+            registry
+                .begin_create_init(Fixture::credentials(), Fixture::limits())
+                .is_err()
+        );
+        let snapshot = registry.snapshot();
+        assert_eq!(snapshot.init, None);
+        assert!(snapshot.processes.is_empty());
+        assert!(snapshot.threads.is_empty());
+        assert!(snapshot.sessions.is_empty());
+        assert!(snapshot.process_groups.is_empty());
+    }
+
+    let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let reservation = registry
+        .begin_create_init(Fixture::credentials(), Fixture::limits())
+        .unwrap();
+    let slots = reservation.slots;
+    registry.lock().threads[slots.thread.parts().unwrap().0].generation += 1;
+    assert_eq!(reservation.commit(), Err(TaskError::InvalidPlan));
+    let snapshot = registry.snapshot();
+    assert_eq!(snapshot.init, None);
+    assert!(snapshot.processes.is_empty());
+    assert!(snapshot.threads.is_empty());
+}
+
+#[test]
 fn signal_thread_target_is_generation_qualified() {
     let (registry, process, thread) = Fixture::registry(4, 4);
     let target = registry

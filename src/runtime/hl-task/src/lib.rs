@@ -42,8 +42,8 @@ pub use port::{
     TerminalControl, TerminalTransition, TerminalTransitionEffects,
 };
 pub use registry::{
-    PreparedTaskExec, ProcessCheckpointReference, TASK_CHECKPOINT_VERSION, TaskExternalCheckpoint, TaskExternalRestore,
-    TaskRegistry, TaskRegistryImage, TaskResourceKey, ThreadCheckpointReference,
+    InitReservation, PreparedTaskExec, ProcessCheckpointReference, TASK_CHECKPOINT_VERSION, TaskExternalCheckpoint,
+    TaskExternalRestore, TaskRegistry, TaskRegistryImage, TaskResourceKey, ThreadCheckpointReference,
 };
 pub use resource::{Limit, ProcessLimits, Resource};
 pub use robust_list::{ROBUST_LIST_HEAD_SIZE, RobustExitCleanup, RobustListRegistration};
