@@ -9,6 +9,11 @@ members = [
     "src/workspaces/*",
     "src/apps/*",
 ]
+# Test runs drop scratch directories beside the crates; the member globs would
+# otherwise pick them up and fail every cargo command with a missing manifest.
+exclude = [
+    "src/containers/.cache",
+]
 default-members = [
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
