@@ -75,7 +75,7 @@ impl Reactor {
         shared.pollset_builds.fetch_add(1, Ordering::Relaxed);
         let mut polls = Vec::with_capacity(tokens.len() + 1);
         polls.push(libc::pollfd {
-            fd: shared.wake_read,
+            fd: shared.wake,
             events: libc::POLLIN,
             revents: 0,
         });
@@ -106,10 +106,10 @@ impl Reactor {
 
     fn drain(source: &Weak<Self>) {
         let Some(shared) = source.upgrade() else { return };
-        let mut bytes = [0_u8; 64];
-        // SAFETY: bytes is writable and wake_read remains owned while shared is live.
+        let mut bytes = [0_u8; 8];
+        // SAFETY: bytes is writable and wake remains owned while shared is live.
         unsafe {
-            libc::read(shared.wake_read, bytes.as_mut_ptr().cast(), bytes.len());
+            libc::read(shared.wake, bytes.as_mut_ptr().cast(), bytes.len());
         }
     }
 }

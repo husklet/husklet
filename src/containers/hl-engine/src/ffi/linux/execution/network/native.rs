@@ -91,8 +91,7 @@ pub(super) struct Reactor {
     pub(super) observers: Mutex<BTreeMap<u64, Weak<dyn ReadinessObserver>>>,
     pub(super) bindings: Mutex<Vec<(SocketAddress, SocketAddress)>>,
     pub(super) switch_paths: Mutex<BTreeMap<Vec<u8>, Weak<SwitchPath>>>,
-    pub(super) wake_read: i32,
-    pub(super) wake_write: i32,
+    pub(super) wake: i32,
     #[cfg(test)]
     pub(super) wake_writes: AtomicU64,
     #[cfg(test)]
@@ -115,16 +114,10 @@ impl Native {
     }
 
     fn with_authority(authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>) -> Self {
-        let mut wake = [0_i32; 2];
-        // SAFETY: wake points to two writable integers; successful pipe returns two owned descriptors.
-        assert!(unsafe { libc::pipe(wake.as_mut_ptr()) } == 0, "native network wake pipe creation failed");
-        // SAFETY: both descriptors are newly owned and valid for fcntl flag mutation.
-        unsafe {
-            libc::fcntl(wake[0], libc::F_SETFL, libc::O_NONBLOCK);
-            libc::fcntl(wake[1], libc::F_SETFL, libc::O_NONBLOCK);
-            libc::fcntl(wake[0], libc::F_SETFD, libc::FD_CLOEXEC);
-            libc::fcntl(wake[1], libc::F_SETFD, libc::FD_CLOEXEC);
-        }
+        // SAFETY: eventfd2 takes scalar arguments only and returns one owned descriptor.
+        // Worker confinement admits exactly this call shape, unlike pipe plus fcntl.
+        let wake = unsafe { libc::syscall(libc::SYS_eventfd2, 0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) } as i32;
+        assert!(wake >= 0, "native network wake eventfd creation failed");
         let shared = Arc::new(Reactor {
             started: AtomicBool::new(false),
             next: AtomicU64::new(1),
@@ -132,8 +125,7 @@ impl Native {
             observers: Mutex::new(BTreeMap::new()),
             bindings: Mutex::new(Vec::new()),
             switch_paths: Mutex::new(BTreeMap::new()),
-            wake_read: wake[0],
-            wake_write: wake[1],
+            wake,
             #[cfg(test)]
             wake_writes: AtomicU64::new(0),
             #[cfg(test)]
@@ -737,10 +729,10 @@ impl Native {
     fn wake(&self) {
         #[cfg(test)]
         self.shared.wake_writes.fetch_add(1, Ordering::Relaxed);
-        let byte = [1_u8];
-        // SAFETY: wake_write remains owned by Shared and byte is readable for one byte.
+        let count = 1_u64.to_ne_bytes();
+        // SAFETY: wake remains owned by Shared and count is readable for one eventfd counter.
         unsafe {
-            libc::write(self.shared.wake_write, byte.as_ptr().cast(), 1);
+            libc::write(self.shared.wake, count.as_ptr().cast(), count.len());
         }
     }
 
@@ -769,10 +761,9 @@ impl Drop for Native {
 
 impl Drop for Reactor {
     fn drop(&mut self) {
-        // SAFETY: Reactor owns both pipe descriptors and drops after the thread releases its last upgrade.
+        // SAFETY: Reactor owns the wake descriptor and drops after the thread releases its last upgrade.
         unsafe {
-            libc::close(self.wake_read);
-            libc::close(self.wake_write);
+            libc::close(self.wake);
         }
     }
 }
