@@ -232,19 +232,36 @@ pub enum StepOutcome {
 }
 
 struct IdentityCoordinates;
-#[derive(Default)]
-struct RunnerSystem {
+/// Samples the architectural counter on first guest read and memoizes it, so an
+/// instruction that never reads `CounterValue` costs no host clock read.
+struct RunnerSystem<'a> {
     invalidated: Option<u64>,
-    counter: u64,
+    counter: &'a dyn crate::ArchitecturalCounter,
+    sampled: std::cell::Cell<Option<u64>>,
 }
 
-impl GuestSystemPort for RunnerSystem {
+impl<'a> RunnerSystem<'a> {
+    fn new(counter: &'a dyn crate::ArchitecturalCounter) -> Self {
+        Self {
+            invalidated: None,
+            counter,
+            sampled: std::cell::Cell::new(None),
+        }
+    }
+}
+
+impl GuestSystemPort for RunnerSystem<'_> {
     fn barrier(&mut self, _kind: crate::BarrierKind, _option: u8) {}
     fn counter_frequency(&self) -> u64 {
         1_000_000_000
     }
     fn counter_value(&self) -> u64 {
-        self.counter
+        if let Some(value) = self.sampled.get() {
+            return value;
+        }
+        let value = self.counter.read();
+        self.sampled.set(Some(value));
+        value
     }
     fn invalidate_instruction(&mut self, address: u64) {
         self.invalidated = Some(address);
@@ -416,10 +433,7 @@ impl ExecutionMachine {
                 }));
             }
         };
-        let mut system = RunnerSystem {
-            counter: self.architectural_counter.read(),
-            ..RunnerSystem::default()
-        };
+        let mut system = RunnerSystem::new(self.architectural_counter.as_ref());
         let exit = Aarch64Interpreter::execute_runtime(cpu, memory, &mut system, &IdentityCoordinates, word);
         if let Some(address) = system.invalidated {
             memory.invalidate_instruction(address);
@@ -652,10 +666,7 @@ impl ExecutionMachine {
                 let exit = if RegisterExecutor::supports(ir.instruction) {
                     RegisterExecutor::execute(cpu, &IdentityCoordinates, ir).expect("supported register instruction")
                 } else {
-                    let mut system = RunnerSystem {
-                        counter: self.architectural_counter.read(),
-                        ..RunnerSystem::default()
-                    };
+                    let mut system = RunnerSystem::new(self.architectural_counter.as_ref());
                     let exit =
                         Aarch64Interpreter::execute_runtime_ir(cpu, memory, &mut system, &IdentityCoordinates, ir);
                     if let Some(address) = system.invalidated {
