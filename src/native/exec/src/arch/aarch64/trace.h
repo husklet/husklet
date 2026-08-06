@@ -20,7 +20,6 @@ typedef struct hl_a64_trace_result {
     uint32_t terminal;
     uint32_t relocation_count;
     uint32_t conditional_self_loop;
-    uint32_t successor_region;
     uint32_t decoded_count;
     uint64_t loop_pc;
     hl_native_relocation relocations[HL_A64_TRACE_MAX_RELOCATIONS];

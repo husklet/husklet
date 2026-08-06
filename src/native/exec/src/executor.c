@@ -1165,7 +1165,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             .direct_generation = authority_generation,
         };
         if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-            (code.source_last > key.source_last && !code.successor_region)) {
+            code.decoded_count > count) {
             status = hl_native_execution_leave(&execution);
             if (status != HL_NATIVE_OK) return status;
             const hl_a64_source *build_source = active_source;
@@ -1205,6 +1205,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                                                sizeof(scratch), memory_mode != 0 ? &direct_authority : NULL,
                                                expected_authority,
                                                &code, &hit);
+            count = build_count;
             if (status != HL_NATIVE_OK) {
                 if (executor->diagnostics) {
                     hl_a64_fetch_result declined;
@@ -1221,7 +1222,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
              * Resolve only after re-admission, so no pointer selected before
              * that boundary can survive an epoch change or fork repair. */
             if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-                (code.source_last > key.source_last && !code.successor_region))
+                code.decoded_count > count)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         if (cpu->indirect_site != 0) {
@@ -1232,7 +1233,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
             if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-                (code.source_last > key.source_last && !code.successor_region))
+                code.decoded_count > count)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         uint64_t executed_before = cpu->executed;

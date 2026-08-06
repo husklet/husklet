@@ -584,7 +584,10 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         planned++;
         cursor = next;
         hl_a64_instruction_effect effect = hl_a64_trace_effect(word, planned_pcs[planned - 1]);
-        if ((effect.control || effect.terminal) && !followed) break;
+        int conditional = (word & UINT32_C(0xff000010)) == UINT32_C(0x54000000) ||
+            (word & UINT32_C(0x7e000000)) == UINT32_C(0x34000000) ||
+            (word & UINT32_C(0x7e000000)) == UINT32_C(0x36000000);
+        if ((effect.terminal || (effect.control && !conditional)) && !followed) break;
     }
     if (planned == 0) return 0;
     count = planned;
@@ -650,7 +653,6 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         int followed_direct = index + 1 < count && planned_pcs[index + 1] != instruction + 4 &&
             (word & UINT32_C(0xfc000000)) == UINT32_C(0x14000000);
         if (followed_direct) {
-            output->successor_region = 1;
             hl_a64_emit32(&assembler, UINT32_C(0xd503201f));
             if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
             density_record(&density, HL_A64_DENSITY_CONTROL, 1, 1);
@@ -886,7 +888,6 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
                                     .relocation_count = trace.relocation_count,
                                     .instruction_count = (uint32_t)trace.instruction_count,
                                     .cycle_safe = 1};
-    emission.successor_region = trace.successor_region;
     emission.decoded_count = trace.decoded_count;
     for (uint32_t index = 0; index < trace.relocation_count; index++) {
         trace.relocations[index].target_instruction_epoch = 0;
