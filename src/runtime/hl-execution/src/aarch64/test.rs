@@ -1154,3 +1154,45 @@ fn extract_registers() {
         assert_eq!(Aarch64Decoder::decode(word), Err(Aarch64DecodeError::Reserved));
     }
 }
+
+#[test]
+fn integer_step_commits_scalars_and_leaves_vectors() {
+    let mut cpu = Aarch64CpuState {
+        pc: 0x1000,
+        sp: 0x7ff0,
+        tls: 0xdead_beef,
+        ..Default::default()
+    };
+    cpu.vectors[0] = u128::MAX;
+    cpu.vectors[31] = 0x0123_4567_89ab_cdef;
+    let vectors = cpu.vectors;
+    cpu.set_register(1, 5);
+    // ADD X0, X1, #7
+    assert_eq!(cpu.execute_word(0x9100_1c20), Aarch64ExecutionExit::Continue);
+    assert_eq!(cpu.register(0), 12);
+    assert_eq!(cpu.pc, 0x1004);
+    assert_eq!(cpu.sp, 0x7ff0);
+    assert_eq!(cpu.vectors, vectors);
+}
+
+#[test]
+fn misaligned_indirect_branch_commits_nothing() {
+    let mut cpu = Aarch64CpuState {
+        pc: 0x1000,
+        ..Default::default()
+    };
+    cpu.vectors[2] = 0xfeed;
+    cpu.set_register(9, 0x2002);
+    cpu.set_register(30, 0xaaaa);
+    let before = cpu.clone();
+    // BLR X9 to a misaligned target: the link register must not be written.
+    assert_eq!(
+        cpu.execute_word(0xd63f_0120),
+        Aarch64ExecutionExit::AlignmentFault {
+            instruction: 0x1000,
+            target: 0x2002,
+            access: crate::AccessKind::Execute,
+        }
+    );
+    assert_eq!(cpu, before);
+}

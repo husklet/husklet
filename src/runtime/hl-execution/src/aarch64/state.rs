@@ -129,6 +129,18 @@ impl Aarch64CpuState {
         self.set_register(register, u64::from(value));
     }
 
+    /// Commits a staged step that never wrote the vector file, skipping its 512-byte copy-back.
+    pub(crate) fn commit_scalar(&mut self, staged: &Self) {
+        self.registers = staged.registers;
+        self.sp = staged.sp;
+        self.pc = staged.pc;
+        self.nzcv = staged.nzcv;
+        self.tls = staged.tls;
+        self.fpcr = staged.fpcr;
+        self.fpsr = staged.fpsr;
+        self.exclusive = staged.exclusive;
+    }
+
     pub(crate) fn set_narrow_destination(&mut self, register: u8, value: u32) {
         if register == 31 {
             self.sp = u64::from(value);

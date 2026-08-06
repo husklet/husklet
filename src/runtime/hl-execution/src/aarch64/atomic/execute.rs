@@ -100,7 +100,7 @@ impl Executor {
             let mut staged = cpu.clone();
             Self::write_width(&mut staged, transfer, width, value);
             staged.pc = instruction.wrapping_add(4);
-            *cpu = staged;
+            cpu.commit_scalar(&staged);
         } else if memory
             .store_ordered(address, width.bytes(), cpu.register(transfer), order)
             .is_err()
@@ -142,7 +142,7 @@ impl Executor {
         }
         staged.exclusive = Some(loaded.reservation);
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
@@ -165,7 +165,7 @@ impl Executor {
             staged.set_narrow_register(status, 1);
             staged.exclusive = None;
             staged.pc = instruction.wrapping_add(4);
-            *cpu = staged;
+            cpu.commit_scalar(&staged);
             return Aarch64ExecutionExit::Continue;
         };
         let pair = registers.1.is_some();
@@ -178,7 +178,7 @@ impl Executor {
             staged.set_narrow_register(status, 1);
             staged.exclusive = None;
             staged.pc = instruction.wrapping_add(4);
-            *cpu = staged;
+            cpu.commit_scalar(&staged);
             return Aarch64ExecutionExit::Continue;
         }
         let replacement = AtomicValue {
@@ -193,7 +193,7 @@ impl Executor {
         let mut staged = cpu.clone();
         staged.set_narrow_register(status, u32::from(!success));
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
@@ -230,7 +230,7 @@ impl Executor {
             Self::write_width(&mut staged, expected + 1, width, observed.high);
         }
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
@@ -254,7 +254,7 @@ impl Executor {
         let mut staged = cpu.clone();
         Self::write_width(&mut staged, registers.1, width, old);
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 

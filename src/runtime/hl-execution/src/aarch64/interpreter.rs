@@ -484,7 +484,7 @@ impl Aarch64Interpreter {
             }
         };
         if !matches!(exit, Aarch64ExecutionExit::AlignmentFault { .. }) {
-            *cpu = staged;
+            cpu.commit_scalar(&staged);
         }
         exit
     }
