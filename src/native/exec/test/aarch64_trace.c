@@ -1395,6 +1395,42 @@ int main(void) {
         .value = UINT64_C(0x123456789abcdef0), .guest = 0x3000,
         .permissions = HL_A64_PERMISSION_READ, .result = HL_NATIVE_OPERAND_RESOLVED,
         .expected_epoch = 9};
+    {
+        const uint32_t nonlinear_words[] = {
+            UINT32_C(0x14000003), /* b 0xb31c */
+            UINT32_C(0xd503201f), /* skipped */
+            UINT32_C(0xd503201f), /* skipped */
+            UINT32_C(0x91000421), /* add x1,x1,#1 */
+            LDR_X(0, 10),
+            UINT32_C(0xd4000001), /* svc */
+        };
+        const hl_a64_source_span nonlinear_span = {
+            0xb310, (const uint8_t *)nonlinear_words, sizeof(nonlinear_words), 7, 8};
+        const hl_a64_source nonlinear_source = {&nonlinear_span, 1, 7, 8};
+        hl_native_diagnostics nonlinear_before = {
+            .abi = HL_NATIVE_ABI, .size = sizeof(nonlinear_before)};
+        hl_native_diagnostics nonlinear_after = nonlinear_before;
+        versioned_memory.expected_epoch = 8;
+        CHECK(hl_native_diagnose(run_executor, &nonlinear_before) == HL_NATIVE_OK);
+        run_request.source = &nonlinear_source;
+        run_request.source_context = NULL;
+        run_request.source_resolve = NULL;
+        run_request.operand_context = &versioned_memory;
+        run_request.operand_resolve = resolve_operand;
+        run_request.size = sizeof(run_request);
+        run_request.budget = 4;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0xb310;
+        run_state.registers[10] = versioned_memory.guest;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0xb324);
+        CHECK(run_state.executed == 4 && run_state.budget == 0 && versioned_memory.calls == 1);
+        CHECK(run_state.registers[0] == versioned_memory.value && run_state.registers[1] == 1);
+        CHECK(hl_native_diagnose(run_executor, &nonlinear_after) == HL_NATIVE_OK);
+        CHECK(nonlinear_after.completed == nonlinear_before.completed + 4);
+        versioned_memory.expected_epoch = 9;
+        versioned_memory.calls = 0;
+    }
     provider.word = LDR_X(1, 0);
     provider.next = 0xd4000001u;
     provider.guest = 0x9400;
@@ -1566,30 +1602,6 @@ int main(void) {
     run_state.interrupt = 1;
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_INTERRUPT && operand_memory.calls == 0);
-
-    {
-        const uint32_t nonlinear_words[] = {
-            UINT32_C(0x14000003), /* b 0xb31c */
-            UINT32_C(0xd503201f), /* skipped */
-            UINT32_C(0xd503201f), /* skipped */
-            UINT32_C(0x91000421), /* add x1,x1,#1 */
-            LDR_X(0, 10),
-            UINT32_C(0xd4000001), /* svc */
-        };
-        const hl_a64_source_span nonlinear_span = {
-            0xb310, (const uint8_t *)nonlinear_words, sizeof(nonlinear_words), 7, 8};
-        const hl_a64_source nonlinear_source = {&nonlinear_span, 1, 7, 8};
-        operand_memory.calls = 0;
-        run_request.source = &nonlinear_source;
-        run_request.budget = 4;
-        memset(&run_state, 0, sizeof(run_state));
-        run_state.program = 0xb310;
-        run_state.registers[10] = operand_memory.guest;
-        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
-        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0xb324);
-        CHECK(run_state.executed == 4 && run_state.budget == 0 && operand_memory.calls == 1);
-        CHECK(run_state.registers[0] == operand_memory.value && run_state.registers[1] == 1);
-    }
 
     const uint32_t alternating_words[] = {
         LDR_X(0, 10), LDR_X(1, 11), LDR_X(2, 12),

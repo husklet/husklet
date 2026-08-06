@@ -1357,8 +1357,10 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 return run_fatal(&execution, output, 1);
             if (cpu->budget > request->budget - (charged - completed))
                 return run_fatal(&execution, output, 1);
-            cpu->executed -= charged - completed;
-            cpu->budget += charged - completed;
+            uint64_t refund = charged - completed;
+            cpu->executed -= refund;
+            cpu->budget += refund;
+            if (executor->diagnostics) executor->completed -= refund;
             budget = cpu->budget;
             if (HL_A64_RUN_VIEW_CACHE && run_view_resolve(&operand_views, cpu, cpu->fault_address,
                                                          cpu->fault_size, (uint32_t)cpu->fault_access)) {
