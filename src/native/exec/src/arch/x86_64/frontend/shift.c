@@ -82,7 +82,14 @@ static uint32_t shift_word(unsigned destination, unsigned source, unsigned count
     return base | rotate << 16 | mask << 10 | source << 5 | destination;
 }
 
+/* Words for the shifted value alone, i.e. what remains once the flag word is elided. */
+static uint32_t value_words(const instruction *item) {
+    if (item->variable_count) return 5u + constant_words(item->width == 8u ? 63u : 31u);
+    return item->shift_count == 0u ? 1u : 3u;
+}
+
 uint32_t hl_x86_shift_words(const instruction *item) {
+    if (item->flags_dead) return value_words(item);
     if (item->variable_count) return item->shift_kind == 4u ? 46u : 43u;
     if (item->shift_count == 0u) return 1u;
     if (item->shift_count != 1u) return 27u;
@@ -163,12 +170,39 @@ static void emit_variable(uint32_t *words, uint32_t *cursor, const instruction *
     words[(*cursor)++] = move_register(item->destination, 18, wide);
 }
 
+/* The value half of a shift, emitting the same instructions the full form does for the result. */
+static void emit_value_only(uint32_t *words, uint32_t *cursor, const instruction *item) {
+    unsigned bits = item->width == 8u ? 64u : 32u;
+    int wide = item->width == 8u;
+
+    if (!item->variable_count) {
+        if (item->shift_count == 0u) {
+            words[(*cursor)++] = move_register(item->destination, item->destination, wide);
+            return;
+        }
+        words[(*cursor)++] = move_register(16, item->destination, wide);
+        words[(*cursor)++] = shift_word(18, 16, item->shift_count, item->shift_kind, wide);
+        words[(*cursor)++] = move_register(item->destination, 18, wide);
+        return;
+    }
+    words[(*cursor)++] = move_register(16, item->destination, wide);
+    words[(*cursor)++] = move_register(17, 1, wide);
+    emit_constant(words, cursor, 23, bits - 1u);
+    words[(*cursor)++] = UINT32_C(0x8a000000) | 23u << 16 | 17u << 5 | 17u;
+    words[(*cursor)++] = variable_shift(18, 16, 17, item->shift_kind, wide);
+    words[(*cursor)++] = move_register(item->destination, 18, wide);
+}
+
 void hl_x86_emit_shift(uint32_t *words, uint32_t *cursor, const instruction *item) {
     unsigned bits = item->width == 8u ? 64u : 32u;
     unsigned count = item->shift_count;
     int wide = item->width == 8u;
     uint64_t clear;
 
+    if (item->flags_dead) {
+        emit_value_only(words, cursor, item);
+        return;
+    }
     if (item->variable_count) {
         emit_variable(words, cursor, item);
         return;

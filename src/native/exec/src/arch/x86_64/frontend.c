@@ -26,12 +26,13 @@ static int kills_flags(const instruction *item) {
            item->preserve_flags == 0u && item->alu_kind != 2u && item->alu_kind != 3u;
 }
 
-/* A register ALU op publishes nothing observable besides cpu->flags, so an immediately following
-   killer lets it skip the NZCV and PF/AF materialization entirely. */
+/* A register ALU or shift op publishes nothing observable besides cpu->flags, so an immediately
+   following killer lets it skip the NZCV and PF/AF materialization entirely. */
 static int flags_dead_at(const decode *block, uint32_t index) {
     const instruction *item = &block->instructions[index];
 
-    if (item->operation != OP_ALU || item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
+    if (item->operation != OP_ALU && item->operation != OP_SHIFT) return 0;
+    if (item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
     if (index + 1u >= block->count) return 0;
     return kills_flags(&block->instructions[index + 1u]);
 }

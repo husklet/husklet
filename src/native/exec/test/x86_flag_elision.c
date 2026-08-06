@@ -53,6 +53,40 @@ static uint32_t words_for(const uint8_t *guest, size_t size, uint32_t index) {
     return provenance[index].word_end - provenance[index].word_start;
 }
 
+/* Emit into exactly `capacity` host words, reporting the status the budgeting pass produced. */
+static hl_x86_a64_status status_at_capacity(const uint8_t *guest, size_t size, uint32_t capacity) {
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[64] = {0};
+    hl_x86_a64_request request = request_for(guest, size, host, provenance);
+    hl_x86_a64_result result;
+
+    request.host_capacity = capacity;
+    return hl_x86_a64_emit(&request, &result);
+}
+
+/* The budgeting pass must never promise fewer words than the emit pass writes. */
+static int budget_covers_emitted(const uint8_t *guest, size_t size) {
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[64] = {0};
+    hl_x86_a64_request request = request_for(guest, size, host, provenance);
+    hl_x86_a64_result result;
+
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 0;
+    return status_at_capacity(guest, size, result.word_count - 1u) == HL_X86_A64_CAPACITY;
+}
+
+/* Stronger: the two passes agree to the word, so the elided form wastes no reserved space. */
+static int budget_is_exact(const uint8_t *guest, size_t size) {
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[64] = {0};
+    hl_x86_a64_request request = request_for(guest, size, host, provenance);
+    hl_x86_a64_result result;
+
+    if (!budget_covers_emitted(guest, size)) return 0;
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 0;
+    return status_at_capacity(guest, size, result.word_count) == HL_X86_A64_OK;
+}
+
 /* A register ALU op costs this many words once its flag materialization is elided. */
 #define ELIDED_ADD 4u
 #define ELIDED_LOGICAL 5u
@@ -67,6 +101,59 @@ static int elision_fires(void) {
     CHECK(words_for(logical, sizeof logical, 0) == ELIDED_LOGICAL);
     /* cmp is flags_only, so an elided producer keeps only its two operand moves and the subs. */
     CHECK(words_for(cmp_then_sub, sizeof cmp_then_sub, 0) == ELIDED_ADD - 1u);
+    return 0;
+}
+
+/* Shifts pay the same flag tax as ALU ops and elide down to the shifted value alone. */
+#define ELIDED_SHIFT 3u
+#define ELIDED_VARIABLE_SHIFT 6u
+
+static int shift_elision_fires(void) {
+    const uint8_t immediate[] = {0xc1, 0xe0, 0x03, 0x01, 0xc8}; /* shl eax,3 ; add eax,ecx */
+    const uint8_t once[] = {0xd1, 0xe8, 0x01, 0xc8};            /* shr eax,1 ; add eax,ecx */
+    const uint8_t variable[] = {0xd3, 0xe0, 0x01, 0xc8};        /* shl eax,cl ; add eax,ecx */
+    const uint8_t wide[] = {0x48, 0xd3, 0xf8, 0x01, 0xc8};      /* sar rax,cl ; add eax,ecx */
+    const uint8_t chained[] = {0xd1, 0xe0, 0xd1, 0xe0, 0x01, 0xc8}; /* shl eax,1 x2 ; add eax,ecx */
+
+    CHECK(words_for(immediate, sizeof immediate, 0) == ELIDED_SHIFT);
+    CHECK(words_for(once, sizeof once, 0) == ELIDED_SHIFT);
+    CHECK(words_for(variable, sizeof variable, 0) == ELIDED_VARIABLE_SHIFT);
+    CHECK(words_for(wide, sizeof wide, 0) == ELIDED_VARIABLE_SHIFT);
+    /* A shift does not unconditionally define every flag, so it never kills its predecessor. */
+    CHECK(words_for(chained, sizeof chained, 0) > ELIDED_SHIFT);
+    CHECK(words_for(chained, sizeof chained, 1) == ELIDED_SHIFT);
+
+    CHECK(budget_is_exact(immediate, sizeof immediate));
+    CHECK(budget_is_exact(once, sizeof once));
+    CHECK(budget_is_exact(variable, sizeof variable));
+    CHECK(budget_is_exact(wide, sizeof wide));
+    /* The unelided shift ahead of it keeps one word of pre-existing budget slack. */
+    CHECK(budget_covers_emitted(chained, sizeof chained));
+    return 0;
+}
+
+static int shift_boundaries_materialize(void) {
+    const uint8_t block_end[] = {0xc1, 0xe0, 0x03};             /* shl eax,3 (last in block) */
+    const uint8_t adc[] = {0xc1, 0xe0, 0x03, 0x11, 0xd0};       /* shl ; adc -- reads CF */
+    const uint8_t jcc[] = {0xc1, 0xe0, 0x03, 0x75, 0x02};       /* shl ; jne */
+    const uint8_t setcc[] = {0xc1, 0xe0, 0x03, 0x0f, 0x94, 0xc2}; /* shl ; sete dl */
+    const uint8_t cmov[] = {0xc1, 0xe0, 0x03, 0x0f, 0x44, 0xd0};  /* shl ; cmove edx,eax */
+    const uint8_t pushf[] = {0xc1, 0xe0, 0x03, 0x9c};           /* shl ; pushfq */
+    const uint8_t inc[] = {0xc1, 0xe0, 0x03, 0xff, 0xc2};       /* shl ; inc edx -- preserves CF */
+    const uint8_t memory[] = {0xc1, 0xe0, 0x03, 0x03, 0x03};    /* shl ; add eax,[rbx] -- may fault */
+    const uint8_t syscall_exit[] = {0xc1, 0xe0, 0x03, 0x0f, 0x05}; /* shl ; syscall */
+    const uint8_t variable_end[] = {0xd3, 0xe0};                /* shl eax,cl (last in block) */
+
+    CHECK(words_for(block_end, sizeof block_end, 0) > ELIDED_SHIFT);
+    CHECK(words_for(adc, sizeof adc, 0) > ELIDED_SHIFT);
+    CHECK(words_for(jcc, sizeof jcc, 0) > ELIDED_SHIFT);
+    CHECK(words_for(setcc, sizeof setcc, 0) > ELIDED_SHIFT);
+    CHECK(words_for(cmov, sizeof cmov, 0) > ELIDED_SHIFT);
+    CHECK(words_for(pushf, sizeof pushf, 0) > ELIDED_SHIFT);
+    CHECK(words_for(inc, sizeof inc, 0) > ELIDED_SHIFT);
+    CHECK(words_for(memory, sizeof memory, 0) > ELIDED_SHIFT);
+    CHECK(words_for(syscall_exit, sizeof syscall_exit, 0) > ELIDED_SHIFT);
+    CHECK(words_for(variable_end, sizeof variable_end, 0) > ELIDED_VARIABLE_SHIFT);
     return 0;
 }
 
@@ -158,6 +245,46 @@ static int execution_matches(void) {
     CHECK((uint32_t)elided.registers[0] == 6u);
     return 0;
 }
+
+/* An elided shift must still produce the shifted value, and the successor must define the flags. */
+static int shift_execution_matches(void) {
+    uint64_t registers[16];
+    hl_native_x86_64_cpu elided;
+    hl_native_x86_64_cpu reference;
+    const uint8_t pair[] = {0xc1, 0xe0, 0x04, 0x01, 0xd0};      /* shl eax,4 ; add eax,edx */
+    const uint8_t variable[] = {0xd3, 0xe8, 0x01, 0xd0};        /* shr eax,cl ; add eax,edx */
+    const uint8_t wide[] = {0x48, 0xd3, 0xe0, 0x01, 0xd0};      /* shl rax,cl ; add eax,edx */
+    const uint8_t single[] = {0x01, 0xd0};                      /* add eax,edx */
+
+    /* eax=0x12345678 <<4 = 0x23456780; edx=5. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[2] = 5u;
+    CHECK(run_block(pair, sizeof pair, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == 0x23456785u);
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x23456780u; registers[2] = 5u;
+    CHECK(run_block(single, sizeof single, registers, &reference));
+    CHECK((elided.flags & HL_X86_RFLAGS_NZCV_MASK) == (reference.flags & HL_X86_RFLAGS_NZCV_MASK));
+    CHECK((elided.flags & (HL_X86_RFLAGS_PF | HL_X86_RFLAGS_AF)) ==
+          (reference.flags & (HL_X86_RFLAGS_PF | HL_X86_RFLAGS_AF)));
+
+    /* Variable count, including the count-zero form that leaves the value untouched. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0xff00u; registers[1] = 8u; registers[2] = 5u;
+    CHECK(run_block(variable, sizeof variable, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == 0xffu + 5u);
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0xff00u; registers[1] = 0u; registers[2] = 5u;
+    CHECK(run_block(variable, sizeof variable, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == 0xff00u + 5u);
+
+    /* A 64-bit variable shift keeps the full width before the 32-bit successor truncates. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 1u; registers[1] = 40u; registers[2] = 5u;
+    CHECK(run_block(wide, sizeof wide, registers, &elided));
+    CHECK(elided.registers[0] == 5u);
+    return 0;
+}
 #endif
 
 int main(void) {
@@ -165,8 +292,11 @@ int main(void) {
 
     if ((status = elision_fires()) != 0) return status;
     if ((status = boundaries_materialize()) != 0) return status;
+    if ((status = shift_elision_fires()) != 0) return status;
+    if ((status = shift_boundaries_materialize()) != 0) return status;
 #if defined(__aarch64__)
     if ((status = execution_matches()) != 0) return status;
+    if ((status = shift_execution_matches()) != 0) return status;
 #endif
     return 0;
 }
