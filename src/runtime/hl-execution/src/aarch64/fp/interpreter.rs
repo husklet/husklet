@@ -61,15 +61,14 @@ impl Aarch64FpExecutor {
         port: &mut P,
         ir: Aarch64Ir,
     ) -> Aarch64ExecutionExit {
-        let mut staged = cpu.clone();
-        staged.pc = cpu.pc.wrapping_add(4);
+        cpu.pc = cpu.pc.wrapping_add(4);
         match ir.instruction {
             Aarch64Instruction::FpImmediate {
                 format,
                 immediate,
                 destination,
             } => {
-                staged.set_vector(
+                cpu.set_vector(
                     destination,
                     u128::from(crate::aarch64_fp::ImmediateEncoding::expand(format, immediate)),
                 );
@@ -87,11 +86,11 @@ impl Aarch64FpExecutor {
                     FpUnaryOperation::Negate => bits ^ Self::sign_mask(format),
                     FpUnaryOperation::SquareRoot => {
                         let result = port.evaluate(Self::request(cpu, FpArithmetic::SquareRoot, format, bits, 0));
-                        staged.fpsr |= u64::from(result.exceptions);
+                        cpu.fpsr |= u64::from(result.exceptions);
                         result.value
                     }
                 };
-                staged.set_vector(destination, u128::from(value));
+                cpu.set_vector(destination, u128::from(value));
             }
             Aarch64Instruction::FpBinary {
                 operation,
@@ -107,8 +106,8 @@ impl Aarch64FpExecutor {
                     cpu.vector_lane(left, format.bits(), 0),
                     cpu.vector_lane(right, format.bits(), 0),
                 ));
-                staged.fpsr |= u64::from(result.exceptions);
-                staged.set_vector(destination, u128::from(result.value));
+                cpu.fpsr |= u64::from(result.exceptions);
+                cpu.set_vector(destination, u128::from(result.value));
             }
             Aarch64Instruction::FpSelect {
                 format,
@@ -122,7 +121,7 @@ impl Aarch64FpExecutor {
                 } else {
                     alternate
                 };
-                staged.set_vector(destination, u128::from(cpu.vector_lane(selected, format.bits(), 0)));
+                cpu.set_vector(destination, u128::from(cpu.vector_lane(selected, format.bits(), 0)));
             }
             Aarch64Instruction::FpFused {
                 format,
@@ -151,8 +150,8 @@ impl Aarch64FpExecutor {
                 );
                 request.addend = addend;
                 let result = port.evaluate(request);
-                staged.fpsr |= u64::from(result.exceptions);
-                staged.set_vector(destination, u128::from(result.value));
+                cpu.fpsr |= u64::from(result.exceptions);
+                cpu.set_vector(destination, u128::from(result.value));
             }
             Aarch64Instruction::FpRoundIntegral {
                 format,
@@ -168,8 +167,8 @@ impl Aarch64FpExecutor {
                     cpu.vector_lane(source, format.bits(), 0),
                     0,
                 ));
-                staged.fpsr |= u64::from(result.exceptions);
-                staged.set_vector(destination, u128::from(result.value));
+                cpu.fpsr |= u64::from(result.exceptions);
+                cpu.set_vector(destination, u128::from(result.value));
             }
             Aarch64Instruction::SimdFpUnary {
                 operation,
@@ -188,7 +187,7 @@ impl Aarch64FpExecutor {
                     };
                     value |= u128::from(result) << (u32::from(lane) * u32::from(format.bits()));
                 }
-                staged.set_vector(destination, value);
+                cpu.set_vector(destination, value);
             }
             Aarch64Instruction::SimdFpRoundIntegral {
                 format,
@@ -207,10 +206,10 @@ impl Aarch64FpExecutor {
                         cpu.vector_lane(source, format.bits(), lane),
                         0,
                     ));
-                    staged.fpsr |= u64::from(result.exceptions);
+                    cpu.fpsr |= u64::from(result.exceptions);
                     value |= u128::from(result.value) << (u32::from(lane) * u32::from(format.bits()));
                 }
-                staged.set_vector(destination, value);
+                cpu.set_vector(destination, value);
             }
             Aarch64Instruction::FpFormatConvert {
                 source_format,
@@ -227,8 +226,8 @@ impl Aarch64FpExecutor {
                     cpu.vector_lane(source, source_format.bits(), 0),
                     0,
                 ));
-                staged.fpsr |= u64::from(result.exceptions);
-                staged.set_vector(destination, u128::from(result.value));
+                cpu.fpsr |= u64::from(result.exceptions);
+                cpu.set_vector(destination, u128::from(result.value));
             }
             Aarch64Instruction::FpCompare {
                 format,
@@ -245,14 +244,14 @@ impl Aarch64FpExecutor {
                 if holds {
                     let right = Self::comparison_operand(cpu, right, format);
                     Self::compare(
-                        &mut staged,
+                        cpu,
                         format,
                         cpu.vector_lane(left, format.bits(), 0),
                         right,
                         signaling,
                     );
                 } else {
-                    staged.nzcv = Nzcv::from_bits(u32::from(alternative_nzcv) << 28);
+                    cpu.nzcv = Nzcv::from_bits(u32::from(alternative_nzcv) << 28);
                 }
             }
             Aarch64Instruction::SimdFpCompare {
@@ -264,7 +263,7 @@ impl Aarch64FpExecutor {
                 lanes,
                 absolute,
             } => crate::aarch64_simd_compare::Comparison::execute(
-                &mut staged,
+                cpu,
                 operation,
                 format,
                 left,
@@ -281,19 +280,19 @@ impl Aarch64FpExecutor {
                 vector,
             } => match (top_half, general_to_fp, format) {
                 (true, true, _) => {
-                    staged.set_vector_lane(vector, 64, 1, cpu.register(general));
+                    cpu.set_vector_lane(vector, 64, 1, cpu.register(general));
                 }
                 (true, false, _) => {
-                    staged.set_register(general, cpu.vector_lane(vector, 64, 1));
+                    cpu.set_register(general, cpu.vector_lane(vector, 64, 1));
                 }
                 (false, true, _) => {
-                    staged.set_vector(vector, u128::from(cpu.register(general) & Self::value_mask(format)));
+                    cpu.set_vector(vector, u128::from(cpu.register(general) & Self::value_mask(format)));
                 }
                 (false, false, FpFormat::Double) => {
-                    staged.set_register(general, cpu.vector_lane(vector, 64, 0));
+                    cpu.set_register(general, cpu.vector_lane(vector, 64, 0));
                 }
                 (false, false, _) => {
-                    staged.set_narrow_register(general, cpu.vector_lane(vector, format.bits(), 0) as u32);
+                    cpu.set_narrow_register(general, cpu.vector_lane(vector, format.bits(), 0) as u32);
                 }
             },
             Aarch64Instruction::FpConvert {
@@ -321,7 +320,7 @@ impl Aarch64FpExecutor {
                     cpu.register(source)
                 };
                 let result = port.evaluate(Self::request(cpu, operation, format, input, 0));
-                Self::apply_conversion(&mut staged, result, fp_to_integer, integer_wide, destination);
+                Self::apply_conversion(cpu, result, fp_to_integer, integer_wide, destination);
             }
             Aarch64Instruction::Bf16Convert {
                 source,
@@ -329,7 +328,7 @@ impl Aarch64FpExecutor {
                 vector,
                 high,
             } => {
-                crate::aarch64_simd_bf16::Bf16::execute(&mut staged, source, destination, vector, high);
+                crate::aarch64_simd_bf16::Bf16::execute(cpu, source, destination, vector, high);
             }
             Aarch64Instruction::SimdFpEstimate {
                 format,
@@ -339,7 +338,7 @@ impl Aarch64FpExecutor {
                 lanes,
             } => {
                 crate::aarch64_simd_reciprocal::Reciprocal::estimate(
-                    &mut staged,
+                    cpu,
                     format,
                     reciprocal_sqrt,
                     source,
@@ -352,7 +351,7 @@ impl Aarch64FpExecutor {
                 source,
                 destination,
             } => {
-                crate::aarch64_simd_reciprocal::Reciprocal::exponent(&mut staged, format, source, destination);
+                crate::aarch64_simd_reciprocal::Reciprocal::exponent(cpu, format, source, destination);
             }
             Aarch64Instruction::SimdUnsignedEstimate {
                 reciprocal_sqrt,
@@ -361,7 +360,7 @@ impl Aarch64FpExecutor {
                 wide,
             } => {
                 crate::aarch64_simd_reciprocal::Reciprocal::unsigned(
-                    &mut staged,
+                    cpu,
                     reciprocal_sqrt,
                     source,
                     destination,
@@ -377,7 +376,7 @@ impl Aarch64FpExecutor {
                 lanes,
             } => {
                 crate::aarch64_simd_reciprocal::Reciprocal::step(
-                    &mut staged,
+                    cpu,
                     port,
                     format,
                     reciprocal_sqrt,
@@ -393,7 +392,7 @@ impl Aarch64FpExecutor {
                 high,
                 scalar,
             } => crate::aarch64_simd_narrow::NarrowOdd::execute(
-                &mut staged,
+                cpu,
                 port,
                 source,
                 destination,
@@ -407,7 +406,7 @@ impl Aarch64FpExecutor {
                 high,
                 widen,
             } => crate::aarch64_simd_convert::Convert::execute(
-                &mut staged,
+                cpu,
                 port,
                 format,
                 source,
@@ -439,10 +438,10 @@ impl Aarch64FpExecutor {
                         input,
                         0,
                     ));
-                    staged.fpsr |= u64::from(result.exceptions);
+                    cpu.fpsr |= u64::from(result.exceptions);
                     value |= u128::from(result.value) << (u32::from(lane) * u32::from(format.bits()));
                 }
-                staged.set_vector(destination, value);
+                cpu.set_vector(destination, value);
             }
             Aarch64Instruction::SimdIntegerFp {
                 format,
@@ -464,10 +463,10 @@ impl Aarch64FpExecutor {
                         input,
                         0,
                     ));
-                    staged.fpsr |= u64::from(result.exceptions);
+                    cpu.fpsr |= u64::from(result.exceptions);
                     value |= u128::from(result.value) << (u32::from(lane) * u32::from(format.bits()));
                 }
-                staged.set_vector(destination, value);
+                cpu.set_vector(destination, value);
             }
             Aarch64Instruction::SimdFpBinary {
                 operation,
@@ -478,7 +477,7 @@ impl Aarch64FpExecutor {
                 destination,
             } => {
                 crate::aarch64_simd_arithmetic::Binary::execute(
-                    &mut staged,
+                    cpu,
                     port,
                     operation,
                     format,
@@ -499,7 +498,7 @@ impl Aarch64FpExecutor {
                 scalar: _,
             } => {
                 Self::fused(
-                    &mut staged,
+                    cpu,
                     port,
                     format,
                     lanes,
@@ -521,7 +520,7 @@ impl Aarch64FpExecutor {
                 scalar: _,
             } => {
                 Self::product(
-                    &mut staged,
+                    cpu,
                     port,
                     format,
                     lanes,
@@ -547,13 +546,12 @@ impl Aarch64FpExecutor {
                         cpu.vector_lane(source, 32, lane),
                     ));
                     value = result.value;
-                    staged.fpsr |= u64::from(result.exceptions);
+                    cpu.fpsr |= u64::from(result.exceptions);
                 }
-                staged.set_vector(destination, u128::from(value));
+                cpu.set_vector(destination, u128::from(value));
             }
             _ => unreachable!("FP interpreter called for non-FP instruction"),
         }
-        *cpu = staged;
         Aarch64ExecutionExit::Continue
     }
 }

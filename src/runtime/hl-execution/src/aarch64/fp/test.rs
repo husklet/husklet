@@ -1382,6 +1382,15 @@ fn fp_destination_aliasing_reads_before_writing() {
     );
     assert_eq!(cpu.vector(0), single_lanes([2.0, 6.0, 12.0, 20.0]));
 
+    // FMLA V0.4S, V0.4S, V0.S[0] -- every lane multiplies by lane zero of the destination.
+    let mut cpu = Aarch64CpuState::default();
+    cpu.set_vector(0, single_lanes([1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        Aarch64FpExecutor::execute_word(&mut cpu, &mut fp, 0x4f80_1000),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vector(0), single_lanes([2.0, 4.0, 6.0, 8.0]));
+
     // FADD V0.4S, V0.4S, V0.4S
     let mut cpu = Aarch64CpuState::default();
     cpu.set_vector(0, single_lanes([1.0, 2.0, 3.0, 4.0]));
