@@ -92,8 +92,7 @@ int main(void) {
     hl_native_cache_diagnose(executor->cache, &legacy_after);
     CHECK(context.lookups == 1 && context.misses == 1 && context.hits == 0 &&
           context.epoch_rejections == 0);
-    CHECK(legacy_after.lookups == legacy_before.lookups + 1 &&
-          legacy_after.misses == legacy_before.misses + 1);
+    CHECK(memcmp(&legacy_after, &legacy_before, sizeof(legacy_before)) == 0);
     hl_native_cache_diagnose(executor->cache, &legacy_before);
     CHECK(hl_native_translation_lookup_inner(NULL, &context, &key, &code) == HL_NATIVE_MISS);
     CHECK(hl_native_translation_lookup_inner(executor, NULL, &key, &code) == HL_NATIVE_MISS);
@@ -118,8 +117,7 @@ int main(void) {
     hl_native_cache_diagnose(executor->cache, &legacy_after);
     CHECK(context.lookups == 2 && context.misses == 1 && context.hits == 1 &&
           context.epoch_rejections == 0);
-    CHECK(legacy_after.lookups == legacy_before.lookups + 1 &&
-          legacy_after.hits == legacy_before.hits + 1);
+    CHECK(memcmp(&legacy_after, &legacy_before, sizeof(legacy_before)) == 0);
     hl_native_translation_key stale = key;
     stale.instruction_epoch++;
     CHECK(hl_native_translation_lookup(executor, &stale, &code) == HL_NATIVE_MISS);

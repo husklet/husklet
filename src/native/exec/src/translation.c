@@ -37,14 +37,9 @@ hl_native_lookup hl_native_translation_lookup_inner(hl_native_executor *executor
                                                     hl_native_code *output) {
     if (executor == NULL || context == NULL || key == NULL || output == NULL)
         return HL_NATIVE_MISS;
-    hl_native_lookup result = hl_native_cache_lookup_key(executor->cache, key->guest,
+    return hl_native_cache_probe_key_counted(executor->cache, context, key->guest,
         key->mapping_incarnation, key->instruction_epoch, key->memory_mode,
         key->authority_generation, output);
-    if (context->lookups != UINT64_MAX) context->lookups++;
-    uint64_t *counter = result == HL_NATIVE_HIT ? &context->hits :
-                        result == HL_NATIVE_EPOCH ? &context->epoch_rejections : &context->misses;
-    if (*counter != UINT64_MAX) (*counter)++;
-    return result;
 }
 
 hl_native_lookup hl_native_translation_lookup(hl_native_executor *executor, const hl_native_translation_key *key,
