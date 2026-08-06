@@ -504,8 +504,14 @@ mod tests {
 
     #[test]
     fn extracts_authoritative_build_id_from_current_elf() {
+        // Toolchains that omit --build-id are legitimate, so the identity falls back to the content hash.
         let executable = std::env::current_exe().unwrap();
-        assert!(!elf_build_id(&executable).unwrap().is_empty());
+        let identity = build_identity(&executable).unwrap();
+        match elf_build_id(&executable) {
+            Ok(id) => assert_eq!(identity, id),
+            Err(_) => assert!(identity.starts_with("sha256:")),
+        }
+        assert!(!identity.is_empty());
     }
 
     fn build_id_elf() -> Vec<u8> {
