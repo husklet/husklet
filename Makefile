@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-workloads
+.PHONY: all check design-lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-gate-arm64 bench-gate-amd64 bench-workloads
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -58,9 +58,17 @@ BENCH_GATE = target/release/testing benchmark gate \
 	  --c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \
 	  --repeats $(BENCH_REPEATS) --divisor $(BENCH_DIVISOR) --max-spread $(BENCH_MAX_SPREAD)
 
+# The guest ISA selects the lowering under test: arm64 covers
+# src/native/exec/src/arch/aarch64, amd64 covers .../x86_64. Prove an x86-64
+# change with bench-gate-amd64, never with bench-gate-arm64.
+BENCH_CC_arm64 = aarch64-linux-gnu-gcc
+BENCH_CC_amd64 = x86_64-linux-gnu-gcc
+BENCH_CC = $(BENCH_CC_$(BENCH_ARCH))
+
 bench-guest:
 	@mkdir -p $(dir $(BENCH_GUEST))
-	cc -O2 -static -o $(BENCH_GUEST) tests/bench/combined/main.c
+	@command -v $(BENCH_CC) >/dev/null || { echo "install $(BENCH_CC) to build the $(BENCH_ARCH) guest"; exit 1; }
+	$(BENCH_CC) -O2 -static -o $(BENCH_GUEST) tests/bench/combined/main.c
 
 bench-gate: bench-guest
 	cargo build --release -p engine -p testing --bins --locked
@@ -69,6 +77,12 @@ bench-gate: bench-guest
 bench-gate-update: bench-guest
 	cargo build --release -p engine -p testing --bins --locked
 	$(BENCH_GATE) --update
+
+bench-gate-arm64:
+	$(MAKE) bench-gate BENCH_ARCH=arm64
+
+bench-gate-amd64:
+	$(MAKE) bench-gate BENCH_ARCH=amd64
 
 bench-workloads:
 	cargo run -q --release -p testing --bin testing -- benchmark workloads

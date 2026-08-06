@@ -25,11 +25,19 @@ pub(super) struct Step {
     pub mode: Mode,
 }
 
+#[cfg(test)]
 pub(super) fn plan(cycles: u32) -> Result<Vec<Step>, String> {
+    plan_over(cycles, &[Provider::Native, Provider::C, Provider::Rust])
+}
+
+/// Balances the given providers so ordering cannot favour one of them.
+pub(super) fn plan_over(cycles: u32, providers: &[Provider]) -> Result<Vec<Step>, String> {
     if !(1..=MAX_CYCLES).contains(&cycles) {
         return Err("alternating benchmark cycles must be between 1 and 128".into());
     }
-    let providers = [Provider::Native, Provider::C, Provider::Rust];
+    if providers.is_empty() {
+        return Err("alternating benchmark requires at least one provider".into());
+    }
     let mut steps = vec![Step {
         cycle: 0,
         provider: Provider::Rust,
@@ -49,14 +57,21 @@ pub(super) fn plan(cycles: u32) -> Result<Vec<Step>, String> {
 }
 
 /// Runs one diagnostics-on Rust proof, then diagnostics-off timing steps.
-pub(super) fn run<F>(cycles: u32, journal: &Path, identity: &str, resume: bool, mut execute: F) -> Result<(), String>
+pub(super) fn run<F>(
+    cycles: u32,
+    providers: &[Provider],
+    journal: &Path,
+    identity: &str,
+    resume: bool,
+    mut execute: F,
+) -> Result<(), String>
 where
     F: FnMut(Step) -> Result<String, String>,
 {
     if identity.contains(['\t', '\n']) {
         return Err("unsafe alternating benchmark identity".into());
     }
-    let steps = plan(cycles)?;
+    let steps = plan_over(cycles, providers)?;
     let expected = steps.iter().copied().collect::<BTreeSet<_>>();
     let mut completed = if resume && journal.exists() {
         load(journal, identity, &expected)?
@@ -158,8 +173,18 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mode, Provider, plan, run};
+    use super::{Mode, Provider, plan, plan_over, run};
     use std::sync::{Arc, Mutex};
+
+    const ALL: [Provider; 3] = [Provider::Native, Provider::C, Provider::Rust];
+
+    #[test]
+    fn engine_only_plans_drop_the_native_baseline() {
+        let steps = plan_over(2, &[Provider::C, Provider::Rust]).unwrap();
+        assert!(steps[1..].iter().all(|step| step.provider != Provider::Native));
+        assert_eq!(steps.len(), 5);
+        assert!(plan_over(1, &[]).is_err());
+    }
 
     #[test]
     fn proof_precedes_balanced_alternation() {
@@ -191,7 +216,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(0));
         let first = Arc::clone(&calls);
         assert!(
-            run(1, &journal, "tree-rootfs-artifacts", false, move |_| {
+            run(1, &ALL, &journal, "tree-rootfs-artifacts", false, move |_| {
                 let mut n = first.lock().unwrap();
                 *n += 1;
                 if *n == 3 {
@@ -203,12 +228,12 @@ mod tests {
             .is_err()
         );
         let resumed = Arc::clone(&calls);
-        run(1, &journal, "tree-rootfs-artifacts", true, move |_| {
+        run(1, &ALL, &journal, "tree-rootfs-artifacts", true, move |_| {
             *resumed.lock().unwrap() += 1;
             Ok("bounded".into())
         })
         .unwrap();
         assert_eq!(*calls.lock().unwrap(), 5);
-        assert!(run(1, &journal, "changed", true, |_| Ok("bounded".into())).is_err());
+        assert!(run(1, &ALL, &journal, "changed", true, |_| Ok("bounded".into())).is_err());
     }
 }

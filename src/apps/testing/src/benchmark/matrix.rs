@@ -35,6 +35,9 @@ pub(crate) struct Matrix {
     /// Continue only rows recorded for this exact runner, rootfs, guest, and engine content.
     #[arg(long)]
     resume: bool,
+    /// Omit the host-native baseline; required when the guest ISA is foreign to the host.
+    #[arg(long)]
+    skip_native: bool,
     /// Optional bounded guest/provider clone/thread evidence captured beside each row.
     #[arg(long)]
     clone_thread_evidence: Option<PathBuf>,
@@ -63,6 +66,7 @@ impl Matrix {
         repeats: usize,
         timeout: Duration,
         guest: Vec<String>,
+        skip_native: bool,
     ) -> Self {
         Self {
             isa,
@@ -76,6 +80,7 @@ impl Matrix {
             output,
             repeats,
             resume: false,
+            skip_native,
             clone_thread_evidence: None,
             timeout,
             guest,
@@ -89,7 +94,7 @@ impl Matrix {
             (std::env::consts::ARCH, self.isa),
             ("aarch64", Isa::Aarch64) | ("x86_64", Isa::X86)
         );
-        if !host_matches {
+        if !host_matches && !self.skip_native {
             return Err("matrix requires a host-native baseline for the selected architecture".into());
         }
         if self.output.as_os_str().is_empty() {
@@ -167,15 +172,17 @@ impl Matrix {
         .map_err(|error| format!("C engine provenance: {error}"))?;
         eprintln!("benchmark-host {}", host_snapshot());
         let identity = self.identity()?;
+        let scheduled = self.providers();
         let mut paths = Vec::new();
         for cycle in 1..=self.repeats {
-            for provider in [Provider::Native, Provider::C, Provider::Rust] {
-                paths.push(self.output_path(cycle, provider));
+            for provider in &scheduled {
+                paths.push(self.output_path(cycle, Self::public(*provider)));
             }
         }
         let journal = self.output.join("alternating.tsv");
         alternating::run(
             u32::try_from(self.repeats).map_err(|_| "matrix repeat overflow")?,
+            &scheduled,
             &journal,
             &identity,
             self.resume,
@@ -194,12 +201,26 @@ impl Matrix {
         Ok(paths)
     }
 
-    fn run(&self, step: alternating::Step) -> Run {
-        let provider = match step.provider {
+    fn providers(&self) -> Vec<alternating::Provider> {
+        let mut providers = if self.skip_native {
+            Vec::new()
+        } else {
+            vec![alternating::Provider::Native]
+        };
+        providers.extend([alternating::Provider::C, alternating::Provider::Rust]);
+        providers
+    }
+
+    const fn public(provider: alternating::Provider) -> Provider {
+        match provider {
             alternating::Provider::Native => Provider::Native,
             alternating::Provider::C => Provider::C,
             alternating::Provider::Rust => Provider::Rust,
-        };
+        }
+    }
+
+    fn run(&self, step: alternating::Step) -> Run {
+        let provider = Self::public(step.provider);
         let engine = match provider {
             Provider::C => Some(self.c_engine.clone()),
             Provider::Rust => Some(self.rust_engine.clone()),
@@ -382,6 +403,7 @@ mod tests {
             output: "/results".into(),
             repeats: 1,
             resume: false,
+            skip_native: false,
             clone_thread_evidence: None,
             timeout: Duration::from_secs(1),
             guest: Vec::new(),
@@ -447,6 +469,7 @@ mod tests {
             output: directory.path().join("out"),
             repeats: 3,
             resume: false,
+            skip_native: false,
             clone_thread_evidence: None,
             timeout: Duration::from_secs(1),
             guest: Vec::new(),

@@ -58,9 +58,9 @@ pub(crate) struct Statistics {
 /// A committed baseline: the builds it was measured against and its samples.
 #[derive(Default)]
 pub(crate) struct Baseline {
-    engine: Option<String>,
+    engines: BTreeMap<String, String>,
     revision: Option<String>,
-    samples: BTreeMap<(String, String), u64>,
+    samples: BTreeMap<(String, String, String), u64>,
 }
 
 impl Statistics {
@@ -95,11 +95,15 @@ impl Baseline {
             }
             let fields = line.split('\t').collect::<Vec<_>>();
             match fields.as_slice() {
-                ["engine", "c-engine", build_id] => baseline.engine = Some((*build_id).to_owned()),
+                ["engine", "c-engine", arch, build_id] => {
+                    baseline.engines.insert((*arch).to_owned(), (*build_id).to_owned());
+                }
                 ["engine", "rust-engine", revision] => baseline.revision = Some((*revision).to_owned()),
-                ["sample", workload, phase, us] => {
+                ["sample", arch, workload, phase, us] => {
                     let value = us.parse().map_err(|_| format!("invalid baseline sample: {line}"))?;
-                    baseline.samples.insert(((*workload).to_owned(), (*phase).to_owned()), value);
+                    baseline
+                        .samples
+                        .insert(((*arch).to_owned(), (*workload).to_owned(), (*phase).to_owned()), value);
                 }
                 _ => return Err(format!("invalid baseline row: {line}")),
             }
@@ -107,18 +111,28 @@ impl Baseline {
         Ok(baseline)
     }
 
-    /// Replaces only this workload's rows so other workloads stay recorded.
-    fn render(&self, provenance: &Provenance, workload: &str, samples: &BTreeMap<String, Statistics>) -> String {
+    /// Replaces only this arch and workload's rows so other records survive.
+    fn render(
+        &self,
+        provenance: &Provenance,
+        arch: &str,
+        workload: &str,
+        samples: &BTreeMap<String, Statistics>,
+    ) -> String {
         let mut merged = self.samples.clone();
-        merged.retain(|(recorded, _), _| recorded != workload);
+        merged.retain(|(recorded_arch, recorded, _), _| recorded_arch != arch || recorded != workload);
         for (phase, statistics) in samples {
-            merged.insert((workload.to_owned(), phase.clone()), statistics.median);
+            merged.insert((arch.to_owned(), workload.to_owned(), phase.clone()), statistics.median);
         }
+        let mut engines = self.engines.clone();
+        engines.insert(arch.to_owned(), provenance.build_id.clone());
         let mut text = String::from("# husklet benchmark baseline v1: rust-engine median microseconds\n");
-        text.push_str(&format!("engine\tc-engine\t{}\n", provenance.build_id));
+        for (arch, build_id) in &engines {
+            text.push_str(&format!("engine\tc-engine\t{arch}\t{build_id}\n"));
+        }
         text.push_str(&format!("engine\trust-engine\t{}\n", provenance.revision));
-        for ((workload, phase), us) in &merged {
-            text.push_str(&format!("sample\t{workload}\t{phase}\t{us}\n"));
+        for ((arch, workload, phase), us) in &merged {
+            text.push_str(&format!("sample\t{arch}\t{workload}\t{phase}\t{us}\n"));
         }
         text
     }
@@ -191,6 +205,39 @@ pub(crate) fn pinning(affinity: &str, requested: Option<usize>) -> Result<(usize
     Ok((cpu, allowed.as_slice() == [cpu]))
 }
 
+/// The guest lowering a run actually exercises, so nobody proves an x86-64
+/// change by measuring an ARM64 guest.
+pub(crate) const fn lowering(isa: Isa) -> &'static str {
+    match isa {
+        Isa::Aarch64 => "src/native/exec/src/arch/aarch64",
+        Isa::X86 => "src/native/exec/src/arch/x86_64",
+    }
+}
+
+/// Names every prerequisite a lane must build before the gate can measure.
+pub(crate) fn missing(guest: &Path, rust_engine: &Path, c_engine: &Path, runner: &Path, arch: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    if !guest.is_file() {
+        missing.push(format!("guest {} is missing: make bench-guest BENCH_ARCH={arch}", guest.display()));
+    }
+    if !rust_engine.is_file() {
+        missing.push(format!(
+            "rust engine {} is missing: cargo build --release -p engine --bins --locked",
+            rust_engine.display()
+        ));
+    }
+    if !c_engine.is_file() {
+        missing.push(format!(
+            "retained C engine {} is missing: build it in the engine tree and pass --c-build",
+            c_engine.display()
+        ));
+    }
+    if !runner.is_file() {
+        missing.push(format!("retained C exec wrapper {} is missing", runner.display()));
+    }
+    missing
+}
+
 /// Resolves the retained engine and its exec wrapper from a build root.
 pub(crate) fn wiring(root: &Path, isa: Isa) -> (PathBuf, PathBuf) {
     (
@@ -208,11 +255,26 @@ impl Gate {
             return Err(format!("gate repeats must be between 3 and {LIMIT}"));
         }
         let (engine, runner) = wiring(&self.c_build, self.isa);
-        if !engine.is_file() {
-            return Err(format!("retained C engine is missing: {}", engine.display()));
+        println!(
+            "coverage\tguest_arch={}\tlowering={}\thost_arch={}",
+            self.isa.public(),
+            lowering(self.isa),
+            std::env::consts::ARCH
+        );
+        let foreign = !matches!(
+            (std::env::consts::ARCH, self.isa),
+            ("aarch64", Isa::Aarch64) | ("x86_64", Isa::X86)
+        );
+        if foreign {
+            println!(
+                "coverage\tnative_baseline=absent\treason=a {} host cannot run a {} guest directly",
+                std::env::consts::ARCH,
+                self.isa.public()
+            );
         }
-        if !runner.is_file() {
-            return Err(format!("retained C exec wrapper is missing: {}", runner.display()));
+        let missing = missing(&self.binary, &self.rust_engine, &engine, &runner, self.isa.public());
+        if !missing.is_empty() {
+            return Err(format!("gate prerequisites are not built:\n  {}", missing.join("\n  ")));
         }
         let provenance = Provenance {
             build_id: super::matrix::build_identity(&engine)?,
@@ -222,7 +284,7 @@ impl Gate {
         let (cpu, _) = pinning(&super::host_affinity(), self.cpu)?;
         provenance.print(self.workload.name(), cpu, self.repeats);
         let baseline = self.baseline()?;
-        if let Some(pinned) = baseline.engine.as_deref() {
+        if let Some(pinned) = baseline.engines.get(self.isa.public()).map(String::as_str) {
             if !self.update && !pinned.eq_ignore_ascii_case(&provenance.build_id) {
                 return Err(format!(
                     "retained C build changed: baseline pins {pinned}, {} has {}; re-record with --update",
@@ -234,7 +296,7 @@ impl Gate {
         if self.update && provenance.dirty() {
             return Err("refusing to record a baseline from a dirty tree; commit first".into());
         }
-        let paths = self.measure(process, engine, runner, &provenance.build_id)?;
+        let paths = self.measure(process, engine, runner, &provenance.build_id, foreign)?;
         let series = collect(&paths)?;
         self.verdict(&series, &provenance, &baseline)
     }
@@ -271,6 +333,7 @@ impl Gate {
         engine: PathBuf,
         runner: PathBuf,
         build_id: &str,
+        skip_native: bool,
     ) -> Result<Vec<PathBuf>, String> {
         let matrix = Matrix::gated(
             self.isa,
@@ -284,6 +347,7 @@ impl Gate {
             self.repeats,
             self.timeout,
             self.workload.guest(self.divisor),
+            skip_native,
         );
         matrix.validate()?.produce(process)
     }
@@ -309,29 +373,35 @@ impl Gate {
         let mut rust = BTreeMap::new();
         for (phase, providers) in &summaries {
             let pick = |name: &str| providers.get(name).copied();
-            let (Some(native), Some(c), Some(engine)) = (pick("native"), pick("c-engine"), pick("rust-engine")) else {
-                return Err(format!("phase {phase} is missing a provider row"));
+            let (native, Some(c), Some(engine)) = (pick("native"), pick("c-engine"), pick("rust-engine")) else {
+                return Err(format!("phase {phase} is missing an engine row"));
             };
-            let spread = [native, c, engine].map(Statistics::spread).into_iter().fold(0.0, f64::max);
+            let spread = native
+                .into_iter()
+                .chain([c, engine])
+                .map(Statistics::spread)
+                .fold(0.0, f64::max);
             if spread > self.max_spread {
                 noisy.push(format!("{phase} spread {spread:.3}"));
             }
-            let against = baseline
-                .samples
-                .get(&(self.workload.name().to_owned(), phase.clone()))
-                .map_or_else(|| "-".to_owned(), |value| format!("{:.3}", ratio(engine.median, *value)));
+            let recorded = baseline.samples.get(&(
+                self.isa.public().to_owned(),
+                self.workload.name().to_owned(),
+                phase.clone(),
+            ));
+            let against = recorded.map_or_else(|| "-".to_owned(), |value| format!("{:.3}", ratio(engine.median, *value)));
             println!(
-                "{}\t{phase}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{spread:.3}\t{against}",
+                "{}\t{phase}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{spread:.3}\t{against}",
                 self.workload.name(),
-                native.median,
+                native.map_or_else(|| "-".to_owned(), |value| value.median.to_string()),
                 c.median,
                 engine.median,
                 engine.minimum,
                 engine.maximum,
                 ratio(engine.median, c.median),
-                ratio(engine.median, native.median),
+                native.map_or_else(|| "-".to_owned(), |value| format!("{:.3}", ratio(engine.median, value.median))),
             );
-            if let Some(value) = baseline.samples.get(&(self.workload.name().to_owned(), phase.clone())) {
+            if let Some(value) = recorded {
                 let allowance = 1.0 + self.tolerance.max(spread);
                 if ratio(engine.median, *value) > allowance {
                     regressed.push(format!("{phase} {}us over baseline {value}us", engine.median));
@@ -347,7 +417,8 @@ impl Gate {
             ));
         }
         if self.update {
-            std::fs::write(&self.baseline, baseline.render(provenance, self.workload.name(), &rust))
+            let text = baseline.render(provenance, self.isa.public(), self.workload.name(), &rust);
+            std::fs::write(&self.baseline, text)
                 .map_err(|error| format!("write baseline: {error}"))?;
             println!("baseline\t{}\trecorded", self.baseline.display());
             return Ok(());
@@ -440,6 +511,22 @@ mod tests {
     }
 
     #[test]
+    fn each_guest_arch_names_the_lowering_it_covers() {
+        assert!(super::lowering(Isa::X86).ends_with("x86_64"));
+        assert!(super::lowering(Isa::Aarch64).ends_with("aarch64"));
+        assert_ne!(super::lowering(Isa::X86), super::lowering(Isa::Aarch64));
+    }
+
+    #[test]
+    fn absent_prerequisites_name_the_command_that_builds_them() {
+        let absent = std::path::Path::new("/absent");
+        let missing = super::missing(absent, absent, absent, absent, "amd64");
+        assert_eq!(missing.len(), 4);
+        assert!(missing[0].contains("make bench-guest BENCH_ARCH=amd64"));
+        assert!(missing[1].contains("cargo build --release -p engine"));
+    }
+
+    #[test]
     fn wiring_never_selects_the_exec_wrapper_as_the_engine() {
         let (engine, runner) = wiring(std::path::Path::new("/build"), Isa::Aarch64);
         assert!(engine.ends_with("linux-production/hl-engine-linux-aarch64"));
@@ -452,22 +539,20 @@ mod tests {
         let mut samples = std::collections::BTreeMap::new();
         samples.insert(
             "compute".to_owned(),
-            Statistics {
-                median: 42,
-                minimum: 41,
-                maximum: 43,
-            },
+            Statistics::of(&[41, 42, 43]).unwrap(),
         );
-        let text = Baseline::default().render(&provenance(), "compute", &samples);
+        let key = |arch: &str| (arch.to_owned(), "compute".to_owned(), "compute".to_owned());
+        let text = Baseline::default().render(&provenance(), "arm64", "compute", &samples);
         let parsed = Baseline::parse(&text).unwrap();
-        assert_eq!(parsed.engine.as_deref(), Some("abc"));
+        assert_eq!(parsed.engines["arm64"], "abc");
         assert_eq!(parsed.revision.as_deref(), Some("0123456789ab"));
-        assert_eq!(parsed.samples[&("compute".to_owned(), "compute".to_owned())], 42);
+        assert_eq!(parsed.samples[&key("arm64")], 42);
         assert!(Baseline::parse("sample\tonly\ttwo\n").is_err());
 
-        let kept = Baseline::parse(&parsed.render(&provenance(), "syscall", &samples)).unwrap();
+        let kept = Baseline::parse(&parsed.render(&provenance(), "amd64", "compute", &samples)).unwrap();
         assert_eq!(kept.samples.len(), 2);
-        assert!(kept.samples.contains_key(&("compute".to_owned(), "compute".to_owned())));
+        assert_eq!(kept.engines.len(), 2);
+        assert!(kept.samples.contains_key(&key("arm64")));
     }
 
     #[test]
