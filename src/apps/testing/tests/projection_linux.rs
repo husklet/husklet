@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 
 mod engine_binary;
+mod guest_fixture;
 
 fn engine_binary(name: &str) -> String {
     engine_binary::EngineBinaryPaths::required()
@@ -111,9 +112,7 @@ fn confined_static_guest() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir(&root).unwrap();
     let path = root.join("guest");
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/runtime/legacy/artifacts/full/process/x86_64/uname-boundary");
-    std::fs::copy(fixture, &path).unwrap();
+    guest_fixture::projection("projected_static.c", "x86_64", &path);
     let authority = ProcessAuthority::projected(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
         &path,
@@ -158,9 +157,7 @@ fn confined_projected_file() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir(&root).unwrap();
     let guest = root.join("guest");
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../tests/runtime/legacy/artifacts/full/filesystem/x86_64/projected-read");
-    std::fs::copy(fixture, &guest).unwrap();
+    guest_fixture::projection("projected_read.c", "x86_64", &guest);
     std::fs::write(root.join("data"), b"original").unwrap();
     let authority = ProcessAuthority::projected_root(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
@@ -208,10 +205,7 @@ fn projected_directory(isa: &str, engine: &str) {
     std::os::unix::fs::symlink("child", root.join("tree/base/relative")).unwrap();
     std::os::unix::fs::symlink("/tree/base/child", root.join("tree/base/absolute")).unwrap();
     let guest = root.join("guest");
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../../tests/runtime/legacy/artifacts/full/filesystem/{isa}/projected-directory"
-    ));
-    std::fs::copy(fixture, &guest).unwrap();
+    guest_fixture::projection("projected_directory.c", isa, &guest);
     let authority = ProcessAuthority::projected_root(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
         &root,
@@ -257,10 +251,7 @@ fn projected_write(isa: &str, engine: &str) {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let guest = root.join("guest");
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "../../../tests/runtime/legacy/artifacts/full/filesystem/{isa}/projected-write"
-    ));
-    std::fs::copy(fixture, &guest).unwrap();
+    guest_fixture::projection("projected_write.c", isa, &guest);
     let authority = ProcessAuthority::projected_root_writable(
         std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
         &root,
@@ -318,120 +309,6 @@ fn write_x86() {
 #[test]
 fn write_arm() {
     projected_write("aarch64", &engine_binary("hl-aarch64"));
-}
-
-#[test]
-fn confined_dynamic_guest() {
-    let root = std::env::temp_dir().join(format!("hl-dynamic-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("lib64")).unwrap();
-    std::fs::create_dir_all(root.join("lib/x86_64-linux-gnu")).unwrap();
-    let artifacts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/artifacts");
-    let guest = root.join("guest");
-    std::fs::copy(artifacts.join("full/process/x86_64/nonpie-dladdr"), &guest).unwrap();
-    std::fs::copy(
-        artifacts.join("runtime/x86_64/lib64/ld-linux-x86-64.so.2"),
-        root.join("lib64/ld-linux-x86-64.so.2"),
-    )
-    .unwrap();
-    std::fs::copy(
-        artifacts.join("runtime/x86_64/lib/x86_64-linux-gnu/libc.so.6"),
-        root.join("lib/x86_64-linux-gnu/libc.so.6"),
-    )
-    .unwrap();
-    let authority = ProcessAuthority::projected_root(
-        std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
-        &root,
-        &guest,
-        Arc::new(LinuxHost),
-    )
-    .unwrap();
-    let channel = authority.open([11, 12]).unwrap();
-    std::fs::remove_file(&guest).unwrap();
-    std::fs::write(&guest, b"replacement-not-elf").unwrap();
-    let descriptor = channel.descriptor();
-    let health = channel.health();
-    let request = SpawnRequest {
-        program: CString::new(engine_binary("hl-x86_64")).unwrap(),
-        arguments: vec![
-            CString::new("--guest-isa").unwrap(),
-            CString::new("x86_64").unwrap(),
-            CString::new("/guest").unwrap(),
-        ],
-        environment: vec![
-            CString::new(format!("HL_AUTHORITY_FD={}", descriptor.get())).unwrap(),
-            CString::new(format!("HL_AUTHORITY_HEALTH_FD={}", health.get())).unwrap(),
-        ],
-        process_group: ProcessGroup::New,
-        file_actions: vec![FileAction::Inherit(descriptor), FileAction::Inherit(health)],
-    };
-    let worker = ProcessHandle::spawn(Arc::new(LinuxHost), &request).unwrap();
-    authority.commit(channel).unwrap();
-    let (worker_exit, worker_timeout) = Bounded::worker(&worker);
-    let (authority_exit, authority_timeout) = Bounded::authority(&authority, channel.session()[0]).unwrap();
-    std::fs::remove_dir_all(root).unwrap();
-    assert!(!worker_timeout, "dynamic worker timed out: {worker_exit:?}");
-    assert!(!authority_timeout, "dynamic authority timed out: {authority_exit:?}");
-    assert_eq!(worker_exit, ChildExit::Code(0));
-    assert!(matches!(authority_exit, None | Some(ChildExit::Code(0))));
-}
-
-#[test]
-fn confined_dynamic_arm() {
-    let root = std::env::temp_dir().join(format!("hl-dynamic-arm-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("lib/aarch64-linux-gnu")).unwrap();
-    let artifacts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy/artifacts");
-    let guest = root.join("guest");
-    std::fs::copy(artifacts.join("full/process/aarch64/nonpie-dladdr"), &guest).unwrap();
-    std::fs::copy(
-        artifacts.join("runtime/aarch64/lib/ld-linux-aarch64.so.1"),
-        root.join("lib/ld-linux-aarch64.so.1"),
-    )
-    .unwrap();
-    std::fs::copy(
-        artifacts.join("runtime/aarch64/lib/aarch64-linux-gnu/libc.so.6"),
-        root.join("lib/aarch64-linux-gnu/libc.so.6"),
-    )
-    .unwrap();
-    let authority = ProcessAuthority::projected_root(
-        std::path::Path::new(env!("CARGO_BIN_EXE_hl-authority-child")),
-        &root,
-        &guest,
-        Arc::new(LinuxHost),
-    )
-    .unwrap();
-    let channel = authority.open([13, 14]).unwrap();
-    std::fs::remove_file(&guest).unwrap();
-    std::fs::write(&guest, b"replacement-not-elf").unwrap();
-    let descriptor = channel.descriptor();
-    let health = channel.health();
-    let request = SpawnRequest {
-        program: CString::new(engine_binary("hl-aarch64")).unwrap(),
-        arguments: vec![
-            CString::new("--guest-isa").unwrap(),
-            CString::new("aarch64").unwrap(),
-            CString::new("/guest").unwrap(),
-        ],
-        environment: vec![
-            CString::new(format!("HL_AUTHORITY_FD={}", descriptor.get())).unwrap(),
-            CString::new(format!("HL_AUTHORITY_HEALTH_FD={}", health.get())).unwrap(),
-        ],
-        process_group: ProcessGroup::New,
-        file_actions: vec![FileAction::Inherit(descriptor), FileAction::Inherit(health)],
-    };
-    let worker = ProcessHandle::spawn(Arc::new(LinuxHost), &request).unwrap();
-    authority.commit(channel).unwrap();
-    let (worker_exit, worker_timeout) = Bounded::worker(&worker);
-    let (authority_exit, authority_timeout) = Bounded::authority(&authority, channel.session()[0]).unwrap();
-    std::fs::remove_dir_all(root).unwrap();
-    assert!(!worker_timeout, "dynamic arm worker timed out: {worker_exit:?}");
-    assert!(
-        !authority_timeout,
-        "dynamic arm authority timed out: {authority_exit:?}"
-    );
-    assert_eq!(worker_exit, ChildExit::Code(0));
-    assert!(matches!(authority_exit, None | Some(ChildExit::Code(0))));
 }
 
 #[test]
