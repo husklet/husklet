@@ -2127,6 +2127,9 @@ static uint32_t scalar_cmpxchg_fragment(uint32_t *host) {
     item.address_index = UINT8_MAX;
     hl_x86_emit_cmpxchg(host, &cursor, &item);
     CHECK(cursor == hl_x86_cmpxchg_words(&item));
+    /* The accumulator stays in its host register, so spill it to make the
+     * failed-compare pre-image observable. */
+    host[cursor++] = store_word(0, offsetof(hl_native_x86_64_cpu, registers));
     host[cursor++] = UINT32_C(0xd65f03c0);
     return cursor;
 }
@@ -2242,6 +2245,9 @@ static int dirty_journal_contract(void) {
         CHECK(execute_fragment(swap, swap_count, &cpu) == 0);
         CHECK(cpu.reason == 0);
         CHECK(high[0] == UINT64_C(0x1111111111111111)); /* no architectural mutation */
+        /* A failed compare still loads the accumulator with the pre-image; the
+         * fixture asserted only journal state, which reads as rax "unchanged". */
+        CHECK(cpu.registers[0] == UINT64_C(0x1111111111111111));
         CHECK(cpu.memory_first == UINT64_C(0x2000));    /* the high view was installed */
         CHECK(cpu.dirty_count == 1);                    /* the low interval was archived */
         CHECK(cpu.dirty_records[0][0] == UINT64_C(0x1000) &&
