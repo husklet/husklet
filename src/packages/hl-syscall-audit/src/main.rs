@@ -24,14 +24,22 @@ struct Audit {
     root: PathBuf,
 }
 
+/// Syscall numbers extracted from the retired C engine and checked in; refresh with `--regenerate`.
+const NUMBERS: &str = include_str!("../syscall-numbers.tsv");
+
 fn main() {
     let audit = Audit::discover(PathBuf::from("."));
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(index) = arguments.iter().position(|argument| argument == "--regenerate") {
+        audit.regenerate(arguments.get(index + 1).map(String::as_str));
+        return;
+    }
     let entries = audit.inventory().unwrap_or_else(|error| panic!("{error}"));
     let manifest = audit.render_manifest(&entries);
     let report = audit.render_report(&entries);
     let manifest_path = audit.output("syscall-inventory.tsv");
     let report_path = audit.output("SYSCALL_PARITY.md");
-    if std::env::args().any(|argument| argument == "--check") {
+    if arguments.iter().any(|argument| argument == "--check") {
         audit.check(&manifest_path, &manifest);
         audit.check(&report_path, &report);
     } else {
@@ -60,8 +68,6 @@ impl Audit {
     }
 
     fn inventory(&self) -> Result<Vec<Entry>, String> {
-        let c = fs::read_to_string(self.root.join("../engine/src/linux_abi/number.c"))
-            .map_err(|error| format!("read C number oracle: {error}"))?;
         let rust = fs::read_to_string(self.root.join("src/runtime/hl-linux/src/syscall/table.rs"))
             .map_err(|error| format!("read Rust router table: {error}"))?;
         let app = fs::read_to_string(
@@ -71,7 +77,7 @@ impl Audit {
         .map_err(|error| format!("read production inventory: {error}"))?;
         let router = self.rust_routes(&rust);
         let supported = self.supported_names(&app);
-        let mut entries = self.c_entries(&c)?;
+        let mut entries = Self::numbers(NUMBERS)?;
         for entry in &mut entries {
             entry.arm_category = Self::isa_status(entry.arm, &entry.name, &router.arm, &supported);
             entry.x86_category = Self::isa_status(entry.x86, &entry.name, &router.x86, &supported);
@@ -203,7 +209,60 @@ impl Audit {
             .collect()
     }
 
-    fn c_entries(&self, source: &str) -> Result<Vec<Entry>, String> {
+    /// Rewrites the checked-in number table from an explicitly supplied C oracle.
+    fn regenerate(&self, oracle: Option<&str>) {
+        let Some(oracle) = oracle else {
+            eprintln!("usage: hl-syscall-audit --regenerate <path to the retired engine linux_abi/number.c>");
+            std::process::exit(2);
+        };
+        let Ok(source) = fs::read_to_string(oracle) else {
+            eprintln!("oracle unavailable at {oracle}; the retired C engine checkout is optional");
+            std::process::exit(1);
+        };
+        let entries = Self::c_entries(&source).unwrap_or_else(|error| {
+            eprintln!("{error}");
+            std::process::exit(1);
+        });
+        let mut output = String::from("# arm64\tx86_64\tname\n");
+        for entry in entries {
+            output.push_str(&format!(
+                "{}\t{}\t{}\n",
+                entry.arm.expect("oracle arm number"),
+                entry.x86.expect("oracle x86 number"),
+                entry.name
+            ));
+        }
+        fs::write(self.numbers_path(), output).expect("write number table");
+    }
+
+    fn numbers_path(&self) -> PathBuf {
+        self.root.join("src/packages/hl-syscall-audit/syscall-numbers.tsv")
+    }
+
+    fn numbers(source: &str) -> Result<Vec<Entry>, String> {
+        let mut output = Vec::new();
+        for line in source.lines().filter(|line| !line.starts_with('#')) {
+            let columns = line.split('\t').collect::<Vec<_>>();
+            let [arm, x86, name] = columns.as_slice() else {
+                continue;
+            };
+            output.push(Entry {
+                arm: Some(arm.parse().map_err(|_| format!("invalid arm number: {arm}"))?),
+                x86: Some(x86.parse().map_err(|_| format!("invalid x86 number: {x86}"))?),
+                name: (*name).to_owned(),
+                category: "missing",
+                arm_category: "missing",
+                x86_category: "missing",
+            });
+        }
+        if output.is_empty() {
+            return Err("checked-in number table is empty".into());
+        }
+        output.sort_by_key(|entry| (entry.arm, entry.x86));
+        Ok(output)
+    }
+
+    fn c_entries(source: &str) -> Result<Vec<Entry>, String> {
         let mut output = Vec::new();
         let mut pending = None;
         for line in source.lines() {

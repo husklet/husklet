@@ -2,6 +2,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "src/native",
     "src/runtime/*",
     "src/packages/*",
     "src/containers/*",

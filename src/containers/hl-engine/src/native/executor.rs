@@ -20,10 +20,7 @@ fn projection_permissions(authority: Protection, mapped: Protection) -> Protecti
     })
 }
 
-#[allow(dead_code)]
-mod schema {
-    include!("../../../../native/cpu/rust/layout.rs");
-}
+use hl_native::cpu as schema;
 
 #[repr(C)]
 struct Handle {

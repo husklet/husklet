@@ -328,6 +328,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-client", "hl-images")
             | ("hl-client", "hl-log")
             | ("hl-container", "hl-engine")
+            | ("hl-engine", "hl-native")
             | ("hl-container", "hl-fs")
             | ("hl-container", "hl-images")
             | ("hl-container", "hl-log")

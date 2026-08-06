@@ -21,6 +21,7 @@ hl-ipc = { path = "../../runtime/hl-ipc" }
 hl-loader = { path = "../../runtime/hl-loader" }
 hl-linux = { path = "../../runtime/hl-linux" }
 hl-memory = { path = "../../runtime/hl-memory" }
+hl-native = { path = "../../native" }
 hl-provider = { path = "../../runtime/hl-provider" }
 hl-runtime = { path = "../../runtime/hl-runtime" }
 hl-sync = { path = "../../runtime/hl-sync" }
@@ -30,9 +31,6 @@ ring = "0.17.14"
 zeroize = "1.9"
 [dev-dependencies]
 hl-fake-host = { path = "../../runtime/hl-fake-host" }
-
-[build-dependencies]
-cc = "1.4.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,0 +1,17 @@
+[package]
+name = "hl-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "hl_native"
+path = "lib.rs"
+
+[build-dependencies]
+cc = "1.4.0"

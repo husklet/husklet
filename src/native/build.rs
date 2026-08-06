@@ -13,8 +13,8 @@ impl NativeInputs {
         inputs.visit(&root.join("src"), true);
         inputs.visit(&root.join("cache"), true);
         inputs.visit(&root.join("include"), false);
-        // cpu.h crosses the native boundary through this project-owned ABI header.
-        inputs.visit(Path::new("../../native/cpu/include"), false);
+        // cpu.h crosses the native boundary through this crate-owned ABI header.
+        inputs.visit(Path::new("cpu/include"), false);
         inputs.sources.sort();
         inputs.assembly.sort();
         inputs.dependencies.sort();
@@ -48,7 +48,7 @@ impl NativeInputs {
 }
 
 fn main() {
-    let root = Path::new("../../native/exec");
+    let root = Path::new("exec");
     let inputs = NativeInputs::discover(root);
     let mut build = cc::Build::new();
     let allocation_test = std::env::var_os("HL_NATIVE_ALLOCATION_TEST").is_some();
@@ -109,7 +109,7 @@ fn main() {
     // Directory watches discover newly added compilation units and headers.
     for directory in [root.join("src"), root.join("cache"), root.join("include")]
         .into_iter()
-        .chain([PathBuf::from("../../native/cpu/include")])
+        .chain([PathBuf::from("cpu/include")])
     {
         println!("cargo:rerun-if-changed={}", directory.display());
     }
