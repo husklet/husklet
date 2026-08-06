@@ -327,7 +327,11 @@ typedef struct hl_native_run_certificate {
  * `budget` is the maximum number of guest instructions that may be entered
  * during this activation. Zero is an immediate, precise yield. Requests whose
  * size includes source/projection may carry immutable architecture-owned batch
- * descriptors; older requests and other architectures ignore those fields. */
+ * descriptors; older requests and other architectures ignore those fields.
+ * Budgets above `HL_NATIVE_MAX_BUDGET` are rejected so generated accounting can
+ * test remaining budget by sign instead of an unsigned compare. */
+#define HL_NATIVE_MAX_BUDGET (INT64_MAX)
+
 typedef struct hl_native_run_request {
     uint32_t abi;
     uint32_t size;

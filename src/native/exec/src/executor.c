@@ -1514,7 +1514,8 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
         cpu->abi != HL_NATIVE_ABI || cpu->size < sizeof(*cpu) || cpu->reserved != 0 ||
         request->abi != HL_NATIVE_ABI || request->size < offsetof(hl_native_run_request, source) ||
         request->reserved != 0 || output->abi != HL_NATIVE_ABI || output->size < sizeof(*output) ||
-        cpu->architecture != request->architecture)
+        cpu->architecture != request->architecture ||
+        request->budget > HL_NATIVE_MAX_BUDGET)
         return HL_NATIVE_ARGUMENT;
     switch (cpu->architecture) {
         case HL_NATIVE_AARCH64:

@@ -401,10 +401,8 @@ static int relocation_span(void) {
     CHECK(source_words[0] != nop && source_words[1] == UINT32_C(0xb50001f0));
     CHECK(source_words[3] == UINT32_C(0xb4000070));
     CHECK(source_words[5] == UINT32_C(0xb5000170));
-    CHECK(source_words[8] == (UINT32_C(0xf100021f) | (23u << 10)));
-    CHECK(source_words[9] == UINT32_C(0x540000a3));
-    CHECK(source_words[11] == (UINT32_C(0xd1000210) | (23u << 10)));
-    CHECK(source_words[14] == UINT32_C(0xd51b4211));
+    CHECK(source_words[7] == (UINT32_C(0xd1000210) | (23u << 10)));
+    CHECK(source_words[8] == UINT32_C(0xb7f800f0));
     CHECK(source_words[15] == UINT32_C(0x14000001));
     CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
     CHECK(hl_native_cache_relocations_invalidate(fixture.cache, 0xb000, 0xb004) == HL_NATIVE_OK);
