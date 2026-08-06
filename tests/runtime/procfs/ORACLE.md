@@ -82,6 +82,29 @@ consumers remain unchanged in this prerequisite; the next consumer migration
 must accept and validate `ProcessIdentity` directly and must not re-resolve its
 PID, which would silently retarget an operation after slot reuse.
 
+That consumer migration is now complete for process identity. Every per-process
+`hl-vfs::procfs::Source` method receives `ProcessIdentity`; `open`, `read_link`,
+`kind`, `metadata`, `uts_namespace`, and `namespace_inode` resolve a numeric PID
+once and carry the resulting tuple through thread validation and source access.
+Dynamic `comm` and `oom_score_adj` open descriptions retain that tuple, so a
+reaped slot cannot retarget an already-open description after reuse. The
+`TaskProcfs` adapter converts the tuple directly to `ProcessId` and uses exact
+registry snapshot APIs rather than scanning numeric process snapshots.
+
+Namespace opens synthesize their OFD metadata from that already resolved tuple;
+they never call the public path-metadata operation and therefore cannot perform a
+second numeric lookup after PID reuse. UTS and network inode identities come from
+the tuple-scoped source views, while static namespace inodes are exposed only
+after the same tuple passes an exact process lookup. Cgroup membership similarly
+validates the pinned tuple immediately before consulting the immutable
+`CgroupView`. Its numeric PID is only an index into that snapshot and the rendered
+unified membership value (`0::/`) contains no process-generation state.
+
+Thread paths still validate a numeric TID within the already pinned process.
+Generation-bearing thread identity is explicitly deferred to the task/thread
+identity lane; this change makes no claim that TID reuse is pinned independently
+of process generation.
+
 ### Magic-link open lifetime
 
 The `/proc/[self|pid]/{root,cwd}` open and lifetime path was audited directly in

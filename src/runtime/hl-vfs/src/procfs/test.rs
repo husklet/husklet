@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use hl_descriptor::{OperationActor, OperationContext, SeekPosition};
@@ -12,69 +13,77 @@ struct Source {
     process: ProcessView,
     descriptors: Vec<DescriptorView>,
     oom_score_adj: Mutex<i16>,
+    resolutions: AtomicUsize,
+    generation: AtomicU16,
+}
+
+fn process_number(process: super::ProcessIdentity) -> u32 {
+    process.slot() + 1
 }
 
 impl super::Source for Source {
     fn resolve_process(&self, process: u32) -> Result<super::ProcessIdentity, Error> {
+        self.resolutions.fetch_add(1, Ordering::Relaxed);
         if process != self.process.process {
             return Err(Error::NotFound);
         }
-        super::ProcessIdentity::new(process.checked_sub(1).ok_or(Error::NotFound)?, 1).ok_or(Error::NotFound)
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed);
+        super::ProcessIdentity::new(process.checked_sub(1).ok_or(Error::NotFound)?, generation).ok_or(Error::NotFound)
     }
 
     fn processes(&self) -> Result<Vec<u32>, Error> {
         Ok(vec![self.process.process])
     }
 
-    fn thread(&self, process: u32, thread: u32) -> Result<(), Error> {
-        (process == self.process.process && matches!(thread, 7 | 9))
+    fn thread(&self, process: super::ProcessIdentity, thread: u32) -> Result<(), Error> {
+        (process_number(process) == self.process.process && matches!(thread, 7 | 9))
             .then_some(())
             .ok_or(Error::NotFound)
     }
 
-    fn threads(&self, process: u32) -> Result<Vec<u32>, Error> {
-        (process == self.process.process)
+    fn threads(&self, process: super::ProcessIdentity) -> Result<Vec<u32>, Error> {
+        (process_number(process) == self.process.process)
             .then(|| vec![7, 9])
             .ok_or(Error::NotFound)
     }
 
-    fn root(&self, process: u32) -> Result<Vec<u8>, Error> {
-        (process == self.process.process)
+    fn root(&self, process: super::ProcessIdentity) -> Result<Vec<u8>, Error> {
+        (process_number(process) == self.process.process)
             .then(|| b"/sandbox".to_vec())
             .ok_or(Error::NotFound)
     }
 
-    fn cwd(&self, process: u32) -> Result<Vec<u8>, Error> {
-        (process == self.process.process)
+    fn cwd(&self, process: super::ProcessIdentity) -> Result<Vec<u8>, Error> {
+        (process_number(process) == self.process.process)
             .then(|| b"/sandbox/work".to_vec())
             .ok_or(Error::NotFound)
     }
 
-    fn process(&self, process: u32) -> Result<ProcessView, Error> {
-        (process == self.process.process)
+    fn process(&self, process: super::ProcessIdentity) -> Result<ProcessView, Error> {
+        (process_number(process) == self.process.process)
             .then(|| self.process.clone())
             .ok_or(Error::NotFound)
     }
 
-    fn environment(&self, process: u32) -> Result<Vec<u8>, Error> {
-        (process == self.process.process)
+    fn environment(&self, process: super::ProcessIdentity) -> Result<Vec<u8>, Error> {
+        (process_number(process) == self.process.process)
             .then(|| b"HOME=/root\0TERM=xterm\0".to_vec())
             .ok_or(Error::NotFound)
     }
 
-    fn oom_score_adj(&self, process: u32) -> Result<i16, Error> {
-        (process == self.process.process)
+    fn oom_score_adj(&self, process: super::ProcessIdentity) -> Result<i16, Error> {
+        (process_number(process) == self.process.process)
             .then(|| *self.oom_score_adj.lock().unwrap())
             .ok_or(Error::NotFound)
     }
 
     fn write_oom_score_adj(
         &self,
-        process: u32,
+        process: super::ProcessIdentity,
         _actor: OperationActor,
         value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {
-        if process != self.process.process {
+        if process_number(process) != self.process.process {
             return Err(hl_descriptor::ObjectError::Retired);
         }
         *self.oom_score_adj.lock().unwrap() = value;
@@ -127,20 +136,20 @@ impl super::Source for Source {
         super::CgroupView::new(3, Some(2), Some(4096), 1024, vec![7], vec![7, 9]).ok_or(Error::Invalid)
     }
 
-    fn descriptors(&self, process: u32) -> Result<Vec<DescriptorView>, Error> {
-        (process == self.process.process)
+    fn descriptors(&self, process: super::ProcessIdentity) -> Result<Vec<DescriptorView>, Error> {
+        (process_number(process) == self.process.process)
             .then(|| self.descriptors.clone())
             .ok_or(Error::NotFound)
     }
 
-    fn mounts(&self, process: u32) -> Result<MountView, Error> {
-        (process == self.process.process)
+    fn mounts(&self, process: super::ProcessIdentity) -> Result<MountView, Error> {
+        (process_number(process) == self.process.process)
             .then(fixed_mounts)
             .ok_or(Error::NotFound)
     }
 
-    fn network(&self, process: u32) -> Result<NetworkView, Error> {
-        (process == self.process.process)
+    fn network(&self, process: super::ProcessIdentity) -> Result<NetworkView, Error> {
+        (process_number(process) == self.process.process)
             .then(|| NetworkView {
                 generation: 11,
                 internet: Vec::new(),
@@ -180,8 +189,8 @@ impl super::Source for Source {
             .ok_or(Error::NotFound)
     }
 
-    fn memory(&self, process: u32) -> Result<super::MemoryView, Error> {
-        (process == self.process.process)
+    fn memory(&self, process: super::ProcessIdentity) -> Result<super::MemoryView, Error> {
+        (process_number(process) == self.process.process)
             .then_some(super::MemoryView {
                 page_bytes: 4096,
                 total_pages: 16,
@@ -193,8 +202,8 @@ impl super::Source for Source {
             .ok_or(Error::NotFound)
     }
 
-    fn address_space(&self, process: u32) -> Result<AddressSpaceView, Error> {
-        (process == self.process.process)
+    fn address_space(&self, process: super::ProcessIdentity) -> Result<AddressSpaceView, Error> {
+        (process_number(process) == self.process.process)
             .then(|| {
                 AddressSpaceView::new(
                     9,
@@ -217,8 +226,8 @@ impl super::Source for Source {
             .ok_or(Error::NotFound)
     }
 
-    fn uts(&self, process: u32) -> Result<super::UtsView, Error> {
-        (process == self.process.process)
+    fn uts(&self, process: super::ProcessIdentity) -> Result<super::UtsView, Error> {
+        (process_number(process) == self.process.process)
             .then(|| super::UtsView {
                 namespace: 73,
                 hostname: b"guest".to_vec(),
@@ -356,7 +365,70 @@ fn fixed_source() -> Source {
             target: Some(b"/data/file".to_vec()),
         }],
         oom_score_adj: Mutex::new(0),
+        resolutions: AtomicUsize::new(0),
+        generation: AtomicU16::new(1),
     }
+}
+
+fn assert_one(source: &Source, operation: impl FnOnce() -> Result<(), Error>) {
+    let before = source.resolutions.load(Ordering::Relaxed);
+    operation().unwrap();
+    assert_eq!(source.resolutions.load(Ordering::Relaxed), before + 1);
+}
+
+#[test]
+fn per_process_operations_resolve_numeric_pid_once() {
+    let source = Arc::new(fixed_source());
+    let procfs = Procfs::new(Arc::clone(&source) as Arc<dyn super::Source>);
+    let operations: &[&dyn Fn() -> Result<(), Error>] = &[
+        &|| procfs.open(b"/proc/7/status", 7, OpenIntent::default()).map(|_| ()),
+        &|| procfs.read_link(b"/proc/7/cwd", 7).map(|_| ()),
+        &|| procfs.kind(b"/proc/7/status", 7).map(|_| ()),
+        &|| procfs.metadata(b"/proc/7/status", 7).map(|_| ()),
+        &|| procfs.uts_namespace(b"/proc/7/ns/uts", 7).map(|_| ()),
+        &|| procfs.namespace_inode(b"/proc/7/ns/uts", 7).map(|_| ()),
+    ];
+    for operation in operations {
+        let before = source.resolutions.load(Ordering::Relaxed);
+        operation().unwrap();
+        assert_eq!(source.resolutions.load(Ordering::Relaxed), before + 1);
+    }
+}
+
+#[test]
+fn namespaces_resolve_once() {
+    let source = Arc::new(fixed_source());
+    let procfs = Procfs::new(Arc::clone(&source) as Arc<dyn super::Source>);
+    let paths: &[&[u8]] = &[
+        b"/proc/7/ns/uts",
+        b"/proc/7/ns/net",
+        b"/proc/7/ns/cgroup",
+        b"/proc/7/ns/ipc",
+        b"/proc/7/ns/mnt",
+        b"/proc/7/ns/pid",
+        b"/proc/7/ns/time",
+        b"/proc/7/ns/user",
+    ];
+    for path in paths {
+        // Every resolution returns a fresh generation, deterministically modeling
+        // PID reuse. Each operation must consume only its first pinned identity.
+        assert_one(&source, || procfs.open(path, 7, OpenIntent::default()).map(|_| ()));
+        assert_one(&source, || procfs.read_link(path, 7).map(|_| ()));
+        assert_one(&source, || procfs.kind(path, 7).map(|_| ()));
+        assert_one(&source, || procfs.metadata(path, 7).map(|_| ()));
+        assert_one(&source, || procfs.namespace_inode(path, 7).map(|_| ()));
+    }
+}
+
+#[test]
+fn membership_resolves_once() {
+    let source = Arc::new(fixed_source());
+    let procfs = Procfs::new(Arc::clone(&source) as Arc<dyn super::Source>);
+    assert_one(&source, || {
+        procfs.open(b"/proc/7/cgroup", 7, OpenIntent::default()).map(|_| ())
+    });
+    assert_one(&source, || procfs.kind(b"/proc/7/cgroup", 7).map(|_| ()));
+    assert_one(&source, || procfs.metadata(b"/proc/7/cgroup", 7).map(|_| ()));
 }
 
 #[test]

@@ -124,7 +124,10 @@ impl Procfs {
         let Some((process, thread, leaf)) = model::Node::parse(path, current) else {
             return Ok(None);
         };
-        self.validate_thread(process, thread)?;
+        let identity = (process != 0)
+            .then(|| self.source.resolve_process(process))
+            .transpose()?;
+        self.validate_thread(identity, thread)?;
         if intent.bits() & OpenIntent::WRITE != 0
             && !matches!(
                 leaf,
@@ -143,7 +146,7 @@ impl Procfs {
             }
             model::Node::Cgroup(name) => self.snapshot_file(0, leaf, self.source.cgroup()?.render(name)),
             model::Node::Membership => {
-                let bytes = self.source.cgroup()?.membership(process).ok_or(Error::NotFound)?;
+                let bytes = self.membership(process, identity.ok_or(Error::NotFound)?)?;
                 self.snapshot_file(process, leaf, bytes)
             }
             model::Node::ProcRoot => {
@@ -176,7 +179,7 @@ impl Procfs {
                 ))))
             }
             model::Node::ProcessDirectory | model::Node::ThreadDirectory => {
-                self.source.process(process)?;
+                self.source.process(identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     leaf.entries()
                         .into_iter()
@@ -187,14 +190,14 @@ impl Procfs {
             }
             model::Node::TaskDirectory => Ok(Some(Arc::new(file::SnapshotDirectory::names(
                 self.source
-                    .threads(process)?
+                    .threads(identity.ok_or(Error::NotFound)?)?
                     .into_iter()
                     .map(|thread| thread.to_string().into_bytes()),
                 leaf.metadata(process, 0),
             )))),
             model::Node::NamespaceDirectory => {
-                self.source.uts(process)?;
-                self.source.network(process)?;
+                self.source.uts(identity.ok_or(Error::NotFound)?)?;
+                self.source.network(identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     ["uts", "net", "cgroup", "ipc", "mnt", "pid", "time", "user"]
                         .into_iter()
@@ -203,18 +206,18 @@ impl Procfs {
                 ))))
             }
             model::Node::NetworkDirectory => {
-                let network = self.source.network(process)?;
+                let network = self.source.network(identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     network.entries().map(|(name, kind)| (name.to_vec(), kind)),
                     leaf.metadata(process, 0),
                 ))))
             }
             model::Node::NetworkFile(name) => {
-                let bytes = self.source.network(process)?.bytes(name);
+                let bytes = self.source.network(identity.ok_or(Error::NotFound)?)?.bytes(name);
                 self.snapshot_file(process, leaf, bytes)
             }
             model::Node::InterfaceRoot => {
-                let network = self.source.network(process)?;
+                let network = self.source.network(identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     network.interfaces.into_iter().map(|interface| interface.name),
                     leaf.metadata(process, 0),
@@ -222,7 +225,10 @@ impl Procfs {
             }
             model::Node::InterfaceDirectory => {
                 let name = model::Node::interface_name(path).ok_or(Error::NotFound)?;
-                self.source.network(process)?.interface(name).ok_or(Error::NotFound)?;
+                self.source
+                    .network(identity.ok_or(Error::NotFound)?)?
+                    .interface(name)
+                    .ok_or(Error::NotFound)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::entries(
                     [
                         (b"address".to_vec(), 8),
@@ -238,7 +244,10 @@ impl Procfs {
             }
             model::Node::StatisticsDirectory => {
                 let name = model::Node::interface_name(path).ok_or(Error::NotFound)?;
-                self.source.network(process)?.interface(name).ok_or(Error::NotFound)?;
+                self.source
+                    .network(identity.ok_or(Error::NotFound)?)?
+                    .interface(name)
+                    .ok_or(Error::NotFound)?;
                 Ok(Some(Arc::new(file::SnapshotDirectory::names(
                     [b"rx_bytes".to_vec(), b"tx_packets".to_vec()],
                     leaf.metadata(process, 0),
@@ -246,25 +255,45 @@ impl Procfs {
             }
             model::Node::InterfaceFile(attribute) => {
                 let name = model::Node::interface_name(path).ok_or(Error::NotFound)?;
-                let network = self.source.network(process)?;
+                let network = self.source.network(identity.ok_or(Error::NotFound)?)?;
                 let bytes = network.interface(name).ok_or(Error::NotFound)?.attribute(attribute);
                 self.snapshot_file(process, leaf, bytes)
             }
             model::Node::Status => {
-                let bytes = self.source.process(process)?.status();
+                let bytes = self.source.process(identity.ok_or(Error::NotFound)?)?.status();
                 let metadata = leaf.metadata(process, bytes.len() as u64);
                 Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
             }
-            model::Node::ProcessStat => self.snapshot_file(process, leaf, self.source.stat(process)?.bytes()),
-            model::Node::Statm => self.snapshot_file(process, leaf, self.source.memory(process)?.statm()),
+            model::Node::ProcessStat => self.snapshot_file(
+                process,
+                leaf,
+                self.source.stat(identity.ok_or(Error::NotFound)?)?.bytes(),
+            ),
+            model::Node::Statm => self.snapshot_file(
+                process,
+                leaf,
+                self.source.memory(identity.ok_or(Error::NotFound)?)?.statm(),
+            ),
             model::Node::Io => self.snapshot_file(process, leaf, PROCESS_IO.to_vec()),
-            model::Node::Maps => self.snapshot_file(process, leaf, self.source.address_space(process)?.maps(false)),
-            model::Node::NumaMaps => self.snapshot_file(process, leaf, self.source.address_space(process)?.numa()),
-            model::Node::SmapsRollup => self.snapshot_file(process, leaf, self.source.address_space(process)?.rollup()),
+            model::Node::Maps => self.snapshot_file(
+                process,
+                leaf,
+                self.source.address_space(identity.ok_or(Error::NotFound)?)?.maps(false),
+            ),
+            model::Node::NumaMaps => self.snapshot_file(
+                process,
+                leaf,
+                self.source.address_space(identity.ok_or(Error::NotFound)?)?.numa(),
+            ),
+            model::Node::SmapsRollup => self.snapshot_file(
+                process,
+                leaf,
+                self.source.address_space(identity.ok_or(Error::NotFound)?)?.rollup(),
+            ),
             model::Node::MapFiles => {
                 let entries = self
                     .source
-                    .address_space(process)?
+                    .address_space(identity.ok_or(Error::NotFound)?)?
                     .regions
                     .into_iter()
                     .filter(|region| region.inode != 0 && region.path.is_some())
@@ -275,32 +304,55 @@ impl Procfs {
                 ))))
             }
             model::Node::MapFile(_, _) => Ok(None),
-            model::Node::Smaps => self.snapshot_file(process, leaf, self.source.address_space(process)?.maps(true)),
+            model::Node::Smaps => self.snapshot_file(
+                process,
+                leaf,
+                self.source.address_space(identity.ok_or(Error::NotFound)?)?.maps(true),
+            ),
             model::Node::Comm => {
-                let bytes = self.source.comm(process, thread)?;
+                let identity = identity.ok_or(Error::NotFound)?;
+                let bytes = self.source.comm(identity, thread)?;
                 Ok(Some(Arc::new(file::CommFile::new(
                     Arc::clone(&self.source),
-                    process,
+                    identity,
                     thread,
                     leaf.metadata(process, bytes.len() as u64),
                 ))))
             }
-            model::Node::Cmdline => self.snapshot_file(process, leaf, self.source.cmdline(process)?),
-            model::Node::Environ => self.snapshot_file(process, leaf, self.source.environment(process)?),
+            model::Node::Cmdline => {
+                self.snapshot_file(process, leaf, self.source.cmdline(identity.ok_or(Error::NotFound)?)?)
+            }
+            model::Node::Environ => self.snapshot_file(
+                process,
+                leaf,
+                self.source.environment(identity.ok_or(Error::NotFound)?)?,
+            ),
             model::Node::OomScore | model::Node::OomAdj => self.snapshot_file(process, leaf, b"0\n".to_vec()),
             model::Node::OomScoreAdj => Ok(Some(Arc::new(file::OomFile::new(
                 Arc::clone(&self.source),
-                process,
+                identity.ok_or(Error::NotFound)?,
                 leaf.metadata(process, 0),
             )))),
             model::Node::Limits => {
-                let bytes = self.source.process(process)?.limits();
+                let bytes = self.source.process(identity.ok_or(Error::NotFound)?)?.limits();
                 let metadata = leaf.metadata(process, bytes.len() as u64);
                 Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
             }
-            model::Node::Mounts => self.snapshot_file(process, leaf, self.source.mounts(process)?.mounts_bytes()),
-            model::Node::MountInfo => self.snapshot_file(process, leaf, self.source.mounts(process)?.bytes()),
-            model::Node::MountStats => self.snapshot_file(process, leaf, self.source.mounts(process)?.stats()),
+            model::Node::Mounts => self.snapshot_file(
+                process,
+                leaf,
+                self.source.mounts(identity.ok_or(Error::NotFound)?)?.mounts_bytes(),
+            ),
+            model::Node::MountInfo => self.snapshot_file(
+                process,
+                leaf,
+                self.source.mounts(identity.ok_or(Error::NotFound)?)?.bytes(),
+            ),
+            model::Node::MountStats => self.snapshot_file(
+                process,
+                leaf,
+                self.source.mounts(identity.ok_or(Error::NotFound)?)?.stats(),
+            ),
             model::Node::Root | model::Node::Cwd | model::Node::UtsNamespace => Ok(None),
             model::Node::NetworkNamespace
             | model::Node::CgroupNamespace
@@ -309,11 +361,11 @@ impl Procfs {
             | model::Node::PidNamespace
             | model::Node::TimeNamespace
             | model::Node::UserNamespace => {
-                let metadata = self.metadata(path, current)?.ok_or(Error::NotFound)?;
+                let metadata = self.namespace_metadata(process, leaf, identity.ok_or(Error::NotFound)?)?;
                 Ok(Some(Arc::new(file::SnapshotFile::new(Vec::new(), metadata))))
             }
             model::Node::Fd | model::Node::FdInfo => {
-                let descriptors = self.source.descriptors(process)?;
+                let descriptors = self.source.descriptors(identity.ok_or(Error::NotFound)?)?;
                 let file_type = if leaf == model::Node::Fd { 10 } else { 8 };
                 Ok(Some(Arc::new(file::SnapshotDirectory::new(
                     descriptors.into_iter().map(|descriptor| descriptor.number),
@@ -324,7 +376,7 @@ impl Procfs {
             model::Node::FdInfoFile(number) => {
                 let descriptor = self
                     .source
-                    .descriptors(process)?
+                    .descriptors(identity.ok_or(Error::NotFound)?)?
                     .into_iter()
                     .find(|descriptor| descriptor.number == number)
                     .ok_or(Error::NotFound)?;
@@ -437,7 +489,7 @@ impl Procfs {
             model::Node::Filesystems => self.snapshot_file(0, leaf, FILESYSTEMS.to_vec()),
             model::Node::Version => self.snapshot_file(0, leaf, self.source.cpu()?.version()),
             model::Node::Hostname | model::Node::Domainname => {
-                let uts = self.source.uts(current)?;
+                let uts = self.source.uts(self.source.resolve_process(current)?)?;
                 Ok(Some(Arc::new(file::UtsFile::new(
                     Arc::clone(&self.source),
                     uts.namespace,
@@ -477,43 +529,45 @@ impl Procfs {
     pub fn read_link_for(&self, path: &[u8], current: u32, thread: u32) -> Result<Option<Vec<u8>>, Error> {
         let path = path.strip_prefix(b"/").unwrap_or(path);
         if path == b"proc/self" {
-            self.source.process(current)?;
+            let identity = self.source.resolve_process(current)?;
+            self.source.process(identity)?;
             return Ok(Some(current.to_string().into_bytes()));
         }
         if path == b"proc/thread-self" {
-            self.source.thread(current, thread)?;
+            let identity = self.source.resolve_process(current)?;
+            self.source.thread(identity, thread)?;
             return Ok(Some(format!("{current}/task/{thread}").into_bytes()));
         }
         if let Some((process, thread, model::Node::Root)) = model::Node::parse(path, current) {
-            self.validate_thread(process, thread)?;
-            return self.source.root(process).map(Some);
+            let identity = self.resolve_path_process(process, thread)?;
+            return self.source.root(identity).map(Some);
         }
         if let Some((process, thread, model::Node::Cwd)) = model::Node::parse(path, current) {
-            self.validate_thread(process, thread)?;
-            return self.source.cwd(process).map(Some);
+            let identity = self.resolve_path_process(process, thread)?;
+            return self.source.cwd(identity).map(Some);
         }
         if let Some((process, thread, model::Node::UtsNamespace)) = model::Node::parse(path, current) {
-            self.validate_thread(process, thread)?;
-            let namespace = self.source.uts(process)?.namespace;
+            let identity = self.resolve_path_process(process, thread)?;
+            let namespace = self.source.uts(identity)?.namespace;
             return Ok(Some(format!("uts:[{namespace}]").into_bytes()));
         }
         if let Some((process, thread, model::Node::NetworkNamespace)) = model::Node::parse(path, current) {
-            self.validate_thread(process, thread)?;
-            let namespace = self.source.network(process)?.generation;
+            let identity = self.resolve_path_process(process, thread)?;
+            let namespace = self.source.network(identity)?.generation;
             return Ok(Some(format!("net:[{namespace}]").into_bytes()));
         }
         if let Some((process, thread, node)) = model::Node::parse(path, current)
             && let Some((name, inode)) = node.static_namespace()
         {
-            self.validate_thread(process, thread)?;
-            self.source.process(process)?;
+            let identity = self.resolve_path_process(process, thread)?;
+            self.source.process(identity)?;
             return Ok(Some(format!("{name}:[{inode}]").into_bytes()));
         }
         if let Some((process, thread, model::Node::MapFile(start, end))) = model::Node::parse(path, current) {
-            self.validate_thread(process, thread)?;
+            let identity = self.resolve_path_process(process, thread)?;
             let target = self
                 .source
-                .address_space(process)?
+                .address_space(identity)?
                 .regions
                 .into_iter()
                 .find(|region| region.start == start && region.end == end && region.inode != 0)
@@ -524,10 +578,10 @@ impl Procfs {
         let Some((process, thread, model::Node::FdLink(number))) = model::Node::parse(path, current) else {
             return Ok(None);
         };
-        self.validate_thread(process, thread)?;
+        let identity = self.resolve_path_process(process, thread)?;
         let target = self
             .source
-            .descriptors(process)?
+            .descriptors(identity)?
             .into_iter()
             .find(|descriptor| descriptor.number == number)
             .ok_or(Error::NotFound)?
@@ -539,13 +593,18 @@ impl Procfs {
     pub fn kind(&self, path: &[u8], current: u32) -> Result<Option<NodeKind>, Error> {
         let normalized = path.strip_prefix(b"/").unwrap_or(path);
         if normalized == b"proc/self" || normalized == b"proc/thread-self" {
-            self.source.process(current)?;
+            let identity = self.source.resolve_process(current)?;
+            self.source.process(identity)?;
             return Ok(Some(NodeKind::Link));
         }
         let Some((process, thread, node)) = model::Node::parse(path, current) else {
             return Ok(None);
         };
-        self.validate_thread(process, thread)?;
+        let identity = (process != 0)
+            .then(|| self.source.resolve_process(process))
+            .transpose()?;
+        self.validate_thread(identity, thread)?;
+        let process_identity = || identity.ok_or(Error::NotFound);
         let kind = match node {
             model::Node::CgroupRoot => {
                 self.source.cgroup()?;
@@ -553,7 +612,7 @@ impl Procfs {
             }
             model::Node::Cgroup(_) => NodeKind::Regular,
             model::Node::Membership => {
-                self.source.cgroup()?.membership(process).ok_or(Error::NotFound)?;
+                self.membership(process, process_identity()?)?;
                 NodeKind::Regular
             }
             model::Node::ProcRoot => {
@@ -561,28 +620,28 @@ impl Procfs {
                 NodeKind::Directory
             }
             model::Node::ProcessDirectory | model::Node::ThreadDirectory => {
-                self.source.process(process)?;
+                self.source.process(process_identity()?)?;
                 NodeKind::Directory
             }
             model::Node::TaskDirectory => {
-                self.source.threads(process)?;
+                self.source.threads(process_identity()?)?;
                 NodeKind::Directory
             }
             model::Node::NamespaceDirectory => {
-                self.source.uts(process)?;
-                self.source.network(process)?;
+                self.source.uts(process_identity()?)?;
+                self.source.network(process_identity()?)?;
                 NodeKind::Directory
             }
             model::Node::NetworkDirectory => {
-                self.source.network(process)?;
+                self.source.network(process_identity()?)?;
                 NodeKind::Directory
             }
             model::Node::NetworkFile(_) | model::Node::InterfaceFile(_) => {
-                self.source.network(process)?;
+                self.source.network(process_identity()?)?;
                 NodeKind::Regular
             }
             model::Node::InterfaceRoot | model::Node::InterfaceDirectory | model::Node::StatisticsDirectory => {
-                let network = self.source.network(process)?;
+                let network = self.source.network(process_identity()?)?;
                 if node != model::Node::InterfaceRoot {
                     network
                         .interface(model::Node::interface_name(path).ok_or(Error::NotFound)?)
@@ -610,7 +669,7 @@ impl Procfs {
             | model::Node::Mounts
             | model::Node::MountInfo
             | model::Node::MountStats => {
-                self.source.process(process)?;
+                self.source.process(process_identity()?)?;
                 if matches!(
                     node,
                     model::Node::Statm
@@ -621,13 +680,13 @@ impl Procfs {
                         | model::Node::MapFile(_, _)
                         | model::Node::Smaps
                 ) {
-                    self.source.memory(process)?;
+                    self.source.memory(process_identity()?)?;
                 }
                 if matches!(
                     node,
                     model::Node::Mounts | model::Node::MountInfo | model::Node::MountStats
                 ) {
-                    self.source.mounts(process)?;
+                    self.source.mounts(process_identity()?)?;
                 }
                 if node == model::Node::MapFiles {
                     NodeKind::Directory
@@ -638,11 +697,11 @@ impl Procfs {
                 }
             }
             model::Node::Root => {
-                self.source.root(process)?;
+                self.source.root(process_identity()?)?;
                 NodeKind::Link
             }
             model::Node::Cwd => {
-                self.source.cwd(process)?;
+                self.source.cwd(process_identity()?)?;
                 NodeKind::Link
             }
             model::Node::UtsNamespace
@@ -652,20 +711,20 @@ impl Procfs {
             | model::Node::PidNamespace
             | model::Node::TimeNamespace
             | model::Node::UserNamespace => {
-                self.source.uts(process)?;
+                self.source.uts(process_identity()?)?;
                 NodeKind::Link
             }
             model::Node::NetworkNamespace => {
-                self.source.network(process)?;
+                self.source.network(process_identity()?)?;
                 NodeKind::Link
             }
             model::Node::Fd | model::Node::FdInfo => {
-                self.source.descriptors(process)?;
+                self.source.descriptors(process_identity()?)?;
                 NodeKind::Directory
             }
             model::Node::FdLink(number) => {
                 self.source
-                    .descriptors(process)?
+                    .descriptors(process_identity()?)?
                     .into_iter()
                     .find(|descriptor| descriptor.number == number)
                     .ok_or(Error::NotFound)?;
@@ -673,7 +732,7 @@ impl Procfs {
             }
             model::Node::FdInfoFile(number) => {
                 self.source
-                    .descriptors(process)?
+                    .descriptors(process_identity()?)?
                     .into_iter()
                     .find(|descriptor| descriptor.number == number)
                     .ok_or(Error::NotFound)?;
@@ -738,7 +797,7 @@ impl Procfs {
             | model::Node::Filesystems
             | model::Node::Version => NodeKind::Regular,
             model::Node::Hostname | model::Node::Domainname => {
-                self.source.uts(current)?;
+                self.source.uts(self.source.resolve_process(current)?)?;
                 NodeKind::Regular
             }
         };
@@ -749,7 +808,8 @@ impl Procfs {
     pub fn metadata(&self, path: &[u8], current: u32) -> Result<Option<OfdMetadata>, Error> {
         let normalized = path.strip_prefix(b"/").unwrap_or(path);
         if normalized == b"proc/self" || normalized == b"proc/thread-self" {
-            self.source.process(current)?;
+            let process = self.source.resolve_process(current)?;
+            self.source.process(process)?;
             let identity = if normalized == b"proc/self" {
                 0x5000_0001
             } else {
@@ -760,69 +820,73 @@ impl Procfs {
         let Some((process, thread, node)) = model::Node::parse(path, current) else {
             return Ok(None);
         };
-        self.validate_thread(process, thread)?;
+        let identity = (process != 0)
+            .then(|| self.source.resolve_process(process))
+            .transpose()?;
+        self.validate_thread(identity, thread)?;
+        let process_identity = || identity.ok_or(Error::NotFound);
         let size = match node {
             model::Node::CgroupRoot => {
                 self.source.cgroup()?;
                 0
             }
             model::Node::Cgroup(name) => self.source.cgroup()?.render(name).len() as u64,
-            model::Node::Membership => self.source.cgroup()?.membership(process).ok_or(Error::NotFound)?.len() as u64,
+            model::Node::Membership => self.membership(process, process_identity()?)?.len() as u64,
             model::Node::ProcRoot => {
                 self.source.processes()?;
                 0
             }
             model::Node::ProcessDirectory | model::Node::ThreadDirectory => {
-                self.source.process(process)?;
+                self.source.process(process_identity()?)?;
                 0
             }
             model::Node::TaskDirectory => {
-                self.source.threads(process)?;
+                self.source.threads(process_identity()?)?;
                 0
             }
             model::Node::NamespaceDirectory => {
-                self.source.uts(process)?;
-                self.source.network(process)?;
+                self.source.uts(process_identity()?)?;
+                self.source.network(process_identity()?)?;
                 0
             }
             model::Node::NetworkDirectory => {
-                self.source.network(process)?;
+                self.source.network(process_identity()?)?;
                 0
             }
-            model::Node::NetworkFile(name) => self.source.network(process)?.bytes(name).len() as u64,
+            model::Node::NetworkFile(name) => self.source.network(process_identity()?)?.bytes(name).len() as u64,
             model::Node::InterfaceRoot => {
-                self.source.network(process)?;
+                self.source.network(process_identity()?)?;
                 0
             }
             model::Node::InterfaceDirectory | model::Node::StatisticsDirectory => {
-                let network = self.source.network(process)?;
+                let network = self.source.network(process_identity()?)?;
                 network
                     .interface(model::Node::interface_name(path).ok_or(Error::NotFound)?)
                     .ok_or(Error::NotFound)?;
                 0
             }
             model::Node::InterfaceFile(attribute) => {
-                let network = self.source.network(process)?;
+                let network = self.source.network(process_identity()?)?;
                 network
                     .interface(model::Node::interface_name(path).ok_or(Error::NotFound)?)
                     .ok_or(Error::NotFound)?
                     .attribute(attribute)
                     .len() as u64
             }
-            model::Node::Status => self.source.process(process)?.status().len() as u64,
-            model::Node::ProcessStat => self.source.stat(process)?.bytes().len() as u64,
-            model::Node::Statm => self.source.memory(process)?.statm().len() as u64,
+            model::Node::Status => self.source.process(process_identity()?)?.status().len() as u64,
+            model::Node::ProcessStat => self.source.stat(process_identity()?)?.bytes().len() as u64,
+            model::Node::Statm => self.source.memory(process_identity()?)?.statm().len() as u64,
             model::Node::Io => PROCESS_IO.len() as u64,
-            model::Node::Maps => self.source.address_space(process)?.maps(false).len() as u64,
-            model::Node::NumaMaps => self.source.address_space(process)?.numa().len() as u64,
-            model::Node::SmapsRollup => self.source.address_space(process)?.rollup().len() as u64,
+            model::Node::Maps => self.source.address_space(process_identity()?)?.maps(false).len() as u64,
+            model::Node::NumaMaps => self.source.address_space(process_identity()?)?.numa().len() as u64,
+            model::Node::SmapsRollup => self.source.address_space(process_identity()?)?.rollup().len() as u64,
             model::Node::MapFiles => {
-                self.source.address_space(process)?;
+                self.source.address_space(process_identity()?)?;
                 0
             }
             model::Node::MapFile(start, end) => {
                 self.source
-                    .address_space(process)?
+                    .address_space(process_identity()?)?
                     .regions
                     .into_iter()
                     .find(|region| {
@@ -831,22 +895,22 @@ impl Procfs {
                     .ok_or(Error::NotFound)?;
                 0
             }
-            model::Node::Smaps => self.source.address_space(process)?.maps(true).len() as u64,
-            model::Node::Limits => self.source.process(process)?.limits().len() as u64,
-            model::Node::Mounts => self.source.mounts(process)?.mounts_bytes().len() as u64,
-            model::Node::MountInfo => self.source.mounts(process)?.bytes().len() as u64,
-            model::Node::MountStats => self.source.mounts(process)?.stats().len() as u64,
-            model::Node::Comm => self.source.process(process)?.comm().len() as u64,
-            model::Node::Cmdline => self.source.cmdline(process)?.len() as u64,
-            model::Node::Environ => self.source.environment(process)?.len() as u64,
+            model::Node::Smaps => self.source.address_space(process_identity()?)?.maps(true).len() as u64,
+            model::Node::Limits => self.source.process(process_identity()?)?.limits().len() as u64,
+            model::Node::Mounts => self.source.mounts(process_identity()?)?.mounts_bytes().len() as u64,
+            model::Node::MountInfo => self.source.mounts(process_identity()?)?.bytes().len() as u64,
+            model::Node::MountStats => self.source.mounts(process_identity()?)?.stats().len() as u64,
+            model::Node::Comm => self.source.process(process_identity()?)?.comm().len() as u64,
+            model::Node::Cmdline => self.source.cmdline(process_identity()?)?.len() as u64,
+            model::Node::Environ => self.source.environment(process_identity()?)?.len() as u64,
             model::Node::OomScore | model::Node::OomAdj => 2,
-            model::Node::OomScoreAdj => format!("{}\n", self.source.oom_score_adj(process)?).len() as u64,
+            model::Node::OomScoreAdj => format!("{}\n", self.source.oom_score_adj(process_identity()?)?).len() as u64,
             model::Node::Root => {
-                self.source.root(process)?;
+                self.source.root(process_identity()?)?;
                 0
             }
             model::Node::Cwd => {
-                self.source.cwd(process)?;
+                self.source.cwd(process_identity()?)?;
                 0
             }
             model::Node::UtsNamespace
@@ -856,20 +920,20 @@ impl Procfs {
             | model::Node::PidNamespace
             | model::Node::TimeNamespace
             | model::Node::UserNamespace => {
-                self.source.uts(process)?;
+                self.source.uts(process_identity()?)?;
                 0
             }
             model::Node::NetworkNamespace => {
-                self.source.network(process)?;
+                self.source.network(process_identity()?)?;
                 0
             }
             model::Node::Fd | model::Node::FdInfo => {
-                self.source.descriptors(process)?;
+                self.source.descriptors(process_identity()?)?;
                 0
             }
             model::Node::FdLink(number) => {
                 self.source
-                    .descriptors(process)?
+                    .descriptors(process_identity()?)?
                     .into_iter()
                     .find(|descriptor| descriptor.number == number)
                     .ok_or(Error::NotFound)?;
@@ -877,7 +941,7 @@ impl Procfs {
             }
             model::Node::FdInfoFile(number) => self
                 .source
-                .descriptors(process)?
+                .descriptors(process_identity()?)?
                 .into_iter()
                 .find(|descriptor| descriptor.number == number)
                 .ok_or(Error::NotFound)?
@@ -963,7 +1027,7 @@ impl Procfs {
             model::Node::Filesystems => FILESYSTEMS.len() as u64,
             model::Node::Version => self.source.cpu()?.version().len() as u64,
             model::Node::Hostname | model::Node::Domainname => {
-                let uts = self.source.uts(current)?;
+                let uts = self.source.uts(self.source.resolve_process(current)?)?;
                 (1 + if node == model::Node::Hostname {
                     uts.hostname.len()
                 } else {
@@ -973,18 +1037,56 @@ impl Procfs {
         };
         let mut metadata = node.metadata(process, size);
         if node == model::Node::UtsNamespace {
-            metadata.inode = self.source.uts(process)?.namespace;
+            metadata.inode = self.source.uts(process_identity()?)?.namespace;
         } else if node == model::Node::NetworkNamespace {
-            metadata.inode = self.source.network(process)?.generation;
+            metadata.inode = self.source.network(process_identity()?)?.generation;
         } else if let Some((_, inode)) = node.static_namespace() {
-            self.source.process(process)?;
+            self.source.process(process_identity()?)?;
             metadata.inode = inode;
         }
         Ok(Some(metadata))
     }
 
-    fn validate_thread(&self, process: u32, thread: Option<u32>) -> Result<(), Error> {
-        thread.map_or(Ok(()), |thread| self.source.thread(process, thread))
+    fn validate_thread(&self, process: Option<model::ProcessIdentity>, thread: Option<u32>) -> Result<(), Error> {
+        match (process, thread) {
+            (_, None) => Ok(()),
+            (Some(process), Some(thread)) => self.source.thread(process, thread),
+            (None, Some(_)) => Err(Error::NotFound),
+        }
+    }
+
+    fn membership(&self, process: u32, identity: model::ProcessIdentity) -> Result<Vec<u8>, Error> {
+        // Pin the numeric projection to the resolved task generation before reading
+        // the immutable cgroup snapshot. Unified membership bytes contain no task
+        // generation, so the number is only an index after this liveness check.
+        self.source.process(identity)?;
+        self.source.cgroup()?.membership(process).ok_or(Error::NotFound)
+    }
+
+    fn namespace_metadata(
+        &self,
+        process: u32,
+        node: model::Node,
+        identity: model::ProcessIdentity,
+    ) -> Result<OfdMetadata, Error> {
+        let mut metadata = node.metadata(process, 0);
+        if node == model::Node::UtsNamespace {
+            metadata.inode = self.source.uts(identity)?.namespace;
+        } else if node == model::Node::NetworkNamespace {
+            metadata.inode = self.source.network(identity)?.generation;
+        } else if let Some((_, inode)) = node.static_namespace() {
+            self.source.process(identity)?;
+            metadata.inode = inode;
+        } else {
+            return Err(Error::NotFound);
+        }
+        Ok(metadata)
+    }
+
+    fn resolve_path_process(&self, process: u32, thread: Option<u32>) -> Result<model::ProcessIdentity, Error> {
+        let identity = self.source.resolve_process(process)?;
+        self.validate_thread(Some(identity), thread)?;
+        Ok(identity)
     }
 
     /// Resolves one live UTS namespace magic link to its stable task-owned identity.
@@ -992,12 +1094,12 @@ impl Procfs {
         let Some((process, thread, model::Node::UtsNamespace)) = model::Node::parse(path, current) else {
             return Ok(None);
         };
-        self.validate_thread(process, thread)?;
-        self.source.uts(process).map(|view| Some(view.namespace))
+        let identity = self.resolve_path_process(process, thread)?;
+        self.source.uts(identity).map(|view| Some(view.namespace))
     }
 
     pub fn namespace_inode(&self, path: &[u8], current: u32) -> Result<Option<u64>, Error> {
-        let Some((process, thread, node)) = model::Node::parse(path.strip_prefix(b"/").unwrap_or(path), current) else {
+        let Some((_, _, node)) = model::Node::parse(path.strip_prefix(b"/").unwrap_or(path), current) else {
             return Ok(None);
         };
         let namespace = matches!(
@@ -1014,7 +1116,6 @@ impl Procfs {
         if !namespace {
             return Ok(None);
         }
-        self.validate_thread(process, thread)?;
         self.metadata(path, current)
             .map(|metadata| metadata.map(|value| value.inode))
     }

@@ -22,7 +22,7 @@ pub(super) struct UtsFile {
 
 pub(super) struct CommFile {
     source: std::sync::Arc<dyn super::Source>,
-    process: u32,
+    process: super::ProcessIdentity,
     thread: Option<u32>,
     cursor: Mutex<usize>,
     metadata: OfdMetadata,
@@ -30,13 +30,17 @@ pub(super) struct CommFile {
 
 pub(super) struct OomFile {
     source: std::sync::Arc<dyn super::Source>,
-    process: u32,
+    process: super::ProcessIdentity,
     cursor: Mutex<usize>,
     metadata: OfdMetadata,
 }
 
 impl OomFile {
-    pub(super) const fn new(source: std::sync::Arc<dyn super::Source>, process: u32, metadata: OfdMetadata) -> Self {
+    pub(super) const fn new(
+        source: std::sync::Arc<dyn super::Source>,
+        process: super::ProcessIdentity,
+        metadata: OfdMetadata,
+    ) -> Self {
         Self {
             source,
             process,
@@ -105,7 +109,7 @@ impl OpenFileDescription for OomFile {
 impl CommFile {
     pub(super) fn new(
         source: std::sync::Arc<dyn super::Source>,
-        process: u32,
+        process: super::ProcessIdentity,
         thread: Option<u32>,
         metadata: OfdMetadata,
     ) -> Self {

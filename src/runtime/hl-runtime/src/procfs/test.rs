@@ -38,6 +38,10 @@ impl DescriptorTarget for Targets {
     }
 }
 
+fn identity(source: &TaskProcfs, number: u32) -> ProcfsProcessIdentity {
+    source.resolve_process(number).unwrap()
+}
+
 struct StatMetrics;
 
 impl StatPort for StatMetrics {
@@ -162,7 +166,7 @@ fn task_projection() {
     let source = TaskProcfs::new(Arc::clone(&tasks))
         .with_root(b"/guest".to_vec())
         .with_fs_context(Arc::clone(&fs_context));
-    let view = source.process(process.number()).unwrap();
+    let view = source.process(identity(&source, process.number())).unwrap();
     assert_eq!(view.process, 1);
     assert_eq!(view.threads, 1);
     assert_eq!(view.real_user, 12);
@@ -170,13 +174,13 @@ fn task_projection() {
     assert_eq!(view.groups, [56]);
     assert_eq!(view.umask, None);
     assert_eq!(fs_context.replace_mask(0o077), 0o022);
-    assert_eq!(source.process(process.number()).unwrap().umask, None);
+    assert_eq!(source.process(identity(&source, process.number())).unwrap().umask, None);
     assert_eq!(view.allowed_mask, "3f");
     assert_eq!(view.allowed_list, "0-5");
     assert_eq!(source.cpu().unwrap().online(), 6);
     tasks.set_thread_blocked(thread, true).unwrap();
     assert_eq!(
-        source.process(process.number()).unwrap().state,
+        source.process(identity(&source, process.number())).unwrap().state,
         ProcfsProcessState::Sleeping
     );
     tasks.set_thread_blocked(thread, false).unwrap();
@@ -194,7 +198,10 @@ fn stat_requires_metrics() {
         .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
         .unwrap();
     let source = TaskProcfs::new(tasks);
-    assert_eq!(source.stat(process.number()), Err(ProcfsError::NotFound));
+    assert_eq!(
+        source.stat(identity(&source, process.number())),
+        Err(ProcfsError::NotFound)
+    );
 }
 
 #[test]
@@ -206,15 +213,16 @@ fn process_view_uses_selected_seccomp_baseline() {
     let seccomp = Arc::new(crate::SeccompControl::new(1).unwrap());
     seccomp.register(thread).unwrap();
 
-    let disabled = TaskProcfs::new(Arc::clone(&tasks))
-        .with_seccomp(Arc::clone(&seccomp), hl_linux::SeccompBaseline::Disabled)
-        .process(process.number())
+    let disabled_source =
+        TaskProcfs::new(Arc::clone(&tasks)).with_seccomp(Arc::clone(&seccomp), hl_linux::SeccompBaseline::Disabled);
+    let disabled = disabled_source
+        .process(identity(&disabled_source, process.number()))
         .unwrap();
     assert_eq!((disabled.seccomp_mode, disabled.seccomp_filters), (0, 0));
 
-    let container = TaskProcfs::new(tasks)
-        .with_seccomp(seccomp, hl_linux::SeccompBaseline::Container)
-        .process(process.number())
+    let container_source = TaskProcfs::new(tasks).with_seccomp(seccomp, hl_linux::SeccompBaseline::Container);
+    let container = container_source
+        .process(identity(&container_source, process.number()))
         .unwrap();
     assert_eq!((container.seccomp_mode, container.seccomp_filters), (2, 1));
 }
@@ -233,8 +241,14 @@ fn cmdline_is_process_image_snapshot() {
         .unwrap()
         .0;
     let source = TaskProcfs::new(Arc::clone(&tasks));
-    assert_eq!(source.cmdline(process.number()).unwrap(), b"/bin/program\0two words\0");
-    assert_eq!(source.cmdline(child.number()).unwrap(), b"/bin/program\0two words\0");
+    assert_eq!(
+        source.cmdline(identity(&source, process.number())).unwrap(),
+        b"/bin/program\0two words\0"
+    );
+    assert_eq!(
+        source.cmdline(identity(&source, child.number())).unwrap(),
+        b"/bin/program\0two words\0"
+    );
 }
 
 #[test]
@@ -244,7 +258,7 @@ fn stat_joins_domains() {
         .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
         .unwrap();
     let source = TaskProcfs::new(tasks).with_stat(Arc::new(StatMetrics));
-    let bytes = source.stat(process.number()).unwrap().bytes();
+    let bytes = source.stat(identity(&source, process.number())).unwrap().bytes();
     let text = String::from_utf8(bytes).unwrap();
     let suffix = text.rsplit_once(") ").unwrap().1;
     let fields = suffix.split_ascii_whitespace().collect::<Vec<_>>();
@@ -277,10 +291,40 @@ fn zombie_stat_keeps_identity() {
     tasks.exit_process(child, hl_task::ExitStatus::Code(0)).unwrap();
 
     let source = TaskProcfs::new(Arc::clone(&tasks)).with_stat(Arc::new(StatMetrics));
-    let text = String::from_utf8(source.stat(child.number()).unwrap().bytes()).unwrap();
+    let child_identity = identity(&source, child.number());
+    let text = String::from_utf8(source.stat(child_identity).unwrap().bytes()).unwrap();
     assert!(text.starts_with(&format!("{} (dead-child) Z {} ", child.number(), parent.number())));
     tasks.reap(parent, child).unwrap();
-    assert_eq!(source.stat(child.number()), Err(ProcfsError::NotFound));
+    assert_eq!(source.stat(child_identity), Err(ProcfsError::NotFound));
+}
+
+#[test]
+fn stat_reuse() {
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_processes: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
+    let (parent, parent_thread) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let (child, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    let source = TaskProcfs::new(Arc::clone(&tasks)).with_stat(Arc::new(StatMetrics));
+    let resolved = child;
+
+    tasks.exit_process(child, ExitStatus::Code(0)).unwrap();
+    tasks.reap(parent, child).unwrap();
+    let (replacement, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    assert_eq!(replacement.number(), resolved.number());
+    assert_ne!(replacement, resolved);
+
+    assert_eq!(source.stat_view(resolved), Err(ProcfsError::NotFound));
 }
 
 #[test]
@@ -300,23 +344,123 @@ fn live_task_identity() {
     )
     .with_root(b"/guest".to_vec())
     .with_fs_context(Arc::new(crate::FsContext::new(0o077)));
+    let child_identity = identity(&source, child.number());
     assert_eq!(source.processes().unwrap(), [parent.number(), child.number()]);
-    assert_eq!(source.thread(child.number(), child_thread.number()), Ok(()));
-    assert_eq!(source.threads(child.number()).unwrap(), [child_thread.number()]);
-    assert_eq!(source.root(child.number()).unwrap(), b"/guest");
-    assert_eq!(source.process(parent.number()).unwrap().umask, Some(0o077));
-    assert_eq!(source.process(child.number()).unwrap().umask, None);
+    assert_eq!(source.thread(child_identity, child_thread.number()), Ok(()));
     assert_eq!(
-        source.thread(parent.number(), child_thread.number()),
+        source.threads(identity(&source, child.number())).unwrap(),
+        [child_thread.number()]
+    );
+    assert_eq!(source.root(identity(&source, child.number())).unwrap(), b"/guest");
+    assert_eq!(
+        source.process(identity(&source, parent.number())).unwrap().umask,
+        Some(0o077)
+    );
+    assert_eq!(source.process(identity(&source, child.number())).unwrap().umask, None);
+    assert_eq!(
+        source.thread(identity(&source, parent.number()), child_thread.number()),
         Err(ProcfsError::NotFound)
     );
     tasks.exit_process(child, ExitStatus::Code(0)).unwrap();
     tasks.reap(parent, child).unwrap();
     assert_eq!(source.processes().unwrap(), [parent.number()]);
     assert_eq!(
-        source.thread(child.number(), child_thread.number()),
+        source.thread(child_identity, child_thread.number()),
         Err(ProcfsError::NotFound)
     );
+}
+
+#[test]
+fn open_comm_pins_process_generation_across_pid_reuse() {
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_processes: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
+    let (parent, parent_thread) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let (child, child_thread) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    tasks.set_name(child_thread, *b"old-child\0\0\0\0\0\0\0").unwrap();
+    let procfs = hl_vfs::Procfs::new(Arc::new(TaskProcfs::new(Arc::clone(&tasks))));
+    let path = format!("/proc/{}/comm", child.number());
+    let old = procfs
+        .open(path.as_bytes(), parent.number(), hl_vfs::OpenIntent::default())
+        .unwrap()
+        .unwrap();
+
+    tasks.exit_process(child, ExitStatus::Code(0)).unwrap();
+    tasks.reap(parent, child).unwrap();
+    let (replacement, replacement_thread) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    assert_eq!(replacement.number(), child.number());
+    tasks.set_name(replacement_thread, *b"new-child\0\0\0\0\0\0\0").unwrap();
+
+    assert!(old.read(&mut [0; 32]).is_err());
+    let current = procfs
+        .open(path.as_bytes(), parent.number(), hl_vfs::OpenIntent::default())
+        .unwrap()
+        .unwrap();
+    let mut output = [0; 32];
+    let count = current.read(&mut output).unwrap();
+    assert_eq!(&output[..count], b"new-child\n");
+}
+
+#[test]
+fn oom_reuse() {
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_processes: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
+    let (parent, parent_thread) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let (child, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    let procfs = hl_vfs::Procfs::new(Arc::new(TaskProcfs::new(Arc::clone(&tasks))));
+    let path = format!("/proc/{}/oom_score_adj", child.number());
+    let old = procfs
+        .open(
+            path.as_bytes(),
+            parent.number(),
+            hl_vfs::OpenIntent::from_bits(hl_vfs::OpenIntent::WRITE),
+        )
+        .unwrap()
+        .unwrap();
+
+    tasks.exit_process(child, ExitStatus::Code(0)).unwrap();
+    tasks.reap(parent, child).unwrap();
+    let (replacement, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    assert_eq!(replacement.number(), child.number());
+    let (process, process_generation) = parent.wire_parts();
+    let (thread, thread_generation) = parent_thread.wire_parts();
+    let context = hl_descriptor::OperationContext {
+        actor: Some(hl_descriptor::OperationActor {
+            process,
+            process_generation,
+            thread,
+            thread_generation,
+        }),
+        cancellation: None,
+    };
+
+    assert_eq!(old.read(&mut [0; 16]), Err(hl_descriptor::ObjectError::Retired));
+    assert_eq!(
+        old.write_context(b"500\n", context),
+        Err(hl_descriptor::ObjectError::Retired)
+    );
+    assert_eq!(tasks.process_snapshot(replacement).unwrap().oom_score_adj, 0);
 }
 
 #[test]
@@ -334,12 +478,15 @@ fn live_working_directory() {
     )
     .with_fs_context(Arc::new(crate::FsContext::default()))
     .with_working(Arc::clone(&working));
-    assert_eq!(source.cwd(process.number()).unwrap(), b"/");
+    assert_eq!(source.cwd(identity(&source, process.number())).unwrap(), b"/");
     working.replace_path("/work").unwrap();
-    assert_eq!(source.cwd(process.number()).unwrap(), b"/work");
+    assert_eq!(source.cwd(identity(&source, process.number())).unwrap(), b"/work");
     working.mark_deleted();
-    assert_eq!(source.cwd(process.number()).unwrap(), b"/work (deleted)");
-    assert_eq!(source.cwd(process.number() + 1), Err(ProcfsError::NotFound));
+    assert_eq!(
+        source.cwd(identity(&source, process.number())).unwrap(),
+        b"/work (deleted)"
+    );
+    assert_eq!(source.resolve_process(process.number() + 1), Err(ProcfsError::NotFound));
 }
 
 #[test]

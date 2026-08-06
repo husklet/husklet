@@ -46,7 +46,6 @@ pub struct TaskProcfs {
 }
 
 impl TaskProcfs {
-    #[cfg(test)]
     fn process_id(&self, identity: ProcfsProcessIdentity) -> Result<ProcessId, ProcfsError> {
         let id = ProcessId::from_wire(identity.slot(), identity.generation()).ok_or(ProcfsError::NotFound)?;
         self.tasks
@@ -185,12 +184,13 @@ impl TaskProcfs {
         self
     }
 
-    fn view(&self, process: u32) -> Result<ProcfsProcessView, ProcfsError> {
+    fn view(&self, identity: ProcfsProcessIdentity) -> Result<ProcfsProcessView, ProcfsError> {
+        let id = self.process_id(identity)?;
         let registry = self.tasks.snapshot();
         let snapshot = registry
             .processes
             .iter()
-            .find(|candidate| candidate.id.number() == process)
+            .find(|candidate| candidate.id == id)
             .ok_or(ProcfsError::NotFound)?;
         let leader = registry
             .threads
@@ -226,14 +226,14 @@ impl TaskProcfs {
             )
             .map_err(|_| ProcfsError::Invalid)?;
         Ok(ProcfsProcessView {
-            process,
+            process: id.number(),
             parent: snapshot.parent.map_or(0, hl_task::ProcessId::number),
             name: leader.name,
             state: self.process_state(snapshot.lifecycle, leader.lifecycle),
             threads: snapshot.threads.len(),
             umask: self
                 .current
-                .filter(|current| current.number() == process)
+                .filter(|current| *current == id)
                 .and_then(|_| self.fs_context.as_ref().map(|context| context.mask())),
             real_user: credentials.real_user,
             effective_user: credentials.effective_user,
@@ -318,7 +318,7 @@ impl ProcfsSource for TaskProcfs {
         ProcfsProcessIdentity::new(slot, generation).ok_or(ProcfsError::NotFound)
     }
 
-    fn network(&self, process: u32) -> Result<hl_vfs::ProcfsNetworkView, ProcfsError> {
+    fn network(&self, process: ProcfsProcessIdentity) -> Result<hl_vfs::ProcfsNetworkView, ProcfsError> {
         self.view(process)?;
         self.network
             .as_ref()
@@ -337,44 +337,39 @@ impl ProcfsSource for TaskProcfs {
         Ok(processes)
     }
 
-    fn thread(&self, process: u32, thread: u32) -> Result<(), ProcfsError> {
+    fn thread(&self, process: ProcfsProcessIdentity, thread: u32) -> Result<(), ProcfsError> {
+        let process = self.process_id(process)?;
         self.tasks
             .snapshot()
             .threads
             .into_iter()
-            .find(|candidate| candidate.process.number() == process && candidate.id.number() == thread)
+            .find(|candidate| candidate.process == process && candidate.id.number() == thread)
             .map(|_| ())
             .ok_or(ProcfsError::NotFound)
     }
 
-    fn threads(&self, process: u32) -> Result<Vec<u32>, ProcfsError> {
+    fn threads(&self, process: ProcfsProcessIdentity) -> Result<Vec<u32>, ProcfsError> {
         self.view(process)?;
+        let process = self.process_id(process)?;
         let mut threads = self
             .tasks
             .snapshot()
             .threads
             .into_iter()
-            .filter(|thread| thread.process.number() == process)
+            .filter(|thread| thread.process == process)
             .map(|thread| thread.id.number())
             .collect::<Vec<_>>();
         threads.sort_unstable();
         Ok(threads)
     }
 
-    fn root(&self, process: u32) -> Result<Vec<u8>, ProcfsError> {
+    fn root(&self, process: ProcfsProcessIdentity) -> Result<Vec<u8>, ProcfsError> {
         self.view(process)?;
         self.root.clone().ok_or(ProcfsError::NotFound)
     }
 
-    fn cwd(&self, process: u32) -> Result<Vec<u8>, ProcfsError> {
-        let id = self
-            .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .map(|candidate| candidate.id)
-            .ok_or(ProcfsError::NotFound)?;
+    fn cwd(&self, process: ProcfsProcessIdentity) -> Result<Vec<u8>, ProcfsError> {
+        let id = self.process_id(process)?;
         let working = match &self.resources {
             Some(resources) => resources.working(id)?,
             None if self.current == Some(id) => Arc::clone(self.working.as_ref().ok_or(ProcfsError::NotFound)?),
@@ -388,47 +383,36 @@ impl ProcfsSource for TaskProcfs {
         Ok(path)
     }
 
-    fn process(&self, process: u32) -> Result<ProcfsProcessView, ProcfsError> {
+    fn process(&self, process: ProcfsProcessIdentity) -> Result<ProcfsProcessView, ProcfsError> {
         self.view(process)
     }
 
-    fn oom_score_adj(&self, process: u32) -> Result<i16, ProcfsError> {
+    fn oom_score_adj(&self, process: ProcfsProcessIdentity) -> Result<i16, ProcfsError> {
         self.tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .map(|candidate| candidate.oom_score_adj)
-            .ok_or(ProcfsError::NotFound)
+            .process_snapshot(self.process_id(process)?)
+            .map(|snapshot| snapshot.oom_score_adj)
+            .map_err(|_| ProcfsError::NotFound)
     }
 
     fn write_oom_score_adj(
         &self,
-        process: u32,
+        process: ProcfsProcessIdentity,
         _actor: hl_descriptor::OperationActor,
         value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {
         let process = self
-            .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .ok_or(hl_descriptor::ObjectError::Retired)?
-            .id;
+            .process_id(process)
+            .map_err(|_| hl_descriptor::ObjectError::Retired)?;
         self.tasks
             .set_oom_score_adj(process, value)
             .map_err(|_| hl_descriptor::ObjectError::InvalidArgument)
     }
 
-    fn cmdline(&self, process: u32) -> Result<Vec<u8>, ProcfsError> {
+    fn cmdline(&self, process: ProcfsProcessIdentity) -> Result<Vec<u8>, ProcfsError> {
         let snapshot = self
             .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .ok_or(ProcfsError::NotFound)?;
+            .process_snapshot(self.process_id(process)?)
+            .map_err(|_| ProcfsError::NotFound)?;
         let capacity = snapshot.arguments.iter().map(|argument| argument.len() + 1).sum();
         let mut bytes = Vec::with_capacity(capacity);
         for argument in snapshot.arguments {
@@ -438,52 +422,32 @@ impl ProcfsSource for TaskProcfs {
         Ok(bytes)
     }
 
-    fn stat(&self, process: u32) -> Result<ProcfsStatView, ProcfsError> {
-        self.stat_view(process)
+    fn stat(&self, process: ProcfsProcessIdentity) -> Result<ProcfsStatView, ProcfsError> {
+        self.stat_view(self.process_id(process)?)
     }
 
-    fn memory(&self, process: u32) -> Result<hl_vfs::ProcfsMemoryView, ProcfsError> {
-        let id = self
-            .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .map(|candidate| candidate.id)
-            .ok_or(ProcfsError::NotFound)?;
+    fn memory(&self, process: ProcfsProcessIdentity) -> Result<hl_vfs::ProcfsMemoryView, ProcfsError> {
+        let id = self.process_id(process)?;
         self.memory.as_ref().ok_or(ProcfsError::NotFound)?.sample(id)
     }
 
-    fn address_space(&self, process: u32) -> Result<hl_vfs::ProcfsAddressSpaceView, ProcfsError> {
-        let id = self
-            .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .map(|candidate| candidate.id)
-            .ok_or(ProcfsError::NotFound)?;
+    fn address_space(&self, process: ProcfsProcessIdentity) -> Result<hl_vfs::ProcfsAddressSpaceView, ProcfsError> {
+        let id = self.process_id(process)?;
         self.memory.as_ref().ok_or(ProcfsError::NotFound)?.address_space(id)
     }
 
-    fn environment(&self, process: u32) -> Result<Vec<u8>, ProcfsError> {
-        let id = self
-            .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .map(|candidate| candidate.id)
-            .ok_or(ProcfsError::NotFound)?;
+    fn environment(&self, process: ProcfsProcessIdentity) -> Result<Vec<u8>, ProcfsError> {
+        let id = self.process_id(process)?;
         self.memory.as_ref().ok_or(ProcfsError::NotFound)?.environment(id)
     }
 
-    fn comm(&self, process: u32, thread: Option<u32>) -> Result<Vec<u8>, ProcfsError> {
+    fn comm(&self, process: ProcfsProcessIdentity, thread: Option<u32>) -> Result<Vec<u8>, ProcfsError> {
+        let process_id = self.process_id(process)?;
         let registry = self.tasks.snapshot();
         let process = registry
             .processes
             .iter()
-            .find(|candidate| candidate.id.number() == process)
+            .find(|candidate| candidate.id == process_id)
             .ok_or(ProcfsError::NotFound)?;
         let target = thread.map_or(process.leader.number(), |thread| thread);
         let thread = registry
@@ -498,7 +462,7 @@ impl ProcfsSource for TaskProcfs {
 
     fn write_comm(
         &self,
-        process: u32,
+        process: ProcfsProcessIdentity,
         thread: Option<u32>,
         actor: hl_descriptor::OperationActor,
         bytes: &[u8],
@@ -510,7 +474,7 @@ impl ProcfsSource for TaskProcfs {
             .ok_or(hl_descriptor::ObjectError::PermissionDenied)?;
         let actor_thread = hl_task::ThreadId::from_wire(actor.thread, actor.thread_generation)
             .ok_or(hl_descriptor::ObjectError::PermissionDenied)?;
-        if actor_process.number() != process {
+        if self.process_id(process).ok() != Some(actor_process) {
             return Err(hl_descriptor::ObjectError::PermissionDenied);
         }
         self.tasks
@@ -587,14 +551,11 @@ impl ProcfsSource for TaskProcfs {
         Ok(self.system.as_ref().ok_or(ProcfsError::NotFound)?.random_identity())
     }
 
-    fn uts(&self, process: u32) -> Result<ProcfsUtsView, ProcfsError> {
+    fn uts(&self, process: ProcfsProcessIdentity) -> Result<ProcfsUtsView, ProcfsError> {
         let target = self
             .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .ok_or(ProcfsError::NotFound)?;
+            .process_snapshot(self.process_id(process)?)
+            .map_err(|_| ProcfsError::NotFound)?;
         let value = self.tasks.uts_identity(target.id).map_err(|_| ProcfsError::Invalid)?;
         Ok(ProcfsUtsView {
             namespace: target.namespaces.uts.serial,
@@ -651,7 +612,7 @@ impl ProcfsSource for TaskProcfs {
             })
     }
 
-    fn mounts(&self, process: u32) -> Result<hl_vfs::ProcfsMountView, ProcfsError> {
+    fn mounts(&self, process: ProcfsProcessIdentity) -> Result<hl_vfs::ProcfsMountView, ProcfsError> {
         self.view(process)?;
         Self::mount_view(
             self.mounts
@@ -662,15 +623,8 @@ impl ProcfsSource for TaskProcfs {
         )
     }
 
-    fn descriptors(&self, process: u32) -> Result<Vec<ProcfsDescriptorView>, ProcfsError> {
-        let id = self
-            .tasks
-            .snapshot()
-            .processes
-            .into_iter()
-            .find(|candidate| candidate.id.number() == process)
-            .map(|candidate| candidate.id)
-            .ok_or(ProcfsError::NotFound)?;
+    fn descriptors(&self, process: ProcfsProcessIdentity) -> Result<Vec<ProcfsDescriptorView>, ProcfsError> {
+        let id = self.process_id(process)?;
         let table = match &self.resources {
             Some(resources) => resources.descriptors(id)?,
             None if self.current == Some(id) => Arc::clone(self.descriptors.as_ref().ok_or(ProcfsError::NotFound)?),

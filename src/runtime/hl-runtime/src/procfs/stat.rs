@@ -58,12 +58,12 @@ pub trait StatPort: Send + Sync {
 }
 
 impl TaskProcfs {
-    pub(super) fn stat_view(&self, process: u32) -> Result<ProcfsStatView, ProcfsError> {
+    pub(super) fn stat_view(&self, process: ProcessId) -> Result<ProcfsStatView, ProcfsError> {
         let registry = self.tasks.snapshot();
         let process = registry
             .processes
             .iter()
-            .find(|candidate| candidate.id.number() == process)
+            .find(|candidate| candidate.id == process)
             .ok_or(ProcfsError::NotFound)?;
         let leader = registry.threads.iter().find(|thread| thread.id == process.leader);
         if leader.is_none() && process.lifecycle != ProcessLifecycle::Zombie {
