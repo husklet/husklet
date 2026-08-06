@@ -1,4 +1,4 @@
-use hl_descriptor::{DescriptorSnapshot, DescriptorTable, ObjectKind, OfdMetadata};
+use hl_descriptor::{DescriptionIdentity, DescriptorSnapshot, DescriptorTable, ObjectKind, OfdMetadata};
 use hl_vfs::{ProcfsDescriptorView, ProcfsError};
 
 use super::TaskProcfs;
@@ -27,7 +27,11 @@ impl TaskProcfs {
     ) -> Result<ProcfsDescriptorView, ProcfsError> {
         let lease = descriptors.pin(snapshot.number).map_err(|_| ProcfsError::NotFound)?;
         if lease.descriptor_generation() != snapshot.descriptor_generation
-            || lease.description_identity().identity != snapshot.description_identity
+            || lease.description_identity()
+                != (DescriptionIdentity {
+                    identity: snapshot.description_identity,
+                    generation: snapshot.description_generation,
+                })
         {
             return Err(ProcfsError::NotFound);
         }

@@ -104,6 +104,31 @@ fn descriptor_reuse() {
     );
 }
 
+#[test]
+fn descriptor_view_rejects_stale_description_generation() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (process, _) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let table = Arc::new(DescriptorTable::new(2).unwrap());
+    let descriptor = table
+        .install(
+            0,
+            Arc::new(DescriptorObject(11)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    let mut stale = table.snapshot(descriptor).unwrap();
+    stale.description_generation = stale.description_generation.wrapping_add(1);
+    let source = TaskProcfs::with_descriptors(Arc::clone(&tasks), process, Arc::clone(&table), Arc::new(Targets));
+
+    assert_eq!(source.descriptor_view(&table, stale), Err(ProcfsError::NotFound));
+    assert_eq!(
+        table.snapshot(descriptor).unwrap().descriptor_generation,
+        stale.descriptor_generation
+    );
+}
+
 fn identity(source: &TaskProcfs, number: u32) -> ProcfsProcessIdentity {
     source.resolve_process(number).unwrap()
 }
@@ -250,11 +275,10 @@ fn task_projection() {
         ProcfsProcessState::Sleeping
     );
     tasks.set_thread_blocked(thread, false).unwrap();
-    assert!(
-        view.limits
-            .iter()
-            .any(|limit| { limit.resource == ProcfsLimitResource::Core && limit.soft == 9 && limit.hard == 10 })
-    );
+    assert!(view
+        .limits
+        .iter()
+        .any(|limit| { limit.resource == ProcfsLimitResource::Core && limit.soft == 9 && limit.hard == 10 }));
 }
 
 #[test]

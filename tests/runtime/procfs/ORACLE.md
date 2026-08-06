@@ -62,12 +62,37 @@ Rust maps listing to `DescriptorTable::bounded_active_snapshots`: count and peak
 vector bytes are admitted atomically under the table read lock before allocation,
 then only descriptor numbers cross the VFS Source boundary. Targeted fd links,
 fdinfo, kind, and metadata use `DescriptorTable::snapshot(number)` followed by
-an exact pin and descriptor-generation/OFD-identity comparison; close and
+an exact pin and descriptor-generation/full `DescriptionIdentity { identity,
+generation }` comparison; close and
 same-number reuse therefore cannot substitute the replacement. Snapshot budget
 failure is the typed `ProcfsError::ResourceLimit`. This stage retains the current
 eager directory snapshot timing; post-publication lazy capture remains the next
 descriptor-directory lifetime slice. The peer-fd shared-path identity gap is
 unchanged.
+
+The syscall-side readlink route was additionally audited in read-only
+`../engine/src/linux_abi/syscall/fs.c` at `svc_fs`'s `readlinkat` case and its
+calls to `procfd_num`, `proc_any_leaf`, `proc_pid_member`, and
+`proc_fd_link_pid`. Self links reject engine-only eventfd peers, translate PTY
+master/slave handles to `/dev/ptmx` or `/dev/pts/N`, then use the native fd path;
+peer links validate live process membership and query the peer host fd table.
+Closed, missing, pathless, or failed host lookups produce `ENOENT`; successful
+targets use Linux readlink truncation to the guest buffer length without a
+terminator. There is no guest-ISA branch; host-specific path discovery and peer
+inspection remain behind native adapters.
+
+The retained directory materialization was audited at `g_procfd_dirs`,
+`procfd_dirs_reap`, `procfd_dirs_atexit`, `proc_fdinfo_dir_open`,
+`proc_fdinfo_text`, `proc_fd_dir_pid_open`, `proc_fd_link_pid`, and `proc_open`
+in `../engine/src/linux_abi/container/vfs.c`. Each bounded global slot owns a
+temporary directory path and returned host directory fd; opportunistic reap
+removes it after that fd closes, while atexit force-removes survivors. Directory
+names are materialized from the open-fd set at directory open. Opening or reading
+an `fdinfo/N` body instead rechecks the then-live descriptor and renders current
+position, flags, mount, and type-specific state. The retained ordering is thus
+name snapshot at directory-open followed by live body admission/rendering, not
+one atomic arena snapshot spanning both; a listed name may disappear before its
+body is opened.
 
 ### PID reuse identity prerequisite
 
