@@ -1,6 +1,7 @@
 use hl_checkpoint::{MemorySink, MemorySource};
 use hl_runtime::{AssemblyCheckpointError, RuntimeAssembly};
 
+use super::diagnostics::{LaunchError, LaunchPhase};
 use crate::composition::RuntimeServices;
 use crate::engine::EngineError;
 use crate::launch_plan::RuntimeLaunchPlan;
@@ -26,7 +27,7 @@ impl<'a> Operation<'a> {
         }
     }
 
-    pub(super) fn apply(&self) -> Result<(), EngineError> {
+    pub(super) fn apply(&self) -> Result<(), LaunchError> {
         if self.plan.options.get("HL_RESTORE").is_some() {
             self.restore()?;
         }
@@ -36,7 +37,7 @@ impl<'a> Operation<'a> {
         Ok(())
     }
 
-    fn restore(&self) -> Result<(), EngineError> {
+    fn restore(&self) -> Result<(), LaunchError> {
         let transport = self
             .services
             .checkpoint_source
@@ -44,30 +45,37 @@ impl<'a> Operation<'a> {
             .ok_or(EngineError::Unsupported)?;
         let bytes = transport
             .read(MAXIMUM_IMAGE_BYTES + 1)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| LaunchError::phase(LaunchPhase::Transfer))?;
         if bytes.len() > MAXIMUM_IMAGE_BYTES {
-            return Err(EngineError::LaunchFailed);
+            return Err(LaunchError::phase(LaunchPhase::Transfer));
         }
         let mut source = MemorySource::new(bytes);
         self.assembly
             .restore_checkpoint(&mut source)
             .map_err(|error| match error {
-                AssemblyCheckpointError::Missing | AssemblyCheckpointError::Unsupported(_) => EngineError::Unsupported,
-                AssemblyCheckpointError::Transaction(_) => EngineError::LaunchFailed,
+                AssemblyCheckpointError::Missing | AssemblyCheckpointError::Unsupported(_) => {
+                    LaunchError::from(EngineError::Unsupported)
+                }
+                AssemblyCheckpointError::Transaction(_) => LaunchError::phase(LaunchPhase::Transfer),
             })
     }
 
-    fn capture(&self) -> Result<(), EngineError> {
+    fn capture(&self) -> Result<(), LaunchError> {
         let transport = self.services.checkpoint_sink.as_ref().ok_or(EngineError::Unsupported)?;
         let mut sink = MemorySink::new();
         self.assembly
             .capture_checkpoint(&mut sink)
             .map_err(|error| match error {
-                AssemblyCheckpointError::Missing | AssemblyCheckpointError::Unsupported(_) => EngineError::Unsupported,
-                AssemblyCheckpointError::Transaction(_) => EngineError::LaunchFailed,
+                AssemblyCheckpointError::Missing | AssemblyCheckpointError::Unsupported(_) => {
+                    LaunchError::from(EngineError::Unsupported)
+                }
+                AssemblyCheckpointError::Transaction(_) => LaunchError::phase(LaunchPhase::Transfer),
             })?;
         transport
-            .replace(sink.committed().ok_or(EngineError::LaunchFailed)?)
-            .map_err(|_| EngineError::LaunchFailed)
+            .replace(
+                sink.committed()
+                    .ok_or_else(|| LaunchError::phase(LaunchPhase::Transfer))?,
+            )
+            .map_err(|_| LaunchError::phase(LaunchPhase::Transfer))
     }
 }
