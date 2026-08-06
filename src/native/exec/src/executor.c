@@ -1343,7 +1343,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         }
         if (cpu->reason == HL_NATIVE_EXIT_FALLBACK && cpu->fault_access != 0 &&
             cpu->fault_size != 0 && operand_resolver != NULL) {
-            uint64_t completed, current_first, current_last;
+            uint64_t completed, current_first;
             hl_a64_view view = {0};
             hl_a64_projection resolved_projection;
             uint32_t result;
@@ -1351,11 +1351,12 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 return run_fatal(&execution, output, 1);
             }
             current_first = executed_code.source_first;
-            current_last = executed_code.source_last;
             completed = (cpu->program - current_first) / 4;
             if (completed > budget) return run_fatal(&execution, output, 1);
-            uint64_t charged = (current_last - current_first) / 4;
-            if (charged < completed || cpu->executed < charged || cpu->budget > request->budget - (charged - completed))
+            uint64_t charged = executed_code.instruction_count;
+            if (charged < completed || cpu->executed < charged)
+                return run_fatal(&execution, output, 1);
+            if (cpu->budget > request->budget - (charged - completed))
                 return run_fatal(&execution, output, 1);
             cpu->executed -= charged - completed;
             cpu->budget += charged - completed;
