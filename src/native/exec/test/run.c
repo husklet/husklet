@@ -30,7 +30,12 @@ static int run_contract(void) {
 #endif
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
     for (unsigned iteration = 0; iteration != 64; iteration++) {
+        state.code_arena_lower = UINT64_MAX;
+        state.code_arena_upper = UINT64_MAX;
+        state.entry_certificate_identity = UINT64_MAX;
         CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(state.code_arena_lower == 0 && state.code_arena_upper == 0 &&
+              state.entry_certificate_identity == 0);
         CHECK(output.kind == HL_NATIVE_EXIT_FALLBACK && output.instruction == state.program);
         CHECK(output.next == state.program && output.code == 0);
     }
@@ -38,9 +43,21 @@ static int run_contract(void) {
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_YIELD && output.instruction == state.program);
     request.budget = 8;
+    state.code_arena_lower = 1;
+    state.code_arena_upper = 2;
+    state.entry_certificate_identity = 3;
     state.interrupt = 7;
     CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
     CHECK(output.kind == HL_NATIVE_EXIT_INTERRUPT && output.code == 0);
+    CHECK(state.code_arena_lower == 0 && state.code_arena_upper == 0 &&
+          state.entry_certificate_identity == 0);
+    request.memory_mode = 1;
+    state.code_arena_lower = 1;
+    state.code_arena_upper = 2;
+    state.entry_certificate_identity = 3;
+    CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_ARGUMENT);
+    CHECK(state.code_arena_lower == 0 && state.code_arena_upper == 0 &&
+          state.entry_certificate_identity == 0);
     hl_native_destroy(executor);
     CHECK(host.release_calls == 1);
     return 0;

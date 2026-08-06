@@ -1534,6 +1534,16 @@ run boundaries, or adding executor atomics. The ABI fields are appended at
 offset 520, so a 520-byte caller retains its prior contract. Until authenticated
 ingress lands, size-544 diagnostics return zero for all three fields.
 
+The retained-oracle audit at
+`/var/tmp/husklet-auth-retained-oracle-7b7bdd-ea319.md` records the cache,
+IBTC, STW, fork, checkpoint, fault, and publication call graph. Stage A appends
+three more dormant AArch64 words for future executable-arena lower/upper bounds
+and one transfer identity. Native run admission sanitizes all three to zero;
+no current path publishes or consumes a host address or identity. A later
+coherent authentication stage will source bounds exclusively from the
+executor-owned arena after execution-lease admission and clear them before
+lease release.
+
 The future target-owned authenticated ingress increments
 `ibtc_authenticated_entries` after identity acceptance for both local and
 shared routes. The authenticated shared reader increments `ibtc_shared_hits`.

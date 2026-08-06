@@ -1375,6 +1375,12 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
         case HL_NATIVE_AARCH64:
             if (cpu->state.aarch64 == NULL) return HL_NATIVE_ARGUMENT;
             cpu->state.aarch64->executable_written = 0;
+            /* Authenticated-ingress admission is dormant. Caller storage is
+             * untrusted across run, fallback, reset, and fork boundaries, so
+             * no preloaded arena pointer or entry identity may survive. */
+            cpu->state.aarch64->code_arena_lower = 0;
+            cpu->state.aarch64->code_arena_upper = 0;
+            cpu->state.aarch64->entry_certificate_identity = 0;
             instruction = cpu->state.aarch64->program;
             interrupt = &cpu->state.aarch64->interrupt;
             break;

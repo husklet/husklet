@@ -1273,6 +1273,9 @@ impl NativeAarch64 {
             diagnostic_ibtc_authenticated_entries: 0,
             diagnostic_ibtc_shared_hits: 0,
             diagnostic_ibtc_auth_rejections: 0,
+            code_arena_lower: 0,
+            code_arena_upper: 0,
+            entry_certificate_identity: 0,
         })
     }
 
@@ -3090,7 +3093,10 @@ mod test {
         assert_eq!(x86.0.certificate_token, 0);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, certificate_cache_identity), 2328);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, certificate_token), 2336);
-        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2368);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, code_arena_lower), 2368);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, code_arena_upper), 2376);
+        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, entry_certificate_identity), 2384);
+        assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2392);
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity), 1928);
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_token), 1936);
         assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 1944);
@@ -3164,6 +3170,9 @@ mod test {
         assert_eq!(native.0.active_authority, 0);
         assert_eq!(native.0.active_view_incarnation, 0);
         assert_eq!(native.0.active_view_authority, 0);
+        assert_eq!(native.0.code_arena_lower, 0);
+        assert_eq!(native.0.code_arena_upper, 0);
+        assert_eq!(native.0.entry_certificate_identity, 0);
         cpu = Aarch64CpuState::default();
         native.restore(&mut cpu);
         assert_eq!(cpu, expected);

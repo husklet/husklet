@@ -87,6 +87,9 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t diagnostic_ibtc_authenticated_entries;
     uint64_t diagnostic_ibtc_shared_hits;
     uint64_t diagnostic_ibtc_auth_rejections;
+    uint64_t code_arena_lower;
+    uint64_t code_arena_upper;
+    uint64_t entry_certificate_identity;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -237,7 +240,10 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, certificate_token, 2336);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_ibtc_authenticated_entries, 2344);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_ibtc_shared_hits, 2352);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, diagnostic_ibtc_auth_rejections, 2360);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2368, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, code_arena_lower, 2368);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, code_arena_upper, 2376);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, entry_certificate_identity, 2384);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2392, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 
