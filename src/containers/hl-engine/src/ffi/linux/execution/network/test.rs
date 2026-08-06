@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -573,6 +573,119 @@ fn wildcard_alias_failure_removes_partial_paths_and_resets_the_socket() {
         .is_ok()
     );
     host.close(socket.token);
+}
+
+#[test]
+fn wildcard_alias_collision_preserves_foreign_path_and_resets_the_socket() {
+    let bridge = format!("alias-owner-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 101, 0, 2],
+    };
+    let alias = EgressInterface {
+        bridge: format!("{bridge}-foreign").into_bytes(),
+        index: 3,
+        ipv4: [10, 102, 0, 2],
+    };
+    let port = 41_000 + (std::process::id() % 20_000) as u16;
+    let primary_path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.101.0.2:{port}"));
+    let alias_path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}-foreign/10.102.0.2:{port}"));
+    std::fs::create_dir_all(alias_path.parent().unwrap()).unwrap();
+    std::fs::write(&alias_path, b"foreign").unwrap();
+    let host = Native::new();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    assert_eq!(
+        host.bind_route(
+            socket.token,
+            BindRoute {
+                address: SocketAddress::Inet4 { address: [0; 4], port },
+                interface: Some(interface),
+                aliases: vec![alias],
+            },
+        ),
+        Err(hl_runtime::RuntimeNetworkError::AddressInUse)
+    );
+    assert!(!primary_path.exists());
+    assert_eq!(std::fs::read(&alias_path).unwrap(), b"foreign");
+    assert_eq!(
+        host.local_address(socket.token),
+        Ok(SocketAddress::Inet4 { address: [0; 4], port: 0 })
+    );
+    assert!(
+        host.bind(
+            socket.token,
+            SocketAddress::Inet4 {
+                address: Ipv4Addr::LOCALHOST.octets(),
+                port: 0,
+            },
+        )
+        .is_ok()
+    );
+    host.close(socket.token);
+    std::fs::remove_file(&alias_path).unwrap();
+    std::fs::remove_dir(alias_path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn concurrent_switch_publication_has_one_owner_and_one_final_cleanup() {
+    let bridge = format!("publication-race-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 103, 0, 2],
+    };
+    let port = 42_000 + (std::process::id() % 20_000) as u16;
+    let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/10.103.0.2:{port}"));
+    let host = Arc::new(Native::new());
+    let tokens = (0..2)
+        .map(|_| {
+            host.create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+                .unwrap()
+                .token
+        })
+        .collect::<Vec<_>>();
+    let barrier = Arc::new(Barrier::new(3));
+    let threads = tokens
+        .iter()
+        .map(|token| {
+            let host = Arc::clone(&host);
+            let barrier = Arc::clone(&barrier);
+            let interface = interface.clone();
+            let token = *token;
+            std::thread::spawn(move || {
+                barrier.wait();
+                host.bind_route(
+                    token,
+                    BindRoute {
+                        address: SocketAddress::Inet4 { address: [0; 4], port },
+                        interface: Some(interface),
+                        aliases: Vec::new(),
+                    },
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let results = threads
+        .into_iter()
+        .map(|thread| thread.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| **result == Err(hl_runtime::RuntimeNetworkError::AddressInUse))
+            .count(),
+        1
+    );
+    assert!(path.exists());
+    for token in tokens {
+        host.close(token);
+    }
+    assert!(!path.exists());
 }
 
 #[test]

@@ -62,16 +62,53 @@ fn arm_interest(armed: &mut bool) -> bool {
 
 pub(super) struct SwitchPath(Vec<Vec<u8>>);
 
+pub(super) struct PreparedPublication {
+    paths: Vec<Vec<u8>>,
+}
+
+impl PreparedPublication {
+    pub(super) fn primary(path: Vec<u8>) -> Self {
+        Self { paths: vec![path] }
+    }
+
+    pub(super) fn add_alias(&mut self, target: &[u8], alias: Vec<u8>) -> Result<(), RuntimeNetworkError> {
+        let target = std::ffi::CString::new(target).map_err(|_| RuntimeNetworkError::Invalid)?;
+        let alias_name = std::ffi::CString::new(alias.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
+        // SAFETY: target and alias are valid NUL-terminated paths retained only by the filesystem.
+        if unsafe { libc::symlink(target.as_ptr(), alias_name.as_ptr()) } != 0 {
+            return Err(Native::runtime_error());
+        }
+        self.paths.push(alias);
+        Ok(())
+    }
+
+    pub(super) fn publish(mut self) -> Arc<SwitchPath> {
+        Arc::new(SwitchPath(std::mem::take(&mut self.paths)))
+    }
+}
+
+impl Drop for PreparedPublication {
+    fn drop(&mut self) {
+        SwitchPath(std::mem::take(&mut self.paths));
+    }
+}
+
 impl Drop for SwitchPath {
     fn drop(&mut self) {
-        for path in &self.0 {
+        cleanup_paths(&self.0, |path| {
             if let Ok(path) = std::ffi::CString::new(path.clone()) {
                 // SAFETY: path is a live NUL-terminated pathname and unlink retains no pointer.
                 unsafe {
                     libc::unlink(path.as_ptr());
                 }
             }
-        }
+        });
+    }
+}
+
+fn cleanup_paths(paths: &[Vec<u8>], mut unlink: impl FnMut(&Vec<u8>)) {
+    for path in paths.iter().rev() {
+        unlink(path);
     }
 }
 
@@ -646,7 +683,7 @@ impl Native {
             libc::EINPROGRESS => RuntimeNetworkError::InProgress,
             libc::EALREADY => RuntimeNetworkError::AlreadyPending,
             libc::EISCONN => RuntimeNetworkError::AlreadyConnected,
-            libc::EADDRINUSE => RuntimeNetworkError::AddressInUse,
+            libc::EADDRINUSE | libc::EEXIST => RuntimeNetworkError::AddressInUse,
             libc::EADDRNOTAVAIL => RuntimeNetworkError::AddressNotAvailable,
             libc::ENOTCONN => RuntimeNetworkError::NotConnected,
             libc::ECONNREFUSED => RuntimeNetworkError::Refused,
@@ -731,7 +768,7 @@ impl Native {
 
 #[cfg(test)]
 mod kind_cache_test {
-    use super::{Native, arm_interest};
+    use super::{Native, arm_interest, cleanup_paths};
     use hl_network::SocketHostIo;
     use std::sync::atomic::Ordering;
 
@@ -793,6 +830,17 @@ mod kind_cache_test {
         assert!(!arm_interest(&mut armed));
         armed = false;
         assert!(arm_interest(&mut armed));
+    }
+
+    #[test]
+    fn switch_publication_cleans_aliases_in_reverse_then_primary() {
+        let paths = vec![b"primary".to_vec(), b"alias-one".to_vec(), b"alias-two".to_vec()];
+        let mut removed = Vec::new();
+        cleanup_paths(&paths, |path| removed.push(path.clone()));
+        assert_eq!(
+            removed,
+            vec![b"alias-two".to_vec(), b"alias-one".to_vec(), b"primary".to_vec()]
+        );
     }
 
     #[test]

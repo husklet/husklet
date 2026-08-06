@@ -1,5 +1,27 @@
 # Network compatibility oracle audit
 
+## Native switch pathname publication
+
+The publication lifecycle was compared with retained
+`../engine/src/linux_abi/syscall/net.c` bind, alias-publication, fork/duplicate,
+and final-close paths and `../engine/src/host/linux/host.c` host bind/close
+adapters. The retained owner publishes the primary AF_UNIX pathname before its
+aliases, records only aliases it created, reverses them on partial failure, and
+keeps the publication with the shared socket lifetime until final close. Host
+calls occur without a guest descriptor-table lock. Publication has no guest-ISA
+branch and does not change routing or checkpoint schema.
+
+Rust keeps the same ownership in the native adapter. `PreparedPublication`
+owns the successfully created primary and alias pathnames until the complete
+set can be attached to the socket `Entry`; dropping it reverses only those
+paths. Publication transfers that set once into the existing `Arc<SwitchPath>`.
+Duplicate descriptors discover and share that owner through the reactor's weak
+pathname registry, while the last `Entry` close drops the final strong owner
+and unlinks each pathname exactly once. A pre-existing foreign alias is never
+unlinked. Tests cover injected partial-alias failure, a foreign-path collision,
+concurrent primary publication, socket reset after rollback, duplicate
+ownership, and final-close cleanup through the production native host path.
+
 The retained implementation was studied read-only in
 `../engine/src/linux_abi/syscall/net.c`, especially `svc_net`,
 `net_precheck`, `net_sockaddr_copyout_begin`, `net_message_bounce_begin`, and

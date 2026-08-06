@@ -10,7 +10,7 @@ use hl_runtime::{
     RuntimeNetworkHost,
 };
 
-use super::{Native, SwitchPath};
+use super::{Native, PreparedPublication};
 
 impl RuntimeNetworkHost for Native {
     type Attachment = OwnedFd;
@@ -212,7 +212,7 @@ impl RuntimeNetworkHost for Native {
                     address: interface.ipv4,
                     port: candidate,
                 };
-                let mut paths = vec![path.clone()];
+                let mut publication = PreparedPublication::primary(path.clone());
                 let aliases = (|| {
                     if address != [0; 4] || kind != libc::SOCK_STREAM {
                         return Ok(());
@@ -223,21 +223,12 @@ impl RuntimeNetworkHost for Native {
                             alias_path.extend_from_slice(b".v6only");
                         }
                         Self::mkdir_switch(&alias_directory)?;
-                        let target = std::ffi::CString::new(path.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
-                        let alias_name =
-                            std::ffi::CString::new(alias_path.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
-                        // SAFETY: both paths are live NUL-terminated strings and neither call retains them.
-                        unsafe { libc::unlink(alias_name.as_ptr()) };
-                        // SAFETY: target and alias are valid NUL-terminated paths retained only by the filesystem.
-                        if unsafe { libc::symlink(target.as_ptr(), alias_name.as_ptr()) } != 0 {
-                            return Err(Self::runtime_error());
-                        }
-                        paths.push(alias_path);
+                        publication.add_alias(&path, alias_path)?;
                     }
                     Ok(())
                 })();
                 if let Err(error) = aliases {
-                    drop(SwitchPath(paths));
+                    drop(publication);
                     self.restore_inet_socket(token, kind)?;
                     return Err(error);
                 }
@@ -245,15 +236,15 @@ impl RuntimeNetworkHost for Native {
                 let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
                 entry.guest_local = Some(local.clone());
                 entry.switch_interface = Some(interface.clone());
-                let ownership = Arc::new(SwitchPath(paths.clone()));
+                let ownership = publication.publish();
                 let weak = Arc::downgrade(&ownership);
                 let mut registry = self
                     .shared
                     .switch_paths
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
-                for owned_path in paths {
-                    registry.insert(owned_path, weak.clone());
+                for owned_path in &ownership.0 {
+                    registry.insert(owned_path.clone(), weak.clone());
                 }
                 entry.switch_path = Some(ownership);
                 return Ok(local);
