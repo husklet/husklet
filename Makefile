@@ -52,10 +52,11 @@ BENCH_C_BUILD ?= $(CURDIR)/../engine/build/unit-audit
 BENCH_GUEST ?= $(CURDIR)/target/testing/bench/combined/$(BENCH_ARCH)/combined-bench
 BENCH_REPEATS ?= 7
 BENCH_DIVISOR ?= 1
+BENCH_MAX_SPREAD ?= 0.05
 BENCH_GATE = target/release/testing benchmark gate \
 	  --workload $(BENCH_WORKLOAD) --arch $(BENCH_ARCH) --binary $(BENCH_GUEST) \
 	  --c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \
-	  --repeats $(BENCH_REPEATS) --divisor $(BENCH_DIVISOR)
+	  --repeats $(BENCH_REPEATS) --divisor $(BENCH_DIVISOR) --max-spread $(BENCH_MAX_SPREAD)
 
 bench-guest:
 	@mkdir -p $(dir $(BENCH_GUEST))
