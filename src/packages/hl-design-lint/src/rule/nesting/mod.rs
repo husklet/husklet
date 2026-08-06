@@ -97,9 +97,23 @@ struct Depth {
     maximum: usize,
     span: Option<Span>,
     construct: &'static str,
+    statement: bool,
 }
 
 impl Depth {
+    /// Reports whether the branch being visited stands as a statement rather than producing a value.
+    fn statement(&mut self) -> bool {
+        std::mem::replace(&mut self.statement, false)
+    }
+
+    /// Visits an else branch, keeping an `else if` chain on the level of the `if` it continues.
+    fn visit_else(&mut self, expression: &syn::ExprIf) {
+        if let Some((_, branch)) = &expression.else_branch {
+            self.statement = false;
+            <Self as Visit>::visit_expr(self, branch);
+        }
+    }
+
     fn enter(&mut self, construct: &'static str, span: Span, visit: impl FnOnce(&mut Self)) {
         self.current += 1;
         if self.current > self.maximum {
@@ -113,22 +127,57 @@ impl Depth {
 }
 
 impl<'ast> Visit<'ast> for Depth {
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        for statement in &block.stmts {
+            if let syn::Stmt::Expr(expression, _) = statement {
+                self.statement = true;
+                self.visit_expr(expression);
+                self.statement = false;
+            } else {
+                self.visit_stmt(statement);
+            }
+        }
+    }
+
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        if let Some((_, guard)) = &arm.guard {
+            self.visit_expr(guard);
+        }
+        self.statement = true;
+        self.visit_expr(&arm.body);
+        self.statement = false;
+    }
+
+    fn visit_expr(&mut self, expression: &'ast Expr) {
+        if !matches!(expression, Expr::If(_) | Expr::Match(_)) {
+            self.statement = false;
+        }
+        syn::visit::visit_expr(self, expression);
+    }
+
     fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
+        let branch = self.statement();
         self.visit_expr(&expression.cond);
+        if !branch {
+            self.visit_block(&expression.then_branch);
+            self.visit_else(expression);
+            return;
+        }
         self.enter("if", expression.if_token.span, |visitor| {
             visitor.visit_block(&expression.then_branch);
-            if let Some((_, branch)) = &expression.else_branch {
-                if let Expr::If(next) = branch.as_ref() {
-                    syn::visit::visit_expr_if(visitor, next);
-                } else {
-                    visitor.visit_expr(branch);
-                }
-            }
+            visitor.visit_else(expression);
         });
     }
 
     fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
+        let branch = self.statement();
         self.visit_expr(&expression.expr);
+        if !branch {
+            for arm in &expression.arms {
+                self.visit_arm(arm);
+            }
+            return;
+        }
         self.enter("match", expression.match_token.span, |visitor| {
             for arm in &expression.arms {
                 visitor.visit_arm(arm);
@@ -285,6 +334,67 @@ fn summarize(row: &ResultRow) {
             other => *other,
         },
         None => 0,
+    }
+}",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn accepts_a_branch_that_produces_a_bound_value() {
+        let findings = findings(
+            r"fn round(control: u16, truncate: bool, value: f64) -> f64 {
+    for _ in 0..2 {
+        let rounded = if truncate {
+            value.trunc()
+        } else {
+            match control >> 10 & 3 {
+                0 => value.round(),
+                _ => value.floor(),
+            }
+        };
+        if rounded > value {
+            return rounded;
+        }
+    }
+    value
+}",
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn reports_a_branch_that_stands_as_a_statement() {
+        let findings = findings(
+            r"fn drain(rows: &[u8], other: &[u8]) {
+    for row in rows {
+        for column in other {
+            if row > column {
+                println!();
+            }
+        }
+    }
+}",
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("depth 3"));
+    }
+
+    #[test]
+    fn keeps_an_else_if_chain_on_one_level() {
+        let findings = findings(
+            r"fn select(first: u8, second: u8, third: u8) {
+    for _ in 0..2 {
+        if first > 0 {
+            println!();
+        } else if second > 0 {
+            println!();
+        } else if third > 0 {
+            println!();
+        }
     }
 }",
         );
