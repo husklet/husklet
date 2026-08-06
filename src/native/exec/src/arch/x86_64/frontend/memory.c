@@ -1131,8 +1131,9 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
     } else if (item->vector_kind == VECTOR_SCALAR_COMPARE_DOUBLE) {
         uint64_t clear = UINT64_C(1) | UINT64_C(1) << 2 | UINT64_C(1) << 4 |
                          UINT64_C(1) << 6 | UINT64_C(1) << 7 | UINT64_C(1) << 11;
-        words[(*cursor)++] = UINT32_C(0x1e602000) | (item->condition != 0u ? UINT32_C(0x10) : 0u) |
-                             source << 16 | destination << 5; /* fcmp/fcmpe dd,ds */
+        words[(*cursor)++] = (item->vector_lane == 4u ? UINT32_C(0x1e202000) : UINT32_C(0x1e602000)) |
+                             (item->condition != 0u ? UINT32_C(0x10) : 0u) |
+                             source << 16 | destination << 5; /* fcmp/fcmpe sd,ss or dd,ds */
         words[(*cursor)++] = UINT32_C(0x9a9f07e0) | (4u ^ 1u) << 12 | 19u; /* cset x19,mi: less */
         words[(*cursor)++] = UINT32_C(0x9a9f07e0) | (0u ^ 1u) << 12 | 20u; /* cset x20,eq */
         words[(*cursor)++] = UINT32_C(0x9a9f07e0) | (6u ^ 1u) << 12 | 21u; /* cset x21,vs: unordered */

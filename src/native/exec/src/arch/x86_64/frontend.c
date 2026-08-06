@@ -673,17 +673,20 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->memory_operand = 1u;
                 item->source = 16u;
             }
-        } else if (operand_16 != 0u && opcode == 0x0fu && cursor < request->guest_size &&
+        } else if (semantic_prefix == 0u && opcode == 0x0fu && cursor < request->guest_size &&
                    (request->guest_bytes[cursor] == 0x2eu || request->guest_bytes[cursor] == 0x2fu)) {
             uint8_t extension = request->guest_bytes[cursor++];
             uint8_t modrm;
+            /* 66 selects the double form (comisd/ucomisd), bare selects single. */
+            uint8_t lane = operand_16 != 0u ? 8u : 4u;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
                 cursor = start; block->status = HL_X86_A64_TRUNCATED;
                 block->exit = HL_X86_A64_INTERPRETER; break;
             }
             modrm = request->guest_bytes[cursor];
             item->operation = OP_VECTOR;
-            item->width = 8u;
+            item->width = lane;
+            item->vector_lane = lane;
             item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
             item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
             item->vector_kind = VECTOR_SCALAR_COMPARE_DOUBLE;
@@ -693,7 +696,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             } else {
                 if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
                 item->operation = OP_VECTOR;
-                item->width = 8u;
+                item->width = lane;
+                item->vector_lane = lane;
                 item->memory_operand = 1u;
                 item->source = 16u;
             }
