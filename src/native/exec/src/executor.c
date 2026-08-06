@@ -1192,7 +1192,10 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             hl_a64_source region_source;
             size_t build_count = count;
             hl_a64_fetch_result tail;
-            if (resolver != NULL && count < limit && active_source->span_count < HL_A64_SOURCE_MAX_SPANS &&
+            /* The resolver refills one borrowed buffer, so a resolved primary
+             * span's bytes die the moment the successor is resolved. */
+            if (resolver != NULL && active_source == source && count < limit &&
+                active_source->span_count < HL_A64_SOURCE_MAX_SPANS &&
                 hl_a64_source_fetch(active_source, instruction + (count - 1) * 4, 1, &tail) &&
                 (tail.words[0] & UINT32_C(0xfc000000)) == UINT32_C(0x14000000)) {
                 int64_t displacement = (int64_t)((uint64_t)(tail.words[0] & UINT32_C(0x03ffffff)) << 38) >> 36;
