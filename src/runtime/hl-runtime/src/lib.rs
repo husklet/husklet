@@ -84,7 +84,10 @@ mod process_timer;
 mod process_uname;
 mod system;
 pub use hl_ipc::{MqLimits, MqNamespace};
-pub use system::{ResourceSnapshot, SystemAuthority};
+pub use system::{
+    LaunchToken, ResourceSnapshot, SystemAuthority, SystemLaunchError, SystemLaunchUpdate, SystemObservationError,
+    SystemObservationHandle, SystemView,
+};
 #[path = "process/wait.rs"]
 mod process_wait;
 mod robust;

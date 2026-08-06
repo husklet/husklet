@@ -1358,6 +1358,84 @@ fn force_stop_interrupts_running() {
 }
 
 #[test]
+fn create_reports_process_capacity_exhaustion_before_system_permit() {
+    let assembly = RuntimeAssembly::new(hl_runtime::RuntimeAssemblyConfig {
+        maximum_processes: 1,
+        maximum_threads: 1,
+        ..hl_runtime::RuntimeAssemblyConfig::default()
+    })
+    .unwrap();
+    install_test_ipc(&assembly);
+    let before = assembly.system().view();
+    let (arena, mappings) = mapped_arena();
+    let result = super::routing::create(
+        arena,
+        mappings,
+        &RuntimeLaunchPlan {
+            rootfs: None,
+            executable_host: None,
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            result_path: None,
+            options: Options::default(),
+        },
+        &assembly,
+        GuestArchitecture::Aarch64,
+        Arc::new(super::readiness::Cancellation::new().unwrap()),
+        None,
+        Arc::new(super::image_data::Entropy),
+        &crate::composition::StandardStreams::default(),
+    );
+    assert!(matches!(result, Err(EngineError::LaunchFailed)));
+    assert_eq!(assembly.system().view(), before);
+}
+
+#[test]
+fn create_with_existing_anonymous_memory_does_not_reenter_system_lock() {
+    let assembly = RuntimeAssembly::new(hl_runtime::RuntimeAssemblyConfig::default()).unwrap();
+    install_test_ipc(&assembly);
+    let (arena, mappings) = mapped_arena();
+    mappings
+        .map_charged(
+            MapRequest {
+                placement: Placement::Fixed(GuestAddress::new(0)),
+                length: 4096,
+                alignment: 4096,
+                protection: Protection::READ,
+                backing: Backing::Anonymous {
+                    identity: 91,
+                    shared: false,
+                },
+                backing_offset: 0,
+            },
+            4096,
+        )
+        .unwrap();
+    let mut options = Options::default();
+    options.set("HL_MEM_MAX", "8192", true).unwrap();
+    let result = super::routing::create(
+        arena,
+        mappings,
+        &RuntimeLaunchPlan {
+            rootfs: None,
+            executable_host: None,
+            arguments: Vec::new(),
+            environment: Vec::new(),
+            result_path: None,
+            options,
+        },
+        &assembly,
+        GuestArchitecture::Aarch64,
+        Arc::new(super::readiness::Cancellation::new().unwrap()),
+        None,
+        Arc::new(super::image_data::Entropy),
+        &crate::composition::StandardStreams::default(),
+    );
+    assert!(result.is_ok());
+    assert_eq!(assembly.system().snapshot().free_memory, 4096);
+}
+
+#[test]
 fn stop_before_start() {
     let executor = GuestExecutor::default();
     let assembly = RuntimeAssembly::new(Default::default()).unwrap();

@@ -46,6 +46,71 @@ handle), but the Linux-visible code and bytes do not.
 These seeds establish launch plumbing only; they do not claim broad descriptor,
 process, signal, fork, exec, or partial-I/O domain completeness.
 
+## System launch publication audit
+
+The retained launch paths in `../engine/src/core/target/aarch64.c` and
+`../engine/src/core/target/x86_64.c` parse `HL_MEM_MAX` into the process-global
+`g_mem_max` before `container_populate_machine_id`. The latter entry in
+`../engine/src/linux_abi/container/vfs.c` derives the machine identity from
+`proc_reg_key`; `boot_id_bytes` derives the matching stable boot identity from
+the same `HL_NETNS`, hostname, or session key. Resource readers in
+`container/vfs.c` combine `g_mem_max`, atomic memory/fork counters, and host
+snapshots, while `../engine/src/linux_abi/syscall/dispatch.c` independently
+assembles the corresponding `sysinfo` view through `hl_host_system_read`.
+
+Those retained values have process lifetime, process-global identity, and no
+single publication lock: initialization precedes guest execution, dynamic
+memory/fork counters are atomic, and host sampling is per read. There is no
+blocking, cancellation, partial-result, signal, or errno behavior in the
+initial publication itself. AArch64 and x86-64 differ only in their target
+entry files; the container VFS and syscall publication code is shared. Host
+branches are confined to `hl_host_system_read` and are completed before the
+Rust launch transaction is prepared.
+
+The target entry functions studied were `main` in both target files. Each
+parses launch options, initializes container globals, calls
+`container_populate_machine_id`, and reaches guest execution only after that
+initialization. In `container/vfs.c`, `proc_reg_key`,
+`container_populate_machine_id`, `boot_id_bytes`, `proc_meminfo_text`, and the
+cgroup resource renderers own the identity and resource projections. In
+`syscall/dispatch.c`, `service_local` dispatches `sysinfo` through
+`hl_host_system_read`. These globals live until process teardown; dynamic
+memory and fork counters use atomic updates while identity initialization is
+single-threaded. No retained lock is held across a host call.
+
+Rust maps the retained container key and resource projection to the
+instance-owned `hl_runtime::SystemAuthority`; `hl-engine` owns launch-option
+capture and host sampling. `SystemLaunchUpdate` validates and copies those
+values after task-slot admission, reserves the next generation, then replaces
+boot identity, resource snapshot, random sequence, and generation infallibly
+under the authority's one state lock. `SystemAuthority::view` is the public
+combined observation contract and returns either the complete old or complete
+new tuple. Separate `boot_identity` and `snapshot` calls are independent
+observations and deliberately make no cross-call coherence promise. Resource
+free-memory observations made during construction use an explicit
+generation-qualified handle. Its route state and pending resource tuple live
+under the same authority mutex as the published tuple. Commit publishes the
+tuple and promotes every permit-owned route in that single critical section;
+abort retires every route under the same lock, so late construction objects
+cannot publish failed-launch limits. External uptime, fork, and memory
+observations remain live and are merged into the pending tuple in mutex order.
+Other conflicting launch mutations fail immediately with `LaunchBusy`. Drop
+releases construction state without discarding successful external observations.
+
+This is atomic publication of the system tuple, not a transaction over every
+domain touched by route composition. Task-slot exhaustion is admitted before
+the system permit and is returned as launch failure. Later task, seccomp,
+mapping, ptrace, host-path, and descriptor effects still rely on their existing
+domain cleanup and are not collectively rolled back by `SystemLaunchUpdate`.
+Cross-domain rollback for those post-permit effects remains a separate launch
+composition gap; this slice does not claim launch-wide atomicity.
+
+`SystemAuthority` is not yet a checkpoint participant. A prepared launch update
+is therefore not checkpoint-portable state and must finish or drop before a
+runnable route is published. Adding system identity, resource observations,
+and random-sequence state to the checkpoint format remains a separate
+cross-domain migration; this launch slice does not claim that capability.
+
 ## Consolidated freestanding variants
 
 The category also owns the retained `runtime/legacy-exit/status-42` and

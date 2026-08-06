@@ -1,6 +1,31 @@
 use super::*;
 use crate::composition::StandardStreams;
 
+struct SystemLaunchPublication(hl_runtime::SystemLaunchUpdate);
+
+impl SystemLaunchPublication {
+    fn prepare(
+        system: &Arc<hl_runtime::SystemAuthority>,
+        boot_key: &[u8],
+        resources: hl_runtime::ResourceSnapshot,
+    ) -> Result<Self, EngineError> {
+        system
+            .prepare_launch(boot_key, resources)
+            .map(Self)
+            .map_err(|_| EngineError::LaunchFailed)
+    }
+
+    fn construction_observer(&mut self) -> hl_runtime::SystemObservationHandle {
+        self.0.construction_observer()
+    }
+
+    fn finish<T>(self, result: Result<T, EngineError>) -> Result<T, EngineError> {
+        let value = result?;
+        self.0.commit();
+        Ok(value)
+    }
+}
+
 pub(in crate::ffi::linux::execution) fn launch_identity(
     plan: &RuntimeLaunchPlan,
     name: &str,
@@ -201,18 +226,32 @@ pub(in crate::ffi::linux::execution) fn create(
         .or(plan.rootfs.as_deref())
         .or(plan.executable_host.as_deref())
         .unwrap_or(b"hl-engine");
-    system.set_boot_key(boot_key);
-    system.replace(hl_runtime::ResourceSnapshot {
-        uptime_seconds,
-        total_memory: memory_limit.unwrap_or(0),
-        free_memory: memory_limit.unwrap_or(0),
-        cpu_limit,
-        ..hl_runtime::ResourceSnapshot::default()
-    });
-    let child = tasks
+    let child_plan = tasks
         .begin_fork_process(source)
-        .and_then(|plan| tasks.commit_fork_process(plan))
-        .expect("task registry has process capacity");
+        .map_err(|_| EngineError::LaunchFailed)?;
+    let mut system_launch = match SystemLaunchPublication::prepare(
+        &system,
+        boot_key,
+        hl_runtime::ResourceSnapshot {
+            uptime_seconds,
+            total_memory: memory_limit.unwrap_or(0),
+            free_memory: memory_limit.unwrap_or(0),
+            cpu_limit,
+            ..hl_runtime::ResourceSnapshot::default()
+        },
+    ) {
+        Ok(publication) => publication,
+        Err(error) => {
+            tasks
+                .rollback_fork_process(child_plan)
+                .map_err(|_| EngineError::LaunchFailed)?;
+            return Err(error);
+        }
+    };
+    let system_observer = system_launch.construction_observer();
+    let child = tasks
+        .commit_fork_process(child_plan)
+        .map_err(|_| EngineError::LaunchFailed)?;
     // A syscall router can be composed before an executable image is attached
     // (checkpoint restore and the route-level harness both do this). Linux task
     // identity still needs a stable initial comm; exec replaces it with the
@@ -272,7 +311,7 @@ pub(in crate::ffi::linux::execution) fn create(
         brk = brk
             .with_account(Arc::new(super::super::memory_account::MemoryAccount::new(
                 limit,
-                Arc::clone(&system),
+                system_observer,
             )))
             .map_err(|_| EngineError::LaunchFailed)?;
     }
@@ -420,11 +459,12 @@ pub(in crate::ffi::linux::execution) fn create(
         vfork,
     });
     let router = process.router(child.1, cancellation, None);
-    Ok(Route {
+    let route = Route {
         router,
         thread: child.1,
         process,
-    })
+    };
+    system_launch.finish(Ok(route))
 }
 
 #[cfg(test)]
@@ -511,5 +551,26 @@ mod tests {
                 Err(EngineError::LaunchFailed)
             ));
         }
+    }
+
+    #[test]
+    fn downstream_failure_drops_unpublished_system_launch() {
+        let system = Arc::new(hl_runtime::SystemAuthority::default());
+        let before = (system.boot_identity(), system.snapshot());
+        let update = SystemLaunchPublication::prepare(
+            &system,
+            b"next",
+            hl_runtime::ResourceSnapshot {
+                total_memory: 4096,
+                free_memory: 2048,
+                ..hl_runtime::ResourceSnapshot::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            update.finish::<()>(Err(EngineError::LaunchFailed)),
+            Err(EngineError::LaunchFailed)
+        );
+        assert_eq!((system.boot_identity(), system.snapshot()), before);
     }
 }

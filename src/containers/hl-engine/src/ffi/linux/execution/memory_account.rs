@@ -1,9 +1,11 @@
-use std::sync::{Arc, Mutex};
+#[cfg(test)]
+use std::sync::Arc;
+use std::sync::Mutex;
 
 pub(super) struct MemoryAccount {
     limit: u64,
     current: Mutex<u64>,
-    system: Arc<hl_runtime::SystemAuthority>,
+    system: hl_runtime::SystemObservationHandle,
 }
 
 impl std::fmt::Debug for MemoryAccount {
@@ -17,7 +19,7 @@ impl std::fmt::Debug for MemoryAccount {
 }
 
 impl MemoryAccount {
-    pub(super) fn new(limit: u64, system: Arc<hl_runtime::SystemAuthority>) -> Self {
+    pub(super) fn new(limit: u64, system: hl_runtime::SystemObservationHandle) -> Self {
         Self {
             limit,
             current: Mutex::new(0),
@@ -25,8 +27,10 @@ impl MemoryAccount {
         }
     }
 
-    fn publish(&self, current: u64) {
-        self.system.observe_free_memory(self.limit.saturating_sub(current));
+    fn publish(&self, current: u64) -> bool {
+        self.system
+            .observe_free_memory(self.limit.saturating_sub(current))
+            .is_ok()
     }
 }
 
@@ -36,15 +40,17 @@ impl hl_runtime::AnonymousMemoryAccount for MemoryAccount {
         let Some(next) = current.checked_add(bytes).filter(|next| *next <= self.limit) else {
             return false;
         };
+        if !self.publish(next) {
+            return false;
+        }
         *current = next;
-        self.publish(next);
         true
     }
 
     fn refund(&self, bytes: u64) {
         let mut current = self.current.lock().unwrap_or_else(|error| error.into_inner());
         *current = current.saturating_sub(bytes);
-        self.publish(*current);
+        let _ = self.publish(*current);
     }
 
     fn current(&self) -> u64 {
@@ -59,12 +65,18 @@ mod tests {
 
     #[test]
     fn current_updates_visible_memory() {
-        let system = Arc::new(hl_runtime::SystemAuthority::new(hl_runtime::ResourceSnapshot {
-            total_memory: 100,
-            free_memory: 100,
-            ..hl_runtime::ResourceSnapshot::default()
-        }));
-        let account = MemoryAccount::new(100, Arc::clone(&system));
+        let system = Arc::new(
+            hl_runtime::SystemAuthority::new(hl_runtime::ResourceSnapshot {
+                total_memory: 100,
+                free_memory: 100,
+                ..hl_runtime::ResourceSnapshot::default()
+            })
+            .unwrap(),
+        );
+        let mut launch = system.prepare_launch(b"memory-account", system.snapshot()).unwrap();
+        let observer = launch.construction_observer();
+        launch.commit();
+        let account = MemoryAccount::new(100, observer);
         system.observe_uptime(17);
         system.observe_fork();
         assert!(account.reserve(37));

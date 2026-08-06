@@ -548,7 +548,11 @@ impl ProcfsSource for TaskProcfs {
     }
 
     fn random_identity(&self) -> Result<[u8; 16], ProcfsError> {
-        Ok(self.system.as_ref().ok_or(ProcfsError::NotFound)?.random_identity())
+        self.system
+            .as_ref()
+            .ok_or(ProcfsError::NotFound)?
+            .random_identity()
+            .map_err(|_| ProcfsError::Invalid)
     }
 
     fn uts(&self, process: ProcfsProcessIdentity) -> Result<ProcfsUtsView, ProcfsError> {
