@@ -140,7 +140,7 @@ impl GuestExecutor {
             .install_ipc(Arc::clone(&shared))
             .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Ipc))?;
         let arena = Arc::new(
-            VirtualMemory::reserve_in(Arc::clone(&self.resources), arena::Capacity::DEFAULT)
+            arena::Capacity::reserve(Arc::clone(&self.resources))
                 .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Memory))?
                 .with_shared_store(Arc::clone(&shared))
                 .with_shared_backings(shared_backings),

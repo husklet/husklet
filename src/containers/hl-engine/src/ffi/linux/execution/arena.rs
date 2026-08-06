@@ -1,9 +1,12 @@
+use super::super::MemoryError;
+
 pub(super) struct Capacity;
 
 const _: () = assert!(usize::BITS >= 64);
 
 impl Capacity {
     pub(super) const MAXIMUM: usize = hl_memory::MEMORY_ADDRESS_MAXIMUM as usize;
+    pub(super) const MINIMUM: usize = 16 * 1024 * 1024 * 1024;
     // The retained C engine gives an unconstrained guest the host's ordinary
     // virtual address space. Rust uses one sparse PROT_NONE reservation instead,
     // so its default must not turn a few ordinary pthread stacks into an
@@ -11,6 +14,25 @@ impl Capacity {
     // ceiling consumes virtual addresses, not resident memory. HL_MEM_MAX is a
     // separate anonymous-memory charge and never narrows this address aperture.
     pub(super) const DEFAULT: usize = Self::MAXIMUM;
+
+    pub(super) fn reserve(
+        context: std::sync::Arc<crate::native_host::HostResourceContext>,
+    ) -> Result<super::VirtualMemory, MemoryError> {
+        Self::reserve_with(|length| super::VirtualMemory::reserve_in(std::sync::Arc::clone(&context), length))
+    }
+
+    fn reserve_with<T>(mut attempt: impl FnMut(usize) -> Result<T, MemoryError>) -> Result<T, MemoryError> {
+        let mut length = Self::DEFAULT;
+        loop {
+            match attempt(length) {
+                Ok(value) => return Ok(value),
+                Err(MemoryError::OutOfMemory) if length > Self::MINIMUM => {
+                    length = (length / 2).max(Self::MINIMUM);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -21,7 +43,48 @@ mod tests {
     use hl_memory::{Backing, MapRequest, MappingCoordinator, Placement, Protection};
 
     use super::super::{MappingHostAdapter, VirtualMemory};
-    use super::Capacity;
+    use super::{Capacity, MemoryError};
+
+    #[test]
+    fn reservation_selects_largest_supported_capacity() {
+        let mut attempted = Vec::new();
+        let selected = Capacity::reserve_with(|length| {
+            attempted.push(length);
+            (length <= Capacity::DEFAULT / 4)
+                .then_some(length)
+                .ok_or(MemoryError::OutOfMemory)
+        })
+        .unwrap();
+        assert_eq!(selected, Capacity::DEFAULT / 4);
+        assert_eq!(
+            attempted,
+            vec![Capacity::DEFAULT, Capacity::DEFAULT / 2, Capacity::DEFAULT / 4]
+        );
+    }
+
+    #[test]
+    fn reservation_preserves_non_capacity_error_ordering() {
+        let mut calls = 0;
+        let error = Capacity::reserve_with::<()>(|_| {
+            calls += 1;
+            Err(MemoryError::Host)
+        })
+        .unwrap_err();
+        assert_eq!(error, MemoryError::Host);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn reservation_returns_out_of_memory_when_minimum_cannot_fit() {
+        let mut last = 0;
+        let error = Capacity::reserve_with::<()>(|length| {
+            last = length;
+            Err(MemoryError::OutOfMemory)
+        })
+        .unwrap_err();
+        assert_eq!(error, MemoryError::OutOfMemory);
+        assert_eq!(last, Capacity::MINIMUM);
+    }
 
     fn request(placement: Placement, length: u64, identity: u64) -> MapRequest {
         MapRequest {

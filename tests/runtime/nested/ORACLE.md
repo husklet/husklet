@@ -10,6 +10,7 @@ The retained implementation was studied read-only in `../engine`.
 | Exact result gate | `tools/nested_engine_gate.c:main`, `read_file` | Waits for the chain, requires ordinary exit and byte-exact stdout; stderr remains a diagnostic channel | `execute` | Implemented; native-mode rows additionally require propagated `hl-native-detail` evidence |
 | Bounded supervision | `tools/process.c:hl_process_run`, `child_exec`, `read_output` | Fork/exec ownership, EINTR-safe reads and wait; the C capture grows without a bound and has no timeout/process-group teardown | `capture`, `drain`, `terminate_group` | Rust intentionally strengthens the oracle with byte bounds, timeout, TERM/KILL, and reap |
 | Foreign static nested artifacts | `cmake/Phase2Production.cmake:hl_linux_production`, `cmake/Phase3Gates.cmake:nested-foreign-engines` | Second static cross-toolchain; deliberately absent from default build | Typed Cargo recipe plus `testing nested prepare`; the recipe and complete Rust source tree determine the cache key, while a SHA-256 receipt verifies reused bytes | Implemented; target toolchains remain an explicit host prerequisite |
+| Nested address-space ownership | `src/linux_abi/syscall/mem.c` case 222 and `src/host/linux/host.c:hl_linux_memory_reserve` | C maps each requested guest range and returns the host mapping errno; it does not reserve one engine-wide aperture, so recursive engines consume only their live mappings | `ffi/linux/execution/arena.rs::Capacity` and `VirtualMemory` | Rust uses a guarded sparse aperture; initial construction now selects the largest deterministic capacity the containing Linux address space accepts, while fork and checkpoint restore preserve the already-selected exact limit |
 
 Architecture branches are encoded by the manifest rather than host-conditionals in
 the runner. The retained matrix covers same-ISA, cross-ISA, three-layer inverse,
@@ -18,6 +19,20 @@ Linux targets with locked, offline Cargo, installs verified artifacts atomically
 and reuses only a content-bound cache entry. `testing nested run` prepares first,
 so an unavailable compiler or target is a build failure rather than a false test
 result.
+
+The Rust aperture audit additionally covered `ffi/linux/execution/mod.rs:run`,
+`ffi/linux/virtual/memory.rs:VirtualMemory::reserve_in`,
+`hl-runtime/src/memory/syscalls.rs:mmap`, and
+`hl-memory/src/checkpoint.rs:MemoryCheckpointImage::validate`. The former default
+used the 1 TiB checkpoint maximum as its arena size and added two guard pages.
+When an engine ran as a guest of another engine with the same 1 TiB limit, the
+outer Linux personality rejected the child's 1 TiB plus two-page reservation
+with `ENOMEM` before placement. Initial arena selection may therefore fall back
+geometrically on `OutOfMemory` only. Invalid ranges and host failures retain
+their original ordering, and the generic minimum is bounded. The selected arena
+length remains the guest syscall address limit and the snapshot `address_limit`;
+fork and restore reserve that exact value and never shrink an existing process
+or checkpoint image.
 
 The artifact recipe uses the pinned GNU Rust targets with `+crt-static` applied
 only to the final `hl-engine` binary through `cargo rustc`; applying that feature
