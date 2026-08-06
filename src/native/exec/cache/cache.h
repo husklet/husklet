@@ -98,6 +98,15 @@ typedef struct hl_native_cache_stats {
     uint64_t mapping_epoch;
 } hl_native_cache_stats;
 
+/* Pointer-free caller-owned lookup accounting. Each field saturates
+ * independently at UINT64_MAX. */
+typedef struct hl_native_cache_lookup_counts {
+    uint64_t lookups;
+    uint64_t hits;
+    uint64_t misses;
+    uint64_t epoch_rejections;
+} hl_native_cache_lookup_counts;
+
 /* A relocation owns the complete cold instruction image that may eventually
  * become an edge-admission program.  A zero word_count is the legacy one-word
  * form in `expected`; it keeps existing non-AArch64 producers ABI-compatible
@@ -125,6 +134,14 @@ hl_native_status hl_native_cache_create(hl_native_cache **, hl_native_arena *, u
 hl_native_lookup hl_native_cache_lookup(hl_native_cache *, uint64_t, uint64_t, hl_native_code *);
 hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *, uint64_t, uint64_t, uint64_t,
                                              uint64_t, uint64_t, hl_native_code *);
+/* These internal probes are an explicit request to bypass legacy cache
+ * diagnostics. Production use is forbidden until a routed migration owns
+ * the counted context's complete lifetime and publication. */
+hl_native_lookup hl_native_cache_probe_key(hl_native_cache *, uint64_t, uint64_t, uint64_t,
+                                            uint64_t, uint64_t, hl_native_code *);
+hl_native_lookup hl_native_cache_probe_key_counted(hl_native_cache *, hl_native_cache_lookup_counts *,
+                                                    uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                                                    hl_native_code *);
 int hl_native_cache_available(const hl_native_cache *);
 hl_native_status hl_native_cache_write_begin(hl_native_cache *);
 hl_native_status hl_native_cache_write_end(hl_native_cache *);

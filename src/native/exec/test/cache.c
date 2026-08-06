@@ -194,6 +194,68 @@ static int instruction_epoch(void) {
     return 0;
 }
 
+static int probe_accounting(void) {
+    fixture fixture;
+    hl_native_code raw, legacy, counted, zero = {0}, sentinel;
+    hl_native_cache_stats before, after;
+    hl_native_cache_lookup_counts counts = {0};
+    CHECK(fixture_create(&fixture, 8, 5) == 0);
+    CHECK(publish(&fixture, 0x7100, 5, 0x7100, 0x7104) == HL_NATIVE_OK);
+    hl_native_cache_diagnose(fixture.cache, &before);
+    memset(&raw, 0xa5, sizeof(raw));
+    CHECK(hl_native_cache_probe_key(fixture.cache, 0x7100, 5, 0, 0, 0, &raw) == HL_NATIVE_HIT);
+    CHECK(hl_native_cache_probe_key(fixture.cache, 0x7200, 5, 0, 0, 0, &legacy) == HL_NATIVE_MISS);
+    CHECK(memcmp(&legacy, &zero, sizeof(zero)) == 0);
+    CHECK(hl_native_cache_probe_key(fixture.cache, 0x7100, 6, 0, 0, 0, &legacy) == HL_NATIVE_EPOCH);
+    CHECK(memcmp(&legacy, &zero, sizeof(zero)) == 0);
+    CHECK(hl_native_cache_probe_key(fixture.cache, 0x7100, 5, 1, 0, 0, &legacy) == HL_NATIVE_MISS);
+    CHECK(memcmp(&legacy, &zero, sizeof(zero)) == 0);
+    hl_native_cache_diagnose(fixture.cache, &after);
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+    CHECK(hl_native_cache_lookup_key(fixture.cache, 0x7100, 5, 0, 0, 0, &legacy) == HL_NATIVE_HIT);
+    CHECK(memcmp(&raw, &legacy, sizeof(raw)) == 0);
+    hl_native_cache_diagnose(fixture.cache, &before);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0x7100, 5, 0, 0, 0, &counted) == HL_NATIVE_HIT);
+    CHECK(memcmp(&raw, &counted, sizeof(raw)) == 0);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0x7200, 5, 0, 0, 0, &counted) == HL_NATIVE_MISS);
+    CHECK(memcmp(&counted, &zero, sizeof(zero)) == 0);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0x7100, 5, 1, 0, 0, &counted) == HL_NATIVE_MISS);
+    CHECK(memcmp(&counted, &zero, sizeof(zero)) == 0);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0x7100, 6, 0, 0, 0, &counted) == HL_NATIVE_EPOCH);
+    CHECK(memcmp(&counted, &zero, sizeof(zero)) == 0);
+    hl_native_cache_diagnose(fixture.cache, &after);
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+    CHECK(counts.lookups == 4 && counts.hits == 1 && counts.misses == 2 && counts.epoch_rejections == 1);
+    hl_native_cache_diagnose(fixture.cache, &before);
+    CHECK(hl_native_cache_probe_key_counted(NULL, &counts, 0, 0, 0, 0, 0, &legacy) == HL_NATIVE_MISS);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, NULL, 0, 0, 0, 0, 0, &legacy) == HL_NATIVE_MISS);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0, 0, 0, 0, 0, NULL) == HL_NATIVE_MISS);
+    hl_native_cache_diagnose(fixture.cache, &after);
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0 && counts.lookups == 4);
+    counts = (hl_native_cache_lookup_counts){UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0x7100, 5, 0, 0, 0, &legacy) == HL_NATIVE_HIT);
+    CHECK(counts.lookups == UINT64_MAX && counts.hits == UINT64_MAX &&
+          counts.misses == UINT64_MAX && counts.epoch_rejections == UINT64_MAX);
+    memset(&sentinel, 0xa5, sizeof(sentinel));
+    before = after;
+    CHECK(hl_native_cache_probe_key(NULL, 0, 0, 0, 0, 0, &sentinel) == HL_NATIVE_MISS);
+    CHECK(((const uint8_t *)&sentinel)[0] == 0xa5);
+    hl_native_cache_diagnose(fixture.cache, &after);
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+    hl_native_cache_fail(fixture.cache);
+    hl_native_code poisoned_raw, poisoned_counted, poisoned_legacy;
+    memset(&poisoned_raw, 0xa5, sizeof(poisoned_raw));
+    poisoned_counted = poisoned_legacy = poisoned_raw;
+    CHECK(hl_native_cache_probe_key(fixture.cache, 0, 0, 0, 0, 0, &poisoned_raw) == HL_NATIVE_MISS);
+    CHECK(hl_native_cache_probe_key_counted(fixture.cache, &counts, 0, 0, 0, 0, 0,
+                                            &poisoned_counted) == HL_NATIVE_MISS);
+    CHECK(hl_native_cache_lookup_key(fixture.cache, 0, 0, 0, 0, 0, &poisoned_legacy) == HL_NATIVE_MISS);
+    CHECK(memcmp(&poisoned_raw, &poisoned_counted, sizeof(poisoned_raw)) == 0 &&
+          memcmp(&poisoned_raw, &poisoned_legacy, sizeof(poisoned_raw)) == 0);
+    fixture_destroy(&fixture);
+    return 0;
+}
+
 static int execution_identity(void) {
     fixture fixture;
     hl_native_code code;
@@ -356,7 +418,7 @@ static int relocation_span(void) {
 
 int main(void) {
     if (reuse() != 0 || invalidation() != 0 || epoch() != 0 || capacity() != 0 || isolation() != 0 ||
-        instruction_epoch() != 0 || execution_identity() != 0 || authority_identity() != 0 ||
+        instruction_epoch() != 0 || probe_accounting() != 0 || execution_identity() != 0 || authority_identity() != 0 ||
         relocation_observer() != 0 || relocation_span() != 0) return 1;
     return 0;
 }

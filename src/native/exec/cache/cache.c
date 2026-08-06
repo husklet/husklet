@@ -114,49 +114,75 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     return HL_NATIVE_OK;
 }
 
+#define PROBE_KEY_VALID(EPOCH_SINK, MISS_SINK, HIT_SINK) do { \
+    if (mapping_epoch != cache->mapping_epoch || memory_mode != cache->memory_mode || \
+        authority_generation != cache->authority_generation) { EPOCH_SINK; return HL_NATIVE_EPOCH; } \
+    slot = hl_native_cache_find_identity(cache, guest, memory_mode, authority_generation); \
+    if (slot < 0) { MISS_SINK; return HL_NATIVE_MISS; } \
+    entry = &cache->entries[slot]; \
+    if (entry->instruction_epoch != instruction_epoch) { MISS_SINK; return HL_NATIVE_MISS; } \
+    output->entry = cache->arena->executable + entry->code_offset; \
+    output->body = cache->arena->executable + entry->body_offset; \
+    output->admitted = cache->arena->executable + entry->admitted_offset; \
+    output->code_size = entry->code_size; \
+    output->generation = cache->generation; \
+    output->source_first = entry->source_first; \
+    output->source_last = entry->source_last; \
+    output->instruction_count = entry->instruction_count; \
+    output->relocation_count = entry->relocation_count; \
+    output->conditional_self_loop = entry->conditional_self_loop; \
+    output->cycle_safe = entry->cycle_safe; \
+    output->loop_pc = entry->loop_pc; \
+    output->identity_token = entry->token; \
+    output->mapping_epoch = entry->mapping_epoch; \
+    output->instruction_epoch = entry->instruction_epoch; \
+    output->memory_mode = entry->memory_mode; \
+    output->authority_generation = entry->authority_generation; \
+    output->certificate_identity = entry->certificate_identity; \
+    HIT_SINK; \
+    return HL_NATIVE_HIT; \
+} while (0)
+
 hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *cache, uint64_t guest, uint64_t mapping_epoch,
                                             uint64_t instruction_epoch, uint64_t memory_mode,
                                             uint64_t authority_generation, hl_native_code *output) {
     int slot;
+    cache_entry *entry;
     if (!hl_native_cache_available(cache) || output == NULL) return HL_NATIVE_MISS;
     memset(output, 0, sizeof(*output));
     cache->stats.lookups++;
-    if (mapping_epoch != cache->mapping_epoch || memory_mode != cache->memory_mode ||
-        authority_generation != cache->authority_generation) {
-        cache->stats.epoch_rejections++;
-        return HL_NATIVE_EPOCH;
-    }
-    slot = hl_native_cache_find_identity(cache, guest, memory_mode, authority_generation);
-    if (slot < 0) {
-        cache->stats.misses++;
-        return HL_NATIVE_MISS;
-    }
-    cache_entry *entry = &cache->entries[slot];
-    if (entry->instruction_epoch != instruction_epoch) {
-        cache->stats.misses++;
-        return HL_NATIVE_MISS;
-    }
-    output->entry = cache->arena->executable + entry->code_offset;
-    output->body = cache->arena->executable + entry->body_offset;
-    output->admitted = cache->arena->executable + entry->admitted_offset;
-    output->code_size = entry->code_size;
-    output->generation = cache->generation;
-    output->source_first = entry->source_first;
-    output->source_last = entry->source_last;
-    output->instruction_count = entry->instruction_count;
-    output->relocation_count = entry->relocation_count;
-    output->conditional_self_loop = entry->conditional_self_loop;
-    output->cycle_safe = entry->cycle_safe;
-    output->loop_pc = entry->loop_pc;
-    output->identity_token = entry->token;
-    output->mapping_epoch = entry->mapping_epoch;
-    output->instruction_epoch = entry->instruction_epoch;
-    output->memory_mode = entry->memory_mode;
-    output->authority_generation = entry->authority_generation;
-    output->certificate_identity = entry->certificate_identity;
-    cache->stats.hits++;
-    return HL_NATIVE_HIT;
+    PROBE_KEY_VALID(cache->stats.epoch_rejections++, cache->stats.misses++, cache->stats.hits++);
 }
+
+hl_native_lookup hl_native_cache_probe_key(hl_native_cache *cache, uint64_t guest, uint64_t mapping_epoch,
+                                           uint64_t instruction_epoch, uint64_t memory_mode,
+                                           uint64_t authority_generation, hl_native_code *output) {
+    if (!hl_native_cache_available(cache) || output == NULL) return HL_NATIVE_MISS;
+    memset(output, 0, sizeof(*output));
+    int slot;
+    cache_entry *entry;
+    PROBE_KEY_VALID((void)0, (void)0, (void)0);
+}
+
+static void count_saturating(uint64_t *value) {
+    if (*value != UINT64_MAX) (*value)++;
+}
+
+hl_native_lookup hl_native_cache_probe_key_counted(hl_native_cache *cache,
+                                                   hl_native_cache_lookup_counts *counts,
+                                                   uint64_t guest, uint64_t mapping_epoch,
+                                                   uint64_t instruction_epoch, uint64_t memory_mode,
+                                                   uint64_t authority_generation, hl_native_code *output) {
+    if (!hl_native_cache_available(cache) || counts == NULL || output == NULL) return HL_NATIVE_MISS;
+    memset(output, 0, sizeof(*output));
+    count_saturating(&counts->lookups);
+    int slot;
+    cache_entry *entry;
+    PROBE_KEY_VALID(count_saturating(&counts->epoch_rejections),
+                    count_saturating(&counts->misses), count_saturating(&counts->hits));
+}
+
+#undef PROBE_KEY_VALID
 
 hl_native_lookup hl_native_cache_lookup(hl_native_cache *cache, uint64_t guest, uint64_t mapping_epoch,
                                         hl_native_code *output) {
