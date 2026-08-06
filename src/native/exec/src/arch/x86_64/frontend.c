@@ -31,7 +31,8 @@ static int kills_flags(const instruction *item) {
 static int flags_dead_at(const decode *block, uint32_t index) {
     const instruction *item = &block->instructions[index];
 
-    if (item->operation != OP_ALU && item->operation != OP_SHIFT) return 0;
+    if (item->operation != OP_ALU && item->operation != OP_SHIFT && item->operation != OP_ROTATE)
+        return 0;
     if (item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
     if (index + 1u >= block->count) return 0;
     return kills_flags(&block->instructions[index + 1u]);

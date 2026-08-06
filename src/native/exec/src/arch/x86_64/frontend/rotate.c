@@ -30,6 +30,29 @@ static void compare_zero(uint32_t *instruction, uint32_t *target, unsigned reg, 
                    ((uint32_t)distance & UINT32_C(0x7ffff)) << 5 | reg;
 }
 
+/* ror Xd, Xn, #amount, i.e. EXTR with both sources tied together. */
+static uint32_t rotate_immediate(unsigned destination, unsigned source, unsigned amount, int wide) {
+    return (wide ? UINT32_C(0x93c00000) : UINT32_C(0x13800000)) | source << 16 | amount << 10 |
+           source << 5 | destination;
+}
+
+static uint32_t rotate_variable(unsigned destination, unsigned source, unsigned amount, int wide) {
+    return (wide ? UINT32_C(0x9ac02c00) : UINT32_C(0x1ac02c00)) | amount << 16 | source << 5 |
+           destination;
+}
+
+static uint32_t negate(unsigned destination, unsigned source, int wide) {
+    return (wide ? UINT32_C(0xcb0003e0) : UINT32_C(0x4b0003e0)) | source << 16 | destination;
+}
+
+/* rol/ror of a 32- or 64-bit register with no live flags is one host rotate, so the bit-at-a-time
+   loop the full form needs to track CF and OF is skipped entirely. */
+static int rotates_directly(const instruction *item) {
+    return item->flags_dead != 0u && item->memory_operand == 0u &&
+           (item->shift_kind == 0u || item->shift_kind == 1u) &&
+           (item->width == 4u || item->width == 8u);
+}
+
 void hl_x86_emit_rotate(uint32_t *words, uint32_t *cursor, const instruction *item) {
     unsigned bits = item->width * 8u;
     uint64_t mask = item->width == 8u ? UINT64_MAX : (UINT64_C(1) << bits) - 1u;
@@ -38,6 +61,25 @@ void hl_x86_emit_rotate(uint32_t *words, uint32_t *cursor, const instruction *it
     uint32_t *again;
     uint32_t *other_count;
 
+    if (rotates_directly(item)) {
+        int wide = item->width == 8u;
+
+        if (item->variable_count == 0u) {
+            /* x86 rotates left by n; the host rotates right, and n is already masked below bits. */
+            unsigned amount = item->shift_kind == 0u ? (bits - item->shift_count) % bits :
+                                                       item->shift_count;
+            words[(*cursor)++] = rotate_immediate(item->destination, item->destination, amount, wide);
+            return;
+        }
+        /* Negating cl gives the right-rotate amount, and the host reads only its low log2(bits) bits. */
+        if (item->shift_kind == 0u) {
+            words[(*cursor)++] = negate(23u, 1u, wide);
+            words[(*cursor)++] = rotate_variable(item->destination, item->destination, 23u, wide);
+        } else {
+            words[(*cursor)++] = rotate_variable(item->destination, item->destination, 1u, wide);
+        }
+        return;
+    }
     if (item->memory_operand != 0u) {
         instruction load = *item;
         load.operation = OP_LOAD;

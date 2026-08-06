@@ -157,6 +157,54 @@ static int shift_boundaries_materialize(void) {
     return 0;
 }
 
+/* A rol/ror of a 32- or 64-bit register collapses to a single host rotate once flags are dead. */
+#define ELIDED_ROTATE 1u
+
+static int rotate_elision_fires(void) {
+    const uint8_t left[] = {0xc1, 0xc0, 0x0d, 0x01, 0xd0};       /* rol eax,13 ; add eax,edx */
+    const uint8_t right[] = {0xc1, 0xc8, 0x0d, 0x01, 0xd0};      /* ror eax,13 ; add eax,edx */
+    const uint8_t wide[] = {0x48, 0xc1, 0xc2, 0x0d, 0x01, 0xc8}; /* rol rdx,13 ; add eax,ecx */
+    const uint8_t left_cl[] = {0xd3, 0xc0, 0x01, 0xd0};          /* rol eax,cl ; add eax,edx */
+    const uint8_t right_cl[] = {0xd3, 0xc8, 0x01, 0xd0};         /* ror eax,cl ; add eax,edx */
+    const uint8_t through_carry[] = {0xd1, 0xd0, 0x01, 0xd0};    /* rcl eax,1 ; add eax,edx */
+
+    CHECK(words_for(left, sizeof left, 0) == ELIDED_ROTATE);
+    CHECK(words_for(right, sizeof right, 0) == ELIDED_ROTATE);
+    CHECK(words_for(wide, sizeof wide, 0) == ELIDED_ROTATE);
+    /* Left by a variable count needs the count negated first. */
+    CHECK(words_for(left_cl, sizeof left_cl, 0) == ELIDED_ROTATE + 1u);
+    CHECK(words_for(right_cl, sizeof right_cl, 0) == ELIDED_ROTATE);
+    /* rcl reads CF into the value, so it keeps the full rotate-through-carry form. */
+    CHECK(words_for(through_carry, sizeof through_carry, 0) > ELIDED_ROTATE + 1u);
+
+    CHECK(budget_is_exact(left, sizeof left));
+    CHECK(budget_is_exact(wide, sizeof wide));
+    CHECK(budget_is_exact(left_cl, sizeof left_cl));
+    CHECK(budget_is_exact(right_cl, sizeof right_cl));
+    return 0;
+}
+
+static int rotate_boundaries_materialize(void) {
+    const uint8_t block_end[] = {0xc1, 0xc0, 0x0d};              /* rol eax,13 (last in block) */
+    const uint8_t adc[] = {0xc1, 0xc0, 0x0d, 0x11, 0xd0};        /* rol ; adc -- reads CF */
+    const uint8_t jcc[] = {0xc1, 0xc0, 0x0d, 0x75, 0x02};        /* rol ; jne */
+    const uint8_t setcc[] = {0xc1, 0xc0, 0x0d, 0x0f, 0x94, 0xc2};/* rol ; sete dl */
+    const uint8_t pushf[] = {0xc1, 0xc0, 0x0d, 0x9c};            /* rol ; pushfq */
+    const uint8_t inc[] = {0xc1, 0xc0, 0x0d, 0xff, 0xc2};        /* rol ; inc edx */
+    const uint8_t memory[] = {0xc1, 0xc0, 0x0d, 0x03, 0x03};     /* rol ; add eax,[rbx] */
+    const uint8_t syscall_exit[] = {0xc1, 0xc0, 0x0d, 0x0f, 0x05}; /* rol ; syscall */
+
+    CHECK(words_for(block_end, sizeof block_end, 0) > ELIDED_ROTATE);
+    CHECK(words_for(adc, sizeof adc, 0) > ELIDED_ROTATE);
+    CHECK(words_for(jcc, sizeof jcc, 0) > ELIDED_ROTATE);
+    CHECK(words_for(setcc, sizeof setcc, 0) > ELIDED_ROTATE);
+    CHECK(words_for(pushf, sizeof pushf, 0) > ELIDED_ROTATE);
+    CHECK(words_for(inc, sizeof inc, 0) > ELIDED_ROTATE);
+    CHECK(words_for(memory, sizeof memory, 0) > ELIDED_ROTATE);
+    CHECK(words_for(syscall_exit, sizeof syscall_exit, 0) > ELIDED_ROTATE);
+    return 0;
+}
+
 /* Every boundary at which the guest can observe EFLAGS must keep the producer materializing. */
 static int boundaries_materialize(void) {
     const uint8_t block_end[] = {0x01, 0xc8};                   /* add eax,ecx (last in block) */
@@ -285,6 +333,64 @@ static int shift_execution_matches(void) {
     CHECK(elided.registers[0] == 5u);
     return 0;
 }
+
+static uint32_t rol32(uint32_t value, unsigned count) {
+    return count == 0u ? value : (uint32_t)((value << count) | (value >> (32u - count)));
+}
+
+static uint64_t rol64(uint64_t value, unsigned count) {
+    return count == 0u ? value : (value << count) | (value >> (64u - count));
+}
+
+/* The single-instruction rotate must reproduce the bit-loop's value exactly. */
+static int rotate_execution_matches(void) {
+    uint64_t registers[16];
+    hl_native_x86_64_cpu elided;
+    const uint8_t left[] = {0xc1, 0xc0, 0x0d, 0x01, 0xd0};       /* rol eax,13 ; add eax,edx */
+    const uint8_t right[] = {0xc1, 0xc8, 0x0d, 0x01, 0xd0};      /* ror eax,13 ; add eax,edx */
+    const uint8_t wide[] = {0x48, 0xc1, 0xc2, 0x0d, 0x48, 0x01, 0xca}; /* rol rdx,13 ; add rdx,rcx */
+    const uint8_t left_cl[] = {0xd3, 0xc0, 0x01, 0xd0};          /* rol eax,cl ; add eax,edx */
+    const uint8_t right_cl[] = {0xd3, 0xc8, 0x01, 0xd0};         /* ror eax,cl ; add eax,edx */
+
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[2] = 5u;
+    CHECK(run_block(left, sizeof left, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == rol32(0x12345678u, 13u) + 5u);
+
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[2] = 5u;
+    CHECK(run_block(right, sizeof right, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == rol32(0x12345678u, 32u - 13u) + 5u);
+
+    /* 64-bit, and the destination is not the accumulator. */
+    memset(registers, 0, sizeof registers);
+    registers[2] = UINT64_C(0x0123456789abcdef); registers[1] = 7u;
+    CHECK(run_block(wide, sizeof wide, registers, &elided));
+    CHECK(elided.registers[2] == rol64(UINT64_C(0x0123456789abcdef), 13u) + 7u);
+
+    /* Variable counts, including zero, which must leave the value untouched. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[1] = 13u; registers[2] = 5u;
+    CHECK(run_block(left_cl, sizeof left_cl, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == rol32(0x12345678u, 13u) + 5u);
+
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[1] = 0u; registers[2] = 5u;
+    CHECK(run_block(left_cl, sizeof left_cl, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == 0x12345678u + 5u);
+
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[1] = 13u; registers[2] = 5u;
+    CHECK(run_block(right_cl, sizeof right_cl, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == rol32(0x12345678u, 32u - 13u) + 5u);
+
+    /* A count above the width is masked by the guest, exactly as the host rotate masks it. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 0x12345678u; registers[1] = 45u; registers[2] = 5u;
+    CHECK(run_block(left_cl, sizeof left_cl, registers, &elided));
+    CHECK((uint32_t)elided.registers[0] == rol32(0x12345678u, 45u % 32u) + 5u);
+    return 0;
+}
 #endif
 
 int main(void) {
@@ -294,9 +400,12 @@ int main(void) {
     if ((status = boundaries_materialize()) != 0) return status;
     if ((status = shift_elision_fires()) != 0) return status;
     if ((status = shift_boundaries_materialize()) != 0) return status;
+    if ((status = rotate_elision_fires()) != 0) return status;
+    if ((status = rotate_boundaries_materialize()) != 0) return status;
 #if defined(__aarch64__)
     if ((status = execution_matches()) != 0) return status;
     if ((status = shift_execution_matches()) != 0) return status;
+    if ((status = rotate_execution_matches()) != 0) return status;
 #endif
     return 0;
 }
