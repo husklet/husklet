@@ -80,10 +80,8 @@ impl Proxy {
     fn publish(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.published = true;
-            if state.closed {
-                if let Some(object) = state.object.take() {
-                    object.close();
-                }
+            if state.closed && let Some(object) = state.object.take() {
+                object.close();
             }
         }
     }
@@ -151,10 +149,8 @@ impl OpenFileDescription for Proxy {
                 return;
             }
             state.closed = true;
-            if state.published {
-                if let Some(object) = state.object.take() {
-                    object.close();
-                }
+            if state.published && let Some(object) = state.object.take() {
+                object.close();
             }
         }
     }
@@ -389,15 +385,14 @@ impl MemoryResourceRestore for Bindings {
             }
             proxies.push((Arc::clone(proxy), object));
         }
-        let mut bound: Vec<Arc<Proxy>> = Vec::with_capacity(proxies.len());
-        for (proxy, object) in &proxies {
-            if proxy.bind(Arc::clone(object)).is_err() {
-                for proxy in bound {
-                    proxy.unbind();
-                }
-                return Err(());
+        let failed = proxies
+            .iter()
+            .position(|(proxy, object)| proxy.bind(Arc::clone(object)).is_err());
+        if let Some(index) = failed {
+            for (proxy, _) in &proxies[..index] {
+                proxy.unbind();
             }
-            bound.push(Arc::clone(proxy));
+            return Err(());
         }
         bindings.staged = true;
         drop(bindings);
@@ -425,6 +420,26 @@ struct Transaction {
     store: Option<(Arc<SharedObjectStore>, u64)>,
     proxies: Vec<Arc<Proxy>>,
     pending: Option<BTreeMap<DescriptionIdentity, (Image, Arc<Proxy>)>>,
+}
+
+impl Transaction {
+    /// Reinstates the pre-transaction registry state, retiring the objects it displaces.
+    fn restore(&self, previous: RegistryState) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.epoch != self.epoch {
+            return;
+        }
+        let replacement = std::mem::replace(&mut *state, previous);
+        for object in replacement.objects.values() {
+            object.deactivate_backing();
+        }
+        drop(state);
+        drop(replacement);
+    }
 }
 
 impl MemoryResourceTransaction for Transaction {
@@ -474,19 +489,7 @@ impl MemoryResourceTransaction for Transaction {
             return;
         }
         if let Some(previous) = self.previous.take() {
-            let mut state = self
-                .registry
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.epoch == self.epoch {
-                let replacement = std::mem::replace(&mut *state, previous);
-                for object in replacement.objects.values() {
-                    object.deactivate_backing();
-                }
-                drop(state);
-                drop(replacement);
-            }
+            self.restore(previous);
         }
         for proxy in &self.proxies {
             proxy.unbind();

@@ -480,25 +480,29 @@ impl OwnedChild {
 
     fn quiesce(&self) -> std::io::Result<()> {
         self.signal(libc::SIGTERM)?;
+        if self.settle() {
+            return Ok(());
+        }
+        self.signal(libc::SIGKILL)?;
+        if self.settle() {
+            return Ok(());
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "host subprocess group did not quiesce",
+        ))
+    }
+
+    /// Waits out the grace period, reporting whether the group disappeared within it.
+    fn settle(&self) -> bool {
         let deadline = Instant::now() + TERM_GRACE;
         while self.group_exists() {
             if Instant::now() >= deadline {
-                self.signal(libc::SIGKILL)?;
-                let kill_deadline = Instant::now() + TERM_GRACE;
-                while self.group_exists() {
-                    if Instant::now() >= kill_deadline {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "host subprocess group did not quiesce",
-                        ));
-                    }
-                    thread::sleep(POLL);
-                }
-                return Ok(());
+                return false;
             }
             thread::sleep(POLL);
         }
-        Ok(())
+        true
     }
 
     fn signal(&self, signal: i32) -> std::io::Result<bool> {
@@ -546,13 +550,14 @@ impl Process {
     }
 
     fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        match self {
-            Self::Standard(child) => child.wait(),
-            Self::Exact(pid) => loop {
-                if let Some(status) = wait_pid(*pid, 0)? {
-                    break Ok(status);
-                }
-            },
+        let pid = match self {
+            Self::Standard(child) => return child.wait(),
+            Self::Exact(pid) => *pid,
+        };
+        loop {
+            if let Some(status) = wait_pid(pid, 0)? {
+                break Ok(status);
+            }
         }
     }
 
@@ -563,14 +568,13 @@ impl Process {
                 // SAFETY: pid is the positive identity returned by posix_spawn.
                 // The call touches no Rust memory, retains nothing, and cannot unwind.
                 if unsafe { libc::kill(*pid, libc::SIGKILL) } == 0 {
+                    return Ok(());
+                }
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
                     Ok(())
                 } else {
-                    let error = std::io::Error::last_os_error();
-                    if error.raw_os_error() == Some(libc::ESRCH) {
-                        Ok(())
-                    } else {
-                        Err(error)
-                    }
+                    Err(error)
                 }
             }
         }
