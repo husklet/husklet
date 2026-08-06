@@ -1211,6 +1211,7 @@ dependencies = [
 name = "hl-fs"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "tempfile",
  "tokio",
 ]

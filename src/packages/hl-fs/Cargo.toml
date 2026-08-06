@@ -11,6 +11,9 @@ description = "Transferable filesystem entities for Husklet crates"
 [dependencies]
 tokio = { workspace = true, features = ["fs"], optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [features]
 default = ["async"]
 async = ["dep:tokio"]

@@ -55,7 +55,76 @@ impl Drop for ReplacementFile {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct File(PathBuf);
 
+/// The certain result of publishing a new filesystem value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Creation {
+    /// The target name did not previously exist and now names the complete value.
+    Created,
+}
+
+/// Failure to publish a value without replacing an existing name.
+#[derive(Debug)]
+pub enum CreateError {
+    /// The target name was already occupied at the atomic commit point.
+    AlreadyExists,
+    /// The name was created, but directory synchronization failed.
+    CreatedButNotDurable(io::Error),
+    /// The platform, filesystem, or procfs view cannot support held-inode publication.
+    Unsupported,
+    /// Ancestor directories were created before a later publication failure.
+    AncestorsCreated {
+        count: usize,
+        cause: Box<CreateError>,
+    },
+    /// The publication call failed and the held inode was not observed at the target name.
+    Ambiguous(io::Error),
+    /// Publication failed before the target name was created.
+    Io(io::Error),
+}
+
+impl std::fmt::Display for CreateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyExists => formatter.write_str("target already exists"),
+            Self::CreatedButNotDurable(error) => {
+                write!(formatter, "target was created but durability is uncertain: {error}")
+            }
+            Self::Unsupported => formatter.write_str("handle-relative no-replace publication is unsupported"),
+            Self::AncestorsCreated { count, cause } => {
+                write!(formatter, "publication failed after creating {count} ancestor directories: {cause}")
+            }
+            Self::Ambiguous(error) => write!(formatter, "publication outcome is ambiguous: {error}"),
+            Self::Io(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for CreateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CreatedButNotDurable(error) | Self::Ambiguous(error) | Self::Io(error) => Some(error),
+            Self::AncestorsCreated { cause, .. } => Some(cause),
+            Self::AlreadyExists | Self::Unsupported => None,
+        }
+    }
+}
+
 impl File {
+    /// Durably publishes bytes only when this path is unoccupied.
+    ///
+    /// On Linux, the commit links the held staged-file descriptor into a held parent directory, so
+    /// replacing either pathname cannot substitute another inode. Newly created directory entries
+    /// are synchronized from ancestor to target. Other hosts report [`CreateError::Unsupported`]
+    /// until they provide an equivalent handle-based, no-replace primitive.
+    ///
+    /// # Errors
+    /// Returns a typed collision, ambiguous publication, unsupported-platform, pre-commit I/O,
+    /// partial ancestor-creation, or post-commit durability result. A successful return means the
+    /// complete bytes and all created directory entries were synchronized.
+    pub fn create(&self, bytes: impl AsRef<[u8]>) -> Result<Creation, CreateError> {
+        publication::Publisher::create(&self.0, bytes.as_ref())
+    }
+
     /// Writes, flushes, and atomically renames a sibling temporary file over this path.
     ///
     /// Readers observe either the previous complete value or the new complete value. The containing
@@ -88,6 +157,23 @@ impl File {
             io::ErrorKind::AlreadyExists,
             "could not allocate a unique replacement file",
         ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod publication;
+
+#[cfg(not(target_os = "linux"))]
+mod publication {
+    use super::{CreateError, Creation};
+    use std::path::Path;
+
+    pub(super) struct Publisher;
+
+    impl Publisher {
+        pub(super) fn create(_target: &Path, _bytes: &[u8]) -> Result<Creation, CreateError> {
+            Err(CreateError::Unsupported)
+        }
     }
 }
 
@@ -164,7 +250,7 @@ struct TreeEntry {
 }
 
 impl TreeEntry {
-    fn inspect(entry: std::fs::DirEntry, destination: &Path) -> io::Result<Self> {
+    fn inspect(entry: &std::fs::DirEntry, destination: &Path) -> io::Result<Self> {
         let source = entry.path();
         let metadata = std::fs::symlink_metadata(&source)?;
         let file_type = metadata.file_type();
@@ -265,7 +351,7 @@ impl Directory {
             ));
         }
         for entry in std::fs::read_dir(&self.0)? {
-            TreeEntry::inspect(entry?, &destination.0)?.copy()?;
+            TreeEntry::inspect(&entry?, &destination.0)?.copy()?;
         }
         Ok(())
     }
@@ -300,7 +386,7 @@ impl<P: Into<PathBuf>> From<P> for Directory {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnonymousFile, Directory, File};
+    use super::{AnonymousFile, CreateError, Creation, Directory, File};
     use std::io::{Read, Seek, Write};
 
     #[test]
@@ -358,6 +444,29 @@ mod tests {
                 .unwrap()
                 .all(|entry| { !entry.unwrap().file_name().to_string_lossy().contains(".replace-") })
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn create_contract() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("target");
+        let file = File::from(&target);
+        assert_eq!(file.create(b"first").unwrap(), Creation::Created);
+        assert!(matches!(file.create(b"second"), Err(CreateError::AlreadyExists)));
+        assert_eq!(std::fs::read(&target).unwrap(), b"first");
+
+        let referent = temporary.path().join("referent");
+        let occupied = temporary.path().join("occupied");
+        std::fs::write(&referent, b"unchanged").unwrap();
+        symlink(&referent, &occupied).unwrap();
+        assert!(matches!(
+            File::from(occupied).create(b"new"),
+            Err(CreateError::AlreadyExists)
+        ));
+        assert_eq!(std::fs::read(referent).unwrap(), b"unchanged");
     }
 
     #[cfg(unix)]
