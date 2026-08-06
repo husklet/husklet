@@ -272,6 +272,8 @@ where
     }
 }
 
+/// Test double wiring; the fake host is a development-only dependency.
+#[cfg(test)]
 impl HostServices for hl_fake_host::FakeHost {
     fn exec_port(&self, _: &RuntimeAssembly) -> Result<Option<Arc<dyn RuntimeExecPort>>, CompositionError> {
         Ok(None)

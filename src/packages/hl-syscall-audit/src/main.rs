@@ -51,7 +51,7 @@ impl Audit {
     }
 
     fn output(&self, name: &str) -> PathBuf {
-        self.root.join("src/runtime/hl-syscall-audit").join(name)
+        self.root.join("src/packages/hl-syscall-audit").join(name)
     }
 
     fn check(&self, path: &Path, expected: &str) {

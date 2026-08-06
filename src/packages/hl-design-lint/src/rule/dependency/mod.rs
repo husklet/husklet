@@ -450,7 +450,6 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-engine", "hl-event")
             | ("hl-engine", "hl-network")
             | ("hl-engine", "hl-linux")
-            | ("hl-engine", "hl-fake-host")
             | ("hl-engine", "hl-execution")
             | ("hl-engine", "hl-isa")
             | ("hl-engine", "hl-loader")
@@ -469,7 +468,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
 /// Cargo excludes these edges from production builds and permits development
 /// dependency cycles, but they still require an explicit ownership review.
 fn allowed_development_edge(source: &str, target: &str) -> bool {
-    matches!((source, target), ("dockerd", "hl-client"))
+    matches!((source, target), ("dockerd", "hl-client") | ("hl-engine", "hl-fake-host"))
 }
 
 fn dependencies(document: &toml::Value, manifest: &Path, workspace: &WorkspaceDependencies) -> Vec<Dependency> {

@@ -13,7 +13,6 @@ workspace = true
 hl-checkpoint = { path = "../../runtime/hl-checkpoint" }
 hl-descriptor = { path = "../../runtime/hl-descriptor" }
 hl-network = { path = "../../runtime/hl-network" }
-hl-fake-host = { path = "../../runtime/hl-fake-host" }
 hl-execution = { path = "../../runtime/hl-execution" }
 hl-event = { path = "../../runtime/hl-event" }
 hl-isa = { path = "../../runtime/hl-isa" }
@@ -29,6 +28,7 @@ hl-time = { path = "../../runtime/hl-time" }
 ring = "0.17.14"
 zeroize = "1.9"
 [dev-dependencies]
+hl-fake-host = { path = "../../runtime/hl-fake-host" }
 
 [build-dependencies]
 cc = "1.4.0"
