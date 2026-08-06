@@ -898,6 +898,7 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_SIGN: return 6u;
     case VECTOR_ABSOLUTE: return 1u;
     case VECTOR_SIGNED_DWORD_TO_FLOAT: return 1u;
+    case VECTOR_MERGE_FROM_INTEGER: return item->memory_operand != 0u ? 3u : 2u;
     case VECTOR_PACK_SIGNED:
     case VECTOR_PACK_UNSIGNED: return 3u;
     case VECTOR_FLOAT_TO_SIGNED_DWORD:
@@ -1172,6 +1173,22 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         emit_constant(words, cursor, 20u, indefinite);
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9a800000) : UINT32_C(0x1a800000)) |
                              destination << 16 | 2u << 12 | 20u << 5 | destination; /* csel result,indef,result,cs */
+    } else if (item->vector_kind == VECTOR_MERGE_FROM_INTEGER) {
+        uint32_t wide = item->width == 8u;
+        uint32_t single = item->vector_lane == 4u;
+        uint32_t convert = UINT32_C(0x1e220000);
+        uint32_t from = source;
+        if (item->memory_operand != 0u) {
+            /* The operand landed in v16; SCVTF reads a general register. */
+            words[(*cursor)++] = (wide != 0u ? UINT32_C(0x9e660000) : UINT32_C(0x1e260000)) |
+                                 16u << 5 | 20u; /* fmov w/x 20,s/d 16 */
+            from = 20u;
+        }
+        if (wide != 0u) convert |= UINT32_C(0x80000000);
+        if (single == 0u) convert |= UINT32_C(0x00400000);
+        words[(*cursor)++] = convert | from << 5 | 19u; /* scvtf s/d 19,w/x from */
+        words[(*cursor)++] = (single != 0u ? UINT32_C(0x6e040400) : UINT32_C(0x6e080400)) |
+                             19u << 5 | destination; /* ins vd.s/d[0],v19.s/d[0] */
     } else if (item->vector_kind == VECTOR_MERGE_LOW) {
         words[(*cursor)++] = (item->width == 4u ? UINT32_C(0x6e040400) : UINT32_C(0x6e080400)) |
                              source << 5 | destination; /* ins vd.s/d[0],vn.s/d[0] */

@@ -98,6 +98,8 @@ enum vector_operation {
     VECTOR_STRING_EQUAL_EACH,
     /* Register-form movss/movsd: overwrite the low lane and keep the rest. */
     VECTOR_MERGE_LOW,
+    /* cvtsi2ss/cvtsi2sd: convert an integer into the low lane, keeping the rest. */
+    VECTOR_MERGE_FROM_INTEGER,
 };
 
 enum vector_immediate_form {
