@@ -14,6 +14,7 @@ struct Source {
     descriptors: Vec<DescriptorView>,
     oom_score_adj: Mutex<i16>,
     resolutions: AtomicUsize,
+    thread_resolutions: AtomicUsize,
     generation: AtomicU16,
 }
 
@@ -35,9 +36,15 @@ impl super::Source for Source {
         Ok(vec![self.process.process])
     }
 
-    fn thread(&self, process: super::ProcessIdentity, thread: u32) -> Result<(), Error> {
+    fn resolve_thread(
+        &self,
+        process: super::ProcessIdentity,
+        thread: Option<u32>,
+    ) -> Result<super::ThreadIdentity, Error> {
+        self.thread_resolutions.fetch_add(1, Ordering::Relaxed);
+        let thread = thread.unwrap_or(7);
         (process_number(process) == self.process.process && matches!(thread, 7 | 9))
-            .then_some(())
+            .then(|| super::ThreadIdentity::new(thread - 1, 1).unwrap())
             .ok_or(Error::NotFound)
     }
 
@@ -366,7 +373,43 @@ fn fixed_source() -> Source {
         }],
         oom_score_adj: Mutex::new(0),
         resolutions: AtomicUsize::new(0),
+        thread_resolutions: AtomicUsize::new(0),
         generation: AtomicU16::new(1),
+    }
+}
+
+fn assert_task(source: &Source, operation: impl FnOnce() -> Result<(), Error>) {
+    let processes = source.resolutions.load(Ordering::Relaxed);
+    let threads = source.thread_resolutions.load(Ordering::Relaxed);
+    operation().unwrap();
+    assert_eq!(source.resolutions.load(Ordering::Relaxed), processes + 1);
+    assert_eq!(source.thread_resolutions.load(Ordering::Relaxed), threads + 1);
+}
+
+#[test]
+fn task_resolves_once() {
+    let source = Arc::new(fixed_source());
+    let procfs = Procfs::new(Arc::clone(&source) as Arc<dyn super::Source>);
+    let operations: &[&dyn Fn() -> Result<(), Error>] = &[
+        &|| {
+            procfs
+                .open(b"/proc/7/task/9/status", 7, OpenIntent::default())
+                .map(|_| ())
+        },
+        &|| {
+            procfs
+                .open(b"/proc/7/task/9/comm", 7, OpenIntent::default())
+                .map(|_| ())
+        },
+        &|| procfs.read_link(b"/proc/7/task/9/cwd", 7).map(|_| ()),
+        &|| procfs.kind(b"/proc/7/task/9/status", 7).map(|_| ()),
+        &|| procfs.metadata(b"/proc/7/task/9/comm", 7).map(|_| ()),
+        &|| procfs.read_link(b"/proc/7/task/9/ns/uts", 7).map(|_| ()),
+        &|| procfs.namespace_inode(b"/proc/7/task/9/ns/uts", 7).map(|_| ()),
+        &|| procfs.read_link(b"/proc/thread-self", 7).map(|_| ()),
+    ];
+    for operation in operations {
+        assert_task(&source, operation);
     }
 }
 

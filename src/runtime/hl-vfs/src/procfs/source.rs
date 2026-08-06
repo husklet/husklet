@@ -1,6 +1,6 @@
 use super::{
     AddressSpaceView, CgroupView, CpuView, DescriptorView, Error, MemoryView, MountView, NetworkView, ProcessIdentity,
-    ProcessView, StatView, SystemView, UtsView,
+    ProcessView, StatView, SystemView, ThreadIdentity, UtsView,
 };
 
 /// Consumer-owned boundary for obtaining coherent process snapshots.
@@ -14,7 +14,10 @@ pub trait Source: Send + Sync {
     fn processes(&self) -> Result<Vec<u32>, Error> {
         Err(Error::NotFound)
     }
-    fn thread(&self, _process: ProcessIdentity, _thread: u32) -> Result<(), Error> {
+    /// Resolves a numeric TID within an exact process, or that process's exact
+    /// leader when `thread` is `None`. A zombie retains its leader identity
+    /// through the process snapshot even after live thread membership ends.
+    fn resolve_thread(&self, _process: ProcessIdentity, _thread: Option<u32>) -> Result<ThreadIdentity, Error> {
         Err(Error::NotFound)
     }
     fn threads(&self, _process: ProcessIdentity) -> Result<Vec<u32>, Error> {
@@ -53,14 +56,14 @@ pub trait Source: Send + Sync {
     fn address_space(&self, _process: ProcessIdentity) -> Result<AddressSpaceView, Error> {
         Err(Error::NotFound)
     }
-    fn comm(&self, process: ProcessIdentity, thread: Option<u32>) -> Result<Vec<u8>, Error> {
+    fn comm(&self, process: ProcessIdentity, thread: ThreadIdentity) -> Result<Vec<u8>, Error> {
         let _ = thread;
         self.process(process).map(|process| process.comm())
     }
     fn write_comm(
         &self,
         _process: ProcessIdentity,
-        _thread: Option<u32>,
+        _thread: ThreadIdentity,
         _actor: hl_descriptor::OperationActor,
         _bytes: &[u8],
     ) -> Result<(), hl_descriptor::ObjectError> {

@@ -292,10 +292,13 @@ fn zombie_stat_keeps_identity() {
 
     let source = TaskProcfs::new(Arc::clone(&tasks)).with_stat(Arc::new(StatMetrics));
     let child_identity = identity(&source, child.number());
+    let leader_identity = source.resolve_thread(child_identity, None).unwrap();
+    assert_eq!(source.comm(child_identity, leader_identity).unwrap(), b"dead-child\n");
     let text = String::from_utf8(source.stat(child_identity).unwrap().bytes()).unwrap();
     assert!(text.starts_with(&format!("{} (dead-child) Z {} ", child.number(), parent.number())));
     tasks.reap(parent, child).unwrap();
     assert_eq!(source.stat(child_identity), Err(ProcfsError::NotFound));
+    assert_eq!(source.comm(child_identity, leader_identity), Err(ProcfsError::NotFound));
 }
 
 #[test]
@@ -345,8 +348,16 @@ fn live_task_identity() {
     .with_root(b"/guest".to_vec())
     .with_fs_context(Arc::new(crate::FsContext::new(0o077)));
     let child_identity = identity(&source, child.number());
+    let child_thread_identity = source
+        .resolve_thread(child_identity, Some(child_thread.number()))
+        .unwrap();
     assert_eq!(source.processes().unwrap(), [parent.number(), child.number()]);
-    assert_eq!(source.thread(child_identity, child_thread.number()), Ok(()));
+    assert_eq!(
+        source
+            .resolve_thread(child_identity, Some(child_thread.number()))
+            .map(|_| ()),
+        Ok(())
+    );
     assert_eq!(
         source.threads(identity(&source, child.number())).unwrap(),
         [child_thread.number()]
@@ -358,14 +369,56 @@ fn live_task_identity() {
     );
     assert_eq!(source.process(identity(&source, child.number())).unwrap().umask, None);
     assert_eq!(
-        source.thread(identity(&source, parent.number()), child_thread.number()),
+        source
+            .resolve_thread(identity(&source, parent.number()), Some(child_thread.number()))
+            .map(|_| ()),
         Err(ProcfsError::NotFound)
+    );
+    assert_eq!(
+        source.comm(identity(&source, parent.number()), child_thread_identity),
+        Err(ProcfsError::NotFound)
+    );
+    let child_name = tasks
+        .snapshot()
+        .threads
+        .into_iter()
+        .find(|thread| thread.id == child_thread)
+        .unwrap()
+        .name;
+    let (process_slot, process_generation) = parent.wire_parts();
+    let (thread_slot, thread_generation) = parent_thread.wire_parts();
+    let actor = hl_descriptor::OperationActor {
+        process: process_slot,
+        process_generation,
+        thread: thread_slot,
+        thread_generation,
+    };
+    assert_eq!(
+        source.write_comm(
+            identity(&source, parent.number()),
+            child_thread_identity,
+            actor,
+            b"wrong"
+        ),
+        Err(hl_descriptor::ObjectError::Retired)
+    );
+    assert_eq!(
+        tasks
+            .snapshot()
+            .threads
+            .into_iter()
+            .find(|thread| thread.id == child_thread)
+            .unwrap()
+            .name,
+        child_name
     );
     tasks.exit_process(child, ExitStatus::Code(0)).unwrap();
     tasks.reap(parent, child).unwrap();
     assert_eq!(source.processes().unwrap(), [parent.number()]);
     assert_eq!(
-        source.thread(child_identity, child_thread.number()),
+        source
+            .resolve_thread(child_identity, Some(child_thread.number()))
+            .map(|_| ()),
         Err(ProcfsError::NotFound)
     );
 }
@@ -491,7 +544,13 @@ fn live_working_directory() {
 
 #[test]
 fn comm_write() {
-    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_threads: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
     let (process, leader) = tasks
         .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
         .unwrap();
@@ -534,6 +593,26 @@ fn comm_write() {
     let mut output = [0_u8; 32];
     let count = file.read(&mut output).unwrap();
     assert_eq!(&output[..count], b"worker-renamed-\n");
+    let stale = worker.id;
+    tasks.exit_thread(stale, ExitStatus::Code(0)).unwrap();
+    let replacement = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(leader.id).unwrap())
+        .unwrap();
+    assert_eq!(replacement.number(), stale.number());
+    assert_ne!(replacement.wire_parts(), stale.wire_parts());
+    assert_eq!(file.metadata(), Err(hl_descriptor::ObjectError::Retired));
+    assert_eq!(file.read(&mut output), Err(hl_descriptor::ObjectError::Retired));
+    assert_eq!(
+        file.write_context(b"stale", context),
+        Err(hl_descriptor::ObjectError::Retired)
+    );
+    let replacement = tasks
+        .snapshot()
+        .threads
+        .into_iter()
+        .find(|thread| thread.id == replacement)
+        .unwrap();
+    assert_ne!(&replacement.name, b"stale\0\0\0\0\0\0\0\0\0\0\0");
 }
 
 #[test]

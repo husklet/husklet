@@ -63,7 +63,7 @@ pub use procfs::{
     ProcessIdentity as ProcfsProcessIdentity, ProcessState as ProcfsProcessState, ProcessView as ProcfsProcessView,
     Procfs, Source as ProcfsSource, StatError as ProcfsStatError, StatInput as ProcfsStatInput,
     StatState as ProcfsStatState, StatView as ProcfsStatView, SystemView as ProcfsSystemView,
-    UnixSocketView as ProcfsUnixSocketView, UtsView as ProcfsUtsView,
+    ThreadIdentity as ProcfsThreadIdentity, UnixSocketView as ProcfsUnixSocketView, UtsView as ProcfsUtsView,
 };
 pub use readonly::{ReadOnlyError, ReadOnlyPaths};
 pub use resolver::{

@@ -30,6 +30,34 @@ impl ProcessIdentity {
     }
 }
 
+/// Generation-qualified thread identity resolved from a guest-visible TID.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ThreadIdentity {
+    slot: u32,
+    generation: u16,
+}
+
+impl ThreadIdentity {
+    #[must_use]
+    pub const fn new(slot: u32, generation: u16) -> Option<Self> {
+        if generation == 0 {
+            None
+        } else {
+            Some(Self { slot, generation })
+        }
+    }
+
+    #[must_use]
+    pub const fn slot(self) -> u32 {
+        self.slot
+    }
+
+    #[must_use]
+    pub const fn generation(self) -> u16 {
+        self.generation
+    }
+}
+
 /// Linux resource represented in `/proc/<pid>/limits`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LimitResource {

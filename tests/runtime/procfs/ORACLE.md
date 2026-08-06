@@ -100,10 +100,33 @@ validates the pinned tuple immediately before consulting the immutable
 `CgroupView`. Its numeric PID is only an index into that snapshot and the rendered
 unified membership value (`0::/`) contains no process-generation state.
 
-Thread paths still validate a numeric TID within the already pinned process.
-Generation-bearing thread identity is explicitly deferred to the task/thread
-identity lane; this change makes no claim that TID reuse is pinned independently
-of process generation.
+The retained thread implementation was audited directly in
+`../engine/src/linux_abi/thread.c`: `thread_register`, `thread_unregister`,
+`thread_tid_alive`, `thread_tid_list`, `thread_live_count`, `thread_after_fork`,
+and `cpu_tid` own numeric live-thread membership under `g_threg_m` from
+registration through exit. The retained procfs consumers in
+`../engine/src/linux_abi/container/vfs.c` (`proc_task_tid_visible`,
+`proc_task_dir_open`, `proc_dir_try_open`, `proc_deself`, and `proc_open`)
+snapshot numeric directory names and revalidate numeric membership on later
+path access. They have no generation identity, fold task leaves onto process
+leaves, and expose only peer leaders; a reused numeric TID can therefore name a
+different retained thread on a later lookup.
+
+Rust maps registry membership to `hl_task::ThreadId(slot, generation)` and the
+VFS boundary to `ThreadIdentity`. `TaskProcfs::resolve_thread` resolves a TID
+within an already exact `ProcessIdentity` from one registry snapshot. Explicit
+task paths use that lookup as their validation linearization point before a
+process-owned projection; directory enumeration remains a numeric snapshot and
+does not promise that a later open succeeds. Dynamic `comm` OFDs retain both
+exact identities, so exit and same-number reuse retire old reads, metadata, and
+writes without mutating the replacement. Process-level `comm` resolves the
+exact leader identity. After process exit the live thread entry is absent, but
+the zombie `ProcessSnapshot` owns the leader identity and name until reap; the
+shared leader slot cannot be reused while that process slot remains occupied.
+Thus zombie process-level comm remains readable, while an explicit zombie task
+path is absent and reap retires the pinned process identity. Rust intentionally
+provides stronger peer-thread identity than the retained numeric peer-leader
+projection.
 
 ### Magic-link open lifetime
 

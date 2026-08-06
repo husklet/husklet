@@ -12,7 +12,7 @@ pub use cgroup::View as CgroupView;
 pub use model::{
     AddressSpaceView, CpuModel, CpuTicks, CpuView, DescriptorView, InternetSocketView, LimitResource, LimitView,
     MemoryRegionLabel, MemoryRegionView, MemoryView, NetworkInterfaceView, NetworkView, NodeKind, ProcessIdentity,
-    ProcessState, ProcessView, SystemView, UnixSocketView, UtsView,
+    ProcessState, ProcessView, SystemView, ThreadIdentity, UnixSocketView, UtsView,
 };
 pub use mount::{MountEntry, MountView};
 pub use source::Source;
@@ -127,7 +127,12 @@ impl Procfs {
         let identity = (process != 0)
             .then(|| self.source.resolve_process(process))
             .transpose()?;
-        self.validate_thread(identity, thread)?;
+        let thread_identity = match identity {
+            Some(process) if thread.is_some() || leaf == model::Node::Comm => {
+                Some(self.source.resolve_thread(process, thread)?)
+            }
+            _ => None,
+        };
         if intent.bits() & OpenIntent::WRITE != 0
             && !matches!(
                 leaf,
@@ -311,11 +316,12 @@ impl Procfs {
             ),
             model::Node::Comm => {
                 let identity = identity.ok_or(Error::NotFound)?;
-                let bytes = self.source.comm(identity, thread)?;
+                let thread_identity = thread_identity.ok_or(Error::NotFound)?;
+                let bytes = self.source.comm(identity, thread_identity)?;
                 Ok(Some(Arc::new(file::CommFile::new(
                     Arc::clone(&self.source),
                     identity,
-                    thread,
+                    thread_identity,
                     leaf.metadata(process, bytes.len() as u64),
                 ))))
             }
@@ -535,7 +541,7 @@ impl Procfs {
         }
         if path == b"proc/thread-self" {
             let identity = self.source.resolve_process(current)?;
-            self.source.thread(identity, thread)?;
+            self.source.resolve_thread(identity, Some(thread))?;
             return Ok(Some(format!("{current}/task/{thread}").into_bytes()));
         }
         if let Some((process, thread, model::Node::Root)) = model::Node::parse(path, current) {
@@ -823,7 +829,12 @@ impl Procfs {
         let identity = (process != 0)
             .then(|| self.source.resolve_process(process))
             .transpose()?;
-        self.validate_thread(identity, thread)?;
+        let thread_identity = match identity {
+            Some(process) if thread.is_some() || node == model::Node::Comm => {
+                Some(self.source.resolve_thread(process, thread)?)
+            }
+            _ => None,
+        };
         let process_identity = || identity.ok_or(Error::NotFound);
         let size = match node {
             model::Node::CgroupRoot => {
@@ -900,7 +911,10 @@ impl Procfs {
             model::Node::Mounts => self.source.mounts(process_identity()?)?.mounts_bytes().len() as u64,
             model::Node::MountInfo => self.source.mounts(process_identity()?)?.bytes().len() as u64,
             model::Node::MountStats => self.source.mounts(process_identity()?)?.stats().len() as u64,
-            model::Node::Comm => self.source.process(process_identity()?)?.comm().len() as u64,
+            model::Node::Comm => self
+                .source
+                .comm(process_identity()?, thread_identity.ok_or(Error::NotFound)?)?
+                .len() as u64,
             model::Node::Cmdline => self.source.cmdline(process_identity()?)?.len() as u64,
             model::Node::Environ => self.source.environment(process_identity()?)?.len() as u64,
             model::Node::OomScore | model::Node::OomAdj => 2,
@@ -1047,10 +1061,14 @@ impl Procfs {
         Ok(Some(metadata))
     }
 
-    fn validate_thread(&self, process: Option<model::ProcessIdentity>, thread: Option<u32>) -> Result<(), Error> {
+    fn validate_thread(
+        &self,
+        process: Option<model::ProcessIdentity>,
+        thread: Option<u32>,
+    ) -> Result<Option<model::ThreadIdentity>, Error> {
         match (process, thread) {
-            (_, None) => Ok(()),
-            (Some(process), Some(thread)) => self.source.thread(process, thread),
+            (_, None) => Ok(None),
+            (Some(process), Some(thread)) => self.source.resolve_thread(process, Some(thread)).map(Some),
             (None, Some(_)) => Err(Error::NotFound),
         }
     }

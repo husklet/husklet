@@ -23,7 +23,7 @@ pub(super) struct UtsFile {
 pub(super) struct CommFile {
     source: std::sync::Arc<dyn super::Source>,
     process: super::ProcessIdentity,
-    thread: Option<u32>,
+    thread: super::ThreadIdentity,
     cursor: Mutex<usize>,
     metadata: OfdMetadata,
 }
@@ -110,7 +110,7 @@ impl CommFile {
     pub(super) fn new(
         source: std::sync::Arc<dyn super::Source>,
         process: super::ProcessIdentity,
-        thread: Option<u32>,
+        thread: super::ThreadIdentity,
         metadata: OfdMetadata,
     ) -> Self {
         Self {

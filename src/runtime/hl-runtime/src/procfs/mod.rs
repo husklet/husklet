@@ -18,11 +18,11 @@ pub use stat::{StatMetrics, StatPort};
 use std::sync::Arc;
 
 use hl_descriptor::DescriptorTable;
-use hl_task::{ProcessId, ProcessLifecycle, Resource, TaskRegistry};
+use hl_task::{ProcessId, ProcessLifecycle, Resource, TaskRegistry, ThreadId};
 use hl_vfs::{
     ProcfsCgroupView, ProcfsCpuModel, ProcfsCpuView, ProcfsDescriptorView, ProcfsError, ProcfsLimitResource,
     ProcfsLimitView, ProcfsProcessIdentity, ProcfsProcessState, ProcfsProcessView, ProcfsSource, ProcfsStatView,
-    ProcfsSystemView, ProcfsUtsView,
+    ProcfsSystemView, ProcfsThreadIdentity, ProcfsUtsView,
 };
 /// Task-owned producer for typed process-filesystem views.
 pub struct TaskProcfs {
@@ -52,6 +52,10 @@ impl TaskProcfs {
             .process_snapshot(id)
             .map(|_| id)
             .map_err(|_| ProcfsError::NotFound)
+    }
+
+    fn thread_id(&self, identity: ProcfsThreadIdentity) -> Result<ThreadId, ProcfsError> {
+        ThreadId::from_wire(identity.slot(), identity.generation()).ok_or(ProcfsError::NotFound)
     }
 
     #[must_use]
@@ -318,6 +322,32 @@ impl ProcfsSource for TaskProcfs {
         ProcfsProcessIdentity::new(slot, generation).ok_or(ProcfsError::NotFound)
     }
 
+    fn resolve_thread(
+        &self,
+        process: ProcfsProcessIdentity,
+        thread: Option<u32>,
+    ) -> Result<ProcfsThreadIdentity, ProcfsError> {
+        let process = self.process_id(process)?;
+        let snapshot = self.tasks.snapshot();
+        let leader = snapshot
+            .processes
+            .iter()
+            .find(|candidate| candidate.id == process)
+            .ok_or(ProcfsError::NotFound)?
+            .leader;
+        let id = match thread {
+            None => leader,
+            Some(number) => snapshot
+                .threads
+                .iter()
+                .find(|candidate| candidate.process == process && candidate.id.number() == number)
+                .map(|candidate| candidate.id)
+                .ok_or(ProcfsError::NotFound)?,
+        };
+        let (slot, generation) = id.wire_parts();
+        ProcfsThreadIdentity::new(slot, generation).ok_or(ProcfsError::NotFound)
+    }
+
     fn network(&self, process: ProcfsProcessIdentity) -> Result<hl_vfs::ProcfsNetworkView, ProcfsError> {
         self.view(process)?;
         self.network
@@ -335,17 +365,6 @@ impl ProcfsSource for TaskProcfs {
             .collect::<Vec<_>>();
         processes.sort_unstable();
         Ok(processes)
-    }
-
-    fn thread(&self, process: ProcfsProcessIdentity, thread: u32) -> Result<(), ProcfsError> {
-        let process = self.process_id(process)?;
-        self.tasks
-            .snapshot()
-            .threads
-            .into_iter()
-            .find(|candidate| candidate.process == process && candidate.id.number() == thread)
-            .map(|_| ())
-            .ok_or(ProcfsError::NotFound)
     }
 
     fn threads(&self, process: ProcfsProcessIdentity) -> Result<Vec<u32>, ProcfsError> {
@@ -441,21 +460,26 @@ impl ProcfsSource for TaskProcfs {
         self.memory.as_ref().ok_or(ProcfsError::NotFound)?.environment(id)
     }
 
-    fn comm(&self, process: ProcfsProcessIdentity, thread: Option<u32>) -> Result<Vec<u8>, ProcfsError> {
+    fn comm(&self, process: ProcfsProcessIdentity, thread: ProcfsThreadIdentity) -> Result<Vec<u8>, ProcfsError> {
         let process_id = self.process_id(process)?;
+        let thread_id = self.thread_id(thread)?;
         let registry = self.tasks.snapshot();
         let process = registry
             .processes
             .iter()
             .find(|candidate| candidate.id == process_id)
             .ok_or(ProcfsError::NotFound)?;
-        let target = thread.map_or(process.leader.number(), |thread| thread);
-        let thread = registry
-            .threads
-            .iter()
-            .find(|candidate| candidate.process == process.id && candidate.id.number() == target)
-            .ok_or(ProcfsError::NotFound)?;
-        let mut name = thread.name.split(|byte| *byte == 0).next().unwrap_or(&[]).to_vec();
+        let name = if process.leader == thread_id {
+            &process.name
+        } else {
+            &registry
+                .threads
+                .iter()
+                .find(|candidate| candidate.process == process_id && candidate.id == thread_id)
+                .ok_or(ProcfsError::NotFound)?
+                .name
+        };
+        let mut name = name.split(|byte| *byte == 0).next().unwrap_or(&[]).to_vec();
         name.push(b'\n');
         Ok(name)
     }
@@ -463,7 +487,7 @@ impl ProcfsSource for TaskProcfs {
     fn write_comm(
         &self,
         process: ProcfsProcessIdentity,
-        thread: Option<u32>,
+        thread: ProcfsThreadIdentity,
         actor: hl_descriptor::OperationActor,
         bytes: &[u8],
     ) -> Result<(), hl_descriptor::ObjectError> {
@@ -474,7 +498,10 @@ impl ProcfsSource for TaskProcfs {
             .ok_or(hl_descriptor::ObjectError::PermissionDenied)?;
         let actor_thread = hl_task::ThreadId::from_wire(actor.thread, actor.thread_generation)
             .ok_or(hl_descriptor::ObjectError::PermissionDenied)?;
-        if self.process_id(process).ok() != Some(actor_process) {
+        let process_id = self
+            .process_id(process)
+            .map_err(|_| hl_descriptor::ObjectError::Retired)?;
+        if process_id != actor_process {
             return Err(hl_descriptor::ObjectError::PermissionDenied);
         }
         self.tasks
@@ -483,17 +510,14 @@ impl ProcfsSource for TaskProcfs {
             .iter()
             .find(|candidate| candidate.id == actor_thread && candidate.process == actor_process)
             .ok_or(hl_descriptor::ObjectError::PermissionDenied)?;
+        let target_id = self
+            .thread_id(thread)
+            .map_err(|_| hl_descriptor::ObjectError::Retired)?;
         let snapshot = self.tasks.snapshot();
-        let target_process = snapshot
-            .processes
-            .iter()
-            .find(|candidate| candidate.id == actor_process)
-            .ok_or(hl_descriptor::ObjectError::Retired)?;
-        let target = thread.map_or(target_process.leader.number(), |thread| thread);
         let target = snapshot
             .threads
             .iter()
-            .find(|candidate| candidate.process == actor_process && candidate.id.number() == target)
+            .find(|candidate| candidate.process == process_id && candidate.id == target_id)
             .ok_or(hl_descriptor::ObjectError::Retired)?;
         let mut name = [0_u8; 16];
         name[..bytes.len()].copy_from_slice(bytes);
