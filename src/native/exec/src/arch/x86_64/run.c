@@ -54,6 +54,20 @@ static int host_has_lse(void) {
 #endif
 }
 
+/* AES rounds are likewise only selected from a positive probe. */
+static int host_has_aes(void) {
+#if defined(__aarch64__) && defined(__linux__)
+    return (getauxval(AT_HWCAP) & HWCAP_AES) != 0u;
+#elif defined(__aarch64__) && defined(__APPLE__)
+    int available = 0;
+    size_t size = sizeof available;
+    return sysctlbyname("hw.optional.arm.FEAT_AES", &available, &size, NULL, 0) == 0 &&
+           size == sizeof available && available != 0;
+#else
+    return 0;
+#endif
+}
+
 static int view_contains(const hl_native_projection_view *view, uint64_t address,
                          uint64_t size, uint32_t required) {
     return view != NULL && size != 0 && address <= UINT64_MAX - size &&
@@ -401,6 +415,7 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
         .provenance_capacity = HL_X86_A64_MAX_INSTRUCTIONS,
         .flags = HL_X86_A64_CHECKPOINTS | HL_X86_A64_CONDITIONAL_SELF_LOOP | HL_X86_A64_LIVE_CHAIN |
                  (host_has_lse() ? HL_X86_A64_LSE : 0u) |
+                 (host_has_aes() ? HL_X86_A64_AES : 0u) |
                  (executor->diagnostics ? HL_X86_A64_DIAGNOSTICS : 0u),
     };
     hl_x86_a64_result result = {.abi = HL_X86_A64_FRONTEND_ABI, .size = sizeof(result)};

@@ -598,6 +598,33 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 block->exit = HL_X86_A64_INTERPRETER;
                 break;
             }
+        } else if (semantic_prefix == 0u && operand_16 != 0u && opcode == 0x0fu &&
+                   (request->flags & HL_X86_A64_AES) != 0u &&
+                   cursor + 1u < request->guest_size && request->guest_bytes[cursor] == 0x38u &&
+                   (request->guest_bytes[cursor + 1u] == 0xdcu ||
+                    request->guest_bytes[cursor + 1u] == 0xddu)) {
+            uint8_t extension = request->guest_bytes[cursor + 1u];
+            uint8_t modrm;
+            cursor += 2u;
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            item->operation = OP_VECTOR;
+            item->width = 16u;
+            item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->vector_kind = extension == 0xdcu ? VECTOR_AES_ENCRYPT : VECTOR_AES_ENCRYPT_LAST;
+            if ((modrm >> 6) == 3u) {
+                ++cursor;
+            } else {
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = 16u;
+                item->memory_operand = 1u;
+                item->source = 16u;
+            }
         } else if (opcode == 0x0fu && cursor < request->guest_size &&
                    request->guest_bytes[cursor] == 0x5bu &&
                    (semantic_prefix == 0u || semantic_prefix == 0xf3u)) {

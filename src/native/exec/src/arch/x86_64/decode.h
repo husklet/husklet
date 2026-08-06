@@ -100,6 +100,8 @@ enum vector_operation {
     VECTOR_MERGE_LOW,
     /* cvtsi2ss/cvtsi2sd: convert an integer into the low lane, keeping the rest. */
     VECTOR_MERGE_FROM_INTEGER,
+    VECTOR_AES_ENCRYPT,
+    VECTOR_AES_ENCRYPT_LAST,
 };
 
 enum vector_immediate_form {

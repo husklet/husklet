@@ -15,6 +15,8 @@
 #define HL_X86_A64_LSE 8u
 /* Emits diagnostics-only vector-dirty observation stores. */
 #define HL_X86_A64_DIAGNOSTICS 16u
+/* Host guarantees FEAT_AES round instructions. */
+#define HL_X86_A64_AES 32u
 
 typedef enum hl_x86_a64_status {
     HL_X86_A64_OK = 0,
