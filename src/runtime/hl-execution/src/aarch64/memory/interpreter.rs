@@ -143,7 +143,7 @@ impl Aarch64MemoryInterpreter {
         Self::write_load(&mut staged, destination, width, extension, value);
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
@@ -167,7 +167,7 @@ impl Aarch64MemoryInterpreter {
         let mut staged = cpu.clone();
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
@@ -199,7 +199,7 @@ impl Aarch64MemoryInterpreter {
         Self::write_load(&mut staged, registers.1, width, extension, second);
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
@@ -231,7 +231,7 @@ impl Aarch64MemoryInterpreter {
         let mut staged = cpu.clone();
         Self::writeback(&mut staged, resolved);
         staged.pc = instruction.wrapping_add(4);
-        *cpu = staged;
+        cpu.commit_scalar(&staged);
         Aarch64ExecutionExit::Continue
     }
 
