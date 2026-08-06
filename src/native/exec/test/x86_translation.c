@@ -3643,7 +3643,6 @@ static int immediate_differential(void) {
         hl_native_x86_64_cpu cpu = {0};
         hl_x86_a64_request request;
         size_t byte;
-
         if (bits[width] == 16u) guest[size++] = 0x66;
         if (bits[width] == 64u) guest[size++] = 0x48;
         guest[size++] = bits[width] == 8u ? 0xa8 : 0xa9;
@@ -3987,6 +3986,67 @@ static int test_differential(void) {
                 hl_x86_test_enter(&cpu, code);
                 CHECK(cpu.registers[0] == values[sample][0]);
                 CHECK(cpu.flags == expected_flags);
+                CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+            }
+        }
+    }
+    {
+        static const struct {
+            uint8_t guest[5];
+            uint8_t size;
+            uint8_t width;
+            uint8_t source;
+            uint8_t high;
+        } cases[] = {
+            {{0x84, 0x5c, 0x24, 0x18}, 4, 8, 3, 0}, /* test [rsp+24],bl */
+            {{0x84, 0x64, 0x24, 0x18}, 4, 8, 0, 1}, /* test [rsp+24],ah */
+            {{0x84, 0x6c, 0x24, 0x18}, 4, 8, 1, 1}, /* test [rsp+24],ch */
+            {{0x84, 0x74, 0x24, 0x18}, 4, 8, 2, 1}, /* test [rsp+24],dh */
+            {{0x84, 0x7c, 0x24, 0x18}, 4, 8, 3, 1}, /* test [rsp+24],bh */
+            {{0x40, 0x84, 0x6c, 0x24, 0x18}, 5, 8, 5, 0}, /* test [rsp+24],bpl */
+            {{0x44, 0x84, 0x5c, 0x24, 0x18}, 5, 8, 11, 0}, /* test [rsp+24],r11b */
+            {{0x66, 0x85, 0x5c, 0x24, 0x18}, 5, 16, 3, 0}, /* test [rsp+24],bx */
+            {{0x85, 0x5c, 0x24, 0x18}, 4, 32, 3, 0}, /* test [rsp+24],ebx */
+            {{0x48, 0x85, 0x5c, 0x24, 0x18}, 5, 64, 3, 0}, /* test [rsp+24],rbx */
+            {{0x44, 0x85, 0x5c, 0x24, 0x18}, 5, 32, 11, 0}, /* test [rsp+24],r11d */
+        };
+        size_t test_case;
+        unsigned nonzero;
+
+        for (test_case = 0; test_case < sizeof cases / sizeof cases[0]; ++test_case) {
+            for (nonzero = 0; nonzero < 2u; ++nonzero) {
+                uint8_t backing[32] = {0};
+                uint32_t host[256] = {0};
+                hl_x86_a64_provenance provenance[8] = {0};
+                hl_x86_a64_result emitted;
+                hl_native_x86_64_cpu cpu = {0};
+                hl_x86_a64_request request =
+                    request_for(cases[test_case].guest, cases[test_case].size, host, provenance);
+                uint64_t source = nonzero != 0u ? 1u : 2u;
+                uint64_t ignored;
+                uint64_t expected_flags;
+
+                backing[24] = 1;
+                CHECK(hl_x86_a64_emit(&request, &emitted) == HL_X86_A64_OK);
+                memcpy(code, host, emitted.word_count * sizeof(uint32_t));
+                ((uint32_t *)code)[emitted.word_count] = UINT32_C(0xd65f03c0);
+                __builtin___clear_cache((char *)code, (char *)code + (emitted.word_count + 1u) * 4u);
+                CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+                cpu.registers[cases[test_case].source] =
+                    cases[test_case].high != 0u ? source << 8 : source;
+                cpu.registers[4] = UINT64_C(0x2000);
+                cpu.flags = UINT64_C(0xad7);
+                cpu.memory_first = UINT64_C(0x2000);
+                cpu.memory_last = UINT64_C(0x2020);
+                cpu.memory_delta = (uint64_t)(uintptr_t)backing - UINT64_C(0x2000);
+                cpu.memory_permissions = HL_NATIVE_ACCESS_READ;
+                alu_reference(4u, cases[test_case].width, 1u, source, cpu.flags,
+                              &ignored, &expected_flags);
+                hl_x86_test_enter(&cpu, code);
+                CHECK(cpu.flags == expected_flags && cpu.reason == 0u);
+                CHECK(cpu.registers[cases[test_case].source] ==
+                      (cases[test_case].high != 0u ? source << 8 : source));
+                CHECK(backing[24] == 1 && cpu.memory_written == 0u);
                 CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_WRITE) == 0);
             }
         }

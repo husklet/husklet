@@ -79,6 +79,8 @@ int hl_x86_decode_test(const hl_x86_a64_request *request, decode *block, instruc
                 item->source_high = 8u;
             }
         }
+        if (item->memory_operand != 0u)
+            item->memory_destination = 1u;
         return 1;
     }
     size_t immediate_size = opcode == 0xa8u || opcode == 0xf6u ? 1u : operand_16 != 0 ? 2u : 4u;
