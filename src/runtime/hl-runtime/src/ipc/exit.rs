@@ -74,20 +74,14 @@ impl From<crate::RuntimeExecError> for ExitRuntimeError {
 impl<H: MappingHost> PreparedExitParticipant for PreparedIpcExit<H> {
     fn publish(&mut self) -> Result<(), ExitRuntimeError> {
         self.mappings.publish()?;
-        let shared = match self.shared.take().ok_or(ExitRuntimeError::Failed)?.commit() {
-            Ok(value) => value,
-            Err(_) => {
-                self.mappings.rollback()?;
-                return Err(ExitRuntimeError::Failed);
-            }
+        let Ok(shared) = self.shared.take().ok_or(ExitRuntimeError::Failed)?.commit() else {
+            self.mappings.rollback()?;
+            return Err(ExitRuntimeError::Failed);
         };
-        let semaphores = match self.semaphores.take().ok_or(ExitRuntimeError::Failed)?.commit() {
-            Ok(value) => value,
-            Err(_) => {
-                shared.rollback().map_err(|_| ExitRuntimeError::Failed)?;
-                self.mappings.rollback()?;
-                return Err(ExitRuntimeError::Failed);
-            }
+        let Ok(semaphores) = self.semaphores.take().ok_or(ExitRuntimeError::Failed)?.commit() else {
+            shared.rollback().map_err(|_| ExitRuntimeError::Failed)?;
+            self.mappings.rollback()?;
+            return Err(ExitRuntimeError::Failed);
         };
         self.committed_shared = Some(shared);
         self.committed_semaphores = Some(semaphores);

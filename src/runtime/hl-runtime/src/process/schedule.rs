@@ -17,10 +17,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             return LinuxResult::Error(Errno::EFAULT);
         }
         let priority = i32::from_le_bytes(bytes);
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
         let base = policy & !0x4000_0000;
         let range = match base {
             1 | 2 => 1..=99,
@@ -33,10 +30,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if matches!(base, 1 | 2) {
             return LinuxResult::Error(Errno::EPERM);
         }
-        let current = match self.tasks.schedule(target) {
-            Ok(profile) => profile,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(current) = self.tasks.schedule(target) else { return LinuxResult::Error(Errno::ESRCH) };
         let Some(profile) = hl_task::SchedulingProfile::non_realtime(base, policy & 0x4000_0000 != 0) else {
             return LinuxResult::Error(Errno::EINVAL);
         };
@@ -56,14 +50,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if progress.copied != 4 || progress.fault.is_some() {
             return LinuxResult::Error(Errno::EFAULT);
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
-        let profile = match self.tasks.schedule(target) {
-            Ok(profile) => profile,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Ok(profile) = self.tasks.schedule(target) else { return LinuxResult::Error(Errno::ESRCH) };
         let Some(profile) = profile.with_priority(i32::from_le_bytes(bytes)) else {
             return LinuxResult::Error(Errno::EINVAL);
         };
@@ -77,10 +65,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if pid < 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
         match self.tasks.schedule(target) {
             Ok(profile) => LinuxResult::Value(u64::from(profile.policy())),
             Err(_) => LinuxResult::Error(Errno::ESRCH),
@@ -91,10 +76,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if parameter == 0 || pid < 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
         let priority = match self.tasks.schedule(target) {
             Ok(profile) => profile.priority(),
             Err(_) => return LinuxResult::Error(Errno::ESRCH),
@@ -153,10 +135,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if size != 0 && size < bytes.len() as u32 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
         let policy = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         let attr_flags = u64::from_le_bytes([
             bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
@@ -194,18 +173,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if pid < 0 || flags != 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
         if address == 0 {
             return LinuxResult::Error(Errno::EFAULT);
         }
         let copy = if size == 0 || size > 48 { 48 } else { size };
-        let profile = match self.tasks.schedule(target) {
-            Ok(profile) => profile,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(profile) = self.tasks.schedule(target) else { return LinuxResult::Error(Errno::ESRCH) };
         let mut bytes = [0_u8; 48];
         if copy >= 4 {
             bytes[0..4].copy_from_slice(&(copy as u32).to_le_bytes());
@@ -232,10 +205,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if which != 0 {
             return LinuxResult::Error(Errno::ENOSYS);
         }
-        let target = match self.tasks.affinity_target(self.thread, who) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, who) else { return LinuxResult::Error(Errno::ESRCH) };
         let profile = match self.tasks.schedule(target) {
             Ok(profile) => profile.with_nice(nice),
             Err(_) => return LinuxResult::Error(Errno::ESRCH),
@@ -253,10 +223,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if which != 0 {
             return LinuxResult::Error(Errno::ENOSYS);
         }
-        let target = match self.tasks.affinity_target(self.thread, who) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, who) else { return LinuxResult::Error(Errno::ESRCH) };
         match self.tasks.schedule(target) {
             Ok(profile) => LinuxResult::Value((20_i32 - i32::from(profile.nice())) as u64),
             Err(_) => LinuxResult::Error(Errno::ESRCH),
@@ -272,10 +239,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 return LinuxResult::Error(Errno::EFAULT);
             }
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
         let affinity = match AffinityMask::decode(&bytes[..copy], self.tasks.topology().online()) {
             Ok(affinity) => affinity,
             Err(error) => return LinuxResult::Error(error),
@@ -291,14 +255,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if size % 8 != 0 || size < width {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let target = match self.tasks.affinity_target(self.thread, pid) {
-            Ok(target) => target,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
-        let affinity = match self.tasks.affinity(target) {
-            Ok(affinity) => affinity,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(target) = self.tasks.affinity_target(self.thread, pid) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Ok(affinity) = self.tasks.affinity(target) else { return LinuxResult::Error(Errno::ESRCH) };
         let bytes = AffinityMask::encode(affinity);
         let copy = size.min(AFFINITY_BYTES);
         let progress = GuestMarshaller::new(&self.memory, self.architecture).copy_to(address, &bytes[..copy]);
@@ -319,10 +277,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     pub(crate) fn getcpu(&self, processor: u64, node: u64) -> LinuxResult {
-        let affinity = match self.tasks.affinity(self.thread) {
-            Ok(affinity) => affinity,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(affinity) = self.tasks.affinity(self.thread) else { return LinuxResult::Error(Errno::ESRCH) };
         let current = u32::try_from(affinity.first()).unwrap_or(0);
         let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
         if processor != 0 {

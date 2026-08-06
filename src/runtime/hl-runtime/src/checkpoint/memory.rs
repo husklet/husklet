@@ -265,17 +265,14 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
                 replacement.thaw_checkpoint();
                 return Err(());
             }
-            let mut states = match self.staged.lock() {
-                Ok(states) => states,
-                Err(_) => {
-                    self.memory.clear_stage(&replacement);
-                    if let Some(resources) = &mut resources {
-                        resources.rollback();
-                    }
-                    host.rollback();
-                    replacement.thaw_checkpoint();
-                    return Err(());
+            let Ok(mut states) = self.staged.lock() else {
+                self.memory.clear_stage(&replacement);
+                if let Some(resources) = &mut resources {
+                    resources.rollback();
                 }
+                host.rollback();
+                replacement.thaw_checkpoint();
+                return Err(());
             };
             states.insert(
                 reservation,

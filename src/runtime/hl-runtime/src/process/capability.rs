@@ -13,10 +13,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let words = match Self::cap_words(version) {
-            Some(value) => value,
-            None => return self.cap_version(header),
-        };
+        let Some(words) = Self::cap_words(version) else { return self.cap_version(header) };
         let credentials = match self.cap_target(pid) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
@@ -39,10 +36,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let words = match Self::cap_words(version) {
-            Some(value) => value,
-            None => return self.cap_version(header),
-        };
+        let Some(words) = Self::cap_words(version) else { return self.cap_version(header) };
         if pid != 0 && pid as u32 != self.thread.number() {
             return LinuxResult::Error(Errno::EPERM);
         }

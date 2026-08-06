@@ -87,19 +87,15 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(descriptors) = &self.descriptors else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let lease = match descriptors.pin(descriptor) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EBADF),
-        };
+        let Ok(lease) = descriptors.pin(descriptor) else { return LinuxResult::Error(Errno::EBADF) };
         if namespace_type != 0 && (namespace_type & !NAMESPACE_FLAGS != 0 || !namespace_type.is_power_of_two()) {
             return LinuxResult::Error(Errno::EINVAL);
         }
         let Some(handles) = &self.namespace_handles else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let identifier = match handles.identifier(lease.description_identity()) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
+        let Ok(identifier) = handles.identifier(lease.description_identity()) else {
+            return LinuxResult::Error(Errno::EINVAL)
         };
         if namespace_type != 0 && namespace_type != identifier.kind.clone_flag() {
             return LinuxResult::Error(Errno::EINVAL);

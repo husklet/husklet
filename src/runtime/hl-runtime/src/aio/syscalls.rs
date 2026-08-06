@@ -163,10 +163,7 @@ impl<M: GuestMemory> RuntimeAioSyscalls<M> {
             return -i64::from(Errno::EINVAL.raw());
         }
         let marshaller = hl_linux::GuestMarshaller::new(&self.memory, self.architecture);
-        let count = match usize::try_from(control.count) {
-            Ok(count) => count,
-            Err(_) => return -i64::from(Errno::EINVAL.raw()),
-        };
+        let Ok(count) = usize::try_from(control.count) else { return -i64::from(Errno::EINVAL.raw()) };
         let plan = match marshaller.iovecs(control.buffer, count) {
             Ok(plan) if plan.total_length <= TRANSFER_MAXIMUM => plan,
             Ok(_) | Err(hl_linux::MarshalError::Invalid) => return -i64::from(Errno::EINVAL.raw()),

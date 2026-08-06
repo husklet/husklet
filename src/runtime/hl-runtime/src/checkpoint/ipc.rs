@@ -109,12 +109,9 @@ impl IpcCheckpointParticipant {
 
     fn stage_image(&self, previous: &Arc<HostIpcCatalog>, image: &IpcCheckpointImage) -> Result<u64, ()> {
         let mut external = self.rebind.stage(image).map_err(|_| ())?;
-        let replacement = match HostIpcCatalog::restore_checkpoint(image, external.as_mut()) {
-            Ok(catalog) => catalog,
-            Err(_) => {
-                external.rollback();
-                return Err(());
-            }
+        let Ok(replacement) = HostIpcCatalog::restore_checkpoint(image, external.as_mut()) else {
+            external.rollback();
+            return Err(());
         };
         replacement.freeze_checkpoint();
         let reservation = self.next.fetch_add(1, Ordering::Relaxed);

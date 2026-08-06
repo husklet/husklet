@@ -5,10 +5,7 @@ use crate::RuntimeProcessSyscalls;
 
 impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     pub(crate) fn uname(&self, destination: u64) -> LinuxResult {
-        let identity = match self.tasks.uts_identity(self.process) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(identity) = self.tasks.uts_identity(self.process) else { return LinuxResult::Error(Errno::ESRCH) };
         let identity = UtsName::identity(self.architecture, &identity.hostname, &identity.domainname);
         let progress = GuestMarshaller::new(&self.memory, self.architecture).copy_to(destination, identity.bytes());
         if progress.copied == identity.bytes().len() && progress.fault.is_none() {
@@ -32,10 +29,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 return LinuxResult::Error(Errno::EFAULT);
             }
         }
-        let mut identity = match self.tasks.uts_identity(self.process) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(mut identity) = self.tasks.uts_identity(self.process) else { return LinuxResult::Error(Errno::ESRCH) };
         if domain {
             identity.domainname = bytes;
         } else {

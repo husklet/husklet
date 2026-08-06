@@ -307,15 +307,12 @@ impl CheckpointParticipant for Participant {
                 replacement.thaw_checkpoint();
                 return Err(());
             }
-            let mut staged = match self.staged.lock() {
-                Ok(staged) => staged,
-                Err(_) => {
-                    self.registry.clear_stage(&replacement);
-                    self.thaw_seccomp();
-                    external.rollback();
-                    replacement.thaw_checkpoint();
-                    return Err(());
-                }
+            let Ok(mut staged) = self.staged.lock() else {
+                self.registry.clear_stage(&replacement);
+                self.thaw_seccomp();
+                external.rollback();
+                replacement.thaw_checkpoint();
+                return Err(());
             };
             staged.insert(
                 reservation,

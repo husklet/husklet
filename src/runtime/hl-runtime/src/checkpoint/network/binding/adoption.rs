@@ -30,12 +30,9 @@ impl<H: CheckpointHost> ObjectBindings<H> {
             .map_err(|_| NetworkCheckpointError::InvalidImage)?;
         snapshot.id = id;
         let object = RuntimeSocket::host(description, created.token, id, snapshot, network);
-        let install = match descriptors.prepare_open(0, object.clone(), status, flags) {
-            Ok(install) => install,
-            Err(_) => {
-                object.close();
-                return Err(NetworkCheckpointError::ResourceLimit);
-            }
+        let Ok(install) = descriptors.prepare_open(0, object.clone(), status, flags) else {
+            object.close();
+            return Err(NetworkCheckpointError::ResourceLimit);
         };
         if self
             .sockets

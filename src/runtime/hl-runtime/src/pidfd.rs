@@ -57,12 +57,9 @@ impl ProcessHandleRegistry {
 
     pub fn export(&self, process: ProcessId, descriptor: i32) -> Result<DescriptionRef, ProcessHandleError> {
         let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let table = match files.get(&process).and_then(Weak::upgrade) {
-            Some(table) => table,
-            None => {
-                files.remove(&process);
-                return Err(ProcessHandleError::MissingFiles);
-            }
+        let Some(table) = files.get(&process).and_then(Weak::upgrade) else {
+            files.remove(&process);
+            return Err(ProcessHandleError::MissingFiles);
         };
         drop(files);
         table

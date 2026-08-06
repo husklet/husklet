@@ -71,10 +71,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         }
         let mut bytes = snapshot.path.as_str().as_bytes().to_vec();
         bytes.push(0);
-        let length = match usize::try_from(size) {
-            Ok(length) => length,
-            Err(_) => return LinuxResult::Error(Errno::EFAULT),
-        };
+        let Ok(length) = usize::try_from(size) else { return LinuxResult::Error(Errno::EFAULT) };
         if length < bytes.len() {
             return LinuxResult::Error(Errno::ERANGE);
         }

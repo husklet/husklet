@@ -199,10 +199,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if family == AddressFamily::Unix {
             let mut snapshot = Self::snapshot(family, socket_type, protocol, status, local, None);
             let catalog = self.current_catalog();
-            let id = match catalog.insert_unix(snapshot.clone()) {
-                Ok(value) => value,
-                Err(_) => return LinuxResult::Error(Errno::ENFILE),
-            };
+            let Ok(id) = catalog.insert_unix(snapshot.clone()) else { return LinuxResult::Error(Errno::ENFILE) };
             snapshot.id = id;
             return self.install_one(RuntimeSocket::unix_standalone(id, snapshot, catalog), raw_type);
         }
@@ -220,12 +217,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         description.bind_readiness();
         let snapshot = Self::snapshot(family, socket_type, protocol, status, local, None);
         let catalog = self.current_catalog();
-        let id = match catalog.insert_host(snapshot.clone(), created.resource, created.binding, Vec::new()) {
-            Ok(value) => value,
-            Err(_) => {
-                description.close();
-                return LinuxResult::Error(Errno::ENFILE);
-            }
+        let Ok(id) = catalog.insert_host(snapshot.clone(), created.resource, created.binding, Vec::new()) else {
+            description.close();
+            return LinuxResult::Error(Errno::ENFILE);
         };
         let mut snapshot = snapshot;
         snapshot.id = id;
@@ -259,9 +253,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Self::snapshot(family, socket_type, protocol, status, local, peer),
         ];
         let catalog = self.current_catalog();
-        let ids = match catalog.insert_unix_pair(snapshots.clone(), pair.clone()) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::ENFILE),
+        let Ok(ids) = catalog.insert_unix_pair(snapshots.clone(), pair.clone()) else {
+            return LinuxResult::Error(Errno::ENFILE)
         };
         snapshots[0].id = ids[0];
         snapshots[1].id = ids[1];
@@ -326,9 +319,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             };
             let mut prepared_path = if !raw.is_empty() && raw[0] != 0 {
                 if let Some(paths) = &self.unix_socket_paths {
-                    let pathname = match hl_vfs::GuestPathBytes::new(&raw) {
-                        Ok(pathname) => pathname,
-                        Err(_) => return LinuxResult::Error(Errno::EINVAL),
+                    let Ok(pathname) = hl_vfs::GuestPathBytes::new(&raw) else {
+                        return LinuxResult::Error(Errno::EINVAL)
                     };
                     match paths.prepare_bind(&pathname) {
                         Ok(prepared) => Some(prepared),
@@ -432,16 +424,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             snapshot.local = Some(address);
             snapshot.state = SocketState::Bound;
             let catalog = self.current_catalog();
-            let prepared = match catalog.prepare_host_bind(
+            let Ok(prepared) = catalog.prepare_host_bind(
                 snapshot.clone(),
                 hl_network::PortCheckpoint {
                     family,
                     port,
                     owner: socket.id,
                 },
-            ) {
-                Ok(prepared) => prepared,
-                Err(_) => return LinuxResult::Error(Errno::EADDRINUSE),
+            )
+            else {
+                return LinuxResult::Error(Errno::EADDRINUSE)
             };
             if prepared.commit().is_err() {
                 return LinuxResult::Error(Errno::EADDRINUSE);
@@ -699,15 +691,15 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             );
             accepted_snapshot.state = SocketState::Connected;
             let catalog = self.current_catalog();
-            let accepted_id = match catalog.connect_unix_pair(
+            let Ok(accepted_id) = catalog.connect_unix_pair(
                 listener.id,
                 socket.id,
                 client_snapshot.clone(),
                 accepted_snapshot.clone(),
                 pair.clone(),
-            ) {
-                Ok(id) => id,
-                Err(_) => return LinuxResult::Error(Errno::EIO),
+            )
+            else {
+                return LinuxResult::Error(Errno::EIO)
             };
             accepted_snapshot.id = accepted_id;
             let lifetime = RuntimeSocket::<H>::pair_lifetime(catalog, socket.id);

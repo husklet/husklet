@@ -110,10 +110,7 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let size = match usize::try_from(plan.size) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(size) = usize::try_from(plan.size) else { return LinuxResult::Error(Errno::EINVAL) };
         let result = self.catalog.with_shared_memory(|namespace| {
             namespace.shmget(ShmGetRequest {
                 key: IpcKey(plan.key),
@@ -188,10 +185,7 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
 
     fn semget(&self, arguments: [u64; 6]) -> LinuxResult {
         let plan = SysvAbi::<M>::semget(arguments[0], arguments[1], arguments[2] as u32);
-        let count = match usize::try_from(plan.semaphores) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(count) = usize::try_from(plan.semaphores) else { return LinuxResult::Error(Errno::EINVAL) };
         let (actor, pid, now) = match self.context() {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),

@@ -123,12 +123,9 @@ impl ProviderCheckpointParticipant {
             .iter()
             .map(|resource| remote.remote(resource.key).map(|value| (resource.slot, value)))
             .collect::<Result<Vec<_>, _>>();
-        let remotes = match remotes {
-            Ok(remotes) => remotes,
-            Err(_) => {
-                remote.rollback();
-                return Err(());
-            }
+        let Ok(remotes) = remotes else {
+            remote.rollback();
+            return Err(());
         };
         let replacement = match HandleNamespace::restore_checkpoint(&image.namespace, &remotes) {
             Ok(namespace) => Arc::new(namespace),

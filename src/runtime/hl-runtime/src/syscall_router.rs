@@ -438,12 +438,9 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
             ExecutionCpuSnapshot::Aarch64(cpu) => cpu.pc,
             ExecutionCpuSnapshot::X86_64(cpu) => cpu.rip,
         };
-        let frame = match SyscallFrameDecoder::decode(architecture, &CpuRegisters(cpu)) {
-            Ok(frame) => frame,
-            Err(_) => {
-                hl_log::hl_debug!(hl_log::tag::SYSCALL, "frame decode faulted pc={pc:#x}");
-                return RuntimeTrapOutcome::Fault;
-            }
+        let Ok(frame) = SyscallFrameDecoder::decode(architecture, &CpuRegisters(cpu)) else {
+            hl_log::hl_debug!(hl_log::tag::SYSCALL, "frame decode faulted pc={pc:#x}");
+            return RuntimeTrapOutcome::Fault;
         };
         let route = SyscallDispatcher::route(architecture, frame.raw_number);
         hl_log::hl_trace!(

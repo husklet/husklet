@@ -84,14 +84,8 @@ impl<M: GuestMemory> RuntimeSyscalls<M> {
                 value: u32::from_le_bytes(bytes[4..8].try_into().expect("fixed slice")),
             })
             .collect();
-        let program = match BpfProgram::new(instructions) {
-            Ok(program) => program,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
-        let plan = match SeccompPolicy::install_plan(program, flags) {
-            Ok(plan) => plan,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(program) = BpfProgram::new(instructions) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(plan) = SeccompPolicy::install_plan(program, flags) else { return LinuxResult::Error(Errno::EINVAL) };
         self.install(plan)
     }
 

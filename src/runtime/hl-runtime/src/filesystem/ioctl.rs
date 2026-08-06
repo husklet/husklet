@@ -331,9 +331,8 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 let Some((tasks, process)) = &self.terminal_tasks else {
                     return Some(LinuxResult::Error(Errno::ENOTTY));
                 };
-                let prepared = match tasks.prepare_terminal_transition(*process, hl_task::TerminalTransition::Detach) {
-                    Ok(prepared) => prepared,
-                    Err(_) => return Some(LinuxResult::Error(Errno::ENOTTY)),
+                let Ok(prepared) = tasks.prepare_terminal_transition(*process, hl_task::TerminalTransition::Detach) else {
+                    return Some(LinuxResult::Error(Errno::ENOTTY))
                 };
                 let effects = prepared.effects();
                 if terminal.controlling_session() != Some(effects.session.number()) {
@@ -416,10 +415,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let Some(bytes) = self.ioctl_read(argument, length) else {
             return LinuxResult::Error(Errno::EFAULT);
         };
-        let settings = match hl_terminal::Settings::decode(&bytes) {
-            Ok(settings) => settings,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
-        };
+        let Ok(settings) = hl_terminal::Settings::decode(&bytes) else { return LinuxResult::Error(Errno::EIO) };
         match terminal.pair.configure(settings, matches!(request, TCSETSF | TCSETSF2)) {
             Ok(()) => LinuxResult::Value(0),
             Err(_) => LinuxResult::Error(Errno::EIO),
@@ -471,10 +467,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if flags & !(ACCESS_MASK | NO_CTTY | CLOSE_EXEC) != 0 || flags & ACCESS_MASK == 3 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let object = match terminal.slave() {
-            Ok(object) => object,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
-        };
+        let Ok(object) = terminal.slave() else { return LinuxResult::Error(Errno::EIO) };
         let status = StatusFlags::from_bits(flags as u32 & ACCESS_MASK as u32);
         let descriptor_flags = if flags & CLOSE_EXEC != 0 {
             DescriptorFlags::from_bits(DescriptorFlags::CLOSE_ON_EXEC)

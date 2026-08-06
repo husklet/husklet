@@ -184,12 +184,9 @@ impl<H: MappingHost + 'static> ForkParticipant for IpcForkParticipant<H> {
             prepared
         };
         let shared = prepared.shared.commit().map_err(|_| ())?;
-        let semaphores = match prepared.semaphores.commit() {
-            Ok(committed) => committed,
-            Err(_) => {
-                shared.rollback().map_err(|_| ())?;
-                return Err(());
-            }
+        let Ok(semaphores) = prepared.semaphores.commit() else {
+            shared.rollback().map_err(|_| ())?;
+            return Err(());
         };
         let committed = CommittedIpcFork {
             child: prepared.child,

@@ -342,10 +342,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(Self::lock_errno(error)),
         };
-        let actor = match self.actor {
-            Some(value) => value,
-            None => return LinuxResult::Error(Errno::EIO),
-        };
+        let Some(actor) = self.actor else { return LinuxResult::Error(Errno::EIO) };
         let owner = if command >= 36 {
             let identity = lease.description_identity();
             ProcessLockOwner::open_file(FlockOwnerToken {

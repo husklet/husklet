@@ -23,10 +23,7 @@ impl<M: GuestMemory> TimerOperations<'_, M> {
             Ok(value) => value,
             Err(_) => return LinuxResult::Error(Errno::EINVAL),
         };
-        let setting = match timer.get_time() {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(setting) = timer.get_time() else { return LinuxResult::Error(Errno::EINVAL) };
         let staged = match EventAbi::new(self.memory, self.architecture).timerfd_gettime_copyout(output, setting) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(ErrorMap::marshal(error)),
@@ -47,15 +44,11 @@ impl<M: GuestMemory> TimerOperations<'_, M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(FilesystemErrno::descriptor(error)),
         };
-        let timer = match self.operations.timer(lease.description_identity()) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
+        let Ok(timer) = self.operations.timer(lease.description_identity()) else {
+            return LinuxResult::Error(Errno::EINVAL)
         };
         if let Some(output) = plan.old_value {
-            let previous = match timer.get_time() {
-                Ok(value) => value,
-                Err(_) => return LinuxResult::Error(Errno::EINVAL),
-            };
+            let Ok(previous) = timer.get_time() else { return LinuxResult::Error(Errno::EINVAL) };
             let staged = match abi.timerfd_gettime_copyout(output, previous) {
                 Ok(value) => value,
                 Err(error) => return LinuxResult::Error(ErrorMap::marshal(error)),

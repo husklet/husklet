@@ -148,9 +148,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if targets.is_empty() {
             return LinuxResult::Error(Errno::ESRCH);
         }
-        let sender = match snapshots.iter().find(|process| process.id == self.process) {
-            Some(value) => value,
-            None => return LinuxResult::Error(Errno::ESRCH),
+        let Some(sender) = snapshots.iter().find(|process| process.id == self.process) else {
+            return LinuxResult::Error(Errno::ESRCH)
         };
         let mut permitted = 0;
         for target in targets {
@@ -193,9 +192,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let target = match self.tasks.signal_thread_target(self.process, tid as u32) {
-            Ok(Some(target)) => target,
-            Ok(None) | Err(_) => return LinuxResult::Error(Errno::ESRCH),
+        let Ok(Some(target)) = self.tasks.signal_thread_target(self.process, tid as u32) else {
+            return LinuxResult::Error(Errno::ESRCH)
         };
         if expected_process.is_some_and(|pid| target.process.number() != pid as u32) {
             return LinuxResult::Error(Errno::ESRCH);

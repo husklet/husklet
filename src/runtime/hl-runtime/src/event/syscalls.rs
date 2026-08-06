@@ -136,10 +136,7 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             Ok(install) => install,
             Err(error) => return LinuxResult::Error(crate::filesystem::FilesystemErrno::descriptor(error)),
         };
-        let id = match self.catalog.insert_eventfd(object) {
-            Ok(id) => id,
-            Err(_) => return LinuxResult::Error(Errno::ENFILE),
-        };
+        let Ok(id) = self.catalog.insert_eventfd(object) else { return LinuxResult::Error(Errno::ENFILE) };
         if self
             .bind_checkpoint(&bound, install.description_identity(), id)
             .is_err()
@@ -175,10 +172,7 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             control.register_epoll(identity, object.clone());
             bound.bind_epoll(control.clone(), identity);
         }
-        let id = match self.catalog.insert_epoll(object, Vec::new()) {
-            Ok(id) => id,
-            Err(_) => return LinuxResult::Error(Errno::ENFILE),
-        };
+        let Ok(id) = self.catalog.insert_epoll(object, Vec::new()) else { return LinuxResult::Error(Errno::ENFILE) };
         if self
             .bind_checkpoint(&bound, install.description_identity(), id)
             .is_err()
@@ -205,10 +199,7 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(ErrorMap::marshal(error)),
         };
-        let (resource, source) = match source.clock() {
-            Ok(source) => source,
-            Err(_) => return LinuxResult::Error(Errno::ENOSYS),
-        };
+        let Ok((resource, source)) = source.clock() else { return LinuxResult::Error(Errno::ENOSYS) };
         if let Some((_, resources)) = &self.checkpoint
             && resources.register_clock(resource, source.clone()).is_err()
         {
@@ -238,12 +229,9 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             return LinuxResult::Error(Errno::ENFILE);
         }
         bound.bind_operations(self.operations.clone(), identity);
-        let id = match self.catalog.insert_timerfd(object, resource) {
-            Ok(id) => id,
-            Err(_) => {
-                self.operations.retire(identity);
-                return LinuxResult::Error(Errno::ENFILE);
-            }
+        let Ok(id) = self.catalog.insert_timerfd(object, resource) else {
+            self.operations.retire(identity);
+            return LinuxResult::Error(Errno::ENFILE);
         };
         if self.bind_checkpoint(&bound, identity, id).is_err() {
             self.operations.retire(identity);
@@ -265,9 +253,8 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
                 Ok(lease) => lease,
                 Err(error) => return LinuxResult::Error(crate::filesystem::FilesystemErrno::descriptor(error)),
             };
-            let object = match self.operations.signal(lease.description_identity()) {
-                Ok(object) => object,
-                Err(_) => return LinuxResult::Error(Errno::EINVAL),
+            let Ok(object) = self.operations.signal(lease.description_identity()) else {
+                return LinuxResult::Error(Errno::EINVAL)
             };
             return match object.set_mask(mask) {
                 Ok(()) => LinuxResult::Value(descriptor as u64),
@@ -277,10 +264,7 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
         let Some(source) = &self.signal_source else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let (resource, queue) = match source.queue() {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::ENOSYS),
-        };
+        let Ok((resource, queue)) = source.queue() else { return LinuxResult::Error(Errno::ENOSYS) };
         if let Some((_, resources)) = &self.checkpoint
             && resources.register_signal(resource, queue.clone()).is_err()
         {
@@ -310,12 +294,9 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             return LinuxResult::Error(Errno::ENFILE);
         }
         bound.bind_operations(self.operations.clone(), identity);
-        let id = match self.catalog.insert_signalfd(object, resource) {
-            Ok(value) => value,
-            Err(_) => {
-                self.operations.retire(identity);
-                return LinuxResult::Error(Errno::ENFILE);
-            }
+        let Ok(id) = self.catalog.insert_signalfd(object, resource) else {
+            self.operations.retire(identity);
+            return LinuxResult::Error(Errno::ENFILE);
         };
         if self.bind_checkpoint(&bound, identity, id).is_err() {
             self.operations.retire(identity);
@@ -334,10 +315,7 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
         let Some(source) = &self.watch_source else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let (resource, source) = match source.watches() {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::ENOSYS),
-        };
+        let Ok((resource, source)) = source.watches() else { return LinuxResult::Error(Errno::ENOSYS) };
         if let Some((_, resources)) = &self.checkpoint
             && resources.register_watch(resource, source.clone()).is_err()
         {
@@ -367,12 +345,9 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             return LinuxResult::Error(Errno::ENFILE);
         }
         bound.bind_operations(self.operations.clone(), identity);
-        let id = match self.catalog.insert_inotify(object, resource, Vec::new()) {
-            Ok(value) => value,
-            Err(_) => {
-                self.operations.retire(identity);
-                return LinuxResult::Error(Errno::ENFILE);
-            }
+        let Ok(id) = self.catalog.insert_inotify(object, resource, Vec::new()) else {
+            self.operations.retire(identity);
+            return LinuxResult::Error(Errno::ENFILE);
         };
         if self.bind_checkpoint(&bound, identity, id).is_err()
             || self
@@ -397,9 +372,8 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(crate::filesystem::FilesystemErrno::descriptor(error)),
         };
-        let object = match self.operations.watch(lease.description_identity()) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
+        let Ok(object) = self.operations.watch(lease.description_identity()) else {
+            return LinuxResult::Error(Errno::EINVAL)
         };
         match object.add_watch(&plan.path, plan.mask) {
             Ok(value)
@@ -423,9 +397,8 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(crate::filesystem::FilesystemErrno::descriptor(error)),
         };
-        let object = match self.operations.watch(lease.description_identity()) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
+        let Ok(object) = self.operations.watch(lease.description_identity()) else {
+            return LinuxResult::Error(Errno::EINVAL)
         };
         match object.remove_watch(watch) {
             Ok(())

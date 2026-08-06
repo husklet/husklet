@@ -75,10 +75,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let maximum = match usize::try_from(arguments[4]) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(maximum) = usize::try_from(arguments[4]) else { return LinuxResult::Error(Errno::EINVAL) };
         let cancellation = self.pipe_cancellation.as_ref().map(|port| port.observation());
         let result = source.copy_file_range(&target, input, output, maximum, false, cancellation);
         match result {
@@ -218,10 +215,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let Some(target) = target.pipe_transfer_endpoint() else {
             return LinuxResult::Error(Errno::EINVAL);
         };
-        let maximum = match usize::try_from(maximum) {
-            Ok(maximum) => maximum,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(maximum) = usize::try_from(maximum) else { return LinuxResult::Error(Errno::EINVAL) };
         let cancellation = self.pipe_cancellation.as_ref().map(|port| port.observation());
         match PipeTransfer::execute(source, target, maximum, mode, nonblocking, cancellation) {
             Ok(count) => LinuxResult::Value(count as u64),
@@ -257,10 +251,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
     }
 
     fn splice_file_side(&self, plan: FileSplicePlan<'_>) -> LinuxResult {
-        let maximum = match usize::try_from(plan.maximum.min(65_536)) {
-            Ok(maximum) => maximum,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
-        };
+        let Ok(maximum) = usize::try_from(plan.maximum.min(65_536)) else { return LinuxResult::Error(Errno::EINVAL) };
         let cancellation = self.pipe_cancellation.as_ref().map(|port| port.observation());
         let prepared = match plan
             .source

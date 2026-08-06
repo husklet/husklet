@@ -134,10 +134,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(clock) = &self.cpu_clock else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let usage = match clock.resource_usage(self.process, scope) {
-            Ok(usage) => usage,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
-        };
+        let Ok(usage) = clock.resource_usage(self.process, scope) else { return LinuxResult::Error(Errno::EIO) };
         let staged = match ProcessAbi::new(&self.memory, self.architecture).stage_usage(destination, usage) {
             Ok(staged) => staged,
             Err(error) => return LinuxResult::Error(error.errno()),
@@ -175,10 +172,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             }
             thread.id
         };
-        let registration = match self.tasks.robust_list(target) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::ESRCH),
-        };
+        let Ok(registration) = self.tasks.robust_list(target) else { return LinuxResult::Error(Errno::ESRCH) };
         let head = registration.map_or(0, |value| value.head);
         let abi = TimeFutexAbi::new(&self.memory, self.architecture);
         let (head_copyout, length_copyout) = match abi.stage_robust_list(head_output, length_output, head) {
@@ -303,10 +297,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(provider) = &self.clock else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let value = match provider.realtime_now() {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
-        };
+        let Ok(value) = provider.realtime_now() else { return LinuxResult::Error(Errno::EIO) };
         let abi = TimeFutexAbi::new(&self.memory, self.architecture);
         let marshaller = hl_linux::GuestMarshaller::new(&self.memory, self.architecture);
         if time != 0 {
@@ -380,10 +371,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 None => return LinuxResult::Error(Errno::ENOSYS),
             },
         };
-        let value = match value {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
-        };
+        let Ok(value) = value else { return LinuxResult::Error(Errno::EIO) };
         let staged = match abi.stage_timespec(destination, value) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error.errno()),
@@ -400,13 +388,11 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(cpu) = &self.cpu_clock else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let process = match cpu.resource_usage(self.process, ResourceUsageScope::Process) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
+        let Ok(process) = cpu.resource_usage(self.process, ResourceUsageScope::Process) else {
+            return LinuxResult::Error(Errno::EIO)
         };
-        let children = match cpu.resource_usage(self.process, ResourceUsageScope::Children) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
+        let Ok(children) = cpu.resource_usage(self.process, ResourceUsageScope::Children) else {
+            return LinuxResult::Error(Errno::EIO)
         };
         let child_user = Self::usage_ticks(children.user_seconds, children.user_microseconds);
         let child_system = Self::usage_ticks(children.system_seconds, children.system_microseconds);

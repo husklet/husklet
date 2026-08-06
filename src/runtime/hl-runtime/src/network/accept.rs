@@ -58,9 +58,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     Ok(hl_sync::WaitOutcome::TimedOut) | Err(_) => return LinuxResult::Error(Errno::EIO),
                 }
             }
-            let id = match self.current_catalog().accept_pending_unix(listener.id) {
-                Ok(value) => value,
-                Err(_) => return LinuxResult::Error(Errno::EIO),
+            let Ok(id) = self.current_catalog().accept_pending_unix(listener.id) else {
+                return LinuxResult::Error(Errno::EIO)
             };
             let Some(object) = listener.take_pending(id) else {
                 return LinuxResult::Error(Errno::EIO);
@@ -92,9 +91,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         }
         let queue = Arc::new(hl_sync::WaitQueue::new());
         let observer: Arc<dyn ReadinessObserver> = Arc::new(AcceptWake(queue.clone()));
-        let _subscription = match description.subscribe_readiness(observer) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EIO),
+        let Ok(_subscription) = description.subscribe_readiness(observer) else {
+            return LinuxResult::Error(Errno::EIO)
         };
         let accepted = loop {
             let observed = queue.observation();
@@ -129,12 +127,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         );
         snapshot.state = SocketState::Connected;
         let catalog = self.current_catalog();
-        let id = match catalog.insert_host(snapshot.clone(), accepted.resource, accepted.binding, Vec::new()) {
-            Ok(value) => value,
-            Err(_) => {
-                description.close();
-                return LinuxResult::Error(Errno::ENFILE);
-            }
+        let Ok(id) = catalog.insert_host(snapshot.clone(), accepted.resource, accepted.binding, Vec::new()) else {
+            description.close();
+            return LinuxResult::Error(Errno::ENFILE);
         };
         snapshot.id = id;
         let object = RuntimeSocket::host(description, accepted.token, id, snapshot, catalog);

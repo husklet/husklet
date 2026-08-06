@@ -453,10 +453,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             interval: hl_time::Timespec::default(),
             value: hl_time::Timespec::new(u64::from(seconds), 0).unwrap_or_default(),
         };
-        let previous = match alarms.replace(self.process, timer) {
-            Ok(previous) => previous,
-            Err(()) => return LinuxResult::Error(Errno::EAGAIN),
-        };
+        let Ok(previous) = alarms.replace(self.process, timer) else { return LinuxResult::Error(Errno::EAGAIN) };
         let nanoseconds = previous.value.checked_nanoseconds().unwrap_or(u64::MAX);
         LinuxResult::Value(nanoseconds.div_ceil(1_000_000_000))
     }
@@ -481,10 +478,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 Err(error) => return LinuxResult::Error(error),
             }
         };
-        let previous = match replaced {
-            Ok(previous) => previous,
-            Err(()) => return LinuxResult::Error(Errno::EAGAIN),
-        };
+        let Ok(previous) = replaced else { return LinuxResult::Error(Errno::EAGAIN) };
         if old == 0 {
             return LinuxResult::Value(0);
         }

@@ -60,12 +60,9 @@ impl ForkParticipant for ExecutionForkParticipant {
 
     fn prepare(&self, context: ForkContext) -> Result<u64, ()> {
         self.parent.freeze().map_err(|_| ())?;
-        let previous = match self.parent.snapshot() {
-            Ok(snapshot) => snapshot,
-            Err(_) => {
-                let _ = self.parent.thaw();
-                return Err(());
-            }
+        let Ok(previous) = self.parent.snapshot() else {
+            let _ = self.parent.thaw();
+            return Err(());
         };
         let mut state = self.state.lock().map_err(|_| ())?;
         let reservation = state.next;

@@ -264,9 +264,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
         };
         let mut payload = Vec::new();
-        let length = match usize::try_from(imported.vectors.total_length) {
-            Ok(value) => value,
-            Err(_) => return LinuxResult::Error(Errno::EINVAL),
+        let Ok(length) = usize::try_from(imported.vectors.total_length) else {
+            return LinuxResult::Error(Errno::EINVAL)
         };
         if payload.try_reserve_exact(length).is_err() {
             return LinuxResult::Error(Errno::ENOMEM);
