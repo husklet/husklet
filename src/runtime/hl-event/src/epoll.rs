@@ -2,11 +2,11 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 pub(crate) mod model;
 mod ofd;
+mod readiness;
+mod registration;
 mod wait;
 
-use hl_descriptor::{
-    ObjectError, OperationLease, Readiness, ReadinessObserver, ReadinessRegistry, ReadinessSubscription,
-};
+use hl_descriptor::{OperationLease, Readiness, ReadinessObserver, ReadinessRegistry, ReadinessSubscription};
 
 use self::model::{
     EpollError, EpollEvent, EpollInterest, EpollSnapshot, EpollStatus, EpollWatchKey, EpollWatchSnapshot,
@@ -15,7 +15,7 @@ use self::model::{
 const EPOLL_MODE: u32 = 0o100_600;
 const DEFAULT_WATCH_LIMIT: usize = 4_096;
 
-struct Watch {
+pub(crate) struct Watch {
     key: EpollWatchKey,
     target: OperationLease,
     interests: EpollInterest,
@@ -30,7 +30,7 @@ struct Watch {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BatchSelection {
+pub(crate) struct BatchSelection {
     token: u64,
     revision: u64,
     readiness_sequence: u64,
@@ -55,7 +55,7 @@ impl EpollBatch {
     }
 }
 
-struct EpollState {
+pub(crate) struct EpollState {
     watches: Vec<Watch>,
     token_index: HashMap<u64, usize>,
     ready: VecDeque<u64>,
@@ -64,7 +64,7 @@ struct EpollState {
     retired: bool,
 }
 
-struct EpollInner {
+pub(crate) struct EpollInner {
     watch_limit: usize,
     state: Mutex<EpollState>,
     changed: Condvar,
@@ -72,7 +72,7 @@ struct EpollInner {
     retired_watches: Mutex<Vec<Watch>>,
 }
 
-struct TargetObserver {
+pub(crate) struct TargetObserver {
     epoll: Weak<EpollInner>,
     token: u64,
 }
@@ -194,125 +194,6 @@ impl Epoll {
         Ok(epoll)
     }
 
-    pub fn add(
-        &self,
-        target: OperationLease,
-        interests: EpollInterest,
-        data: u64,
-    ) -> Result<EpollWatchKey, EpollError> {
-        if !interests.valid() {
-            return Err(EpollError::InvalidArgument);
-        }
-        self.prune_retired();
-        let target = target.into_durable();
-        let key = EpollWatchKey::from_lease(&target);
-        {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::validate_active(&state)?;
-            if state.watches.iter().any(|watch| watch.key == key) {
-                return Err(EpollError::AlreadyExists);
-            }
-            if state.watches.len() == self.inner.watch_limit {
-                return Err(EpollError::ResourceLimit);
-            }
-        }
-        let token = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let token = state.next_token;
-            state.next_token = state.next_token.wrapping_add(1).max(1);
-            token
-        };
-        let observer = Arc::new(TargetObserver {
-            epoll: Arc::downgrade(&self.inner),
-            token,
-        });
-        let subscription = target.subscribe_readiness(observer)?;
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::validate_active(&state)?;
-        if state.watches.iter().any(|watch| watch.key == key) {
-            drop(state);
-            subscription.quiesce();
-            return Err(EpollError::AlreadyExists);
-        }
-        if state.watches.len() == self.inner.watch_limit {
-            drop(state);
-            subscription.quiesce();
-            return Err(EpollError::ResourceLimit);
-        }
-        let index = state.watches.len();
-        state.watches.push(Watch {
-            key,
-            target,
-            interests,
-            data,
-            observed: Readiness::default(),
-            disabled: false,
-            token,
-            revision: 1,
-            readiness_sequence: 0,
-            queued: false,
-            subscription,
-        });
-        state.token_index.insert(token, index);
-        Self::wake(&self.inner, &mut state);
-        drop(state);
-        Self::refresh_token(&self.inner, token);
-        Ok(key)
-    }
-
-    pub fn modify(&self, target: &OperationLease, interests: EpollInterest, data: u64) -> Result<(), EpollError> {
-        if !interests.valid() {
-            return Err(EpollError::InvalidArgument);
-        }
-        let key = EpollWatchKey::from_lease(target);
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::validate_active(&state)?;
-        let index = state
-            .watches
-            .iter()
-            .position(|watch| watch.key == key)
-            .ok_or(EpollError::NotFound)?;
-        let token = state.watches[index].token;
-        if interests.exclusive() || state.watches[index].interests.exclusive() {
-            return Err(EpollError::InvalidArgument);
-        }
-        if state.watches[index].queued {
-            state.ready.retain(|queued| *queued != token);
-        }
-        let watch = &mut state.watches[index];
-        watch.interests = interests;
-        watch.data = data;
-        watch.revision = watch.revision.wrapping_add(1).max(1);
-        watch.observed = Readiness::default();
-        watch.disabled = false;
-        watch.queued = false;
-        Self::wake(&self.inner, &mut state);
-        drop(state);
-        Self::refresh_token(&self.inner, token);
-        Ok(())
-    }
-
-    pub fn delete(&self, target: &OperationLease) -> Result<(), EpollError> {
-        let key = EpollWatchKey::from_lease(target);
-        let removed = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::validate_active(&state)?;
-            let index = state
-                .watches
-                .iter()
-                .position(|watch| watch.key == key)
-                .ok_or(EpollError::NotFound)?;
-            let removed = state.watches.remove(index);
-            state.token_index.remove(&removed.token);
-            Self::reindex_from(&mut state, index);
-            state.ready.retain(|token| *token != removed.token);
-            Self::wake(&self.inner, &mut state);
-            removed
-        };
-        removed.subscription.quiesce();
-        Ok(())
-    }
-
     #[must_use]
     pub fn snapshot(&self) -> EpollSnapshot {
         let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -384,149 +265,4 @@ impl Epoll {
         }
     }
 
-    fn validate_active(state: &EpollState) -> Result<(), EpollError> {
-        if state.retired {
-            Err(EpollError::Retired)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn refresh_token(inner: &Arc<EpollInner>, token: u64) {
-        let snapshot = {
-            let state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.retired {
-                return;
-            }
-            let Some(watch) = state.token_index.get(&token).map(|index| &state.watches[*index]) else {
-                return;
-            };
-            (watch.target.clone(), watch.interests, watch.observed, watch.disabled)
-        };
-        let (target, interests, observed, disabled) = snapshot;
-        let sampled = target.readiness(interests.readiness());
-        let mut state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(index) = state.token_index.get(&token).copied() else {
-            return;
-        };
-        let transition = Readiness::from_bits(sampled.bits() & !observed.bits()).bits() != 0;
-        let should_queue = !disabled && sampled.bits() != 0 && (!interests.edge_triggered() || transition);
-        state.watches[index].observed = sampled;
-        if should_queue && !state.watches[index].queued {
-            state.watches[index].queued = true;
-            state.ready.push_back(token);
-        }
-        if should_queue {
-            state.watches[index].readiness_sequence = state.watches[index].readiness_sequence.wrapping_add(1).max(1);
-        }
-        Self::wake(inner, &mut state);
-        drop(state);
-        inner.readiness.notify();
-    }
-
-    fn signal_token(inner: &Arc<EpollInner>, token: u64) {
-        let mut state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state.retired {
-            return;
-        }
-        let Some(index) = state.token_index.get(&token).copied() else {
-            return;
-        };
-        if state.watches[index].disabled {
-            return;
-        }
-        state.watches[index].readiness_sequence = state.watches[index].readiness_sequence.wrapping_add(1).max(1);
-        if !state.watches[index].queued {
-            state.watches[index].queued = true;
-            state.ready.push_back(token);
-        }
-        Self::wake(inner, &mut state);
-        drop(state);
-        inner.readiness.notify();
-    }
-
-    fn prune_retired(&self) {
-        let removed = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::take_retired(&mut state)
-        };
-        for watch in removed {
-            watch.subscription.quiesce();
-        }
-    }
-
-    fn take_retired(state: &mut EpollState) -> Vec<Watch> {
-        let mut removed = Vec::new();
-        let mut index = 0;
-        while index < state.watches.len() {
-            if !state.watches[index].target.retired() {
-                index += 1;
-                continue;
-            }
-            let watch = state.watches.remove(index);
-            state.ready.retain(|token| *token != watch.token);
-            removed.push(watch);
-        }
-        state.token_index = state
-            .watches
-            .iter()
-            .enumerate()
-            .map(|(index, watch)| (watch.token, index))
-            .collect();
-        removed
-    }
-
-    fn reindex_from(state: &mut EpollState, first: usize) {
-        for (index, watch) in state.watches.iter().enumerate().skip(first) {
-            state.token_index.insert(watch.token, index);
-        }
-    }
-
-    fn wake(inner: &EpollInner, state: &mut EpollState) {
-        state.epoch = state.epoch.wrapping_add(1);
-        inner.changed.notify_all();
-    }
-
-    pub(crate) fn subscribe_observer(
-        &self,
-        observer: Arc<dyn ReadinessObserver>,
-    ) -> Result<Box<dyn ReadinessSubscription>, ObjectError> {
-        self.inner.readiness.subscribe(observer)
-    }
-
-    pub(crate) fn retire_description(&self) {
-        let watches = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.retired {
-                return;
-            }
-            state.retired = true;
-            state.epoch = state.epoch.wrapping_add(1);
-            self.inner.changed.notify_all();
-            let watches = std::mem::take(&mut state.watches);
-            state.token_index.clear();
-            watches
-        };
-        self.inner
-            .retired_watches
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .extend(watches);
-    }
-
-    /// Completes final close after descriptor retirement has stopped new waits.
-    /// Every target subscription is synchronously quiesced exactly once.
-    pub fn finish_retirement(&self) {
-        let watches = std::mem::take(
-            &mut *self
-                .inner
-                .retired_watches
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        for watch in watches {
-            watch.subscription.quiesce();
-        }
-        self.inner.readiness.close();
-    }
 }
