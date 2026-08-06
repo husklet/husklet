@@ -189,7 +189,11 @@ pub struct PipeEndpoint {
 impl PipeEndpoint {
     #[cfg(test)]
     pub(crate) fn sleeper_count(&self) -> usize {
-        self.pipe.state.lock().unwrap_or_else(|error| error.into_inner()).sleepers
+        self.pipe
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .sleepers
     }
 
     #[cfg(test)]
