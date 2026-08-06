@@ -368,6 +368,17 @@ rows it did not complete are `NOT_RUN`, never inferred failures or passes. The
 merged verdict uses the isolated result where one exists and preserves both
 attempts' provenance.
 
+`NOT_RUN` covers every planned case the sweep did not execute, so the result
+file always represents the whole selection. Deliberately inactive cases
+(`!broken`, `!unsupported`, `!host-excluded`) are recorded as `NOT_RUN` with
+their reason and evidence, and a selection containing only inactive cases is a
+successful run rather than an error. When the sweep aborts, its unreached rows
+are recorded as `NOT_RUN` naming the abort before the error propagates. A row's
+diagnostic is bounded and truncated with an explicit marker; an oversized or
+unreadable diagnostic never removes a row from the corpus. Byte differences are
+reported as the first differing offset with escaped context from both sides,
+never as a raw byte-array dump.
+
 YAML declares the smallest valid failure boundary:
 
 ```yaml

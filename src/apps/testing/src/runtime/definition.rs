@@ -160,14 +160,17 @@ impl App {
             .join(&self.name)
             .join(target.name())
             .join(&case.output);
-        fs::create_dir_all(output.parent().ok_or("runtime output has no parent")?)?;
+        let parent = output.parent().ok_or("runtime output has no parent")?;
+        fs::create_dir_all(parent).map_err(|error| format!("create build directory {}: {error}", parent.display()))?;
         let compiler = self.compiler.for_target(target);
+        let source = self.directory.join(case.source.native());
         let status = StdCommand::new(compiler)
             .arg("-o")
             .arg(&output)
-            .arg(self.directory.join(case.source.native()))
+            .arg(&source)
             .args(&case.flags)
-            .status()?;
+            .status()
+            .map_err(|error| format!("run {compiler} on {}: {error}", source.display()))?;
         if !status.success() {
             return Err(format!("{compiler} failed with {status}").into());
         }

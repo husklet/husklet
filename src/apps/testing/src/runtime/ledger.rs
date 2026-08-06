@@ -7,6 +7,11 @@ use std::collections::BTreeSet;
 
 pub(super) type Ledger = journal::Ledger<Runtime>;
 
+pub(super) const PASS: &str = "pass";
+pub(super) const FAIL: &str = "fail";
+/// A case the sweep never attempted: deliberately inactive, or lost to an abort.
+pub(super) const NOT_RUN: &str = "NOT_RUN";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Row {
     pub key: WorkKey,
@@ -31,19 +36,20 @@ impl Schema for Runtime {
         &row.key
     }
 
+    /// Never fails on diagnostic shape: a truncated row is worth more than an aborted sweep.
     fn format(row: &Row) -> Result<String, Error> {
-        (!row.key.id.contains(['\t', '\n']) && !row.diagnostic.contains(['\t', '\n']))
-            .require("runtime result contains an unsafe delimiter")?;
-        let text = format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+        (!row.key.id.contains(['\t', '\n'])).require("runtime result contains an unsafe delimiter")?;
+        let prefix = format!(
+            "{}\t{}\t{}\t{}\t",
             row.key.id,
             row.key.target.name(),
             row.status,
-            row.elapsed_ms,
-            row.diagnostic
+            row.elapsed_ms
         );
-        (text.len() <= Self::ROW_LIMIT).require("runtime result row exceeds its byte bound")?;
-        Ok(text)
+        let diagnostic = row.diagnostic.replace(['\t', '\n'], " ");
+        let room = Self::ROW_LIMIT.saturating_sub(prefix.len() + 1);
+        (room > 64).require("runtime result key exceeds its byte bound")?;
+        Ok(format!("{prefix}{}\n", super::diagnostic::bound(diagnostic, room)))
     }
 
     fn parse(fields: &[&str], keys: &BTreeSet<WorkKey>) -> Result<Option<Row>, Error> {
@@ -53,8 +59,9 @@ impl Schema for Runtime {
         };
         keys.contains(&key).require("stale runtime resume row")?;
         let status = match fields[2] {
-            "pass" => "pass",
-            "fail" => "fail",
+            "pass" => PASS,
+            "fail" => FAIL,
+            NOT_RUN => NOT_RUN,
             _ => return Err("invalid runtime resume status".into()),
         };
         Ok(Some(Row {
@@ -110,6 +117,43 @@ mod tests {
         resumed.ledger.finish().unwrap();
         let text = std::fs::read_to_string(report).unwrap();
         assert!(text.find("runtime/a").unwrap() < text.find("runtime/b").unwrap());
+    }
+
+    #[test]
+    fn an_oversized_diagnostic_is_truncated_rather_than_rejected() {
+        use crate::journal::Schema as _;
+
+        let row = Row {
+            key: key("runtime/loud"),
+            status: super::FAIL,
+            elapsed_ms: 1,
+            diagnostic: "x\ty\n".repeat(1 << 16),
+        };
+        let text = super::Runtime::format(&row).unwrap();
+        assert!(text.len() <= super::Runtime::ROW_LIMIT, "{}", text.len());
+        assert_eq!(text.matches('\t').count(), 4);
+        assert!(text.ends_with("truncated]\n"), "{text}");
+    }
+
+    #[test]
+    fn not_run_rows_round_trip_through_resume() {
+        let directory = tempfile::tempdir().unwrap();
+        let report = directory.path().join("results.tsv");
+        let keys = BTreeSet::from([key("runtime/a")]);
+        let opened = Ledger::open(&report, "stamp", &keys, false).unwrap();
+        opened
+            .ledger
+            .record(Row {
+                key: key("runtime/a"),
+                status: super::NOT_RUN,
+                elapsed_ms: 0,
+                diagnostic: "BROKEN: retained".to_owned(),
+            })
+            .unwrap();
+        drop(opened);
+        let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
+        assert_eq!(resumed.prior[&key("runtime/a")].status, super::NOT_RUN);
+        assert_eq!(resumed.ledger.planned(), &keys);
     }
 
     #[test]

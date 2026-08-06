@@ -1,4 +1,5 @@
 use super::CaseResult;
+use crate::runtime::diagnostic::preview;
 use crate::runtime::{self, workspace};
 use crate::suite::{Error, Target};
 use clap::Args;
@@ -198,31 +199,31 @@ fn supervise(
         ProcessOutcome::Exited(code) => return Err(termination(code, &stdout, &stderr)),
         ProcessOutcome::Signaled(signal) => {
             return Err(format!(
-                "runtime worker terminated by signal {signal}; stderr={:?}; stdout={:?}",
-                String::from_utf8_lossy(&stderr),
-                String::from_utf8_lossy(&stdout)
+                "runtime worker terminated by signal {signal}; stderr={}; stdout={}",
+                preview(&stderr),
+                preview(&stdout)
             ));
         }
         ProcessOutcome::TimedOut => {
             return Err(format!(
-                "runtime worker timed out after {} milliseconds; stderr={:?}; stdout={:?}",
+                "runtime worker timed out after {} milliseconds; stderr={}; stdout={}",
                 timeout.as_millis(),
-                String::from_utf8_lossy(&stderr),
-                String::from_utf8_lossy(&stdout)
+                preview(&stderr),
+                preview(&stdout)
             ));
         }
         ProcessOutcome::Cancelled => {
             return Err(format!(
-                "runtime worker was interrupted; stderr={:?}; stdout={:?}",
-                String::from_utf8_lossy(&stderr),
-                String::from_utf8_lossy(&stdout)
+                "runtime worker was interrupted; stderr={}; stdout={}",
+                preview(&stderr),
+                preview(&stdout)
             ));
         }
         ProcessOutcome::OutputLimit => {
             return Err(format!(
-                "runtime worker output exceeded {CAPTURE_LIMIT} bytes; stderr={:?}; stdout={:?}",
-                String::from_utf8_lossy(&stderr),
-                String::from_utf8_lossy(&stdout)
+                "runtime worker output exceeded {CAPTURE_LIMIT} bytes; stderr={}; stdout={}",
+                preview(&stderr),
+                preview(&stdout)
             ));
         }
     }
@@ -271,9 +272,9 @@ fn write_result(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 fn termination(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
     format!(
-        "runtime worker exited with {code:?}; stderr={:?}; stdout={:?}",
-        String::from_utf8_lossy(stderr),
-        String::from_utf8_lossy(stdout)
+        "runtime worker exited with {code:?}; stderr={}; stdout={}",
+        preview(stderr),
+        preview(stdout)
     )
 }
 

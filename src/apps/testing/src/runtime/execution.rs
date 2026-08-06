@@ -54,22 +54,35 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
     })
     .await??;
     let case = &app.cases[case_index];
-    let fixture = TestImage::materialize(&app.image, &target.platform()).await?;
-    let state = tempfile::tempdir()?;
+    let fixture = TestImage::materialize(&app.image, &target.platform())
+        .await
+        .map_err(|error| format!("materialize image {} for {}: {error}", app.image, target.name()))?;
+    let state = tempfile::tempdir().map_err(|error| format!("create container state directory: {error}"))?;
     let containers = hl_container::Containers::builder(Config::new(state.path()))
         .build()
         .await?;
     let destination = fixture.path().join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).map_err(|error| context("create staging directory", parent, &error))?;
     }
-    fs::copy(&artifact, &destination)?;
-    make_executable(&destination)?;
+    fs::copy(&artifact, &destination).map_err(|error| {
+        format!(
+            "stage {} into {}: {error}",
+            artifact.display(),
+            destination.display()
+        )
+    })?;
+    make_executable(&destination).map_err(|error| context("make executable", &destination, &error))?;
     let results = CaseExecution::new(&app, case, target, fixture.path(), &containers, execution)
         .run()
         .await;
     fixture.release()?;
     Ok(results)
+}
+
+/// Names the failing operation and its path, so a bare `os error 2` is never the whole diagnostic.
+fn context(operation: &str, path: &std::path::Path, error: &std::io::Error) -> String {
+    format!("{operation} {}: {error}", path.display())
 }
 
 #[cfg(unix)]
@@ -191,15 +204,16 @@ impl<'a> CaseExecution<'a> {
         let status = self.wait(name, timeout).await?;
         let logs = self.containers.logs(name).await?;
         logs.bounded()?;
-        let expected = fs::read(&self.case.golden)?;
+        let expected =
+            fs::read(&self.case.golden).map_err(|error| context("read golden", &self.case.golden, &error))?;
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
         }
         if logs.stdout != expected {
-            return Err(format!("stdout differs: got {:?}, expected {:?}", logs.stdout, expected).into());
+            return Err(super::diagnostic::compare("stdout", &logs.stdout, &expected).into());
         }
         if !logs.stderr.is_empty() {
-            return Err(format!("unexpected stderr: {:?}", logs.stderr).into());
+            return Err(format!("unexpected stderr: {}", super::diagnostic::preview(&logs.stderr)).into());
         }
         Ok(())
     }

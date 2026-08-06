@@ -1,4 +1,4 @@
-use super::{Options, WorkKey, apps, plan, plan_for_host, require_work, validate_case_ids, workspace};
+use super::{Options, WorkKey, apps, plan, plan_for_host, require_planned, validate_case_ids, workspace};
 use crate::runtime::definition::{App, EngineHost};
 use crate::suite::Target;
 use clap::Parser;
@@ -78,22 +78,21 @@ fn plan_matches_only_the_complete_case_id() {
     assert_eq!(planned.work[0].key.id, "runtime/exact");
 
     let substring = options(&["--case", "runtime/ex"]);
-    let Err(error) = require_work(plan(vec![app()], &substring), substring.case.as_deref()) else {
-        panic!("substring case selection unexpectedly produced work");
-    };
+    let error = require_planned(plan(vec![app()], &substring), substring.case.as_deref())
+        .err()
+        .expect("substring case selection unexpectedly produced work");
     assert_eq!(error.to_string(), "no runtime case exactly matched --case runtime/ex");
 }
 
 #[test]
-fn inactive_exact_match_is_distinct_from_no_match() {
+fn an_inactive_only_selection_is_recorded_rather_than_rejected() {
     let options = options(&["--case", "runtime/inactive", "--isa", "arm64"]);
-    let Err(error) = require_work(plan(vec![app()], &options), options.case.as_deref()) else {
-        panic!("inactive case selection unexpectedly produced work");
-    };
-    assert_eq!(
-        error.to_string(),
-        "runtime case runtime/inactive matched but has no active work for the selected target(s)"
-    );
+    let planned = require_planned(plan(vec![app()], &options), options.case.as_deref()).unwrap();
+    assert!(planned.work.is_empty());
+    assert_eq!(planned.skipped.len(), 1);
+    assert_eq!(planned.skipped[0].key.id, "runtime/inactive");
+    assert_eq!(planned.skipped[0].status, super::ledger::NOT_RUN);
+    assert!(planned.skipped[0].diagnostic.contains("retained incompatibility"));
 }
 
 #[test]
@@ -108,13 +107,10 @@ fn host_exclusion_uses_the_injected_engine_host() {
 
     let excluded = plan_for_host(vec![app()], &options, EngineHost::Macos);
     assert!(excluded.matched_case);
-    let Err(error) = require_work(excluded, options.case.as_deref()) else {
-        panic!("macOS-excluded case unexpectedly produced work");
-    };
-    assert_eq!(
-        error.to_string(),
-        "runtime case runtime/host-excluded matched but has no active work for the selected target(s)"
-    );
+    let excluded = require_planned(excluded, options.case.as_deref()).unwrap();
+    assert!(excluded.work.is_empty());
+    assert_eq!(excluded.skipped.len(), 1);
+    assert_eq!(excluded.skipped[0].key.id, "runtime/host-excluded");
 }
 
 #[test]
@@ -161,10 +157,10 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
     assert!(active.is_disjoint(&inactive));
     assert_eq!(declared, active.union(&inactive).cloned().collect());
 
-    let planned = plan(apps, &options)
-        .work
-        .into_iter()
-        .map(|work| work.key)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(planned, active);
+    let planned = plan(apps, &options);
+    let scheduled = planned.work.into_iter().map(|work| work.key).collect::<BTreeSet<_>>();
+    let recorded = planned.skipped.into_iter().map(|row| row.key).collect::<BTreeSet<_>>();
+    assert_eq!(scheduled, active);
+    assert_eq!(recorded, inactive);
+    assert_eq!(scheduled.union(&recorded).cloned().collect::<BTreeSet<_>>(), declared);
 }

@@ -11,6 +11,8 @@ use std::{
 };
 use tokio::time::sleep;
 
+const MATERIALIZE_ATTEMPTS: u32 = 4;
+
 pub struct TestImage {
     images: Images,
     identity: String,
@@ -30,16 +32,36 @@ impl TestImage {
         Ok(image.target.digest().to_string())
     }
 
+    /// Concurrent workers share one on-disk snapshot store, so a lost race there is transient.
     pub async fn materialize(name: &str, platform: &Platform) -> Result<Self, Error> {
-        let (images, image) = resolve(name, platform).await?;
-        Self::from_image(images, &image, platform)
+        for attempt in 1..=MATERIALIZE_ATTEMPTS {
+            let (images, image) = resolve(name, platform).await?;
+            let failure = match Self::from_image(images, &image, platform) {
+                Ok(fixture) => return Ok(fixture),
+                Err(error) => error.to_string(),
+            };
+            if attempt == MATERIALIZE_ATTEMPTS || !contended(&failure) {
+                return Err(failure.into());
+            }
+            eprintln!("image materialization attempt {attempt} for {name} lost a store race; retrying: {failure}");
+            sleep(Duration::from_millis(200 * u64::from(attempt))).await;
+        }
+        unreachable!("bounded materialization retry loop always returns")
     }
 
     fn from_image(images: Images, image: &Image, platform: &Platform) -> Result<Self, Error> {
-        let unpacked = images.unpack(image, platform)?;
+        let digest = image.target.digest().to_string();
+        let unpacked = images
+            .unpack(image, platform)
+            .map_err(|error| format!("unpack {digest}: {error}"))?;
         let runtime = unpacked.runtime().clone();
-        let reference = images.rootfs(&unpacked)?;
-        let view = images.roots().open(&reference)?;
+        let reference = images
+            .rootfs(&unpacked)
+            .map_err(|error| format!("fork rootfs from {digest}: {error}"))?;
+        let view = images
+            .roots()
+            .open(&reference)
+            .map_err(|error| format!("open rootfs {}: {error}", reference.lease_id()))?;
         Ok(Self {
             images,
             identity: image.target.digest().to_string(),
@@ -69,9 +91,10 @@ impl TestImage {
 }
 
 async fn resolve(name: &str, platform: &Platform) -> Result<(Images, Image), Error> {
-    let images = Images::open(cache_root(platform)?)?;
+    let root = cache_root(platform)?;
+    let images = Images::open(&root).map_err(|error| format!("open image cache {}: {error}", root.display()))?;
     let reference: Reference = name.parse()?;
-    let image = match images.resolve(&reference)? {
+    let image = match images.resolve(&reference).map_err(|error| format!("resolve {name}: {error}"))? {
         Some(image) if images.details(&image, platform).is_ok() => image,
         _ if offline() => {
             return Err(format!(
@@ -118,6 +141,13 @@ fn registry_auth() -> Auth {
     }
 }
 
+fn contended(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    ["os error 2", "os error 17", "no such file", "already exists"]
+        .iter()
+        .any(|needle| error.contains(needle))
+}
+
 fn retryable(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
     [
@@ -161,7 +191,15 @@ pub fn preflight(name: &str, platform: &Platform) -> Result<bool, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_path, retryable};
+    use super::{cache_path, contended, retryable};
+
+    #[test]
+    fn only_shared_store_races_are_retried() {
+        assert!(contended("fork rootfs from sha256:a: No such file or directory (os error 2)"));
+        assert!(contended("File exists (os error 17)"));
+        assert!(!contended("layer DiffID mismatch"));
+    }
+
     use hl_images::Platform;
 
     #[test]

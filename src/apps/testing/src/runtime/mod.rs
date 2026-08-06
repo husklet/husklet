@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod case_tests;
 pub(crate) mod definition;
+mod diagnostic;
 mod execution;
 mod fingerprint;
 pub(crate) mod image;
@@ -23,9 +24,15 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 pub async fn run(options: Options) -> Result<(), Error> {
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
-    let mut work = require_work(plan(apps, &options), options.case.as_deref())?;
+    let planned = require_planned(plan(apps, &options), options.case.as_deref())?;
+    let mut work = planned.work;
+    let skipped = planned.skipped;
     let stamp = fingerprint::calculate(&work).await?;
-    let keys = work.iter().map(|item| item.key.clone()).collect();
+    let keys: std::collections::BTreeSet<WorkKey> = work
+        .iter()
+        .map(|item| item.key.clone())
+        .chain(skipped.iter().map(|row| row.key.clone()))
+        .collect();
     let report = workspace()?.join(&options.results);
     let resume = options.resume;
     let opened = tokio::task::spawn_blocking(move || {
@@ -33,10 +40,16 @@ pub async fn run(options: Options) -> Result<(), Error> {
     })
     .await??;
     let ledger = Arc::new(opened.ledger);
-    let prior = opened.prior;
+    let mut prior = opened.prior;
+    // A NOT_RUN row records an unattempted case, so resume must retry rather than accept it.
+    prior.retain(|_, row| row.status != ledger::NOT_RUN);
+    record_all(&ledger, skipped).await?;
     work.retain(|item| !prior.contains_key(&item.key));
     let mut running = pool::Pool::new(work, options.jobs);
-    let mut completed = drain(&mut running, &ledger).await?;
+    let drained = drain(&mut running, &ledger).await;
+    let unattempted = unattempted(&ledger, drained.as_ref().err())?;
+    record_all(&ledger, unattempted).await?;
+    let mut completed = drained?;
     completed.sort_by(|left, right| left.key.cmp(&right.key));
     let (passed, failed) = summarize(&prior, completed);
     tokio::task::spawn_blocking(move || ledger.finish().map_err(|error| error.to_string())).await??;
@@ -46,6 +59,37 @@ pub async fn run(options: Options) -> Result<(), Error> {
     } else {
         Err(failed.join("\n").into())
     }
+}
+
+/// Records every planned key the sweep never reached, so absence is never mistaken for success.
+fn unattempted(ledger: &ledger::Ledger, aborted: Option<&Error>) -> Result<Vec<ledger::Row>, Error> {
+    let recorded = ledger.recorded()?;
+    let reason = aborted.map_or_else(
+        || String::from("case was not scheduled"),
+        |error| format!("sweep aborted before this case ran: {error}"),
+    );
+    Ok(ledger
+        .planned()
+        .difference(&recorded)
+        .map(|key| ledger::Row {
+            key: key.clone(),
+            status: ledger::NOT_RUN,
+            elapsed_ms: 0,
+            diagnostic: reason.clone(),
+        })
+        .collect())
+}
+
+async fn record_all(ledger: &Arc<ledger::Ledger>, rows: Vec<ledger::Row>) -> Result<(), Error> {
+    let recording = Arc::clone(ledger);
+    tokio::task::spawn_blocking(move || {
+        for row in rows {
+            recording.record(row).map_err(|error| error.to_string())?;
+        }
+        Ok::<(), String>(())
+    })
+    .await??;
+    Ok(())
 }
 
 pub async fn worker(options: WorkerOptions) -> Result<(), Error> {
@@ -63,7 +107,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
-    let mut planned = require_work(plan(apps, &options), Some(&case))?;
+    let mut planned = require_planned(plan(apps, &options), Some(&case))?.work;
     if planned.len() != 1 {
         return Err("runtime worker selection did not resolve exactly one row".into());
     }
@@ -128,18 +172,19 @@ impl Completed {
 }
 
 fn outcome(result: &Result<Vec<execution::CaseResult>, String>) -> (&'static str, String) {
-    match result {
-        Ok(results) if results.iter().all(execution::CaseResult::passed) => ("pass", String::new()),
+    let (status, diagnostic) = match result {
+        Ok(results) if results.iter().all(execution::CaseResult::passed) => (ledger::PASS, String::new()),
         Ok(results) => (
-            "fail",
+            ledger::FAIL,
             results
                 .iter()
                 .filter_map(execution::CaseResult::diagnostic)
                 .collect::<Vec<_>>()
                 .join("; "),
         ),
-        Err(error) => ("fail", error.clone()),
-    }
+        Err(error) => (ledger::FAIL, error.clone()),
+    };
+    (status, diagnostic::bound(diagnostic, diagnostic::DIAGNOSTIC_LIMIT))
 }
 
 fn summarize(
@@ -207,6 +252,7 @@ fn summarize_results(
 
 struct Planned {
     work: Vec<Work>,
+    skipped: Vec<ledger::Row>,
     matched_case: bool,
 }
 
@@ -216,6 +262,7 @@ fn plan(apps: Vec<App>, options: &Options) -> Planned {
 
 fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned {
     let mut work = Vec::new();
+    let mut skipped = Vec::new();
     let mut matched_case = options.case.is_none();
     for app in apps {
         let app = Arc::new(app);
@@ -237,6 +284,15 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned
                 }
                 if let Some((kind, reason, evidence)) = case.inactive(host) {
                     println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
+                    skipped.push(ledger::Row {
+                        key: WorkKey {
+                            id: case.id.clone(),
+                            target,
+                        },
+                        status: ledger::NOT_RUN,
+                        elapsed_ms: 0,
+                        diagnostic: format!("{kind}: {reason} [{evidence}]"),
+                    });
                     continue;
                 }
                 work.push(Work {
@@ -252,23 +308,28 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned
         }
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
-    Planned { work, matched_case }
+    Planned {
+        work,
+        skipped,
+        matched_case,
+    }
 }
 
-fn require_work(planned: Planned, selected: Option<&str>) -> Result<Vec<Work>, Error> {
+/// A selection with only inactive cases is a valid, fully recorded NOT_RUN sweep, not a failure.
+fn require_planned(planned: Planned, selected: Option<&str>) -> Result<Planned, Error> {
     if !planned.matched_case {
         let selected = selected.ok_or("case selection match state is inconsistent")?;
         return Err(format!("no runtime case exactly matched --case {selected}").into());
     }
-    if planned.work.is_empty() {
+    if planned.work.is_empty() && planned.skipped.is_empty() {
         return Err(selected
             .map_or_else(
-                || "no active runtime cases support the selected target(s)".to_owned(),
-                |id| format!("runtime case {id} matched but has no active work for the selected target(s)"),
+                || "no runtime cases support the selected target(s)".to_owned(),
+                |id| format!("runtime case {id} matched but has no work for the selected target(s)"),
             )
             .into());
     }
-    Ok(planned.work)
+    Ok(planned)
 }
 
 fn display_attempt(id: &str, attempt: Option<u16>) -> String {

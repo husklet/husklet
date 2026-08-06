@@ -50,6 +50,7 @@ pub(crate) struct Ledger<S: Schema> {
     partial: PathBuf,
     file: Mutex<Option<BufWriter<File>>>,
     rows: Mutex<BTreeMap<S::Key, S::Row>>,
+    keys: BTreeSet<S::Key>,
     _lock: hl_engine::native::FileLock,
     _schema: PhantomData<fn() -> S>,
 }
@@ -74,6 +75,7 @@ impl<S: Schema> Ledger<S> {
                 partial,
                 file: Mutex::new(Some(BufWriter::new(file))),
                 rows: Mutex::new(prior.clone()),
+                keys: keys.clone(),
                 _lock: lock,
                 _schema: PhantomData,
             },
@@ -104,6 +106,20 @@ impl<S: Schema> Ledger<S> {
             .map_err(|_| Self::poisoned("rows"))?
             .insert(S::key(&row).clone(), row);
         Ok(())
+    }
+
+    pub(crate) const fn planned(&self) -> &BTreeSet<S::Key> {
+        &self.keys
+    }
+
+    pub(crate) fn recorded(&self) -> Result<BTreeSet<S::Key>, Error> {
+        Ok(self
+            .rows
+            .lock()
+            .map_err(|_| Self::poisoned("rows"))?
+            .keys()
+            .cloned()
+            .collect())
     }
 
     pub(crate) fn finish(&self) -> Result<(), Error> {
