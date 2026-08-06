@@ -1,0 +1,4 @@
+# husklet benchmark baseline v1: rust-engine median microseconds
+engine	c-engine	arm64	sha256:9c2701b36a46050909b12498eb0b47673f301bcb35d57e552d343b029cf3a67a
+engine	rust-engine	db154e1d0dcb
+sample	arm64	compute	compute	347618
