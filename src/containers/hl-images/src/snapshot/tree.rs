@@ -19,19 +19,30 @@ impl<'a> From<&'a Path> for Tree<'a> {
 impl Tree<'_> {
     /// Make every regular file and directory in this tree durable, children first.
     pub(super) fn sync(&self) -> Result<()> {
-        self.sync_with(&mut |path, opened| match opened {
-            Some(file) => file.sync_all(),
-            None => fs::File::open(path)?.sync_all(),
-        })
+        self.sync_with(&mut |_, opened| opened.sync_all())
     }
 
-    fn sync_with(&self, sync: &mut impl FnMut(&Path, Option<&fs::File>) -> std::io::Result<()>) -> Result<()> {
+    fn sync_with(&self, sync: &mut impl FnMut(&Path, &fs::File) -> std::io::Result<()>) -> Result<()> {
         let metadata = fs::symlink_metadata(self.0)?;
         if metadata.file_type().is_symlink() {
             return Ok(());
         }
         if metadata.is_file() {
-            return sync(self.0, None).map_err(Into::into);
+            let original = metadata.permissions();
+            let mut readable = original.clone();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                readable.set_mode(readable.mode() | 0o400);
+            }
+            #[cfg(not(unix))]
+            readable.set_readonly(false);
+            fs::set_permissions(self.0, readable)?;
+            let opened = fs::File::open(self.0);
+            let restored = fs::set_permissions(self.0, original);
+            let opened = opened?;
+            restored?;
+            return sync(self.0, &opened).map_err(Into::into);
         }
         if metadata.is_dir() {
             let original = metadata.permissions();
@@ -55,7 +66,7 @@ impl Tree<'_> {
             let restored = fs::set_permissions(self.0, original);
             let directory = traversed?;
             restored?;
-            sync(self.0, Some(&directory))?;
+            sync(self.0, &directory)?;
         }
         Ok(())
     }
