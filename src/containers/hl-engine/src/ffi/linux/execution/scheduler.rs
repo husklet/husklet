@@ -23,10 +23,16 @@ struct NativeBoundary {
     next: u64,
     rip: u64,
     stack: u64,
-    registers: [u64; 8],
-    vectors: [u128; 2],
+    registers: [u64; 16],
+    vectors: [u128; 16],
+    vector_upper: [u128; 16],
     flags: u16,
     mxcsr: u32,
+    fs_base: u64,
+    gs_base: u64,
+    direction: bool,
+    alignment_check: bool,
+    id_flag: bool,
     fault_address: u64,
     provenance: u64,
 }
@@ -49,31 +55,33 @@ impl NativeBoundaries {
         self.next = (self.next + 1) % NATIVE_BOUNDARY_CAPACITY;
     }
 
-    fn report(&self, process: hl_task::ProcessId) {
+    fn report(&self, process: Option<hl_task::ProcessId>) {
         for offset in 0..NATIVE_BOUNDARY_CAPACITY {
             let index = (self.next + offset) % NATIVE_BOUNDARY_CAPACITY;
-            let Some(record) = self.records[index].filter(|record| record.process == process) else {
+            let Some(record) =
+                self.records[index].filter(|record| process.is_none_or(|process| record.process == process))
+            else {
                 continue;
             };
             eprintln!(
-                "hl-native-boundary: start={:#x} exit={:?} instruction={:#x} next={:#x} rip={:#x} rsp={:#x} rax={:#x} rcx={:#x} rdx={:#x} rbx={:#x} rbp={:#x} rsi={:#x} rdi={:#x} xmm0={:#034x} xmm1={:#034x} rflags={:#x} mxcsr={:#x} fault={:#x} provenance={:#x}",
+                "hl-native-boundary: process={:?} start={:#x} exit={:?} instruction={:#x} next={:#x} rip={:#x} rsp={:#x} registers={:#x?} vectors={:#034x?} vector_upper={:#034x?} rflags={:#x} mxcsr={:#x} fs_base={:#x} gs_base={:#x} direction={} alignment_check={} id_flag={} fault={:#x} provenance={:#x}",
+                record.process,
                 record.start,
                 record.exit,
                 record.instruction,
                 record.next,
                 record.rip,
                 record.stack,
-                record.registers[0],
-                record.registers[1],
-                record.registers[2],
-                record.registers[3],
-                record.registers[5],
-                record.registers[6],
-                record.registers[7],
-                record.vectors[0],
-                record.vectors[1],
+                record.registers,
+                record.vectors,
+                record.vector_upper,
                 record.flags,
                 record.mxcsr,
+                record.fs_base,
+                record.gs_base,
+                record.direction,
+                record.alignment_check,
+                record.id_flag,
                 record.fault_address,
                 record.provenance,
             );
@@ -405,6 +413,12 @@ impl NativePool {
 
 impl Drop for NativePool {
     fn drop(&mut self) {
+        // Native execution and all signal/fault callbacks have returned before
+        // this coordinator-owned report. The fixed ring performs no capture
+        // allocation and formatting is confined to diagnostics-enabled teardown.
+        if let Some(boundaries) = &self.boundaries {
+            boundaries.report(None);
+        }
         if self.enabled && self.diagnostics {
             eprintln!(
                 "hl-native: runs={} builds={} hits={} fallbacks={} sites={} services={}",
@@ -785,7 +799,7 @@ impl GuestExecutor {
         {
             if let Some(boundaries) = &native.boundaries {
                 eprintln!("hl-native-terminal-sigsegv: code={code} address={address:#x}");
-                boundaries.report(run.process);
+                boundaries.report(Some(run.process));
             }
         }
         TurnResult { run, action }
@@ -1491,19 +1505,16 @@ impl GuestExecutor {
                 next: result.next,
                 rip: cpu.rip,
                 stack: cpu.registers[4],
-                registers: [
-                    cpu.registers[0],
-                    cpu.registers[1],
-                    cpu.registers[2],
-                    cpu.registers[3],
-                    cpu.registers[4],
-                    cpu.registers[5],
-                    cpu.registers[6],
-                    cpu.registers[7],
-                ],
-                vectors: [cpu.vectors[0], cpu.vectors[1]],
+                registers: cpu.registers,
+                vectors: cpu.vectors,
+                vector_upper: cpu.vector_upper,
                 flags: cpu.flags.bits(),
                 mxcsr: cpu.mxcsr,
+                fs_base: cpu.fs_base,
+                gs_base: cpu.gs_base,
+                direction: cpu.direction,
+                alignment_check: cpu.alignment_check,
+                id_flag: cpu.id_flag,
                 fault_address: result.address,
                 provenance: token.version,
             });
