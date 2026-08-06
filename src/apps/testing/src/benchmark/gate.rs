@@ -103,16 +103,18 @@ impl Baseline {
         Ok(baseline)
     }
 
-    fn render(
-        provenance: &Provenance,
-        workload: &str,
-        samples: &BTreeMap<String, Statistics>,
-    ) -> String {
+    /// Replaces only this workload's rows so other workloads stay recorded.
+    fn render(&self, provenance: &Provenance, workload: &str, samples: &BTreeMap<String, Statistics>) -> String {
+        let mut merged = self.samples.clone();
+        merged.retain(|(recorded, _), _| recorded != workload);
+        for (phase, statistics) in samples {
+            merged.insert((workload.to_owned(), phase.clone()), statistics.median);
+        }
         let mut text = String::from("# husklet benchmark baseline v1: rust-engine median microseconds\n");
         text.push_str(&format!("engine\tc-engine\t{}\n", provenance.build_id));
         text.push_str(&format!("engine\trust-engine\t{}\n", provenance.revision));
-        for (phase, statistics) in samples {
-            text.push_str(&format!("sample\t{workload}\t{phase}\t{}\n", statistics.median));
+        for ((workload, phase), us) in &merged {
+            text.push_str(&format!("sample\t{workload}\t{phase}\t{us}\n"));
         }
         text
     }
@@ -209,7 +211,7 @@ impl Gate {
             return Err(format!("retained C exec wrapper is missing: {}", runner.display()));
         }
         let provenance = Provenance {
-            build_id: super::matrix::elf_build_id(&engine)?,
+            build_id: super::matrix::build_identity(&engine)?,
             revision: revision(),
             rust_sha256: super::file_identity(&self.rust_engine)?,
         };
@@ -337,7 +339,7 @@ impl Gate {
             ));
         }
         if self.update {
-            std::fs::write(&self.baseline, Baseline::render(provenance, self.workload.name(), &rust))
+            std::fs::write(&self.baseline, baseline.render(provenance, self.workload.name(), &rust))
                 .map_err(|error| format!("write baseline: {error}"))?;
             println!("baseline\t{}\trecorded", self.baseline.display());
             return Ok(());
@@ -445,12 +447,16 @@ mod tests {
                 maximum: 43,
             },
         );
-        let text = Baseline::render(&provenance(), "compute", &samples);
+        let text = Baseline::default().render(&provenance(), "compute", &samples);
         let parsed = Baseline::parse(&text).unwrap();
         assert_eq!(parsed.engine.as_deref(), Some("abc"));
         assert_eq!(parsed.revision.as_deref(), Some("0123456789ab"));
         assert_eq!(parsed.samples[&("compute".to_owned(), "compute".to_owned())], 42);
         assert!(Baseline::parse("sample\tonly\ttwo\n").is_err());
+
+        let kept = Baseline::parse(&parsed.render(&provenance(), "syscall", &samples)).unwrap();
+        assert_eq!(kept.samples.len(), 2);
+        assert!(kept.samples.contains_key(&("compute".to_owned(), "compute".to_owned())));
     }
 
     #[test]

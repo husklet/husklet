@@ -23,7 +23,7 @@ pub(crate) struct Matrix {
     /// identity is established independently by SHA-256 and ELF BuildID.
     #[arg(long)]
     c_engine_tree: String,
-    /// Expected ELF BuildID, verified directly against `--c-engine`.
+    /// Expected ELF BuildID, or `sha256:<hex>` when the producer emitted none.
     #[arg(long)]
     c_engine_build_id: String,
     #[arg(long)]
@@ -98,7 +98,7 @@ impl Matrix {
         if self.c_engine_tree.trim().is_empty() || self.c_engine_build_id.trim().is_empty() {
             return Err("matrix requires nonempty retained C tree and build identifiers".into());
         }
-        verified_elf_build_id(&self.c_engine, &self.c_engine_build_id)?;
+        verified_build_identity(&self.c_engine, &self.c_engine_build_id)?;
         if self.repeats == 0 || self.repeats > LIMIT {
             return Err(format!("repeats must be between 1 and {LIMIT}"));
         }
@@ -289,12 +289,20 @@ pub(super) fn elf_build_id(path: &std::path::Path) -> Result<String, String> {
     elf_build_id_bytes(&bytes)
 }
 
-fn verified_elf_build_id(path: &std::path::Path, expected: &str) -> Result<String, String> {
-    let actual = elf_build_id(path)?;
+/// The GNU BuildID when the producer emitted one, else the binary's content hash.
+pub(super) fn build_identity(path: &std::path::Path) -> Result<String, String> {
+    match elf_build_id(path) {
+        Ok(identity) => Ok(identity),
+        Err(_) => Ok(format!("sha256:{}", super::file_identity(path)?)),
+    }
+}
+
+fn verified_build_identity(path: &std::path::Path, expected: &str) -> Result<String, String> {
+    let actual = build_identity(path)?;
     if expected.eq_ignore_ascii_case(&actual) {
         Ok(actual)
     } else {
-        Err(format!("retained C BuildID mismatch: expected {expected}, binary has {actual}"))
+        Err(format!("retained C identity mismatch: expected {expected}, binary has {actual}"))
     }
 }
 
@@ -525,7 +533,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("engine");
         std::fs::write(&path, build_id_elf()).unwrap();
-        assert_eq!(verified_elf_build_id(&path, "DEADBEEF").unwrap(), "deadbeef");
-        assert!(verified_elf_build_id(&path, "0000").unwrap_err().contains("mismatch"));
+        assert_eq!(verified_build_identity(&path, "DEADBEEF").unwrap(), "deadbeef");
+        assert!(verified_build_identity(&path, "0000").unwrap_err().contains("mismatch"));
+
+        let unmarked = directory.path().join("unmarked");
+        std::fs::write(&unmarked, b"no build id").unwrap();
+        let identity = build_identity(&unmarked).unwrap();
+        assert!(identity.starts_with("sha256:"));
+        assert_eq!(verified_build_identity(&unmarked, &identity).unwrap(), identity);
     }
 }
