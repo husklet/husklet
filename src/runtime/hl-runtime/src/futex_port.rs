@@ -314,24 +314,8 @@ impl<H: MemoryAccessHost + 'static> SafeRuntimeFutex<H> {
             .map_err(|_| ())?;
         self.domain.table.wake(key, 1, u32::MAX).map(|_| ()).map_err(|_| ())
     }
-}
 
-impl<H: MemoryAccessHost + 'static> crate::RobustWake for SafeRuntimeFutex<H> {
-    fn wake(&self, address: GuestAddress) -> Result<(), ()> {
-        self.wake_robust(address)
-    }
-}
-
-impl<H: MemoryAccessHost + 'static> RuntimeFutexPort for SafeRuntimeFutex<H> {
-    fn owner_exit(&self, thread: hl_task::ThreadId) {
-        let _ = self.domain.pi.owner_exit(thread);
-    }
-
-    fn checkpoint_quiescent(&self) -> bool {
-        self.domain.table.snapshot().waits.is_empty() && self.domain.pi.is_quiescent()
-    }
-
-    fn execute(&self, _process: hl_task::ProcessId, thread: hl_task::ThreadId, plan: FutexPlan) -> LinuxResult {
+    fn execute_result(&self, thread: hl_task::ThreadId, plan: FutexPlan) -> LinuxResult {
         let source_access = match plan.operation {
             FutexOperation::Wake | FutexOperation::WakeBitset | FutexOperation::Requeue => FutexAccess::KeyOnly,
             _ => FutexAccess::Read,
@@ -440,6 +424,32 @@ impl<H: MemoryAccessHost + 'static> RuntimeFutexPort for SafeRuntimeFutex<H> {
             },
             _ => LinuxResult::Error(Errno::ENOSYS),
         }
+    }
+}
+
+impl<H: MemoryAccessHost + 'static> crate::RobustWake for SafeRuntimeFutex<H> {
+    fn wake(&self, address: GuestAddress) -> Result<(), ()> {
+        self.wake_robust(address)
+    }
+}
+
+impl<H: MemoryAccessHost + 'static> RuntimeFutexPort for SafeRuntimeFutex<H> {
+    fn owner_exit(&self, thread: hl_task::ThreadId) {
+        let _ = self.domain.pi.owner_exit(thread);
+    }
+
+    fn checkpoint_quiescent(&self) -> bool {
+        self.domain.table.snapshot().waits.is_empty() && self.domain.pi.is_quiescent()
+    }
+
+    fn execute(&self, _process: hl_task::ProcessId, thread: hl_task::ThreadId, plan: FutexPlan) -> LinuxResult {
+        let result = self.execute_result(thread, plan);
+        hl_log::hl_debug!(
+            hl_log::tag::SYNC,
+            "futex thread={} operation={:?} address={:#x} value={} result={:#x}",
+            thread.number(), plan.operation, plan.address, plan.value, result.encode(),
+        );
+        result
     }
 
     fn wait_multiple(

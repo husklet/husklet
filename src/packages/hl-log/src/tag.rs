@@ -258,6 +258,8 @@ pub const MEMORY: Tag = Tag::new(1 << 22, "memory");
 pub const TASK: Tag = Tag::new(1 << 23, "task");
 /// Guest signal boundaries: queueing from kill, and the delivery action taken at a safe point.
 pub const SIGNAL: Tag = Tag::new(1 << 24, "signal");
+/// Guest synchronisation boundaries: futex wait, wake, requeue, and priority-inheritance locking.
+pub const SYNC: Tag = Tag::new(1 << 25, "sync");
 
 /// Every tag enabled.
 pub const ALL: Tags = Tags::ALL;
@@ -270,7 +272,7 @@ pub const NONE: Tags = Tags::NONE;
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
-    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL,
+    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC,
 ];
 
 #[cfg(test)]
