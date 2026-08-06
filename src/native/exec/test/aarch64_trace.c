@@ -1416,6 +1416,57 @@ int main(void) {
     CHECK(operand_memory.calls == 2);
     CHECK(hl_native_diagnose(run_executor, &operand_cold) == HL_NATIVE_OK);
     CHECK(operand_cold.publications == publications);
+    pthread_mutex_t pair_mutex[2] = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_MUTEX_INITIALIZER};
+    pthread_cond_t pair_changed[2] = {PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER};
+    int pair_entered[2] = {0, 0}, pair_released[2] = {0, 0};
+    operand_provider pair_memory[2] = {operand_memory, operand_memory};
+    hl_native_aarch64_cpu pair_state[2] = {0};
+    hl_native_cpu pair_cpu[2];
+    hl_native_run_request pair_request[2] = {run_request, run_request};
+    hl_native_exit pair_output[2] = {
+        {.abi = HL_NATIVE_ABI, .size = sizeof(hl_native_exit)},
+        {.abi = HL_NATIVE_ABI, .size = sizeof(hl_native_exit)}};
+    trace_run_worker pair_worker[2];
+    pthread_t pair_thread[2];
+    for (size_t index = 0; index < 2; ++index) {
+        pair_memory[index].calls = 0;
+        pair_memory[index].block_mutex = &pair_mutex[index];
+        pair_memory[index].block_changed = &pair_changed[index];
+        pair_memory[index].block_entered = &pair_entered[index];
+        pair_memory[index].block_released = &pair_released[index];
+        pair_state[index].program = 0xb000;
+        pair_state[index].registers[0] = pair_memory[index].guest;
+        pair_cpu[index] = (hl_native_cpu){.abi = HL_NATIVE_ABI, .size = sizeof(hl_native_cpu),
+            .architecture = HL_NATIVE_AARCH64, .state.aarch64 = &pair_state[index]};
+        pair_request[index].operand_context = &pair_memory[index];
+        pair_worker[index] = (trace_run_worker){run_executor, &pair_cpu[index], &pair_request[index],
+                                                &pair_output[index], HL_NATIVE_STATE};
+        CHECK(pthread_create(&pair_thread[index], NULL, trace_run_thread, &pair_worker[index]) == 0);
+    }
+    for (size_t index = 0; index < 2; ++index) {
+        pthread_mutex_lock(&pair_mutex[index]);
+        while (!pair_entered[index]) pthread_cond_wait(&pair_changed[index], &pair_mutex[index]);
+        pthread_mutex_unlock(&pair_mutex[index]);
+    }
+    CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_STATE);
+    pthread_mutex_lock(&pair_mutex[0]);
+    pair_released[0] = 1;
+    pthread_cond_broadcast(&pair_changed[0]);
+    pthread_mutex_unlock(&pair_mutex[0]);
+    CHECK(pthread_join(pair_thread[0], NULL) == 0 && pair_worker[0].status == HL_NATIVE_OK);
+    CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_STATE);
+    pthread_mutex_lock(&pair_mutex[1]);
+    pair_released[1] = 1;
+    pthread_cond_broadcast(&pair_changed[1]);
+    pthread_mutex_unlock(&pair_mutex[1]);
+    CHECK(pthread_join(pair_thread[1], NULL) == 0 && pair_worker[1].status == HL_NATIVE_OK);
+    CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_OK);
+    CHECK(hl_native_after_fork(run_executor, 1) == HL_NATIVE_OK);
+    for (size_t index = 0; index < 2; ++index) {
+        CHECK(pair_output[index].kind == HL_NATIVE_EXIT_SYSCALL && pair_memory[index].calls == 1);
+        CHECK(pthread_cond_destroy(&pair_changed[index]) == 0);
+        CHECK(pthread_mutex_destroy(&pair_mutex[index]) == 0);
+    }
     const uint32_t operand_store_words[] = {0xf9000001u, 0xd4000001u};
     const hl_a64_source_span operand_store_span = {
         0xb100, (const uint8_t *)operand_store_words, sizeof(operand_store_words), 7, 8};
