@@ -7,11 +7,7 @@ use crate::composition::RuntimeServices;
 use crate::engine::{EngineError, EngineExit, StopRequest};
 use crate::runtime_machine::GuestExecutionPort;
 
-use super::{
-    GuestExecutor, RuntimeLaunchPlan,
-    diagnostics::{LaunchError, LaunchPhase},
-    readiness, task, threads,
-};
+use super::{GuestExecutor, RuntimeLaunchPlan, readiness, task, threads};
 
 impl GuestExecutionPort for GuestExecutor {
     fn start(
@@ -22,16 +18,10 @@ impl GuestExecutionPort for GuestExecutor {
         services: &RuntimeServices,
     ) -> Result<(), EngineError> {
         let key = assembly as *const RuntimeAssembly as usize;
-        let cancellation = Arc::new(
-            readiness::Cancellation::new()
-                .map_err(|_| LaunchError::phase(LaunchPhase::ServiceCancellation))
-                .map_err(|error| error.into_engine(plan))?,
-        );
+        let cancellation = Arc::new(readiness::Cancellation::new().map_err(|_| EngineError::LaunchFailed)?);
         let counter: Arc<dyn hl_execution::ArchitecturalCounter> = Arc::new(task::HostCounter);
         let threads = Arc::new(
-            threads::ThreadSet::with_counter(4096, assembly.tasks(), counter)
-                .map_err(|_| LaunchError::phase(LaunchPhase::ServiceThreads))
-                .map_err(|error| error.into_engine(plan))?,
+            threads::ThreadSet::with_counter(4096, assembly.tasks(), counter).map_err(|_| EngineError::LaunchFailed)?,
         );
         {
             let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
@@ -40,9 +30,7 @@ impl GuestExecutionPort for GuestExecutor {
             }
             state.running.insert(key, Arc::clone(&threads));
         }
-        let result = self
-            .run(isa, plan, assembly, services, cancellation, threads)
-            .map_err(|error| error.into_engine(plan));
+        let result = self.run(isa, plan, assembly, services, cancellation, threads);
         let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
         state.running.remove(&key);
         match result {
