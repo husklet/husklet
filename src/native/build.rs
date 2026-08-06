@@ -47,6 +47,31 @@ impl NativeInputs {
     }
 }
 
+// The C test harness in `tests/exec_c.rs` links against the archive this script produces, so the
+// archive path, include roots and host architecture travel to it as compile-time environment values.
+fn emit_test_environment(root: &Path, allocation_test: bool) {
+    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"));
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("output directory"));
+    let display = |path: PathBuf| path.to_str().expect("utf-8 native path").to_owned();
+    println!("cargo:rustc-env=HL_NATIVE_TEST_ARCHIVE={}", display(out.join("libhl_native_execution.a")));
+    println!("cargo:rustc-env=HL_NATIVE_TEST_SOURCES={}", display(manifest.join(root).join("test")));
+    println!(
+        "cargo:rustc-env=HL_NATIVE_TEST_INCLUDES={}",
+        [root.join("include"), root.join("src"), PathBuf::from("cpu/include")]
+            .into_iter()
+            .map(|path| display(manifest.join(path)))
+            .collect::<Vec<_>>()
+            .join(":")
+    );
+    println!(
+        "cargo:rustc-env=HL_NATIVE_TEST_ARCH={}",
+        std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default()
+    );
+    // The allocation-test archive interposes malloc, so the ordinary C tests are not linkable against it.
+    println!("cargo:rustc-env=HL_NATIVE_TEST_ALLOCATION={}", u8::from(allocation_test));
+    println!("cargo:rerun-if-changed={}", root.join("test").display());
+}
+
 fn main() {
     let root = Path::new("exec");
     let inputs = NativeInputs::discover(root);
@@ -103,6 +128,7 @@ fn main() {
             .flag_if_supported("-Werror")
             .compile("hl_native_execution_entry");
     }
+    emit_test_environment(root, allocation_test);
     for dependency in &inputs.dependencies {
         println!("cargo:rerun-if-changed={}", dependency.display());
     }
