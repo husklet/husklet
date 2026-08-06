@@ -19,48 +19,38 @@ static int may_fallback(const instruction *item) {
            item->operation == OP_VECTOR;
 }
 
-/* 1 iff the item redefines every x86 arithmetic flag while reading none, so a predecessor's flags are
-   dead. adc/sbb read CF, inc/dec preserve it, and a memory operand can fault before the redefinition. */
-static int kills_flags(const instruction *item) {
+/* 1 iff the item redefines every flag the NZCV transfer publishes while reading none. adc/sbb read CF,
+   inc/dec preserve it, and a memory operand can fault before the redefinition. imul qualifies: it
+   redefines CF and OF, and this lowering stores SF and ZF too rather than leaving them undefined. */
+static int kills_nzcv(const instruction *item) {
+    if (item->operation == OP_IMUL) return item->source_high == 0u && item->memory_operand == 0u;
     return item->operation == OP_ALU && item->memory_operand == 0u && item->preserve_carry == 0u &&
            item->preserve_flags == 0u && item->alu_kind != 2u && item->alu_kind != 3u;
 }
 
-/* A register ALU or shift op publishes nothing observable besides cpu->flags, so an immediately
-   following killer lets it skip the NZCV and PF/AF materialization entirely. */
-static int flags_dead_at(const decode *block, uint32_t index) {
-    const instruction *item = &block->instructions[index];
-
-    if (item->operation != OP_ALU && item->operation != OP_SHIFT && item->operation != OP_ROTATE)
-        return 0;
-    if (item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
-    if (index + 1u >= block->count) return 0;
-    return kills_flags(&block->instructions[index + 1u]);
-}
-
 /* 1 iff the item redefines both PF and AF while reading neither, which adc/sbb and inc/dec also do
-   even though they read or preserve CF and so cannot kill the whole flag word. */
+   even though they read or preserve CF. imul is absent because this lowering leaves PF and AF alone. */
 static int kills_pfaf(const instruction *item) {
     return item->operation == OP_ALU && item->memory_operand == 0u && item->preserve_flags == 0u;
 }
 
-/* The PF/AF substrate is a separate 13-to-18 word tail, so it dies to a wider set of successors than
-   the NZCV half and elides on ALU ops whose full flag word is still live. */
-static int pfaf_dead_at(const decode *block, uint32_t index) {
-    const instruction *item = &block->instructions[index];
-
-    if (item->operation != OP_ALU) return 0;
-    if (item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
-    if (index + 1u >= block->count) return 0;
-    return kills_pfaf(&block->instructions[index + 1u]);
-}
-
+/* A register ALU, shift or rotate op publishes nothing observable besides cpu->flags, so a successor
+   redefining a half it wrote lets it skip that half's materialization. The two halves are tracked
+   apart because their killer sets differ, and each producer consumes the ones it writes. */
 static void mark_dead_flags(decode *block) {
     uint32_t index;
 
     for (index = 0; index < block->count; ++index) {
-        block->instructions[index].flags_dead = (uint8_t)flags_dead_at(block, index);
-        block->instructions[index].pfaf_dead = (uint8_t)pfaf_dead_at(block, index);
+        instruction *item = &block->instructions[index];
+
+        item->nzcv_dead = 0u;
+        item->pfaf_dead = 0u;
+        if (item->operation != OP_ALU && item->operation != OP_SHIFT && item->operation != OP_ROTATE)
+            continue;
+        if (item->memory_operand != 0u || item->preserve_flags != 0u) continue;
+        if (index + 1u >= block->count) continue;
+        item->nzcv_dead = (uint8_t)kills_nzcv(&block->instructions[index + 1u]);
+        item->pfaf_dead = (uint8_t)kills_pfaf(&block->instructions[index + 1u]);
     }
 }
 

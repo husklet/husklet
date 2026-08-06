@@ -48,7 +48,7 @@ static uint32_t negate(unsigned destination, unsigned source, int wide) {
 /* rol/ror of a 32- or 64-bit register with no live flags is one host rotate, so the bit-at-a-time
    loop the full form needs to track CF and OF is skipped entirely. */
 static int rotates_directly(const instruction *item) {
-    return item->flags_dead != 0u && item->memory_operand == 0u &&
+    return item->nzcv_dead != 0u && item->memory_operand == 0u &&
            (item->shift_kind == 0u || item->shift_kind == 1u) &&
            (item->width == 4u || item->width == 8u);
 }

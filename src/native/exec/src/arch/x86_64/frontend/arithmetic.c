@@ -142,13 +142,13 @@ uint32_t hl_x86_alu_words(const instruction *item) {
     uint64_t immediate = item->memory_operand != 0u ? item->operand_immediate : item->immediate;
     uint32_t words = 1u + (item->has_immediate ? constant_words(immediate) : 1u) +
                      (logical ? 2u : 1u) +
-                     (item->flags_dead ? 0u : 18u + (item->preserve_carry ? 6u : 0u)) +
-                     (item->flags_dead || item->pfaf_dead ? 0u : (logical ? 13u : 18u));
+                     (item->nzcv_dead ? 0u : 18u + (item->preserve_carry ? 6u : 0u)) +
+                     (item->pfaf_dead ? 0u : (logical ? 13u : 18u));
     if (item->preserve_flags != 0u) words += 2u;
 
     if (item->alu_kind == 2u) words += 4u;
     if (item->alu_kind == 3u) words += 6u;
-    if ((item->alu_kind == 0u || item->alu_kind == 2u) && !item->flags_dead) words += 5u;
+    if ((item->alu_kind == 0u || item->alu_kind == 2u) && !item->nzcv_dead) words += 5u;
     if (item->width == 1u || item->width == 2u) words += 5u;
     if ((item->alu_kind == 2u || item->alu_kind == 3u) && item->width < 4u)
         words += 5u + constant_words(item->width == 1u ? UINT64_C(0xffffff) : UINT64_C(0xffff));
@@ -240,9 +240,9 @@ void hl_x86_emit_alu(uint32_t *words, uint32_t *cursor, const instruction *item)
     if (logical)
         words[(*cursor)++] = UINT32_C(0x6a00001f) | (wide ? UINT32_C(0x80000000) : 0) |
                              18u << 16 | 18u << 5;
-    if ((item->alu_kind == 0u || item->alu_kind == 2u) && item->flags_dead == 0u)
+    if ((item->alu_kind == 0u || item->alu_kind == 2u) && item->nzcv_dead == 0u)
         emit_add_flags(words, cursor);
-    if (item->flags_dead == 0u) {
+    if (item->nzcv_dead == 0u) {
         if (item->preserve_carry)
             hl_x86_emit_nzcv_keep_carry(words, cursor);
         else
@@ -254,7 +254,7 @@ void hl_x86_emit_alu(uint32_t *words, uint32_t *cursor, const instruction *item)
         words[(*cursor)++] = UINT32_C(0x53007c00) | shift << 16 | 17u << 5 | 17u;
         words[(*cursor)++] = UINT32_C(0x53007c00) | shift << 16 | 18u << 5 | 18u;
     }
-    if (item->flags_dead == 0u && item->pfaf_dead == 0u) emit_pfaf(words, cursor, logical);
+    if (item->pfaf_dead == 0u) emit_pfaf(words, cursor, logical);
     if (item->preserve_flags != 0u)
         words[(*cursor)++] = store_word(25u, offsetof(hl_native_x86_64_cpu, flags));
     if (!item->flags_only) {

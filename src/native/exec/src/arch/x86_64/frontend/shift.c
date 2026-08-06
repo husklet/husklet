@@ -89,7 +89,7 @@ static uint32_t value_words(const instruction *item) {
 }
 
 uint32_t hl_x86_shift_words(const instruction *item) {
-    if (item->flags_dead) return value_words(item);
+    if (item->nzcv_dead && item->pfaf_dead) return value_words(item);
     if (item->variable_count) return item->shift_kind == 4u ? 46u : 43u;
     if (item->shift_count == 0u) return 1u;
     if (item->shift_count != 1u) return 27u;
@@ -199,7 +199,7 @@ void hl_x86_emit_shift(uint32_t *words, uint32_t *cursor, const instruction *ite
     int wide = item->width == 8u;
     uint64_t clear;
 
-    if (item->flags_dead) {
+    if (item->nzcv_dead && item->pfaf_dead) {
         emit_value_only(words, cursor, item);
         return;
     }

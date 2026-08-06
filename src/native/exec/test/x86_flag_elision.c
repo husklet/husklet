@@ -250,6 +250,31 @@ static int rotate_boundaries_materialize(void) {
     return 0;
 }
 
+/* imul restores the whole NZCV half, so it kills that half of a predecessor's flags. It leaves PF and
+   AF alone, so the PF/AF half survives it: a rotate writes neither and collapses, an ALU op does not. */
+#define FULL_LOGICAL 36u
+#define NZCV_ELIDED_LOGICAL 18u
+
+static int multiply_kills_nzcv(void) {
+    const uint8_t logical[] = {0x48, 0x31, 0xd0, 0x48, 0x0f, 0xaf, 0xd1};      /* xor rax,rdx ; imul rdx,rcx */
+    const uint8_t immediate[] = {0x48, 0x31, 0xd0, 0x48, 0x6b, 0xd1, 0x07};    /* xor ; imul rdx,rcx,7 */
+    const uint8_t rotate[] = {0x48, 0xc1, 0xc2, 0x0d, 0x48, 0x0f, 0xaf, 0xd1}; /* rol rdx,13 ; imul */
+    const uint8_t shift[] = {0x48, 0xc1, 0xe2, 0x0d, 0x48, 0x0f, 0xaf, 0xd1};  /* shl rdx,13 ; imul */
+    const uint8_t memory[] = {0x48, 0x31, 0xd0, 0x48, 0x0f, 0xaf, 0x13};       /* xor ; imul rdx,[rbx] */
+
+    CHECK(words_for(logical, sizeof logical, 0) == NZCV_ELIDED_LOGICAL);
+    CHECK(words_for(immediate, sizeof immediate, 0) == NZCV_ELIDED_LOGICAL);
+    CHECK(words_for(rotate, sizeof rotate, 0) == ELIDED_ROTATE);
+    /* A shift defines PF, which imul does not redefine, so it keeps its whole flag word. */
+    CHECK(words_for(shift, sizeof shift, 0) > ELIDED_SHIFT);
+    /* A memory source can fault before the multiply redefines anything. */
+    CHECK(words_for(memory, sizeof memory, 0) == FULL_LOGICAL);
+
+    /* The multiply's own budget carries pre-existing slack, so only the covering bound is asserted. */
+    CHECK(status_at_capacity(rotate, sizeof rotate, ELIDED_ROTATE) == HL_X86_A64_CAPACITY);
+    return 0;
+}
+
 /* Every boundary at which the guest can observe EFLAGS must keep the producer materializing. */
 static int boundaries_materialize(void) {
     const uint8_t block_end[] = {0x01, 0xc8};                   /* add eax,ecx (last in block) */
@@ -482,6 +507,7 @@ int main(void) {
     if ((status = shift_boundaries_materialize()) != 0) return status;
     if ((status = rotate_elision_fires()) != 0) return status;
     if ((status = rotate_boundaries_materialize()) != 0) return status;
+    if ((status = multiply_kills_nzcv()) != 0) return status;
 #if defined(__aarch64__)
     if ((status = execution_matches()) != 0) return status;
     if ((status = pfaf_execution_matches()) != 0) return status;
