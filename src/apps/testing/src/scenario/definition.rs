@@ -1,10 +1,11 @@
+use crate::suite::SafePath as _;
 use crate::suite::{Error, Execution, Target};
 use clap::ValueEnum;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 #[derive(Deserialize)]
@@ -415,8 +416,8 @@ fn load_actions(
             .collect::<Result<Vec<_>, Error>>()?;
         return Ok(("/".to_owned(), actions));
     };
-    safe_absolute(&run.program)?;
-    safe_absolute(&run.working_directory)?;
+    std::path::Path::new(&run.program).safe_absolute()?;
+    std::path::Path::new(&run.working_directory).safe_absolute()?;
     let action = Action {
         argv: Some(ArgvAction {
             argv: std::iter::once(run.program).chain(run.arguments).collect(),
@@ -490,7 +491,7 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
                 destination: Some(destination),
             }),
         ) => {
-            safe_absolute(&destination)?;
+            std::path::Path::new(&destination).safe_absolute()?;
             Ok(ScenarioAction::Api(ScenarioApiAction::CopyToContainer {
                 source: local_path(directory, source, "copy source")?,
                 destination,
@@ -511,7 +512,7 @@ fn validate_action(directory: &Path, id: &str, action: Action) -> Result<Scenari
                 .to_str()
                 .ok_or_else(|| format!("{id} copy source is not UTF-8"))?
                 .to_owned();
-            safe_absolute(&source)?;
+            std::path::Path::new(&source).safe_absolute()?;
             Ok(ScenarioAction::Api(ScenarioApiAction::CopyFromContainer { source }))
         }
         _ => Err(format!("{id} has an empty or invalid action").into()),
@@ -562,7 +563,7 @@ fn bounded_text(value: &str) -> bool {
 }
 
 fn load_fixture(directory: &Path, fixture: Fixture) -> Result<ScenarioFixture, Error> {
-    safe_absolute(&fixture.destination)?;
+    std::path::Path::new(&fixture.destination).safe_absolute()?;
     Ok(ScenarioFixture {
         source: local_file(directory, fixture.source, "fixture")?,
         destination: fixture.destination,
@@ -582,7 +583,7 @@ fn reject_duplicate_fixture_destinations(id: &str, fixtures: &[ScenarioFixture])
 }
 
 fn local_file(directory: &Path, path: PathBuf, noun: &str) -> Result<PathBuf, Error> {
-    safe_relative(&path)?;
+    path.safe_relative()?;
     let path = directory.join(path);
     if path.is_file() {
         Ok(path)
@@ -592,37 +593,12 @@ fn local_file(directory: &Path, path: PathBuf, noun: &str) -> Result<PathBuf, Er
 }
 
 fn local_path(directory: &Path, path: PathBuf, noun: &str) -> Result<PathBuf, Error> {
-    safe_relative(&path)?;
+    path.safe_relative()?;
     let path = directory.join(path);
     if path.exists() {
         Ok(path)
     } else {
         Err(format!("missing {noun} {}", path.display()).into())
-    }
-}
-
-fn safe_relative(path: &Path) -> Result<(), Error> {
-    if path.as_os_str().len() > MAX_FIELD
-        || path.as_os_str().to_string_lossy().contains('\0')
-        || path.is_absolute()
-        || path.components().any(|value| matches!(value, Component::ParentDir))
-    {
-        Err(format!("unsafe relative path {}", path.display()).into())
-    } else {
-        Ok(())
-    }
-}
-
-fn safe_absolute(path: &str) -> Result<(), Error> {
-    let path = Path::new(path);
-    if path.as_os_str().len() > MAX_FIELD
-        || path.as_os_str().to_string_lossy().contains('\0')
-        || !path.is_absolute()
-        || path.components().any(|value| matches!(value, Component::ParentDir))
-    {
-        Err(format!("unsafe guest path {}", path.display()).into())
-    } else {
-        Ok(())
     }
 }
 

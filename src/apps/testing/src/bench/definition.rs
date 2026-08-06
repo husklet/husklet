@@ -1,10 +1,11 @@
+use crate::suite::SafePath as _;
 use crate::suite::{Commands, Error, Execution, Target};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 #[derive(Deserialize)]
@@ -149,7 +150,7 @@ impl Benchmark {
             return Err(format!("{} must define exactly one of build or workload.rootfs", definition.display()).into());
         }
         if let Some(build) = &document.build {
-            safe_relative(&build.source)?;
+            build.source.safe_relative()?;
             if !directory.join(&build.source).is_file() {
                 return Err(format!("{} has a missing benchmark source", definition.display()).into());
             }
@@ -184,7 +185,7 @@ impl Benchmark {
                 {
                     return Err(format!("{} has invalid case {:?}", definition.display(), case.id).into());
                 }
-                safe_relative(&case.expect.stdout_contains)?;
+                case.expect.stdout_contains.safe_relative()?;
                 let stdout_contains = directory.join(case.expect.stdout_contains);
                 if !stdout_contains.is_file() {
                     return Err(format!("missing benchmark golden {}", stdout_contains.display()).into());
@@ -250,14 +251,6 @@ impl Benchmark {
             }
         }
         Ok(cache)
-    }
-}
-
-fn safe_relative(path: &Path) -> Result<(), Error> {
-    if path.is_absolute() || path.components().any(|value| matches!(value, Component::ParentDir)) {
-        Err(format!("unsafe source path {}", path.display()).into())
-    } else {
-        Ok(())
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::suite::SafePath as _;
 use clap::{Args, Subcommand};
 use hl_process::{Capture, Command as ProcessCommand, Outcome as ProcessOutcome};
 use serde::Deserialize;
@@ -5,7 +6,7 @@ use std::{
     collections::BTreeSet,
     fs,
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::atomic::AtomicBool,
     time::Duration,
 };
@@ -211,7 +212,7 @@ fn load(root: &Path, definition: &Path) -> Result<Document, Error> {
             return Err(format!("invalid nested chain {:?}", chain.id).into());
         }
         validate_artifact(root, &chain.guest)?;
-        safe_relative(&chain.expect.stdout)?;
+        chain.expect.stdout.safe_relative()?;
         for layer in &chain.layers {
             validate_artifact(root, &layer.artifact)?;
             layer.options.validate()?;
@@ -221,7 +222,7 @@ fn load(root: &Path, definition: &Path) -> Result<Document, Error> {
 }
 
 fn validate_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
-    safe_relative(&artifact.path)?;
+    artifact.path.safe_relative()?;
     if root.join(&artifact.path) == root
         || matches!(artifact.source, ArtifactSource::ForeignBuild) && artifact.build.is_none()
     {
@@ -495,17 +496,6 @@ fn materialize(source: &Path, destination: &Path) -> Result<(), Error> {
     fs::set_permissions(&temporary, fs::Permissions::from_mode(0o755))?;
     fs::rename(temporary, destination)?;
     Ok(())
-}
-
-fn safe_relative(path: &Path) -> Result<(), Error> {
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path.components().any(|part| matches!(part, Component::ParentDir))
-    {
-        Err(format!("unsafe relative path {}", path.display()).into())
-    } else {
-        Ok(())
-    }
 }
 
 fn command(root: &Path, chain: &Chain) -> Vec<String> {

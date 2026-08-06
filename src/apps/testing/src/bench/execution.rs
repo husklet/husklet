@@ -2,7 +2,10 @@ use super::{
     Error,
     definition::{Benchmark, BenchmarkCase, LifecyclePhase},
 };
-use crate::{runtime::image::TestImage, suite::Target};
+use crate::{
+    runtime::image::TestImage,
+    suite::{BoundedCapture as _, Capture, Target},
+};
 use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
 use std::{
     collections::BTreeMap,
@@ -59,7 +62,6 @@ pub struct Measurement {
     pub setup: BTreeMap<String, u128>,
 }
 
-const CAPTURE_LIMIT: usize = 1024 * 1024;
 const DIAGNOSTIC_CAPTURE: usize = 4096;
 const DIAGNOSTIC_OUTPUT: usize = 16 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(120);
@@ -392,7 +394,7 @@ impl<'a> Invocation<'a> {
         let phase_started = Instant::now();
         let logs = self.containers.logs(&self.name).await?;
         let logs_us = elapsed_us(phase_started);
-        bounded(&logs)?;
+        logs.bounded()?;
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
         }
@@ -502,23 +504,10 @@ fn capture_size(captured: usize, entry: &Entry) -> std::result::Result<usize, Er
     let captured = captured
         .checked_add(entry.bytes.len())
         .ok_or("captured output size overflow")?;
-    if captured > CAPTURE_LIMIT {
-        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
+    if captured > Capture::LIMIT {
+        Err(format!("captured output exceeded {} bytes", Capture::LIMIT).into())
     } else {
         Ok(captured)
-    }
-}
-
-fn bounded(logs: &hl_container::Logs) -> std::result::Result<(), Error> {
-    let captured = logs
-        .stdout
-        .len()
-        .checked_add(logs.stderr.len())
-        .ok_or("captured output size overflow")?;
-    if captured > CAPTURE_LIMIT {
-        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
-    } else {
-        Ok(())
     }
 }
 
@@ -627,9 +616,10 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 #[cfg(test)]
 mod tests {
     use super::{
-        Benchmark, CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, capture_size, isolated_state, output_excerpt,
-        parse_phases, stdout_contains,
+        Benchmark, Capture, DIAGNOSTIC_OUTPUT, capture_size, isolated_state, output_excerpt, parse_phases,
+        stdout_contains,
     };
+    use crate::suite::BoundedCapture as _;
     use hl_container::{Entry, Stream};
 
     fn entry(bytes: usize) -> Entry {
@@ -699,22 +689,22 @@ mod tests {
     #[test]
     fn combined_capture_is_bounded() {
         let within = hl_container::Logs {
-            stdout: vec![0; CAPTURE_LIMIT - 1],
+            stdout: vec![0; Capture::LIMIT - 1],
             stderr: vec![0],
         };
-        assert!(bounded(&within).is_ok());
+        assert!(within.bounded().is_ok());
         let over = hl_container::Logs {
-            stdout: vec![0; CAPTURE_LIMIT],
+            stdout: vec![0; Capture::LIMIT],
             stderr: vec![0],
         };
-        assert!(bounded(&over).is_err());
+        assert!(over.bounded().is_err());
     }
 
     #[test]
     fn incremental_capture_preserves_the_combined_limit() {
-        let captured = capture_size(0, &entry(CAPTURE_LIMIT - 1)).unwrap();
-        assert_eq!(capture_size(captured, &entry(1)).unwrap(), CAPTURE_LIMIT);
-        assert!(capture_size(CAPTURE_LIMIT, &entry(1)).is_err());
+        let captured = capture_size(0, &entry(Capture::LIMIT - 1)).unwrap();
+        assert_eq!(capture_size(captured, &entry(1)).unwrap(), Capture::LIMIT);
+        assert!(capture_size(Capture::LIMIT, &entry(1)).is_err());
         assert!(capture_size(usize::MAX, &entry(1)).is_err());
     }
 
@@ -727,7 +717,7 @@ mod tests {
 
     #[test]
     fn failure_diagnostic_does_not_repeat_the_full_capture() {
-        let excerpt = output_excerpt(&vec![0xff; CAPTURE_LIMIT]);
+        let excerpt = output_excerpt(&vec![0xff; Capture::LIMIT]);
         assert!(excerpt.len() <= DIAGNOSTIC_OUTPUT);
         assert!(excerpt.contains("truncated"));
     }

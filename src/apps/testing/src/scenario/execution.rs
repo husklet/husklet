@@ -2,7 +2,10 @@ use super::{
     Error,
     definition::{Scenario, ScenarioCase},
 };
-use crate::{runtime::image::TestImage, suite::Target};
+use crate::{
+    runtime::image::TestImage,
+    suite::{BoundedCapture as _, Capture, Target},
+};
 use hl_container::{Config, ContainerSpec, ExecSpec, ExitStatus, Stream};
 use hl_images::RuntimeConfig;
 use std::{fmt::Display, fs, future::Future, sync::Arc, time::Duration};
@@ -10,7 +13,6 @@ use tokio::time::Instant;
 
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
-const CAPTURE_LIMIT: usize = 1024 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 4096;
 
 pub enum CaseResult {
@@ -293,7 +295,7 @@ async fn execute_actions(
     ) {
         let status = wait(containers, name, Duration::from_secs(case.timeout)).await?;
         let logs = containers.logs(name).await?;
-        bounded(&logs)?;
+        logs.bounded()?;
         return Ok(ActionOutput {
             status,
             stdout: logs.stdout,
@@ -353,7 +355,7 @@ async fn execute_actions(
         status = outcome.0;
         stdout.extend(outcome.1);
         stderr.extend(outcome.2);
-        bounded_size(stdout.len(), stderr.len())?;
+        crate::suite::Capture::bounded(stdout.len(), stderr.len())?;
         if status != ExitStatus::Code(0) {
             break;
         }
@@ -393,7 +395,7 @@ async fn run_api(
                 bytes.as_slice(),
                 hl_container::Limits {
                     entries: 1024,
-                    bytes: CAPTURE_LIMIT as u64,
+                    bytes: Capture::LIMIT as u64,
                 },
             )?;
             Ok((ExitStatus::Code(0), Vec::new(), Vec::new()))
@@ -407,10 +409,10 @@ async fn run_api(
                 if entry.header().entry_type().is_file() {
                     use std::io::Read;
                     entry
-                        .take((CAPTURE_LIMIT - output.len()) as u64 + 1)
+                        .take((Capture::LIMIT - output.len()) as u64 + 1)
                         .read_to_end(&mut output)?;
-                    if output.len() > CAPTURE_LIMIT {
-                        return Err(format!("copied output exceeded {CAPTURE_LIMIT} bytes").into());
+                    if output.len() > Capture::LIMIT {
+                        return Err(format!("copied output exceeded {} bytes", Capture::LIMIT).into());
                     }
                 }
             }
@@ -429,10 +431,10 @@ impl std::io::Write for LimitedOutput {
             .len()
             .checked_add(bytes.len())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::FileTooLarge, "copy archive size overflow"))?;
-        if next > CAPTURE_LIMIT {
+        if next > Capture::LIMIT {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::FileTooLarge,
-                format!("copy archive exceeded {CAPTURE_LIMIT} bytes"),
+                format!("copy archive exceeded {} bytes", Capture::LIMIT),
             ));
         }
         self.0.extend_from_slice(bytes);
@@ -462,7 +464,7 @@ async fn run_exec(
             Stream::Stdout => stdout.extend(entry.bytes),
             Stream::Stderr => stderr.extend(entry.bytes),
         }
-        bounded_size(stdout.len(), stderr.len())?;
+        crate::suite::Capture::bounded(stdout.len(), stderr.len())?;
     }
     let status = containers.executions().wait(&execution.id).await?;
     Ok((status, stdout, stderr))
@@ -546,22 +548,9 @@ async fn wait(containers: &hl_container::Containers, name: &str, timeout: Durati
                 return Err(format!("timed out after {} milliseconds", timeout.as_millis()).into());
             }
             () = tokio::time::sleep(Duration::from_millis(10)) => {
-                bounded(&containers.logs(name).await?)?;
+                containers.logs(name).await?.bounded()?;
             }
         }
-    }
-}
-
-fn bounded(logs: &hl_container::Logs) -> Result<(), Error> {
-    bounded_size(logs.stdout.len(), logs.stderr.len())
-}
-
-fn bounded_size(stdout: usize, stderr: usize) -> Result<(), Error> {
-    let size = stdout.checked_add(stderr).ok_or("captured output size overflow")?;
-    if size > CAPTURE_LIMIT {
-        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
-    } else {
-        Ok(())
     }
 }
 
@@ -600,7 +589,8 @@ fn diagnostic(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CAPTURE_LIMIT, CaseResult, PhaseTiming, bounded_size, classify, combine, diagnostic, execute_phases, verify,
+        Capture,
+        CaseResult, PhaseTiming, classify, combine, diagnostic, execute_phases, verify,
     };
     use crate::{
         scenario::definition::{Class, ScenarioAction, ScenarioCase},
@@ -621,9 +611,9 @@ mod tests {
 
     #[test]
     fn combined_capture_is_bounded() {
-        assert!(bounded_size(CAPTURE_LIMIT - 1, 1).is_ok());
-        assert!(bounded_size(CAPTURE_LIMIT, 1).is_err());
-        assert!(bounded_size(usize::MAX, 1).is_err());
+        assert!(crate::suite::Capture::bounded(Capture::LIMIT - 1, 1).is_ok());
+        assert!(crate::suite::Capture::bounded(Capture::LIMIT, 1).is_err());
+        assert!(crate::suite::Capture::bounded(usize::MAX, 1).is_err());
     }
 
     #[test]

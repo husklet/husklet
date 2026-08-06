@@ -11,7 +11,7 @@ use definition::Benchmark;
 use std::{
     collections::BTreeSet,
     future::Future,
-    path::{Component, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 use tokio::task::JoinSet;
@@ -330,39 +330,14 @@ pub(crate) struct Options {
     #[arg(long = "isa", value_enum)]
     target: Option<Target>,
     /// Maximum concurrent rows; use 1 for uncontended latency comparisons.
-    #[arg(long, env = "HL_BENCH_JOBS", default_value_t = logical_jobs(), value_parser = parse_jobs)]
+    #[arg(long, env = "HL_BENCH_JOBS", default_value_t = crate::suite::parse::logical_jobs(), value_parser = crate::suite::parse::jobs)]
     jobs: usize,
     /// Resume exact completed rows from the synchronized partial result.
     #[arg(long, env = "HL_BENCH_RESUME", default_value_t = false)]
     resume: bool,
     /// Relative durable result path beneath the repository workspace.
-    #[arg(long, default_value = "target/testing/bench/results.tsv", value_parser = parse_results)]
+    #[arg(long, default_value = "target/testing/bench/results.tsv", value_parser = crate::suite::parse::results)]
     results: PathBuf,
-}
-
-fn logical_jobs() -> usize {
-    std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(256)
-}
-
-fn parse_jobs(value: &str) -> Result<usize, String> {
-    let jobs = value
-        .parse::<usize>()
-        .map_err(|_| "jobs must be an integer".to_owned())?;
-    (1..=256)
-        .contains(&jobs)
-        .then_some(jobs)
-        .ok_or_else(|| "jobs must be between 1 and 256".to_owned())
-}
-
-fn parse_results(value: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value);
-    if value.is_empty() || path.is_absolute() || path.components().any(|part| matches!(part, Component::ParentDir)) {
-        Err("results must be a safe relative path".to_owned())
-    } else {
-        Ok(path)
-    }
 }
 
 impl Options {
@@ -401,7 +376,7 @@ impl Options {
 
 #[cfg(test)]
 mod tests {
-    use super::{DIAGNOSTIC_LIMIT, Options, Statistics, WorkPool, excerpt, format_passed, parse_jobs, parse_results};
+    use super::{DIAGNOSTIC_LIMIT, Options, Statistics, WorkPool, excerpt, format_passed};
     use clap::Parser;
     use std::sync::{
         Arc,
@@ -449,16 +424,6 @@ mod tests {
         assert_eq!(summary.p90, 100);
         assert_eq!(summary.p99, 100);
         assert_eq!(summary.maximum, 100);
-    }
-
-    #[test]
-    fn jobs_and_results_are_bounded() {
-        assert_eq!(parse_jobs("1").unwrap(), 1);
-        assert_eq!(parse_jobs("256").unwrap(), 256);
-        assert!(parse_jobs("0").is_err());
-        assert!(parse_jobs("257").is_err());
-        assert!(parse_results("target/bench.tsv").is_ok());
-        assert!(parse_results("../bench.tsv").is_err());
     }
 
     #[test]

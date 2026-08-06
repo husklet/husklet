@@ -1,3 +1,4 @@
+use crate::suite::SafePath as _;
 use super::{scheduler, workspace};
 mod environment;
 mod host;
@@ -113,7 +114,7 @@ impl App {
                         .resolve(case.build, case.artifact, document.artifact.as_ref())?;
                 let inputs = input::validate(directory, &source, inputs)?;
                 safe_output(&output)?;
-                safe_absolute(&destination)?;
+                std::path::Path::new(&destination).safe_absolute()?;
                 if !outputs.insert(output.clone()) || !destinations.insert(destination.clone()) {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
@@ -251,16 +252,8 @@ impl App {
     }
 }
 
-fn safe_relative(path: &Path) -> Result<(), Error> {
-    if path.is_absolute() || path.components().any(|value| matches!(value, Component::ParentDir)) {
-        Err(format!("unsafe relative path {}", path.display()).into())
-    } else {
-        Ok(())
-    }
-}
-
 fn validate_golden(directory: &Path, relative: &Path) -> Result<PathBuf, Error> {
-    safe_relative(relative)?;
+    relative.safe_relative()?;
     let golden = directory.join(relative);
     let canonical_directory = directory.canonicalize()?;
     let canonical_golden = golden
@@ -274,15 +267,6 @@ fn validate_golden(directory: &Path, relative: &Path) -> Result<PathBuf, Error> 
         .into());
     }
     Ok(golden)
-}
-
-fn safe_absolute(path: &str) -> Result<(), Error> {
-    let path = Path::new(path);
-    if !path.is_absolute() || path.components().any(|value| matches!(value, Component::ParentDir)) {
-        Err(format!("unsafe guest path {}", path.display()).into())
-    } else {
-        Ok(())
-    }
 }
 
 fn safe_output(output: &str) -> Result<(), Error> {

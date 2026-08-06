@@ -20,7 +20,7 @@ pub(crate) struct Options {
     #[arg(long)]
     pub(super) list: bool,
     /// Maximum number of concurrently executing cases.
-    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = logical_jobs(), value_parser = parse_jobs)]
+    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = crate::suite::parse::logical_jobs(), value_parser = crate::suite::parse::jobs)]
     pub(super) jobs: usize,
     /// Resume completed case/target keys from the durable partial result.
     #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
@@ -29,38 +29,8 @@ pub(crate) struct Options {
     #[arg(long, default_value_t = false)]
     pub(super) warm_provider: bool,
     /// Relative durable result path beneath the repository workspace.
-    #[arg(long, default_value = "target/testing/scenarios/results.tsv", value_parser = parse_results)]
+    #[arg(long, default_value = "target/testing/scenarios/results.tsv", value_parser = crate::suite::parse::results)]
     pub(super) results: PathBuf,
-}
-
-fn logical_jobs() -> usize {
-    std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(256)
-}
-
-fn parse_jobs(value: &str) -> Result<usize, String> {
-    let jobs = value
-        .parse::<usize>()
-        .map_err(|_| "jobs must be an integer".to_owned())?;
-    (1..=256)
-        .contains(&jobs)
-        .then_some(jobs)
-        .ok_or_else(|| "jobs must be between 1 and 256".to_owned())
-}
-
-fn parse_results(value: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        Err("results must be a safe relative path".to_owned())
-    } else {
-        Ok(path)
-    }
 }
 
 impl Options {
@@ -86,23 +56,13 @@ impl Options {
 
 #[cfg(test)]
 mod tests {
-    use super::{Options, logical_jobs, parse_jobs};
+    use super::Options;
     use clap::Parser;
 
     #[derive(Parser)]
     struct TestCli {
         #[command(flatten)]
         options: Options,
-    }
-
-    #[test]
-    fn jobs_are_positive_and_bounded() {
-        assert_eq!(parse_jobs("1"), Ok(1));
-        assert_eq!(parse_jobs("256"), Ok(256));
-        for invalid in ["0", "257", "many"] {
-            assert!(parse_jobs(invalid).is_err(), "accepted {invalid}");
-        }
-        assert!((1..=256).contains(&logical_jobs()));
     }
 
     #[test]

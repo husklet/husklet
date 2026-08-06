@@ -366,42 +366,14 @@ pub(crate) struct Options {
     #[arg(long = "isa", value_enum)]
     target: Option<Target>,
     /// Maximum number of concurrently executing cases.
-    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = logical_jobs(), value_parser = parse_jobs)]
+    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = crate::suite::parse::logical_jobs(), value_parser = crate::suite::parse::jobs)]
     jobs: usize,
     /// Resume exact completed case/target keys from the synchronized partial result.
     #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
     resume: bool,
     /// Relative durable result path beneath the repository workspace.
-    #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = parse_results)]
+    #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = crate::suite::parse::results)]
     results: PathBuf,
-}
-
-fn logical_jobs() -> usize {
-    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
-}
-
-fn parse_jobs(value: &str) -> Result<usize, String> {
-    let jobs = value
-        .parse::<usize>()
-        .map_err(|_| "jobs must be an integer".to_owned())?;
-    (1..=256)
-        .contains(&jobs)
-        .then_some(jobs)
-        .ok_or_else(|| "jobs must be between 1 and 256".to_owned())
-}
-
-fn parse_results(value: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        Err("results must be a safe relative path".to_owned())
-    } else {
-        Ok(path)
-    }
 }
 
 impl Options {

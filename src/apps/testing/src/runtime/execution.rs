@@ -1,7 +1,7 @@
 mod worker;
 
 use super::{Error, definition::App, image::TestImage};
-use crate::suite::Target;
+use crate::suite::{BoundedCapture as _, Target};
 use hl_container::{Config, ContainerSpec, Containers, ExitStatus, Isolation, Process, Sandbox};
 use serde::{Deserialize, Serialize};
 use std::{fs, sync::Arc, time::Duration};
@@ -9,7 +9,6 @@ use tokio::time::Instant;
 
 pub(crate) use worker::Options as WorkerOptions;
 
-const CAPTURE_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub enum CaseResult {
@@ -191,7 +190,7 @@ impl<'a> CaseExecution<'a> {
         self.containers.start(name).await?;
         let status = self.wait(name, timeout).await?;
         let logs = self.containers.logs(name).await?;
-        bounded(&logs)?;
+        logs.bounded()?;
         let expected = fs::read(&self.case.golden)?;
         if status != ExitStatus::Code(self.case.exit) {
             return Err(format!("exit {status:?}, expected {}", self.case.exit).into());
@@ -218,22 +217,10 @@ impl CaseExecution<'_> {
                     return Err(format!("timed out after {} milliseconds", timeout.as_millis()).into());
                 }
                 () = tokio::time::sleep(Duration::from_millis(10)) => {
-                    bounded(&self.containers.logs(name).await?)?;
+                    self.containers.logs(name).await?.bounded()?;
                 }
             }
         }
     }
 }
 
-fn bounded(logs: &hl_container::Logs) -> Result<(), Error> {
-    let size = logs
-        .stdout
-        .len()
-        .checked_add(logs.stderr.len())
-        .ok_or("captured output size overflow")?;
-    if size > CAPTURE_LIMIT {
-        Err(format!("captured output exceeded {CAPTURE_LIMIT} bytes").into())
-    } else {
-        Ok(())
-    }
-}
