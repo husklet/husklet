@@ -159,6 +159,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 Err(error) => return LinuxResult::Error(error),
             }
         }
+        hl_log::hl_debug!(
+            hl_log::tag::SIGNAL,
+            "signal queued sender={} signal={} permitted={permitted}",
+            self.process.number(),
+            signal.map_or(0, SignalNumber::get),
+        );
         if permitted == 0 {
             LinuxResult::Error(Errno::EPERM)
         } else {
@@ -188,6 +194,17 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     fn deliver_thread(&self, expected_process: Option<i32>, tid: i32, raw_signal: u32) -> LinuxResult {
+        let result = self.deliver_thread_result(expected_process, tid, raw_signal);
+        hl_log::hl_debug!(
+            hl_log::tag::SIGNAL,
+            "signal queued sender={} target_thread={tid} signal={raw_signal} result={:#x}",
+            self.process.number(),
+            result.encode(),
+        );
+        result
+    }
+
+    fn deliver_thread_result(&self, expected_process: Option<i32>, tid: i32, raw_signal: u32) -> LinuxResult {
         let signal = match Self::signal(raw_signal) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),

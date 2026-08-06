@@ -54,7 +54,15 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         }
         let action = self.tasks.action(self.process, signal).map_err(|_| Errno::ESRCH)?;
         if matches!(action.disposition, SignalDisposition::Handler(_)) {
-            return match self.deliver_forced_frame() {
+            let frame = self.deliver_forced_frame();
+            hl_log::hl_debug!(
+                hl_log::tag::SIGNAL,
+                "signal delivered thread={} signal={} disposition=handler frame={:#x}",
+                self.thread.number(),
+                signal.get(),
+                frame.encode(),
+            );
+            return match frame {
                 LinuxResult::Value(_) => Ok(SignalBoundaryOutcome::Handled),
                 LinuxResult::Error(error) => Err(error),
                 LinuxResult::Restart(_) => Err(Errno::EINTR),
@@ -66,6 +74,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             .commit_forced_delivery(forced)
             .map_err(|_| Errno::ESRCH)?
             .ok_or(Errno::ESRCH)?;
+        hl_log::hl_debug!(
+            hl_log::tag::SIGNAL,
+            "signal delivered thread={} signal={} action={outcome:?}",
+            self.thread.number(),
+            signal.get(),
+        );
         Ok(match outcome {
             DeliveryAction::Ignore => SignalBoundaryOutcome::None,
             DeliveryAction::Stop => SignalBoundaryOutcome::Stop { control_epoch },
