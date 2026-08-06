@@ -10,7 +10,7 @@ use crate::{
     Result,
     model::{Finding, Location, Review, Severity},
     rule::Rule,
-    source::{Source, Workspace},
+    source::{Source, Workspace, requires_test},
 };
 
 #[cfg(test)]
@@ -243,11 +243,12 @@ impl Rule for SymbolName {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        for source in workspace.sources() {
+        for source in workspace.production() {
             let mut visitor = Symbols {
                 rule: self.id(),
                 source,
                 trait_impl: false,
+                test_scope: false,
                 findings: &mut findings,
             };
             visitor.visit_file(&source.syntax);
@@ -270,7 +271,7 @@ impl Rule for ModulePrefix {
 
     fn check(&self, workspace: &Workspace) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
-        for source in workspace.sources() {
+        for source in workspace.production() {
             let Some(noun) = module_noun(&source.path) else {
                 continue;
             };
@@ -279,6 +280,7 @@ impl Rule for ModulePrefix {
                 source,
                 noun,
                 trait_impl: false,
+                test_scope: false,
                 findings: &mut findings,
             };
             visitor.visit_file(&source.syntax);
@@ -291,11 +293,15 @@ struct Symbols<'a> {
     rule: &'static str,
     source: &'a Source,
     trait_impl: bool,
+    test_scope: bool,
     findings: &'a mut Vec<Finding>,
 }
 
 impl Symbols<'_> {
     fn inspect(&mut self, ident: &syn::Ident, span: Span) {
+        if self.test_scope {
+            return;
+        }
         let count = words(&ident.to_string()).len();
         if count < 4 {
             return;
@@ -308,6 +314,13 @@ impl Symbols<'_> {
 }
 
 impl<'ast> Visit<'ast> for Symbols<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let previous = self.test_scope;
+        self.test_scope |= requires_test(&item.attrs);
+        syn::visit::visit_item_mod(self, item);
+        self.test_scope = previous;
+    }
+
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
         let previous = self.trait_impl;
         self.trait_impl = item.trait_.is_some();
@@ -331,7 +344,9 @@ impl<'ast> Visit<'ast> for Symbols<'_> {
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        self.inspect(&item.sig.ident, item.span());
+        if !test_function(&item.attrs) {
+            self.inspect(&item.sig.ident, item.span());
+        }
         syn::visit::visit_item_fn(self, item);
     }
 
@@ -353,11 +368,15 @@ struct Prefixes<'a> {
     source: &'a Source,
     noun: String,
     trait_impl: bool,
+    test_scope: bool,
     findings: &'a mut Vec<Finding>,
 }
 
 impl Prefixes<'_> {
     fn inspect(&mut self, ident: &syn::Ident, span: Span) {
+        if self.test_scope {
+            return;
+        }
         let tokens = words(&ident.to_string());
         if tokens.len() < 2 || tokens.first() != Some(&self.noun) {
             return;
@@ -373,6 +392,13 @@ impl Prefixes<'_> {
 }
 
 impl<'ast> Visit<'ast> for Prefixes<'_> {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        let previous = self.test_scope;
+        self.test_scope |= requires_test(&item.attrs);
+        syn::visit::visit_item_mod(self, item);
+        self.test_scope = previous;
+    }
+
     fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
         let previous = self.trait_impl;
         self.trait_impl = item.trait_.is_some();
@@ -396,7 +422,9 @@ impl<'ast> Visit<'ast> for Prefixes<'_> {
     }
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
-        self.inspect(&item.sig.ident, item.span());
+        if !test_function(&item.attrs) {
+            self.inspect(&item.sig.ident, item.span());
+        }
         syn::visit::visit_item_fn(self, item);
     }
 
@@ -411,6 +439,18 @@ impl<'ast> Visit<'ast> for Prefixes<'_> {
         self.inspect(&item.sig.ident, item.span());
         syn::visit::visit_trait_item_fn(self, item);
     }
+}
+
+/// Test harness attributes name assertions rather than API, so naming density does not apply.
+fn test_function(attributes: &[syn::Attribute]) -> bool {
+    requires_test(attributes)
+        || attributes.iter().any(|attribute| {
+            attribute
+                .path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "test" || segment.ident == "bench")
+        })
 }
 
 fn conventional(stem: &str) -> bool {

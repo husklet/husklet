@@ -209,11 +209,16 @@ trait Drive {
     let workspace = Workspace::load([root.clone()]).unwrap();
     let findings = SymbolName.check(&workspace).unwrap();
 
-    assert_eq!(findings.len(), 7);
+    assert_eq!(findings.len(), 6);
     assert!(
         findings
             .iter()
             .any(|finding| finding.subject == "PreparedSharedMemoryExec")
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding.subject == "DeliberatelyVeryLongTestFixtureName")
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -240,7 +245,12 @@ mod tests { struct LauncherFixture; }
     let workspace = Workspace::load([root.clone()]).unwrap();
     let findings = ModulePrefix.check(&workspace).unwrap();
 
-    assert_eq!(findings.len(), 5);
+    assert_eq!(findings.len(), 4);
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding.subject == "LauncherFixture")
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -259,8 +269,33 @@ fn deliberately_very_long_test_function_name() {}
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();
 
-    assert_eq!(ModulePrefix.check(&workspace).unwrap().len(), 2);
-    assert_eq!(SymbolName.check(&workspace).unwrap().len(), 1);
+    assert_eq!(ModulePrefix.check(&workspace).unwrap().len(), 0);
+    assert_eq!(SymbolName.check(&workspace).unwrap().len(), 0);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn naming_test_attribute() {
+    let root = fixture("test-attribute");
+    fs::create_dir_all(root.join("src/launcher")).unwrap();
+    fs::write(
+        root.join("src/launcher/plan.rs"),
+        r#"
+#[test]
+fn launcher_rejects_a_deliberately_long_assertion_name() {}
+fn launcher_rejects_a_deliberately_long_production_name() {}
+"#,
+    )
+    .unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+
+    let symbols = SymbolName.check(&workspace).unwrap();
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(
+        symbols[0].subject,
+        "launcher_rejects_a_deliberately_long_production_name"
+    );
+    assert_eq!(ModulePrefix.check(&workspace).unwrap().len(), 1);
     fs::remove_dir_all(root).unwrap();
 }
 
