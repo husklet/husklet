@@ -435,9 +435,11 @@ impl ProcfsSource for TaskProcfs {
         _actor: hl_descriptor::OperationActor,
         value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {
-        let process = self
-            .process_id(process)
-            .map_err(|_| hl_descriptor::ObjectError::Retired)?;
+        let process = self.process_id(process).map_err(|_| {
+            thread.map_or(hl_descriptor::ObjectError::Retired, |_| {
+                hl_descriptor::ObjectError::NoSuchProcess
+            })
+        })?;
         if let Some(thread) = thread {
             let thread = self
                 .thread_id(thread)
