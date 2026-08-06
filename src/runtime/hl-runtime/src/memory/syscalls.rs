@@ -311,6 +311,22 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
     }
 
     fn mmap(&self, arguments: [u64; 6], pages: bool) -> LinuxResult {
+        let result = self.mmap_result(arguments, pages);
+        hl_log::hl_debug!(
+            hl_log::tag::MEMORY,
+            "mmap address={:#x} length={:#x} protection={:#x} flags={:#x} descriptor={} offset={:#x} pages={pages} result={:#x}",
+            arguments[0],
+            arguments[1],
+            arguments[2],
+            arguments[3],
+            arguments[4] as i32,
+            arguments[5],
+            result.encode(),
+        );
+        result
+    }
+
+    fn mmap_result(&self, arguments: [u64; 6], pages: bool) -> LinuxResult {
         // Linux acquires a file reference before validating the mapping
         // length. Preserve that observable ordering: a stale descriptor on a
         // file-backed zero-length request is EBADF, not EINVAL. Anonymous
@@ -486,6 +502,19 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
     }
 
     fn range_operation(&self, name: &str, arguments: [u64; 6]) -> LinuxResult {
+        let result = self.range_operation_result(name, arguments);
+        hl_log::hl_debug!(
+            hl_log::tag::MEMORY,
+            "{name} address={:#x} length={:#x} protection={:#x} result={:#x}",
+            arguments[0],
+            arguments[1],
+            arguments[2],
+            result.encode(),
+        );
+        result
+    }
+
+    fn range_operation_result(&self, name: &str, arguments: [u64; 6]) -> LinuxResult {
         let plan = match name {
             "munmap" => MemoryAbi::<M>::munmap(arguments[0], arguments[1]),
             "mprotect" => match MemoryAbi::<M>::mprotect(arguments[0], arguments[1], arguments[2] as u32) {
@@ -528,6 +557,21 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
     }
 
     fn mremap(&self, arguments: [u64; 6]) -> LinuxResult {
+        let result = self.mremap_result(arguments);
+        hl_log::hl_debug!(
+            hl_log::tag::MEMORY,
+            "mremap address={:#x} old_length={:#x} new_length={:#x} flags={:#x} destination={:#x} result={:#x}",
+            arguments[0],
+            arguments[1],
+            arguments[2],
+            arguments[3],
+            arguments[4],
+            result.encode(),
+        );
+        result
+    }
+
+    fn mremap_result(&self, arguments: [u64; 6]) -> LinuxResult {
         let plan = match MemoryAbi::<M>::mremap(
             arguments[0],
             arguments[1],
@@ -789,7 +833,13 @@ impl<H: MappingHost, M: GuestMemory> MemorySyscalls for RuntimeMemorySyscalls<H,
     fn handle(&mut self, operation: SyscallOperation, arguments: [u64; 6]) -> LinuxResult {
         match operation.name {
             "brk" => self.brk.as_ref().map_or(LinuxResult::Error(Errno::ENOSYS), |brk| {
-                LinuxResult::Value(brk.set(arguments[0]))
+                let address = brk.set(arguments[0]);
+                hl_log::hl_debug!(
+                    hl_log::tag::MEMORY,
+                    "brk requested={:#x} break={address:#x}",
+                    arguments[0],
+                );
+                LinuxResult::Value(address)
             }),
             "mmap" => self.mmap(arguments, false),
             "mmap2" => self.mmap(arguments, true),
