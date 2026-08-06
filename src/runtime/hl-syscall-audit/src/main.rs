@@ -29,8 +29,8 @@ fn main() {
     let entries = audit.inventory().unwrap_or_else(|error| panic!("{error}"));
     let manifest = audit.render_manifest(&entries);
     let report = audit.render_report(&entries);
-    let manifest_path = audit.root.join("syscall-inventory.tsv");
-    let report_path = audit.root.join("SYSCALL_PARITY.md");
+    let manifest_path = audit.output("syscall-inventory.tsv");
+    let report_path = audit.output("SYSCALL_PARITY.md");
     if std::env::args().any(|argument| argument == "--check") {
         audit.check(&manifest_path, &manifest);
         audit.check(&report_path, &report);
@@ -48,6 +48,10 @@ impl Audit {
             assert!(root.pop(), "workspace root not found");
         }
         Self { root }
+    }
+
+    fn output(&self, name: &str) -> PathBuf {
+        self.root.join("src/runtime/hl-syscall-audit").join(name)
     }
 
     fn check(&self, path: &Path, expected: &str) {
@@ -101,23 +105,29 @@ impl Audit {
             routes.arm.insert((line.0, line.2.clone()));
             routes.x86.insert((line.1, line.2));
         }
+        let mut legacy_definition = false;
         let mut legacy = None;
         for line in source.lines() {
             let line = line.trim();
-            if line.contains("LegacyDefinition { raw_number:") {
+            if line.starts_with("LegacyDefinition {") {
+                legacy_definition = true;
                 legacy = Self::legacy_number(line);
                 continue;
+            }
+            if legacy_definition && legacy.is_none() {
+                legacy = Self::legacy_number(line);
             }
             let Some(number) = legacy else { continue };
             let Some(name) = Self::legacy_name(line) else { continue };
             routes.x86.insert((number, name));
+            legacy_definition = false;
             legacy = None;
         }
         routes
     }
 
     fn legacy_number(line: &str) -> Option<u16> {
-        let raw = line.split("LegacyDefinition { raw_number:").nth(1)?;
+        let raw = line.split("raw_number:").nth(1)?;
         raw.split(',').next()?.trim().parse().ok()
     }
 
@@ -297,11 +307,11 @@ mod tests {
         let audit = Audit::discover(PathBuf::from("."));
         let entries = audit.inventory().unwrap();
         assert_eq!(
-            fs::read_to_string(audit.root.join("syscall-inventory.tsv")).unwrap(),
+            fs::read_to_string(audit.output("syscall-inventory.tsv")).unwrap(),
             audit.render_manifest(&entries),
         );
         assert_eq!(
-            fs::read_to_string(audit.root.join("SYSCALL_PARITY.md")).unwrap(),
+            fs::read_to_string(audit.output("SYSCALL_PARITY.md")).unwrap(),
             audit.render_report(&entries),
         );
     }
