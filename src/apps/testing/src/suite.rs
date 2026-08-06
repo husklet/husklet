@@ -18,6 +18,15 @@ impl Target {
         }
     }
 
+    /// The target a journal or manifest spelled, when it names one.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        match name {
+            "arm64" => Some(Self::Arm64),
+            "amd64" => Some(Self::Amd64),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn guest(self) -> hl_container::Guest {
         match self {
             Self::Arm64 => hl_container::Guest::Aarch64,

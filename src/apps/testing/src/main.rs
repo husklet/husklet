@@ -2,6 +2,7 @@
 
 mod bench;
 mod benchmark;
+mod journal;
 mod nested;
 mod record;
 mod runtime;

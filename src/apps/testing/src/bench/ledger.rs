@@ -1,17 +1,13 @@
 use super::WorkKey;
-use crate::suite::{Error, Target};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{BufWriter, Write},
-    path::{Path, PathBuf},
-    sync::Mutex,
+use crate::{
+    journal::{self, Require as _, Schema},
+    suite::{Error, Target},
 };
+use std::collections::BTreeSet;
 
-const HEADER: &str = "id\ttarget\tprovenance\tstatus\telapsed_ms\toutput\n";
+pub(super) type Ledger = journal::Ledger<Bench>;
+
 const OUTPUT_LIMIT: usize = 1024 * 1024;
-const ROW_LIMIT: usize = OUTPUT_LIMIT * 2 + 4096;
-const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(super) struct Row {
@@ -21,136 +17,77 @@ pub(super) struct Row {
     pub output: String,
 }
 
-pub(super) struct Ledger {
-    report: PathBuf,
-    partial: PathBuf,
-    file: Mutex<Option<BufWriter<File>>>,
-    rows: Mutex<BTreeMap<WorkKey, Row>>,
-    _lock: hl_engine::native::FileLock,
-}
+/// The result schema of a benchmark run, whose keys carry the provenance they measured.
+pub(super) struct Bench;
 
-pub(super) struct Opened {
-    pub ledger: Ledger,
-    pub prior: BTreeMap<WorkKey, Row>,
-}
-
-impl Ledger {
-    pub fn open(report: &Path, stamp: &str, keys: &BTreeSet<WorkKey>, resume: bool) -> Result<Opened, Error> {
-        let partial = report.with_extension("partial.tsv");
-        if let Some(parent) = report.parent() {
-            fs::create_dir_all(parent)?;
+impl Bench {
+    /// Hexadecimal so multi-line writer output survives a single tab-separated field.
+    fn encode(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut result = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            result.push(HEX[(byte >> 4) as usize] as char);
+            result.push(HEX[(byte & 0x0f) as usize] as char);
         }
-        let lock = hl_engine::native::FileLock::acquire(report.with_extension("lock"))?;
-        let prior = if resume && partial.exists() {
-            load(&partial, stamp, keys)?
-        } else {
-            initialize(&partial, stamp)?;
-            BTreeMap::new()
-        };
-        let file = OpenOptions::new().append(true).open(&partial)?;
-        Ok(Opened {
-            ledger: Self {
-                report: report.to_path_buf(),
-                partial,
-                file: Mutex::new(Some(BufWriter::new(file))),
-                rows: Mutex::new(prior.clone()),
-                _lock: lock,
-            },
-            prior,
-        })
+        result
     }
 
-    pub fn record(&self, row: Row) -> Result<(), Error> {
-        let text = format_row(&row)?;
-        if fs::metadata(&self.partial)?
+    fn decode(value: &str) -> Result<String, Error> {
+        value
             .len()
-            .checked_add(text.len() as u64)
-            .ok_or("benchmark result file size overflow")?
-            > FILE_LIMIT
-        {
-            return Err(format!("benchmark result journal exceeded {FILE_LIMIT} bytes").into());
-        }
-        let mut guard = self.file.lock().map_err(|_| "benchmark result journal lock poisoned")?;
-        let file = guard.as_mut().ok_or("benchmark result journal is finalized")?;
-        file.write_all(text.as_bytes())?;
-        file.flush()?;
-        file.get_ref().sync_data()?;
-        self.rows
-            .lock()
-            .map_err(|_| "benchmark result rows lock poisoned")?
-            .insert(row.key.clone(), row);
-        Ok(())
+            .is_multiple_of(2)
+            .require("invalid benchmark result encoding")?;
+        let bytes = value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| Ok((Self::digit(pair[0])? << 4) | Self::digit(pair[1])?))
+            .collect::<Result<Vec<_>, Error>>()?;
+        Ok(String::from_utf8(bytes)?)
     }
 
-    pub fn finish(&self) -> Result<(), Error> {
-        let mut journal = self.file.lock().map_err(|_| "benchmark result journal lock poisoned")?;
-        if let Some(mut file) = journal.take() {
-            file.flush()?;
-            file.get_ref().sync_data()?;
+    fn digit(value: u8) -> Result<u8, Error> {
+        match value {
+            b'0'..=b'9' => Ok(value - b'0'),
+            b'a'..=b'f' => Ok(value - b'a' + 10),
+            _ => Err("invalid benchmark result encoding".into()),
         }
-        let temporary = self.report.with_extension("tmp");
-        let rows = self.rows.lock().map_err(|_| "benchmark result rows lock poisoned")?;
-        let mut file = BufWriter::new(File::create(&temporary)?);
-        file.write_all(HEADER.as_bytes())?;
-        for row in rows.values() {
-            file.write_all(format_row(row)?.as_bytes())?;
-        }
-        file.flush()?;
-        file.get_ref().sync_data()?;
-        drop(file);
-        fs::rename(&temporary, &self.report)?;
-        fs::remove_file(&self.partial)?;
-        Ok(())
     }
 }
 
-fn initialize(path: &Path, stamp: &str) -> Result<(), Error> {
-    let mut file = BufWriter::new(File::create(path)?);
-    writeln!(file, "# benchmark-run\t{stamp}")?;
-    file.write_all(HEADER.as_bytes())?;
-    file.flush()?;
-    file.get_ref().sync_data()?;
-    Ok(())
-}
+impl Schema for Bench {
+    type Key = WorkKey;
+    type Row = Row;
 
-fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<WorkKey, Row>, Error> {
-    let mut bytes = fs::read(path)?;
-    if bytes.len() as u64 > FILE_LIMIT {
-        return Err("benchmark result journal exceeds its byte bound".into());
+    const KIND: &'static str = "benchmark";
+    const HEADER: &'static str = "id\ttarget\tprovenance\tstatus\telapsed_ms\toutput\n";
+    const ROW_LIMIT: usize = OUTPUT_LIMIT * 2 + 4096;
+    const FIELDS: usize = 6;
+
+    fn key(row: &Row) -> &WorkKey {
+        &row.key
     }
-    if !bytes.ends_with(b"\n") {
-        let complete = bytes
-            .iter()
-            .rposition(|byte| *byte == b'\n')
-            .map_or(0, |index| index + 1);
-        bytes.truncate(complete);
-        let file = OpenOptions::new().write(true).open(path)?;
-        file.set_len(complete as u64)?;
-        file.sync_data()?;
+
+    fn format(row: &Row) -> Result<String, Error> {
+        (!row.key.id.contains(['\t', '\n']) && !row.key.provenance.contains(['\t', '\n']))
+            .require("benchmark result contains an unsafe delimiter")?;
+        (row.output.len() <= OUTPUT_LIMIT).require("benchmark result output exceeds its byte bound")?;
+        let text = format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            row.key.id,
+            row.key.target.name(),
+            row.key.provenance,
+            row.status,
+            row.elapsed_ms,
+            Self::encode(row.output.as_bytes())
+        );
+        (text.len() <= Self::ROW_LIMIT).require("benchmark result row exceeds its byte bound")?;
+        Ok(text)
     }
-    let text = std::str::from_utf8(&bytes)?;
-    let mut lines = text.lines();
-    require(
-        lines.next() == Some(format!("# benchmark-run\t{stamp}").as_str()),
-        "benchmark resume input changed",
-    )?;
-    require(
-        lines.next() == Some(HEADER.trim_end()),
-        "benchmark resume schema changed",
-    )?;
-    let mut rows = BTreeMap::new();
-    for line in lines.filter(|line| !line.is_empty()) {
-        require(line.len() <= ROW_LIMIT, "benchmark resume row exceeds its byte bound")?;
-        let fields = line.split('\t').collect::<Vec<_>>();
-        require(fields.len() == 6, "invalid benchmark resume row")?;
-        let target = match fields[1] {
-            "arm64" => Target::Arm64,
-            "amd64" => Target::Amd64,
-            _ => return Err("invalid benchmark resume target".into()),
-        };
+
+    fn parse(fields: &[&str], keys: &BTreeSet<WorkKey>) -> Result<Option<Row>, Error> {
         let key = WorkKey {
             id: fields[0].to_owned(),
-            target,
+            target: Target::named(fields[1]).ok_or("invalid benchmark resume target")?,
             provenance: fields[2].to_owned(),
         };
         let status = match fields[3] {
@@ -159,86 +96,22 @@ fn load(path: &Path, stamp: &str, keys: &BTreeSet<WorkKey>) -> Result<BTreeMap<W
             _ => return Err("invalid benchmark resume status".into()),
         };
         let elapsed_ms = fields[4].parse()?;
-        let output = decode(fields[5])?;
+        let output = Self::decode(fields[5])?;
         if !keys.contains(&key) {
-            let current_row = keys.iter().any(|candidate| candidate.id == key.id && candidate.target == key.target);
-            require(current_row, "stale benchmark resume row")?;
-            continue;
+            // The same work under new provenance supersedes this row; anything else is stale.
+            keys.iter()
+                .any(|candidate| candidate.id == key.id && candidate.target == key.target)
+                .require("stale benchmark resume row")?;
+            return Ok(None);
         }
-        require(!rows.contains_key(&key), "duplicate benchmark resume row")?;
-        rows.insert(
-            key.clone(),
-            Row {
-                key,
-                status,
-                elapsed_ms,
-                output,
-            },
-        );
-    }
-    Ok(rows)
-}
-
-fn format_row(row: &Row) -> Result<String, Error> {
-    require(
-        !row.key.id.contains(['\t', '\n']) && !row.key.provenance.contains(['\t', '\n']),
-        "benchmark result contains an unsafe delimiter",
-    )?;
-    require(
-        row.output.len() <= OUTPUT_LIMIT,
-        "benchmark result output exceeds its byte bound",
-    )?;
-    let text = format!(
-        "{}\t{}\t{}\t{}\t{}\t{}\n",
-        row.key.id,
-        row.key.target.name(),
-        row.key.provenance,
-        row.status,
-        row.elapsed_ms,
-        encode(row.output.as_bytes())
-    );
-    require(text.len() <= ROW_LIMIT, "benchmark result row exceeds its byte bound")?;
-    Ok(text)
-}
-
-fn encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut result = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        result.push(HEX[(byte >> 4) as usize] as char);
-        result.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    result
-}
-
-fn decode(value: &str) -> Result<String, Error> {
-    if !value.len().is_multiple_of(2) {
-        return Err("invalid benchmark result encoding".into());
-    }
-    let bytes = value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = digit(pair[0])?;
-            let low = digit(pair[1])?;
-            Ok((high << 4) | low)
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
-    Ok(String::from_utf8(bytes)?)
-}
-
-fn digit(value: u8) -> Result<u8, Error> {
-    match value {
-        b'0'..=b'9' => Ok(value - b'0'),
-        b'a'..=b'f' => Ok(value - b'a' + 10),
-        _ => Err("invalid benchmark result encoding".into()),
+        Ok(Some(Row {
+            key,
+            status,
+            elapsed_ms,
+            output,
+        }))
     }
 }
-
-fn require(condition: bool, message: &'static str) -> Result<(), Error> {
-    condition.then_some(()).ok_or_else(|| message.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Ledger, OUTPUT_LIMIT, Row, WorkKey};
