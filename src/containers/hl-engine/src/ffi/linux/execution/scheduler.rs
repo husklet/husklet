@@ -1497,7 +1497,7 @@ impl GuestExecutor {
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
             };
             statistics = Some(stats);
-            boundary = diagnostics.then_some(NativeBoundary {
+            boundary = diagnostics.then(|| NativeBoundary {
                 process: run.process,
                 start: pc,
                 exit: result.exit,
@@ -1724,7 +1724,9 @@ mod tests {
     #[test]
     fn selection_scope() {
         let disabled = plan(crate::options::Options::default());
-        assert!(!NativePool::new(GuestIsa::Aarch64, &disabled, None).enabled);
+        let disabled_pool = NativePool::new(GuestIsa::Aarch64, &disabled, None);
+        assert!(!disabled_pool.enabled);
+        assert!(disabled_pool.boundaries.is_none());
         let mut options = crate::options::Options::default();
         options.set("HL_NATIVE_EXECUTION", "1", true).unwrap();
         let enabled = plan(options);
@@ -1735,6 +1737,15 @@ mod tests {
         assert_eq!(
             NativePool::new(GuestIsa::X86_64, &enabled, None).enabled,
             cfg!(target_arch = "aarch64")
+        );
+        assert!(NativePool::new(GuestIsa::X86_64, &enabled, None).boundaries.is_none());
+
+        let mut diagnostic_options = crate::options::Options::default();
+        diagnostic_options.set("HL_NATIVE_DIAGNOSTICS", "1", true).unwrap();
+        assert!(
+            NativePool::new(GuestIsa::X86_64, &plan(diagnostic_options), None)
+                .boundaries
+                .is_some()
         );
     }
 
