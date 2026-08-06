@@ -20,7 +20,9 @@ pub use ancillary::{
     ControlCodec, ControlEncoding, ControlError, ControlMessage, ControlWord, QueueMessageSnapshot,
     QueueRightsSnapshot, QueueSnapshot, ReceiveControl, SenderCredentials, UnixMessageQueue,
 };
-pub use catalog::{InternetSocketView, NetworkCatalog, NetworkCatalogError, NetworkNamespaceView, UnixSocketView};
+pub use catalog::{
+    InternetSocketView, NetworkCatalog, NetworkCatalogError, NetworkNamespaceView, PreparedBind, UnixSocketView,
+};
 pub use checkpoint::{
     AcceptedSocketCheckpoint, AuthoritySocketKey, AuthoritySocketLease, NETWORK_CHECKPOINT_SOCKET_MAXIMUM,
     NETWORK_CHECKPOINT_VERSION, NetworkCatalogRestore, NetworkCheckpointError, NetworkCheckpointImage,

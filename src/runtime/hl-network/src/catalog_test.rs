@@ -1,4 +1,4 @@
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -197,6 +197,205 @@ fn port_owner_must() {
     catalog.freeze_checkpoint();
     assert!(catalog.checkpoint_image().is_ok());
     catalog.thaw_checkpoint();
+}
+
+#[test]
+fn host_bind_transaction_rolls_back_once_and_commits_once() {
+    let catalog = catalog();
+    let owner = catalog
+        .insert_host(
+            CatalogScenario::socket(SocketState::Created, None),
+            NetworkResourceKey::new(1).unwrap(),
+            Arc::new(()),
+            Vec::new(),
+        )
+        .unwrap();
+    let mut bound = catalog.snapshot(owner).unwrap();
+    bound.local = Some(SocketAddress::Inet4 {
+        address: [192, 0, 2, 1],
+        port: 8080,
+    });
+    bound.state = SocketState::Bound;
+    let port = crate::PortCheckpoint {
+        family: AddressFamily::Inet4,
+        port: 8080,
+        owner,
+    };
+    let rollback = catalog.prepare_host_bind(bound.clone(), port.clone()).unwrap();
+    assert_eq!(catalog.snapshot(owner).unwrap().state, SocketState::Created);
+    rollback.rollback().unwrap();
+    assert_eq!(catalog.snapshot(owner).unwrap().state, SocketState::Created);
+
+    let commit = catalog.prepare_host_bind(bound.clone(), port).unwrap();
+    commit.commit().unwrap();
+    assert_eq!(catalog.snapshot(owner).unwrap(), bound);
+}
+
+#[test]
+fn host_bind_transaction_rejects_collision_without_snapshot_mutation() {
+    let catalog = catalog();
+    let create = |resource| {
+        catalog
+            .insert_host(
+                CatalogScenario::socket(SocketState::Created, None),
+                NetworkResourceKey::new(resource).unwrap(),
+                Arc::new(()),
+                Vec::new(),
+            )
+            .unwrap()
+    };
+    let first = create(1);
+    let second = create(2);
+    let bind = |owner| {
+        let mut snapshot = catalog.snapshot(owner).unwrap();
+        snapshot.local = Some(SocketAddress::Inet4 {
+            address: [0; 4],
+            port: 9000,
+        });
+        snapshot.state = SocketState::Bound;
+        catalog.prepare_host_bind(
+            snapshot,
+            crate::PortCheckpoint {
+                family: AddressFamily::Inet4,
+                port: 9000,
+                owner,
+            },
+        )
+    };
+    bind(first).unwrap().commit().unwrap();
+    assert!(matches!(bind(second), Err(NetworkCatalogError::Invalid)));
+    assert_eq!(catalog.snapshot(second).unwrap().state, SocketState::Created);
+}
+
+#[test]
+fn stale_bind_rollback_does_not_overwrite_newer_snapshot() {
+    let catalog = catalog();
+    let owner = catalog
+        .insert_host(
+            CatalogScenario::socket(SocketState::Created, None),
+            NetworkResourceKey::new(1).unwrap(),
+            Arc::new(()),
+            Vec::new(),
+        )
+        .unwrap();
+    let mut bound = catalog.snapshot(owner).unwrap();
+    bound.local = Some(SocketAddress::Inet4 {
+        address: [127, 0, 0, 1],
+        port: 7000,
+    });
+    bound.state = SocketState::Bound;
+    let prepared = catalog
+        .prepare_host_bind(
+            bound.clone(),
+            crate::PortCheckpoint {
+                family: AddressFamily::Inet4,
+                port: 7000,
+                owner,
+            },
+        )
+        .unwrap();
+    let mut newer = bound;
+    newer.state = SocketState::Listening { backlog: 4 };
+    catalog.replace_host_snapshot(owner, newer.clone()).unwrap();
+    assert_eq!(prepared.commit(), Err(NetworkCatalogError::Stale));
+    assert_eq!(catalog.snapshot(owner).unwrap(), newer);
+}
+
+#[test]
+fn concurrent_bind_reserves_one_owner() {
+    let catalog = Arc::new(catalog());
+    let mut candidates = Vec::new();
+    for resource in 1..=2 {
+        let owner = catalog
+            .insert_host(
+                CatalogScenario::socket(SocketState::Created, None),
+                NetworkResourceKey::new(resource).unwrap(),
+                Arc::new(()),
+                Vec::new(),
+            )
+            .unwrap();
+        let mut snapshot = catalog.snapshot(owner).unwrap();
+        snapshot.local = Some(SocketAddress::Inet4 {
+            address: [0; 4],
+            port: 9100,
+        });
+        snapshot.state = SocketState::Bound;
+        candidates.push((owner, snapshot));
+    }
+    let barrier = Arc::new(Barrier::new(3));
+    let observed = Arc::new(Barrier::new(3));
+    let workers = candidates
+        .into_iter()
+        .map(|(owner, snapshot)| {
+            let catalog = catalog.clone();
+            let barrier = barrier.clone();
+            let observed = observed.clone();
+            thread::spawn(move || {
+                barrier.wait();
+                let prepared = catalog
+                    .prepare_host_bind(
+                        snapshot,
+                        crate::PortCheckpoint {
+                            family: AddressFamily::Inet4,
+                            port: 9100,
+                            owner,
+                        },
+                    );
+                observed.wait();
+                prepared.is_ok()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    observed.wait();
+    assert_eq!(
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .filter(|won| *won)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn checkpoint_freeze_waits_for_prepared_bind() {
+    let catalog = Arc::new(catalog());
+    let owner = catalog
+        .insert_host(
+            CatalogScenario::socket(SocketState::Created, None),
+            NetworkResourceKey::new(1).unwrap(),
+            Arc::new(()),
+            Vec::new(),
+        )
+        .unwrap();
+    let mut bound = catalog.snapshot(owner).unwrap();
+    bound.local = Some(SocketAddress::Inet4 {
+        address: [127, 0, 0, 1],
+        port: 9200,
+    });
+    bound.state = SocketState::Bound;
+    let prepared = catalog
+        .prepare_host_bind(
+            bound,
+            crate::PortCheckpoint {
+                family: AddressFamily::Inet4,
+                port: 9200,
+                owner,
+            },
+        )
+        .unwrap();
+    let freezer_catalog = catalog.clone();
+    let (frozen_send, frozen) = mpsc::channel();
+    let freezer = thread::spawn(move || {
+        freezer_catalog.freeze_checkpoint();
+        frozen_send.send(()).unwrap();
+        freezer_catalog.thaw_checkpoint();
+    });
+    assert!(frozen.recv_timeout(Duration::from_millis(20)).is_err());
+    prepared.rollback().unwrap();
+    frozen.recv_timeout(Duration::from_secs(1)).unwrap();
+    freezer.join().unwrap();
 }
 
 #[test]

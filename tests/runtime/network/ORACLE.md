@@ -130,3 +130,26 @@ AF_UNIX namespace disabled; POSIX hosts use the switch path.
 | specific IPv6 binds remain on the native IPv6 stack | `hl-network::NetworkPolicy` | implemented |
 | policy-selected bridge listeners invoke host listen/accept | `hl-runtime::RuntimeNetworkSyscalls` | implemented |
 | last-close cleanup and failed-bind rollback | native `SwitchPath` ownership and socket restoration | implemented |
+
+## Bind reservation transaction audit
+
+The retained switch bind path in
+`../engine/src/linux_abi/syscall/net.c::svc_net` validates the guest address,
+selects the loopback or bridge identity, binds the substituted socket, records
+the refcounted port owner, and rolls that ownership back if later publication
+fails. `../engine/src/linux_abi/container/netns.c::{udp_ref_create,
+udp_ref_drop}` keeps the reservation through duplicate and fork lifetime and
+removes it on final close. These operations have no guest-ISA branch; host
+calls occur outside retained descriptor-table bookkeeping locks.
+
+The current Rust checkpoint schema represents the corresponding namespace
+claim as `PortCheckpoint`. `NetworkCatalog::prepare_host_bind` reserves that
+identity under one deterministic `slots` then `ports` critical section while
+retaining the exact current socket object and a unique reservation generation.
+It releases both locks before returning. Commit reacquires the same order,
+verifies exact object and reservation identity, and atomically publishes the
+bound snapshot and port; dropping or explicitly rolling back the must-use guard
+removes only its pending reservation. The live isolated bind path uses the
+transaction, so no catalog lock crosses host work and early return cannot leak
+a claim. Native alias publication and expanded checkpoint identities remain a
+separate capability gap.

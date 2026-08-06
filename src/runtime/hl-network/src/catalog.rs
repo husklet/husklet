@@ -34,10 +34,55 @@ struct Slot {
 
 pub struct NetworkCatalog {
     configuration: NetworkConfiguration,
-    ports: Mutex<Vec<PortCheckpoint>>,
+    ports: Mutex<Vec<PortEntry>>,
     slots: Mutex<Vec<Slot>>,
     generation: AtomicU64,
+    port_generation: AtomicU64,
     activity: crate::checkpoint_activity::CheckpointActivity,
+}
+
+/// Generation-qualified rollback capability for one atomic host bind update.
+#[derive(Clone)]
+pub(crate) enum PortEntry {
+    Published(PortCheckpoint),
+    Prepared { checkpoint: PortCheckpoint, generation: u64 },
+}
+
+impl PortEntry {
+    fn checkpoint(&self) -> &PortCheckpoint {
+        match self {
+            Self::Published(checkpoint) | Self::Prepared { checkpoint, .. } => checkpoint,
+        }
+    }
+}
+
+#[must_use = "dropping an uncommitted bind rolls its reservation back"]
+pub struct PreparedBind<'a> {
+    catalog: &'a NetworkCatalog,
+    _admission: crate::checkpoint_activity::Admission<'a>,
+    previous: Arc<CatalogSocket>,
+    installed: SocketSnapshot,
+    port: PortCheckpoint,
+    generation: u64,
+    finalized: bool,
+}
+
+impl PreparedBind<'_> {
+    pub fn commit(mut self) -> Result<(), NetworkCatalogError> {
+        self.catalog.commit_prepared(&mut self)
+    }
+
+    pub fn rollback(mut self) -> Result<(), NetworkCatalogError> {
+        self.catalog.rollback_prepared(&mut self)
+    }
+}
+
+impl Drop for PreparedBind<'_> {
+    fn drop(&mut self) {
+        if !self.finalized {
+            let _ = self.catalog.rollback_prepared(self);
+        }
+    }
 }
 
 /// One coherent observation of the live sockets in a network namespace.
@@ -91,6 +136,7 @@ impl NetworkCatalog {
             ports: Mutex::new(Vec::new()),
             slots: Mutex::new(Vec::new()),
             generation: AtomicU64::new(0),
+            port_generation: AtomicU64::new(1),
             activity: crate::checkpoint_activity::CheckpointActivity::default(),
         }
     }
@@ -242,13 +288,119 @@ impl NetworkCatalog {
             return Err(NetworkCatalogError::Invalid);
         }
         let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
-        if ports
-            .iter()
-            .any(|port| port.family == checkpoint.family && port.port == checkpoint.port)
+        if ports.iter().any(|port| {
+            let port = port.checkpoint();
+            port.family == checkpoint.family && port.port == checkpoint.port
+        })
         {
             return Err(NetworkCatalogError::Invalid);
         }
-        ports.push(checkpoint);
+        ports.push(PortEntry::Published(checkpoint));
+        Ok(())
+    }
+
+    /// Atomically publishes a bound host snapshot and reserves its port.
+    ///
+    /// Locks are acquired in `slots` then `ports` order and released before
+    /// returning, so callers may perform host work before commit or rollback.
+    pub fn prepare_host_bind(
+        &self,
+        installed: SocketSnapshot,
+        port: PortCheckpoint,
+    ) -> Result<PreparedBind<'_>, NetworkCatalogError> {
+        let admission = self.activity.admit();
+        if installed.id != port.owner || !crate::SocketNamespace::valid_checkpoint_snapshot(&installed) {
+            return Err(NetworkCatalogError::Invalid);
+        }
+        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slot = Self::slot_mut(&mut slots, port.owner)?;
+        let Some(previous) = slot.socket.as_ref().filter(|socket| matches!(socket.as_ref(), CatalogSocket::Host { .. }))
+        else {
+            return Err(NetworkCatalogError::Invalid);
+        };
+        if !Self::owns_port(&installed, &port) {
+            return Err(NetworkCatalogError::Invalid);
+        }
+        let previous = previous.clone();
+        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        if ports.iter().any(|reserved| {
+            let reserved = reserved.checkpoint();
+            reserved.family == port.family && reserved.port == port.port
+        })
+        {
+            return Err(NetworkCatalogError::Invalid);
+        }
+        let generation = self.port_generation.fetch_add(1, Ordering::Relaxed);
+        if generation == 0 {
+            return Err(NetworkCatalogError::Capacity);
+        }
+        ports.push(PortEntry::Prepared {
+            checkpoint: port.clone(),
+            generation,
+        });
+        Ok(PreparedBind {
+            catalog: self,
+            _admission: admission,
+            previous,
+            installed,
+            port,
+            generation,
+            finalized: false,
+        })
+    }
+
+    fn commit_prepared(&self, prepared: &mut PreparedBind<'_>) -> Result<(), NetworkCatalogError> {
+        if prepared.finalized {
+            return Ok(());
+        }
+        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slot = Self::slot_mut(&mut slots, prepared.port.owner)?;
+        let Some(current) = slot.socket.as_ref() else {
+            return Err(NetworkCatalogError::Stale);
+        };
+        if !Arc::ptr_eq(current, &prepared.previous) {
+            return Err(NetworkCatalogError::Stale);
+        }
+        let CatalogSocket::Host { resource, binding, accepted, .. } = current.as_ref() else {
+            return Err(NetworkCatalogError::Stale);
+        };
+        let replacement = Arc::new(CatalogSocket::Host {
+            snapshot: prepared.installed.clone(),
+            resource: *resource,
+            binding: binding.clone(),
+            accepted: accepted.clone(),
+        });
+        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(entry) = ports.iter_mut().find(|entry| matches!(
+            entry,
+            PortEntry::Prepared { checkpoint, generation }
+                if checkpoint == &prepared.port && *generation == prepared.generation
+        )) else {
+            return Err(NetworkCatalogError::Stale);
+        };
+        *entry = PortEntry::Published(prepared.port.clone());
+        slot.socket = Some(replacement);
+        self.advance_generation();
+        prepared.finalized = true;
+        Ok(())
+    }
+
+    fn rollback_prepared(&self, prepared: &mut PreparedBind<'_>) -> Result<(), NetworkCatalogError> {
+        if prepared.finalized {
+            return Ok(());
+        }
+        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(index) = ports.iter().position(|entry| matches!(
+            entry,
+            PortEntry::Prepared { checkpoint, generation }
+                if checkpoint == &prepared.port && *generation == prepared.generation
+        )) else {
+            return Err(NetworkCatalogError::Stale);
+        };
+        ports.remove(index);
+        drop(slots);
+        prepared.finalized = true;
         Ok(())
     }
 
@@ -308,7 +460,7 @@ impl NetworkCatalog {
         self.ports
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .retain(|port| port.owner != id);
+            .retain(|port| port.checkpoint().owner != id);
         Ok(())
     }
 

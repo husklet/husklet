@@ -51,7 +51,16 @@ impl NetworkCatalog {
                 }),
             }
         }
-        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let mut ports = self
+            .ports
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .filter_map(|entry| match entry {
+                PortEntry::Published(checkpoint) => Some(checkpoint.clone()),
+                PortEntry::Prepared { .. } => None,
+            })
+            .collect::<Vec<_>>();
         ports.sort_by_key(|port| (port.family as u8, port.port));
         let image = NetworkCheckpointImage {
             version: NETWORK_CHECKPOINT_VERSION,
@@ -83,9 +92,10 @@ impl NetworkCatalog {
         }
         Ok(Self {
             configuration: image.configuration.clone(),
-            ports: Mutex::new(image.ports.clone()),
+            ports: Mutex::new(image.ports.iter().cloned().map(PortEntry::Published).collect()),
             slots: Mutex::new(slots),
             generation: AtomicU64::new(1),
+            port_generation: AtomicU64::new(1),
             activity: crate::checkpoint_activity::CheckpointActivity::default(),
         })
     }

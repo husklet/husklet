@@ -28,8 +28,21 @@ impl OpenFileDescription for Lifecycle {
 struct LifecycleCodec;
 
 impl DescriptorObjectCheckpoint for LifecycleCodec {
-    fn snapshot(&self, _: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        Ok(vec![1])
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(1)
+    }
+
+    fn snapshot_into(
+        &self,
+        _: u64,
+        _: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != 1 {
+            return Err(DescriptorCheckpointError::Object);
+        }
+        output[0] = 1;
+        Ok(())
     }
 
     fn rebind(

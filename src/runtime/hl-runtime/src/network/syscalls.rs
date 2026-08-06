@@ -419,20 +419,21 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     SocketAddress::Unix(_) => unreachable!(),
                 }
             }
-            let previous = snapshot.clone();
             snapshot.local = Some(address);
             snapshot.state = SocketState::Bound;
             let catalog = self.current_catalog();
-            if catalog.replace_host_snapshot(socket.id, snapshot.clone()).is_err()
-                || catalog
-                    .claim_port(hl_network::PortCheckpoint {
-                        family,
-                        port,
-                        owner: socket.id,
-                    })
-                    .is_err()
-            {
-                let _ = catalog.replace_host_snapshot(socket.id, previous);
+            let prepared = match catalog.prepare_host_bind(
+                snapshot.clone(),
+                hl_network::PortCheckpoint {
+                    family,
+                    port,
+                    owner: socket.id,
+                },
+            ) {
+                Ok(prepared) => prepared,
+                Err(_) => return LinuxResult::Error(Errno::EADDRINUSE),
+            };
+            if prepared.commit().is_err() {
                 return LinuxResult::Error(Errno::EADDRINUSE);
             }
             return LinuxResult::Value(0);
