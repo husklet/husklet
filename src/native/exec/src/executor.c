@@ -1476,6 +1476,16 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
         request->reserved != 0 || output->abi != HL_NATIVE_ABI || output->size < sizeof(*output) ||
         cpu->architecture != request->architecture)
         return HL_NATIVE_ARGUMENT;
+    switch (cpu->architecture) {
+        case HL_NATIVE_AARCH64:
+            if (cpu->state.aarch64 == NULL) return HL_NATIVE_ARGUMENT;
+            break;
+        case HL_NATIVE_X86_64:
+            if (cpu->state.x86_64 == NULL) return HL_NATIVE_ARGUMENT;
+            break;
+        default:
+            return HL_NATIVE_ARGUMENT;
+    }
     status = run_lifecycle_enter(executor);
     if (status != HL_NATIVE_OK) return status;
     status = run_inner(executor, cpu, request, output);

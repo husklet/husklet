@@ -450,7 +450,8 @@ _Static_assert(sizeof(hl_native_direct_authority) == 64, "native direct authorit
 /* Destruction remains externally serialized. Native translated-thread
  * admission and dispatcher safepoints arrive with reusable block execution. */
 hl_native_status hl_native_create(const hl_native_config *, hl_native_executor **);
-/* Closes cache mutation admission across the host fork operation. Every
+/* Closes whole-public-run and cache mutation admission across the host fork
+ * operation. STATE is nonblocking when either owner is live. Every
  * successful before_fork call must be completed exactly once in both the
  * parent and child copies with after_fork. */
 hl_native_status hl_native_before_fork(hl_native_executor *);

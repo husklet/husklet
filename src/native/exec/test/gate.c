@@ -65,6 +65,9 @@ int main(void) {
         .state.aarch64 = &aarch64,
     };
     hl_native_fault_scope scope = {0};
+    hl_native_run_request run_request = {.abi = HL_NATIVE_ABI, .size = sizeof(run_request),
+        .architecture = HL_NATIVE_AARCH64, .budget = 0};
+    hl_native_exit run_output = {.abi = HL_NATIVE_ABI, .size = sizeof(run_output)};
     hl_native_change replace = {
         .abi = HL_NATIVE_ABI,
         .size = sizeof(replace),
@@ -153,6 +156,13 @@ int main(void) {
 
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
+    CHECK(hl_native_run(executor, &cpu, &run_request, &run_output) == HL_NATIVE_STATE);
+    hl_native_cpu invalid_cpu = cpu;
+    invalid_cpu.architecture = UINT32_MAX;
+    CHECK(hl_native_run(executor, &invalid_cpu, &run_request, &run_output) == HL_NATIVE_ARGUMENT);
+    invalid_cpu = cpu;
+    invalid_cpu.state.aarch64 = NULL;
+    CHECK(hl_native_run(executor, &invalid_cpu, &run_request, &run_output) == HL_NATIVE_ARGUMENT);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_STATE);
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_STATE);
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_STATE);
