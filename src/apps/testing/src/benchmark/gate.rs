@@ -52,6 +52,7 @@ pub(crate) struct Statistics {
     pub median: u64,
     pub minimum: u64,
     pub maximum: u64,
+    quartiles: (u64, u64),
 }
 
 /// A committed baseline: the builds it was measured against and its samples.
@@ -71,14 +72,17 @@ impl Statistics {
             median,
             minimum: sorted[0],
             maximum: sorted[sorted.len() - 1],
+            quartiles: (sorted[sorted.len() / 4], sorted[sorted.len() * 3 / 4]),
         })
     }
 
+    /// Interquartile width over the median, so one intruding process cannot
+    /// veto a run while sustained contention still does.
     pub(crate) fn spread(self) -> f64 {
         if self.median == 0 {
             return f64::INFINITY;
         }
-        ratio(self.maximum - self.minimum, self.median)
+        ratio(self.quartiles.1 - self.quartiles.0, self.median)
     }
 }
 
@@ -297,7 +301,9 @@ impl Gate {
         if summaries.is_empty() {
             return Err("gate measured no phases".into());
         }
-        println!("workload\tphase\tnative_us\tc_us\trust_us\trust_x_c\trust_x_native\tspread\tbaseline_x");
+        println!(
+            "workload\tphase\tnative_us\tc_us\trust_us\trust_min_us\trust_max_us\trust_x_c\trust_x_native\tspread\tbaseline_x"
+        );
         let mut noisy = Vec::new();
         let mut regressed = Vec::new();
         let mut rust = BTreeMap::new();
@@ -315,11 +321,13 @@ impl Gate {
                 .get(&(self.workload.name().to_owned(), phase.clone()))
                 .map_or_else(|| "-".to_owned(), |value| format!("{:.3}", ratio(engine.median, *value)));
             println!(
-                "{}\t{phase}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{spread:.3}\t{against}",
+                "{}\t{phase}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{spread:.3}\t{against}",
                 self.workload.name(),
                 native.median,
                 c.median,
                 engine.median,
+                engine.minimum,
+                engine.maximum,
                 ratio(engine.median, c.median),
                 ratio(engine.median, native.median),
             );
@@ -414,9 +422,12 @@ mod tests {
     #[test]
     fn statistics_report_median_and_spread() {
         let statistics = Statistics::of(&[100, 104, 102]).unwrap();
-        assert_eq!(statistics.median, 102);
+        assert_eq!((statistics.median, statistics.minimum, statistics.maximum), (102, 100, 104));
         assert!((statistics.spread() - 4.0 / 102.0).abs() < 1e-9);
         assert!(Statistics::of(&[]).is_none());
+        let outlier = Statistics::of(&[100, 101, 102, 103, 104, 105, 900]).unwrap();
+        assert_eq!(outlier.median, 103);
+        assert!(outlier.spread() < 0.05);
     }
 
     #[test]
