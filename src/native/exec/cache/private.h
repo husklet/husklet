@@ -12,6 +12,7 @@ typedef struct cache_entry {
     uint64_t mapping_epoch, instruction_epoch, token;
     uint64_t memory_mode, authority_generation;
     uint64_t loop_pc;
+    uint64_t certificate_identity;
     uint32_t instruction_count, relocation_count, conditional_self_loop, cycle_safe, generation, state;
 } cache_entry;
 
@@ -24,17 +25,23 @@ typedef struct provenance_entry {
 
 typedef struct pending_relocation {
     uint64_t source_guest, source_instruction_epoch, source_code_offset;
+    uint64_t source_certificate_identity, target_certificate_identity;
     hl_native_relocation relocation;
     uint32_t generation;
 } pending_relocation;
 
 typedef struct resolved_relocation {
     uint64_t source_guest, source_instruction_epoch, source_code_offset;
+    uint64_t source_certificate_identity, target_certificate_identity;
     hl_native_relocation relocation;
     uint32_t patched[HL_NATIVE_RELOCATION_SPAN_WORDS];
     uint32_t generation;
     uint32_t target_epoch_wildcard;
 } resolved_relocation;
+
+_Static_assert(sizeof(cache_entry) == 136, "cache entry footprint drifted");
+_Static_assert(sizeof(pending_relocation) == 160, "pending relocation footprint drifted");
+_Static_assert(sizeof(resolved_relocation) == 224, "resolved relocation footprint drifted");
 
 struct hl_native_cache {
     hl_native_arena *arena;
@@ -54,6 +61,9 @@ struct hl_native_cache {
     uint32_t relocation_count, relocation_capacity;
     resolved_relocation *resolved;
     uint32_t resolved_count, resolved_capacity;
+    hl_native_certificate_record *certificates;
+    _Atomic unsigned char *certificate_valid;
+    _Atomic uint32_t certificate_used;
     hl_native_cache_observer observer;
 };
 

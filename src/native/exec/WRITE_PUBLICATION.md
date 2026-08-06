@@ -1310,3 +1310,33 @@ free on the repository filesystem, 7.1 GiB free in `/tmp`, and load average
 0.48/3.27/6.02. The targeted acquire is accepted: it materially improves the
 read-heavy control without changing observable results, diagnostics, emitted
 instruction count, or the required float-SIMD workload.
+# Sparse publication-certificate oracle audit
+
+The retained implementation was read in `../engine/src/translator/cache.c`
+(`jit_cache_init`, `map_idx`, `map_host`, `map_body`, `map_put`,
+`map_invalidate_source_ranges`, pending-link add/resolve/patch/reset, cache flush
+and fork reset), `../engine/src/core/dispatch.c` (`run_guest`, cache lookup,
+translation under `g_jit_lock`, flush and block entry), and
+`../engine/src/translator/guest/aarch64/translate.c` (`translate_block`, source
+fetch, emission, link registration and publication). The C cache is
+process-global, generation-owned, serialized for translation by `g_jit_lock`,
+published only after executable bytes and map metadata are complete, and reset
+with pending/resolved link state on flush/fork. Its AArch64/x86 and host W^X
+branches change encoding and publication mechanics, not guest identity.
+
+Rust ownership maps those capabilities to `hl_native_cache` entries, arena,
+bounded pending/resolved arrays, and the executor mutation gate. Sparse
+certificates add an authenticated identity to that same lifetime: reserve is
+invisible, validity is the final release publication after `ENTRY_LIVE`, and
+cancel/invalidate/reset/fork revoke it. The 4096 record slots are monotonic and
+never reused during an executor lifetime; validity revocation therefore cannot
+race a stable-copy reader with record replacement or ABA. Exhaustion leaves
+ordinary translation operational with identity zero. Relocation records capture
+source and target certificate identities and fail closed on replacement. A
+preserving fork first restores every resolved executable span to its cold image
+under the arena W^X transition, publishes each restoration, removes inherited
+IBTC ingress, and only then revokes certificate validity; a publication failure
+poisons cache admission without discarding the unresolved metadata. Rollback
+poisons the cache if either relocation or entry cleanup fails. Certificate reads
+return a caller-owned copy from bounded immutable storage, never an internal
+pointer.

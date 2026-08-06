@@ -184,7 +184,7 @@ static int instruction_epoch(void) {
     CHECK(fixture_create(&fixture, 8, 5) == 0);
     CHECK(hl_native_arena_begin(&fixture.arena) == HL_NATIVE_OK);
     CHECK(hl_native_cache_reserve_key(fixture.cache, 0x7000, 5, 17, 0, 0,
-                                      0x7000, 0x7004, 16, &block) == HL_NATIVE_OK);
+                                      0x7000, 0x7004, 16, NULL, &block) == HL_NATIVE_OK);
     memset(fixture.arena.writable + block.code_offset, 0xa5, 4);
     CHECK(hl_native_cache_publish(fixture.cache, &block, 4, 0) == HL_NATIVE_OK);
     CHECK(hl_native_arena_end(&fixture.arena) == HL_NATIVE_OK);
@@ -230,7 +230,7 @@ static int authority_identity(void) {
 
     CHECK(hl_native_arena_begin(&fixture.arena) == HL_NATIVE_OK);
     CHECK(hl_native_cache_reserve_key(fixture.cache, 0x8000, 5, 0, 1, 41,
-                                      0x8000, 0x8004, 16, &block) == HL_NATIVE_OK);
+                                      0x8000, 0x8004, 16, NULL, &block) == HL_NATIVE_OK);
     memset(fixture.arena.writable + block.code_offset, 0xa5, 4);
     CHECK(hl_native_cache_publish(fixture.cache, &block, 4, 0) == HL_NATIVE_OK);
     CHECK(hl_native_arena_end(&fixture.arena) == HL_NATIVE_OK);

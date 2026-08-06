@@ -311,7 +311,7 @@ static int rep_contract(void) {
             state = (hl_native_x86_64_cpu){.program = pc,
                 .registers = {[1] = 1, [6] = 0xe000, [7] = 0xf000}, .dirty_first = UINT64_MAX};
             CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
-            hl_native_translation_key key = {pc, 7, 16, pc, pc + 3, 0, 0};
+            hl_native_translation_key key = {pc, 7, 16, pc, pc + 3, 0, 0, 0, 0, 0};
             hl_native_code translated;
             CHECK(hl_native_translation_lookup(executor, &key, &translated) == HL_NATIVE_HIT);
         }
@@ -326,7 +326,7 @@ static int rep_contract(void) {
             state = (hl_native_x86_64_cpu){.program = pc,
                 .registers = {[1] = 1, [6] = 0xe000, [7] = 0xf000}, .dirty_first = UINT64_MAX};
             CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
-            hl_native_translation_key key = {pc, 7, 16, pc, pc + 4, 0, 0};
+            hl_native_translation_key key = {pc, 7, 16, pc, pc + 4, 0, 0, 0, 0, 0};
             hl_native_code translated;
             if (index == 0) {
                 CHECK(hl_native_translation_lookup(executor, &key, &translated) == HL_NATIVE_HIT &&

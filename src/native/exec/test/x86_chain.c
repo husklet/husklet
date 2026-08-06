@@ -57,8 +57,8 @@ static int chain_contract(void) {
     hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
         .architecture = HL_NATIVE_X86_64, .mapping_epoch = 7, .budget = 1, .source = &source};
     hl_native_exit output = {.abi = HL_NATIVE_ABI, .size = sizeof(output)};
-    hl_native_translation_key first_key = {0x7000, 7, 16, 0x7000, 0x7002, 0, 0};
-    hl_native_translation_key second_key = {0x7010, 7, 16, 0x7010, 0x7012, 0, 0};
+    hl_native_translation_key first_key = {0x7000, 7, 16, 0x7000, 0x7002, 0, 0, 0, 0, 0};
+    hl_native_translation_key second_key = {0x7010, 7, 16, 0x7010, 0x7012, 0, 0, 0, 0, 0};
     hl_native_code first, second;
     hl_native_change invalidate = {.abi = HL_NATIVE_ABI, .size = sizeof(invalidate),
         .kind = HL_NATIVE_INVALIDATE, .mapping_epoch = 7};
@@ -118,7 +118,7 @@ static int chain_contract(void) {
             {0x8020, syscall, sizeof(syscall), 7, 16},
         };
         hl_native_source conditional_source = {conditional_spans, 4, 7, 16};
-        hl_native_translation_key choose_key = {0x8000, 7, 16, 0x8000, 0x8005, 0, 0};
+        hl_native_translation_key choose_key = {0x8000, 7, 16, 0x8000, 0x8005, 0, 0, 0, 0, 0};
         hl_native_code choose_code;
 
         request.source = &conditional_source;
@@ -179,7 +179,7 @@ static int chain_contract(void) {
             HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
         hl_native_projection projection = {
             .views = &stack_view, .count = 1, .mapping_incarnation = 7};
-        hl_native_translation_key caller_key = {0x9000, 7, 16, 0x9000, 0x9005, 0, 0};
+        hl_native_translation_key caller_key = {0x9000, 7, 16, 0x9000, 0x9005, 0, 0, 0, 0, 0};
         hl_native_code caller_code;
         hl_native_diagnostics before = {.abi = HL_NATIVE_ABI, .size = sizeof(before)};
         hl_native_diagnostics after = {.abi = HL_NATIVE_ABI, .size = sizeof(after)};

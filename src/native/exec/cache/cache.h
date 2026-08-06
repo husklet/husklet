@@ -23,6 +23,25 @@ typedef enum hl_native_lookup {
     HL_NATIVE_EPOCH = 2,
 } hl_native_lookup;
 
+/* Immutable certificate authority captured when one translation becomes
+ * live.  A zero identity is deliberately uncertified. */
+typedef struct hl_native_certificate_record {
+    uint64_t identity;
+    uint64_t architecture;
+    uint64_t mapping_epoch;
+    uint64_t instruction_epoch;
+    uint64_t memory_mode;
+    uint64_t authority_identity;
+    uint64_t direct_token;
+    uint64_t direct_generation;
+    uint64_t source_first;
+    uint64_t source_last;
+} hl_native_certificate_record;
+
+#define HL_NATIVE_CERTIFICATE_CAPACITY 4096u
+#define HL_NATIVE_CERTIFICATE_RECORD_BYTES \
+    (HL_NATIVE_CERTIFICATE_CAPACITY * sizeof(hl_native_certificate_record))
+
 typedef struct hl_native_block {
     uint64_t guest;
     uint64_t source_first;
@@ -42,6 +61,7 @@ typedef struct hl_native_block {
     uint32_t cycle_safe;
     uint64_t loop_pc;
     uint64_t identity_token;
+    uint64_t certificate_identity;
     uint32_t slot;
 } hl_native_block;
 
@@ -63,6 +83,7 @@ typedef struct hl_native_code {
     uint64_t instruction_epoch;
     uint64_t memory_mode;
     uint64_t authority_generation;
+    uint64_t certificate_identity;
 } hl_native_code;
 
 typedef struct hl_native_cache_stats {
@@ -111,7 +132,7 @@ hl_native_status hl_native_cache_reserve(hl_native_cache *, uint64_t, uint64_t, 
                                          hl_native_block *);
 hl_native_status hl_native_cache_reserve_key(hl_native_cache *, uint64_t, uint64_t, uint64_t,
                                              uint64_t, uint64_t, uint64_t, uint64_t,
-                                             uint64_t, hl_native_block *);
+                                             uint64_t, const hl_native_certificate_record *, hl_native_block *);
 hl_native_status hl_native_cache_writable(hl_native_cache *, const hl_native_block *, void **, uint64_t *);
 hl_native_status hl_native_cache_publish(hl_native_cache *, hl_native_block *, uint64_t, uint64_t);
 hl_native_status hl_native_cache_publish_map(hl_native_cache *, hl_native_block *, uint64_t, uint64_t,
@@ -123,6 +144,10 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *, const void *, 
                                                uint64_t, uint64_t, uint64_t, uint32_t *);
 hl_native_status hl_native_cache_resolve(hl_native_cache *, uint64_t, uint64_t);
 void hl_native_cache_relocations_clear(hl_native_cache *);
+hl_native_status hl_native_cache_relocations_restore(hl_native_cache *);
+void hl_native_cache_certificates_clear(hl_native_cache *);
+int hl_native_cache_certificate(const hl_native_cache *, uint64_t, hl_native_certificate_record *);
+void hl_native_cache_fail(hl_native_cache *);
 hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *, uint64_t, uint64_t);
 hl_native_status hl_native_cache_reset(hl_native_cache *, uint64_t);
 hl_native_status hl_native_cache_reset_epoch(hl_native_cache *, uint64_t, uint64_t);

@@ -784,6 +784,9 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
         .source_last = pc + count * 4,
         .memory_mode = executor->memory_mode,
         .authority_generation = expected_authority,
+        .architecture = HL_NATIVE_AARCH64,
+        .direct_token = authority == NULL ? 0 : (uint64_t)(uintptr_t)executor->direct_authority,
+        .direct_generation = authority == NULL ? 0 : executor->direct_generation,
     };
     if (hl_native_translation_lookup(executor, &key, code) == HL_NATIVE_HIT) {
         if (code->source_last <= key.source_last) {

@@ -170,8 +170,15 @@ static hl_native_status remember(hl_native_cache *cache, const cache_entry *sour
         return HL_NATIVE_CAPACITY;
     }
     cache->resolved[cache->resolved_count++] = (resolved_relocation){
-        source->guest, source->instruction_epoch, source->code_offset,
-        *relocation, {0}, cache->generation, target_epoch_wildcard};
+        .source_guest = source->guest,
+        .source_instruction_epoch = source->instruction_epoch,
+        .source_code_offset = source->code_offset,
+        .source_certificate_identity = source->certificate_identity,
+        .target_certificate_identity = target->certificate_identity,
+        .relocation = *relocation,
+        .generation = cache->generation,
+        .target_epoch_wildcard = target_epoch_wildcard,
+    };
     memcpy(cache->resolved[cache->resolved_count - 1].patched, patched,
            sizeof(cache->resolved[cache->resolved_count - 1].patched));
     cache->resolved[cache->resolved_count - 1].relocation.target_instruction_count =
@@ -225,6 +232,11 @@ hl_native_status hl_native_cache_relocate_site(hl_native_cache *cache, const voi
             old.source_code_offset != source->code_offset ||
             old.relocation.code_offset != branch_offset - source->code_offset)
             continue;
+        int old_target_slot = hl_native_cache_find(cache, old.relocation.target_guest);
+        int old_target_valid = old_target_slot >= 0 &&
+            cache->entries[old_target_slot].certificate_identity == old.target_certificate_identity;
+        if (!old_target_valid)
+            hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_INVALIDATION);
         uint32_t *word = (uint32_t *)(cache->arena->writable + branch_offset);
         if (!hot_span_matches(word, &old)) return HL_NATIVE_STATE;
         span_restore(word, &old.relocation);
@@ -269,7 +281,9 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
         int source_slot = hl_native_cache_find(cache, pending.source_guest);
         cache_entry *source = source_slot < 0 ? NULL : &cache->entries[source_slot];
         if (source != NULL && source->instruction_epoch == pending.source_instruction_epoch &&
-            source->code_offset == pending.source_code_offset && !overlaps(source, first, last))
+            source->code_offset == pending.source_code_offset &&
+            source->certificate_identity == pending.source_certificate_identity &&
+            !overlaps(source, first, last))
             cache->relocations[retained++] = pending;
     }
     cache->relocation_count = retained;
@@ -281,15 +295,18 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
         cache_entry *source = source_slot < 0 ? NULL : &cache->entries[source_slot];
         cache_entry *target = target_slot < 0 ? NULL : &cache->entries[target_slot];
         int source_removed = source == NULL || source->instruction_epoch != resolved.source_instruction_epoch ||
-            source->code_offset != resolved.source_code_offset || overlaps(source, first, last);
+            source->code_offset != resolved.source_code_offset ||
+            source->certificate_identity != resolved.source_certificate_identity || overlaps(source, first, last);
         int target_removed = target == NULL ||
-            target->instruction_epoch != resolved.relocation.target_instruction_epoch || overlaps(target, first, last);
+            target->instruction_epoch != resolved.relocation.target_instruction_epoch ||
+            target->certificate_identity != resolved.target_certificate_identity || overlaps(target, first, last);
         if (!source_removed && !target_removed) {
             cache->resolved[retained++] = resolved;
             continue;
         }
         uint32_t words = span_words(&resolved.relocation);
-        if (source != NULL && words <= HL_NATIVE_RELOCATION_SPAN_WORDS &&
+        if (source != NULL && source->certificate_identity == resolved.source_certificate_identity &&
+            words <= HL_NATIVE_RELOCATION_SPAN_WORDS &&
             source->code_size >= words * 4u &&
             resolved.relocation.code_offset <= source->code_size - words * 4u) {
             uint64_t offset = source->code_offset + resolved.relocation.code_offset;
@@ -316,8 +333,13 @@ hl_native_status hl_native_cache_relocations_invalidate(hl_native_cache *cache,
             }
             pending.target_instruction_count = 0;
             cache->relocations[cache->relocation_count++] = (pending_relocation){
-                resolved.source_guest, resolved.source_instruction_epoch,
-                resolved.source_code_offset, pending, cache->generation};
+                .source_guest = resolved.source_guest,
+                .source_instruction_epoch = resolved.source_instruction_epoch,
+                .source_code_offset = resolved.source_code_offset,
+                .source_certificate_identity = resolved.source_certificate_identity,
+                .relocation = pending,
+                .generation = cache->generation,
+            };
         }
     }
     cache->resolved_count = retained;
@@ -367,7 +389,13 @@ hl_native_status hl_native_cache_relocate(hl_native_cache *cache, uint64_t sourc
             return HL_NATIVE_CAPACITY;
         }
         cache->relocations[cache->relocation_count++] = (pending_relocation){
-            source_guest, source_instruction_epoch, source->code_offset, *relocation, cache->generation};
+            .source_guest = source_guest,
+            .source_instruction_epoch = source_instruction_epoch,
+            .source_code_offset = source->code_offset,
+            .source_certificate_identity = source->certificate_identity,
+            .relocation = *relocation,
+            .generation = cache->generation,
+        };
         hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_COLD_TARGET);
     }
     return HL_NATIVE_OK;
@@ -404,7 +432,8 @@ hl_native_status hl_native_cache_resolve(hl_native_cache *cache, uint64_t target
         }
         int source_slot = hl_native_cache_find(cache, pending.source_guest);
         if (source_slot < 0 || cache->entries[source_slot].instruction_epoch != pending.source_instruction_epoch ||
-            cache->entries[source_slot].code_offset != pending.source_code_offset)
+            cache->entries[source_slot].code_offset != pending.source_code_offset ||
+            cache->entries[source_slot].certificate_identity != pending.source_certificate_identity)
             continue;
         if (cycle_requires_exit(cache, &cache->entries[source_slot], &cache->entries[target_slot])) {
             hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_CYCLE);
@@ -430,5 +459,48 @@ hl_native_status hl_native_cache_resolve(hl_native_cache *cache, uint64_t target
 }
 
 void hl_native_cache_relocations_clear(hl_native_cache *cache) {
-    if (cache != NULL) cache->relocation_count = 0;
+    if (cache != NULL) {
+        cache->relocation_count = 0;
+        cache->resolved_count = 0;
+    }
+}
+
+hl_native_status hl_native_cache_relocations_restore(hl_native_cache *cache) {
+    if (cache == NULL) return HL_NATIVE_ARGUMENT;
+    if (cache->resolved_count != 0 && !cache->arena->writing) {
+        hl_native_cache_fail(cache);
+        return HL_NATIVE_STATE;
+    }
+    while (cache->resolved_count != 0) {
+        resolved_relocation *resolved = &cache->resolved[cache->resolved_count - 1];
+        int source_slot = hl_native_cache_find(cache, resolved->source_guest);
+        cache_entry *source = source_slot < 0 ? NULL : &cache->entries[source_slot];
+        uint32_t words = span_words(&resolved->relocation);
+        if (source == NULL || source->instruction_epoch != resolved->source_instruction_epoch ||
+            source->code_offset != resolved->source_code_offset ||
+            source->certificate_identity != resolved->source_certificate_identity ||
+            words > HL_NATIVE_RELOCATION_SPAN_WORDS || source->code_size < words * 4u ||
+            resolved->relocation.code_offset > source->code_size - words * 4u)
+            {
+                hl_native_cache_fail(cache);
+                return HL_NATIVE_STATE;
+            }
+        uint64_t offset = source->code_offset + resolved->relocation.code_offset;
+        uint32_t *word = (uint32_t *)(cache->arena->writable + offset);
+        if (!hot_span_matches(word, resolved)) {
+            hl_native_cache_fail(cache);
+            return HL_NATIVE_STATE;
+        }
+        span_restore(word, &resolved->relocation);
+        hl_native_status status = cache->arena->memory.publish(
+            cache->arena->memory.context, cache->arena->mapping.handle, offset, words * 4u);
+        if (status != HL_NATIVE_OK) {
+            hl_native_cache_fail(cache);
+            return status;
+        }
+        cache->resolved_count--;
+        hl_native_cache_observe(cache, HL_NATIVE_CACHE_RELOCATION_INVALIDATION);
+    }
+    cache->relocation_count = 0;
+    return HL_NATIVE_OK;
 }

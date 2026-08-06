@@ -153,7 +153,7 @@ static int x86_native(void) {
     request.size = sizeof(request);
 
     {
-        const hl_native_translation_key key = {0x1000, 7, 11, 0x1000, 0x1009, 0, 0};
+        const hl_native_translation_key key = {0x1000, 7, 11, 0x1000, 0x1009, 0, 0, 0, 0, 0};
         hl_native_code code;
         CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_HIT);
         CHECK((uint8_t *)code.body == (uint8_t *)code.entry + 2u * sizeof(uint32_t));

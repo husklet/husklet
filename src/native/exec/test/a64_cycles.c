@@ -105,8 +105,8 @@ static int publication(void) {
         .target_instruction_epoch = 3, .target_epoch_known = 1, .expected = exit_word};
     const hl_native_relocation right_link = {.code_offset = 0, .target_guest = 0x1000,
         .target_instruction_epoch = 3, .target_epoch_known = 1, .expected = exit_word};
-    const hl_native_translation_key left = {0x1000, 7, 3, 0x1000, 0x1004, 0, 0};
-    const hl_native_translation_key right = {0x2000, 7, 3, 0x2000, 0x2004, 0, 0};
+    const hl_native_translation_key left = {0x1000, 7, 3, 0x1000, 0x1004, 0, 0, 0, 0, 0};
+    const hl_native_translation_key right = {0x2000, 7, 3, 0x2000, 0x2004, 0, 0, 0, 0, 0};
     const hl_native_emission left_emission = {.bytes = (const uint8_t *)&exit_word,
         .size = sizeof(exit_word), .provenance = &left_map, .provenance_count = 1,
         .relocations = &left_link, .relocation_count = 1, .cycle_safe = 1};
@@ -139,9 +139,9 @@ static int publication(void) {
     const hl_native_change branch_reset = {.abi = HL_NATIVE_ABI, .size = sizeof(branch_reset),
         .kind = HL_NATIVE_REPLACE, .mapping_epoch = 9};
     CHECK(hl_native_changed(executor, &branch_reset, 1) == HL_NATIVE_OK);
-    const hl_native_translation_key branch_source = {0x3000, 9, 4, 0x3000, 0x3004, 0, 0};
-    const hl_native_translation_key branch_target = {0x4000, 9, 4, 0x4000, 0x4004, 0, 0};
-    const hl_native_translation_key branch_unsafe = {0x5000, 9, 4, 0x5000, 0x5004, 0, 0};
+    const hl_native_translation_key branch_source = {0x3000, 9, 4, 0x3000, 0x3004, 0, 0, 0, 0, 0};
+    const hl_native_translation_key branch_target = {0x4000, 9, 4, 0x4000, 0x4004, 0, 0, 0, 0, 0};
+    const hl_native_translation_key branch_unsafe = {0x5000, 9, 4, 0x5000, 0x5004, 0, 0, 0, 0, 0};
     const hl_native_provenance branch_source_map = {
         .code_offset = 0, .code_size = 4, .guest = 0x3000};
     const hl_native_provenance branch_target_map = {

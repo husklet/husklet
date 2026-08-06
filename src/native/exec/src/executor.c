@@ -601,8 +601,24 @@ hl_native_status hl_native_after_fork(hl_native_executor *executor, uint32_t pre
         return HL_NATIVE_STATE;
     status = hl_native_arena_repair(&executor->arena, preserve);
     if (status == HL_NATIVE_OK && preserve == 0) status = hl_native_cache_reset(executor->cache, 0);
-    if (status == HL_NATIVE_OK && preserve != 0) hl_native_cache_relocations_clear(executor->cache);
-    if (status == HL_NATIVE_OK) ibtc_clear(executor);
+    if (status == HL_NATIVE_OK && preserve != 0) {
+        int writing = 0;
+        status = hl_native_cache_write_begin(executor->cache);
+        if (status == HL_NATIVE_OK) writing = 1;
+        if (status == HL_NATIVE_OK) status = hl_native_cache_relocations_restore(executor->cache);
+        if (writing) {
+            hl_native_status end = hl_native_cache_write_end(executor->cache);
+            if (status == HL_NATIVE_OK) status = end;
+        }
+        if (status == HL_NATIVE_OK)
+            hl_native_cache_certificates_clear(executor->cache);
+        else
+            hl_native_cache_fail(executor->cache);
+        /* A failed cold restoration poisons cache admission; inherited IBTC
+         * ingress must still be removed before the fork lease is released. */
+        ibtc_clear(executor);
+    }
+    if (status == HL_NATIVE_OK && preserve == 0) ibtc_clear(executor);
     if (status == HL_NATIVE_OK && executor->memory_mode != 0) {
         hl_native_cache_stats identity;
         hl_native_cache_diagnose(executor->cache, &identity);
@@ -1103,6 +1119,9 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             .source_last = instruction + count * 4,
             .memory_mode = memory_mode,
             .authority_generation = expected_authority,
+            .architecture = HL_NATIVE_AARCH64,
+            .direct_token = (uint64_t)(uintptr_t)direct_token,
+            .direct_generation = authority_generation,
         };
         if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
             code.source_last > key.source_last) {

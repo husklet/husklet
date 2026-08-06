@@ -109,7 +109,7 @@ static int continuation_contract(void) {
     {
         hl_native_change invalidate = {.abi = HL_NATIVE_ABI, .size = sizeof(invalidate),
             .kind = HL_NATIVE_INVALIDATE, .mapping_epoch = 7, .first = 0x8000, .last = 0x8008};
-        hl_native_translation_key key = {0x8000, 7, 16, 0x8000, 0x8008, 0, 0};
+        hl_native_translation_key key = {0x8000, 7, 16, 0x8000, 0x8008, 0, 0, 0, 0, 0};
         hl_native_code code;
         CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_HIT);
         CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);

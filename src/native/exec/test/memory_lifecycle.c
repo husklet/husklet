@@ -45,7 +45,8 @@ static int create_failures(void) {
         CHECK(state.release_calls == state.reserve_calls);
         CHECK(hl_test_allocation_live() == 0);
     }
-    CHECK(successful_calls == 8);
+    /* executor + arena + cache arrays + fixed certificate records/validity + IBTC */
+    CHECK(successful_calls == 10);
     return 0;
 }
 

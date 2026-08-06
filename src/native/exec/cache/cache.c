@@ -87,8 +87,10 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     cache->live = calloc(capacity, sizeof(*cache->live));
     cache->relocations = calloc(RELOCATION_CAPACITY, sizeof(*cache->relocations));
     cache->resolved = calloc(RELOCATION_CAPACITY, sizeof(*cache->resolved));
+    cache->certificates = calloc(HL_NATIVE_CERTIFICATE_CAPACITY, sizeof(*cache->certificates));
+    cache->certificate_valid = calloc(HL_NATIVE_CERTIFICATE_CAPACITY, sizeof(*cache->certificate_valid));
     if (cache->entries == NULL || cache->provenance == NULL || cache->live == NULL || cache->relocations == NULL ||
-        cache->resolved == NULL) {
+        cache->resolved == NULL || cache->certificates == NULL || cache->certificate_valid == NULL) {
         hl_native_cache_destroy(cache);
         return HL_NATIVE_MEMORY;
     }
@@ -97,6 +99,7 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     cache->provenance_capacity = provenance_capacity;
     cache->relocation_capacity = RELOCATION_CAPACITY;
     cache->resolved_capacity = RELOCATION_CAPACITY;
+    atomic_init(&cache->certificate_used, 0);
     if (observer != NULL) cache->observer = *observer;
     cache->generation = 1;
     atomic_init(&cache->published_generation, 1);
@@ -115,7 +118,7 @@ hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *cache, uint64_t gue
                                             uint64_t instruction_epoch, uint64_t memory_mode,
                                             uint64_t authority_generation, hl_native_code *output) {
     int slot;
-    if (cache == NULL || output == NULL) return HL_NATIVE_MISS;
+    if (!hl_native_cache_available(cache) || output == NULL) return HL_NATIVE_MISS;
     memset(output, 0, sizeof(*output));
     cache->stats.lookups++;
     if (mapping_epoch != cache->mapping_epoch || memory_mode != cache->memory_mode ||
@@ -150,6 +153,7 @@ hl_native_lookup hl_native_cache_lookup_key(hl_native_cache *cache, uint64_t gue
     output->instruction_epoch = entry->instruction_epoch;
     output->memory_mode = entry->memory_mode;
     output->authority_generation = entry->authority_generation;
+    output->certificate_identity = entry->certificate_identity;
     cache->stats.hits++;
     return HL_NATIVE_HIT;
 }
@@ -163,6 +167,60 @@ int hl_native_cache_available(const hl_native_cache *cache) {
     return cache != NULL && !cache->poisoned;
 }
 
+static void certificate_revoke(hl_native_cache *cache, uint64_t identity) {
+    if (cache == NULL || identity == 0) return;
+    uint32_t used = atomic_load_explicit(&cache->certificate_used, memory_order_acquire);
+    for (uint32_t index = 0; index < used; ++index)
+        if (cache->certificates[index].identity == identity) {
+            atomic_store_explicit(&cache->certificate_valid[index], 0, memory_order_release);
+            return;
+        }
+}
+
+static uint64_t certificate_reserve(hl_native_cache *cache,
+                                  const hl_native_certificate_record *record) {
+    if (record == NULL || record->identity == 0) return 0;
+    uint32_t index = atomic_load_explicit(&cache->certificate_used, memory_order_relaxed);
+    if (index == HL_NATIVE_CERTIFICATE_CAPACITY) return 0;
+    cache->certificates[index] = *record;
+    atomic_store_explicit(&cache->certificate_used, index + 1, memory_order_release);
+    return record->identity;
+}
+
+static void certificate_publish(hl_native_cache *cache, uint64_t identity) {
+    if (identity == 0) return;
+    uint32_t used = atomic_load_explicit(&cache->certificate_used, memory_order_acquire);
+    for (uint32_t index = 0; index < used; ++index)
+        if (cache->certificates[index].identity == identity) {
+            atomic_store_explicit(&cache->certificate_valid[index], 1, memory_order_release);
+            return;
+        }
+}
+
+_Static_assert(sizeof(hl_native_certificate_record) == 80,
+               "certificate record footprint drifted");
+
+int hl_native_cache_certificate(const hl_native_cache *cache, uint64_t identity,
+                                hl_native_certificate_record *output) {
+    if (cache == NULL || identity == 0 || output == NULL) return 0;
+    uint32_t used = atomic_load_explicit(&cache->certificate_used, memory_order_acquire);
+    for (uint32_t index = 0; index < used; ++index) {
+        if (cache->certificates[index].identity != identity) continue;
+        if (atomic_load_explicit(&cache->certificate_valid[index], memory_order_acquire) == 0) return 0;
+        *output = cache->certificates[index];
+        return atomic_load_explicit(&cache->certificate_valid[index], memory_order_acquire) != 0;
+    }
+    return 0;
+}
+
+void hl_native_cache_certificates_clear(hl_native_cache *cache) {
+    if (cache == NULL) return;
+    for (uint32_t index = 0; index < HL_NATIVE_CERTIFICATE_CAPACITY; ++index)
+        atomic_store_explicit(&cache->certificate_valid[index], 0, memory_order_release);
+    for (uint32_t index = 0; index < cache->live_count; ++index)
+        cache->entries[cache->live[index]].certificate_identity = 0;
+}
+
 hl_native_status hl_native_cache_write_begin(hl_native_cache *cache) {
     if (!hl_native_cache_available(cache)) return HL_NATIVE_STATE;
     return hl_native_arena_begin(cache->arena);
@@ -172,14 +230,16 @@ hl_native_status hl_native_cache_write_end(hl_native_cache *cache) {
     hl_native_status status;
     if (cache == NULL) return HL_NATIVE_ARGUMENT;
     status = hl_native_arena_end(cache->arena);
-    if (status != HL_NATIVE_OK) cache->poisoned = 1;
+    if (status != HL_NATIVE_OK) hl_native_cache_fail(cache);
     return status;
 }
 
 hl_native_status hl_native_cache_reserve_key(hl_native_cache *cache, uint64_t guest, uint64_t mapping_epoch,
                                              uint64_t instruction_epoch, uint64_t memory_mode,
                                              uint64_t authority_generation, uint64_t source_first,
-                                             uint64_t source_last, uint64_t maximum, hl_native_block *block) {
+                                             uint64_t source_last, uint64_t maximum,
+                                             const hl_native_certificate_record *certificate,
+                                             hl_native_block *block) {
     hl_native_span span;
     int slot;
     if (block == NULL) return HL_NATIVE_ARGUMENT;
@@ -207,6 +267,7 @@ hl_native_status hl_native_cache_reserve_key(hl_native_cache *cache, uint64_t gu
     entry->instruction_epoch = instruction_epoch;
     entry->memory_mode = memory_mode;
     entry->authority_generation = authority_generation;
+    entry->certificate_identity = certificate_reserve(cache, certificate);
     entry->token = cache->next_token++;
     if (entry->token == 0) entry->token = cache->next_token++;
     entry->generation = cache->generation;
@@ -223,6 +284,7 @@ hl_native_status hl_native_cache_reserve_key(hl_native_cache *cache, uint64_t gu
     block->instruction_epoch = instruction_epoch;
     block->memory_mode = memory_mode;
     block->authority_generation = authority_generation;
+    block->certificate_identity = entry->certificate_identity;
     block->token = entry->token;
     block->slot = (uint32_t)slot;
     return HL_NATIVE_OK;
@@ -232,7 +294,7 @@ hl_native_status hl_native_cache_reserve(hl_native_cache *cache, uint64_t guest,
                                          uint64_t source_first, uint64_t source_last, uint64_t maximum,
                                          hl_native_block *block) {
     return hl_native_cache_reserve_key(cache, guest, mapping_epoch, 0, 0, 0,
-                                       source_first, source_last, maximum, block);
+                                       source_first, source_last, maximum, NULL, block);
 }
 
 hl_native_status hl_native_cache_writable(hl_native_cache *cache, const hl_native_block *block, void **bytes,
@@ -281,6 +343,7 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
         entry->instruction_epoch != block->instruction_epoch ||
         entry->memory_mode != block->memory_mode ||
         entry->authority_generation != block->authority_generation ||
+        entry->certificate_identity != block->certificate_identity ||
         entry->source_first != block->source_first || entry->source_last != block->source_last ||
         entry->code_offset != block->code_offset || entry->code_size != block->code_size)
         return HL_NATIVE_STATE;
@@ -290,6 +353,8 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     span.capacity = block->code_size;
     status = hl_native_arena_publish(cache->arena, &span, used);
     if (status != HL_NATIVE_OK) {
+        certificate_revoke(cache, entry->certificate_identity);
+        entry->certificate_identity = 0;
         entry->state = ENTRY_TOMBSTONE;
         cache->active_token = 0;
         return status;
@@ -322,8 +387,16 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     cache->active_token = 0;
     atomic_store_explicit(&cache->published_generation, cache->generation, memory_order_release);
     atomic_fetch_add_explicit(&cache->provenance_epoch, 1, memory_order_release);
+    certificate_publish(cache, entry->certificate_identity);
     memset(block, 0, sizeof(*block));
     return HL_NATIVE_OK;
+}
+
+void hl_native_cache_fail(hl_native_cache *cache) {
+    if (cache != NULL) {
+        cache->poisoned = 1;
+        hl_native_cache_certificates_clear(cache);
+    }
 }
 
 hl_native_status hl_native_cache_publish(hl_native_cache *cache, hl_native_block *block, uint64_t used,
@@ -339,8 +412,11 @@ hl_native_status hl_native_cache_publish(hl_native_cache *cache, hl_native_block
 void hl_native_cache_cancel(hl_native_cache *cache, hl_native_block *block) {
     if (cache == NULL || block == NULL || block->slot >= cache->capacity) return;
     cache_entry *entry = &cache->entries[block->slot];
-    if (entry->generation == cache->generation && entry->state == ENTRY_RESERVED && entry->token == block->token)
+    if (entry->generation == cache->generation && entry->state == ENTRY_RESERVED && entry->token == block->token) {
+        certificate_revoke(cache, entry->certificate_identity);
+        entry->certificate_identity = 0;
         entry->state = ENTRY_TOMBSTONE;
+    }
     if (cache->active_token == block->token) cache->active_token = 0;
     memset(block, 0, sizeof(*block));
 }
@@ -390,6 +466,7 @@ int hl_native_cache_execution(const hl_native_cache *cache, uint64_t identity, h
         output->instruction_epoch = entry->instruction_epoch;
         output->memory_mode = entry->memory_mode;
         output->authority_generation = entry->authority_generation;
+        output->certificate_identity = entry->certificate_identity;
         return 1;
     }
     return 0;
@@ -403,6 +480,7 @@ hl_native_status hl_native_cache_reset_identity(hl_native_cache *cache, uint64_t
     atomic_fetch_add_explicit(&cache->provenance_epoch, 1, memory_order_acq_rel);
     for (uint32_t index = 0; index < cache->provenance_capacity; index++)
         provenance_clear(&cache->provenance[index]);
+    hl_native_cache_certificates_clear(cache);
     cache->generation++;
     if (cache->generation == 0) {
         memset(cache->entries, 0, cache->capacity * sizeof(*cache->entries));
@@ -441,6 +519,8 @@ hl_native_status hl_native_cache_invalidate(hl_native_cache *cache, uint64_t fir
         cache_entry *entry = &cache->entries[slot];
         if (!hl_native_cache_live(cache, slot)) continue;
         if (entry->source_first < last && first < entry->source_last) {
+            certificate_revoke(cache, entry->certificate_identity);
+            entry->certificate_identity = 0;
             entry->state = ENTRY_TOMBSTONE;
             count++;
         } else {
@@ -551,6 +631,8 @@ void hl_native_cache_destroy(hl_native_cache *cache) {
     free(cache->entries);
     free(cache->relocations);
     free(cache->resolved);
+    free(cache->certificates);
+    free(cache->certificate_valid);
     memset(cache, 0, sizeof(*cache));
     free(cache);
 }

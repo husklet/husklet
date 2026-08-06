@@ -383,6 +383,7 @@ static void finish_execution(uint32_t *words, uint32_t *cursor) {
 static hl_native_status emit_block(hl_native_executor *executor, const hl_native_source *source,
                                    uint64_t pc, const uint8_t *bytes, size_t size,
                                    uint64_t memory_mode, uint64_t authority_generation,
+                                   const hl_native_direct_token *direct_token, uint64_t direct_generation,
                                    int *supported) {
     uint32_t words[X86_MAX_WORDS];
     hl_x86_a64_provenance frontend_map[HL_X86_A64_MAX_INSTRUCTIONS] = {0};
@@ -548,6 +549,9 @@ static hl_native_status emit_block(hl_native_executor *executor, const hl_native
         .source_last = result.source_end,
         .memory_mode = memory_mode,
         .authority_generation = authority_generation,
+        .architecture = HL_NATIVE_X86_64,
+        .direct_token = (uint64_t)(uintptr_t)direct_token,
+        .direct_generation = direct_generation,
     };
     emission = (hl_native_emission){.bytes = (const uint8_t *)words,
                                     .size = cursor * sizeof(uint32_t),
@@ -737,6 +741,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
                 cold_builds++;
                 status = emit_block(executor, active_source, pc, bytes, size,
                                     memory_mode, memory_mode != 0 ? authority_identity : authority_generation,
+                                    direct_token, authority_generation,
                                     &supported);
                 if (executor->diagnostics) {
                     atomic_fetch_add_explicit(&executor->x86_cold_builds, 1, memory_order_relaxed);

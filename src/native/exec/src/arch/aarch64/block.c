@@ -92,6 +92,9 @@ hl_native_status hl_a64_block_cache(hl_native_executor *executor, const hl_a64_s
         .source_last = pc + 4,
         .memory_mode = executor->memory_mode,
         .authority_generation = executor->authority_generation,
+        .architecture = HL_NATIVE_AARCH64,
+        .direct_token = executor->memory_mode == 0 ? 0 : (uint64_t)(uintptr_t)executor->direct_authority,
+        .direct_generation = executor->memory_mode == 0 ? 0 : executor->direct_generation,
     };
     lookup = hl_native_translation_lookup(executor, &key, code);
     if (lookup == HL_NATIVE_HIT) {

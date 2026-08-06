@@ -33,7 +33,7 @@ int main(void) {
                                    .kind = HL_NATIVE_INVALIDATE, .first = 0x4000, .last = 0x4004};
     const uint8_t bytes[] = {0x00, 0x00, 0x00, 0x14};
     const hl_native_provenance provenance = {.code_offset = 0, .code_size = 4, .guest = 0x4000};
-    const hl_native_translation_key key = {0x4000, 7, 3, 0x4000, 0x4004, 0, 0};
+    const hl_native_translation_key key = {0x4000, 7, 3, 0x4000, 0x4004, 0, 0, 0, 0, 0};
     const hl_native_emission emission = {.bytes = bytes, .size = sizeof(bytes), .body_offset = 0,
                                          .provenance = &provenance, .provenance_count = 1};
     hl_native_code code;
@@ -88,8 +88,8 @@ int main(void) {
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_EPOCH);
 
-    const hl_native_translation_key target = {0x6000, 8, 5, 0x6000, 0x6004, 0, 0};
-    const hl_native_translation_key source = {0x7000, 8, 6, 0x7000, 0x7004, 0, 0};
+    const hl_native_translation_key target = {0x6000, 8, 5, 0x6000, 0x6004, 0, 0, 0, 0, 0};
+    const hl_native_translation_key source = {0x7000, 8, 6, 0x7000, 0x7004, 0, 0, 0, 0, 0};
     const hl_native_provenance target_provenance = {.code_offset = 0, .code_size = 4, .guest = 0x6000};
     const hl_native_provenance source_provenance = {.code_offset = 0, .code_size = 4, .guest = 0x7000};
     const hl_native_relocation relocation = {.code_offset = 0, .target_guest = 0x6000,
@@ -185,11 +185,27 @@ int main(void) {
     CHECK(hl_native_translation_publish(executor, &pending_target, &pending_target_emission) == HL_NATIVE_OK);
     CHECK(*(const uint32_t *)code.entry == pending_relocation.expected);
 
+    replace.mapping_epoch = 11;
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    pending_source.mapping_incarnation = 11;
+    pending_target.mapping_incarnation = 11;
+    CHECK(hl_native_translation_publish(executor, &pending_target, &pending_target_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_publish(executor, &pending_source, &pending_source_emission) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_lookup(executor, &pending_source, &code) == HL_NATIVE_HIT);
+    source_entry = code.entry;
+    CHECK(*source_entry != pending_relocation.expected);
+    CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
+    CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+    CHECK(*source_entry == pending_relocation.expected);
+    CHECK(hl_native_translation_lookup(executor, &pending_source, &code) == HL_NATIVE_HIT);
+    replace.mapping_epoch = 10;
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+
 #if defined(__aarch64__)
     const uint32_t safe_source_words[] = {0x14000001u, 0xd65f03c0u};
     const uint32_t safe_target_words[] = {0xd65f03c0u};
-    const hl_native_translation_key safe_source = {0xa000, 10, 7, 0xa000, 0xa008, 0, 0};
-    const hl_native_translation_key safe_target = {0xb000, 10, 7, 0xb000, 0xb004, 0, 0};
+    const hl_native_translation_key safe_source = {0xa000, 10, 7, 0xa000, 0xa008, 0, 0, 0, 0, 0};
+    const hl_native_translation_key safe_target = {0xb000, 10, 7, 0xb000, 0xb004, 0, 0, 0, 0, 0};
     const hl_native_provenance safe_source_map = {.code_offset = 0, .code_size = 8, .guest = 0xa000};
     const hl_native_provenance safe_target_map = {.code_offset = 0, .code_size = 4, .guest = 0xb000};
     const hl_native_relocation safe_link = {.code_offset = 0, .target_guest = 0xb000,
@@ -208,8 +224,8 @@ int main(void) {
     CHECK(hl_native_changed(executor, &invalidate, 1) == HL_NATIVE_OK);
     CHECK(*(const uint32_t *)code.entry == safe_link.expected);
 
-    const hl_native_translation_key cycle_left = {0xc000, 10, 9, 0xc000, 0xc004, 0, 0};
-    const hl_native_translation_key cycle_right = {0xd000, 10, 9, 0xd000, 0xd004, 0, 0};
+    const hl_native_translation_key cycle_left = {0xc000, 10, 9, 0xc000, 0xc004, 0, 0, 0, 0, 0};
+    const hl_native_translation_key cycle_right = {0xd000, 10, 9, 0xd000, 0xd004, 0, 0, 0, 0, 0};
     const hl_native_provenance cycle_left_map = {.code_offset = 0, .code_size = 4, .guest = 0xc000};
     const hl_native_provenance cycle_right_map = {.code_offset = 0, .code_size = 4, .guest = 0xd000};
     const hl_native_relocation cycle_left_link = {.code_offset = 0, .target_guest = 0xd000,

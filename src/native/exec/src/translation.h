@@ -11,6 +11,9 @@ typedef struct hl_native_translation_key {
     uint64_t source_last;
     uint64_t memory_mode;
     uint64_t authority_generation;
+    uint64_t architecture;
+    uint64_t direct_token;
+    uint64_t direct_generation;
 } hl_native_translation_key;
 
 typedef struct hl_native_emission {
