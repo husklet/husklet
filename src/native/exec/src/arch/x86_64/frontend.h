@@ -17,6 +17,11 @@
 #define HL_X86_A64_DIAGNOSTICS 16u
 /* Host guarantees FEAT_AES round instructions. */
 #define HL_X86_A64_AES 32u
+/* Every accepted flag bit. A new capability flag belongs here as well, or every request carrying it
+ * is rejected; `hl_x86_a64_unknown_flags` names the offending bits when that is forgotten. */
+#define HL_X86_A64_FLAGS                                                                     \
+    (HL_X86_A64_CHECKPOINTS | HL_X86_A64_CONDITIONAL_SELF_LOOP | HL_X86_A64_LIVE_CHAIN |     \
+     HL_X86_A64_LSE | HL_X86_A64_DIAGNOSTICS | HL_X86_A64_AES)
 
 typedef enum hl_x86_a64_status {
     HL_X86_A64_OK = 0,
@@ -25,6 +30,7 @@ typedef enum hl_x86_a64_status {
     HL_X86_A64_CAPACITY = 3,
     HL_X86_A64_UNSUPPORTED = 4,
     HL_X86_A64_FLAGS_ABI_REQUIRED = 5,
+    HL_X86_A64_UNKNOWN_FLAG = 6,
 } hl_x86_a64_status;
 
 typedef enum hl_x86_a64_exit {
@@ -77,5 +83,9 @@ typedef struct hl_x86_a64_result {
  * convention. The shared dispatcher owns entry/return stubs and cache
  * publication; this function performs no callbacks and retains no pointers. */
 hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *, hl_x86_a64_result *);
+
+/* Returns the request flag bits this build does not recognise, so a rejected request can name them
+ * instead of reading as a decoder fault. */
+uint32_t hl_x86_a64_unknown_flags(uint32_t flags);
 
 #endif

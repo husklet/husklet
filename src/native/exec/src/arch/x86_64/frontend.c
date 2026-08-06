@@ -1660,7 +1660,9 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
     int checkpoints = (request->flags & HL_X86_A64_CHECKPOINTS) != 0u;
     int live_chain = (request->flags & HL_X86_A64_LIVE_CHAIN) != 0u;
 
-    if (!hl_x86_request_valid(request, result)) return HL_X86_A64_ARGUMENT;
+    if (!hl_x86_request_valid(request, result))
+        return request != NULL && hl_x86_a64_unknown_flags(request->flags) != 0u ?
+                   HL_X86_A64_UNKNOWN_FLAG : HL_X86_A64_ARGUMENT;
     decode_block(request, &block);
     if (block.count > request->provenance_capacity) return HL_X86_A64_CAPACITY;
     mark_dead_flags(&block);

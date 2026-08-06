@@ -47,6 +47,25 @@ impl NativeInputs {
     }
 }
 
+// A C build that does not run leaves a stale archive behind and every test result taken against it
+// is meaningless, so refuse to hand one to the harness.
+fn assert_archive_fresh(archive: &Path, inputs: &[PathBuf]) {
+    let modified = |path: &Path| {
+        std::fs::metadata(path)
+            .and_then(|data| data.modified())
+            .unwrap_or_else(|error| panic!("native build stamp {}: {error}", path.display()))
+    };
+    let built = modified(archive);
+    for source in inputs {
+        assert!(
+            modified(source) <= built,
+            "native archive {} predates {}: the C build did not run, so any test result against it is invalid",
+            archive.display(),
+            source.display()
+        );
+    }
+}
+
 // The C test harness in `tests/exec_c.rs` links against the archive this script produces, so the
 // archive path, include roots and host architecture travel to it as compile-time environment values.
 fn emit_test_environment(root: &Path, allocation_test: bool) {
@@ -128,6 +147,8 @@ fn main() {
             .flag_if_supported("-Werror")
             .compile("hl_native_execution_entry");
     }
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("output directory"));
+    assert_archive_fresh(&out.join("libhl_native_execution.a"), &inputs.dependencies);
     emit_test_environment(root, allocation_test);
     for dependency in &inputs.dependencies {
         println!("cargo:rerun-if-changed={}", dependency.display());
