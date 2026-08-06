@@ -651,19 +651,28 @@ impl ProcfsSource for TaskProcfs {
         )
     }
 
-    fn descriptors(&self, process: ProcfsProcessIdentity) -> Result<Vec<ProcfsDescriptorView>, ProcfsError> {
+    fn descriptor_numbers(&self, process: ProcfsProcessIdentity) -> Result<Vec<i32>, ProcfsError> {
         let id = self.process_id(process)?;
-        let table = match &self.resources {
-            Some(resources) => resources.descriptors(id)?,
-            None if self.current == Some(id) => Arc::clone(self.descriptors.as_ref().ok_or(ProcfsError::NotFound)?),
-            None => return Err(ProcfsError::NotFound),
-        };
-        let mut descriptors = table
-            .active_snapshots()
+        let table = self.descriptor_table(id)?;
+        const MAXIMUM_DESCRIPTORS: usize = 65_536;
+        const MAXIMUM_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
+        let mut numbers = table
+            .bounded_active_snapshots(hl_descriptor::SnapshotBudget {
+                max_items: MAXIMUM_DESCRIPTORS,
+                max_peak_bytes: MAXIMUM_SNAPSHOT_BYTES,
+            })
+            .map_err(|_| ProcfsError::ResourceLimit)?
             .into_iter()
-            .filter_map(|snapshot| self.descriptor_view(&table, snapshot).ok())
+            .map(|snapshot| snapshot.number)
             .collect::<Vec<_>>();
-        descriptors.sort_by_key(|descriptor| descriptor.number);
-        Ok(descriptors)
+        numbers.sort_unstable();
+        Ok(numbers)
+    }
+
+    fn descriptor(&self, process: ProcfsProcessIdentity, number: i32) -> Result<ProcfsDescriptorView, ProcfsError> {
+        let id = self.process_id(process)?;
+        let table = self.descriptor_table(id)?;
+        let snapshot = table.snapshot(number).map_err(|_| ProcfsError::NotFound)?;
+        self.descriptor_view(&table, snapshot)
     }
 }

@@ -94,7 +94,10 @@ pub trait Source: Send + Sync {
     ) -> Result<(), hl_descriptor::ObjectError> {
         Err(hl_descriptor::ObjectError::NotSupported)
     }
-    fn descriptors(&self, _process: ProcessIdentity) -> Result<Vec<DescriptorView>, Error> {
+    fn descriptor_numbers(&self, _process: ProcessIdentity) -> Result<Vec<i32>, Error> {
+        Err(Error::NotFound)
+    }
+    fn descriptor(&self, _process: ProcessIdentity, _number: i32) -> Result<DescriptorView, Error> {
         Err(Error::NotFound)
     }
     fn cgroup(&self) -> Result<CgroupView, Error> {

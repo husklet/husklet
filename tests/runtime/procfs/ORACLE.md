@@ -54,6 +54,21 @@ publication; retained renderers correspond to `Procfs::open`, `read_link`,
 `self-vm`, `nslinks`, and `peer-identity` are unsupported on the macOS backend
 but remain enforceable on Linux.
 
+Descriptor enumeration and targeted lookup preserve separate retained
+capabilities. `proc_fdvis_list` and `proc_fd_dir_pid_open` take a bounded,
+ordered view of the published arena for an fd/fdinfo directory, while
+`proc_fdvis_lookup` and `proc_fd_link_pid` select one live descriptor identity.
+Rust maps listing to `DescriptorTable::bounded_active_snapshots`: count and peak
+vector bytes are admitted atomically under the table read lock before allocation,
+then only descriptor numbers cross the VFS Source boundary. Targeted fd links,
+fdinfo, kind, and metadata use `DescriptorTable::snapshot(number)` followed by
+an exact pin and descriptor-generation/OFD-identity comparison; close and
+same-number reuse therefore cannot substitute the replacement. Snapshot budget
+failure is the typed `ProcfsError::ResourceLimit`. This stage retains the current
+eager directory snapshot timing; post-publication lazy capture remains the next
+descriptor-directory lifetime slice. The peer-fd shared-path identity gap is
+unchanged.
+
 ### PID reuse identity prerequisite
 
 The retained PID/start-token path was audited in

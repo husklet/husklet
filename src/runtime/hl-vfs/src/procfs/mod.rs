@@ -39,6 +39,7 @@ pub enum Error {
     Access,
     ReadOnly,
     Invalid,
+    ResourceLimit,
 }
 
 /// Process-filesystem namespace backed by typed domain snapshots.
@@ -371,21 +372,16 @@ impl Procfs {
                 Ok(Some(Arc::new(file::SnapshotFile::new(Vec::new(), metadata))))
             }
             model::Node::Fd | model::Node::FdInfo => {
-                let descriptors = self.source.descriptors(identity.ok_or(Error::NotFound)?)?;
+                let descriptors = self.source.descriptor_numbers(identity.ok_or(Error::NotFound)?)?;
                 let file_type = if leaf == model::Node::Fd { 10 } else { 8 };
                 Ok(Some(Arc::new(file::SnapshotDirectory::new(
-                    descriptors.into_iter().map(|descriptor| descriptor.number),
+                    descriptors,
                     file_type,
                     leaf.metadata(process, 0),
                 ))))
             }
             model::Node::FdInfoFile(number) => {
-                let descriptor = self
-                    .source
-                    .descriptors(identity.ok_or(Error::NotFound)?)?
-                    .into_iter()
-                    .find(|descriptor| descriptor.number == number)
-                    .ok_or(Error::NotFound)?;
+                let descriptor = self.source.descriptor(identity.ok_or(Error::NotFound)?, number)?;
                 let bytes = descriptor.info();
                 let metadata = leaf.metadata(process, bytes.len() as u64);
                 Ok(Some(Arc::new(file::SnapshotFile::new(bytes, metadata))))
@@ -587,10 +583,7 @@ impl Procfs {
         let identity = self.resolve_path_process(process, thread)?;
         let target = self
             .source
-            .descriptors(identity)?
-            .into_iter()
-            .find(|descriptor| descriptor.number == number)
-            .ok_or(Error::NotFound)?
+            .descriptor(identity, number)?
             .target
             .ok_or(Error::NotFound)?;
         Ok(Some(target))
@@ -725,23 +718,15 @@ impl Procfs {
                 NodeKind::Link
             }
             model::Node::Fd | model::Node::FdInfo => {
-                self.source.descriptors(process_identity()?)?;
+                self.source.descriptor_numbers(process_identity()?)?;
                 NodeKind::Directory
             }
             model::Node::FdLink(number) => {
-                self.source
-                    .descriptors(process_identity()?)?
-                    .into_iter()
-                    .find(|descriptor| descriptor.number == number)
-                    .ok_or(Error::NotFound)?;
+                self.source.descriptor(process_identity()?, number)?;
                 NodeKind::Link
             }
             model::Node::FdInfoFile(number) => {
-                self.source
-                    .descriptors(process_identity()?)?
-                    .into_iter()
-                    .find(|descriptor| descriptor.number == number)
-                    .ok_or(Error::NotFound)?;
+                self.source.descriptor(process_identity()?, number)?;
                 NodeKind::Regular
             }
             model::Node::CpuInfo | model::Node::CpuStat | model::Node::CpuRange => {
@@ -942,25 +927,14 @@ impl Procfs {
                 0
             }
             model::Node::Fd | model::Node::FdInfo => {
-                self.source.descriptors(process_identity()?)?;
+                self.source.descriptor_numbers(process_identity()?)?;
                 0
             }
             model::Node::FdLink(number) => {
-                self.source
-                    .descriptors(process_identity()?)?
-                    .into_iter()
-                    .find(|descriptor| descriptor.number == number)
-                    .ok_or(Error::NotFound)?;
+                self.source.descriptor(process_identity()?, number)?;
                 0
             }
-            model::Node::FdInfoFile(number) => self
-                .source
-                .descriptors(process_identity()?)?
-                .into_iter()
-                .find(|descriptor| descriptor.number == number)
-                .ok_or(Error::NotFound)?
-                .info()
-                .len() as u64,
+            model::Node::FdInfoFile(number) => self.source.descriptor(process_identity()?, number)?.info().len() as u64,
             model::Node::CpuInfo => self.source.cpu()?.cpuinfo().len() as u64,
             model::Node::CpuStat => self.source.cpu()?.stat(self.source.system()?).len() as u64,
             model::Node::CpuRange => self.source.cpu()?.range_bytes().len() as u64,

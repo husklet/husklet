@@ -32,10 +32,76 @@ use hl_task::{ExitStatus, Limit, ProcessCredentials, ProcessLimits, RegistryConf
 
 struct Targets;
 
+#[derive(Debug)]
+struct DescriptorObject(u64);
+
+impl hl_descriptor::OpenFileDescription for DescriptorObject {
+    fn kind(&self) -> hl_descriptor::ObjectKind {
+        hl_descriptor::ObjectKind::File
+    }
+
+    fn metadata(&self) -> Result<OfdMetadata, hl_descriptor::ObjectError> {
+        let timestamp = hl_descriptor::OfdTimestamp {
+            seconds: 0,
+            nanoseconds: 0,
+        };
+        Ok(OfdMetadata {
+            device: 1,
+            inode: self.0,
+            kind: 8,
+            permissions: 0o600,
+            links: 1,
+            user: 0,
+            group: 0,
+            special_device: 0,
+            size: 0,
+            blocks_512: 0,
+            accessed: timestamp,
+            modified: timestamp,
+            changed: timestamp,
+        })
+    }
+}
+
 impl DescriptorTarget for Targets {
     fn path(&self, _metadata: &OfdMetadata) -> Result<Vec<u8>, ProcfsError> {
         Err(ProcfsError::NotFound)
     }
+}
+
+#[test]
+fn descriptor_reuse() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (process, _) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let table = Arc::new(DescriptorTable::new(2).unwrap());
+    let first = table
+        .install(
+            0,
+            Arc::new(DescriptorObject(11)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    let stale = table.snapshot(first).unwrap();
+    table.close(first).unwrap();
+    let replacement = table
+        .install(
+            0,
+            Arc::new(DescriptorObject(22)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    assert_eq!(replacement, first);
+    let source = TaskProcfs::with_descriptors(Arc::clone(&tasks), process, Arc::clone(&table), Arc::new(Targets));
+    assert_eq!(source.descriptor_view(&table, stale), Err(ProcfsError::NotFound));
+    assert_eq!(
+        source
+            .descriptor(identity(&source, process.number()), replacement)
+            .unwrap()
+            .inode,
+        22
+    );
 }
 
 fn identity(source: &TaskProcfs, number: u32) -> ProcfsProcessIdentity {

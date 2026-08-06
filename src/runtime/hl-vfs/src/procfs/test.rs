@@ -143,9 +143,21 @@ impl super::Source for Source {
         super::CgroupView::new(3, Some(2), Some(4096), 1024, vec![7], vec![7, 9]).ok_or(Error::Invalid)
     }
 
-    fn descriptors(&self, process: super::ProcessIdentity) -> Result<Vec<DescriptorView>, Error> {
+    fn descriptor_numbers(&self, process: super::ProcessIdentity) -> Result<Vec<i32>, Error> {
         (process_number(process) == self.process.process)
-            .then(|| self.descriptors.clone())
+            .then(|| self.descriptors.iter().map(|descriptor| descriptor.number).collect())
+            .ok_or(Error::NotFound)
+    }
+
+    fn descriptor(&self, process: super::ProcessIdentity, number: i32) -> Result<DescriptorView, Error> {
+        (process_number(process) == self.process.process)
+            .then(|| {
+                self.descriptors
+                    .iter()
+                    .find(|descriptor| descriptor.number == number)
+                    .cloned()
+            })
+            .flatten()
             .ok_or(Error::NotFound)
     }
 

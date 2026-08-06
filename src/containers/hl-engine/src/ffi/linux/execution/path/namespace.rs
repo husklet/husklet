@@ -230,6 +230,7 @@ impl NativePath {
             hl_runtime::ProcfsError::Access => RuntimePathError::Access,
             hl_runtime::ProcfsError::ReadOnly => RuntimePathError::ReadOnly,
             hl_runtime::ProcfsError::Invalid => RuntimePathError::Invalid,
+            hl_runtime::ProcfsError::ResourceLimit => RuntimePathError::TooLarge,
         }
     }
 
@@ -255,6 +256,7 @@ impl NativePath {
                 Err(hl_runtime::ProcfsError::Access) => return Err(RuntimePathError::Access),
                 Err(hl_runtime::ProcfsError::ReadOnly) => return Err(RuntimePathError::ReadOnly),
                 Err(hl_runtime::ProcfsError::Invalid) => return Err(RuntimePathError::Invalid),
+                Err(hl_runtime::ProcfsError::ResourceLimit) => return Err(RuntimePathError::TooLarge),
             }
             let namespace = procfs
                 .uts_namespace(plan.operand.path.as_bytes(), process.number())
@@ -263,6 +265,7 @@ impl NativePath {
                     hl_runtime::ProcfsError::Access => RuntimePathError::Access,
                     hl_runtime::ProcfsError::ReadOnly => RuntimePathError::ReadOnly,
                     hl_runtime::ProcfsError::Invalid => RuntimePathError::Invalid,
+                    hl_runtime::ProcfsError::ResourceLimit => RuntimePathError::TooLarge,
                 })?;
             if let Some(serial) = namespace {
                 let handles = self.namespace_handles.as_ref().ok_or(RuntimePathError::NotFound)?;

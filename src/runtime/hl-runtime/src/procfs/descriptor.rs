@@ -9,6 +9,17 @@ pub trait DescriptorTarget: Send + Sync {
 }
 
 impl TaskProcfs {
+    pub(super) fn descriptor_table(
+        &self,
+        process: hl_task::ProcessId,
+    ) -> Result<std::sync::Arc<DescriptorTable>, ProcfsError> {
+        match &self.resources {
+            Some(resources) => resources.descriptors(process),
+            None if self.current == Some(process) => self.descriptors.clone().ok_or(ProcfsError::NotFound),
+            None => Err(ProcfsError::NotFound),
+        }
+    }
+
     pub(super) fn descriptor_view(
         &self,
         descriptors: &DescriptorTable,
