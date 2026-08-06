@@ -30,7 +30,7 @@ pub struct RuntimeNetworkSyscalls<H: RuntimeNetworkHost, M: GuestMemory> {
 }
 
 impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
-    fn local_projection(address: &SocketAddress) -> bool {
+    pub(crate) fn local_projection(address: &SocketAddress) -> bool {
         match address {
             SocketAddress::Inet4 { address, .. } => *address == [0; 4] || *address == [127, 0, 0, 1],
             SocketAddress::Inet6 { address, .. } => {

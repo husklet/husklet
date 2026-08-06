@@ -96,7 +96,17 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let nonblocking = listener_snapshot.nonblocking;
-        if !self.host_projection && nonblocking && matches!(listener_snapshot.state, SocketState::Listening { .. }) {
+        // Only a listener bind left virtual lacks a host socket to accept on; a
+        // loopback listener is real and must consult the host.
+        let virtual_listener = !listener_snapshot
+            .local
+            .as_ref()
+            .is_some_and(Self::local_projection);
+        if !self.host_projection
+            && virtual_listener
+            && nonblocking
+            && matches!(listener_snapshot.state, SocketState::Listening { .. })
+        {
             return LinuxResult::Error(Errno::EAGAIN);
         }
         let queue = Arc::new(hl_sync::WaitQueue::new());

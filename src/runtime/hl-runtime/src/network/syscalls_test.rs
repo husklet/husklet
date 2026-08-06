@@ -769,8 +769,35 @@ fn accept4_flags_isas() {
 }
 
 #[test]
-fn isolated_nonblocking_listener_accepts_as_would_block() {
+fn virtual_nonblocking_listener_accepts_as_would_block_but_loopback_reaches_the_host() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        // An interface address binds virtually without host projection, so it
+        // owns no host socket and can only ever report EAGAIN.
+        let fixture = Fixture::new();
+        let policy = hl_network::NetworkPolicy::from_launch(false, b"", b"", b"eth0=172.17.0.2/16").unwrap();
+        let mut runtime = fixture.runtime(architecture).with_network_policy(policy);
+        let listener = match runtime.handle(Fixture::operation("socket"), [2, 1 | 0x800, 6, 0, 0, 0]) {
+            LinuxResult::Value(value) => value,
+            other => panic!("socket failed: {other:?}"),
+        };
+        fixture
+            .memory
+            .put(64, &[2, 0, 0, 0, 172, 17, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            runtime.handle(Fixture::operation("bind"), [listener, 64, 16, 0, 0, 0]),
+            LinuxResult::Value(0),
+        );
+        assert_eq!(
+            runtime.handle(Fixture::operation("listen"), [listener, 1, 0, 0, 0, 0]),
+            LinuxResult::Value(0),
+        );
+        assert_eq!(
+            runtime.handle(Fixture::operation("accept4"), [listener, 0, 0, 0x800, 0, 0]),
+            LinuxResult::Error(Errno::EAGAIN),
+        );
+
+        // A loopback listener is a real host socket, so a non-blocking accept
+        // must consult the host rather than refuse outright.
         let fixture = Fixture::new();
         let mut runtime = fixture.runtime(architecture);
         let listener = match runtime.handle(Fixture::operation("socket"), [2, 1 | 0x800, 6, 0, 0, 0]) {
@@ -793,7 +820,7 @@ fn isolated_nonblocking_listener_accepts_as_would_block() {
         assert_eq!(view.internet[0].state, SocketState::Listening { backlog: 1 });
         assert_eq!(
             runtime.handle(Fixture::operation("accept4"), [listener, 0, 0, 0x800, 0, 0]),
-            LinuxResult::Error(Errno::EAGAIN),
+            LinuxResult::Value(1),
         );
     }
 }
