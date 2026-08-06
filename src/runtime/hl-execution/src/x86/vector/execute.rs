@@ -3,7 +3,6 @@ use crate::{CpuState, ExecutionExit, Flag, FlagState, GuestOperandMemory, Scalar
 pub struct Executor;
 
 impl Executor {
-    #[allow(clippy::too_many_arguments)]
     pub fn stage<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,

@@ -262,6 +262,9 @@ impl ConfigColor {
 
 #[cfg(test)]
 mod tests {
+    // Font sizes are asserted against exactly representable literals the parser just produced.
+    #![allow(clippy::float_cmp)]
+
     use super::*;
 
     #[test]

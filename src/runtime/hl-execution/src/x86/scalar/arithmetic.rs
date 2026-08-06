@@ -7,7 +7,6 @@ use hl_softfloat::{Environment, ExceptionFlags, Format, NaNMode, RoundingMode, T
 pub(crate) struct Arithmetic;
 
 impl Arithmetic {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn round<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -98,7 +97,6 @@ impl Arithmetic {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -191,7 +189,6 @@ impl Arithmetic {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn pair_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -257,7 +254,6 @@ impl Arithmetic {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn vex_pair_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -333,7 +329,6 @@ impl Arithmetic {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn vex_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,

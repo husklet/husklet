@@ -2354,7 +2354,6 @@ impl Executor {
     }
 
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
     fn run_x86_test(
         &self,
         state: &mut X86CpuState,

@@ -95,7 +95,6 @@ impl Environment {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn fused_sum(
         self,
         format: crate::Format,

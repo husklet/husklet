@@ -55,7 +55,6 @@ async fn create_console_size_is_durable_and_checked() {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
 async fn shared_create_contract_resolves_oci_defaults_and_overrides() {
     let root = TempDir::new().unwrap();
     let containers = containers(&root).await;

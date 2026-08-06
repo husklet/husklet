@@ -92,7 +92,6 @@ impl Lane {
         let minimum = -(1_i64 << (bits - 1));
         value.clamp(minimum, maximum) as u128 & Self::mask(bits)
     }
-    #[allow(clippy::too_many_arguments)]
     pub fn insert_word<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,

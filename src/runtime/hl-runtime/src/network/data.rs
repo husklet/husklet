@@ -460,7 +460,6 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn host_receive(
         &self,
         socket: &crate::RuntimeSocket<H>,
@@ -537,7 +536,6 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn unix_receive(
         &self,
         socket: &crate::RuntimeSocket<H>,

@@ -1,7 +1,6 @@
 use super::{Container, Error, ExitStatus, JournalId, Result, Rootfs, Service, Signal, WaitCondition};
 
 impl Service {
-    #[allow(clippy::too_many_lines)]
     pub(crate) async fn remove(
         &self,
         reference: &str,

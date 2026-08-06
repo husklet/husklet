@@ -21,7 +21,6 @@ impl PackedString {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,

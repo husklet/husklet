@@ -6,7 +6,6 @@ use crate::{
 pub(crate) struct BitExecutor;
 
 impl BitExecutor {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute<M: GuestOperandMemory + ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -55,7 +54,6 @@ impl BitExecutor {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn memory<M: GuestOperandMemory + ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

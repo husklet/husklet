@@ -478,6 +478,8 @@ mod test {
         }
     }
 
+    // These reference implementations detect FPSR inexactness, which is exact equality by definition.
+    #[allow(clippy::float_cmp)]
     fn reference32(bits: u32, scale: u8) -> (u32, u32) {
         let value = f32::from_bits(bits) as f64;
         if value.is_nan() {
@@ -497,6 +499,7 @@ mod test {
         )
     }
 
+    #[allow(clippy::float_cmp)]
     fn reference64(bits: u64, scale: u8) -> (u64, u32) {
         let value = f64::from_bits(bits);
         if value.is_nan() {
@@ -516,6 +519,7 @@ mod test {
         )
     }
 
+    #[allow(clippy::float_cmp)]
     fn rounded32(bits: u32, signed: bool, rounding: FpRoundingMode) -> (u32, u32) {
         let value = f64::from(f32::from_bits(bits));
         let rounded = round(value, rounding);
@@ -541,6 +545,7 @@ mod test {
         }
     }
 
+    #[allow(clippy::float_cmp)]
     fn rounded64(bits: u64, signed: bool, rounding: FpRoundingMode) -> (u64, u32) {
         let value = f64::from_bits(bits);
         let rounded = round(value, rounding);

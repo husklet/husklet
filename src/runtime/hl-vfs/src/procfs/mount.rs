@@ -23,7 +23,6 @@ pub struct MountEntry {
 impl MountEntry {
     /// Creates one bounded record. Paths are escaped when rendered; option
     /// tokens must already represent single Linux mountinfo fields.
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         id: u32,

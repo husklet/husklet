@@ -290,6 +290,8 @@ impl ExtendedMemory {
         ExecutionExit::Continue
     }
 
+    // FPREM's round-to-even tie-break is specified as an exact comparison against half the divisor.
+    #[allow(clippy::float_cmp)]
     pub(crate) fn unary(cpu: &mut CpuState, operation: u8, source: u8, instruction: u64, next: u64) -> ExecutionExit {
         let top = usize::from((cpu.x87_status >> 11) & 7);
         let mut staged = cpu.clone();
@@ -786,7 +788,6 @@ impl ExtendedMemory {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn arithmetic<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -1065,7 +1066,6 @@ impl ExtendedMemory {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn float<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

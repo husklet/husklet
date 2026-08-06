@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 /// Docker request for a local network.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
-#[allow(clippy::struct_excessive_bools)]
 pub struct NetworkCreate {
     pub name: String,
     #[serde(default)]
@@ -51,7 +50,6 @@ pub struct NetworkCreated {
 /// Docker network inspection response.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
-#[allow(clippy::struct_excessive_bools)]
 pub struct Network {
     pub name: String,
     #[serde(rename = "Id")]

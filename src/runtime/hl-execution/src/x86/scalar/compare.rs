@@ -32,7 +32,6 @@ impl Comparison {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn mask_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

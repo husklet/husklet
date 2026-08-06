@@ -5,7 +5,6 @@ use crate::{
 pub(crate) struct LaneTransfer;
 
 impl LaneTransfer {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn vex_insert_single<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -43,7 +42,6 @@ impl LaneTransfer {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn insert_single<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -79,7 +77,6 @@ impl LaneTransfer {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn insert<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -109,7 +106,6 @@ impl LaneTransfer {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extract<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

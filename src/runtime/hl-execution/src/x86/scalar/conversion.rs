@@ -58,7 +58,6 @@ impl Conversion {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn mmx_from_float<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -186,7 +185,6 @@ impl Conversion {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_integer_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -223,7 +221,6 @@ impl Conversion {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn to_integer_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -264,7 +261,6 @@ impl Conversion {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn width_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -315,7 +311,6 @@ impl Conversion {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn width_packed_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -395,7 +390,6 @@ impl Conversion {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn packed_single_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -444,7 +438,6 @@ impl Conversion {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn packed_double_execute<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

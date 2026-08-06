@@ -8,7 +8,6 @@ pub enum Transfer<B> {
 pub struct Memory;
 
 impl Memory {
-    #[allow(clippy::too_many_arguments)]
     pub fn duplicate<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,
@@ -42,7 +41,6 @@ impl Memory {
         Ok(Staged::Cpu(staged))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn staged_transfer<M: GuestOperandMemory>(
         staged: CpuState,
         cpu: &CpuState,
@@ -62,7 +60,6 @@ impl Memory {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn half<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,
@@ -110,7 +107,6 @@ impl Memory {
         Ok(Staged::Cpu(staged))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn transfer<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,

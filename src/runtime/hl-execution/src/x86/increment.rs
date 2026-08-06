@@ -6,7 +6,6 @@ use crate::{
 pub(crate) struct Increment;
 
 impl Increment {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute<M: GuestOperandMemory + ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

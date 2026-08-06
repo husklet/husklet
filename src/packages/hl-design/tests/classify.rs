@@ -37,6 +37,8 @@ impl Example {
     }
 }
 
+// The float here is an identity check on an exact literal, not a numeric computation.
+#[allow(clippy::float_cmp)]
 #[test]
 fn classifications_preserve_functions() {
     assert_eq!(root("path"), "path");

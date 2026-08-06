@@ -10,7 +10,6 @@ use tokio::sync::oneshot;
 
 // Keep the whole protocol journey visible in order: splitting it obscures which durable resource a
 // later assertion is proving came from an earlier request.
-#[allow(clippy::too_many_lines)]
 pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let work = TempDir::new()?;
     let archive = work.path().join("fixture.tar");

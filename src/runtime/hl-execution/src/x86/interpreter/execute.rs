@@ -1691,7 +1691,6 @@ impl ScalarInterpreter {
         Self::vex_read_bytes(cpu, memory, source, if wide { 32 } else { 16 }, next, instruction)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn vex_gather<M: GuestOperandMemory>(
         cpu: &mut CpuState,
         memory: &M,
@@ -2780,6 +2779,8 @@ impl ScalarInterpreter {
         output
     }
 
+    // The VEX compare predicates are defined on exact IEEE-754 equality, so an epsilon would be wrong.
+    #[allow(clippy::float_cmp)]
     fn vex_compare(
         left: [u128; 2],
         right: [u128; 2],

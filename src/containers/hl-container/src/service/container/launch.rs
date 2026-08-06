@@ -23,7 +23,6 @@ impl Service {
         self.launch_locked(container, true).await
     }
 
-    #[allow(clippy::too_many_lines, reason = "container launch transaction and rollback")]
     pub(super) async fn launch_locked(self: &Arc<Self>, mut container: Container, explicit: bool) -> Result<()> {
         self.ensure_ports_available(&container).await?;
         self.networks.attach_default_for_publication_locked(&container).await?;

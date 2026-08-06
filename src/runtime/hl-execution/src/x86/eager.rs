@@ -3,7 +3,6 @@ use crate::{CpuState, ExclusiveMemory, ExecutionExit, GuestOperandMemory, Scalar
 pub(crate) struct Eager;
 
 impl Eager {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute<M: GuestOperandMemory + ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

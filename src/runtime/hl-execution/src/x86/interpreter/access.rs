@@ -5,7 +5,6 @@ use crate::{
 };
 
 impl ScalarInterpreter {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn vector_move<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,

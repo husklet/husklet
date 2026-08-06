@@ -7,7 +7,6 @@ use crate::{
 pub(crate) struct CompareExchange;
 
 impl CompareExchange {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn wide<M: GuestOperandMemory + ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -92,7 +91,6 @@ impl CompareExchange {
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn locked_alu<M: ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,
@@ -138,7 +136,6 @@ impl CompareExchange {
         ExecutionExit::Continue
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn add<M: GuestOperandMemory>(
         mut staged: CpuState,
         cpu: &CpuState,
@@ -197,7 +194,6 @@ impl CompareExchange {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn locked_add<M: GuestOperandMemory + ExclusiveMemory>(
         cpu: &mut CpuState,
         memory: &mut M,

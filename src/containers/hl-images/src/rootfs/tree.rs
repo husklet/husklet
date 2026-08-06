@@ -207,7 +207,6 @@ mod tests {
     };
 
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn overlay_changes_merge_add_modify_whiteout_and_opaque_directory() {
         let root = tempfile::tempdir().unwrap();
         let snapshots = Snapshots::open(root.path().join("snapshots")).unwrap();
