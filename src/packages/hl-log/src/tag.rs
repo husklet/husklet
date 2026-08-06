@@ -246,6 +246,9 @@ pub const ALL: Tags = Tags::ALL;
 pub const NONE: Tags = Tags::NONE;
 
 /// Registered tags in deterministic display order.
+///
+/// A new tag is a `Tag::new(1 << <next free bit>, "<name>")` const listed here; parsing,
+/// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
     CONTAINER, IMAGE, DAEMON, UI,
