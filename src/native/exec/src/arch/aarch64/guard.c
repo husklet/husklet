@@ -86,8 +86,7 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc) {
     uint32_t *none, *empty, *different[2], *before, *after, *keep_first, *keep_last,
         *merged, *overflow, *success;
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
-    hl_a64_movconst(assembler, 18, UINT64_MAX);
-    hl_a64_emit32(assembler, UINT32_C(0xeb12023f));
+    hl_a64_emit32(assembler, UINT32_C(0xb100063f)); /* cmn x17,#1: empty sentinel */
     none = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     hl_a64_str(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
@@ -162,7 +161,7 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc) {
     hl_a64_str(assembler, 16, CPU, OFFSET_DIRTY_COUNT);
 
     uint8_t *done = assembler->cursor;
-    hl_a64_movconst(assembler, 17, UINT64_MAX);
+    hl_a64_emit32(assembler, UINT32_C(0x92800011)); /* movn x17,#0 */
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
     hl_a64_movz(assembler, 17, 0, 0);
     hl_a64_str(assembler, 17, CPU, OFFSET_DIRTY_LAST);
@@ -202,8 +201,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     hl_a64_emit32(assembler, 0xCB110210u); /* sub x16,x16,x17: recover guest EA */
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
-    hl_a64_movconst(assembler, 9, UINT64_MAX);
-    hl_a64_emit32(assembler, 0xEB09023Fu); /* cmp first,#UINT64_MAX */
+    hl_a64_emit32(assembler, 0xB100063Fu); /* cmn x17,#1: empty sentinel */
     empty = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     /* Guest contiguity is insufficient: adjacent mappings can belong to
@@ -228,6 +226,10 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     uint8_t *noncontiguous = assembler->cursor;
     above = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    /* The view-identity checks above consumed x17 and x18, so recover the end
+     * and the live start before comparing them. */
+    hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
     hl_a64_emit32(assembler, 0xEB11025Fu); /* cmp end,first */
     below = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
@@ -264,8 +266,7 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     hl_a64_emit32(assembler, 0xCB110210u); /* recover guest EA */
     hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
-    hl_a64_movconst(assembler, 9, UINT64_MAX);
-    hl_a64_emit32(assembler, 0xEB09023Fu);
+    hl_a64_emit32(assembler, 0xB100063Fu); /* cmn x17,#1: empty sentinel */
     empty = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     /* Commit this only after the host store above the emitted guard succeeds.
@@ -289,6 +290,11 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
     uint8_t *noncontiguous = assembler->cursor;
     above = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    /* Same recovery as the reservation: the view-identity checks consumed x17
+     * and x18, and the union below needs the end and the live start, not the
+     * view bounds that overwrote them. */
+    hl_a64_addi(assembler, 18, 16, (unsigned)bytes);
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
     hl_a64_emit32(assembler, 0xEB11025Fu);
     below = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
