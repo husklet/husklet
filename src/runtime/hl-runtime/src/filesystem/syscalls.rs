@@ -154,22 +154,42 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 Some(arguments[5]),
             ),
             "lseek" => self.seek(descriptor, arguments[1], arguments[2] as u32),
-            "close" => match self.descriptors.close(descriptor) {
-                Ok(()) => LinuxResult::Value(0),
-                Err(error) => LinuxResult::Error(FileErrno::descriptor(error)),
-            },
-            "dup" => Self::descriptor_result(self.descriptors.duplicate(descriptor, 0, DescriptorFlags::default())),
+            "close" => {
+                let closed = self.descriptors.close(descriptor);
+                hl_log::hl_debug!(hl_log::tag::FS, "close descriptor={descriptor} closed={}", closed.is_ok());
+                match closed {
+                    Ok(()) => LinuxResult::Value(0),
+                    Err(error) => LinuxResult::Error(FileErrno::descriptor(error)),
+                }
+            }
+            "dup" => {
+                let result =
+                    Self::descriptor_result(self.descriptors.duplicate(descriptor, 0, DescriptorFlags::default()));
+                hl_log::hl_debug!(
+                    hl_log::tag::FS,
+                    "dup descriptor={descriptor} result={:#x}",
+                    result.encode(),
+                );
+                result
+            }
             "dup3" => {
                 let flags = arguments[2] as u32;
                 if flags & !0o2_000_000 != 0 {
                     return LinuxResult::Error(Errno::EINVAL);
                 }
                 let local = DescriptorFlags::from_bits(if flags == 0 { 0 } else { DescriptorFlags::CLOSE_ON_EXEC });
-                Self::descriptor_result(self.descriptors.duplicate_exact(
+                let result = Self::descriptor_result(self.descriptors.duplicate_exact(
                     descriptor,
                     arguments[1] as i32,
                     ExactDuplicate::Dup3(local),
-                ))
+                ));
+                hl_log::hl_debug!(
+                    hl_log::tag::FS,
+                    "dup3 descriptor={descriptor} target={} flags={flags:#x} result={:#x}",
+                    arguments[1] as i32,
+                    result.encode(),
+                );
+                result
             }
             "fcntl" => self.fcntl(descriptor, arguments[1] as u32, arguments[2]),
             "ioctl" => self.ioctl(descriptor, arguments[1] as u32, arguments[2]),

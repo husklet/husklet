@@ -5,6 +5,19 @@ use crate::{DirectoryBaseLease, RuntimeFilesystemSyscalls, RuntimePathHost};
 
 impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
     pub(super) fn path_mutation(&self, name: &str, arguments: [u64; 6]) -> LinuxResult {
+        let result = self.path_mutation_result(name, arguments);
+        hl_log::hl_debug!(
+            hl_log::tag::FS,
+            "{name} directory={} path={:#x} argument={:#x} result={:#x}",
+            arguments[0] as i32,
+            arguments[1],
+            arguments[2],
+            result.encode(),
+        );
+        result
+    }
+
+    fn path_mutation_result(&self, name: &str, arguments: [u64; 6]) -> LinuxResult {
         let Some(host) = &self.path_host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
