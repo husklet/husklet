@@ -175,8 +175,15 @@ static int chain_contract(void) {
             {0x9010, callee, sizeof(callee), 7, 16},
         };
         hl_native_source call_source = {call_spans, 3, 7, 16};
-        hl_native_projection_view stack_view = {0xa000, 0xa008, (uint64_t)(uintptr_t)&stack, 7,
-            HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
+        hl_native_projection_view stack_view = {
+            .guest_first = 0xa000,
+            .guest_last = 0xa008,
+            .host_first = (uint64_t)(uintptr_t)&stack,
+            .mapping_incarnation = 7,
+            .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+            .write_policy = HL_NATIVE_WRITE_EXACT,
+            .write_index = 0,
+        };
         hl_native_projection projection = {
             .views = &stack_view, .count = 1, .mapping_incarnation = 7};
         hl_native_translation_key caller_key = {0x9000, 7, 16, 0x9000, 0x9005, 0, 0, 0, 0, 0};
@@ -285,8 +292,15 @@ static int chain_contract(void) {
             {0xb020, leaf, sizeof(leaf), 7, 16},
         };
         hl_native_source nested_source = {nested_spans, 5, 7, 16};
-        hl_native_projection_view nested_view = {0xc000, 0xc010, (uint64_t)(uintptr_t)stack, 7,
-            HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
+        hl_native_projection_view nested_view = {
+            .guest_first = 0xc000,
+            .guest_last = 0xc010,
+            .host_first = (uint64_t)(uintptr_t)stack,
+            .mapping_incarnation = 7,
+            .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+            .write_policy = HL_NATIVE_WRITE_EXACT,
+            .write_index = 0,
+        };
         hl_native_projection nested_projection = {
             .views = &nested_view, .count = 1, .mapping_incarnation = 7};
 
@@ -358,8 +372,15 @@ static int rewritten_callee_contract(void) {
         {0xd100, callee, sizeof(callee), 7, 16},
     };
     hl_native_source source = {spans, 3, 7, 16};
-    hl_native_projection_view stack_view = {0xe000, 0xe008, (uint64_t)(uintptr_t)&stack, 7,
-        HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE, 0};
+    hl_native_projection_view stack_view = {
+        .guest_first = 0xe000,
+        .guest_last = 0xe008,
+        .host_first = (uint64_t)(uintptr_t)&stack,
+        .mapping_incarnation = 7,
+        .permissions = HL_NATIVE_ACCESS_READ | HL_NATIVE_ACCESS_WRITE,
+        .write_policy = HL_NATIVE_WRITE_EXACT,
+        .write_index = 0,
+    };
     hl_native_projection projection = {
         .views = &stack_view, .count = 1, .mapping_incarnation = 7};
     hl_native_run_request request = {.abi = HL_NATIVE_ABI, .size = sizeof(request),
