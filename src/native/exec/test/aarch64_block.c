@@ -65,19 +65,70 @@ int main(void) {
     uint8_t scratch[HL_A64_BLOCK_MAX_BYTES];
     hl_native_diagnostics before = {.abi = HL_NATIVE_ABI, .size = sizeof(before)};
     hl_native_diagnostics after = before;
+    hl_native_lookup_context context = {0};
     hl_native_change replace = {.abi = HL_NATIVE_ABI, .size = sizeof(replace),
                                 .kind = HL_NATIVE_REPLACE, .mapping_epoch = 1};
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
-    CHECK(hl_a64_block_cache(executor, &source, first, scratch, sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
     CHECK(state == HL_A64_BLOCK_BUILT);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(context.lookups == 2 && context.misses == 1 && context.hits == 1 &&
+          context.epoch_rejections == 0);
+    CHECK(after.cache_lookups == before.cache_lookups + 2 &&
+          after.cache_misses == before.cache_misses + 1 &&
+          after.cache_hits == before.cache_hits + 1);
+    before = after;
     CHECK(hl_a64_block_cache(executor, &source, first, scratch, sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
     CHECK(state == HL_A64_BLOCK_HIT);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.cache_lookups == before.cache_lookups + 1 &&
+          after.cache_hits == before.cache_hits + 1);
+    context = (hl_native_lookup_context){0};
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
+    CHECK(state == HL_A64_BLOCK_HIT && context.lookups == 1 && context.hits == 1);
+    context = (hl_native_lookup_context){0};
     CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
-    CHECK(hl_a64_block_cache(executor, &source, first + 20, scratch, sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first + 20, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
     CHECK(state == HL_A64_BLOCK_FALLBACK);
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(context.lookups == 1 && context.misses == 1);
     CHECK(after.publications == before.publications && after.live_blocks == before.live_blocks);
+    CHECK(after.cache_lookups == before.cache_lookups + 1 &&
+          after.cache_misses == before.cache_misses + 1);
+
+    context = (hl_native_lookup_context){0};
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    CHECK(hl_a64_block_cache_inner(NULL, &context, &source, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_ARGUMENT);
+    CHECK(hl_a64_block_cache_inner(executor, NULL, &source, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_ARGUMENT);
+    CHECK(hl_a64_block_cache_inner(executor, &context, NULL, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_ARGUMENT);
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
+                                   sizeof(scratch), NULL, &state) == HL_NATIVE_ARGUMENT);
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
+                                   sizeof(scratch), &cached, NULL) == HL_NATIVE_ARGUMENT);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(context.lookups == 0 && after.cache_lookups == before.cache_lookups &&
+          after.cache_hits == before.cache_hits && after.cache_misses == before.cache_misses &&
+          after.epoch_rejections == before.epoch_rejections);
+
+    replace.mapping_epoch = 2;
+    CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    context = (hl_native_lookup_context){0};
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_STATE);
+    CHECK(context.lookups == 1 && context.epoch_rejections == 1);
+    context = (hl_native_lookup_context){UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
+    CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
+                                   sizeof(scratch), &cached, &state) == HL_NATIVE_STATE);
+    CHECK(context.lookups == UINT64_MAX && context.hits == UINT64_MAX &&
+          context.misses == UINT64_MAX && context.epoch_rejections == UINT64_MAX);
     hl_native_destroy(executor);
     return 0;
 #endif

@@ -73,15 +73,16 @@ int hl_a64_block_build(const hl_a64_source *source, uint64_t pc, void *buffer, s
     return 1;
 }
 
-hl_native_status hl_a64_block_cache(hl_native_executor *executor, const hl_a64_source *source, uint64_t pc,
-                                    void *buffer, size_t capacity, hl_native_code *code,
-                                    hl_a64_block_state *state) {
+hl_native_status hl_a64_block_cache_inner(hl_native_executor *executor, hl_native_lookup_context *context,
+                                          const hl_a64_source *source, uint64_t pc,
+                                          void *buffer, size_t capacity, hl_native_code *code,
+                                          hl_a64_block_state *state) {
     hl_native_translation_key key;
     hl_a64_block_result block;
     hl_native_emission emission;
     hl_native_lookup lookup;
     hl_native_status status;
-    if (executor == NULL || source == NULL || code == NULL || state == NULL ||
+    if (executor == NULL || context == NULL || source == NULL || code == NULL || state == NULL ||
         !hl_a64_source_validate(source) || pc > UINT64_MAX - 4)
         return HL_NATIVE_ARGUMENT;
     key = (hl_native_translation_key){
@@ -96,7 +97,7 @@ hl_native_status hl_a64_block_cache(hl_native_executor *executor, const hl_a64_s
         .direct_token = executor->memory_mode == 0 ? 0 : (uint64_t)(uintptr_t)executor->direct_authority,
         .direct_generation = executor->memory_mode == 0 ? 0 : executor->direct_generation,
     };
-    lookup = hl_native_translation_lookup(executor, &key, code);
+    lookup = hl_native_translation_lookup_inner(executor, context, &key, code);
     if (lookup == HL_NATIVE_HIT) {
         *state = HL_A64_BLOCK_HIT;
         return HL_NATIVE_OK;
@@ -113,5 +114,13 @@ hl_native_status hl_a64_block_cache(hl_native_executor *executor, const hl_a64_s
                                     .provenance_count = 1};
     status = hl_native_translation_publish(executor, &key, &emission);
     if (status != HL_NATIVE_OK) return status;
-    return hl_native_translation_lookup(executor, &key, code) == HL_NATIVE_HIT ? HL_NATIVE_OK : HL_NATIVE_STATE;
+    return hl_native_translation_lookup_inner(executor, context, &key, code) == HL_NATIVE_HIT
+        ? HL_NATIVE_OK : HL_NATIVE_STATE;
+}
+
+hl_native_status hl_a64_block_cache(hl_native_executor *executor, const hl_a64_source *source, uint64_t pc,
+                                    void *buffer, size_t capacity, hl_native_code *code,
+                                    hl_a64_block_state *state) {
+    hl_native_lookup_context context = {0};
+    return hl_a64_block_cache_inner(executor, &context, source, pc, buffer, capacity, code, state);
 }

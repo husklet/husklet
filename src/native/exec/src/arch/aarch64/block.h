@@ -24,5 +24,8 @@ typedef struct hl_a64_block_result {
 int hl_a64_block_build(const hl_a64_source *, uint64_t, void *, size_t, hl_a64_block_result *);
 hl_native_status hl_a64_block_cache(hl_native_executor *, const hl_a64_source *, uint64_t,
                                     void *, size_t, hl_native_code *, hl_a64_block_state *);
+hl_native_status hl_a64_block_cache_inner(hl_native_executor *, hl_native_lookup_context *,
+                                          const hl_a64_source *, uint64_t, void *, size_t,
+                                          hl_native_code *, hl_a64_block_state *);
 
 #endif
