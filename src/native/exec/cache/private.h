@@ -13,7 +13,7 @@ typedef struct cache_entry {
     uint64_t memory_mode, authority_generation;
     uint64_t loop_pc;
     uint64_t certificate_identity;
-    uint32_t instruction_count, relocation_count, conditional_self_loop, cycle_safe, generation, state;
+    uint32_t instruction_count, relocation_count, conditional_self_loop, cycle_safe, successor_region, generation, state;
 } cache_entry;
 
 typedef struct provenance_entry {
@@ -39,7 +39,7 @@ typedef struct resolved_relocation {
     uint32_t target_epoch_wildcard;
 } resolved_relocation;
 
-_Static_assert(sizeof(cache_entry) == 136, "cache entry footprint drifted");
+_Static_assert(sizeof(cache_entry) == 144, "cache entry footprint drifted");
 _Static_assert(sizeof(pending_relocation) == 160, "pending relocation footprint drifted");
 _Static_assert(sizeof(resolved_relocation) == 224, "resolved relocation footprint drifted");
 

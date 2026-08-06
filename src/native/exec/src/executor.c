@@ -1164,7 +1164,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             .direct_token = (uint64_t)(uintptr_t)direct_token,
             .direct_generation = authority_generation,
         };
-        if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT) {
+        if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
+            (code.source_last > key.source_last && !code.successor_region)) {
             status = hl_native_execution_leave(&execution);
             if (status != HL_NATIVE_OK) return status;
             const hl_a64_source *build_source = active_source;
@@ -1219,7 +1220,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             /* Publication and reset both require exclusive mutation admission.
              * Resolve only after re-admission, so no pointer selected before
              * that boundary can survive an epoch change or fork repair. */
-            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
+                (code.source_last > key.source_last && !code.successor_region))
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         if (cpu->indirect_site != 0) {
@@ -1229,7 +1231,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             if (status != HL_NATIVE_OK) return status;
             status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
-            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
+                (code.source_last > key.source_last && !code.successor_region))
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         uint64_t executed_before = cpu->executed;

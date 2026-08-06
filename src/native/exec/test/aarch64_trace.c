@@ -1239,6 +1239,66 @@ int main(void) {
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x4018);
     run_request.size = sizeof(run_request);
+    {
+        const uint32_t successor_branch = UINT32_C(0x14000400); /* b 0x9300 from 0x8300 */
+        const hl_a64_source_span successor_span = {
+            0x8300, (const uint8_t *)&successor_branch, sizeof(successor_branch), 7, 8};
+        const hl_a64_source successor_source = {&successor_span, 1, 7, 8};
+        source_provider successor = {.word = UINT32_C(0xd4000001), .guest = 0x9300};
+        hl_native_diagnostics successor_before = {
+            .abi = HL_NATIVE_ABI, .size = sizeof(successor_before)};
+        hl_native_diagnostics successor_after = successor_before;
+        CHECK(hl_native_diagnose(run_executor, &successor_before) == HL_NATIVE_OK);
+        run_request.source = &successor_source;
+        run_request.source_context = &successor;
+        run_request.source_resolve = resolve_source;
+        run_request.size = offsetof(hl_native_run_request, operand_context);
+        run_request.budget = 2;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x8300;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x9300);
+        CHECK(run_state.program == 0x9300 && run_state.executed == 2 && run_state.budget == 0);
+        CHECK(successor.calls == 1);
+        CHECK(hl_native_diagnose(run_executor, &successor_after) == HL_NATIVE_OK);
+        CHECK(successor_after.publications == successor_before.publications + 1);
+
+        successor.calls = 0;
+        run_request.budget = 1;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x8300;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_YIELD && run_output.instruction == 0x9300);
+        CHECK(run_state.program == 0x9300 && run_state.executed == 1 && run_state.budget == 0);
+        CHECK(successor.calls == 0);
+
+        run_request.budget = 2;
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x8300;
+        run_state.interrupt = 1;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_INTERRUPT && run_output.instruction == 0x8300);
+        CHECK(run_state.executed == 0 && run_state.budget == 2 && successor.calls == 0);
+
+        CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_OK);
+        CHECK(hl_native_after_fork(run_executor, 1) == HL_NATIVE_OK);
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x8300;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.executed == 2 &&
+              run_state.budget == 0 && successor.calls == 0);
+
+        const hl_native_change gap = {
+            .abi = HL_NATIVE_ABI, .size = sizeof(gap), .kind = HL_NATIVE_INVALIDATE,
+            .first = 0x8500, .last = 0x8510, .mapping_epoch = 7};
+        CHECK(hl_native_changed(run_executor, &gap, 1) == HL_NATIVE_OK);
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x8300;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.executed == 2 &&
+              run_state.budget == 0 && successor.calls == 1);
+    }
+    run_request.size = sizeof(run_request);
     const uint32_t provider_branch = 0x94000400u; /* bl 0x9000 from 0x8000 */
     const hl_a64_source_span provider_span = {
         0x8000, (const uint8_t *)&provider_branch, sizeof(provider_branch), 7, 8};
