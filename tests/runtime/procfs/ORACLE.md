@@ -55,8 +55,9 @@ publication; retained renderers correspond to `Procfs::open`, `read_link`,
 but remain enforceable on Linux.
 
 Descriptor enumeration and targeted lookup preserve separate retained
-capabilities. `proc_fdvis_list` and `proc_fd_dir_pid_open` take a bounded,
-ordered view of the published arena for an fd/fdinfo directory, while
+capabilities. `proc_fdvis_list` and `proc_fd_dir_pid_open` take a bounded view
+of the published arena in arena-slot enumeration order, not guest-fd order, for
+an fd/fdinfo directory, while
 `proc_fdvis_lookup` and `proc_fd_link_pid` select one live descriptor identity.
 Rust maps listing to `DescriptorTable::bounded_active_snapshots`: count and peak
 vector bytes are admitted atomically under the table read lock before allocation,
@@ -76,10 +77,13 @@ calls to `procfd_num`, `proc_any_leaf`, `proc_pid_member`, and
 `proc_fd_link_pid`. Self links reject engine-only eventfd peers, translate PTY
 master/slave handles to `/dev/ptmx` or `/dev/pts/N`, then use the native fd path;
 peer links validate live process membership and query the peer host fd table.
-Closed, missing, pathless, or failed host lookups produce `ENOENT`; successful
-targets use Linux readlink truncation to the guest buffer length without a
-terminator. There is no guest-ISA branch; host-specific path discovery and peer
-inspection remain behind native adapters.
+Closed descriptors fail the initial `F_GETFD` existence check with `ENOENT`.
+Pathless open descriptions synthesize Linux pipe, socket, or anonymous-inode
+targets instead of failing path discovery. A failed host-path rebase can surface
+`EACCES`; missing peer entries remain `ENOENT`. Successful targets use Linux
+readlink truncation to the guest buffer length without a terminator. There is no
+guest-ISA branch; host-specific path discovery and peer inspection remain behind
+native adapters.
 
 The retained directory materialization was audited at `g_procfd_dirs`,
 `procfd_dirs_reap`, `procfd_dirs_atexit`, `proc_fdinfo_dir_open`,
@@ -87,12 +91,14 @@ The retained directory materialization was audited at `g_procfd_dirs`,
 in `../engine/src/linux_abi/container/vfs.c`. Each bounded global slot owns a
 temporary directory path and returned host directory fd; opportunistic reap
 removes it after that fd closes, while atexit force-removes survivors. Directory
-names are materialized from the open-fd set at directory open. Opening or reading
-an `fdinfo/N` body instead rechecks the then-live descriptor and renders current
-position, flags, mount, and type-specific state. The retained ordering is thus
-name snapshot at directory-open followed by live body admission/rendering, not
-one atomic arena snapshot spanning both; a listed name may disappear before its
-body is opened.
+names are materialized from the open-fd set at directory open. Opening an
+`fdinfo/N` file validates the then-live descriptor once and renders its current
+position, flags, and mount fields into a frozen `proc_text_fd`; later reads use
+that frozen text without rechecking the descriptor, and this renderer has no
+type-specific extras. The retained ordering is thus arena-slot name snapshot at
+directory-open followed by one live admission/render at fdinfo file-open, not one
+atomic snapshot spanning both; a listed name may disappear before its body is
+opened, while an already-open body remains readable after descriptor teardown.
 
 ### PID reuse identity prerequisite
 
