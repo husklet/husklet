@@ -66,6 +66,9 @@ struct Entry {
 impl Entry {
     fn inode(&self) -> Result<(u64, u64), RuntimePathError> {
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: the ParentLease keeps its directory fd open, `self.name` is a live
+        // NUL-terminated CString, and `status` is a uniquely borrowed, correctly aligned
+        // stat slot that fstatat fully initializes on success.
         let result = unsafe {
             libc::fstatat(
                 self.parent.as_raw_fd(),
@@ -77,6 +80,8 @@ impl Entry {
         if result != 0 {
             return Err(HostError::map(std::io::Error::last_os_error()));
         }
+        // SAFETY: fstatat returned 0 above, so the kernel initialized every field of the
+        // stat slot; libc::stat is plain data with no validity invariants.
         let status = unsafe { status.assume_init() };
         Ok((status.st_dev, status.st_ino))
     }
@@ -92,6 +97,8 @@ impl PreparedUnixSocketPathBind for Bind {
     fn commit(self: Box<Self>) {}
     fn rollback(self: Box<Self>) {
         if self.entry.inode().ok() == Some(self.inode) {
+            // SAFETY: `self` still owns the ParentLease fd and the NUL-terminated name,
+            // and the inode check above confirms we unlink the socket node we created.
             unsafe {
                 libc::unlinkat(self.entry.parent.as_raw_fd(), self.entry.name.as_ptr(), 0);
             }
@@ -123,6 +130,8 @@ impl UnixSocketPathPort for UnixSocketPaths {
         identity
             .check_access(&metadata, access)
             .map_err(|_| hl_linux::Errno::EACCES)?;
+        // SAFETY: `entry` owns a live ParentLease fd and a NUL-terminated name that both
+        // outlive the call; mknodat takes no output buffer and retains no pointer.
         let result = unsafe {
             libc::mknodat(
                 entry.parent.as_raw_fd(),
@@ -137,6 +146,8 @@ impl UnixSocketPathPort for UnixSocketPaths {
         let inode = match entry.inode() {
             Ok(inode) => inode,
             Err(error) => {
+                // SAFETY: `entry` still owns its ParentLease fd and name CString, and this
+                // only removes the node mknodat just created on this error path.
                 unsafe {
                     libc::unlinkat(entry.parent.as_raw_fd(), entry.name.as_ptr(), 0);
                 }

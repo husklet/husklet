@@ -81,6 +81,8 @@ pub(super) fn set(
                     len: filters.len().try_into().map_err(|_| RuntimeNetworkError::Invalid)?,
                     filter: filters.as_ptr().cast_mut(),
                 };
+                // SAFETY: `filters` outlives this call and backs `program.filter` for
+                // exactly `len` entries, so the kernel copies in-bounds initialized memory.
                 unsafe {
                     libc::setsockopt(
                         descriptor,

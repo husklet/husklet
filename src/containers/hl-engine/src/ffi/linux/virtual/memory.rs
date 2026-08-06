@@ -436,10 +436,10 @@ impl Memory {
             .mappings
             .access(range.start().get(), range.length(), Protection::WRITE)?;
         let (address, length) = self.host_range(range.start().get(), range.length())?;
-        // SAFETY: the ledger proves the exact range writable, the arena lock
-        // excludes mapping/protection changes, and write_bytes retains no
-        // pointer. The caller performs this exact-range clear before the host
-        // discard operation so the zeroing cannot repopulate discarded pages.
+        // The caller performs this exact-range clear before the host discard
+        // operation so the zeroing cannot repopulate discarded pages.
+        // SAFETY: the ledger proves the exact range writable, the held arena lock
+        // excludes mapping/protection changes, and write_bytes retains no pointer.
         unsafe { std::ptr::write_bytes(address.cast::<u8>(), 0, length) };
         self.invalidate(&state, range.start().get(), range.length())
     }

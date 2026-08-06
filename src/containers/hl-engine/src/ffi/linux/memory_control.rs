@@ -109,6 +109,8 @@ impl RuntimeMemoryHost for Control {
             // and make mincore contradict Linux immediately after the call.
             let _ = self.arena.clear(range);
         }
+        // SAFETY: `host_range` checked the range against the arena, which keeps the
+        // mapping alive; madvise is advisory, retains no pointer, and cannot unwind.
         let result = unsafe { madvise(address, length, value) };
         if result != 0 && advice == hl_linux::Advice::Remove {
             return Err(Self::failure());

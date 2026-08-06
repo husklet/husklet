@@ -552,10 +552,16 @@ impl Native {
         }
         // Snapshot table-owned state before replacement. Options are typed and
         // bounded at the Linux ABI boundary; no unbounded host buffer is retained.
+        // SAFETY: entry.descriptor is owned by the locked socket table, so it stays open
+        // across this call; F_GETFL takes no pointer argument and only reads fd flags.
         let flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFL) };
+        // SAFETY: same live table-owned descriptor under the same lock; F_GETFD is a
+        // pointer-free query that cannot alias or free anything.
         let descriptor_flags = unsafe { libc::fcntl(entry.descriptor, libc::F_GETFD) };
         // Configure the unshared replacement completely before dup2. Failure
         // therefore leaves the original descriptor and projected state intact.
+        // SAFETY: replacement is the descriptor just returned by socket() above and is
+        // solely owned here; F_SETFL/F_SETFD pass only integer flags, no pointers.
         unsafe {
             if flags >= 0 {
                 libc::fcntl(replacement, libc::F_SETFL, flags);

@@ -154,6 +154,8 @@ impl PendingInodeLink {
         // this inode. Match the retained engine's capability-independent
         // fallback: create the name exclusively and copy through offset I/O so
         // the source open-file-description cursor remains unchanged.
+        // SAFETY: `parent` holds its directory fd open and `name` is a live
+        // NUL-terminated CString; openat retains no pointer past return.
         let descriptor = unsafe {
             libc::openat(
                 parent.as_raw_fd(),

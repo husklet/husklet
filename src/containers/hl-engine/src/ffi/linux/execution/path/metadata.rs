@@ -184,6 +184,9 @@ impl XattrTarget {
 
     fn get(&self, name: &XattrName) -> Result<Vec<u8>, Errno> {
         let name = Self::name(name)?;
+        // SAFETY: both callers below pass either (null, 0) or a pointer into `value` with
+        // its exact length, and `name`/`path` CStrings outlive each call; a racing xattr
+        // growth yields ERANGE rather than an overrun.
         let read = |output: *mut libc::c_void, size| unsafe {
             match self {
                 Self::Path(path) => {
@@ -207,6 +210,9 @@ impl XattrTarget {
     }
 
     fn list(&self) -> Result<Vec<u8>, Errno> {
+        // SAFETY: both callers below pass either (null, 0) or `value`'s pointer with its
+        // exact length, and the `path` CString outlives each call; a racing xattr growth
+        // yields ERANGE rather than an overrun.
         let read = |output: *mut libc::c_char, size| unsafe {
             match self {
                 Self::Path(path) => {
@@ -231,6 +237,9 @@ impl XattrTarget {
 
     fn set(&self, name: &XattrName, value: &[u8], flags: i32) -> Result<(), Errno> {
         let name = Self::name(name)?;
+        // SAFETY: `value` is a live borrowed slice passed with its own length, and the
+        // `name`/`path` CStrings are NUL-terminated and outlive the call; the kernel only
+        // reads from these buffers.
         let result = unsafe {
             match self {
                 Self::Path(path) => {
@@ -251,6 +260,8 @@ impl XattrTarget {
 
     fn remove(&self, name: &XattrName) -> Result<(), Errno> {
         let name = Self::name(name)?;
+        // SAFETY: the `name`/`path` CStrings are NUL-terminated and live for the whole
+        // call, and the File variant's descriptor is kept open by the borrowed `File`.
         let result = unsafe {
             match self {
                 Self::Path(path) => {

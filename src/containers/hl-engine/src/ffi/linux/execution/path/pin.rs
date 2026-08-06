@@ -250,8 +250,6 @@ impl Host {
         mode: u32,
     ) -> Result<File, RuntimePathError> {
         let flags = Self::open_flags(intent)?;
-        // SAFETY: parent and name remain live for the non-retaining openat;
-        // success returns one new descriptor with unique ownership.
         let mutation = OpenIntent::WRITE
             | OpenIntent::CREATE
             | OpenIntent::TRUNCATE
@@ -262,6 +260,8 @@ impl Host {
         } else {
             Self::visible_parent(parent, name)?
         };
+        // SAFETY: the resolved `parent` lease holds its directory fd open and `name` is a
+        // live NUL-terminated CString; openat reads both and retains no pointer.
         let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags, mode as libc::mode_t) };
         if descriptor < 0 {
             return Err(super::HostError::map(std::io::Error::last_os_error()));

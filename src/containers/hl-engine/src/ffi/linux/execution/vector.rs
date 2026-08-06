@@ -152,6 +152,9 @@ impl VectorAdapter {
         // SpaceLease; the descriptor stays owned and locked, vectors outlive
         // this non-retaining libc call, and zero-length sentinels are not read.
         #[cfg(target_os = "linux")]
+        // SAFETY: `vectors` outlives the call and holds `count` iovecs backed by live,
+        // direction-validated SpaceLeases; the descriptor stays owned and locked and libc
+        // retains no pointer past return.
         let result = unsafe {
             match (request.direction, request.flags, request.position) {
                 (VectorDirection::Read, Some(flags), _) => {
@@ -177,6 +180,8 @@ impl VectorAdapter {
         // Non-Linux hosts lack preadv2/pwritev2. Validation admits only flag
         // zero and write-side RWF_APPEND; the latter uses the EOF offset above.
         #[cfg(not(target_os = "linux"))]
+        // SAFETY: same invariant as the Linux arm — `vectors` outlives the call with
+        // `count` live lease-backed iovecs and the descriptor stays owned and locked.
         let result = unsafe {
             match (request.direction, request.position) {
                 (VectorDirection::Read, VectorPosition::Shared) => libc::readv(descriptor, vectors.as_ptr(), count),
