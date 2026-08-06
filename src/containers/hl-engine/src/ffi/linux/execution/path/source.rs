@@ -336,15 +336,15 @@ impl OrdinaryContext {
     fn raw_non_directory(&self, guest: &GuestPathBytes) -> Result<bool, RuntimePathError> {
         let resolver = Resolver::new(self.host(), self.mounts());
         let root = GuestPathBytes::new(b"/").map_err(|_| RuntimePathError::Invalid)?;
-        let resolved = match resolver.resolve(ResolveRequest {
+        let Ok(resolved) = resolver.resolve(ResolveRequest {
             path: guest,
             base: &root,
             nofollow_final: true,
             no_symlinks: false,
             allow_missing_final: false,
-        }) {
-            Ok(resolved) => resolved,
-            Err(_) => return Ok(false),
+        })
+        else {
+            return Ok(false)
         };
         let Some(name) = resolved.final_name() else {
             return Ok(false);

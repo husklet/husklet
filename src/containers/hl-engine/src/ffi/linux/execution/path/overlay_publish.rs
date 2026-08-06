@@ -82,10 +82,7 @@ pub(super) fn prepare_write(lease: &mut ParentLease, name: &CStr) -> io::Result<
         return Ok(false);
     }
     for lower in lease.lower_parents() {
-        let source = match open_regular(lower, name)? {
-            Some(source) => source,
-            None => continue,
-        };
+        let Some(source) = open_regular(lower, name)? else { continue };
         CopyUp::stage(lease, name, &source)?.commit()?;
         return Ok(true);
     }

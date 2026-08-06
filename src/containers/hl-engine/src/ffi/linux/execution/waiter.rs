@@ -296,10 +296,7 @@ mpsc::TrySendError::Disconnected(Job::Dispatch(returned))) => {
                 #[cfg(test)]
                 Arc::clone(&self.active),
             );
-            let (lane, worker) = match spawned {
-                Ok(spawned) => spawned,
-                Err(()) => return Err(run),
-            };
+            let Ok((lane, worker)) = spawned else { return Err(run) };
             lane.busy.store(true, Ordering::Release);
             lane.jobs.send(Job::Dispatch(run)).map_err(|error| match error.0 {
                 Job::Dispatch(run) => run,

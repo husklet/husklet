@@ -166,7 +166,7 @@ impl Terminal {
                     }
                 }
             });
-        let output = if let Ok(output) = output { output } else {
+        let Ok(output) = output else {
             self.port.close();
             master.close();
             let _ = input.join();

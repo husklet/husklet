@@ -16,10 +16,7 @@ impl EventPort {
             .iter()
             .filter(|entry| entry.descriptor < 0 && entry.generation.is_some())
         {
-            let lease = match self.descriptors.pin(entry.guest) {
-                Ok(lease) => lease,
-                Err(_) => continue,
-            };
+            let Ok(lease) = self.descriptors.pin(entry.guest) else { continue };
             if !descriptions.insert(lease.description_identity()) {
                 continue;
             }

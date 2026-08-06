@@ -131,10 +131,7 @@ impl CheckpointRuntime {
     }
 
     fn valid_listener(listener: &TcpListener, snapshot: &SocketSnapshot, status: StatusFlags) -> bool {
-        let local = match listener.local_addr() {
-            Ok(local) => local,
-            Err(_) => return false,
-        };
+        let Ok(local) = listener.local_addr() else { return false };
         let address_matches = match (&snapshot.local, local) {
             (Some(SocketAddress::Inet4 { address, port }), SocketAddr::V4(local)) => {
                 *address == local.ip().octets() && *port == local.port() && *port != 0

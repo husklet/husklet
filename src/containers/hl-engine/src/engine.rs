@@ -209,10 +209,10 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             }
         }
 
-        let workspace = if let Ok(workspace) = self.material.as_ref().map_or_else(
+        let Ok(workspace) = self.material.as_ref().map_or_else(
             || self.shared.workspaces.prepare(),
             |material| self.shared.workspaces.prepare_material(material),
-        ) { workspace } else {
+        ) else {
             self.fail_start(EngineError::WorkspaceFailed)?;
             return Err(EngineError::WorkspaceFailed);
         };

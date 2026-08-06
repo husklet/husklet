@@ -176,9 +176,9 @@ impl Runtime {
                 return Err(error);
             }
         };
-        let context = if let Ok(value) = self
+        let Ok(context) = self
             .process
-            .fork_child(source, process, Arc::clone(&space), ipc.child()?) { value } else {
+            .fork_child(source, process, Arc::clone(&space), ipc.child()?) else {
             let _ = tasks.rollback_fork_process(plan);
             return Err(Errno::ENOMEM);
         };
@@ -220,7 +220,7 @@ impl Runtime {
                 _ => Errno::EIO,
             });
         }
-        let mut runnable = if let Ok(value) = self.threads.stage_fork(&plan, Self::child_cpu(cpu, linux.stack)) { value } else {
+        let Ok(mut runnable) = self.threads.stage_fork(&plan, Self::child_cpu(cpu, linux.stack)) else {
             self.threads.discard(thread);
             let _ = tasks.rollback_fork_process(plan);
             return Err(Errno::EIO);

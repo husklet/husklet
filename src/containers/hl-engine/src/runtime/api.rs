@@ -199,9 +199,8 @@ impl Builder {
             checkpoint_source: None,
             streams: crate::composition::StandardStreams::default(),
         };
-        let backend = match EngineBackend::construct(self.isa, plan, services, &factory, workspace.clone()) {
-            Ok(value) => value,
-            Err(_) => return workspace.fail(EngineError::LaunchFailed),
+        let Ok(backend) = EngineBackend::construct(self.isa, plan, services, &factory, workspace.clone()) else {
+            return workspace.fail(EngineError::LaunchFailed)
         };
         Ok(Engine {
             backend,
