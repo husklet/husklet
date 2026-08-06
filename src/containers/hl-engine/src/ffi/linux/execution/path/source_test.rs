@@ -65,6 +65,17 @@ fn posix_mount() {
     );
 }
 
+/// Guest `/tmp` must exist, or `mkstemp` and `tmpfile` fail with `ENOENT`.
+#[test]
+fn temporary_directory_exists() {
+    let root = TestRoot::create();
+    drop(OrdinaryContext::new(root.path().as_os_str().as_bytes()).expect("ordinary namespace"));
+
+    let metadata = std::fs::metadata(root.path().join("tmp")).expect("temporary directory metadata");
+    assert!(metadata.is_dir());
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o1777);
+}
+
 #[test]
 fn reverse_projection() {
     let root = TestRoot::create();

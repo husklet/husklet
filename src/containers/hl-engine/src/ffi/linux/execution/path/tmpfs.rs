@@ -89,6 +89,25 @@ impl PosixShm {
         })
     }
 
+    /// Materialises guest `/tmp`, which the tmpfs budget already accounts for.
+    pub(super) fn create_tmp(root: &File) -> Result<(), RuntimePathError> {
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        // SAFETY: root and the name remain live for openat, which retains neither.
+        let existing = unsafe { libc::openat(root.as_raw_fd(), c"tmp".as_ptr(), flags) };
+        if existing >= 0 {
+            // SAFETY: successful openat returned one unowned descriptor.
+            drop(unsafe { File::from_raw_fd(existing) });
+            return Ok(());
+        }
+        let directory = Self::directory(root.as_raw_fd(), c"tmp", 0o1777)?;
+        // mkdirat observes umask; the mounted namespace contract is exactly 01777.
+        // SAFETY: directory is a live owned descriptor and fchmod retains no state.
+        if unsafe { libc::fchmod(directory.as_raw_fd(), 0o1777) } != 0 {
+            return Err(HostError::map(std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+
     pub(super) const fn source(&self) -> MountSourceId {
         self.source
     }

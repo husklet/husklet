@@ -517,6 +517,10 @@ impl Phase {
             .ok_or_else(|| format!("invalid phase checksum: {line}"))?
             .parse()
             .map_err(|_| format!("invalid phase checksum: {line}"))?;
+        // Every phase counts the work it completed, so zero is a silent no-op, not a pass.
+        if checksum == 0 {
+            return Err(format!("phase {name} completed no work (ok=0)"));
+        }
         Ok(Some((name.into(), Self { time, checksum })))
     }
 }
@@ -564,6 +568,7 @@ mod test {
             Phase::parse("PHASE compute us=42 ok=7"),
             Ok(Some((name, Phase { time: 42, checksum: 7 }))) if name == "compute"
         ));
+        assert!(Phase::parse("PHASE file us=100 ok=0").is_err());
     }
 
     #[test]

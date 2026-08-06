@@ -608,6 +608,10 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
                 .and_then(|field| field.strip_prefix("ok="))
                 .ok_or_else(|| format!("invalid PHASE checksum {line:?}"))?
                 .parse::<u64>()?;
+            // Every phase counts the work it completed, so zero is a silent no-op, not a pass.
+            if checksum == 0 {
+                return Err(format!("PHASE {name} completed no work (ok=0)").into());
+            }
             Ok((name.to_owned(), time, checksum))
         })
         .collect()
@@ -636,6 +640,11 @@ mod tests {
         let phases = parse_phases(b"noise\nPHASE compute us=42 ok=7\n").unwrap();
         assert_eq!(phases, vec![("compute".to_owned(), 42, 7)]);
         assert!(parse_phases(b"PHASE compute ms=42 ok=7\n").is_err());
+    }
+
+    #[test]
+    fn zero_work_count_is_rejected() {
+        assert!(parse_phases(b"PHASE file us=100 ok=0\n").is_err());
     }
 
     #[test]
