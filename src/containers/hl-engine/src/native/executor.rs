@@ -1917,6 +1917,9 @@ impl Executor {
             memory: &raw const services,
         };
         let mut raw = std::ptr::null_mut();
+        // SAFETY: `config` and the `services` table it points at are live for this call and
+        // are copied by the engine, while the callback context stays valid afterwards
+        // because it is the heap body of `memory`, which is moved into `Self` unchanged.
         if unsafe { hl_native_create(&raw const config, &raw mut raw) } != 0 {
             return Err(());
         }
@@ -2011,6 +2014,9 @@ impl Executor {
             instruction_generation: generation.instructions,
         };
         let mut token = std::ptr::null_mut();
+        // SAFETY: `&self` keeps the handle alive; `descriptor` and `token` are live locals
+        // and the engine copies the descriptor rather than retaining the pointer. The
+        // returned token's lease is held by the DirectAuthority that owns it.
         if unsafe { hl_native_direct_register(self.handle.as_ptr(), &raw const descriptor, &raw mut token) } != 0 {
             return Err(());
         }
@@ -2035,6 +2041,8 @@ impl Executor {
             last: 0,
             mapping_epoch,
         };
+        // SAFETY: `&self` keeps the handle alive and `change` is one live local matching
+        // the count of 1; the engine reads it during the call and retains no pointer.
         (unsafe { hl_native_changed(self.handle.as_ptr(), &raw const change, 1) } == 0)
             .then_some(())
             .ok_or(())
@@ -2060,6 +2068,8 @@ impl Executor {
                 mapping_epoch: mapping_incarnation,
             })
             .collect();
+        // SAFETY: `&self` keeps the handle alive and `changes` outlives the call, supplying
+        // exactly `len` initialized entries that the engine reads without retaining.
         (unsafe { hl_native_changed(self.handle.as_ptr(), changes.as_ptr(), changes.len()) } == 0)
             .then_some(())
             .ok_or(())
@@ -2140,6 +2150,8 @@ impl Executor {
             ibtc_shared_hits: 0,
             ibtc_auth_rejections: 0,
         };
+        // SAFETY: `&self` keeps the handle alive and `output` is a fully initialized local
+        // the engine only overwrites; it is not retained past the call.
         (unsafe { hl_native_diagnose(self.handle.as_ptr(), &raw mut output) } == 0)
             .then_some(output)
             .ok_or(())
@@ -2760,6 +2772,9 @@ impl Executor {
             address: 0,
             code: 0,
         };
+        // SAFETY: as in the aarch64 path -- `cpu`, `request` and `output` are repr(C)
+        // locals borrowed for exactly this call, and the `&self` borrow excludes executor
+        // destruction; every context pointer inside `request` outlives the run.
         if unsafe { hl_native_run(self.handle.as_ptr(), &raw mut cpu, &raw const request, &raw mut output) } != 0 {
             return Err(());
         }
@@ -2986,12 +3001,18 @@ mod test {
     unsafe impl HostFaultOwner for FakeFaultOwner {
         unsafe fn publish(&self, view: HostFaultView) -> Result<(), ()> {
             assert!(!unsafe { view.contains(0) });
+            // SAFETY: inside `publish`, the trait contract guarantees the scope's cpu
+            // handle is live and lent to this thread until the matching unpublish.
             let cpu = unsafe { &*view.0.cpu };
+            // SAFETY: the executor was created for aarch64, so the live cpu handle's
+            // `state` points at an initialized `Aarch64Cpu` for the same interval.
             let state = unsafe { &*cpu.state.cast::<schema::Aarch64Cpu>() };
             self.authority
                 .store(state.active_authority, std::sync::atomic::Ordering::Relaxed);
             let mut stolen = view.0;
             self.borrowed_leave.store(
+                // SAFETY: `stolen` is a local copy of the still-published scope, so the
+                // call is well-formed; the test asserts it is rejected as a non-owner.
                 unsafe { hl_native_fault_scope_leave(&raw mut stolen) },
                 std::sync::atomic::Ordering::Relaxed,
             );
@@ -3369,6 +3390,8 @@ mod test {
         fn host_environment() -> (u64, u64) {
             let fpcr: u64;
             let fpsr: u64;
+            // SAFETY: gated to aarch64, these `mrs` reads copy the two FP control
+            // registers into locals; they touch no memory and have no side effects.
             unsafe {
                 std::arch::asm!("mrs {value}, fpcr", value = out(reg) fpcr);
                 std::arch::asm!("mrs {value}, fpsr", value = out(reg) fpsr);
@@ -3527,6 +3550,8 @@ mod test {
         let dual = u32::from(cfg!(target_os = "linux"));
         assert_eq!(unsafe { reserve(context, 4096, 4096, dual, &raw mut mapping) }, 0);
         assert_eq!(unsafe { write_begin(context) }, 0);
+        // SAFETY: `reserve` above succeeded with a 4096-byte mapping and `write_begin` made
+        // it writable, so the first 16 bytes are in bounds and uniquely owned by this test.
         unsafe { std::ptr::write_bytes(memory.writable, 0xcc, 16) };
         assert_eq!(unsafe { publish(context, 1, 8, 16) }, 0);
         assert_eq!(unsafe { write_end(context) }, 0);
@@ -3535,6 +3560,8 @@ mod test {
         if cfg!(target_os = "linux") {
             assert_ne!(memory.writable, memory.executable);
             assert_eq!(memory.write_transitions, 0);
+            // SAFETY: 24 bytes lie inside the live 4096-byte readable executable alias, and
+            // the borrow ends before any repair/release invalidates the mapping.
             let executable = unsafe { std::slice::from_raw_parts(memory.executable.cast::<u8>(), 24) };
             assert_eq!(&executable[..16], &[0xcc; 16]);
             #[cfg(target_os = "linux")]
@@ -3549,10 +3576,14 @@ mod test {
                 assert_ne!(memory.descriptor, descriptor);
                 assert_eq!(mapping.writable, memory.writable as usize as u64);
                 assert_eq!(mapping.executable, memory.executable as usize as u64);
+                // SAFETY: the preserving repair returned 0, so `memory.executable` names the
+                // new readable alias and 16 bytes are in bounds of its 4096-byte mapping.
                 let executable = unsafe { std::slice::from_raw_parts(memory.executable.cast::<u8>(), 16) };
                 assert_eq!(executable, &[0xcc; 16]);
                 mapping.content = 0;
                 assert_eq!(unsafe { repair(context, &raw mut mapping, 0) }, 0);
+                // SAFETY: the discarding repair returned 0, so `memory.executable` names the
+                // fresh readable alias and 16 bytes are in bounds of its 4096-byte mapping.
                 let executable = unsafe { std::slice::from_raw_parts(memory.executable.cast::<u8>(), 16) };
                 assert_eq!(executable, &[0; 16]);
             }
@@ -3579,20 +3610,32 @@ mod test {
             content: 16,
         };
         assert_eq!(unsafe { reserve(context, 4096, 4096, 1, &raw mut mapping) }, 0);
+        // SAFETY: `reserve` succeeded above with a 4096-byte writable mapping owned solely
+        // by this test, so the first 16 bytes are in bounds.
         unsafe { std::ptr::write_bytes(memory.writable, 0x11, 16) };
+        // SAFETY: fork takes no arguments; the child below touches only the async-signal
+        // safe subset, so no lock held by another test thread can be observed.
         let child = unsafe { libc::fork() };
         assert!(child >= 0);
         if child == 0 {
+            // SAFETY: `context` still addresses the inherited `Box<ExecutableMemory>` in
+            // the child's copied address space, and repair only issues raw syscalls.
             let status = unsafe { repair(context, &raw mut mapping, 1) };
             if status == 0 {
+                // SAFETY: repair succeeded, so `memory.writable` names the child's private
+                // 4096-byte writable alias and 16 bytes are in bounds of it.
                 unsafe { std::ptr::write_bytes(memory.writable, 0x22, 16) };
             }
+            // SAFETY: `_exit` bypasses atfork handlers and destructors, which is required
+            // because this child was forked from a multi-threaded test process.
             unsafe { libc::_exit(status as i32) };
         }
         let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(child, &raw mut status, 0) }, child);
         assert!(libc::WIFEXITED(status));
         assert_eq!(libc::WEXITSTATUS(status), 0);
+        // SAFETY: the parent's own mapping is untouched by the child and still live, so 16
+        // bytes are in bounds; waitpid above ensures the child has already exited.
         let parent = unsafe { std::slice::from_raw_parts(memory.writable.cast::<u8>(), 16) };
         assert_eq!(parent, &[0x11; 16]);
         assert_eq!(unsafe { release(context, 1) }, 0);
@@ -5236,6 +5279,8 @@ mod test {
     #[test]
     fn aarch64_branch_diagnostics_classify_source_exhaustion_without_changing_exit() {
         let words = [0xd503201f_u32; 32];
+        // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
+        // the range is in bounds; u32 is plain data and u8 has weaker alignment.
         let bytes = unsafe {
             std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
         };
@@ -5292,6 +5337,8 @@ mod test {
             0x54ffffe1,     // b.ne 0x4000
             0xd4000001,     // svc
         ];
+        // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
+        // the range is in bounds; u32 is plain data and u8 has weaker alignment.
         let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
@@ -5331,6 +5378,8 @@ mod test {
             0xd61f0020,     // br x1
             0xd4000001,     // svc
         ];
+        // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
+        // the range is in bounds; u32 is plain data and u8 has weaker alignment.
         let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
@@ -5466,6 +5515,8 @@ mod test {
             0xa8c17bfd,     // ldp x29,x30,[sp],#16
             0xd65f03c0,     // ret
         ];
+        // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
+        // the range is in bounds; u32 is plain data and u8 has weaker alignment.
         let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
@@ -5582,6 +5633,8 @@ mod test {
             0xf900_0820_u32, // str x0,[x1,#16]
             0xd400_0001,     // svc
         ];
+        // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
+        // the range is in bounds; u32 is plain data and u8 has weaker alignment.
         let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x4000,
@@ -5695,6 +5748,8 @@ mod test {
             0xf900_0040_u32, // str x0,[x2]
             0xd400_0001,     // svc
         ];
+        // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
+        // the range is in bounds; u32 is plain data and u8 has weaker alignment.
         let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x5000,
