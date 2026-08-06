@@ -302,7 +302,7 @@ impl Symbols<'_> {
         if self.test_scope {
             return;
         }
-        let count = words(&ident.to_string()).len();
+        let count = semantic_words(&ident.to_string()).len();
         if count < 4 {
             return;
         }
@@ -509,6 +509,43 @@ fn file_location(path: &Path) -> Location {
         column: 1,
         source: String::new(),
     }
+}
+
+/// Grammatical connectives join concepts instead of naming one, so density ignores them.
+fn connective(word: &str) -> bool {
+    matches!(
+        word,
+        "a" | "an"
+            | "the"
+            | "and"
+            | "or"
+            | "of"
+            | "for"
+            | "with"
+            | "without"
+            | "to"
+            | "from"
+            | "in"
+            | "into"
+            | "on"
+            | "at"
+            | "by"
+            | "as"
+            | "after"
+            | "before"
+            | "until"
+            | "when"
+            | "is"
+            | "are"
+            | "be"
+    )
+}
+
+fn semantic_words(value: &str) -> Vec<String> {
+    words(value)
+        .into_iter()
+        .filter(|word| !connective(word))
+        .collect()
 }
 
 fn words(value: &str) -> Vec<String> {

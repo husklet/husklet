@@ -275,6 +275,27 @@ fn deliberately_very_long_test_function_name() {}
 }
 
 #[test]
+fn naming_connectives() {
+    let root = fixture("connectives");
+    fs::create_dir_all(root.join("src/launcher")).unwrap();
+    fs::write(
+        root.join("src/launcher/plan.rs"),
+        r#"
+fn list_with_shared_size() {}
+fn wait_until_freeze_waits() {}
+fn reject_duplicate_fixture_destinations() {}
+"#,
+    )
+    .unwrap();
+    let workspace = Workspace::load([root.clone()]).unwrap();
+
+    let findings = SymbolName.check(&workspace).unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].subject, "reject_duplicate_fixture_destinations");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn naming_test_attribute() {
     let root = fixture("test-attribute");
     fs::create_dir_all(root.join("src/launcher")).unwrap();
