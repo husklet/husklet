@@ -91,11 +91,7 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t code_arena_upper;
     uint64_t entry_certificate_identity;
     uint64_t fault_completed;
-    /* Generated indirect probes load the shared IBTC base from here instead of
-     * materialising the pointer inline. */
     uint64_t ibtc_base;
-    /* Diagnostic execution identity. Separate from indirect_site so publishing
-     * it cannot discard a pending IBTC fill. */
     uint64_t execution_identity;
 } hl_native_aarch64_cpu;
 
