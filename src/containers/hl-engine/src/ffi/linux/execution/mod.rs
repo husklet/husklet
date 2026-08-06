@@ -63,6 +63,7 @@ use operand::ArenaMemory;
 
 use state::State;
 
+use diagnostics::LaunchPhase;
 use scheduler::ThreadTerminal;
 
 pub struct GuestExecutor {
@@ -124,12 +125,13 @@ impl GuestExecutor {
     ) -> Result<EngineExit, EngineError> {
         crate::runtime_machine::prepare_tasks(assembly)
             .map_err(|_| EngineError::Construction(crate::composition::ConstructionError::Task))?;
-        let guest_executable = routing::image::WorkspaceRoot::executable(plan).ok_or(EngineError::LaunchFailed)?;
+        let guest_executable = routing::image::WorkspaceRoot::executable(plan)
+            .ok_or_else(|| diagnostics::launch_failure(plan, LaunchPhase::Executable))?;
         let path = plan
             .executable_host
             .as_deref()
             .or_else(|| plan.arguments.first().map(Vec::as_slice))
-            .ok_or(EngineError::LaunchFailed)?;
+            .ok_or_else(|| diagnostics::launch_failure(plan, LaunchPhase::Executable))?;
         let architecture = match isa {
             GuestIsa::Aarch64 => GuestArchitecture::Aarch64,
             GuestIsa::X86_64 => GuestArchitecture::X86_64,
@@ -202,7 +204,10 @@ impl GuestExecutor {
                 environment: &environment_refs,
                 random: match self.entropy {
                     Some(entropy) => entropy,
-                    None => self.entropy_source.read().map_err(|_| EngineError::LaunchFailed)?,
+                    None => self
+                        .entropy_source
+                        .read()
+                        .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Entropy))?,
                 },
                 credentials: GuestCredentials {
                     user: uid,
@@ -217,7 +222,7 @@ impl GuestExecutor {
         let auxiliary = image_data::AuxiliaryImage::encode(loaded.initial_stack());
         let (_, loaded_space) = loader.into_parts();
         if !Arc::ptr_eq(&loaded_space.space(), &image_space) {
-            return Err(EngineError::LaunchFailed);
+            return Err(diagnostics::launch_failure(plan, LaunchPhase::Image));
         }
         image_space.publish_procfs_image(&loaded, guest_executable.clone(), plan.environment.clone());
         let entry = loaded.dynamic_handoff().start_entry();
@@ -252,7 +257,11 @@ impl GuestExecutor {
             self.authority.clone(),
             self.entropy_source.clone(),
             &services.streams,
-        )?;
+        )
+        .map_err(|error| match error {
+            EngineError::LaunchFailed => diagnostics::launch_failure(plan, LaunchPhase::Routing),
+            error => error,
+        })?;
         routed
             .process
             .space()
@@ -261,7 +270,7 @@ impl GuestExecutor {
             .process
             .tasks()
             .publish_arguments(routed.process.process_id(), plan.arguments.clone())
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         routed.process.set_auxiliary(auxiliary)?;
         let execution_root = routing::image::WorkspaceRoot::select(plan);
         let execution_lowers = if plan.options.get("HL_OVERLAY_UPPER").is_some() {
@@ -308,34 +317,34 @@ impl GuestExecutor {
         routed
             .process
             .install_exec(&exec)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         let exec_slot = assembly.exec_slot();
         exec_slot
             .register(routed.process.process(), exec)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         routed
             .process
             .install_registration(exec_image::Registration::new(exec_slot, routed.process.process()))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         let _initial_router = routed.router;
         let contexts = Arc::new(clone::Contexts::new(Arc::clone(&routed.process), Arc::clone(&threads)));
         let clone_runtime = contexts.build();
         contexts
             .install(Arc::clone(&clone_runtime))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         routed
             .process
             .install_clone(&contexts)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         let fork_runtime = fork::Runtime::new(Arc::clone(&routed.process), Arc::clone(&threads));
         routed
             .process
             .install_fork(&fork_runtime)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         routed
             .process
             .install_threads(&threads)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Registration))?;
         let trap = hl_runtime::ThreadCloneTrap::new(clone_runtime, routed.thread);
         let router = Arc::new(
             routed
@@ -350,10 +359,10 @@ impl GuestExecutor {
                 cancellation,
                 routed.process.space(),
             )
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Thread))?;
         threads
             .stage(routed.thread, snapshot)
-            .map_err(|_| EngineError::LaunchFailed)?
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Thread))?
             .publish();
         let memfds = Arc::new(hl_runtime::MemfdBindings::new(routed.process.memfd_registry()?));
         // Tag 1 is the RuntimeMemfd file subtype. Other File-family codecs are
@@ -367,7 +376,10 @@ impl GuestExecutor {
                         .bind(hl_descriptor::ObjectKind::File, files)
                         .bind(
                             hl_descriptor::ObjectKind::Pipe,
-                            assembly.ipc_pipes().ok_or(EngineError::LaunchFailed)?.bindings(),
+                            assembly
+                                .ipc_pipes()
+                                .ok_or_else(|| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?
+                                .bindings(),
                         )
                         .bind(hl_descriptor::ObjectKind::Event, assembly.event_bindings())
                         .bind(hl_descriptor::ObjectKind::EventCounter, assembly.event_bindings())
@@ -375,7 +387,7 @@ impl GuestExecutor {
                         .bind(hl_descriptor::ObjectKind::Socket, routed.process.network_bindings()),
                 ),
             )))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         let checkpoint_memory = Arc::new(hl_runtime::CheckpointMemoryState::new(Arc::new(
             hl_runtime::CheckpointMemory::new(routed.process.space().mappings(), Arc::clone(&shared)),
         )));
@@ -388,32 +400,36 @@ impl GuestExecutor {
                 )
                 .with_resources(memfds),
             ))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         assembly
             .prepare_provider_checkpoint()
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         assembly
             .prepare_event_checkpoint()
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         assembly
             .prepare_network_checkpoint(routed.process.network_bindings())
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         assembly
             .prepare_ipc_checkpoint(checkpoint_memory)
-            .map_err(|_| EngineError::LaunchFailed)?;
-        let machine = threads.find(routed.thread).ok_or(EngineError::LaunchFailed)?.machine;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
+        let machine = threads
+            .find(routed.thread)
+            .ok_or_else(|| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?
+            .machine;
         assembly
             .prepare_checkpoint(Arc::new(hl_runtime::ExecutionCheckpointParticipant::new(machine)))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         assembly
             .finalize_checkpoint(hl_checkpoint::ImageLimits::new(
                 8,
                 arena::Capacity::MAXIMUM,
                 arena::Capacity::MAXIMUM,
             ))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|_| diagnostics::launch_failure(plan, LaunchPhase::Checkpoint))?;
         transfer::Operation::new(plan, assembly, services).apply()?;
-        let waiters = waiter::Pool::new(&routed.process.tasks()).map_err(|()| EngineError::LaunchFailed)?;
+        let waiters = waiter::Pool::new(&routed.process.tasks())
+            .map_err(|()| diagnostics::launch_failure(plan, LaunchPhase::Waiter))?;
         let result = Self::schedule(isa, plan, &threads, &waiters, self.host_faults.clone());
         // Every parked host wait must be interrupted before the fixed worker
         // set is joined, including successful exit-group termination.
