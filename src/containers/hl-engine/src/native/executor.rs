@@ -99,6 +99,8 @@ pub(crate) struct DirectAuthority<'executor, 'memory, H: MemoryAccessHost> {
 impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
     fn generation(&self) -> Option<u64> {
         let token = self.token?;
+        // SAFETY: the `&'executor Executor` borrow keeps the handle alive, and `token` is
+        // a live registration this struct owns until `retire`; the query only reads.
         let generation = unsafe { hl_native_direct_generation(self.executor.handle.as_ptr(), token.as_ptr()) };
         (generation != 0).then_some(generation)
     }
@@ -106,6 +108,8 @@ impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
     fn request_identity(&self) -> Option<(*const DirectToken, u64, u64)> {
         let token = self.token?;
         let generation = self.generation()?;
+        // SAFETY: same borrow-held handle, and `generation()` above just confirmed the
+        // owned token is still registered; the query only reads native state.
         let identity = unsafe { hl_native_direct_identity(self.executor.handle.as_ptr(), token.as_ptr()) };
         (identity != 0).then_some((token.as_ptr(), generation, identity))
     }
@@ -117,6 +121,8 @@ impl<'memory, H: MemoryAccessHost> DirectAuthority<'_, 'memory, H> {
 
     fn retire(&mut self) -> Result<(), ()> {
         let Some(token) = self.token else { return Ok(()) };
+        // SAFETY: `self.token` is taken exactly once — cleared below on success — so this
+        // unregisters a live registration once, under the borrow that keeps the handle up.
         if unsafe { hl_native_direct_unregister(self.executor.handle.as_ptr(), token.as_ptr()) } != 0 {
             return Err(());
         }
@@ -143,6 +149,8 @@ unsafe impl Sync for InterruptToken {}
 impl InterruptToken {
     pub(crate) fn create() -> Result<Self, ()> {
         let mut token = std::ptr::null_mut();
+        // SAFETY: `token` is a live, aligned local out-parameter; on a zero status the
+        // callee has written one newly owned handle that `Self` takes sole ownership of.
         (unsafe { hl_native_interrupt_create(&raw mut token) } == 0)
             .then(|| {
                 NonNull::new(token).map(|handle| Self {
@@ -156,6 +164,8 @@ impl InterruptToken {
 
     #[allow(dead_code)]
     pub(crate) fn set(&self, value: bool) -> Result<(), ()> {
+        // SAFETY: `&self` keeps the handle alive, and the native side stores the flag
+        // atomically — the documented way to interrupt a run from another thread.
         let result = (unsafe { hl_native_interrupt_set(self.handle.as_ptr(), u64::from(value)) } == 0)
             .then_some(())
             .ok_or(());
@@ -182,6 +192,8 @@ impl hl_task::InterruptSink for InterruptToken {
 
 impl Drop for InterruptToken {
     fn drop(&mut self) {
+        // SAFETY: Drop runs once with unique access, and `handle` has been solely owned
+        // since `create`, so this destroys a live handle exactly once.
         unsafe { hl_native_interrupt_destroy(self.handle.as_ptr()) }
     }
 }
@@ -443,14 +455,22 @@ impl ExecutableMemory {
 
     #[cfg(target_os = "linux")]
     unsafe fn allocate_dual(capacity: usize) -> Result<(*mut c_void, *mut c_void, i32), u32> {
+        // SAFETY: the name is a `'static` NUL-terminated literal; memfd_create takes no
+        // output buffer and returns a newly owned descriptor or a negative errno.
         let descriptor = unsafe { libc::memfd_create(c"hl-native-code".as_ptr(), libc::MFD_CLOEXEC) };
         if descriptor < 0 {
             return Err(2);
         }
+        // SAFETY: `descriptor` is the memfd just created and solely owned here; ftruncate
+        // passes only integers and cannot alias caller memory.
         if unsafe { libc::ftruncate(descriptor, capacity as libc::off_t) } != 0 {
+            // SAFETY: nothing has been mapped from `descriptor` yet, so this closes a
+            // solely-owned fd exactly once on the error path.
             let _ = unsafe { libc::close(descriptor) };
             return Err(2);
         }
+        // SAFETY: a null hint lets the kernel choose a fresh address, so this creates a
+        // brand-new mapping that aliases nothing; `descriptor` was sized by ftruncate.
         let writable = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -462,9 +482,13 @@ impl ExecutableMemory {
             )
         };
         if writable == libc::MAP_FAILED {
+            // SAFETY: no mapping survives on this path, so the solely-owned fd is closed
+            // exactly once.
             let _ = unsafe { libc::close(descriptor) };
             return Err(2);
         }
+        // SAFETY: null hint again, so the executable alias of the same memfd lands at a
+        // fresh address; W^X is kept by giving this view PROT_EXEC and never PROT_WRITE.
         let executable = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -476,7 +500,11 @@ impl ExecutableMemory {
             )
         };
         if executable == libc::MAP_FAILED {
+            // SAFETY: `writable` is the mapping this function just created and has not
+            // escaped, so it is unmapped exactly once with its own length.
             let _ = unsafe { libc::munmap(writable, capacity) };
+            // SAFETY: the last mapping of `descriptor` was just released above, so the
+            // solely-owned fd is closed exactly once.
             let _ = unsafe { libc::close(descriptor) };
             return Err(2);
         }
@@ -493,6 +521,8 @@ impl Drop for ExecutableMemory {
                 let _ = unsafe { libc::munmap(self.executable, self.capacity) };
             }
             if self.descriptor >= 0 {
+                // SAFETY: both aliases were unmapped just above and Drop has unique access,
+                // so the memfd this owner allocated is closed exactly once.
                 let _ = unsafe { libc::close(self.descriptor) };
             }
             self.writable = std::ptr::null_mut();
@@ -518,11 +548,15 @@ unsafe extern "C" fn reserve(
     }
     #[cfg(target_os = "linux")]
     let (writable, executable, descriptor) = if dual != 0 {
+        // SAFETY: `memory.writable` was checked null above, so no mapping is live to leak,
+        // and `capacity` was range-checked against usize::MAX at entry.
         match unsafe { ExecutableMemory::allocate_dual(capacity as usize) } {
             Ok(mapping) => mapping,
             Err(status) => return status,
         }
     } else {
+        // SAFETY: null hint with an anonymous private mapping creates fresh memory that
+        // aliases nothing; `capacity` was range-checked at entry.
         let address = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -543,6 +577,8 @@ unsafe extern "C" fn reserve(
         if dual != 0 {
             return 2;
         }
+        // SAFETY: null hint with an anonymous private mapping creates fresh memory that
+        // aliases nothing; `capacity` was range-checked at entry.
         let address = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -581,6 +617,9 @@ unsafe extern "C" fn release(context: *mut c_void, handle: u64) -> u32 {
     if context.is_null() || handle != 1 {
         return 1;
     }
+    // SAFETY: `context` is the null-checked pointer to the `Box<ExecutableMemory>` the
+    // Executor owns and outlives every callback; the engine never reenters these
+    // callbacks concurrently, so this `&mut` is the only live reference.
     let memory = unsafe { &mut *context.cast::<ExecutableMemory>() };
     if memory.writable.is_null() {
         return 4;
@@ -594,13 +633,19 @@ unsafe extern "C" fn release(context: *mut c_void, handle: u64) -> u32 {
     memory.capacity = 0;
     memory.descriptor = -1;
     memory.releases += 1;
+    // SAFETY: the fields were cleared just above, so no later call can see these
+    // pointers; this unmaps the owned mapping once with the length it was created with.
     let writable_status = unsafe { libc::munmap(writable, capacity) };
     let executable_status = if writable == executable {
         0
     } else {
+        // SAFETY: reached only when the executable alias is a distinct mapping, so this
+        // releases the second owned alias exactly once.
         unsafe { libc::munmap(executable, capacity) }
     };
     if descriptor >= 0 {
+        // SAFETY: both aliases are unmapped above and the field was cleared, so the
+        // memfd is closed exactly once.
         let _ = unsafe { libc::close(descriptor) };
     }
     if writable_status != 0 || executable_status != 0 {
@@ -613,12 +658,19 @@ unsafe extern "C" fn publish(context: *mut c_void, handle: u64, offset: u64, siz
     if context.is_null() || handle != 1 {
         return 1;
     }
+    // SAFETY: `context` is the null-checked pointer to the Executor-owned
+    // `Box<ExecutableMemory>`, which outlives every callback and is not reentered
+    // concurrently, so this `&mut` is the only live reference.
     let memory = unsafe { &mut *context.cast::<ExecutableMemory>() };
     if offset > memory.capacity as u64 || size > memory.capacity as u64 - offset {
         return 1;
     }
     if size != 0 {
+        // SAFETY: the check above proves offset + size <= capacity, so the offset stays
+        // within the single live executable mapping and cannot wrap.
         let address = unsafe { memory.executable.cast::<u8>().add(offset as usize).cast() };
+        // SAFETY: `address..address + size` lies inside that mapping, which stays live for
+        // the call; the flush only maintains icache coherence and retains no pointer.
         unsafe { hl_native_flush(address, size as usize) };
         memory.published_ranges += 1;
         memory.published_bytes += size;
@@ -630,7 +682,11 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
     if context.is_null() || mapping.is_null() {
         return 1;
     }
+    // SAFETY: `context` is the null-checked pointer to the Executor-owned
+    // `Box<ExecutableMemory>`, live for the whole callback and not reentered.
     let memory = unsafe { &mut *context.cast::<ExecutableMemory>() };
+    // SAFETY: `mapping` was null-checked and points to the engine's Mapping record, which
+    // it lends exclusively for this call; it is disjoint from `memory`.
     let current = unsafe { &mut *mapping };
     if current.handle != 1
         || current.writable != memory.writable as usize as u64
@@ -642,6 +698,8 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         if preserve != 0 {
             return memory.protect(libc::PROT_READ | libc::PROT_EXEC);
         }
+        // SAFETY: null hint, so this fresh anonymous mapping aliases nothing; the old
+        // mapping is only unmapped after both `memory` and `current` point at this one.
         let replacement = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
@@ -661,6 +719,8 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         current.writable = replacement as usize as u64;
         current.executable = replacement as usize as u64;
         current.content = 0;
+        // SAFETY: `old` was the sole (non-dual) mapping and both `memory` and `current`
+        // now name the replacement, so nothing can observe it after this single unmap.
         return if unsafe { libc::munmap(old, memory.capacity) } == 0 {
             0
         } else {
@@ -673,21 +733,33 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         let old_executable = memory.executable;
         let old_descriptor = memory.descriptor;
         let capacity = memory.capacity;
+        // SAFETY: the old pointers are saved in locals above, so the fresh pair allocated
+        // here leaks nothing; every early return below unmaps whatever it allocated.
         let (mut writable, mut executable, descriptor) = match unsafe { ExecutableMemory::allocate_dual(capacity) } {
             Ok(replacement) => replacement,
             Err(status) => return status,
         };
         if preserve != 0 {
             if current.content > capacity as u64 {
+                // SAFETY: these three are the freshly allocated pair and its memfd, not yet
+                // stored anywhere, so each is released exactly once on this reject path.
                 let _ = unsafe { libc::munmap(executable, capacity) };
+                // SAFETY: same freshly allocated writable alias, released once.
                 let _ = unsafe { libc::munmap(writable, capacity) };
+                // SAFETY: both new aliases are gone, so the new memfd is closed once.
                 let _ = unsafe { libc::close(descriptor) };
                 return 1;
             }
+            // SAFETY: `content <= capacity` was just checked, and the old and new writable
+            // mappings are distinct kernel-chosen regions, so the ranges cannot overlap.
             unsafe {
                 std::ptr::copy_nonoverlapping(old_writable.cast::<u8>(), writable.cast(), current.content as usize);
             }
+            // SAFETY: the new executable alias is dropped here so the memfd can instead be
+            // remapped at the old address below; `writable` still holds the copied bytes.
             let _ = unsafe { libc::munmap(executable, capacity) };
+            // SAFETY: MAP_FIXED over `old_executable` atomically replaces the stale alias
+            // in place, so code addresses the engine already handed out stay valid.
             executable = unsafe {
                 libc::mmap(
                     old_executable,
@@ -699,10 +771,15 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
                 )
             };
             if executable == libc::MAP_FAILED {
+                // SAFETY: only the new writable alias remains allocated on this path, so it
+                // is unmapped once with its own length.
                 let _ = unsafe { libc::munmap(writable, capacity) };
+                // SAFETY: no mapping of the new memfd survives, so it is closed once.
                 let _ = unsafe { libc::close(descriptor) };
                 return 2;
             }
+            // SAFETY: MAP_FIXED over `old_writable` atomically replaces the stale writable
+            // alias in place, keeping the address the engine already recorded.
             let fixed_writable = unsafe {
                 libc::mmap(
                     old_writable,
@@ -714,16 +791,25 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
                 )
             };
             if fixed_writable == libc::MAP_FAILED {
+                // SAFETY: the executable alias installed above is still reachable via the
+                // memfd, so only the descriptor reference is dropped here, exactly once.
                 let _ = unsafe { libc::close(descriptor) };
                 return 2;
             }
+            // SAFETY: the temporary kernel-chosen writable alias has been superseded by
+            // `fixed_writable`, so this releases that now-redundant mapping once.
             let _ = unsafe { libc::munmap(writable, capacity) };
             writable = fixed_writable;
         } else {
+            // SAFETY: discard mode keeps no contents, so the two old aliases are each
+            // unmapped once; the new pair already replaces them in the locals above.
             let _ = unsafe { libc::munmap(old_executable, capacity) };
+            // SAFETY: the second old alias, unmapped exactly once with its own length.
             let _ = unsafe { libc::munmap(old_writable, capacity) };
         }
         if old_descriptor >= 0 {
+            // SAFETY: every mapping of the old memfd has been replaced or unmapped above,
+            // so the old descriptor is closed exactly once.
             let _ = unsafe { libc::close(old_descriptor) };
         }
         memory.writable = writable;
@@ -744,6 +830,9 @@ unsafe extern "C" fn write_begin(context: *mut c_void) -> u32 {
     if context.is_null() {
         return 1;
     }
+    // SAFETY: `context` is the null-checked pointer to the Executor-owned
+    // `Box<ExecutableMemory>`; the engine brackets write_begin/write_end without
+    // reentering, so this `&mut` is the only live reference.
     let memory = unsafe { &mut *context.cast::<ExecutableMemory>() };
     let status = if memory.dual() {
         0
@@ -760,6 +849,9 @@ unsafe extern "C" fn write_end(context: *mut c_void) -> u32 {
     if context.is_null() {
         return 1;
     }
+    // SAFETY: `context` is the null-checked pointer to the Executor-owned
+    // `Box<ExecutableMemory>`; this closes the write window opened by write_begin, so
+    // the `&mut` is again the only live reference.
     let memory = unsafe { &mut *context.cast::<ExecutableMemory>() };
     let status = if memory.dual() {
         0
