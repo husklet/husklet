@@ -262,6 +262,8 @@ pub const SIGNAL: Tag = Tag::new(1 << 24, "signal");
 pub const SYNC: Tag = Tag::new(1 << 25, "sync");
 /// Guest interprocess objects: System V shared memory, message queues, semaphores, and POSIX queues.
 pub const IPC: Tag = Tag::new(1 << 26, "ipc");
+/// Whole-runtime checkpoint and restore: participant freeze, capture, staging, and commit.
+pub const CHECKPOINT: Tag = Tag::new(1 << 27, "checkpoint");
 
 /// Every tag enabled.
 pub const ALL: Tags = Tags::ALL;
@@ -274,7 +276,7 @@ pub const NONE: Tags = Tags::NONE;
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
-    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC,
+    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK, SIGNAL, SYNC, IPC, CHECKPOINT,
 ];
 
 #[cfg(test)]

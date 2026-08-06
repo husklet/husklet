@@ -223,6 +223,20 @@ impl RuntimeCheckpointCoordinator {
     }
 
     pub fn checkpoint<S: CheckpointSink>(&self, sink: &mut S) -> Result<(), Error> {
+        let _span = hl_log::hl_span!(hl_log::tag::CHECKPOINT, "checkpoint");
+        let result = self.freeze_and_capture(sink);
+        match &result {
+            Ok(()) => hl_log::hl_info!(
+                hl_log::tag::CHECKPOINT,
+                "checkpoint captured participants={}",
+                self.participants.len(),
+            ),
+            Err(error) => hl_log::hl_error!(hl_log::tag::CHECKPOINT, "checkpoint failed error={error:?}"),
+        }
+        result
+    }
+
+    fn freeze_and_capture<S: CheckpointSink>(&self, sink: &mut S) -> Result<(), Error> {
         let _transaction = self
             .transaction
             .lock()
@@ -272,6 +286,20 @@ impl RuntimeCheckpointCoordinator {
     }
 
     pub fn restore<S: CheckpointSource>(&self, source: &mut S) -> Result<(), Error> {
+        let _span = hl_log::hl_span!(hl_log::tag::CHECKPOINT, "restore");
+        let result = self.restore_result(source);
+        match &result {
+            Ok(()) => hl_log::hl_info!(
+                hl_log::tag::CHECKPOINT,
+                "checkpoint restored participants={}",
+                self.participants.len(),
+            ),
+            Err(error) => hl_log::hl_error!(hl_log::tag::CHECKPOINT, "restore failed error={error:?}"),
+        }
+        result
+    }
+
+    fn restore_result<S: CheckpointSource>(&self, source: &mut S) -> Result<(), Error> {
         let _transaction = self
             .transaction
             .lock()
