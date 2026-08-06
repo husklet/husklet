@@ -51,11 +51,11 @@ engine.
 - Force-stop state, host process-tree termination, reaping, and workspace
   cleanup belong to the `hl-engine` launcher and container composition.
 
-The retained Rust integration test in
-`../engine_rust/src/app/hl-engine/tests/compat.rs` supplies the missing
-orchestration: it starts the fixture, requests force-stop, expects signal 9,
-checks workspace removal, and separately verifies that a second engine remains
-alive. That is migration evidence, not current folder-runner evidence.
+The Rust integration test `blocked_socket_teardown` in
+`src/apps/testing/tests/workspace.rs` supplies the missing orchestration: it
+builds this folder's `main.c`, starts the fixture, requests force-stop, expects
+signal 9, checks workspace removal, and separately verifies that a second engine
+remains alive. That is engine evidence, not folder-runner evidence.
 
 ## Current evidence and limits
 
