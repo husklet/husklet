@@ -294,6 +294,32 @@ static int rep_contract(void) {
         request.quantum_grant = 0;
     }
     {
+        /* Exhaustion away from a REP boundary resumes at a fresh RIP that the
+         * entry source window no longer covers, so it must yield, never poll. */
+        static const uint8_t jump_to_syscall[] = {0x90, 0x90, 0x90, 0x90, 0xeb, 0x0a};
+        static const uint8_t syscall_target[] = {0x0f, 0x05};
+        hl_native_source_span spans[] = {
+            {0xd600, jump_to_syscall, sizeof(jump_to_syscall), 7, 16},
+            {0xd610, syscall_target, sizeof(syscall_target), 7, 16},
+        };
+        hl_native_source split = {spans, 2, 7, 16};
+        quantum_observation observation = {0};
+        request.source = &split;
+        request.projection = &projection;
+        state = (hl_native_x86_64_cpu){.program = 0xd600, .dirty_first = UINT64_MAX};
+        request.budget = 5;
+        request.quantum_context = &observation;
+        request.quantum_poll = admit_quantum;
+        request.quantum_grant = 5;
+        CHECK(hl_native_run(executor, &cpu, &request, &output) == HL_NATIVE_OK);
+        CHECK(output.kind == HL_NATIVE_EXIT_YIELD && state.program == 0xd610 &&
+              state.executed == 5 && state.budget == 0 && observation.calls == 0);
+        request.source = &source;
+        request.quantum_context = NULL;
+        request.quantum_poll = NULL;
+        request.quantum_grant = 0;
+    }
+    {
         static const uint8_t address_rep[] = {0xf3, 0x67, 0xa4};
         static const uint8_t segment_rep[] = {0xf3, 0x64, 0xa4};
         const uint8_t *codes[] = {address_rep, segment_rep};
