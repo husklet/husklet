@@ -1164,11 +1164,43 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             .direct_token = (uint64_t)(uintptr_t)direct_token,
             .direct_generation = authority_generation,
         };
-        if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-            code.source_last > key.source_last) {
+        if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT) {
             status = hl_native_execution_leave(&execution);
             if (status != HL_NATIVE_OK) return status;
-            status = hl_a64_trace_cache_direct(executor, active_source, instruction, count, scratch,
+            const hl_a64_source *build_source = active_source;
+            hl_a64_source_span region_spans[HL_A64_SOURCE_MAX_SPANS];
+            hl_a64_source region_source;
+            size_t build_count = count;
+            hl_a64_fetch_result tail;
+            if (resolver != NULL && active_source->span_count < HL_A64_SOURCE_MAX_SPANS &&
+                hl_a64_source_fetch(active_source, instruction + (count - 1) * 4, 1, &tail) &&
+                (tail.words[0] & UINT32_C(0xfc000000)) == UINT32_C(0x14000000)) {
+                int64_t displacement = (int64_t)((uint64_t)(tail.words[0] & UINT32_C(0x03ffffff)) << 38) >> 36;
+                uint64_t branch_pc = instruction + (count - 1) * 4;
+                uint64_t target = branch_pc + (uint64_t)displacement;
+                hl_native_source_span successor = {0};
+                if (target != instruction && resolver(resolver_context, target, source->mapping_incarnation,
+                        source->instruction_epoch, &successor)) {
+                    size_t insert = 0;
+                    for (size_t index = 0; index < active_source->span_count; ++index)
+                        region_spans[index] = active_source->spans[index];
+                    while (insert < active_source->span_count &&
+                           region_spans[insert].guest_first < successor.guest_first) insert++;
+                    memmove(&region_spans[insert + 1], &region_spans[insert],
+                            (active_source->span_count - insert) * sizeof(region_spans[0]));
+                    region_spans[insert] = successor;
+                    region_source = (hl_a64_source){region_spans, active_source->span_count + 1,
+                        source->mapping_incarnation, source->instruction_epoch};
+                    if (hl_a64_source_validate(&region_source)) {
+                        size_t successor_count = hl_a64_source_available(&region_source, target, limit - count);
+                        if (successor_count != 0) {
+                            build_source = &region_source;
+                            build_count += successor_count;
+                        }
+                    }
+                }
+            }
+            status = hl_a64_trace_cache_direct(executor, build_source, instruction, build_count, scratch,
                                                sizeof(scratch), memory_mode != 0 ? &direct_authority : NULL,
                                                expected_authority,
                                                &code, &hit);
@@ -1187,8 +1219,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             /* Publication and reset both require exclusive mutation admission.
              * Resolve only after re-admission, so no pointer selected before
              * that boundary can survive an epoch change or fork repair. */
-            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-                code.source_last > key.source_last)
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         if (cpu->indirect_site != 0) {
@@ -1198,8 +1229,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             if (status != HL_NATIVE_OK) return status;
             status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
-            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT ||
-                code.source_last > key.source_last)
+            if (hl_native_translation_lookup(executor, &key, &code) != HL_NATIVE_HIT)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, instruction);
         }
         uint64_t executed_before = cpu->executed;

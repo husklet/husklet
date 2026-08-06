@@ -534,7 +534,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                        size_t capacity, hl_a64_trace_result *output, void *ibtc,
                        const hl_native_direct_authority *authority, uint64_t expected_authority,
                        hl_a64_trace_density *density_output, uint32_t diagnostics) {
-    hl_a64_fetch_result fetched;
+    uint32_t planned_words[HL_A64_TRACE_MAX_WORDS] = {0};
+    uint64_t planned_pcs[HL_A64_TRACE_MAX_WORDS] = {0};
     hl_a64_assembler assembler;
     hl_a64_guard guards[HL_A64_SOURCE_MAX_WORDS] = {0};
     hl_a64_density_family guard_families[HL_A64_SOURCE_MAX_WORDS] = {0};
@@ -549,9 +550,42 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     if (output == NULL || expected_authority == 0) return 0;
     memset(output, 0, sizeof(*output));
     if (buffer == NULL || capacity < HL_A64_STUB_MAX_BYTES || count == 0 ||
-        count > HL_A64_TRACE_MAX_WORDS || !hl_a64_source_fetch(source, pc, count, &fetched) ||
+        count > HL_A64_TRACE_MAX_WORDS ||
         !hl_a64_assembler_begin(&assembler, buffer, buffer, capacity))
         return 0;
+    uint64_t cursor = pc;
+    int planning_exclusive = 0;
+    size_t planned = 0;
+    while (planned < count) {
+        hl_a64_fetch_result one;
+        if (!hl_a64_source_fetch(source, cursor, 1, &one)) break;
+        planned_pcs[planned] = cursor;
+        planned_words[planned] = one.words[0];
+        uint32_t word = one.words[0];
+        int casp = (word & 0x3fa07c00u) == 0x08207c00u;
+        if (!casp) {
+            if ((word & 0x3fc00000u) == 0x08400000u) planning_exclusive = 1;
+            else if (planning_exclusive && (word & 0x3fc00000u) == 0x08000000u) planning_exclusive = 0;
+        }
+        uint64_t next = cursor + 4;
+        if (!planning_exclusive && (word & UINT32_C(0xfc000000)) == UINT32_C(0x14000000)) {
+            int64_t displacement = (int64_t)((uint64_t)(word & UINT32_C(0x03ffffff)) << 38) >> 36;
+            uint64_t target = cursor + (uint64_t)displacement;
+            int seen = 0;
+            for (size_t index = 0; index <= planned; ++index)
+                if (planned_pcs[index] == target) seen = 1;
+            if (!seen && hl_a64_source_available(source, target, 1) != 0) next = target;
+        }
+        planned++;
+        cursor = next;
+    }
+    if (planned == 0) return 0;
+    count = planned;
+    uint64_t hull_first = planned_pcs[0], hull_last = planned_pcs[0] + 4;
+    for (size_t index = 1; index < count; ++index) {
+        if (planned_pcs[index] < hull_first) hull_first = planned_pcs[index];
+        if (planned_pcs[index] + 4 > hull_last) hull_last = planned_pcs[index] + 4;
+    }
     /* The executor owns a private translation cache and diagnostics is
      * immutable for its lifetime, so this bit is part of that cache's
      * translation identity. Ordinary builders always leave emission unchanged. */
@@ -562,10 +596,10 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     output->admitted_offset = hl_a64_assembler_size(&assembler);
     output->source_first = pc;
     for (size_t index = 0; index < count; index++) {
-        uint64_t instruction = pc + index * 4;
+        uint64_t instruction = planned_pcs[index];
         size_t begin = hl_a64_assembler_size(&assembler);
         hl_a64_memory_sites memory_sites = {0};
-        uint32_t word = fetched.words[index];
+        uint32_t word = planned_words[index];
         /* The exclusive monitor may not cross a stitched block-entry poll.
          * CASP is self-contained and therefore does not open this interval. */
         int casp = (word & 0x3fa07c00u) == 0x08207c00u;
@@ -575,7 +609,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             else if (exclusive && (word & 0x3fc00000u) == 0x08000000u)
                 exclusive = 0;
         }
-        if (fetched.words[index] == 0xD4000001u) {
+        if (planned_words[index] == 0xD4000001u) {
             output->source_last = instruction + 4;
             output->terminal = HL_NATIVE_EXIT_SYSCALL;
             hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_SYSCALL, instruction);
@@ -605,10 +639,18 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             refund_prefixes[stitched++] = (uint32_t)(index + 1u);
             continue;
         }
+        int followed_direct = index + 1 < count && planned_pcs[index + 1] != instruction + 4 &&
+            (word & UINT32_C(0xfc000000)) == UINT32_C(0x14000000);
+        if (followed_direct) {
+            hl_a64_emit32(&assembler, UINT32_C(0xd503201f));
+            if (!append_unknown(output, begin, hl_a64_assembler_size(&assembler), instruction)) return 0;
+            density_record(&density, HL_A64_DENSITY_CONTROL, 1, 1);
+            continue;
+        }
         if (hl_a64_direct_chain(&assembler, word, instruction,
                                 &direct_patch, &direct_target) ||
-            hl_a64_indirect_body(&assembler, fetched.words[index], instruction, ibtc) ||
-            hl_a64_conditional_chain(&assembler, fetched.words[index], instruction,
+            hl_a64_indirect_body(&assembler, planned_words[index], instruction, ibtc) ||
+            hl_a64_conditional_chain(&assembler, planned_words[index], instruction,
                                      &direct_patch, &direct_target, &taken_patch, &taken_target)) {
             output->source_last = instruction + 4;
             output->terminal = HL_NATIVE_EXIT_BRANCH;
@@ -637,15 +679,15 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             }
             break;
         }
-        if (!body(&assembler, fetched.words[index], instruction) &&
-            !hl_a64_single_direct_body(&assembler, fetched.words[index], instruction, authority,
+        if (!body(&assembler, planned_words[index], instruction) &&
+            !hl_a64_single_direct_body(&assembler, planned_words[index], instruction, authority,
                                        &guards[guard_count], &memory_sites) &&
-            !hl_a64_zero_body(&assembler, fetched.words[index], instruction, &guards[guard_count], &memory_sites) &&
-            !hl_a64_ordered_body(&assembler, fetched.words[index], instruction, &guards[guard_count], &memory_sites) &&
-            !hl_a64_simd_immediate_body(&assembler, fetched.words[index]) &&
-            !hl_a64_single_body(&assembler, fetched.words[index], instruction, &guards[guard_count], &memory_sites) &&
-            !hl_a64_pair_body(&assembler, fetched.words[index], instruction, &guards[guard_count], &memory_sites) &&
-            !hl_a64_structure_body(&assembler, fetched.words[index], instruction, &guards[guard_count], &memory_sites)) {
+            !hl_a64_zero_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
+            !hl_a64_ordered_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
+            !hl_a64_simd_immediate_body(&assembler, planned_words[index]) &&
+            !hl_a64_single_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
+            !hl_a64_pair_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
+            !hl_a64_structure_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites)) {
             if (index == 0) {
                 memset(buffer, 0, capacity);
                 memset(output, 0, sizeof(*output));
@@ -667,7 +709,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             memset(output, 0, sizeof(*output));
             return 0;
         }
-        hl_a64_density_family family = density_family(fetched.words[index], instruction, &memory_sites);
+        hl_a64_density_family family = density_family(planned_words[index], instruction, &memory_sites);
         density_record(&density, family,
                        (hl_a64_assembler_size(&assembler) - begin) / sizeof(uint32_t), 1);
         if (guards[guard_count].below != NULL) {
@@ -686,7 +728,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             memset(output, 0, sizeof(*output));
             return 0;
         }
-        output->source_last = pc + count * 4;
+        output->source_last = cursor;
         output->terminal = HL_NATIVE_EXIT_BRANCH;
         uint32_t *fallthrough = hl_a64_stub_edge_reserve(&assembler);
         if (!hl_a64_assembler_ok(&assembler)) {
@@ -704,9 +746,9 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         memcpy(relocation->span.cold, fallthrough, sizeof(relocation->span.cold));
         hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, output->source_last);
     }
-    output->instruction_count = charged_prefix != 0
-        ? charged_prefix
-        : (output->source_last - output->source_first) / 4;
+    output->source_first = hull_first;
+    output->source_last = hull_last;
+    output->instruction_count = charged_prefix != 0 ? charged_prefix : count;
     hl_a64_stub_budget_finish(&assembler, &budget_guard, (uint32_t)output->instruction_count);
     for (uint32_t index = 0; index < stitched; index++) {
         uint32_t refund = (uint32_t)output->instruction_count - refund_prefixes[index];
@@ -789,27 +831,8 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
         .direct_generation = authority == NULL ? 0 : executor->direct_generation,
     };
     if (hl_native_translation_lookup(executor, &key, code) == HL_NATIVE_HIT) {
-        if (code->source_last <= key.source_last) {
-            *hit = 1;
-            return HL_NATIVE_OK;
-        }
-        hl_native_status gate = hl_native_executor_gate_enter(executor);
-        if (gate != HL_NATIVE_OK) return gate;
-        int writing = 0;
-        gate = hl_native_cache_write_begin(executor->cache);
-        if (gate == HL_NATIVE_OK) writing = 1;
-        if (gate == HL_NATIVE_OK)
-            gate = hl_native_cache_relocations_invalidate(executor->cache, pc, pc + 4);
-        if (gate == HL_NATIVE_OK)
-            gate = hl_native_cache_invalidate(executor->cache, pc, pc + 4, NULL);
-        if (gate == HL_NATIVE_OK)
-            memset(executor->ibtc, 0, HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc));
-        if (writing) {
-            hl_native_status end = hl_native_cache_write_end(executor->cache);
-            if (gate == HL_NATIVE_OK) gate = end;
-        }
-        hl_native_executor_gate_leave(executor);
-        if (gate != HL_NATIVE_OK) return gate;
+        *hit = 1;
+        return HL_NATIVE_OK;
     }
     *hit = 0;
     size_t admitted = count;
