@@ -38,6 +38,7 @@ pub use object_contract::{
 pub use ofd_values::{DirectoryBatch, DirectoryBatchToken, OfdDirectoryEntry, OfdMetadata, OfdTimestamp};
 pub use readiness::{DescriptionIdentity, ReadinessObserver, ReadinessRegistry, ReadinessSubscription};
 pub use table::{DescriptorTable, FIRST_DESCRIPTOR, Reservation};
+pub use table_snapshot::{SnapshotBudget, SnapshotError};
 pub use transfer::{DescriptionInstallTransaction, DescriptionRef, PreparedDescriptorInstall, PreparedInstallBatch};
 
 #[cfg(test)]
