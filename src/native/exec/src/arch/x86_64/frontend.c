@@ -19,6 +19,30 @@ static int may_fallback(const instruction *item) {
            item->operation == OP_VECTOR;
 }
 
+/* 1 iff the item redefines every x86 arithmetic flag while reading none, so a predecessor's flags are
+   dead. adc/sbb read CF, inc/dec preserve it, and a memory operand can fault before the redefinition. */
+static int kills_flags(const instruction *item) {
+    return item->operation == OP_ALU && item->memory_operand == 0u && item->preserve_carry == 0u &&
+           item->preserve_flags == 0u && item->alu_kind != 2u && item->alu_kind != 3u;
+}
+
+/* A register ALU op publishes nothing observable besides cpu->flags, so an immediately following
+   killer lets it skip the NZCV and PF/AF materialization entirely. */
+static int flags_dead_at(const decode *block, uint32_t index) {
+    const instruction *item = &block->instructions[index];
+
+    if (item->operation != OP_ALU || item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
+    if (index + 1u >= block->count) return 0;
+    return kills_flags(&block->instructions[index + 1u]);
+}
+
+static void mark_dead_flags(decode *block) {
+    uint32_t index;
+
+    for (index = 0; index < block->count; ++index)
+        block->instructions[index].flags_dead = (uint8_t)flags_dead_at(block, index);
+}
+
 static int vector_register_write(const instruction *item) {
     return item->operation == OP_VECTOR && item->memory_write == 0u &&
            item->vector_kind != VECTOR_TO_INTEGER && item->vector_kind != VECTOR_BYTE_MASK &&
@@ -1478,6 +1502,7 @@ hl_x86_a64_status hl_x86_a64_emit(const hl_x86_a64_request *request, hl_x86_a64_
     if (!hl_x86_request_valid(request, result)) return HL_X86_A64_ARGUMENT;
     decode_block(request, &block);
     if (block.count > request->provenance_capacity) return HL_X86_A64_CAPACITY;
+    mark_dead_flags(&block);
     for (index = 0; index < block.count; ++index) {
         if (!vector_marked && (request->flags & HL_X86_A64_DIAGNOSTICS) != 0u &&
             vector_register_write(&block.instructions[index])) {
