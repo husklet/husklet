@@ -972,6 +972,9 @@ static void run_view_publish(const hl_a64_run_views *cache, hl_native_aarch64_cp
     size_t count = cache != NULL ? cache->count : 0;
     __atomic_store_n(&cpu->read_token, 0, __ATOMIC_RELEASE);
     cpu->read_count = 0;
+    /* Retire both halves of every slot, so no republication can leave a dead
+     * incarnation's delta above the new count. */
+    memset(cpu->read_views, 0, sizeof(cpu->read_views));
     memset(cpu->read_view_publication, 0, sizeof(cpu->read_view_publication));
     if (mapping_incarnation == 0 || count > HL_A64_RUN_VIEW_COUNT) return;
     for (size_t index = 0; index < count; ++index) {

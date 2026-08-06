@@ -375,11 +375,11 @@ void hl_a64_guard_written(hl_a64_assembler *assembler, uint64_t bytes) {
 }
 
 static void test(hl_a64_assembler *assembler, uint32_t *instruction,
-                 const uint8_t *target, unsigned bit) {
+                 const uint8_t *target, unsigned bit, unsigned reg) {
     int64_t words;
     if (!patch_offset(assembler, instruction, target, 14u, &words)) return;
     *instruction = 0x36000000u | ((bit & 0x20u) << 26) | ((bit & 31u) << 19) |
-                   (((uint32_t)words & 0x3fffu) << 5) | 17u;
+                   (((uint32_t)words & 0x3fffu) << 5) | (reg & 31u);
 }
 
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target) {
@@ -436,7 +436,8 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
         hl_a64_emit32(assembler, 0xEB12013Fu); /* cmp end,last */
         next[index][2] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 17, CPU, base + 3 * (int)sizeof(uint64_t));
+        /* x17 still carries read_count for the next slot's bound check. */
+        hl_a64_ldr(assembler, 18, CPU, base + 3 * (int)sizeof(uint64_t));
         next[index][3] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
         hl_a64_ldr(assembler, 17, CPU, base + 2 * (int)sizeof(uint64_t));
@@ -459,7 +460,7 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
         condition(assembler, next[index][0], active_target, 3u);
         condition(assembler, next[index][1], following, 3u);
         condition(assembler, next[index][2], following, 8u);
-        test(assembler, next[index][3], following, 0u);
+        test(assembler, next[index][3], following, 0u, 18u);
     }
 }
 
@@ -508,7 +509,8 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
         hl_a64_emit32(assembler, 0xEB12013Fu); /* cmp end,last */
         next[index][2] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 17, CPU, base + 3 * (int)sizeof(uint64_t));
+        /* x17 still carries read_count for the next slot's bound check. */
+        hl_a64_ldr(assembler, 18, CPU, base + 3 * (int)sizeof(uint64_t));
         next[index][3] = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, 0);
 
@@ -565,7 +567,7 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
         condition(assembler, next[index][0], miss, 3u);
         condition(assembler, next[index][1], following, 3u);
         condition(assembler, next[index][2], following, 8u);
-        test(assembler, next[index][3], following, 1u);
+        test(assembler, next[index][3], following, 1u, 18u);
     }
 }
 
@@ -700,7 +702,7 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     condition(assembler, guard->overflow, miss, 3);
     condition(assembler, guard->above, miss, 8);
     test(assembler, guard->permission, miss,
-         guard->required == HL_A64_PERMISSION_READ ? 0u : 1u);
+         guard->required == HL_A64_PERMISSION_READ ? 0u : 1u, 17u);
     if (guard->required == HL_A64_PERMISSION_WRITE)
         write_cache(assembler, guard->bytes, guard->pc, guard->resume);
     if (!hl_a64_assembler_ok(assembler)) return;
