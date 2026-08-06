@@ -74,6 +74,10 @@ pub(crate) struct Run {
     rootfs: Option<PathBuf>,
     #[arg(long)]
     engine: Option<PathBuf>,
+    /// Explicit launcher for retained-C engines whose packaging requires
+    /// `RUNNER ENGINE GUEST`. Never pass a runner as `--engine`.
+    #[arg(long)]
+    c_runner: Option<PathBuf>,
     #[arg(long = "out")]
     output: Option<PathBuf>,
     #[arg(long, default_value_t = 5)]
@@ -225,6 +229,9 @@ impl Run {
         }
         if matches!(self.provider, Provider::C | Provider::Rust) && self.engine.is_none() {
             return Err("engine provider requires --engine".into());
+        }
+        if self.c_runner.is_some() && self.provider != Provider::C {
+            return Err("--c-runner is valid only with provider c-engine".into());
         }
         if let Some(rootfs) = &self.rootfs {
             if !rootfs.is_dir() {
@@ -536,6 +543,7 @@ mod test {
             binary,
             rootfs: None,
             engine,
+            c_runner: None,
             output: None,
             repeats: 1,
             timeout: Duration::from_secs(1),
@@ -568,6 +576,7 @@ mod test {
             binary: "/bin/sh".into(),
             rootfs: None,
             engine: Some("/bin/sh".into()),
+            c_runner: None,
             output: None,
             repeats: 5,
             timeout: Duration::from_secs(120),
@@ -643,6 +652,30 @@ mod test {
             c.get_args().collect::<Vec<_>>(),
             [binary.as_os_str(), OsStr::new("--phase"), OsStr::new("compute")]
         );
+
+        let wrapper = directory.path().join("runner");
+        fs::write(&wrapper, b"prefix ENGINE GUEST [args...] suffix").unwrap();
+        let mut wrapped = command_run(Provider::C, binary.clone(), Some(engine.clone()));
+        wrapped.c_runner = Some(wrapper.clone());
+        let command = process.command(&wrapped).expect("typed C runner command");
+        assert_eq!(command.get_program(), wrapper.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                engine.as_os_str(),
+                binary.as_os_str(),
+                OsStr::new("--phase"),
+                OsStr::new("compute"),
+            ]
+        );
+
+        let rejected = command_run(Provider::C, binary, Some(wrapper));
+        assert!(
+            process
+                .command(&rejected)
+                .unwrap_err()
+                .contains("exec wrapper configured as --engine")
+        );
     }
 
     #[test]
@@ -705,6 +738,7 @@ mod test {
             binary: PathBuf::from("/bin/sh"),
             rootfs: None,
             engine: None,
+            c_runner: None,
             output: None,
             repeats: 1,
             timeout: Duration::from_secs(1),

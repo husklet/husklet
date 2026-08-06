@@ -16,6 +16,15 @@ pub(crate) struct Matrix {
     rootfs: Option<PathBuf>,
     #[arg(long)]
     c_engine: PathBuf,
+    /// Optional typed exec wrapper. The retained engine remains `--c-engine`.
+    #[arg(long)]
+    c_runner: Option<PathBuf>,
+    /// Retained source tree used to build `--c-engine`.
+    #[arg(long)]
+    c_engine_tree: String,
+    /// ELF/PE build identifier reported by the retained-engine build.
+    #[arg(long)]
+    c_engine_build_id: String,
     #[arg(long)]
     rust_engine: PathBuf,
     #[arg(long = "out", default_value = "target/testing/benchmark-matrix")]
@@ -49,6 +58,9 @@ impl Matrix {
         }
         if self.output.as_os_str().is_empty() {
             return Err("matrix output directory cannot be empty".into());
+        }
+        if self.c_engine_tree.trim().is_empty() || self.c_engine_build_id.trim().is_empty() {
+            return Err("matrix requires nonempty retained C tree and build identifiers".into());
         }
         if self.repeats == 0 || self.repeats > LIMIT {
             return Err(format!("repeats must be between 1 and {LIMIT}"));
@@ -94,6 +106,23 @@ impl Matrix {
         F: FnMut(Run) -> Result<(), String>,
     {
         std::fs::create_dir_all(&self.output).map_err(|error| format!("matrix output directory: {error}"))?;
+        let engine_sha = file_identity(&self.c_engine)?;
+        let runner_sha = self
+            .c_runner
+            .as_ref()
+            .map(|path| file_identity(path))
+            .transpose()?;
+        std::fs::write(
+            self.output.join("c-engine-provenance.tsv"),
+            format!(
+                "tree\tbuild_id\tengine_sha256\trunner_sha256\n{}\t{}\t{}\t{}\n",
+                self.c_engine_tree,
+                self.c_engine_build_id,
+                engine_sha,
+                runner_sha.as_deref().unwrap_or("direct"),
+            ),
+        )
+        .map_err(|error| format!("C engine provenance: {error}"))?;
         eprintln!("benchmark-host {}", host_snapshot());
         let identity = self.identity()?;
         let mut paths = Vec::new();
@@ -149,6 +178,11 @@ impl Matrix {
             binary: self.binary.clone(),
             rootfs: self.rootfs.clone(),
             engine,
+            c_runner: if provider == Provider::C {
+                self.c_runner.clone()
+            } else {
+                None
+            },
             output: Some(if step.mode == alternating::Mode::DiagnosticsProof {
                 self.output.join("rust-engine-diagnostics-proof.csv")
             } else {
@@ -176,6 +210,9 @@ impl Matrix {
         for path in [&self.c_engine, &self.rust_engine] {
             identity_field(&mut digest, file_identity(path)?.as_bytes());
         }
+        if let Some(runner) = &self.c_runner {
+            identity_field(&mut digest, file_identity(runner)?.as_bytes());
+        }
         let guest = self.rootfs.as_ref().map_or_else(
             || self.binary.clone(),
             |root| root.join(self.binary.strip_prefix("/").unwrap_or(&self.binary)),
@@ -187,6 +224,8 @@ impl Matrix {
         );
         for value in [
             self.isa.public(),
+            &self.c_engine_tree,
+            &self.c_engine_build_id,
             &self.repeats.to_string(),
             &self.timeout.as_nanos().to_string(),
         ] {
@@ -219,6 +258,9 @@ mod tests {
             binary: "/guest".into(),
             rootfs: None,
             c_engine: "/c-engine".into(),
+            c_runner: None,
+            c_engine_tree: "tree".into(),
+            c_engine_build_id: "build".into(),
             rust_engine: "/rust-engine".into(),
             output: "/results".into(),
             repeats: 1,
@@ -281,6 +323,9 @@ mod tests {
             binary,
             rootfs: None,
             c_engine,
+            c_runner: None,
+            c_engine_tree: "tree".into(),
+            c_engine_build_id: "build".into(),
             rust_engine,
             output: directory.path().join("out"),
             repeats: 3,

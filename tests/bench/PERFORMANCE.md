@@ -165,6 +165,25 @@ mechanism preserves those contracts for every guarded address.
 
 ## 2026-08-04: current ARM64 compute boundary audit
 
+> **Invalid retained-C comparison.** The command below configured
+> `hl-engine-runner` as `--c-engine`. That executable expects
+> `RUNNER ENGINE GUEST`; the benchmark supplied `RUNNER GUEST [args]`, so it
+> executed the guest directly on the host. Its retained-C medians and ratios,
+> and every later ledger with retained-engine SHA-256
+> `0633ed0f914f666f2127ca1b86a4def69eea65c59f7942f8afd66d2b7a6ebc62`,
+> are host-native measurements mislabeled as C-engine results. They remain
+> below as historical evidence of the harness failure and must not be cited as
+> engine performance evidence.
+>
+> A corrected CPU-17 run used the runner and retained engine as separate typed
+> artifacts. Its content-bound ledger is
+> `real-c-compute-historical/alternating.tsv`, SHA-256
+> `38f0cbe79da26ce70ab02ca5b274415869ec920cfea786718b5201fe6e808ffe`.
+> At divisor 20 and checksum `7097455804780747230`, five-sample medians were
+> host-native 2,365 us, real retained C 2,545 us, and Rust 13,563 us. This
+> corrects provider identity; it does not retroactively validate the ratios
+> below or constitute a release-wide performance claim.
+
 Exact detached Husklet commit `fbfe10df8dc21b1c4827580a624da54c67416585`
 was built in release mode and measured five times on inherited CPU 17.  The
 same content-bound guest ran host-native, through the retained C engine, and

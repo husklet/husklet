@@ -20,7 +20,17 @@ impl Process {
                 command
             }
             Provider::C => {
-                let mut command = Command::new(run.engine.as_ref().expect("validated engine"));
+                let engine = run.engine.as_ref().expect("validated engine");
+                if run.c_runner.is_none() && Process::is_c_exec_wrapper(engine)? {
+                    return Err("C exec wrapper configured as --engine; pass it as --c-runner and provide the retained engine separately".into());
+                }
+                let mut command = if let Some(runner) = &run.c_runner {
+                    let mut command = Command::new(runner);
+                    command.arg(engine);
+                    command
+                } else {
+                    Command::new(engine)
+                };
                 if let Some(rootfs) = &run.rootfs {
                     command.arg("--rootfs").arg(rootfs);
                 }
@@ -55,6 +65,14 @@ impl Process {
 
     pub(in crate::benchmark) fn executable(path: &Path) -> bool {
         path.is_file()
+    }
+
+    fn is_c_exec_wrapper(path: &Path) -> Result<bool, String> {
+        const SIGNATURE: &[u8] = b"ENGINE GUEST [args...]";
+        let bytes = std::fs::read(path).map_err(|error| format!("read C engine capability: {error}"))?;
+        Ok(bytes
+            .windows(SIGNATURE.len())
+            .any(|window| window == SIGNATURE))
     }
 
     pub(in crate::benchmark) fn available(&self, name: &str) -> bool {
