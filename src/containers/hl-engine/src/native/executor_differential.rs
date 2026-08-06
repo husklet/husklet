@@ -610,6 +610,121 @@ fn x86_sse_truncating_float_to_integer_matches_interpreter_at_each_boundary() {
     }
 }
 
+/// `movss`/`movsd`. The register form merges the low lane and preserves the upper
+/// bits; the memory-source form zeroes them. Every destination starts as all-ones
+/// so a wrongly zeroing merge, or a wrongly merging load, diverges immediately.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_sse_scalar_moves_match_interpreter_at_each_boundary() {
+    let bytes = [
+        0xf3, 0x0f, 0x10, 0xc1, // movss %xmm1,%xmm0   merge, upper preserved
+        0xf2, 0x0f, 0x10, 0xd1, // movsd %xmm1,%xmm2   merge, upper preserved
+        0xf3, 0x0f, 0x10, 0x1e, // movss (%rsi),%xmm3  zeroes upper
+        0xf2, 0x0f, 0x10, 0x26, // movsd (%rsi),%xmm4  zeroes upper
+        0xf3, 0x0f, 0x11, 0x2e, // movss %xmm5,(%rsi)  stores 4 bytes
+        0xf2, 0x0f, 0x11, 0x36, // movsd %xmm6,(%rsi)  stores 8 bytes
+        0xf3, 0x0f, 0x11, 0xf8, // movss %xmm7,%xmm0   register store form merges
+        0xf2, 0x0f, 0x11, 0xf9, // movsd %xmm7,%xmm1   register store form merges
+    ];
+    let instruction_ends = [4, 8, 12, 16, 20, 24, 28, 32];
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    for register in 0..8 {
+        initial.vectors[register] = u128::MAX;
+    }
+    initial.vectors[1] = 0x1111_1111_2222_2222_3333_3333_4444_4444;
+    initial.vectors[5] = 0xaaaa_aaaa_bbbb_bbbb_cccc_cccc_dddd_dddd;
+    initial.vectors[6] = 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10;
+    initial.vectors[7] = 0xdead_beef_feed_face_0bad_c0de_1234_5678;
+    let operand: [u8; 16] = [
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
+    ];
+    for (index, &end) in instruction_ends.iter().enumerate() {
+        let mut prefix = bytes[..end].to_vec();
+        prefix.extend_from_slice(&[0x0f, 0x05]);
+        let source = [super::BorrowedSource {
+            guest_first: 0x402720,
+            bytes: &prefix,
+        }];
+        let mut native = initial.clone();
+        let mut storage = operand;
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7010,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 1,
+            permissions: 3,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let executor = Executor::create().expect("native executor");
+        let mut resolve = |_: u64, _: &mut [u8]| None;
+        let outcome = executor
+            .run_x86(
+                &mut native,
+                &source,
+                1,
+                index as u64 + 1,
+                64,
+                false,
+                Some(&projection),
+                &mut resolve,
+            )
+            .unwrap()
+            .0;
+        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        let written = storage;
+
+        let mut memory = ReplayMemory {
+            sources: vec![ReplaySource {
+                first: 0x402720,
+                bytes: prefix.clone(),
+            }],
+            data: vec![ReplayView {
+                first: 0x7000,
+                data: operand.to_vec(),
+            }],
+            generation: 1,
+        };
+        let machine = ExecutionMachine::new(ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::X86_64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        })
+        .unwrap();
+        let step = machine.run_slice(1, index as u64 + 3, &mut memory);
+        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        machine.freeze().unwrap();
+        let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
+            unreachable!()
+        };
+        assert_eq!(
+            native,
+            interpreted,
+            "first state divergence after instruction {} ending at {:#x}",
+            index + 1,
+            0x402720 + end
+        );
+        assert_eq!(
+            written.as_slice(),
+            memory.data[0].data.as_slice(),
+            "memory divergence after instruction {} ending at {:#x}",
+            index + 1,
+            0x402720 + end
+        );
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceResult {
     checkpoint: TraceCheckpoint,

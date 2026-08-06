@@ -1172,6 +1172,9 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         emit_constant(words, cursor, 20u, indefinite);
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9a800000) : UINT32_C(0x1a800000)) |
                              destination << 16 | 2u << 12 | 20u << 5 | destination; /* csel result,indef,result,cs */
+    } else if (item->vector_kind == VECTOR_MERGE_LOW) {
+        words[(*cursor)++] = (item->width == 4u ? UINT32_C(0x6e040400) : UINT32_C(0x6e080400)) |
+                             source << 5 | destination; /* ins vd.s/d[0],vn.s/d[0] */
     } else if (item->vector_kind == VECTOR_SIGNED_DWORD_TO_FLOAT) {
         words[(*cursor)++] = UINT32_C(0x4e21d800) | source << 5 | destination; /* scvtf .4s */
     } else if (item->vector_kind == VECTOR_FLOAT_TO_SIGNED_DWORD ||

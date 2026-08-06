@@ -202,6 +202,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
                request->guest_bytes[cursor] == 0x5eu ||
                request->guest_bytes[cursor] == 0x5bu || request->guest_bytes[cursor] == 0x2cu ||
+               request->guest_bytes[cursor] == 0x10u || request->guest_bytes[cursor] == 0x11u ||
                request->guest_bytes[cursor] == 0xbcu || request->guest_bytes[cursor] == 0xbdu ||
                (cursor + 1u < request->guest_size && request->guest_bytes[cursor] == 0x1eu &&
                 (request->guest_bytes[cursor + 1u] == 0xfau || request->guest_bytes[cursor + 1u] == 0xfbu ||
@@ -211,6 +212,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
               (request->guest_bytes[cursor] == 0x51u || request->guest_bytes[cursor] == 0x58u ||
                request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
                request->guest_bytes[cursor] == 0x5eu || request->guest_bytes[cursor] == 0x2cu ||
+               request->guest_bytes[cursor] == 0x10u || request->guest_bytes[cursor] == 0x11u ||
                request->guest_bytes[cursor] == 0x70u)) &&
             !((semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) && opcode == 0x0fu &&
               cursor < request->guest_size && request->guest_bytes[cursor] == 0xc3u)) {
@@ -876,6 +878,41 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->memory_operand = 1u;
                 item->memory_write = (uint8_t)store;
                 if (!store && item->vector_kind != VECTOR_COPY) item->source = 16u;
+            }
+        } else if ((semantic_prefix == 0xf3u || semantic_prefix == 0xf2u) && opcode == 0x0fu &&
+                   cursor < request->guest_size &&
+                   (request->guest_bytes[cursor] == 0x10u || request->guest_bytes[cursor] == 0x11u)) {
+            uint8_t extension = request->guest_bytes[cursor++];
+            uint8_t modrm;
+            uint8_t reg;
+            uint8_t rm;
+            uint8_t lane = semantic_prefix == 0xf3u ? 4u : 8u;
+
+            if (cursor >= request->guest_size || cursor - start >= 15u) {
+                cursor = start; block->status = HL_X86_A64_TRUNCATED;
+                block->exit = HL_X86_A64_INTERPRETER; break;
+            }
+            modrm = request->guest_bytes[cursor];
+            reg = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
+            rm = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
+            item->operation = OP_VECTOR;
+            item->width = lane;
+            item->destination = extension == 0x10u ? reg : rm;
+            item->source = extension == 0x10u ? rm : reg;
+            if ((modrm >> 6) == 3u) {
+                /* Register to register merges the low lane and preserves the rest. */
+                item->vector_kind = VECTOR_MERGE_LOW;
+                ++cursor;
+            } else {
+                /* A memory source zeroes the upper bits, so the plain sized load is exact. */
+                if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
+                item->operation = OP_VECTOR;
+                item->width = lane;
+                item->vector_kind = VECTOR_COPY;
+                item->memory_operand = 1u;
+                item->memory_write = extension == 0x11u;
+                item->destination = reg;
+                item->source = reg;
             }
         } else if (opcode == 0x0fu && cursor < request->guest_size &&
                    ((semantic_prefix == 0u &&

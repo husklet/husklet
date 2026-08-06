@@ -96,6 +96,8 @@ enum vector_operation {
     VECTOR_FLOAT_TO_SIGNED_DWORD,
     VECTOR_TRUNC_FLOAT_TO_SIGNED_DWORD,
     VECTOR_STRING_EQUAL_EACH,
+    /* Register-form movss/movsd: overwrite the low lane and keep the rest. */
+    VECTOR_MERGE_LOW,
 };
 
 enum vector_immediate_form {
