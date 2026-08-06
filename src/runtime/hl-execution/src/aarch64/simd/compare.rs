@@ -4,8 +4,7 @@ pub(crate) struct Comparison;
 
 impl Comparison {
     pub(crate) fn execute(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         operation: FpComparison,
         format: FpFormat,
         left: u8,
@@ -30,10 +29,10 @@ impl Comparison {
                 right_value,
                 operation != FpComparison::Equal,
             );
-            staged.fpsr |= compared.fpsr;
+            cpu.fpsr |= compared.fpsr;
             value |= (u128::from(lane_mask) * u128::from(Self::matches(operation, compared.nzcv))) << (u32::from(lane) * u32::from(format.bits()));
         }
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 
     fn matches(operation: FpComparison, flags: crate::Nzcv) -> bool {

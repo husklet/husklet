@@ -264,7 +264,6 @@ impl Aarch64FpExecutor {
                 lanes,
                 absolute,
             } => crate::aarch64_simd_compare::Comparison::execute(
-                cpu,
                 &mut staged,
                 operation,
                 format,
@@ -330,7 +329,7 @@ impl Aarch64FpExecutor {
                 vector,
                 high,
             } => {
-                crate::aarch64_simd_bf16::Bf16::execute(cpu, &mut staged, source, destination, vector, high);
+                crate::aarch64_simd_bf16::Bf16::execute(&mut staged, source, destination, vector, high);
             }
             Aarch64Instruction::SimdFpEstimate {
                 format,
@@ -340,7 +339,6 @@ impl Aarch64FpExecutor {
                 lanes,
             } => {
                 crate::aarch64_simd_reciprocal::Reciprocal::estimate(
-                    cpu,
                     &mut staged,
                     format,
                     reciprocal_sqrt,
@@ -354,7 +352,7 @@ impl Aarch64FpExecutor {
                 source,
                 destination,
             } => {
-                crate::aarch64_simd_reciprocal::Reciprocal::exponent(cpu, &mut staged, format, source, destination);
+                crate::aarch64_simd_reciprocal::Reciprocal::exponent(&mut staged, format, source, destination);
             }
             Aarch64Instruction::SimdUnsignedEstimate {
                 reciprocal_sqrt,
@@ -363,7 +361,6 @@ impl Aarch64FpExecutor {
                 wide,
             } => {
                 crate::aarch64_simd_reciprocal::Reciprocal::unsigned(
-                    cpu,
                     &mut staged,
                     reciprocal_sqrt,
                     source,
@@ -380,7 +377,6 @@ impl Aarch64FpExecutor {
                 lanes,
             } => {
                 crate::aarch64_simd_reciprocal::Reciprocal::step(
-                    cpu,
                     &mut staged,
                     port,
                     format,
@@ -397,7 +393,6 @@ impl Aarch64FpExecutor {
                 high,
                 scalar,
             } => crate::aarch64_simd_narrow::NarrowOdd::execute(
-                cpu,
                 &mut staged,
                 port,
                 source,
@@ -412,7 +407,6 @@ impl Aarch64FpExecutor {
                 high,
                 widen,
             } => crate::aarch64_simd_convert::Convert::execute(
-                cpu,
                 &mut staged,
                 port,
                 format,
@@ -484,7 +478,6 @@ impl Aarch64FpExecutor {
                 destination,
             } => {
                 crate::aarch64_simd_arithmetic::Binary::execute(
-                    cpu,
                     &mut staged,
                     port,
                     operation,
@@ -506,7 +499,6 @@ impl Aarch64FpExecutor {
                 scalar: _,
             } => {
                 Self::fused(
-                    cpu,
                     &mut staged,
                     port,
                     format,
@@ -529,7 +521,6 @@ impl Aarch64FpExecutor {
                 scalar: _,
             } => {
                 Self::product(
-                    cpu,
                     &mut staged,
                     port,
                     format,

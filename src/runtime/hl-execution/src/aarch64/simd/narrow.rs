@@ -19,8 +19,7 @@ impl NarrowOdd {
     }
 
     pub(crate) fn execute<P: FpArithmeticPort>(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         port: &mut P,
         source: u8,
         destination: u8,
@@ -42,14 +41,14 @@ impl NarrowOdd {
             });
             let value = result.value as u32 | u32::from(result.exceptions & FPSR_INEXACT != 0);
             narrowed |= u64::from(value) << (lane * 32);
-            staged.fpsr |= u64::from(result.exceptions);
+            cpu.fpsr |= u64::from(result.exceptions);
         }
         let value = if high {
             u128::from(cpu.vector(destination) as u64) | u128::from(narrowed) << 64
         } else {
             u128::from(narrowed)
         };
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 }
 

@@ -54,8 +54,7 @@ impl Reciprocal {
     }
 
     pub(crate) fn unsigned(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         reciprocal_sqrt: bool,
         source: u8,
         destination: u8,
@@ -67,7 +66,7 @@ impl Reciprocal {
             let input = cpu.vector_lane(source, 32, lane) as u32;
             value |= u128::from(Self::unsigned_lane(input, reciprocal_sqrt)) << (lane * 32);
         }
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 
     fn unsigned_lane(value: u32, sqrt: bool) -> u32 {
@@ -97,15 +96,14 @@ impl Reciprocal {
     }
 
     pub(crate) fn exponent(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         format: FpFormat,
         source: u8,
         destination: u8,
     ) {
         let (value, flags) = Self::exponent_lane(cpu.vector_lane(source, format.bits(), 0), format, cpu.fpcr as u32);
-        staged.fpsr |= u64::from(flags);
-        staged.set_vector(destination, u128::from(value));
+        cpu.fpsr |= u64::from(flags);
+        cpu.set_vector(destination, u128::from(value));
     }
 
     fn exponent_lane(bits: u64, format: FpFormat, fpcr: u32) -> (u64, u32) {
@@ -154,8 +152,7 @@ impl Reciprocal {
     }
 
     pub(crate) fn estimate(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         format: FpFormat,
         reciprocal_sqrt: bool,
         source: u8,
@@ -174,13 +171,12 @@ impl Reciprocal {
             value |= u128::from(result) << (u32::from(lane) * u32::from(format.bits()));
             flags |= exceptions;
         }
-        staged.fpsr |= u64::from(flags);
-        staged.set_vector(destination, value);
+        cpu.fpsr |= u64::from(flags);
+        cpu.set_vector(destination, value);
     }
 
     pub(crate) fn step<P: FpArithmeticPort>(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         port: &mut P,
         format: FpFormat,
         reciprocal_sqrt: bool,
@@ -195,9 +191,9 @@ impl Reciprocal {
             let b = cpu.vector_lane(right, format.bits(), lane);
             let result = Self::step_lane(port, a, b, format, reciprocal_sqrt, cpu.fpcr as u32);
             value |= u128::from(result.0) << (u32::from(lane) * u32::from(format.bits()));
-            staged.fpsr |= u64::from(result.1);
+            cpu.fpsr |= u64::from(result.1);
         }
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 
     fn step_lane<P: FpArithmeticPort>(

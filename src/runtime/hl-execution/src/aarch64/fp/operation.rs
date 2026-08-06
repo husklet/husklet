@@ -5,8 +5,7 @@ use crate::{
 
 impl Aarch64FpExecutor {
     pub(super) fn fused<P: FpArithmeticPort>(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         port: &mut P,
         format: FpFormat,
         lanes: u8,
@@ -38,10 +37,10 @@ impl Aarch64FpExecutor {
                 cpu.vector_lane(destination, format.bits(), lane),
                 cpu.fpcr,
             );
-            staged.fpsr |= u64::from(result.exceptions);
+            cpu.fpsr |= u64::from(result.exceptions);
             value |= u128::from(result.value) << (u32::from(lane) * u32::from(format.bits()));
         }
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 
     pub(super) fn half_fused_adjust(
@@ -71,8 +70,7 @@ impl Aarch64FpExecutor {
     }
 
     pub(super) fn product<P: FpArithmeticPort>(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         port: &mut P,
         format: FpFormat,
         lanes: u8,
@@ -96,10 +94,10 @@ impl Aarch64FpExecutor {
                 cpu.vector_lane(left, format.bits(), lane),
                 cpu.vector_lane(right, format.bits(), index.unwrap_or(lane)),
             ));
-            staged.fpsr |= u64::from(result.exceptions);
+            cpu.fpsr |= u64::from(result.exceptions);
             value |= u128::from(result.value) << (u32::from(lane) * u32::from(format.bits()));
         }
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 
     pub(super) fn apply_conversion(

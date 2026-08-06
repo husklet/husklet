@@ -25,8 +25,7 @@ impl Convert {
     }
 
     pub(crate) fn execute<P: FpArithmeticPort>(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         port: &mut P,
         format: FpFormat,
         source: u8,
@@ -54,7 +53,7 @@ impl Convert {
                 addend: 0,
                 fpcr: cpu.fpcr as u32,
             });
-            staged.fpsr |= u64::from(result.exceptions);
+            cpu.fpsr |= u64::from(result.exceptions);
             converted |= u128::from(result.value) << (u32::from(lane) * u32::from(destination_format.bits()));
         }
         let value = if !widen && high {
@@ -62,7 +61,7 @@ impl Convert {
         } else {
             converted
         };
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 }
 

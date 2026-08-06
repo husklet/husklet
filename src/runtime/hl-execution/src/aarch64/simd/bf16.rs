@@ -21,8 +21,7 @@ impl Bf16 {
     }
 
     pub(crate) fn execute(
-        cpu: &Aarch64CpuState,
-        staged: &mut Aarch64CpuState,
+        cpu: &mut Aarch64CpuState,
         source: u8,
         destination: u8,
         vector: bool,
@@ -39,7 +38,7 @@ impl Bf16 {
             let converted = Self::convert(cpu.vector_lane(source, 32, lane), cpu.fpcr as u32);
             value |= u128::from(converted) << (offset + lane * 16);
         }
-        staged.set_vector(destination, value);
+        cpu.set_vector(destination, value);
     }
 
     fn convert(bits: u64, fpcr: u32) -> u16 {
