@@ -763,6 +763,7 @@ expect: { exit: 42, stdout: hello.txt }
         let _lock = receipts.lock(&key).unwrap();
         record.publish(b"first", true).unwrap();
         assert!(record.verify().unwrap());
+        fs::set_permissions(record.artifact(), fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(record.artifact(), b"second").unwrap();
         assert!(!record.verify().unwrap());
     }
