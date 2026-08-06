@@ -1322,3 +1322,90 @@ fn simd_saturating_narrow() {
     assert_eq!(cpu.vector(0) & u128::from(u64::MAX), 0x8877_6655_4433_2211);
     assert_ne!(cpu.fpsr & 1 << 27, 0);
 }
+
+fn single_lanes(lanes: [f32; 4]) -> u128 {
+    lanes
+        .iter()
+        .enumerate()
+        .fold(0, |packed, (lane, value)| packed | u128::from(value.to_bits()) << (32 * lane))
+}
+
+#[test]
+fn fp_step_commits_only_pc_fpsr_and_destination() {
+    let mut cpu = Aarch64CpuState {
+        pc: 0x2000,
+        sp: 0x7fff_0000,
+        tls: 0xdead_beef,
+        fpcr: 0,
+        fpsr: 0,
+        nzcv: Nzcv::from_bits(Nzcv::CARRY),
+        ..Default::default()
+    };
+    for register in 0..31 {
+        cpu.set_register(register, 0x1000 + u64::from(register));
+    }
+    for register in 0..32 {
+        cpu.set_vector(register, u128::from(register) << 96 | 0x5555);
+    }
+    cpu.set_vector(1, single_lanes([1.0, 2.0, 3.0, 4.0]));
+    cpu.set_vector(2, single_lanes([0.5, 0.5, 0.5, 0.5]));
+    let before = cpu.clone();
+
+    // FADD V0.4S, V1.4S, V2.4S
+    assert_eq!(
+        Aarch64FpExecutor::execute_word(&mut cpu, &mut Aarch64SoftFloat, 0x4e22_d420),
+        Aarch64ExecutionExit::Continue
+    );
+
+    assert_eq!(cpu.vector(0), single_lanes([1.5, 2.5, 3.5, 4.5]));
+    assert_eq!(cpu.pc, before.pc + 4);
+    assert_eq!(cpu.registers, before.registers);
+    assert_eq!(
+        (cpu.sp, cpu.tls, cpu.fpcr, cpu.nzcv, cpu.exclusive),
+        (before.sp, before.tls, before.fpcr, before.nzcv, before.exclusive)
+    );
+    for register in 1..32 {
+        assert_eq!(cpu.vector(register), before.vector(register), "V{register} changed");
+    }
+}
+
+#[test]
+fn fp_destination_aliasing_reads_before_writing() {
+    let mut fp = Aarch64SoftFloat;
+
+    // FMLA V0.4S, V0.4S, V0.4S -- the destination is also the addend and both products.
+    let mut cpu = Aarch64CpuState::default();
+    cpu.set_vector(0, single_lanes([1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        Aarch64FpExecutor::execute_word(&mut cpu, &mut fp, 0x4e20_cc00),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vector(0), single_lanes([2.0, 6.0, 12.0, 20.0]));
+
+    // FADD V0.4S, V0.4S, V0.4S
+    let mut cpu = Aarch64CpuState::default();
+    cpu.set_vector(0, single_lanes([1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        Aarch64FpExecutor::execute_word(&mut cpu, &mut fp, 0x4e20_d400),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vector(0), single_lanes([2.0, 4.0, 6.0, 8.0]));
+
+    // FABS V0.4S, V0.4S
+    let mut cpu = Aarch64CpuState::default();
+    cpu.set_vector(0, single_lanes([-1.0, -2.0, -3.0, -4.0]));
+    assert_eq!(
+        Aarch64FpExecutor::execute_word(&mut cpu, &mut fp, 0x4ea0_f800),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vector(0), single_lanes([1.0, 2.0, 3.0, 4.0]));
+
+    // FMAXV S0, V0.4S -- every lane is read before the scalar result lands in the same register.
+    let mut cpu = Aarch64CpuState::default();
+    cpu.set_vector(0, single_lanes([1.0, 4.0, 3.0, 2.0]));
+    assert_eq!(
+        Aarch64FpExecutor::execute_word(&mut cpu, &mut fp, 0x6e30_f800),
+        Aarch64ExecutionExit::Continue
+    );
+    assert_eq!(cpu.vector(0), u128::from(4.0_f32.to_bits()));
+}
