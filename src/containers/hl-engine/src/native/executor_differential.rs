@@ -54,6 +54,108 @@ fn x86_memory_movq_unpack_matches_interpreter() {
     assert_eq!(native.vectors[0], expected);
 }
 
+/// The AArch64 AES round chain the crypto phase runs, with its vector load and
+/// its post-index vector store. Rounds are chained and one round key is zero so
+/// a wrong key/ShiftRows order or a dropped AESMC cannot cancel out, and the
+/// store's writeback is checked because it feeds the next iteration's address.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn aarch64_aes_rounds_and_vector_memory_match_interpreter_at_each_boundary() {
+    let words: [u32; 11] = [
+        0x3dc0_0027, // ldr q7, [x1]
+        0x6e27_1e10, // eor v16.16b, v16.16b, v7.16b
+        0x4e28_4b70, // aese v16.16b, v27.16b
+        0x4e28_6a10, // aesmc v16.16b, v16.16b
+        0x4e28_4b50, // aese v16.16b, v26.16b   zero round key
+        0x4e28_6a10, // aesmc v16.16b, v16.16b
+        0x4e28_5b70, // aesd v16.16b, v27.16b
+        0x4e28_7a10, // aesimc v16.16b, v16.16b
+        0x4e28_4b30, // aese v16.16b, v25.16b
+        0x6e30_1e30, // eor v16.16b, v17.16b, v16.16b
+        0x3c81_0430, // str q16, [x1], #16
+    ];
+    let mut bytes = Vec::new();
+    for word in words {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
+    let mut initial = Aarch64CpuState {
+        pc: 0x4000,
+        ..Aarch64CpuState::default()
+    };
+    initial.registers[1] = 0x7000;
+    initial.vectors[16] = 0x0011_2233_4455_6677_8899_aabb_ccdd_eeff;
+    initial.vectors[17] = 0xdead_beef_0bad_c0de_1234_5678_9abc_def0;
+    initial.vectors[25] = 0xd6aa_74fd_d2af_72fa_daa6_78f1_d6ab_76fe;
+    initial.vectors[26] = 0; // zero round key
+    initial.vectors[27] = 0x0f0e_0d0c_0b0a_0908_0706_0504_0302_0100;
+    let operand: [u8; 32] = std::array::from_fn(|index| (index as u8).wrapping_mul(7).wrapping_add(1));
+
+    for count in 1..=words.len() as u64 {
+        let mut native = initial.clone();
+        let mut storage = operand;
+        let spans = [SourceSpan {
+            guest_first: 0x4000,
+            bytes: bytes.as_ptr(),
+            size: bytes.len(),
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        }];
+        let source = Source {
+            spans: spans.as_ptr(),
+            span_count: spans.len(),
+            mapping_incarnation: 1,
+            instruction_epoch: 1,
+        };
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7020,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 1,
+            permissions: 3,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let executor = Executor::create().expect("native executor");
+        executor.reset(1).expect("native reset");
+        let outcome = executor
+            .run_aarch64(&mut native, &source, Some(&projection), 1, count, None, None)
+            .expect("native run");
+        assert_eq!(outcome.0, Exit::Yield, "boundary {count} outcome {:?}", outcome.0);
+
+        let mut memory = ReplayMemory {
+            sources: vec![ReplaySource {
+                first: 0x4000,
+                bytes: bytes.clone(),
+            }],
+            data: vec![ReplayView {
+                first: 0x7000,
+                data: operand.to_vec(),
+            }],
+            generation: 1,
+        };
+        let machine = ExecutionMachine::new(ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::Aarch64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        })
+        .expect("interpreter");
+        assert_eq!(machine.run_slice(1, count, &mut memory), StepOutcome::Yield, "boundary {count}");
+        machine.freeze().expect("interpreter freeze");
+        let ExecutionCpuSnapshot::Aarch64(interpreted) = machine.snapshot().expect("snapshot").cpu else {
+            unreachable!()
+        };
+        assert_eq!(native, interpreted, "first state divergence after instruction {count}");
+        assert_eq!(storage.as_slice(), memory.data[0].data.as_slice(), "memory divergence after instruction {count}");
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceCheckpoint {
     instruction_count: u64,

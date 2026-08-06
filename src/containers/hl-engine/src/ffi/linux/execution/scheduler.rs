@@ -1238,6 +1238,9 @@ impl GuestExecutor {
             pc,
         );
         if pool.suppressed.contains(&fallback_key) {
+            if pool.diagnostics {
+                *pool.suppressed_weight.entry(pc).or_default() += 1;
+            }
             return None;
         }
         if pool.observe(fallback_key) < 2 {

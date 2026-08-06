@@ -356,6 +356,13 @@ impl InstructionWord {
         Some((target, target.checked_add(width)?))
     }
 
+    /// A SIMD/FP load or store: top-level "loads and stores" class with the
+    /// vector bit set. `scalar_access` declines these, so the direct authority
+    /// has no operand it can certify for them.
+    fn vector_access(self) -> bool {
+        self.0 & 0x0a00_0000 == 0x0800_0000 && self.0 & 0x0400_0000 != 0
+    }
+
     fn scalar_access(self) -> Option<Protection> {
         let word = self.0;
         if word & 0x0400_0000 != 0 || (word >> 30) & 3 == 3 && (word >> 22) & 3 == 2 {
@@ -1866,11 +1873,15 @@ impl Executor {
             let Some(instruction) = pc.checked_add(index * 4) else {
                 continue;
             };
-            let Some(access) = sources
-                .iter()
-                .find_map(|source| source.instruction_at(instruction))
-                .and_then(InstructionWord::scalar_access)
-            else {
+            let Some(word) = sources.iter().find_map(|source| source.instruction_at(instruction)) else {
+                continue;
+            };
+            // Direct authority runs without the operand resolver, so a vector
+            // access it cannot certify would fall back and suppress the entry.
+            if word.vector_access() {
+                return None;
+            }
+            let Some(access) = word.scalar_access() else {
                 continue;
             };
             if access == Protection::WRITE {
@@ -2989,6 +3000,28 @@ mod test {
             assert_eq!(InstructionWord(word).scalar_access(), None);
         }
         assert_eq!(InstructionWord(0xf900_0020).scalar_access(), Some(Protection::WRITE));
+    }
+
+    #[test]
+    fn vector_access_forms() {
+        for word in [
+            0x3dc0_0027, // ldr q7, [x1]
+            0x3c81_0430, // str q16, [x1], #16
+            0xad40_6bfb, // ldp q27, q26, [sp]
+            0xbd40_0020, // ldr s0, [x1]
+        ] {
+            assert!(InstructionWord(word).vector_access(), "{word:#x}");
+        }
+        for word in [
+            0xf940_0020, // ldr x0, [x1]
+            0xa940_0020, // ldp x0, x0, [x1]
+            0x4e28_4b70, // aese
+            0x6e27_1e10, // eor v16.16b
+            0x9100_4021, // add x1, x1, #16
+            0x5400_0000, // b.eq
+        ] {
+            assert!(!InstructionWord(word).vector_access(), "{word:#x}");
+        }
     }
 
     #[derive(Default)]
