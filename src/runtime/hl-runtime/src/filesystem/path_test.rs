@@ -363,7 +363,7 @@ fn host_publishes_descriptor() {
 }
 
 #[test]
-fn openat2_precedes_pointer() {
+fn openat2_how_validation_precedes_containment() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
         let (adapter, host) = Host::fixture(architecture, false);
         {
@@ -373,8 +373,8 @@ fn openat2_precedes_pointer() {
             bytes[80..88].copy_from_slice(&8_u64.to_le_bytes());
         }
         let result = adapter.openat([u64::MAX, 32, 64, 24, 0, 0], true);
-        assert!(matches!(result, LinuxResult::Value(_)));
-        assert_eq!(host.commits.load(Ordering::Acquire), 1);
+        assert_eq!(result, LinuxResult::Error(Errno::EXDEV));
+        assert_eq!(host.commits.load(Ordering::Acquire), 0);
         let invalid = adapter.openat([u64::MAX, 32, u64::MAX, 8, 0, 0], true);
         assert_eq!(invalid, LinuxResult::Error(Errno::EINVAL));
     }
