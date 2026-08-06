@@ -129,6 +129,99 @@ fn descriptor_view_rejects_stale_description_generation() {
     );
 }
 
+#[test]
+fn descriptor_directory_captures_on_first_nonempty_read_and_freezes() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (process, _) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let table = Arc::new(DescriptorTable::new(8).unwrap());
+    let source = TaskProcfs::with_descriptors(Arc::clone(&tasks), process, Arc::clone(&table), Arc::new(Targets));
+    let procfs = hl_vfs::Procfs::new(Arc::new(source));
+    let directory = procfs
+        .open(b"/proc/self/fd", process.number(), hl_vfs::OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
+    assert!(directory.read_directory(0).unwrap().entries.is_empty());
+    let first = table
+        .install(
+            0,
+            Arc::new(DescriptorObject(11)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    let batch = directory.read_directory(8).unwrap();
+    assert_eq!(
+        batch
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_slice())
+            .collect::<Vec<_>>(),
+        [b".".as_slice(), b"..".as_slice(), b"0".as_slice()]
+    );
+    directory.commit_directory(batch.token, batch.entries.len()).unwrap();
+    table.close(first).unwrap();
+    table
+        .install(
+            1,
+            Arc::new(DescriptorObject(22)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    assert!(directory.read_directory(8).unwrap().entries.is_empty());
+
+    let independent = procfs
+        .open(b"/proc/self/fdinfo", process.number(), hl_vfs::OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
+    let batch = independent.read_directory(8).unwrap();
+    assert_eq!(batch.entries[2].name, b"1");
+    assert_eq!(batch.entries[2].file_type, 8);
+}
+
+#[test]
+fn descriptor_directory_limit_failure_retries_and_tokens_serialize_commits() {
+    let table = Arc::new(DescriptorTable::new(4).unwrap());
+    let first = table
+        .install(
+            0,
+            Arc::new(DescriptorObject(11)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    table
+        .install(
+            1,
+            Arc::new(DescriptorObject(22)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    let metadata = table.pin(first).unwrap().metadata().unwrap();
+    let directory: Arc<dyn hl_descriptor::OpenFileDescription> =
+        Arc::new(super::descriptor::DescriptorDirectory::with_budget(
+            Arc::clone(&table),
+            10,
+            metadata,
+            hl_descriptor::SnapshotBudget {
+                max_items: 1,
+                max_peak_bytes: usize::MAX,
+            },
+        ));
+    assert_eq!(
+        directory.read_directory(8),
+        Err(hl_descriptor::ObjectError::ResourceLimit)
+    );
+    table.close(1).unwrap();
+    let left = directory.read_directory(2).unwrap();
+    let right = directory.read_directory(2).unwrap();
+    assert_eq!(left, right);
+    directory.commit_directory(left.token, left.entries.len()).unwrap();
+    assert_eq!(
+        directory.commit_directory(right.token, right.entries.len()),
+        Err(hl_descriptor::ObjectError::InvalidArgument)
+    );
+}
+
 fn identity(source: &TaskProcfs, number: u32) -> ProcfsProcessIdentity {
     source.resolve_process(number).unwrap()
 }
@@ -275,10 +368,11 @@ fn task_projection() {
         ProcfsProcessState::Sleeping
     );
     tasks.set_thread_blocked(thread, false).unwrap();
-    assert!(view
-        .limits
-        .iter()
-        .any(|limit| { limit.resource == ProcfsLimitResource::Core && limit.soft == 9 && limit.hard == 10 }));
+    assert!(
+        view.limits
+            .iter()
+            .any(|limit| { limit.resource == ProcfsLimitResource::Core && limit.soft == 9 && limit.hard == 10 })
+    );
 }
 
 #[test]

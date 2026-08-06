@@ -71,6 +71,16 @@ eager directory snapshot timing; post-publication lazy capture remains the next
 descriptor-directory lifetime slice. The peer-fd shared-path identity gap is
 unchanged.
 
+Stage B1 moves fd/fdinfo directory capture from procfs path open to the first
+non-empty directory read. The runtime-owned directory OFD pins the selected
+process's descriptor table at open, admits one bounded, sorted numeric snapshot
+at first read, and freezes names and cookies for that OFD's remaining lifetime.
+Descriptor changes before capture are visible; changes after capture are not.
+Duplicate descriptors share the OFD cursor, while independent opens capture
+independently. A zero-entry request does not force publication, and a bounded
+capture failure leaves the OFD retryable. This is a Rust lifetime contract; it
+does not claim the retained arena-slot enumeration order.
+
 The syscall-side readlink route was additionally audited in read-only
 `../engine/src/linux_abi/syscall/fs.c` at `svc_fs`'s `readlinkat` case and its
 calls to `procfd_num`, `proc_any_leaf`, `proc_pid_member`, and

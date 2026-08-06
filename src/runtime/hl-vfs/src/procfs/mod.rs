@@ -372,13 +372,12 @@ impl Procfs {
                 Ok(Some(Arc::new(file::SnapshotFile::new(Vec::new(), metadata))))
             }
             model::Node::Fd | model::Node::FdInfo => {
-                let descriptors = self.source.descriptor_numbers(identity.ok_or(Error::NotFound)?)?;
                 let file_type = if leaf == model::Node::Fd { 10 } else { 8 };
-                Ok(Some(Arc::new(file::SnapshotDirectory::new(
-                    descriptors,
+                Ok(Some(self.source.descriptor_directory(
+                    identity.ok_or(Error::NotFound)?,
                     file_type,
                     leaf.metadata(process, 0),
-                ))))
+                )?))
             }
             model::Node::FdInfoFile(number) => {
                 let descriptor = self.source.descriptor(identity.ok_or(Error::NotFound)?, number)?;

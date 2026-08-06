@@ -2,6 +2,9 @@ use super::{
     AddressSpaceView, CgroupView, CpuView, DescriptorView, Error, MemoryView, MountView, NetworkView, ProcessIdentity,
     ProcessView, StatView, SystemView, ThreadIdentity, UtsView,
 };
+use std::sync::Arc;
+
+use hl_descriptor::{OfdMetadata, OpenFileDescription};
 
 /// Consumer-owned boundary for obtaining coherent process snapshots.
 pub trait Source: Send + Sync {
@@ -96,6 +99,18 @@ pub trait Source: Send + Sync {
     }
     fn descriptor_numbers(&self, _process: ProcessIdentity) -> Result<Vec<i32>, Error> {
         Err(Error::NotFound)
+    }
+    fn descriptor_directory(
+        &self,
+        process: ProcessIdentity,
+        file_type: u8,
+        metadata: OfdMetadata,
+    ) -> Result<Arc<dyn OpenFileDescription>, Error> {
+        Ok(Arc::new(super::file::SnapshotDirectory::new(
+            self.descriptor_numbers(process)?,
+            file_type,
+            metadata,
+        )))
     }
     fn descriptor(&self, _process: ProcessIdentity, _number: i32) -> Result<DescriptorView, Error> {
         Err(Error::NotFound)

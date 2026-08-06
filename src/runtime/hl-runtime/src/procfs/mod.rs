@@ -669,6 +669,20 @@ impl ProcfsSource for TaskProcfs {
         Ok(numbers)
     }
 
+    fn descriptor_directory(
+        &self,
+        process: ProcfsProcessIdentity,
+        file_type: u8,
+        metadata: hl_descriptor::OfdMetadata,
+    ) -> Result<Arc<dyn hl_descriptor::OpenFileDescription>, ProcfsError> {
+        let id = self.process_id(process)?;
+        Ok(Arc::new(descriptor::DescriptorDirectory::new(
+            self.descriptor_table(id)?,
+            file_type,
+            metadata,
+        )))
+    }
+
     fn descriptor(&self, process: ProcfsProcessIdentity, number: i32) -> Result<ProcfsDescriptorView, ProcfsError> {
         let id = self.process_id(process)?;
         let table = self.descriptor_table(id)?;
