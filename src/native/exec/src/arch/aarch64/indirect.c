@@ -7,6 +7,13 @@
 #define CPU 28
 #define OFFSET_SITE ((int)offsetof(hl_native_aarch64_cpu, indirect_site))
 
+static void diagnostic_increment(hl_a64_assembler *assembler, int scratch, int offset) {
+    if (!assembler->diagnostics) return;
+    hl_a64_ldr(assembler, scratch, CPU, offset);
+    hl_a64_addi(assembler, scratch, scratch, 1);
+    hl_a64_str(assembler, scratch, CPU, offset);
+}
+
 static void patch_cbnz(uint32_t *branch, const uint8_t *target) {
     uint32_t distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
     *branch |= (distance & UINT32_C(0x7ffff)) << 5;
@@ -64,6 +71,8 @@ int hl_a64_indirect_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc
         hl_a64_emit32(assembler, UINT32_C(0xca110210)); /* eor x16,x16,x17 */
         uint32_t *site_miss = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, UINT32_C(0xb5000010)); /* cbnz x16,shared */
+        diagnostic_increment(assembler, 16,
+                             (int)offsetof(hl_native_aarch64_cpu, diagnostic_ibtc_local_hits));
         uint32_t *site_hit = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, UINT32_C(0xd503201f)); /* patched b body; nop falls to shared */
 
@@ -78,6 +87,8 @@ int hl_a64_indirect_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc
         hl_a64_emit32(assembler, UINT32_C(0xb5000009)); /* cbnz x9,miss */
         uint32_t *shared_empty = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, UINT32_C(0xb4000010)); /* cbz x16,miss */
+        diagnostic_increment(assembler, 9,
+                             (int)offsetof(hl_native_aarch64_cpu, diagnostic_ibtc_shared_hits));
         hl_a64_ldr(assembler, 9, CPU, 9 * 8);
         hl_a64_br(assembler, 16);
 
