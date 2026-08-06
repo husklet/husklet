@@ -32,6 +32,29 @@
 //! ```
 //!
 //! Environment and CLI translation belongs to the application composition root.
+//!
+//! ## Conventions
+//!
+//! `println!`/`eprintln!`/`dbg!` are for tests, benchmarks, build scripts, and deliberate
+//! program output — not diagnostics.
+//!
+//! - `Error`: the operation failed and it is not ordinary guest business. A guest-visible
+//!   errno is not an error; it is the `Debug` outcome of its call.
+//! - `Warn`: degraded, retried, backpressured, or refused by policy.
+//! - `Info`: a lifecycle transition an operator wants in a normal session.
+//! - `Debug`: one line per domain-boundary crossing, with operands and outcome.
+//! - `Trace`: per-syscall, per-instruction, per-packet. Off in normal operation.
+//!
+//! Tag by the domain that owns the boundary, not the caller: a filesystem open reached
+//! from the syscall router is [`tag::FS`]. See [`tag`] for what each one owns.
+//!
+//! Message shape is `subject verb key=value`, lowercase, `snake_case` keys, `{:#x}` for
+//! guest addresses. Prefer [`hl_span!`] over logging a scope's start and end, and
+//! [`hl_event!`] when the consumer is a machine.
+//!
+//! Never log from a signal, VEH, fault-entry, or fork-critical callback: the macros
+//! format, may allocate, and may unwind. Record into a preallocated ring and report from
+//! the owning coordinator once the callback has returned.
 
 // ---- modules (one purpose each) -------------------------------------------------
 mod channel;

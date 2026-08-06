@@ -64,6 +64,19 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
     }
 
     pub(super) fn openat(&self, arguments: [u64; 6], extended: bool) -> LinuxResult {
+        let result = self.openat_result(arguments, extended);
+        hl_log::hl_debug!(
+            hl_log::tag::FS,
+            "openat directory={} path={:#x} flags={:#x} extended={extended} result={:#x}",
+            arguments[0] as i32,
+            arguments[1],
+            arguments[2],
+            result.encode(),
+        );
+        result
+    }
+
+    fn openat_result(&self, arguments: [u64; 6], extended: bool) -> LinuxResult {
         let Some(host) = &self.path_host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };

@@ -239,6 +239,14 @@ pub const CONTAINER: Tag = Tag::new(1 << 15, "container");
 pub const IMAGE: Tag = Tag::new(1 << 16, "image");
 pub const DAEMON: Tag = Tag::new(1 << 17, "daemon");
 pub const UI: Tag = Tag::new(1 << 18, "ui");
+/// Guest syscall admission: decode, route, dispatch, and result write-back.
+pub const SYSCALL: Tag = Tag::new(1 << 19, "syscall");
+/// Guest filesystem boundaries: path resolution, open, and descriptor installation.
+pub const FS: Tag = Tag::new(1 << 20, "fs");
+/// Guest network boundaries: socket creation, bind, listen, connect, and accept publication.
+pub const NET: Tag = Tag::new(1 << 21, "net");
+/// Guest memory boundaries: mapping, protection, faults, and translation-cache invalidation.
+pub const MEMORY: Tag = Tag::new(1 << 22, "memory");
 
 /// Every tag enabled.
 pub const ALL: Tags = Tags::ALL;
@@ -251,7 +259,7 @@ pub const NONE: Tags = Tags::NONE;
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
-    CONTAINER, IMAGE, DAEMON, UI,
+    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY,
 ];
 
 #[cfg(test)]

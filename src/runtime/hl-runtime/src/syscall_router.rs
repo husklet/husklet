@@ -440,9 +440,19 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
         };
         let frame = match SyscallFrameDecoder::decode(architecture, &CpuRegisters(cpu)) {
             Ok(frame) => frame,
-            Err(_) => return RuntimeTrapOutcome::Fault,
+            Err(_) => {
+                hl_log::hl_debug!(hl_log::tag::SYSCALL, "frame decode faulted pc={pc:#x}");
+                return RuntimeTrapOutcome::Fault;
+            }
         };
         let route = SyscallDispatcher::route(architecture, frame.raw_number);
+        hl_log::hl_trace!(
+            hl_log::tag::SYSCALL,
+            "enter name={} number={} pc={pc:#x} arguments={:#x?}",
+            Self::trace_identity(architecture, frame.raw_number, route.disposition).0,
+            frame.raw_number,
+            frame.arguments,
+        );
         let direct_identity = self
             .seccomp_control
             .as_ref()
@@ -527,6 +537,13 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
             };
             SyscallDispatcher::dispatch(frame, &mut ports)
         };
+        hl_log::hl_trace!(
+            hl_log::tag::SYSCALL,
+            "exit name={} number={} pc={pc:#x} result={:#x}",
+            Self::trace_identity(architecture, frame.raw_number, route.disposition).0,
+            frame.raw_number,
+            result.encode(),
+        );
         if let Some(trace) = &self.trace {
             let (name, number) = Self::trace_identity(architecture, frame.raw_number, route.disposition);
             trace
@@ -568,6 +585,11 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
             return RuntimeTrapOutcome::Continue;
         }
         if SyscallFrameDecoder::write_result(&frame, &mut CpuRegisters(cpu), result).is_err() {
+            hl_log::hl_debug!(
+                hl_log::tag::SYSCALL,
+                "result write-back faulted number={} pc={pc:#x}",
+                frame.raw_number,
+            );
             return RuntimeTrapOutcome::Fault;
         }
         if let Some(signal) = killed {
@@ -584,6 +606,11 @@ impl RuntimeSyscallTrap for RuntimeSyscallRouter {
                 } else {
                     RuntimeTerminal::Thread(status)
                 };
+                hl_log::hl_info!(
+                    hl_log::tag::SYSCALL,
+                    "thread terminal name={} status={status}",
+                    operation.name,
+                );
                 *self.terminal.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(terminal);
                 RuntimeTrapOutcome::Exit(status)
             }

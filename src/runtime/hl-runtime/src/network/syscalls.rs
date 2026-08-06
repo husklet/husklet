@@ -290,6 +290,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn bind(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
+        let result = self.bind_result(descriptor, pointer, length);
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "bind descriptor={descriptor} address={pointer:#x} length={length} result={:#x}",
+            result.encode(),
+        );
+        result
+    }
+
+    fn bind_result(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
         if let Ok(socket) = self.lookup(descriptor) {
             if socket.netlink_socket().is_some() {
                 return if length >= 12 {
@@ -459,6 +469,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn listen(&self, descriptor: i32, backlog: i32) -> LinuxResult {
+        let result = self.listen_result(descriptor, backlog);
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "listen descriptor={descriptor} backlog={backlog} result={:#x}",
+            result.encode(),
+        );
+        result
+    }
+
+    fn listen_result(&self, descriptor: i32, backlog: i32) -> LinuxResult {
         let socket = match self.lookup(descriptor) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
@@ -540,6 +560,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn connect(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
+        let result = self.connect_result(descriptor, pointer, length);
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "connect descriptor={descriptor} address={pointer:#x} length={length} result={:#x}",
+            result.encode(),
+        );
+        result
+    }
+
+    fn connect_result(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
         let guest_address = match NetworkAbi::new(&self.memory, self.architecture).decode_sockaddr(pointer, length) {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
