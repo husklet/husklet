@@ -408,7 +408,7 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
 
 impl<M: GuestMemory> IpcSyscalls for RuntimeIpcSyscalls<M> {
     fn handle(&mut self, operation: SyscallOperation, arguments: [u64; 6]) -> LinuxResult {
-        match operation.name {
+        let result = match operation.name {
             "shmget" => self.shmget(arguments),
             "msgget" => self.msgget(arguments),
             "msgsnd" => self.msgsnd(arguments),
@@ -428,7 +428,10 @@ impl<M: GuestMemory> IpcSyscalls for RuntimeIpcSyscalls<M> {
             "mq_notify" => self.mq_notify(arguments),
             "mq_getsetattr" => self.mq_getsetattr(arguments),
             _ => LinuxResult::Error(Errno::ENOSYS),
-        }
+        };
+        hl_log::hl_debug!(hl_log::tag::IPC, "{} key={:#x} argument={:#x} flags={:#x} result={:#x}",
+            operation.name, arguments[0], arguments[1], arguments[2], result.encode());
+        result
     }
 }
 
