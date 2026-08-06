@@ -303,6 +303,10 @@ impl RuntimeMemfd {
 }
 
 impl OpenFileDescription for RuntimeMemfd {
+    fn domain_extension(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+
     fn kind(&self) -> ObjectKind {
         ObjectKind::File
     }

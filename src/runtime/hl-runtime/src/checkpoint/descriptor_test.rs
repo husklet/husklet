@@ -10,6 +10,7 @@ use hl_descriptor::{
 
 use crate::{
     CheckpointDescriptorTable, CheckpointParticipant, DescriptorCheckpointParticipant, DescriptorObjectCatalog,
+    DirectoryObjectCatalog, DirectoryObjectCheckpoint,
 };
 use std::time::Instant;
 
@@ -23,6 +24,63 @@ impl OpenFileDescription for File {
 }
 
 struct Objects;
+
+#[derive(Debug)]
+struct Directory(std::sync::Mutex<u8>);
+
+impl OpenFileDescription for Directory {
+    fn kind(&self) -> ObjectKind {
+        ObjectKind::Directory
+    }
+
+    fn read(&self, output: &mut [u8]) -> Result<usize, hl_descriptor::ObjectError> {
+        let mut cursor = self.0.lock().unwrap();
+        if let Some(first) = output.first_mut() {
+            *first = *cursor;
+            *cursor += 1;
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn domain_extension(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+struct Directories;
+
+impl DescriptorObjectCheckpoint for Directories {
+    fn snapshot(&self, _: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+        let directory = object
+            .domain_extension()
+            .and_then(|value| value.downcast_ref::<Directory>())
+            .ok_or(DescriptorCheckpointError::Object)?;
+        Ok(vec![
+            *directory.0.lock().map_err(|_| DescriptorCheckpointError::Object)?,
+        ])
+    }
+
+    fn rebind(
+        &self,
+        description: &OpenDescriptionImage,
+    ) -> Result<Arc<dyn OpenFileDescription>, DescriptorCheckpointError> {
+        Ok(Arc::new(Directory(std::sync::Mutex::new(
+            *description.object.first().ok_or(DescriptorCheckpointError::Object)?,
+        ))))
+    }
+}
+
+impl DirectoryObjectCheckpoint for Directories {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(1)
+    }
+
+    fn owns(&self, _: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError> {
+        Ok(object.domain_extension().is_some_and(|value| value.is::<Directory>()))
+    }
+}
 
 impl DescriptorObjectCheckpoint for Objects {
     fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
@@ -140,6 +198,32 @@ fn participant_independent_table() {
     assert_eq!(restored.snapshot(first).unwrap().offset, 88);
     assert!(restored.snapshot(first).unwrap().flags.closes_on_exec());
     assert!(!restored.snapshot(alias).unwrap().flags.closes_on_exec());
+}
+
+#[test]
+fn alias_cursor_shared() {
+    let table = DescriptorTable::new(4).unwrap();
+    let first = table
+        .install(
+            0,
+            Arc::new(Directory(std::sync::Mutex::new(7))),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    let alias = table.duplicate(first, 0, DescriptorFlags::default()).unwrap();
+    let directories = Arc::new(DirectoryObjectCatalog::rejecting().bind(1, Arc::new(Directories)));
+    let catalog = DescriptorObjectCatalog::rejecting().bind(ObjectKind::Directory, directories);
+
+    table.freeze_checkpoint();
+    let image = table.checkpoint_image(&catalog).unwrap();
+    table.thaw_checkpoint();
+    let restored = DescriptorTable::restore_checkpoint(&image, &catalog).unwrap();
+
+    let mut byte = [0];
+    assert_eq!(restored.pin(first).unwrap().read(&mut byte).unwrap(), 1);
+    assert_eq!(byte, [7]);
+    assert_eq!(restored.pin(alias).unwrap().read(&mut byte).unwrap(), 1);
+    assert_eq!(byte, [8]);
 }
 
 #[test]

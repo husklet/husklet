@@ -7,6 +7,12 @@ than serialized. Rust owns descriptor checkpoint routing independently of
 procfs. `FileObjectCatalog` therefore selects codecs from authoritative identity
 and OFD evidence, and the symmetric `DirectoryObjectCatalog` reserves durable
 nonzero tags while rejecting no-owner or multiple-owner captures. This stage is
+bounded before codec allocation by a checked tag-plus-payload size contract,
+requires codecs to return that exact size, and rejects a rebound object whose
+kind differs from the catalog route. The memfd file codec additionally proves
+the concrete `RuntimeMemfd` and its complete generation-bearing registry binding,
+not merely a colliding numeric identity. Descriptor restore constructs each open
+description once, so directory aliases retain one shared cursor. This stage is
 selector infrastructure only: no procfs codec is bound, so checkpoint support
 for open procfs snapshot files and directories remains an explicit gap.
 

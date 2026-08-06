@@ -262,16 +262,36 @@ impl DescriptorObjectCheckpoint for Bindings {
 }
 
 impl crate::FileObjectCheckpoint for Bindings {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(PAYLOAD_BYTES)
+    }
+
     fn owns(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError> {
-        if object.kind() != ObjectKind::File {
+        let Some(object) = object
+            .domain_extension()
+            .and_then(|extension| extension.downcast_ref::<RuntimeMemfd>())
+        else {
             return Ok(false);
-        }
+        };
         let state = self
             .registry
             .state
             .lock()
             .map_err(|_| DescriptorCheckpointError::Object)?;
-        Ok(state.objects.keys().any(|candidate| candidate.identity == identity))
+        let binding = object.binding.lock().map_err(|_| DescriptorCheckpointError::Object)?;
+        let Some((registry, bound, epoch)) = binding.as_ref() else {
+            return Ok(false);
+        };
+        let Some(registry) = registry.upgrade() else {
+            return Ok(false);
+        };
+        Ok(Arc::ptr_eq(&registry, &self.registry)
+            && *epoch == state.epoch
+            && bound.identity == identity
+            && state
+                .objects
+                .get(bound)
+                .is_some_and(|candidate| std::ptr::eq(candidate.as_ref(), object)))
     }
 }
 
@@ -459,6 +479,15 @@ mod tests {
     use hl_descriptor::{DescriptorFlags, DescriptorTable};
     use hl_memory::SharedLimits;
 
+    #[derive(Debug)]
+    struct CollidingFile;
+
+    impl OpenFileDescription for CollidingFile {
+        fn kind(&self) -> ObjectKind {
+            ObjectKind::File
+        }
+    }
+
     fn fixture() -> (
         Arc<SharedObjectStore>,
         Arc<Registry>,
@@ -509,6 +538,15 @@ mod tests {
         assert_eq!(receiver.pin(received).unwrap().read(&mut output), Ok(4));
         assert_eq!(&output, b"cdef");
         transaction.resume().unwrap();
+    }
+
+    #[test]
+    fn binding_exact() {
+        let (_, _, bindings, table, number, object) = fixture();
+        let identity = table.pin(number).unwrap().description_identity();
+        assert!(crate::FileObjectCheckpoint::owns(bindings.as_ref(), identity.identity, object.as_ref()).unwrap());
+        assert!(!crate::FileObjectCheckpoint::owns(bindings.as_ref(), identity.identity, &CollidingFile).unwrap());
+        assert!(!crate::FileObjectCheckpoint::owns(bindings.as_ref(), identity.identity + 1, object.as_ref()).unwrap());
     }
 
     #[test]
