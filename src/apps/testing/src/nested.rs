@@ -1,9 +1,14 @@
 use clap::{Args, Subcommand};
 use hl_process::{Capture, Command as ProcessCommand, Outcome as ProcessOutcome};
+use nix::{
+    fcntl::{OFlag, open, openat},
+    sys::stat::Mode,
+};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
-    fs,
+    fs::{self, File, OpenOptions},
+    io,
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Component, Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -12,6 +17,21 @@ use std::{
 
 type Error = Box<dyn std::error::Error>;
 const DEFAULT_CAPTURE_LIMIT: usize = 1024 * 1024;
+const MAXIMUM_LAYERS: usize = 16;
+
+// ORACLE: the retained gate is ../engine/tools/nested_engine_gate.c,
+// whose main validates every executable before process_run(), owns the captured
+// result until comparison, and releases it on every exit. process_run() in
+// tools/process.c forks one child, reports exec failure separately, grows its
+// capture without a bound, waits without a timeout, and returns status/stdout. The C gate
+// forwards one host argv chain and therefore relies on the inherited host tree.
+// Husklet instead gives the outer engine one temporary, flat artifact root: its
+// first two executable paths select/enter that root, and later layers use stable
+// guest paths in the same root. Bundle owns that root through capture completion;
+// dropping it cleans successful, failed, limited, and timed-out runs. Each source
+// is opened relative to a no-follow directory descriptor and copied from that
+// descriptor, so neither a source leaf nor an intermediate component can be
+// replaced with a followed symlink between validation and copy.
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -203,7 +223,7 @@ fn load(root: &Path, definition: &Path) -> Result<Document, Error> {
     for chain in &document.chains {
         if chain.id.is_empty()
             || !ids.insert(&chain.id)
-            || chain.layers.len() < 2
+            || !(2..=MAXIMUM_LAYERS).contains(&chain.layers.len())
             || !(1..=3600).contains(&chain.timeout_seconds)
             || !(1..=16 * 1024 * 1024).contains(&chain.capture_limit_bytes)
             || !(0..=255).contains(&chain.expect.exit)
@@ -512,17 +532,113 @@ fn safe_relative(path: &Path) -> Result<(), Error> {
     }
 }
 
-fn command(root: &Path, chain: &Chain) -> Vec<String> {
-    let mut arguments = Vec::new();
-    for layer in &chain.layers {
-        arguments.push(root.join(&layer.artifact.path).display().to_string());
-        arguments.push("--report-exit".into());
-        arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
-        layer.options.append(&mut arguments);
+#[derive(Debug)]
+struct Bundle {
+    _directory: tempfile::TempDir,
+    layers: Vec<PathBuf>,
+}
+
+impl Bundle {
+    fn new(root: &Path, chain: &Chain) -> Result<Self, Error> {
+        let directory = tempfile::tempdir()?;
+        let mut layers = Vec::with_capacity(chain.layers.len());
+        for (index, layer) in chain.layers.iter().enumerate() {
+            let destination = directory.path().join(format!("layer-{index}"));
+            Self::copy(root, &layer.artifact.path, &destination)?;
+            layers.push(destination);
+        }
+        let guest = directory.path().join("guest");
+        Self::copy(root, &chain.guest.path, &guest)?;
+        Ok(Self {
+            _directory: directory,
+            layers,
+        })
     }
-    arguments.push(root.join(&chain.guest.path).display().to_string());
-    arguments.extend(chain.arguments.iter().cloned());
-    arguments
+
+    fn copy(root: &Path, source: &Path, destination: &Path) -> Result<(), Error> {
+        safe_relative(source)?;
+        let mut directory = open(
+            root,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(|error| format!("cannot open nested bundle root {}: {error}", root.display()))?;
+        let components = source.components().collect::<Vec<_>>();
+        let (name, parents) = components.split_last().ok_or("nested bundle input has no file name")?;
+        for component in parents {
+            let Component::Normal(name) = component else {
+                return Err(format!("unsafe nested bundle component in {}", source.display()).into());
+            };
+            directory = openat(
+                &directory,
+                *name,
+                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW,
+                Mode::empty(),
+            )
+            .map_err(|error| format!("cannot traverse nested bundle input {}: {error}", source.display()))?;
+        }
+        let Component::Normal(name) = name else {
+            return Err(format!("unsafe nested bundle leaf in {}", source.display()).into());
+        };
+        let input = openat(
+            &directory,
+            *name,
+            OFlag::O_RDONLY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|error| format!("cannot open nested bundle input {}: {error}", source.display()))?;
+        let mut input = File::from(input);
+        if !input.metadata()?.is_file() {
+            return Err(format!("nested bundle input is not a regular file: {}", source.display()).into());
+        }
+        let mut output = OpenOptions::new().write(true).create_new(true).open(destination)?;
+        io::copy(&mut input, &mut output)?;
+        output.sync_all()?;
+        output.set_permissions(fs::Permissions::from_mode(0o555))?;
+        Ok(())
+    }
+
+    fn host(&self, path: &Path) -> Result<String, Error> {
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "nested bundle path is not UTF-8".into())
+    }
+
+    fn guest_layer(index: usize) -> String {
+        format!("/layer-{index}")
+    }
+
+    fn command(&self, chain: &Chain) -> Result<Vec<String>, Error> {
+        let mut arguments = Vec::new();
+        for (index, layer) in chain.layers.iter().enumerate() {
+            // The outer host must open layer 1 before a guest filesystem exists.
+            // Every later path is resolved inside the shared bundle root selected
+            // from that host path, so forwarding another host path would escape
+            // the parent engine's guest-visible namespace.
+            arguments.push(if index < 2 {
+                self.host(&self.layers[index])?
+            } else {
+                Self::guest_layer(index)
+            });
+            arguments.push("--report-exit".into());
+            arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
+            layer.options.append(&mut arguments);
+        }
+        arguments.push("/guest".into());
+        arguments.extend(chain.arguments.iter().cloned());
+        Ok(arguments)
+    }
+
+    #[cfg(test)]
+    fn path(&self) -> &Path {
+        self._directory.path()
+    }
+}
+
+fn command(root: &Path, chain: &Chain) -> Result<(Bundle, Vec<String>), Error> {
+    let bundle = Bundle::new(root, chain)?;
+    let arguments = bundle.command(chain)?;
+    Ok((bundle, arguments))
 }
 
 fn unavailable(root: &Path, artifact: &Artifact) -> Option<Outcome> {
@@ -556,7 +672,10 @@ fn execute(root: &Path, definition: &Path, chain: &Chain) -> Outcome {
         Ok(value) => value,
         Err(error) => return Outcome::Failed(format!("cannot read {}: {error}", expected.display())),
     };
-    let arguments = command(root, chain);
+    let (_bundle, arguments) = match command(root, chain) {
+        Ok(value) => value,
+        Err(error) => return Outcome::Failed(format!("nested bundle failed: {error}")),
+    };
     match capture(
         &arguments,
         Duration::from_secs(chain.timeout_seconds),
@@ -631,6 +750,10 @@ mod tests {
 
     #[test]
     fn typed_options_are_attached_to_the_layer_they_configure() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["outer", "inner", "hello"] {
+            fs::write(root.path().join(name), name).unwrap();
+        }
         let chain: Chain = serde_yaml::from_str(
             r#"
 id: arm-amd
@@ -645,11 +768,11 @@ expect: { exit: 42, stdout: hello.txt }
 "#,
         )
         .unwrap();
-        let arguments = command(Path::new("/tree"), &chain);
+        let (bundle, arguments) = command(root.path(), &chain).unwrap();
         assert_eq!(
             &arguments[..8],
             [
-                "/tree/outer",
+                bundle.path().join("layer-0").to_str().unwrap(),
                 "--report-exit",
                 "--guest-isa",
                 "aarch64",
@@ -661,8 +784,173 @@ expect: { exit: 42, stdout: hello.txt }
         );
         assert_eq!(
             &arguments[8..],
-            ["/tree/inner", "--report-exit", "--guest-isa", "x86_64", "/tree/hello"]
+            [
+                bundle.path().join("layer-1").to_str().unwrap(),
+                "--report-exit",
+                "--guest-isa",
+                "x86_64",
+                "/guest"
+            ]
         );
+        assert_eq!(fs::read(bundle.path().join("layer-0")).unwrap(), b"outer");
+        assert_eq!(fs::read(bundle.path().join("layer-1")).unwrap(), b"inner");
+        assert_eq!(fs::read(bundle.path().join("guest")).unwrap(), b"hello");
+        for name in ["layer-0", "layer-1", "guest"] {
+            assert_eq!(
+                fs::metadata(bundle.path().join(name)).unwrap().permissions().mode() & 0o777,
+                0o555
+            );
+        }
+        let directory = bundle.path().to_owned();
+        drop(bundle);
+        assert!(!directory.exists());
+    }
+
+    #[test]
+    fn bundle_projects_only_descendants_into_the_guest_root() {
+        let root = tempfile::tempdir().unwrap();
+        for path in ["first/outer", "second/middle", "third/inner", "leaf/hello"] {
+            let path = root.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"artifact").unwrap();
+        }
+        let chain: Chain = serde_yaml::from_str(
+            r#"
+id: three
+layers:
+  - artifact: { path: first/outer }
+    guest_isa: amd64
+  - artifact: { path: second/middle }
+    guest_isa: arm64
+  - artifact: { path: third/inner }
+    guest_isa: amd64
+guest: { path: leaf/hello }
+expect: { exit: 42, stdout: hello.txt }
+"#,
+        )
+        .unwrap();
+        let (bundle, arguments) = command(root.path(), &chain).unwrap();
+        assert_eq!(arguments[0], bundle.path().join("layer-0").to_str().unwrap());
+        assert_eq!(arguments[4], bundle.path().join("layer-1").to_str().unwrap());
+        assert_eq!(arguments[8], "/layer-2");
+        assert_eq!(arguments[12], "/guest");
+        let names = fs::read_dir(bundle.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(names.len(), 4);
+    }
+
+    #[test]
+    fn bundle_accepts_non_utf8_source_paths_without_exposing_them() {
+        let root = tempfile::tempdir().unwrap();
+        let name = OsString::from_vec(vec![b'e', b'n', b'g', b'i', b'n', b'e', 0xff]);
+        fs::write(root.path().join(&name), b"engine").unwrap();
+        fs::write(root.path().join("inner"), b"inner").unwrap();
+        fs::write(root.path().join("guest"), b"guest").unwrap();
+        let mut chain: Chain = serde_yaml::from_str(
+            "id: bytes\nlayers:\n  - artifact: { path: placeholder }\n    guest_isa: arm64\n  - artifact: { path: inner }\n    guest_isa: arm64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
+        )
+        .unwrap();
+        chain.layers[0].artifact.path = PathBuf::from(name);
+        let (bundle, arguments) = command(root.path(), &chain).unwrap();
+        assert_eq!(fs::read(bundle.path().join("layer-0")).unwrap(), b"engine");
+        assert!(
+            arguments
+                .iter()
+                .all(|argument| !argument.contains(char::REPLACEMENT_CHARACTER))
+        );
+    }
+
+    #[test]
+    fn bundle_rejects_symlink_inputs_without_following_them() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("target"), b"engine").unwrap();
+        symlink("target", root.path().join("outer")).unwrap();
+        fs::write(root.path().join("inner"), b"inner").unwrap();
+        fs::write(root.path().join("guest"), b"guest").unwrap();
+        let chain: Chain = serde_yaml::from_str(
+            "id: link\nlayers:\n  - artifact: { path: outer }\n    guest_isa: arm64\n  - artifact: { path: inner }\n    guest_isa: arm64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
+        )
+        .unwrap();
+        let error = match command(root.path(), &chain) {
+            Ok(_) => panic!("symlink input was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("cannot open nested bundle input"));
+    }
+
+    #[test]
+    fn bundle_rejects_intermediate_symlinks_without_following_them() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("real")).unwrap();
+        fs::write(root.path().join("real/outer"), b"engine").unwrap();
+        symlink("real", root.path().join("linked")).unwrap();
+        fs::write(root.path().join("inner"), b"inner").unwrap();
+        fs::write(root.path().join("guest"), b"guest").unwrap();
+        let chain: Chain = serde_yaml::from_str(
+            "id: link\nlayers:\n  - artifact: { path: linked/outer }\n    guest_isa: arm64\n  - artifact: { path: inner }\n    guest_isa: arm64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
+        )
+        .unwrap();
+        let error = match command(root.path(), &chain) {
+            Ok(_) => panic!("intermediate symlink was accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("cannot traverse nested bundle input"));
+    }
+
+    #[test]
+    fn duplicate_sources_get_distinct_collision_free_destinations() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("engine"), b"engine").unwrap();
+        fs::write(root.path().join("guest"), b"guest").unwrap();
+        let chain: Chain = serde_yaml::from_str(
+            "id: duplicate\nlayers:\n  - artifact: { path: engine }\n    guest_isa: arm64\n  - artifact: { path: engine }\n    guest_isa: amd64\n  - artifact: { path: engine }\n    guest_isa: arm64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
+        )
+        .unwrap();
+        let (bundle, arguments) = command(root.path(), &chain).unwrap();
+        assert_eq!(fs::read(bundle.path().join("layer-0")).unwrap(), b"engine");
+        assert_eq!(fs::read(bundle.path().join("layer-1")).unwrap(), b"engine");
+        assert_eq!(fs::read(bundle.path().join("layer-2")).unwrap(), b"engine");
+        assert_eq!(arguments[8], "/layer-2");
+        assert_eq!(arguments[12], "/guest");
+    }
+
+    #[test]
+    fn failed_partial_bundle_is_removed_by_raii() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("outer"), b"outer").unwrap();
+        fs::write(root.path().join("guest"), b"guest").unwrap();
+        let chain: Chain = serde_yaml::from_str(
+            "id: partial\nlayers:\n  - artifact: { path: outer }\n    guest_isa: arm64\n  - artifact: { path: absent }\n    guest_isa: amd64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
+        )
+        .unwrap();
+        let before = fs::read_dir(std::env::temp_dir()).unwrap().count();
+        assert!(command(root.path(), &chain).is_err());
+        let after = fs::read_dir(std::env::temp_dir()).unwrap().count();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn manifest_accepts_sixteen_layers_and_rejects_seventeen() {
+        let root = tempfile::tempdir().unwrap();
+        let definition = root.path().join("chains.yaml");
+        let document = |count| {
+            let layers = (0..count)
+                .map(|index| format!("  - artifact: {{ path: layer-{index} }}\n    guest_isa: arm64\n"))
+                .collect::<String>();
+            format!(
+                "version: 1\nchains:\n  - id: boundary\n    layers:\n{layers}    guest: {{ path: guest }}\n    expect: {{ exit: 42, stdout: hi.txt }}\n"
+            )
+        };
+        fs::write(&definition, document(MAXIMUM_LAYERS)).unwrap();
+        assert_eq!(load(root.path(), &definition).unwrap().chains[0].layers.len(), 16);
+        fs::write(&definition, document(MAXIMUM_LAYERS + 1)).unwrap();
+        let error = match load(root.path(), &definition) {
+            Ok(_) => panic!("seventeen layers were accepted"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("invalid nested chain"));
     }
 
     #[test]
