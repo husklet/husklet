@@ -244,6 +244,16 @@ where
                 self.failures.report(process, error);
                 Self::project_load(error)
             })?;
+        hl_log::hl_debug!(
+            hl_log::tag::EXEC,
+            "image loaded process={} main={:#x} main_size={:#x} interpreter={:#x} stack_pointer={:#x} stack={:#x}",
+            process.number(),
+            loaded.main().address(),
+            loaded.main().size(),
+            loaded.interpreter().map_or(0, |mapping| mapping.address()),
+            loaded.initial_stack().stack_pointer(),
+            loaded.usable_stack().address(),
+        );
         let (_, address_space) = loader.into_parts();
         let tls = self
             .tls
