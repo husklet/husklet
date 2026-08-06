@@ -158,7 +158,10 @@ struct Selection {
 }
 
 pub fn run(options: Options) -> Result<(), Error> {
-    let root = crate::runtime::workspace()?;
+    let workspace = Workspace {
+        root: crate::runtime::workspace()?,
+    };
+    let root = &workspace.root;
     let (prepare_only, selection) = match options.action {
         Some(Action::Prepare(selection)) => (true, selection),
         Some(Action::Run(selection)) => (false, selection),
@@ -167,15 +170,15 @@ pub fn run(options: Options) -> Result<(), Error> {
     let definition = selection
         .manifest
         .map_or_else(|| root.join("tests/runtime/nested/chains.yaml"), |path| root.join(path));
-    let document = load(&root, &definition)?;
-    prepare(&root, &document)?;
+    let document = workspace.load(&definition)?;
+    workspace.prepare(&document)?;
     if prepare_only {
         return Ok(());
     }
     let mut failed = 0;
     let mut unsupported = 0;
     for chain in document.chains {
-        match execute(&root, &definition, &chain) {
+        match workspace.execute(&definition, &chain) {
             Outcome::Passed => println!("PASS {}", chain.id),
             Outcome::Unsupported(reason) => {
                 unsupported += 1;
@@ -195,82 +198,8 @@ pub fn run(options: Options) -> Result<(), Error> {
     }
 }
 
-fn load(root: &Path, definition: &Path) -> Result<Document, Error> {
-    let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
-    if document.version != 1 || document.chains.is_empty() {
-        return Err(format!("{} has unsupported version or no chains", definition.display()).into());
-    }
-    let mut ids = BTreeSet::new();
-    for chain in &document.chains {
-        if chain.id.is_empty()
-            || !ids.insert(&chain.id)
-            || chain.layers.len() < 2
-            || !(1..=3600).contains(&chain.timeout_seconds)
-            || !(1..=16 * 1024 * 1024).contains(&chain.capture_limit_bytes)
-            || !(0..=255).contains(&chain.expect.exit)
-        {
-            return Err(format!("invalid nested chain {:?}", chain.id).into());
-        }
-        validate_artifact(root, &chain.guest)?;
-        chain.expect.stdout.safe_relative()?;
-        for layer in &chain.layers {
-            validate_artifact(root, &layer.artifact)?;
-            layer.options.validate()?;
-        }
-    }
-    Ok(document)
-}
-
-fn validate_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
-    artifact.path.safe_relative()?;
-    if root.join(&artifact.path) == root
-        || matches!(artifact.source, ArtifactSource::ForeignBuild) && artifact.build.is_none()
-    {
-        return Err(format!(
-            "artifact {} has no usable path/build instruction",
-            artifact.path.display()
-        )
-        .into());
-    }
-    Ok(())
-}
-
 fn release_profile() -> String {
     "release".into()
-}
-
-fn prepare(root: &Path, document: &Document) -> Result<(), Error> {
-    let mut artifacts = document
-        .chains
-        .iter()
-        .flat_map(|chain| chain.layers.iter().map(|layer| &layer.artifact).chain([&chain.guest]))
-        .filter(|artifact| artifact.build.is_some())
-        .collect::<Vec<_>>();
-    artifacts.sort_by(|left, right| left.path.cmp(&right.path));
-    artifacts.dedup_by(|left, right| left.path == right.path);
-    for artifact in artifacts {
-        prepare_artifact(root, artifact)?;
-    }
-    Ok(())
-}
-
-fn prepare_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
-    let build = artifact.build.as_ref().ok_or("prepared artifact has no build")?;
-    validate_build(build)?;
-    let identity = build_identity(root, build)?;
-    let key = &identity.key;
-    let cache = crate::record::Cache::new(root)?;
-    let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
-    let record = receipts.artifact(key, &build.binary)?;
-    let _lock = receipts.lock(key)?;
-    if record.verify()? {
-        println!("REUSED {} key={key}", artifact.path.display());
-    } else {
-        build_artifact(root, build, &identity.cargo, &record)?;
-        println!("BUILT {} key={key}", artifact.path.display());
-    }
-    materialize(record.artifact(), &root.join(&artifact.path))?;
-    Ok(())
 }
 
 fn validate_build(build: &Build) -> Result<(), Error> {
@@ -293,54 +222,6 @@ struct BuildIdentity {
     cargo: String,
 }
 
-fn build_identity(root: &Path, build: &Build) -> Result<BuildIdentity, Error> {
-    let cargo = environment("CARGO").unwrap_or_else(|| "cargo".into());
-    let values = build_environment(build);
-    let key = build_key_with_environment(root, build, &cargo, &values)?;
-    Ok(BuildIdentity { key, cargo })
-}
-
-fn build_key_with_environment(
-    root: &Path,
-    build: &Build,
-    cargo: &str,
-    values: &[(String, String)],
-) -> Result<String, Error> {
-    let mut digest = crate::record::FramedIdentity::new(b"husklet-nested-build-v2")?;
-    for value in [&build.package, &build.target, &build.profile, &build.binary] {
-        digest.field(value.as_bytes())?;
-    }
-    for value in &build.rustflags {
-        digest.field(value.as_bytes())?;
-    }
-    for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
-        let path = root.join(name);
-        if path.is_file() {
-            hash_source(&mut digest, root, &path)?;
-        }
-    }
-    for path in cargo_configs(root) {
-        if path.is_file() {
-            hash_source_named(&mut digest, b"cargo-config", &path)?;
-        }
-    }
-    let rustc = environment("RUSTC").unwrap_or_else(|| "rustc".into());
-    for (name, value) in values {
-        digest.field(name.as_bytes())?;
-        digest.field(value.as_bytes())?;
-    }
-    hash_tool(&mut digest, "cargo", cargo, &["-V"])?;
-    hash_tool(&mut digest, "rustc", &rustc, &["-vV"])?;
-    hash_tool(
-        &mut digest,
-        "rustc-target",
-        &rustc,
-        &["--print", "target-libdir", "--target", &build.target],
-    )?;
-    hash_tree(&mut digest, root, &root.join("src"))?;
-    Ok(digest.finish())
-}
-
 fn environment(name: &str) -> Option<String> {
     std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
 }
@@ -361,22 +242,6 @@ fn build_environment(build: &Build) -> Vec<(String, String)> {
     .into_iter()
     .map(|name| (name.to_owned(), environment(name).unwrap_or_default()))
     .collect()
-}
-
-fn cargo_configs(root: &Path) -> Vec<PathBuf> {
-    let mut paths = root
-        .ancestors()
-        .flat_map(|directory| [directory.join(".cargo/config"), directory.join(".cargo/config.toml")])
-        .collect::<Vec<_>>();
-    let cargo_home = environment("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| environment("HOME").map(|home| PathBuf::from(home).join(".cargo")));
-    if let Some(home) = cargo_home {
-        paths.extend([home.join("config"), home.join("config.toml")]);
-    }
-    paths.sort();
-    paths.dedup();
-    paths
 }
 
 fn hash_source_named(digest: &mut crate::record::FramedIdentity, name: &[u8], path: &Path) -> Result<(), Error> {
@@ -402,35 +267,6 @@ fn hash_tool(
     digest.field(program.as_bytes())?;
     digest.field(&output.stdout)?;
     digest.field(&output.stderr)
-}
-
-fn hash_tree(digest: &mut crate::record::FramedIdentity, root: &Path, directory: &Path) -> Result<(), Error> {
-    let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
-        let path = entry.path();
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            hash_tree(digest, root, &path)?;
-        } else if kind.is_file() {
-            hash_source(digest, root, &path)?;
-        } else if kind.is_symlink() {
-            let relative = path.strip_prefix(root)?;
-            digest.field(b"symlink")?;
-            digest.field(relative.as_os_str().as_bytes())?;
-            digest.field(fs::read_link(&path)?.as_os_str().as_bytes())?;
-        } else {
-            return Err(format!("nested build input is not a regular file: {}", path.display()).into());
-        }
-    }
-    Ok(())
-}
-
-fn hash_source(digest: &mut crate::record::FramedIdentity, root: &Path, path: &Path) -> Result<(), Error> {
-    let relative = path.strip_prefix(root)?;
-    digest.field(relative.as_os_str().as_encoded_bytes())?;
-    digest.field(&fs::read(path)?)?;
-    Ok(())
 }
 
 fn build_artifact(
@@ -498,77 +334,6 @@ fn materialize(source: &Path, destination: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn command(root: &Path, chain: &Chain) -> Vec<String> {
-    let mut arguments = Vec::new();
-    for layer in &chain.layers {
-        arguments.push(root.join(&layer.artifact.path).display().to_string());
-        arguments.push("--report-exit".into());
-        arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
-        layer.options.append(&mut arguments);
-    }
-    arguments.push(root.join(&chain.guest.path).display().to_string());
-    arguments.extend(chain.arguments.iter().cloned());
-    arguments
-}
-
-fn unavailable(root: &Path, artifact: &Artifact) -> Option<Outcome> {
-    let path = root.join(&artifact.path);
-    if path
-        .metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    {
-        return None;
-    }
-    Some(match artifact.source {
-        ArtifactSource::ForeignBuild => Outcome::Unsupported(format!(
-            "foreign artifact {} is absent or not executable; run `testing nested prepare`",
-            path.display(),
-        )),
-        ArtifactSource::Local => Outcome::Failed(format!(
-            "required local artifact {} is absent or not executable",
-            path.display()
-        )),
-    })
-}
-
-fn execute(root: &Path, definition: &Path, chain: &Chain) -> Outcome {
-    for artifact in chain.layers.iter().map(|layer| &layer.artifact).chain([&chain.guest]) {
-        if let Some(outcome) = unavailable(root, artifact) {
-            return outcome;
-        }
-    }
-    let expected = definition.parent().unwrap_or(root).join(&chain.expect.stdout);
-    let expected = match fs::read(&expected) {
-        Ok(value) => value,
-        Err(error) => return Outcome::Failed(format!("cannot read {}: {error}", expected.display())),
-    };
-    let arguments = command(root, chain);
-    match capture(
-        &arguments,
-        Duration::from_secs(chain.timeout_seconds),
-        chain.capture_limit_bytes,
-    ) {
-        Ok(captured)
-            if captured.status == Some(chain.expect.exit)
-                && captured.stdout == expected
-                && (!chain.layers.iter().any(|layer| layer.options.native_execution)
-                    || String::from_utf8_lossy(&captured.stderr).contains("hl-native-detail:")) =>
-        {
-            Outcome::Passed
-        }
-        Ok(captured) => Outcome::Failed(format!(
-            "exit={status:?} expected={}; stdout={} bytes expected={} bytes; native diagnostics required={}; stderr={}",
-            chain.expect.exit,
-            captured.stdout.len(),
-            expected.len(),
-            chain.layers.iter().any(|layer| layer.options.native_execution),
-            String::from_utf8_lossy(&captured.stderr).trim(),
-            status = captured.status,
-        )),
-        Err(error) => Outcome::Failed(error),
-    }
-}
-
 #[derive(Debug)]
 struct ProcessOutput {
     status: Option<i32>,
@@ -601,6 +366,251 @@ fn capture(arguments: &[String], timeout: Duration, limit: usize) -> Result<Proc
     Ok(ProcessOutput { status, stdout, stderr })
 }
 
+/// The repository tree a nested chain run reads its artifacts and builds from.
+struct Workspace {
+    root: PathBuf,
+}
+
+impl Workspace {
+    fn build_key_with_environment(
+        &self,
+        build: &Build,
+        cargo: &str,
+        values: &[(String, String)],
+    ) -> Result<String, Error> {
+        let mut digest = crate::record::FramedIdentity::new(b"husklet-nested-build-v2")?;
+        for value in [&build.package, &build.target, &build.profile, &build.binary] {
+            digest.field(value.as_bytes())?;
+        }
+        for value in &build.rustflags {
+            digest.field(value.as_bytes())?;
+        }
+        for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+            let path = self.root.join(name);
+            if path.is_file() {
+                self.hash_source(&mut digest, &path)?;
+            }
+        }
+        for path in self.cargo_configs() {
+            if path.is_file() {
+                hash_source_named(&mut digest, b"cargo-config", &path)?;
+            }
+        }
+        let rustc = environment("RUSTC").unwrap_or_else(|| "rustc".into());
+        for (name, value) in values {
+            digest.field(name.as_bytes())?;
+            digest.field(value.as_bytes())?;
+        }
+        hash_tool(&mut digest, "cargo", cargo, &["-V"])?;
+        hash_tool(&mut digest, "rustc", &rustc, &["-vV"])?;
+        hash_tool(
+            &mut digest,
+            "rustc-target",
+            &rustc,
+            &["--print", "target-libdir", "--target", &build.target],
+        )?;
+        self.hash_tree(&mut digest, &self.root.join("src"))?;
+        Ok(digest.finish())
+    }
+
+    fn load(&self, definition: &Path) -> Result<Document, Error> {
+        let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
+        if document.version != 1 || document.chains.is_empty() {
+            return Err(format!("{} has unsupported version or no chains", definition.display()).into());
+        }
+        let mut ids = BTreeSet::new();
+        for chain in &document.chains {
+            if chain.id.is_empty()
+                || !ids.insert(&chain.id)
+                || chain.layers.len() < 2
+                || !(1..=3600).contains(&chain.timeout_seconds)
+                || !(1..=16 * 1024 * 1024).contains(&chain.capture_limit_bytes)
+                || !(0..=255).contains(&chain.expect.exit)
+            {
+                return Err(format!("invalid nested chain {:?}", chain.id).into());
+            }
+            self.validate_artifact(&chain.guest)?;
+            chain.expect.stdout.safe_relative()?;
+            for layer in &chain.layers {
+                self.validate_artifact(&layer.artifact)?;
+                layer.options.validate()?;
+            }
+        }
+        Ok(document)
+    }
+
+    fn validate_artifact(&self, artifact: &Artifact) -> Result<(), Error> {
+        artifact.path.safe_relative()?;
+        if self.root.join(&artifact.path) == self.root
+            || matches!(artifact.source, ArtifactSource::ForeignBuild) && artifact.build.is_none()
+        {
+            return Err(format!(
+                "artifact {} has no usable path/build instruction",
+                artifact.path.display()
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn prepare(&self, document: &Document) -> Result<(), Error> {
+        let mut artifacts = document
+            .chains
+            .iter()
+            .flat_map(|chain| chain.layers.iter().map(|layer| &layer.artifact).chain([&chain.guest]))
+            .filter(|artifact| artifact.build.is_some())
+            .collect::<Vec<_>>();
+        artifacts.sort_by(|left, right| left.path.cmp(&right.path));
+        artifacts.dedup_by(|left, right| left.path == right.path);
+        for artifact in artifacts {
+            self.prepare_artifact(artifact)?;
+        }
+        Ok(())
+    }
+
+    fn prepare_artifact(&self, artifact: &Artifact) -> Result<(), Error> {
+        let build = artifact.build.as_ref().ok_or("prepared artifact has no build")?;
+        validate_build(build)?;
+        let identity = self.build_identity(build)?;
+        let key = &identity.key;
+        let cache = crate::record::Cache::new(&self.root)?;
+        let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
+        let record = receipts.artifact(key, &build.binary)?;
+        let _lock = receipts.lock(key)?;
+        if record.verify()? {
+            println!("REUSED {} key={key}", artifact.path.display());
+        } else {
+            build_artifact(&self.root, build, &identity.cargo, &record)?;
+            println!("BUILT {} key={key}", artifact.path.display());
+        }
+        materialize(record.artifact(), &self.root.join(&artifact.path))?;
+        Ok(())
+    }
+
+    fn build_identity(&self, build: &Build) -> Result<BuildIdentity, Error> {
+        let cargo = environment("CARGO").unwrap_or_else(|| "cargo".into());
+        let values = build_environment(build);
+        let key = self.build_key_with_environment(build, &cargo, &values)?;
+        Ok(BuildIdentity { key, cargo })
+    }
+
+    fn cargo_configs(&self) -> Vec<PathBuf> {
+        let mut paths = self.root
+            .ancestors()
+            .flat_map(|directory| [directory.join(".cargo/config"), directory.join(".cargo/config.toml")])
+            .collect::<Vec<_>>();
+        let cargo_home = environment("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| environment("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+        if let Some(home) = cargo_home {
+            paths.extend([home.join("config"), home.join("config.toml")]);
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    fn hash_tree(&self, digest: &mut crate::record::FramedIdentity, directory: &Path) -> Result<(), Error> {
+        let mut entries = fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                self.hash_tree(digest, &path)?;
+            } else if kind.is_file() {
+                self.hash_source(digest, &path)?;
+            } else if kind.is_symlink() {
+                let relative = path.strip_prefix(&self.root)?;
+                digest.field(b"symlink")?;
+                digest.field(relative.as_os_str().as_bytes())?;
+                digest.field(fs::read_link(&path)?.as_os_str().as_bytes())?;
+            } else {
+                return Err(format!("nested build input is not a regular file: {}", path.display()).into());
+            }
+        }
+        Ok(())
+    }
+
+    fn hash_source(&self, digest: &mut crate::record::FramedIdentity, path: &Path) -> Result<(), Error> {
+        let relative = path.strip_prefix(&self.root)?;
+        digest.field(relative.as_os_str().as_encoded_bytes())?;
+        digest.field(&fs::read(path)?)?;
+        Ok(())
+    }
+
+    fn command(&self, chain: &Chain) -> Vec<String> {
+        let mut arguments = Vec::new();
+        for layer in &chain.layers {
+            arguments.push(self.root.join(&layer.artifact.path).display().to_string());
+            arguments.push("--report-exit".into());
+            arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
+            layer.options.append(&mut arguments);
+        }
+        arguments.push(self.root.join(&chain.guest.path).display().to_string());
+        arguments.extend(chain.arguments.iter().cloned());
+        arguments
+    }
+
+    fn unavailable(&self, artifact: &Artifact) -> Option<Outcome> {
+        let path = self.root.join(&artifact.path);
+        if path
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        {
+            return None;
+        }
+        Some(match artifact.source {
+            ArtifactSource::ForeignBuild => Outcome::Unsupported(format!(
+                "foreign artifact {} is absent or not executable; run `testing nested prepare`",
+                path.display(),
+            )),
+            ArtifactSource::Local => Outcome::Failed(format!(
+                "required local artifact {} is absent or not executable",
+                path.display()
+            )),
+        })
+    }
+
+    fn execute(&self, definition: &Path, chain: &Chain) -> Outcome {
+        for artifact in chain.layers.iter().map(|layer| &layer.artifact).chain([&chain.guest]) {
+            if let Some(outcome) = self.unavailable(artifact) {
+                return outcome;
+            }
+        }
+        let expected = definition.parent().unwrap_or(&self.root).join(&chain.expect.stdout);
+        let expected = match fs::read(&expected) {
+            Ok(value) => value,
+            Err(error) => return Outcome::Failed(format!("cannot read {}: {error}", expected.display())),
+        };
+        let arguments = self.command(chain);
+        match capture(
+            &arguments,
+            Duration::from_secs(chain.timeout_seconds),
+            chain.capture_limit_bytes,
+        ) {
+            Ok(captured)
+                if captured.status == Some(chain.expect.exit)
+                    && captured.stdout == expected
+                    && (!chain.layers.iter().any(|layer| layer.options.native_execution)
+                        || String::from_utf8_lossy(&captured.stderr).contains("hl-native-detail:")) =>
+            {
+                Outcome::Passed
+            }
+            Ok(captured) => Outcome::Failed(format!(
+                "exit={status:?} expected={}; stdout={} bytes expected={} bytes; native diagnostics required={}; stderr={}",
+                chain.expect.exit,
+                captured.stdout.len(),
+                expected.len(),
+                chain.layers.iter().any(|layer| layer.options.native_execution),
+                String::from_utf8_lossy(&captured.stderr).trim(),
+                status = captured.status,
+            )),
+            Err(error) => Outcome::Failed(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,7 +621,9 @@ mod tests {
 
     fn tree_key(root: &Path) -> String {
         let mut digest = crate::record::FramedIdentity::new(b"nested-tree-test").unwrap();
-        hash_tree(&mut digest, root, &root.join("src")).unwrap();
+        Workspace { root: root.to_path_buf() }
+            .hash_tree(&mut digest, &root.join("src"))
+            .unwrap();
         digest.finish()
     }
 
@@ -631,7 +643,10 @@ expect: { exit: 42, stdout: hello.txt }
 ",
         )
         .unwrap();
-        let arguments = command(Path::new("/tree"), &chain);
+        let arguments = Workspace {
+            root: PathBuf::from("/tree"),
+        }
+        .command(&chain);
         assert_eq!(
             &arguments[..8],
             [
@@ -658,7 +673,10 @@ expect: { exit: 42, stdout: hello.txt }
         )
         .unwrap();
         assert!(matches!(
-            unavailable(Path::new("/definitely-absent"), &artifact),
+            Workspace {
+                root: PathBuf::from("/definitely-absent"),
+            }
+            .unavailable(&artifact),
             Some(Outcome::Unsupported(_))
         ));
     }
@@ -674,26 +692,26 @@ expect: { exit: 42, stdout: hello.txt }
             serde_yaml::from_str("package: hl-engine\ntarget: aarch64-unknown-linux-musl\nbinary: hl-engine\n")
                 .unwrap();
         let environment = vec![("RUSTFLAGS".into(), "-Ctarget-cpu=generic".into())];
-        let initial = build_key_with_environment(root.path(), &build, "cargo", &environment).unwrap();
+        let initial = Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &environment).unwrap();
         assert_eq!(
             initial,
-            build_key_with_environment(root.path(), &build, "cargo", &environment).unwrap()
+            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &environment).unwrap()
         );
         fs::write(root.path().join("src/lib.rs"), "pub fn second() {}\n").unwrap();
         assert_ne!(
             initial,
-            build_key_with_environment(root.path(), &build, "cargo", &environment).unwrap()
+            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &environment).unwrap()
         );
         let changed: Build =
             serde_yaml::from_str("package: hl-engine\ntarget: x86_64-unknown-linux-musl\nbinary: hl-engine\n").unwrap();
         assert_ne!(
             initial,
-            build_key_with_environment(root.path(), &changed, "cargo", &environment).unwrap()
+            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&changed, "cargo", &environment).unwrap()
         );
         let changed_environment = vec![("RUSTFLAGS".into(), "-Ctarget-cpu=native".into())];
         assert_ne!(
             initial,
-            build_key_with_environment(root.path(), &build, "cargo", &changed_environment).unwrap()
+            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &changed_environment).unwrap()
         );
     }
 
