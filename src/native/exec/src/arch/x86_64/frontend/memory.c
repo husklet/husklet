@@ -19,12 +19,55 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
 }
 
 #define HL_X86_READ_VIEWS 4u
-#define HL_X86_WRITE_CACHE_WORDS 94u
+#define HL_X86_WRITE_CACHE_WORDS 85u
 
 /* The empty-journal sentinel is UINT64_MAX.  emit_constant reaches it with a
  * movz and three movk; MOVN writes the same all-ones pattern in one word. */
 static uint32_t ones_word(unsigned destination) {
     return UINT32_C(0x92800000) | destination;
+}
+
+/* LDP and STP reach only +-504 bytes from their base, and every projection and
+ * journal field sits far past that from the CPU record in x28.  Anchoring a
+ * window on memory_first brings all of them -- the projection quadruple, the
+ * dirty interval, its owner and the record count -- inside one base register's
+ * range, so the write cache can move them in pairs. */
+#define HL_X86_WINDOW offsetof(hl_native_x86_64_cpu, memory_first)
+#define HL_X86_WINDOW_BASE 18u
+
+_Static_assert(offsetof(hl_native_x86_64_cpu, dirty_count) - HL_X86_WINDOW <= 504u,
+               "the write cache window must reach every field it pairs");
+_Static_assert(offsetof(hl_native_x86_64_cpu, memory_last) ==
+                       offsetof(hl_native_x86_64_cpu, memory_first) + 8u &&
+                   offsetof(hl_native_x86_64_cpu, memory_permissions) ==
+                       offsetof(hl_native_x86_64_cpu, memory_delta) + 8u &&
+                   offsetof(hl_native_x86_64_cpu, dirty_view_last) ==
+                       offsetof(hl_native_x86_64_cpu, dirty_view_first) + 8u &&
+                   offsetof(hl_native_x86_64_cpu, dirty_last) ==
+                       offsetof(hl_native_x86_64_cpu, dirty_first) + 8u,
+               "the write cache moves these fields in pairs");
+
+/* memory_first is the lowest field in the window, so every displacement is
+ * non-negative and fits the scaled twelve-bit LDR form and the seven-bit LDP
+ * form alike. */
+static uint32_t window_word(size_t field) {
+    return (uint32_t)((field - HL_X86_WINDOW) / 8u) & UINT32_C(0x7f);
+}
+
+static uint32_t window_load(unsigned destination, size_t field) {
+    return UINT32_C(0xf9400000) | window_word(field) << 10 | HL_X86_WINDOW_BASE << 5 | destination;
+}
+
+static uint32_t window_store(unsigned source, size_t field) {
+    return UINT32_C(0xf9000000) | window_word(field) << 10 | HL_X86_WINDOW_BASE << 5 | source;
+}
+
+static uint32_t pair_load(unsigned first, unsigned second, unsigned base, uint32_t slot) {
+    return UINT32_C(0xa9400000) | (slot & UINT32_C(0x7f)) << 15 | second << 10 | base << 5 | first;
+}
+
+static uint32_t pair_store(unsigned first, unsigned second, unsigned base, uint32_t slot) {
+    return UINT32_C(0xa9000000) | (slot & UINT32_C(0x7f)) << 15 | second << 10 | base << 5 | first;
 }
 
 /* The entry trampolines bound the published count against this capacity as a
@@ -129,10 +172,9 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = UINT32_C(0xaa1d03f6); /* x22 = validated count */
     uint32_t *loop = &words[*cursor];
     uint32_t *none = &words[(*cursor)++];
-    words[(*cursor)++] = UINT32_C(0xf9400274); /* ldr x20,[x19] */
+    words[(*cursor)++] = pair_load(20, 21, 19, 0); /* ldp x20,x21,[x19]: view first,last */
     words[(*cursor)++] = UINT32_C(0xeb14021f);
     uint32_t *below = &words[(*cursor)++];
-    words[(*cursor)++] = UINT32_C(0xf9400675); /* ldr x21,[x19,#8] */
     words[(*cursor)++] = UINT32_C(0xeb15025f);
     uint32_t *above = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400e71); /* ldr x17,[x19,#24] */
@@ -144,38 +186,42 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     uint32_t *again = &words[(*cursor)++];
     uint32_t *selected_target = &words[*cursor];
     words[(*cursor)++] = UINT32_C(0xaa1303f6); /* preserve selected view in x22 */
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
-    words[(*cursor)++] = UINT32_C(0xeb14023f);
+    /* The guest end address in x18 has done its work; every caller recomputes
+     * it after the cache, so x18 becomes the window base from here on. */
+    words[(*cursor)++] = UINT32_C(0x91000000) | (uint32_t)HL_X86_WINDOW << 10 | 28u << 5 |
+                         HL_X86_WINDOW_BASE;
+    words[(*cursor)++] = pair_load(17, 19, HL_X86_WINDOW_BASE,
+                                   window_word(offsetof(hl_native_x86_64_cpu, memory_first)));
+    words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
     uint32_t *different_first = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_last));
-    words[(*cursor)++] = UINT32_C(0xeb15023f);
+    words[(*cursor)++] = UINT32_C(0xeb15027f); /* cmp x19,x21 */
     uint32_t *different_last = &words[(*cursor)++];
     uint32_t *already_active = &words[(*cursor)++];
 
     uint32_t *archive = &words[*cursor];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, dirty_first));
+    words[(*cursor)++] = window_load(17, offsetof(hl_native_x86_64_cpu, dirty_first));
     words[(*cursor)++] = UINT32_C(0xb100063f); /* cmn first,#1: UINT64_MAX means empty */
     uint32_t *empty = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(18, offsetof(hl_native_x86_64_cpu, dirty_count));
+    words[(*cursor)++] = window_load(21, offsetof(hl_native_x86_64_cpu, dirty_count));
     words[(*cursor)++] = UINT32_C(0x91000013) |
                          (uint32_t)offsetof(hl_native_x86_64_cpu, dirty_records) << 10 |
                          28u << 5; /* x19 = first dirty record */
     uint32_t *scan = &words[*cursor];
     uint32_t *append = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400271); /* ldr x17,[x19] */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_view_first));
+    words[(*cursor)++] = window_load(20, offsetof(hl_native_x86_64_cpu, dirty_view_first));
     words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
     uint32_t *next_owner_first = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400671); /* ldr x17,[x19,#8] */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_view_last));
+    words[(*cursor)++] = window_load(20, offsetof(hl_native_x86_64_cpu, dirty_view_last));
     words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
     uint32_t *next_owner_last = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400a71); /* ldr x17,[x19,#16]: recorded first */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = window_load(20, offsetof(hl_native_x86_64_cpu, dirty_last));
     words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp recorded first,current last */
     uint32_t *next_above = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400e71); /* ldr x17,[x19,#24]: recorded last */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
+    words[(*cursor)++] = window_load(20, offsetof(hl_native_x86_64_cpu, dirty_first));
     words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp recorded last,current first */
     uint32_t *next_below = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9400a71); /* recorded first */
@@ -184,48 +230,46 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = UINT32_C(0xf9000a74); /* str current first,[x19,#16] */
     uint32_t *first_done = &words[*cursor];
     words[(*cursor)++] = UINT32_C(0xf9400e71); /* recorded last */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = window_load(20, offsetof(hl_native_x86_64_cpu, dirty_last));
     words[(*cursor)++] = UINT32_C(0xeb11029f); /* cmp current last,recorded last */
     uint32_t *keep_last = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9000e74); /* str current last,[x19,#24] */
     uint32_t *merged = &words[*cursor];
     words[(*cursor)++] = ones_word(20);
-    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
-    words[(*cursor)++] = store_word(31, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = pair_store(20, 31, HL_X86_WINDOW_BASE,
+                                    window_word(offsetof(hl_native_x86_64_cpu, dirty_first)));
     uint32_t *merged_install = &words[(*cursor)++];
     uint32_t *scan_next = &words[*cursor];
     words[(*cursor)++] = UINT32_C(0x91008273); /* add record,record,#32 */
-    words[(*cursor)++] = UINT32_C(0xd1000652); /* sub remaining,remaining,#1 */
+    words[(*cursor)++] = UINT32_C(0xd10006b5); /* sub remaining,remaining,#1 */
     uint32_t *scan_again = &words[(*cursor)++];
     uint32_t *append_target = &words[*cursor];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, dirty_count));
+    words[(*cursor)++] = window_load(17, offsetof(hl_native_x86_64_cpu, dirty_count));
     words[(*cursor)++] = UINT32_C(0xf100423f); /* cmp count,#16 */
     uint32_t *full = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0x91000013) |
                          (uint32_t)offsetof(hl_native_x86_64_cpu, dirty_records) << 10 |
                          28u << 5; /* add x19,cpu,#records */
-    words[(*cursor)++] = UINT32_C(0xd37bea32); /* lsl x18,x17,#5 */
-    words[(*cursor)++] = UINT32_C(0x8b120273); /* add x19,x19,x18 */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_view_first));
-    words[(*cursor)++] = load_word(21, offsetof(hl_native_x86_64_cpu, dirty_view_last));
+    words[(*cursor)++] = UINT32_C(0xd37bea35); /* lsl x21,x17,#5 */
+    words[(*cursor)++] = UINT32_C(0x8b150273); /* add x19,x19,x21 */
+    words[(*cursor)++] = pair_load(20, 21, HL_X86_WINDOW_BASE,
+                                   window_word(offsetof(hl_native_x86_64_cpu, dirty_view_first)));
     words[(*cursor)++] = UINT32_C(0xa9005674); /* stp x20,x21,[x19] */
-    words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
-    words[(*cursor)++] = load_word(21, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = pair_load(20, 21, HL_X86_WINDOW_BASE,
+                                   window_word(offsetof(hl_native_x86_64_cpu, dirty_first)));
     words[(*cursor)++] = UINT32_C(0xa9015674); /* stp x20,x21,[x19,#16] */
     words[(*cursor)++] = UINT32_C(0x91000631); /* add x17,x17,#1 */
-    words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, dirty_count));
+    words[(*cursor)++] = window_store(17, offsetof(hl_native_x86_64_cpu, dirty_count));
     words[(*cursor)++] = ones_word(20);
-    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
-    words[(*cursor)++] = store_word(31, offsetof(hl_native_x86_64_cpu, dirty_last));
+    words[(*cursor)++] = pair_store(20, 31, HL_X86_WINDOW_BASE,
+                                    window_word(offsetof(hl_native_x86_64_cpu, dirty_first)));
     uint32_t *install = &words[*cursor];
-    words[(*cursor)++] = UINT32_C(0xf94002d4); /* ldr x20,[x22] */
-    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, memory_first));
-    words[(*cursor)++] = UINT32_C(0xf94006d4); /* ldr x20,[x22,#8] */
-    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, memory_last));
-    words[(*cursor)++] = UINT32_C(0xf9400ad4); /* ldr x20,[x22,#16] */
-    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, memory_delta));
-    words[(*cursor)++] = UINT32_C(0xf9400ed4); /* ldr x20,[x22,#24] */
-    words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, memory_permissions));
+    words[(*cursor)++] = pair_load(20, 21, 22, 0); /* view first,last */
+    words[(*cursor)++] = pair_store(20, 21, HL_X86_WINDOW_BASE,
+                                    window_word(offsetof(hl_native_x86_64_cpu, memory_first)));
+    words[(*cursor)++] = pair_load(20, 21, 22, 2); /* view delta,permissions */
+    words[(*cursor)++] = pair_store(20, 21, HL_X86_WINDOW_BASE,
+                                    window_word(offsetof(hl_native_x86_64_cpu, memory_delta)));
     uint32_t *installed = &words[(*cursor)++];
     uint32_t *active = &words[*cursor];
     words[(*cursor)++] = UINT32_C(0xa9415bf5);
@@ -244,7 +288,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     jump(already_active, active);
     branch(empty, install, 0u);
     *append = UINT32_C(0xb4000000) |
-              ((uint32_t)(append_target - append) & UINT32_C(0x7ffff)) << 5 | 18u;
+              ((uint32_t)(append_target - append) & UINT32_C(0x7ffff)) << 5 | 21u;
     branch(next_owner_first, scan_next, 1u);
     branch(next_owner_last, scan_next, 1u);
     branch(next_above, scan_next, 8u);

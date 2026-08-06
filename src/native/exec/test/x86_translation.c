@@ -2159,24 +2159,34 @@ static int dirty_journal_contract(void) {
     CHECK(cpu.memory_first == UINT64_C(0x1000) && cpu.dirty_count == 0);
     CHECK(cpu.dirty_first == UINT64_C(0x1000) && cpu.dirty_last == UINT64_C(0x1008));
 
+    /* A second store inside the already-active view must not archive anything:
+     * it widens the open interval and leaves the journal alone.  This is the
+     * common case, and mis-detecting it would archive on every store. */
+    cpu.registers[3] = UINT64_C(0x1008);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(cpu.reason == 0 && low[1] == UINT64_C(0x0123456789abcdef));
+    CHECK(cpu.dirty_count == 0); /* nothing was archived */
+    CHECK(cpu.dirty_first == UINT64_C(0x1000) && cpu.dirty_last == UINT64_C(0x1010));
+    CHECK(cpu.memory_first == UINT64_C(0x1000) && cpu.memory_last == UINT64_C(0x1020));
+
     /* Crossing to the high view archives the low view's interval verbatim. */
     cpu.registers[3] = UINT64_C(0x2000);
     CHECK(execute_fragment(host, count, &cpu) == 0);
     CHECK(cpu.reason == 0 && high[0] == UINT64_C(0x0123456789abcdef));
     CHECK(cpu.dirty_count == 1);
     CHECK(cpu.dirty_records[0][0] == UINT64_C(0x1000) && cpu.dirty_records[0][1] == UINT64_C(0x1020));
-    CHECK(cpu.dirty_records[0][2] == UINT64_C(0x1000) && cpu.dirty_records[0][3] == UINT64_C(0x1008));
+    CHECK(cpu.dirty_records[0][2] == UINT64_C(0x1000) && cpu.dirty_records[0][3] == UINT64_C(0x1010));
     CHECK(cpu.memory_first == UINT64_C(0x2000) && cpu.dirty_view_first == UINT64_C(0x2000));
     CHECK(cpu.dirty_first == UINT64_C(0x2000) && cpu.dirty_last == UINT64_C(0x2008));
 
     /* An unseen owner appends rather than merging into the existing record. */
-    cpu.registers[3] = UINT64_C(0x1008);
+    cpu.registers[3] = UINT64_C(0x1010);
     CHECK(execute_fragment(host, count, &cpu) == 0);
-    CHECK(cpu.reason == 0 && low[1] == UINT64_C(0x0123456789abcdef));
+    CHECK(cpu.reason == 0 && low[2] == UINT64_C(0x0123456789abcdef));
     CHECK(cpu.dirty_count == 2);
     CHECK(cpu.dirty_records[1][0] == UINT64_C(0x2000) && cpu.dirty_records[1][1] == UINT64_C(0x2020));
     CHECK(cpu.dirty_records[1][2] == UINT64_C(0x2000) && cpu.dirty_records[1][3] == UINT64_C(0x2008));
-    CHECK(cpu.dirty_first == UINT64_C(0x1008) && cpu.dirty_last == UINT64_C(0x1010));
+    CHECK(cpu.dirty_first == UINT64_C(0x1010) && cpu.dirty_last == UINT64_C(0x1018));
 
     /* Returning to a known owner widens its record instead of appending. */
     cpu.registers[3] = UINT64_C(0x2010);
@@ -2184,7 +2194,7 @@ static int dirty_journal_contract(void) {
     CHECK(cpu.reason == 0 && high[2] == UINT64_C(0x0123456789abcdef));
     CHECK(cpu.dirty_count == 2);
     CHECK(cpu.dirty_records[0][0] == UINT64_C(0x1000) && cpu.dirty_records[0][1] == UINT64_C(0x1020));
-    CHECK(cpu.dirty_records[0][2] == UINT64_C(0x1000) && cpu.dirty_records[0][3] == UINT64_C(0x1010));
+    CHECK(cpu.dirty_records[0][2] == UINT64_C(0x1000) && cpu.dirty_records[0][3] == UINT64_C(0x1018));
     CHECK(cpu.dirty_first == UINT64_C(0x2010) && cpu.dirty_last == UINT64_C(0x2018));
 
     /* A CMPXCHG whose comparison fails publishes no interval, so the sentinel
