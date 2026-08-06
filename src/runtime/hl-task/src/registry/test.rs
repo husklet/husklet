@@ -42,7 +42,7 @@ impl Fixture {
 }
 
 #[test]
-fn init_reservation_is_invisible_until_atomic_commit() {
+fn publication_is_atomic() {
     let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let original = registry.snapshot();
     let reservation = registry
@@ -77,7 +77,7 @@ fn init_reservation_is_invisible_until_atomic_commit() {
 }
 
 #[test]
-fn dropped_init_reservation_consumes_generation_without_state() {
+fn abort_consumes_generation() {
     let registry = TaskRegistry::new(RegistryConfig {
         max_processes: 1,
         max_threads: 1,
@@ -103,7 +103,7 @@ fn dropped_init_reservation_consumes_generation_without_state() {
 }
 
 #[test]
-fn init_reservation_excludes_competitors_and_checkpoint() {
+fn reservation_excludes_competitors() {
     let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let reservation = registry
         .begin_create_init(Fixture::credentials(), Fixture::limits())
@@ -121,23 +121,21 @@ fn init_reservation_excludes_competitors_and_checkpoint() {
 }
 
 #[test]
-fn init_reservation_delays_checkpoint_freeze_until_publication_finishes() {
+fn reservation_blocks_freeze() {
     let registry = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     let reservation = registry
         .begin_create_init(Fixture::credentials(), Fixture::limits())
         .unwrap();
-    let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (frozen_tx, frozen_rx) = std::sync::mpsc::channel();
     let freezer = {
         let registry = Arc::clone(&registry);
         thread::spawn(move || {
-            started_tx.send(()).unwrap();
             registry.freeze_checkpoint();
             frozen_tx.send(registry.checkpoint_snapshot()).unwrap();
             registry.thaw_checkpoint();
         })
     };
-    started_rx.recv().unwrap();
+    registry.activity.wait_until_freeze_waits();
     assert_eq!(frozen_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
     let (process, _) = reservation.commit().unwrap();
     let image = frozen_rx.recv().unwrap().unwrap();
@@ -147,17 +145,15 @@ fn init_reservation_delays_checkpoint_freeze_until_publication_finishes() {
 }
 
 #[test]
-fn frozen_checkpoint_delays_init_reservation_until_thaw() {
+fn freeze_blocks_reservation() {
     let registry = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     registry.freeze_checkpoint();
     let image = registry.checkpoint_snapshot().unwrap();
     assert_eq!(image.init, None);
-    let (started_tx, started_rx) = std::sync::mpsc::channel();
     let (reservation_tx, reservation_rx) = std::sync::mpsc::channel();
     let beginner = {
         let registry = Arc::clone(&registry);
         thread::spawn(move || {
-            started_tx.send(()).unwrap();
             let reservation = registry
                 .begin_create_init(Fixture::credentials(), Fixture::limits())
                 .unwrap();
@@ -165,7 +161,7 @@ fn frozen_checkpoint_delays_init_reservation_until_thaw() {
             reservation.commit().unwrap()
         })
     };
-    started_rx.recv().unwrap();
+    registry.activity.wait_until_admit_waits();
     assert_eq!(reservation_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
     assert_eq!(registry.checkpoint_snapshot().unwrap(), image);
     registry.thaw_checkpoint();
@@ -175,7 +171,7 @@ fn frozen_checkpoint_delays_init_reservation_until_thaw() {
 }
 
 #[test]
-fn committed_init_token_cannot_publish_twice() {
+fn commit_once() {
     let registry = TaskRegistry::new(RegistryConfig::default()).unwrap();
     let reservation = registry
         .begin_create_init(Fixture::credentials(), Fixture::limits())
@@ -191,7 +187,7 @@ fn committed_init_token_cannot_publish_twice() {
 }
 
 #[test]
-fn init_allocation_and_commit_failures_publish_nothing() {
+fn failures_publish_nothing() {
     for stage in 0..4 {
         let registry = TaskRegistry::new(RegistryConfig {
             max_processes: 1,
