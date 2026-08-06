@@ -17,7 +17,8 @@ typedef struct hl_native_translation_key {
 } hl_native_translation_key;
 
 /* Run-local diagnostic value. It owns no admission lease and is deliberately
- * dormant until the public-run owner supplies aggregate publication. */
+ * dormant until the public-run owner supplies aggregate publication. Each
+ * field saturates independently at UINT64_MAX and never wraps. */
 typedef struct hl_native_lookup_context {
     uint64_t lookups;
     uint64_t hits;

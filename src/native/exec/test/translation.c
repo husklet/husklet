@@ -94,11 +94,17 @@ int main(void) {
           context.epoch_rejections == 0);
     CHECK(legacy_after.lookups == legacy_before.lookups + 1 &&
           legacy_after.misses == legacy_before.misses + 1);
+    hl_native_cache_diagnose(executor->cache, &legacy_before);
     CHECK(hl_native_translation_lookup_inner(NULL, &context, &key, &code) == HL_NATIVE_MISS);
     CHECK(hl_native_translation_lookup_inner(executor, NULL, &key, &code) == HL_NATIVE_MISS);
     CHECK(hl_native_translation_lookup_inner(executor, &context, NULL, &code) == HL_NATIVE_MISS);
     CHECK(hl_native_translation_lookup_inner(executor, &context, &key, NULL) == HL_NATIVE_MISS);
+    hl_native_cache_diagnose(executor->cache, &legacy_after);
     CHECK(context.lookups == 1 && context.misses == 1);
+    CHECK(legacy_after.lookups == legacy_before.lookups &&
+          legacy_after.hits == legacy_before.hits &&
+          legacy_after.misses == legacy_before.misses &&
+          legacy_after.epoch_rejections == legacy_before.epoch_rejections);
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_MISS);
     CHECK(pthread_create(&threads[0], NULL, publish, &workers[0]) == 0);
     CHECK(pthread_create(&threads[1], NULL, publish, &workers[1]) == 0);
