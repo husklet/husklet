@@ -413,7 +413,7 @@ impl GuestExecutor {
             ))
             .map_err(|_| EngineError::LaunchFailed)?;
         transfer::Operation::new(plan, assembly, services).apply()?;
-        let waiters = waiter::Pool::new(&routed.process.tasks()).map_err(|()| EngineError::LaunchFailed)?;
+        let waiters = waiter::Pool::new(&routed.process.tasks()).map_err(|_| EngineError::LaunchFailed)?;
         let result = Self::schedule(isa, plan, &threads, &waiters, self.host_faults.clone());
         // Every parked host wait must be interrupted before the fixed worker
         // set is joined, including successful exit-group termination.

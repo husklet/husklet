@@ -7,6 +7,15 @@ use hl_execution::StepOutcome;
 
 use super::threads::ThreadRun;
 
+// Retained-oracle audit: `../engine/src/linux_abi/sentry.c` entry points
+// `sentry_init`, `sentry_loop`, `sentry_ring_thread`, and `sentry_ring_loop`
+// own one process-wide 64-lane array and spawn detached servicers over shared
+// descriptor authority. A failed C `pthread_create` leaves a claimed lane
+// unserviced and process exit is its only teardown. This Rust owner instead
+// keeps subscription, queue endpoints, and joinable worker lifetime together;
+// partial construction is cancelled and joined before launch failure escapes.
+// Lane service and shutdown have no ISA- or host-specific branches.
+
 // Match the retained sentry's bounded lane count: a guest process may have
 // many legitimately parked syscalls whose peer threads must still run.
 const WORKER_COUNT: usize = 64;
@@ -47,6 +56,50 @@ struct Lane {
 }
 
 struct Worker;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum WaiterStartError {
+    // The task registry currently subscribes infallibly; retain a distinct
+    // transaction phase so a future bounded subscriber cannot be flattened
+    // into thread construction failure.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Subscribe,
+    Spawn,
+    Ready,
+}
+
+struct StartTransaction {
+    lanes: Vec<Lane>,
+    workers: Vec<JoinHandle<()>>,
+    signals: Option<hl_task::SignalActivitySubscription>,
+}
+
+impl StartTransaction {
+    fn rollback(&mut self) {
+        for lane in &self.lanes {
+            let _ = lane.jobs.send(Job::Stop);
+        }
+        for worker in self.workers.drain(..) {
+            let _ = worker.join();
+        }
+        self.lanes.clear();
+        self.signals.take();
+    }
+}
+
+impl Drop for StartTransaction {
+    fn drop(&mut self) {
+        self.rollback();
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum StartFailure {
+    Subscribe,
+    Spawn(usize),
+    Ready(usize),
+}
 
 #[cfg(test)]
 struct Active(Arc<AtomicUsize>);
@@ -128,27 +181,94 @@ mod tests {
         pool.stop();
         assert_eq!(active.load(Ordering::Acquire), 0);
     }
+
+    #[test]
+    fn partial_start_rolls_back_every_started_lane() {
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        for failure in [
+            StartFailure::Spawn(0),
+            StartFailure::Spawn(INITIAL_WORKER_COUNT / 2),
+            StartFailure::Spawn(INITIAL_WORKER_COUNT - 1),
+            StartFailure::Ready(0),
+            StartFailure::Ready(INITIAL_WORKER_COUNT / 2),
+            StartFailure::Ready(INITIAL_WORKER_COUNT - 1),
+        ] {
+            for _ in 0..8 {
+                let active = Arc::new(AtomicUsize::new(0));
+                let result = Pool::start(&tasks, Some(failure), Some(Arc::clone(&active)));
+                assert!(matches!(result, Err(WaiterStartError::Spawn | WaiterStartError::Ready)));
+                assert_eq!(active.load(Ordering::Acquire), 0);
+            }
+        }
+        let pool = Pool::start(&tasks, None, None).unwrap();
+        assert_eq!(pool.active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
+        pool.stop();
+    }
+
+    #[test]
+    fn subscription_failure_starts_no_lane() {
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        assert!(matches!(
+            Pool::start(&tasks, Some(StartFailure::Subscribe), None),
+            Err(WaiterStartError::Subscribe)
+        ));
+        let pool = Pool::start(&tasks, None, None).unwrap();
+        assert_eq!(pool.active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
+        pool.stop();
+    }
 }
 
 impl Pool {
-    pub(super) fn new(tasks: &Arc<hl_task::TaskRegistry>) -> Result<Self, ()> {
+    pub(super) fn new(tasks: &Arc<hl_task::TaskRegistry>) -> Result<Self, WaiterStartError> {
+        Self::start(
+            tasks,
+            None,
+            #[cfg(test)]
+            None,
+        )
+    }
+
+    fn start(
+        tasks: &Arc<hl_task::TaskRegistry>,
+        #[cfg(test)] failure: Option<StartFailure>,
+        #[cfg(not(test))] _failure: Option<()>,
+        #[cfg(test)] injected_active: Option<Arc<AtomicUsize>>,
+    ) -> Result<Self, WaiterStartError> {
         let (completed, events) = mpsc::channel();
         let observer: Arc<dyn hl_task::SignalActivityWake> = Arc::new(SignalWake(completed.clone()));
-        let signals = tasks.subscribe_signal_activity(observer);
-        let mut workers = Vec::with_capacity(WORKER_COUNT);
-        let mut lanes = Vec::with_capacity(WORKER_COUNT);
         #[cfg(test)]
-        let active = Arc::new(AtomicUsize::new(0));
+        if matches!(failure, Some(StartFailure::Subscribe)) {
+            return Err(WaiterStartError::Subscribe);
+        }
+        let signals = tasks.subscribe_signal_activity(observer);
+        let mut transaction = StartTransaction {
+            lanes: Vec::with_capacity(WORKER_COUNT),
+            workers: Vec::with_capacity(WORKER_COUNT),
+            signals: Some(signals),
+        };
+        #[cfg(test)]
+        let active = injected_active.unwrap_or_else(|| Arc::new(AtomicUsize::new(0)));
         for index in 0..INITIAL_WORKER_COUNT {
-            let (lane, worker) = Self::spawn_lane(
+            #[cfg(test)]
+            if matches!(failure, Some(StartFailure::Spawn(failed)) if failed == index) {
+                return Err(WaiterStartError::Spawn);
+            }
+            let (lane, worker, started) = Self::spawn_lane_unchecked(
                 index,
                 completed.clone(),
                 #[cfg(test)]
                 Arc::clone(&active),
-            )?;
-            lanes.push(lane);
-            workers.push(worker);
+                #[cfg(test)]
+                matches!(failure, Some(StartFailure::Ready(failed)) if failed == index),
+            )
+            .map_err(|()| WaiterStartError::Spawn)?;
+            transaction.lanes.push(lane);
+            transaction.workers.push(worker);
+            started.recv().map_err(|_| WaiterStartError::Ready)?;
         }
+        let lanes = std::mem::take(&mut transaction.lanes);
+        let workers = std::mem::take(&mut transaction.workers);
+        let signals = transaction.signals.take().ok_or(WaiterStartError::Subscribe)?;
         Ok(Self {
             lanes: Mutex::new(lanes),
             next: AtomicUsize::new(0),
@@ -168,6 +288,28 @@ impl Pool {
         completed: mpsc::Sender<Event>,
         #[cfg(test)] active: Arc<AtomicUsize>,
     ) -> Result<(Lane, JoinHandle<()>), ()> {
+        let (lane, worker, started) = Self::spawn_lane_unchecked(
+            index,
+            completed,
+            #[cfg(test)]
+            active,
+            #[cfg(test)]
+            false,
+        )?;
+        if started.recv().is_err() {
+            let _ = lane.jobs.send(Job::Stop);
+            let _ = worker.join();
+            return Err(());
+        }
+        Ok((lane, worker))
+    }
+
+    fn spawn_lane_unchecked(
+        index: usize,
+        completed: mpsc::Sender<Event>,
+        #[cfg(test)] active: Arc<AtomicUsize>,
+        #[cfg(test)] fail_ready: bool,
+    ) -> Result<(Lane, JoinHandle<()>, mpsc::Receiver<()>), ()> {
         let (jobs, receiver) = mpsc::sync_channel(1);
         let busy = Arc::new(AtomicBool::new(false));
         let worker_busy = Arc::clone(&busy);
@@ -176,6 +318,10 @@ impl Pool {
             .name(format!("hl-waiter-{index}"))
             .stack_size(WORKER_STACK_SIZE)
             .spawn(move || {
+                #[cfg(test)]
+                if fail_ready {
+                    return;
+                }
                 Worker::serve(
                     receiver,
                     worker_busy,
@@ -186,8 +332,7 @@ impl Pool {
                 )
             })
             .map_err(|_| ())?;
-        started.recv().map_err(|_| ())?;
-        Ok((Lane { jobs, busy }, worker))
+        Ok((Lane { jobs, busy }, worker, started))
     }
 
     pub(super) fn dispatch(&self, run: ThreadRun) -> Result<(), ThreadRun> {
