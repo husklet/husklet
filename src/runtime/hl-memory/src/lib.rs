@@ -13,6 +13,7 @@ mod checkpoint;
 mod checkpoint_activity;
 mod executable;
 mod ledger;
+mod region_set;
 mod mapping;
 mod model;
 mod object_store;
