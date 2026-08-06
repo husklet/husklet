@@ -83,6 +83,11 @@ int main(void) {
     workers[1].executor = executor;
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     CHECK(executor->authenticated_ibtc == NULL);
+    hl_native_lookup_context context = {0};
+    CHECK(hl_native_lookup_context_init(&context, executor) == HL_NATIVE_OK);
+    CHECK(hl_native_translation_lookup_inner(&context, &key, &code) == HL_NATIVE_MISS);
+    CHECK(context.lookups == 1 && context.misses == 1 && context.hits == 0 &&
+          context.epoch_rejections == 0);
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_MISS);
     CHECK(pthread_create(&threads[0], NULL, publish, &workers[0]) == 0);
     CHECK(pthread_create(&threads[1], NULL, publish, &workers[1]) == 0);
@@ -91,6 +96,9 @@ int main(void) {
     CHECK((workers[0].status == HL_NATIVE_OK && workers[1].status == HL_NATIVE_STATE) ||
           (workers[1].status == HL_NATIVE_OK && workers[0].status == HL_NATIVE_STATE));
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_HIT);
+    CHECK(hl_native_translation_lookup_inner(&context, &key, &code) == HL_NATIVE_HIT);
+    CHECK(context.lookups == 2 && context.misses == 1 && context.hits == 1 &&
+          context.epoch_rejections == 0);
     hl_native_translation_key stale = key;
     stale.instruction_epoch++;
     CHECK(hl_native_translation_lookup(executor, &stale, &code) == HL_NATIVE_MISS);

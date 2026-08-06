@@ -25,6 +25,28 @@ static int certificate_eligible(const hl_native_certificate_record *record) {
     return record->direct_token != 0 && record->direct_generation != 0;
 }
 
+hl_native_status hl_native_lookup_context_init(hl_native_lookup_context *context,
+                                               hl_native_executor *executor) {
+    if (context == NULL || executor == NULL) return HL_NATIVE_ARGUMENT;
+    *context = (hl_native_lookup_context){.executor = executor};
+    return HL_NATIVE_OK;
+}
+
+hl_native_lookup hl_native_translation_lookup_inner(hl_native_lookup_context *context,
+                                                    const hl_native_translation_key *key,
+                                                    hl_native_code *output) {
+    if (context == NULL || context->executor == NULL || key == NULL || output == NULL)
+        return HL_NATIVE_MISS;
+    hl_native_lookup result = hl_native_cache_lookup_key(context->executor->cache, key->guest,
+        key->mapping_incarnation, key->instruction_epoch, key->memory_mode,
+        key->authority_generation, output);
+    if (context->lookups != UINT64_MAX) context->lookups++;
+    uint64_t *counter = result == HL_NATIVE_HIT ? &context->hits :
+                        result == HL_NATIVE_EPOCH ? &context->epoch_rejections : &context->misses;
+    if (*counter != UINT64_MAX) (*counter)++;
+    return result;
+}
+
 hl_native_lookup hl_native_translation_lookup(hl_native_executor *executor, const hl_native_translation_key *key,
                                               hl_native_code *output) {
     if (executor == NULL || key == NULL || output == NULL) return HL_NATIVE_MISS;
