@@ -285,6 +285,106 @@ fn x86_sse_integer_min_max_matches_interpreter_at_each_boundary() {
     }
 }
 
+/// Legacy packed single/dword conversions (`cvtdq2ps`/`cvtps2dq`/`cvttps2dq`), in
+/// both the register and the memory-operand form, across saturation and NaN inputs.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_sse_packed_float_dword_conversions_match_interpreter_at_each_boundary() {
+    let bytes = [
+        0x0f, 0x5b, 0xc1, // cvtdq2ps %xmm1,%xmm0
+        0x66, 0x0f, 0x5b, 0xc1, // cvtps2dq %xmm1,%xmm0
+        0xf3, 0x0f, 0x5b, 0xc1, // cvttps2dq %xmm1,%xmm0
+        0x0f, 0x5b, 0x06, // cvtdq2ps (%rsi),%xmm0
+        0x66, 0x0f, 0x5b, 0x06, // cvtps2dq (%rsi),%xmm0
+        0xf3, 0x0f, 0x5b, 0x06, // cvttps2dq (%rsi),%xmm0
+    ];
+    let instruction_ends = [3, 7, 11, 14, 18, 22];
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.vectors[0] = 0x1111_2222_3333_4444_5555_6666_7777_8888;
+    // 2^31 (saturates), -2^31 (exact), NaN, and 1.5 -- also a sane dword pattern.
+    initial.vectors[1] = 0x4f00_0000_cf00_0000_7fc0_0000_3fc0_0000;
+    let operand: [u8; 16] = [
+        0x00, 0x00, 0xc0, 0x3f, 0x00, 0x00, 0xc0, 0x7f, 0x00, 0x00, 0x00, 0xcf, 0x00, 0x00, 0x00, 0x4f,
+    ];
+    for (index, &end) in instruction_ends.iter().enumerate() {
+        let mut prefix = bytes[..end].to_vec();
+        prefix.extend_from_slice(&[0x0f, 0x05]);
+        let source = [super::BorrowedSource {
+            guest_first: 0x402720,
+            bytes: &prefix,
+        }];
+        let mut native = initial.clone();
+        let mut storage = operand;
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7010,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 1,
+            permissions: 3,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let executor = Executor::create().expect("native executor");
+        let mut resolve = |_: u64, _: &mut [u8]| None;
+        let outcome = executor
+            .run_x86(
+                &mut native,
+                &source,
+                1,
+                index as u64 + 1,
+                64,
+                false,
+                Some(&projection),
+                &mut resolve,
+            )
+            .unwrap()
+            .0;
+        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+
+        let mut memory = ReplayMemory {
+            sources: vec![ReplaySource {
+                first: 0x402720,
+                bytes: prefix.clone(),
+            }],
+            data: vec![ReplayView {
+                first: 0x7000,
+                data: operand.to_vec(),
+            }],
+            generation: 1,
+        };
+        let machine = ExecutionMachine::new(ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::X86_64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        })
+        .unwrap();
+        let step = machine.run_slice(1, index as u64 + 3, &mut memory);
+        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        machine.freeze().unwrap();
+        let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
+            unreachable!()
+        };
+        assert_eq!(
+            native,
+            interpreted,
+            "first state divergence after instruction {} ending at {:#x}",
+            index + 1,
+            0x402720 + end
+        );
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceResult {
     checkpoint: TraceCheckpoint,
