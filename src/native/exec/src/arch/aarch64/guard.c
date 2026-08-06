@@ -395,10 +395,19 @@ static void cbnz(hl_a64_assembler *assembler, uint32_t *instruction,
     *instruction = UINT32_C(0xb5000000) | (((uint32_t)words & UINT32_C(0x7ffff)) << 5) | reg;
 }
 
-static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **hits) {
+/* The view payload is immutable for a whole entry, so the scan is a count-driven
+ * loop over x30 rather than four unrolled copies of the same twelve words. */
+static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **hit) {
     uint32_t *active[4 + 1];
-    uint32_t *next[4][4];
-    uint8_t *starts[4];
+    uint32_t *exhausted;
+    uint32_t *below;
+    uint32_t *above;
+    uint32_t *denied;
+    uint32_t *selected;
+    uint32_t *again;
+    uint8_t *loop;
+    uint8_t *following;
+    uint8_t *resume;
     unsigned active_count = 0;
 
     hl_a64_addi(assembler, 9, 16, (unsigned)bytes);
@@ -422,32 +431,38 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     active[active_count++] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
 
-    for (unsigned index = 0; index < 4; ++index) {
-        int base = OFFSET_READ_VIEWS + (int)(index * 4u * sizeof(uint64_t));
-        starts[index] = assembler->cursor;
-        hl_a64_emit32(assembler, 0xF100023Fu | ((index + 1u) << 10)); /* cmp count,#index+1 */
-        next[index][0] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 18, CPU, base);
-        hl_a64_emit32(assembler, 0xEB12021Fu); /* cmp guest EA,first */
-        next[index][1] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 18, CPU, base + (int)sizeof(uint64_t));
-        hl_a64_emit32(assembler, 0xEB12013Fu); /* cmp end,last */
-        next[index][2] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        /* x17 still carries read_count for the next slot's bound check. */
-        hl_a64_ldr(assembler, 18, CPU, base + 3 * (int)sizeof(uint64_t));
-        next[index][3] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 17, CPU, base + 2 * (int)sizeof(uint64_t));
-        hl_a64_emit32(assembler, 0x8B110210u); /* add projected EA */
-        hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
-        hl_a64_emit32(assembler, 0xD51B4200u | 17u);
-        hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-        hits[index] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-    }
+    hl_a64_addi(assembler, 30, CPU, OFFSET_READ_VIEWS);
+    loop = assembler->cursor;
+    hl_a64_emit32(assembler, 0xF1000631u); /* subs x17,x17,#1: slots remaining */
+    exhausted = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, 0);
+    hl_a64_emit32(assembler, 0xEB12021Fu); /* cmp guest EA,first */
+    below = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, (int)sizeof(uint64_t));
+    hl_a64_emit32(assembler, 0xEB12013Fu); /* cmp end,last */
+    above = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, 3 * (int)sizeof(uint64_t));
+    denied = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, 2 * (int)sizeof(uint64_t));
+    hl_a64_emit32(assembler, 0x8B120210u); /* add projected EA */
+    selected = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    following = assembler->cursor;
+    hl_a64_addi(assembler, 30, 30, 4u * (unsigned)sizeof(uint64_t));
+    again = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    resume = assembler->cursor;
+    hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
+    hl_a64_emit32(assembler, 0xD51B4200u | 17u);
+    hl_a64_ldr(assembler, 9, CPU, 9 * 8);
+    *hit = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
 
     uint8_t *active_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
@@ -455,13 +470,12 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     condition(assembler, active[1], active_target, 0u);
     condition(assembler, active[2], active_target, 1u);
     condition(assembler, active[3], active_target, 8u);
-    for (unsigned index = 0; index < 4; ++index) {
-        const uint8_t *following = index + 1u < 4 ? starts[index + 1u] : active_target;
-        condition(assembler, next[index][0], active_target, 3u);
-        condition(assembler, next[index][1], following, 3u);
-        condition(assembler, next[index][2], following, 8u);
-        test(assembler, next[index][3], following, 0u, 18u);
-    }
+    condition(assembler, exhausted, active_target, 3u);
+    condition(assembler, below, following, 3u);
+    condition(assembler, above, following, 8u);
+    test(assembler, denied, following, 0u, 18u);
+    branch(assembler, selected, resume);
+    branch(assembler, again, loop);
 }
 
 /* A write miss may be an alternation between already projected stack and heap
@@ -573,11 +587,11 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
 
 static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
                          hl_a64_guard *guard) {
-    uint32_t *cache_hits[4] = {0};
+    uint32_t *cache_hit = NULL;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u);
     hl_a64_str(assembler, 9, CPU, OFFSET_FLAGS);
-    if (required == HL_A64_PERMISSION_READ) read_cache(assembler, bytes, cache_hits);
+    if (required == HL_A64_PERMISSION_READ) read_cache(assembler, bytes, &cache_hit);
     if (!hl_a64_assembler_ok(assembler)) return;
     hl_a64_ldr(assembler, 9, CPU, OFFSET_FIRST);
     hl_a64_emit32(assembler, 0xEB09021Fu);
@@ -599,9 +613,7 @@ static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t r
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
-    if (required == HL_A64_PERMISSION_READ)
-        for (unsigned index = 0; index < 4; ++index)
-            branch(assembler, cache_hits[index], assembler->cursor);
+    if (required == HL_A64_PERMISSION_READ) branch(assembler, cache_hit, assembler->cursor);
     guard->resume = assembler->cursor;
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
