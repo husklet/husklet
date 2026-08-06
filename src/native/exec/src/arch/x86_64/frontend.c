@@ -745,6 +745,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                       request->guest_bytes[cursor] == 0xd4u ||
                       request->guest_bytes[cursor] == 0xd5u ||
                       request->guest_bytes[cursor] == 0xdbu || request->guest_bytes[cursor] == 0xdfu ||
+                      request->guest_bytes[cursor] == 0xdau || request->guest_bytes[cursor] == 0xdeu ||
+                      request->guest_bytes[cursor] == 0xeau || request->guest_bytes[cursor] == 0xeeu ||
                       request->guest_bytes[cursor] == 0xe4u || request->guest_bytes[cursor] == 0xe5u ||
                       request->guest_bytes[cursor] == 0xebu || request->guest_bytes[cursor] == 0xefu ||
                       request->guest_bytes[cursor] == 0xf4u ||
@@ -789,6 +791,15 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             } else if (extension >= 0x74u && extension <= 0x76u) {
                 item->vector_kind = VECTOR_COMPARE_EQUAL;
                 item->vector_lane = (uint8_t)(1u << (extension - 0x74u));
+            } else if (extension == 0xdau || extension == 0xdeu ||
+                       extension == 0xeau || extension == 0xeeu) {
+                /* Byte forms (0xda/0xde) are unsigned, word forms (0xea/0xee) signed. */
+                uint8_t maximum = extension == 0xdeu || extension == 0xeeu;
+                uint8_t unsigned_kind = extension < 0xe0u;
+                item->vector_kind = maximum != 0u ?
+                    (unsigned_kind != 0u ? VECTOR_MAXIMUM_UNSIGNED : VECTOR_MAXIMUM_SIGNED) :
+                    (unsigned_kind != 0u ? VECTOR_MINIMUM_UNSIGNED : VECTOR_MINIMUM_SIGNED);
+                item->vector_lane = unsigned_kind != 0u ? 1u : 2u;
             } else if (extension == 0xdbu) {
                 item->vector_kind = VECTOR_AND;
             } else if (extension == 0xdfu) {
