@@ -313,10 +313,10 @@ impl Procfs {
                 Ok(Some(Arc::new(file::SnapshotFile::new(Vec::new(), metadata))))
             }
             model::Node::Fd | model::Node::FdInfo => {
+                let descriptors = self.source.descriptors(process)?;
                 let file_type = if leaf == model::Node::Fd { 10 } else { 8 };
-                Ok(Some(Arc::new(file::DescriptorDirectory::new(
-                    Arc::clone(&self.source),
-                    process,
+                Ok(Some(Arc::new(file::SnapshotDirectory::new(
+                    descriptors.into_iter().map(|descriptor| descriptor.number),
                     file_type,
                     leaf.metadata(process, 0),
                 ))))

@@ -10,7 +10,7 @@ use crate::OpenIntent;
 
 struct Source {
     process: ProcessView,
-    descriptors: Mutex<Vec<DescriptorView>>,
+    descriptors: Vec<DescriptorView>,
     oom_score_adj: Mutex<i16>,
 }
 
@@ -122,7 +122,7 @@ impl super::Source for Source {
 
     fn descriptors(&self, process: u32) -> Result<Vec<DescriptorView>, Error> {
         (process == self.process.process)
-            .then(|| self.descriptors.lock().unwrap().clone())
+            .then(|| self.descriptors.clone())
             .ok_or(Error::NotFound)
     }
 
@@ -326,14 +326,14 @@ fn fixed_mounts() -> MountView {
 fn procfs() -> Procfs {
     Procfs::new(Arc::new(Source {
         process: process(),
-        descriptors: Mutex::new(vec![DescriptorView {
+        descriptors: vec![DescriptorView {
             number: 4,
             offset: 19,
             flags: 0o4002,
             mount: Some(7),
             inode: 91,
             target: Some(b"/data/file".to_vec()),
-        }]),
+        }],
         oom_score_adj: Mutex::new(0),
     }))
 }
@@ -1105,49 +1105,6 @@ fn descriptor_snapshots() {
     let link_metadata = procfs.metadata(b"/proc/self/fd/4", 7).unwrap().unwrap();
     assert_eq!(link_metadata.kind, 10);
     assert_eq!(link_metadata.permissions, 0o777);
-}
-
-#[test]
-fn descriptor_directory_captures_on_first_read_and_retains_snapshot() {
-    let source = Arc::new(Source {
-        process: process(),
-        descriptors: Mutex::new(Vec::new()),
-        oom_score_adj: Mutex::new(0),
-    });
-    let procfs = Procfs::new(source.clone());
-    let directory = procfs
-        .open(b"/proc/self/fd", 7, OpenIntent::from_bits(0))
-        .unwrap()
-        .unwrap();
-    source.descriptors.lock().unwrap().push(DescriptorView {
-        number: 5,
-        offset: 0,
-        flags: 0,
-        mount: None,
-        inode: 5,
-        target: Some(b"/proc/7/fd".to_vec()),
-    });
-    let first = directory.read_directory(8).unwrap();
-    assert_eq!(
-        first
-            .entries
-            .iter()
-            .map(|entry| entry.name.as_slice())
-            .collect::<Vec<_>>(),
-        vec![b".".as_slice(), b"..".as_slice(), b"5".as_slice()]
-    );
-    directory.commit_directory(first.token, 2).unwrap();
-    source.descriptors.lock().unwrap().push(DescriptorView {
-        number: 6,
-        offset: 0,
-        flags: 0,
-        mount: None,
-        inode: 6,
-        target: None,
-    });
-    let retained = directory.read_directory(8).unwrap();
-    assert_eq!(retained.entries.len(), 1);
-    assert_eq!(retained.entries[0].name, b"5");
 }
 
 #[test]

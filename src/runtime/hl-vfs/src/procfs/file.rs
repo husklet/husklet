@@ -246,145 +246,7 @@ pub(super) struct SnapshotDirectory {
     metadata: OfdMetadata,
 }
 
-// Oracle: retained `container/vfs.c::proc_fd_dir_pid_open` owns a temporary
-// directory whose entries are a stable, sorted view captured after the open
-// descriptor has been published. Rust keeps the equivalent value snapshot in
-// this OFD; the Source selects the self or peer descriptor table, and the OFD
-// cursor owns iteration and teardown without host-path or inode leases.
-pub(super) struct DescriptorDirectory {
-    source: std::sync::Arc<dyn super::Source>,
-    process: u32,
-    file_type: u8,
-    state: Mutex<DescriptorDirectoryState>,
-    metadata: OfdMetadata,
-}
-
-struct DescriptorDirectoryState {
-    entries: Option<Vec<OfdDirectoryEntry>>,
-    position: usize,
-}
-
-impl DescriptorDirectory {
-    pub(super) fn new(
-        source: std::sync::Arc<dyn super::Source>,
-        process: u32,
-        file_type: u8,
-        metadata: OfdMetadata,
-    ) -> Self {
-        Self {
-            source,
-            process,
-            file_type,
-            state: Mutex::new(DescriptorDirectoryState {
-                entries: None,
-                position: 0,
-            }),
-            metadata,
-        }
-    }
-
-    fn snapshot(&self) -> Result<Vec<OfdDirectoryEntry>, ObjectError> {
-        const MAXIMUM_DESCRIPTORS: usize = 1 << 20;
-        let mut numbers = self
-            .source
-            .descriptors(self.process)
-            .map_err(|_| ObjectError::Retired)?
-            .into_iter()
-            .map(|descriptor| descriptor.number)
-            .collect::<Vec<_>>();
-        if numbers.len() > MAXIMUM_DESCRIPTORS {
-            return Err(ObjectError::InvalidArgument);
-        }
-        numbers.sort_unstable();
-        numbers.dedup();
-        Ok(SnapshotDirectory::directory_entries(
-            numbers,
-            self.file_type,
-            &self.metadata,
-        ))
-    }
-}
-
-impl fmt::Debug for DescriptorDirectory {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("ProcfsDescriptorDirectory")
-    }
-}
-
-impl OpenFileDescription for DescriptorDirectory {
-    fn kind(&self) -> ObjectKind {
-        ObjectKind::Directory
-    }
-
-    fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
-        Ok(self.metadata.clone())
-    }
-
-    fn read_directory(&self, maximum: usize) -> Result<DirectoryBatch, ObjectError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.entries.is_none() {
-            state.entries = Some(self.snapshot()?);
-        }
-        let position = state.position;
-        let entries = state.entries.as_ref().expect("descriptor snapshot initialized");
-        Ok(DirectoryBatch {
-            token: DirectoryBatchToken {
-                generation: 1,
-                cookie: i64::try_from(position).map_err(|_| ObjectError::InvalidArgument)?,
-            },
-            entries: entries.iter().skip(position).take(maximum).cloned().collect(),
-        })
-    }
-
-    fn commit_directory(&self, token: DirectoryBatchToken, count: usize) -> Result<(), ObjectError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let length = state.entries.as_ref().map_or(0, Vec::len);
-        if token.generation != 1 || token.cookie != state.position as i64 {
-            return Err(ObjectError::InvalidArgument);
-        }
-        state.position = state
-            .position
-            .checked_add(count)
-            .filter(|position| *position <= length)
-            .ok_or(ObjectError::InvalidArgument)?;
-        Ok(())
-    }
-}
-
 impl SnapshotDirectory {
-    fn directory_entries(
-        numbers: impl IntoIterator<Item = i32>,
-        file_type: u8,
-        metadata: &OfdMetadata,
-    ) -> Vec<OfdDirectoryEntry> {
-        let mut entries = vec![
-            OfdDirectoryEntry {
-                inode: metadata.inode,
-                cookie: 1,
-                file_type: 4,
-                name: b".".to_vec(),
-            },
-            OfdDirectoryEntry {
-                inode: metadata.inode,
-                cookie: 2,
-                file_type: 4,
-                name: b"..".to_vec(),
-            },
-        ];
-        entries.extend(
-            numbers
-                .into_iter()
-                .enumerate()
-                .map(|(index, number)| OfdDirectoryEntry {
-                    inode: u64::try_from(number).unwrap_or(0),
-                    cookie: i64::try_from(index + 3).unwrap_or(i64::MAX),
-                    file_type,
-                    name: number.to_string().into_bytes(),
-                }),
-        );
-        entries
-    }
-
     pub(super) fn entries(source: impl IntoIterator<Item = (Vec<u8>, u8)>, metadata: OfdMetadata) -> Self {
         let mut entries = vec![
             OfdDirectoryEntry {
@@ -409,6 +271,39 @@ impl SnapshotDirectory {
                     cookie: i64::try_from(index + 3).unwrap_or(i64::MAX),
                     file_type,
                     name,
+                }),
+        );
+        Self {
+            entries,
+            state: Mutex::new((1, 0)),
+            metadata,
+        }
+    }
+
+    pub(super) fn new(numbers: impl IntoIterator<Item = i32>, file_type: u8, metadata: OfdMetadata) -> Self {
+        let mut entries = vec![
+            OfdDirectoryEntry {
+                inode: metadata.inode,
+                cookie: 1,
+                file_type: 4,
+                name: b".".to_vec(),
+            },
+            OfdDirectoryEntry {
+                inode: metadata.inode,
+                cookie: 2,
+                file_type: 4,
+                name: b"..".to_vec(),
+            },
+        ];
+        entries.extend(
+            numbers
+                .into_iter()
+                .enumerate()
+                .map(|(index, number)| OfdDirectoryEntry {
+                    inode: u64::try_from(number).unwrap_or(0),
+                    cookie: i64::try_from(index + 3).unwrap_or(i64::MAX),
+                    file_type,
+                    name: number.to_string().into_bytes(),
                 }),
         );
         Self {
