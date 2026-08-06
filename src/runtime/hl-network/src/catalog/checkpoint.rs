@@ -1,7 +1,8 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-use super::{NetworkCatalog, NetworkCatalogError, CatalogSocket, PortEntry, Slot};
+use super::{CatalogSocket, NetworkCatalog, NetworkCatalogError, Slot};
+use crate::port_binding::PortEntry;
 use crate::{NETWORK_CHECKPOINT_VERSION, NetworkCatalogRestore, NetworkCheckpointImage, NetworkSocketState};
 
 impl NetworkCatalog {

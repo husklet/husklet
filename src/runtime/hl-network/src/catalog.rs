@@ -1,15 +1,16 @@
+use crate::port_binding::PortEntry;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::{
     AcceptedSocketCheckpoint, NETWORK_CHECKPOINT_SOCKET_MAXIMUM, NetworkCheckpointError, NetworkConfiguration,
-    NetworkResourceKey, NetworkSocketResource, PortCheckpoint, SocketId, SocketSnapshot, UnixSocketPair,
+    NetworkResourceKey, NetworkSocketResource, SocketId, SocketSnapshot, UnixSocketPair,
 };
 
 mod checkpoint;
 mod unix;
 
-enum CatalogSocket {
+pub(crate) enum CatalogSocket {
     Host {
         snapshot: SocketSnapshot,
         resource: NetworkResourceKey,
@@ -27,93 +28,19 @@ enum CatalogSocket {
     },
 }
 
-struct Slot {
-    generation: u64,
-    socket: Option<Arc<CatalogSocket>>,
+pub(crate) struct Slot {
+    pub(crate) generation: u64,
+    pub(crate) socket: Option<Arc<CatalogSocket>>,
 }
 
 pub struct NetworkCatalog {
-    configuration: NetworkConfiguration,
-    ports: Mutex<Vec<PortEntry>>,
-    slots: Mutex<Vec<Slot>>,
-    generation: AtomicU64,
-    port_generation: AtomicU64,
-    activity: crate::checkpoint_activity::CheckpointActivity,
+    pub(crate) configuration: NetworkConfiguration,
+    pub(crate) ports: Mutex<Vec<PortEntry>>,
+    pub(crate) slots: Mutex<Vec<Slot>>,
+    pub(crate) generation: AtomicU64,
+    pub(crate) port_generation: AtomicU64,
+    pub(crate) activity: crate::checkpoint_activity::CheckpointActivity,
 }
-
-/// Generation-qualified rollback capability for one atomic host bind update.
-#[derive(Clone)]
-pub(crate) enum PortEntry {
-    Published(PortCheckpoint),
-    Prepared { checkpoint: PortCheckpoint, generation: u64 },
-}
-
-impl PortEntry {
-    fn checkpoint(&self) -> &PortCheckpoint {
-        match self {
-            Self::Published(checkpoint) | Self::Prepared { checkpoint, .. } => checkpoint,
-        }
-    }
-}
-
-#[must_use = "dropping an uncommitted bind rolls its reservation back"]
-pub struct PreparedBind<'a> {
-    catalog: &'a NetworkCatalog,
-    _admission: crate::checkpoint_activity::Admission<'a>,
-    previous: Arc<CatalogSocket>,
-    installed: SocketSnapshot,
-    port: PortCheckpoint,
-    generation: u64,
-    finalized: bool,
-}
-
-impl PreparedBind<'_> {
-    pub fn commit(mut self) -> Result<(), NetworkCatalogError> {
-        self.catalog.commit_prepared(&mut self)
-    }
-
-    pub fn rollback(mut self) -> Result<(), NetworkCatalogError> {
-        self.catalog.rollback_prepared(&mut self)
-    }
-}
-
-impl Drop for PreparedBind<'_> {
-    fn drop(&mut self) {
-        if !self.finalized {
-            let _ = self.catalog.rollback_prepared(self);
-        }
-    }
-}
-
-/// One coherent observation of the live sockets in a network namespace.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NetworkNamespaceView {
-    /// Changes after every catalog mutation represented by this view.
-    pub generation: u64,
-    pub unix: Vec<UnixSocketView>,
-    pub internet: Vec<InternetSocketView>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InternetSocketView {
-    pub inode: u64,
-    pub family: crate::AddressFamily,
-    pub socket_type: crate::SocketType,
-    pub state: crate::SocketState,
-    pub local: Option<crate::SocketAddress>,
-    pub peer: Option<crate::SocketAddress>,
-}
-
-/// A live `AF_UNIX` socket as observed while holding the catalog lock once.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UnixSocketView {
-    pub id: SocketId,
-    pub inode: u64,
-    pub socket_type: crate::SocketType,
-    pub state: crate::SocketState,
-    pub path: Option<Vec<u8>>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkCatalogError {
     Capacity,
@@ -271,152 +198,6 @@ impl NetworkCatalog {
             generation: slot.generation,
         })
     }
-
-    pub fn claim_port(&self, checkpoint: PortCheckpoint) -> Result<(), NetworkCatalogError> {
-        let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let owner = match Self::slot(&slots, checkpoint.owner)?.socket.as_deref() {
-            Some(CatalogSocket::Host { snapshot, .. }) => snapshot,
-            Some(CatalogSocket::UnixPair { endpoints, .. }) => endpoints
-                .iter()
-                .find(|snapshot| snapshot.id == checkpoint.owner)
-                .ok_or(NetworkCatalogError::Stale)?,
-            Some(CatalogSocket::Unix { snapshot, .. }) => snapshot,
-            None => return Err(NetworkCatalogError::Stale),
-        };
-        if !Self::owns_port(owner, &checkpoint) {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if ports.iter().any(|port| {
-            let port = port.checkpoint();
-            port.family == checkpoint.family && port.port == checkpoint.port
-        })
-        {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        ports.push(PortEntry::Published(checkpoint));
-        Ok(())
-    }
-
-    /// Atomically publishes a bound host snapshot and reserves its port.
-    ///
-    /// Locks are acquired in `slots` then `ports` order and released before
-    /// returning, so callers may perform host work before commit or rollback.
-    pub fn prepare_host_bind(
-        &self,
-        installed: SocketSnapshot,
-        port: PortCheckpoint,
-    ) -> Result<PreparedBind<'_>, NetworkCatalogError> {
-        let admission = self.activity.admit();
-        if installed.id != port.owner || !crate::SocketNamespace::valid_checkpoint_snapshot(&installed) {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let slot = Self::slot_mut(&mut slots, port.owner)?;
-        let Some(previous) = slot.socket.as_ref().filter(|socket| matches!(socket.as_ref(), CatalogSocket::Host { .. }))
-        else {
-            return Err(NetworkCatalogError::Invalid);
-        };
-        if !Self::owns_port(&installed, &port) {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        let previous = previous.clone();
-        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if ports.iter().any(|reserved| {
-            let reserved = reserved.checkpoint();
-            reserved.family == port.family && reserved.port == port.port
-        })
-        {
-            return Err(NetworkCatalogError::Invalid);
-        }
-        let generation = self.port_generation.fetch_add(1, Ordering::Relaxed);
-        if generation == 0 {
-            return Err(NetworkCatalogError::Capacity);
-        }
-        ports.push(PortEntry::Prepared {
-            checkpoint: port.clone(),
-            generation,
-        });
-        Ok(PreparedBind {
-            catalog: self,
-            _admission: admission,
-            previous,
-            installed,
-            port,
-            generation,
-            finalized: false,
-        })
-    }
-
-    fn commit_prepared(&self, prepared: &mut PreparedBind<'_>) -> Result<(), NetworkCatalogError> {
-        if prepared.finalized {
-            return Ok(());
-        }
-        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let slot = Self::slot_mut(&mut slots, prepared.port.owner)?;
-        let Some(current) = slot.socket.as_ref() else {
-            return Err(NetworkCatalogError::Stale);
-        };
-        if !Arc::ptr_eq(current, &prepared.previous) {
-            return Err(NetworkCatalogError::Stale);
-        }
-        let CatalogSocket::Host { resource, binding, accepted, .. } = current.as_ref() else {
-            return Err(NetworkCatalogError::Stale);
-        };
-        let replacement = Arc::new(CatalogSocket::Host {
-            snapshot: prepared.installed.clone(),
-            resource: *resource,
-            binding: binding.clone(),
-            accepted: accepted.clone(),
-        });
-        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = ports.iter_mut().find(|entry| matches!(
-            entry,
-            PortEntry::Prepared { checkpoint, generation }
-                if checkpoint == &prepared.port && *generation == prepared.generation
-        )) else {
-            return Err(NetworkCatalogError::Stale);
-        };
-        *entry = PortEntry::Published(prepared.port.clone());
-        slot.socket = Some(replacement);
-        self.advance_generation();
-        prepared.finalized = true;
-        Ok(())
-    }
-
-    fn rollback_prepared(&self, prepared: &mut PreparedBind<'_>) -> Result<(), NetworkCatalogError> {
-        if prepared.finalized {
-            return Ok(());
-        }
-        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(index) = ports.iter().position(|entry| matches!(
-            entry,
-            PortEntry::Prepared { checkpoint, generation }
-                if checkpoint == &prepared.port && *generation == prepared.generation
-        )) else {
-            return Err(NetworkCatalogError::Stale);
-        };
-        ports.remove(index);
-        drop(slots);
-        prepared.finalized = true;
-        Ok(())
-    }
-
-    fn owns_port(snapshot: &SocketSnapshot, checkpoint: &PortCheckpoint) -> bool {
-        matches!(
-            (&snapshot.local, checkpoint.family),
-            (
-                Some(crate::SocketAddress::Inet4 { port, .. }),
-                crate::AddressFamily::Inet4
-            ) | (
-                Some(crate::SocketAddress::Inet6 { port, .. }),
-                crate::AddressFamily::Inet6
-            ) if *port == checkpoint.port && checkpoint.port != 0
-        )
-    }
-
     pub fn remove(&self, id: SocketId) -> Result<(), NetworkCatalogError> {
         let _admission = self.activity.admit();
         let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -463,62 +244,7 @@ impl NetworkCatalog {
             .retain(|port| port.checkpoint().owner != id);
         Ok(())
     }
-
-    /// Captures every live `AF_UNIX` endpoint from a single catalog state.
-    #[must_use]
-    pub fn namespace_view(&self) -> NetworkNamespaceView {
-        let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut unix = Vec::new();
-        let mut internet = Vec::new();
-        for (index, slot) in slots.iter().enumerate() {
-            let Some(socket) = slot.socket.as_deref() else { continue };
-            match socket {
-                CatalogSocket::UnixPair { endpoints, .. } => {
-                    if let Some(snapshot) = endpoints
-                        .iter()
-                        .find(|snapshot| usize::from(snapshot.id.slot) - 1 == index)
-                    {
-                        unix.push(Self::unix_view(snapshot));
-                    }
-                }
-                CatalogSocket::Unix { snapshot, .. } => unix.push(Self::unix_view(snapshot)),
-                CatalogSocket::Host { snapshot, .. } if snapshot.family == crate::AddressFamily::Unix => {
-                    unix.push(Self::unix_view(snapshot));
-                }
-                CatalogSocket::Host { snapshot, .. } => internet.push(InternetSocketView {
-                    inode: snapshot.id.generation.wrapping_shl(16) | u64::from(snapshot.id.slot),
-                    family: snapshot.family,
-                    socket_type: snapshot.socket_type,
-                    state: snapshot.state,
-                    local: snapshot.local.clone(),
-                    peer: snapshot.peer.clone(),
-                }),
-            }
-        }
-        unix.sort_by_key(|socket| socket.id);
-        NetworkNamespaceView {
-            generation: self.generation.load(Ordering::Acquire),
-            unix,
-            internet,
-        }
-    }
-
-    fn unix_view(snapshot: &SocketSnapshot) -> UnixSocketView {
-        let path = match &snapshot.local {
-            Some(crate::SocketAddress::Unix(path)) => Some(path.clone()),
-            _ => None,
-        };
-        UnixSocketView {
-            id: snapshot.id,
-            inode: snapshot.id.generation.wrapping_shl(16) | u64::from(snapshot.id.slot),
-            socket_type: snapshot.socket_type,
-            state: snapshot.state,
-            path,
-        }
-    }
-
-    fn advance_generation(&self) {
+    pub(crate) fn advance_generation(&self) {
         let _ = self
             .generation
             .fetch_update(Ordering::Release, Ordering::Relaxed, |value| value.checked_add(1));
@@ -608,7 +334,7 @@ impl NetworkCatalog {
         }
     }
 
-    fn slot(slots: &[Slot], id: SocketId) -> Result<&Slot, NetworkCatalogError> {
+    pub(crate) fn slot(slots: &[Slot], id: SocketId) -> Result<&Slot, NetworkCatalogError> {
         let index = usize::from(id.slot).checked_sub(1).ok_or(NetworkCatalogError::Stale)?;
         let slot = slots.get(index).ok_or(NetworkCatalogError::Stale)?;
         if slot.generation != id.generation {
@@ -617,7 +343,7 @@ impl NetworkCatalog {
         Ok(slot)
     }
 
-    fn slot_mut(slots: &mut [Slot], id: SocketId) -> Result<&mut Slot, NetworkCatalogError> {
+    pub(crate) fn slot_mut(slots: &mut [Slot], id: SocketId) -> Result<&mut Slot, NetworkCatalogError> {
         let index = usize::from(id.slot).checked_sub(1).ok_or(NetworkCatalogError::Stale)?;
         let slot = slots.get_mut(index).ok_or(NetworkCatalogError::Stale)?;
         if slot.generation != id.generation {
