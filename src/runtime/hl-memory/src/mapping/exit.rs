@@ -64,7 +64,7 @@ impl<H: ExitHost> PreparedAddressExit<H> {
             Ok(generation) => {
                 self.generation = generation;
                 self.state = ExitState::Published;
-                transition.published(generation);
+                self.coordinator.publish_transition(&mut transition, generation);
                 Ok(())
             }
             Err(error) => {
@@ -82,7 +82,7 @@ impl<H: ExitHost> PreparedAddressExit<H> {
             let mut transition = self.coordinator.transition();
             self.host.rollback();
             self.generation = self.coordinator.ledger.replace(self.generation, self.regions.clone())?;
-            transition.published(self.generation);
+            self.coordinator.publish_transition(&mut transition, self.generation);
         }
         self.state = ExitState::Complete;
         self.coordinator.activity.thaw();
@@ -113,7 +113,7 @@ impl<H: ExitHost> Drop for PreparedAddressExit<H> {
             let mut transition = self.coordinator.transition();
             self.host.rollback();
             if let Ok(generation) = self.coordinator.ledger.replace(self.generation, self.regions.clone()) {
-                transition.published(generation);
+                self.coordinator.publish_transition(&mut transition, generation);
             }
         }
         self.coordinator.activity.thaw();

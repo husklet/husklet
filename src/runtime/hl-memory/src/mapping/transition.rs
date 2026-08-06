@@ -42,6 +42,13 @@ impl<H: Host> Coordinator<H> {
         *self.observer.write().unwrap_or_else(|error| error.into_inner()) = observer;
     }
 
+    /// Publishes one committed mapping transition. Every such transition
+    /// advances the executable era so range evidence witnesses reuse.
+    pub(crate) fn publish_transition(&self, transition: &mut Transition, generation: u64) {
+        self.host.executable.rotate();
+        transition.published(generation);
+    }
+
     pub(crate) fn transition(&self) -> Transition {
         let observer = Arc::clone(&self.observer.read().unwrap_or_else(|error| error.into_inner()));
         observer.begin();

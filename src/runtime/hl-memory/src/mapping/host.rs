@@ -253,7 +253,7 @@ impl<H: Host> Coordinator<H> {
                 Ok(())
             });
         if result.is_ok() {
-            transition.published(self.ledger.generation());
+            self.publish_transition(&mut transition, self.ledger.generation());
         }
         result
     }
@@ -271,7 +271,7 @@ impl<H: Host> Coordinator<H> {
             Ok(())
         });
         if result.is_ok() {
-            transition.published(self.ledger.generation());
+            self.publish_transition(&mut transition, self.ledger.generation());
         }
         result
     }
@@ -289,7 +289,7 @@ impl<H: Host> Coordinator<H> {
             Ok(())
         });
         if result.is_ok() {
-            transition.published(self.ledger.generation());
+            self.publish_transition(&mut transition, self.ledger.generation());
         }
         result
     }
@@ -310,7 +310,7 @@ impl<H: Host> Coordinator<H> {
             Ok(())
         });
         if result.is_ok() {
-            transition.published(self.ledger.generation());
+            self.publish_transition(&mut transition, self.ledger.generation());
         }
         result
     }

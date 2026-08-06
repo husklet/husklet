@@ -9,8 +9,16 @@ const EXECUTABLE_PAGE_BYTES: u64 = 4_096;
 /// Stable evidence for the executable bytes in one guest source range.
 ///
 /// `incarnation` is supplied by the address-space owner and rotates when the
-/// complete image is replaced. `version` changes only when a committed write
-/// overlaps a page covered by the queried range.
+/// complete image is replaced. `version` is the later of the era and the page
+/// versions covered by the range: a committed write versions the pages it
+/// touches, while a published mapping transition advances the era and so
+/// supersedes every range at once.
+///
+/// The era exists because reuse leaves both other components fixed. Unmapping a
+/// range and mapping different bytes over the same addresses, replacing a
+/// mapping in place, or turning a written data range into an executable one all
+/// keep the incarnation and leave the page versions untouched, so a token built
+/// only from those two would certify bytes that no longer exist.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ExecutableToken {
     pub incarnation: u64,
@@ -18,14 +26,19 @@ pub struct ExecutableToken {
 }
 
 /// Address-space-owned versions for guest pages which have contained code.
+///
+/// `sequence` numbers every publication, `era` is the sequence of the most
+/// recent whole-space publication, and `pages` holds per-page sequences.
 #[derive(Debug, Default)]
 pub(crate) struct ExecutableVersions {
     sequence: AtomicU64,
+    era: AtomicU64,
     pages: RwLock<BTreeMap<u64, u64>>,
 }
 
 impl ExecutableVersions {
     pub(crate) fn token(&self, range: AddressRange, incarnation: u64) -> ExecutableToken {
+        let era = self.era.load(Ordering::Acquire);
         let first = Self::page(range.start().get());
         let last = Self::page(range.end().get().saturating_sub(1));
         let pages = self.pages.read().unwrap_or_else(|error| error.into_inner());
@@ -33,8 +46,16 @@ impl ExecutableVersions {
             .range(first..=last)
             .map(|(_, version)| *version)
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(era);
         ExecutableToken { incarnation, version }
+    }
+
+    /// Supersedes every range in the space. Mapping transitions publish here
+    /// because they change which bytes an address denotes without writing any.
+    pub(crate) fn rotate(&self) {
+        let version = self.sequence.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        self.era.fetch_max(version, Ordering::AcqRel);
     }
 
     pub(crate) fn publish(&self, ranges: impl IntoIterator<Item = AddressRange>) {
@@ -59,6 +80,9 @@ impl ExecutableVersions {
         for observed in pages.values_mut() {
             *observed = version;
         }
+        // Pages which never took a committed write carry no entry, so the era
+        // is what supersedes them.
+        self.era.fetch_max(version, Ordering::AcqRel);
     }
 
     pub(crate) fn generation(&self) -> u64 {

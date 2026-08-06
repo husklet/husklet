@@ -80,7 +80,7 @@ impl<H: BackingChangeHost + MemoryAccessHost> Coordinator<H> {
         for mapping in &mappings {
             self.invalidate_exclusive(mapping.range())?;
         }
-        transition.published(self.ledger.generation());
+        self.publish_transition(&mut transition, self.ledger.generation());
         Ok(mappings.len())
     }
 }

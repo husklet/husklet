@@ -1110,10 +1110,11 @@ fn committed_write_publishes() {
     let mut writable = request();
     writable.protection = Protection::READ.union(Protection::WRITE);
     coordinator.map(writable).unwrap();
+    let mapped = coordinator.instruction_epoch();
     let prepared = coordinator.prepare_write(GuestAddress::new(0x1000), 4).unwrap();
     assert_eq!(coordinator.commit_write(prepared, &[1, 2, 3, 4]).unwrap(), 1);
     assert_eq!(coordinator.observer_epoch(), 1);
-    assert_eq!(coordinator.instruction_epoch(), 0);
+    assert_eq!(coordinator.instruction_epoch(), mapped);
     assert!(coordinator.host.state.lock().unwrap().live.is_empty());
 }
 
@@ -1123,9 +1124,10 @@ fn executable_write_publishes() {
     let mut executable = request();
     executable.protection = Protection::WRITE.union(Protection::EXECUTE);
     coordinator.map(executable).unwrap();
+    let mapped = coordinator.instruction_epoch();
     let prepared = coordinator.prepare_write(GuestAddress::new(0x1000), 4).unwrap();
     coordinator.commit_write(prepared, &[1, 2, 3, 4]).unwrap();
-    assert_eq!(coordinator.instruction_epoch(), 1);
+    assert_eq!(coordinator.instruction_epoch(), mapped + 1);
 }
 
 #[test]
@@ -1138,10 +1140,11 @@ fn spanning_executable_write_publishes_once() {
     second.placement = Placement::Fixed(GuestAddress::new(0x2000));
     second.protection = Protection::WRITE.union(Protection::EXECUTE);
     coordinator.map(second).unwrap();
+    let mapped = coordinator.instruction_epoch();
 
     let prepared = coordinator.prepare_write_spans(GuestAddress::new(0x1ffe), 4).unwrap();
     coordinator.commit_write_spans(prepared, &[1, 2, 3, 4]).unwrap();
-    assert_eq!(coordinator.instruction_epoch(), 1);
+    assert_eq!(coordinator.instruction_epoch(), mapped + 1);
 }
 
 #[test]
@@ -1150,9 +1153,10 @@ fn nonexecutable_write_does_not_publish_instruction() {
     let mut writable = request();
     writable.protection = Protection::WRITE;
     coordinator.map(writable).unwrap();
+    let mapped = coordinator.instruction_epoch();
     let prepared = coordinator.prepare_write(GuestAddress::new(0x1000), 4).unwrap();
     coordinator.commit_write(prepared, &[1, 2, 3, 4]).unwrap();
-    assert_eq!(coordinator.instruction_epoch(), 0);
+    assert_eq!(coordinator.instruction_epoch(), mapped);
 }
 
 #[test]
@@ -1347,13 +1351,14 @@ fn shared_executable_alias_invalidates_instructions() {
             Protection::READ.union(Protection::EXECUTE),
         ))
         .unwrap();
+    let mapped = coordinator.instruction_epoch();
 
     let prepared = coordinator.prepare_write_spans(GuestAddress::new(0x1000), 4).unwrap();
     coordinator.commit_write_spans(prepared, &[1, 2, 3, 4]).unwrap();
 
-    assert_eq!(coordinator.instruction_epoch(), 1);
+    assert_eq!(coordinator.instruction_epoch(), mapped + 1);
     let alias = AddressRange::nonempty(GuestAddress::new(0x3000), 4).unwrap();
-    assert_eq!(coordinator.executable_token(alias, 1).version, 1);
+    assert_eq!(coordinator.executable_token(alias, 1).version, mapped + 1);
 }
 
 #[test]
@@ -1708,4 +1713,79 @@ fn checkpoint_request_invalidates_live_projection_before_freeze_completes() {
     coordinator.thaw_checkpoint();
     assert!(!continuation.is_current());
     worker.join().unwrap();
+}
+
+#[test]
+fn unmapping_and_reusing_a_range_supersedes_its_executable_token() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut executable = request();
+    executable.placement = Placement::Fixed(GuestAddress::new(0x3000));
+    executable.protection = Protection::READ.union(Protection::EXECUTE);
+    coordinator.map(executable).unwrap();
+    let range = AddressRange::nonempty(GuestAddress::new(0x3000), 16).unwrap();
+    let before = coordinator.executable_token(range, 1);
+
+    coordinator
+        .unmap(AddressRange::nonempty(GuestAddress::new(0x3000), 4096).unwrap())
+        .unwrap();
+    coordinator.map(executable).unwrap();
+
+    assert_ne!(coordinator.executable_token(range, 1), before);
+}
+
+#[test]
+fn reprotecting_written_data_as_executable_supersedes_its_token() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut data = request();
+    data.placement = Placement::Fixed(GuestAddress::new(0x3000));
+    data.protection = Protection::READ.union(Protection::WRITE);
+    coordinator.map(data).unwrap();
+    let range = AddressRange::nonempty(GuestAddress::new(0x3000), 16).unwrap();
+    let before = coordinator.executable_token(range, 1);
+    let prepared = coordinator.prepare_write(GuestAddress::new(0x3000), 4).unwrap();
+    coordinator.commit_write(prepared, &[1, 2, 3, 4]).unwrap();
+    assert_eq!(coordinator.executable_token(range, 1), before);
+
+    coordinator
+        .protect(
+            AddressRange::nonempty(GuestAddress::new(0x3000), 4096).unwrap(),
+            Protection::READ.union(Protection::EXECUTE),
+        )
+        .unwrap();
+
+    assert_ne!(coordinator.executable_token(range, 1), before);
+}
+
+#[test]
+fn a_mapping_transition_supersedes_every_range_not_only_the_changed_one() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut executable = request();
+    executable.protection = Protection::READ.union(Protection::EXECUTE);
+    for base in [0x3000, 0x5000] {
+        executable.placement = Placement::Fixed(GuestAddress::new(base));
+        coordinator.map(executable).unwrap();
+    }
+    let untouched = AddressRange::nonempty(GuestAddress::new(0x5000), 16).unwrap();
+    let before = coordinator.executable_token(untouched, 1);
+
+    coordinator
+        .unmap(AddressRange::nonempty(GuestAddress::new(0x3000), 4096).unwrap())
+        .unwrap();
+
+    assert_ne!(coordinator.executable_token(untouched, 1), before);
+}
+
+#[test]
+fn instruction_publication_supersedes_pages_which_never_took_a_write() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    let mut executable = request();
+    executable.placement = Placement::Fixed(GuestAddress::new(0x3000));
+    executable.protection = Protection::READ.union(Protection::EXECUTE);
+    coordinator.map(executable).unwrap();
+    let range = AddressRange::nonempty(GuestAddress::new(0x3000), 16).unwrap();
+    let before = coordinator.executable_token(range, 1);
+
+    coordinator.publish_instruction();
+
+    assert_ne!(coordinator.executable_token(range, 1), before);
 }

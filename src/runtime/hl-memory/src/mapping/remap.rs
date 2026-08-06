@@ -57,7 +57,7 @@ impl<H: Host> Coordinator<H> {
             Ok(())
         })?;
         let address = addresses.first().copied().ok_or(MemoryError::InvariantViolation)?;
-        transition.published(self.ledger.generation());
+        self.publish_transition(&mut transition, self.ledger.generation());
         Ok(address)
     }
 
