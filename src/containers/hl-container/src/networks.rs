@@ -234,10 +234,7 @@ impl Networks {
         let mut committed: Vec<Network> = Vec::new();
         for (network, _) in &planned {
             if let Err(error) = self.storage.replace(network).await {
-                for mut rollback in committed.into_iter().rev() {
-                    rollback.endpoints.remove(&container.id);
-                    self.storage.replace(&rollback).await?;
-                }
+                self.detach_committed(committed, &container.id).await?;
                 return Err(error);
             }
             committed.push(network.clone());
@@ -282,9 +279,7 @@ impl Networks {
                 .expect("candidate cloned a present endpoint");
             endpoint.name = new.to_owned();
             if let Err(error) = self.storage.replace(&candidate).await {
-                for rollback in committed.into_iter().rev() {
-                    self.storage.replace(&rollback).await?;
-                }
+                self.restore_committed(committed).await?;
                 return Err(error);
             }
             committed.push(original);
@@ -319,6 +314,23 @@ impl Networks {
         Ok(endpoint)
     }
 
+    /// Undoes committed attachments by dropping the container's endpoint from each.
+    async fn detach_committed(&self, committed: Vec<Network>, container: &ContainerId) -> Result<()> {
+        for mut rollback in committed.into_iter().rev() {
+            rollback.endpoints.remove(container);
+            self.storage.replace(&rollback).await?;
+        }
+        Ok(())
+    }
+
+    /// Restores committed networks to the state they held before the failed write.
+    async fn restore_committed(&self, committed: Vec<Network>) -> Result<()> {
+        for rollback in committed.into_iter().rev() {
+            self.storage.replace(&rollback).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn launch(
         &self,
         id: &ContainerId,
@@ -327,27 +339,28 @@ impl Networks {
     ) -> Result<Vec<crate::service::NetworkConfig>> {
         let mut configs = Vec::new();
         for network in self.storage.list().await? {
-            if network.endpoints.contains_key(id) {
-                if mode == crate::NetworkMode::Host {
+            if !network.endpoints.contains_key(id) {
+                continue;
+            }
+            if mode == crate::NetworkMode::Host {
+                return Err(Error::InvalidSpec(
+                    "host network mode cannot carry network endpoints".into(),
+                ));
+            }
+            match network.driver {
+                NetworkDriver::None if !isolation.network_isolated => {
                     return Err(Error::InvalidSpec(
-                        "host network mode cannot carry network endpoints".into(),
+                        "none-network attachment requires network isolation".into(),
                     ));
                 }
-                match network.driver {
-                    NetworkDriver::None if !isolation.network_isolated => {
-                        return Err(Error::InvalidSpec(
-                            "none-network attachment requires network isolation".into(),
-                        ));
-                    }
-                    NetworkDriver::Bridge if isolation.network_isolated => {
-                        return Err(Error::InvalidSpec(
-                            "bridge-network attachment requires networking to be enabled".into(),
-                        ));
-                    }
-                    _ => {}
+                NetworkDriver::Bridge if isolation.network_isolated => {
+                    return Err(Error::InvalidSpec(
+                        "bridge-network attachment requires networking to be enabled".into(),
+                    ));
                 }
-                configs.push(crate::service::NetworkConfig::from_network(&network, id));
+                _ => {}
             }
+            configs.push(crate::service::NetworkConfig::from_network(&network, id));
         }
         Ok(configs)
     }

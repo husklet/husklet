@@ -5,44 +5,52 @@ use super::{
 impl Service {
     pub(crate) async fn reconcile(&self) -> Result<()> {
         let _guard = self.operations.lock().await;
-        for mut container in self.containers.list().await? {
-            if matches!(
-                container.state,
-                ContainerState::Running { .. } | ContainerState::Paused { .. }
-            ) {
-                let result = ExitStatus::Fault { status: -1, detail: 0 };
-                let finished_at_ms = now_ms();
-                container.state = if container.spec.restart.allows_after_daemon_restart() {
-                    ContainerState::Restarting {
-                        result,
-                        finished_at_ms,
-                        ready_at_ms: finished_at_ms,
-                    }
-                } else {
-                    ContainerState::Exited { result, finished_at_ms }
-                };
-                self.containers.replace(&container).await?;
-                self.emit(crate::LifecycleAction::Die, &container);
-                if matches!(container.state, ContainerState::Restarting { .. }) {
-                    self.emit(crate::LifecycleAction::Restart, &container);
-                }
-            } else if let ContainerState::Exited { result, finished_at_ms } = container.state
-                && container.spec.restart == crate::RestartPolicy::Always && container.restart.manually_stopped {
-                    container.restart.manually_stopped = false;
-                    container.state = ContainerState::Restarting {
-                        result,
-                        finished_at_ms,
-                        ready_at_ms: now_ms(),
-                    };
-                    self.containers.replace(&container).await?;
-                    self.emit(crate::LifecycleAction::Restart, &container);
-                }
+        for container in self.containers.list().await? {
+            self.reconcile_container(container).await?;
         }
         for mut exec in self.execs.list().await? {
             if exec.state.is_active() && exec.checkpoint.is_none() {
                 interrupt_exec(&mut exec);
                 self.execs.replace(&exec).await?;
             }
+        }
+        Ok(())
+    }
+
+    /// Settles one container's state after a daemon restart interrupted it.
+    async fn reconcile_container(&self, mut container: crate::Container) -> Result<()> {
+        if matches!(
+            container.state,
+            ContainerState::Running { .. } | ContainerState::Paused { .. }
+        ) {
+            let result = ExitStatus::Fault { status: -1, detail: 0 };
+            let finished_at_ms = now_ms();
+            container.state = if container.spec.restart.allows_after_daemon_restart() {
+                ContainerState::Restarting {
+                    result,
+                    finished_at_ms,
+                    ready_at_ms: finished_at_ms,
+                }
+            } else {
+                ContainerState::Exited { result, finished_at_ms }
+            };
+            self.containers.replace(&container).await?;
+            self.emit(crate::LifecycleAction::Die, &container);
+            if matches!(container.state, ContainerState::Restarting { .. }) {
+                self.emit(crate::LifecycleAction::Restart, &container);
+            }
+        } else if let ContainerState::Exited { result, finished_at_ms } = container.state
+            && container.spec.restart == crate::RestartPolicy::Always
+            && container.restart.manually_stopped
+        {
+            container.restart.manually_stopped = false;
+            container.state = ContainerState::Restarting {
+                result,
+                finished_at_ms,
+                ready_at_ms: now_ms(),
+            };
+            self.containers.replace(&container).await?;
+            self.emit(crate::LifecycleAction::Restart, &container);
         }
         Ok(())
     }
@@ -169,17 +177,14 @@ impl Service {
                     }
                 }
             });
-        } else {
-            let automatic = container.spec.removal == crate::RemovalPolicy::Automatic;
-            if automatic {
-                let reference = id.to_string();
-                drop(guard);
-                if let Err(error) = self.remove(&reference, false, true, Some(result)).await {
-                    self.failures
-                        .lock()
-                        .await
-                        .insert(JournalId::container(id), error.to_string());
-                }
+        } else if container.spec.removal == crate::RemovalPolicy::Automatic {
+            let reference = id.to_string();
+            drop(guard);
+            if let Err(error) = self.remove(&reference, false, true, Some(result)).await {
+                self.failures
+                    .lock()
+                    .await
+                    .insert(JournalId::container(id), error.to_string());
             }
         }
     }
@@ -218,21 +223,22 @@ impl Service {
             {
                 return;
             }
-            if let Err(error) = self.launch_locked(container.clone(), false).await {
-                let mut terminal = container;
-                terminal.state = ContainerState::Exited {
-                    result: ExitStatus::Fault { status: -1, detail: 0 },
-                    finished_at_ms: now_ms(),
-                };
-                if let Err(persist) = self.containers.replace(&terminal).await {
-                    self.failures.lock().await.insert(
-                        JournalId::container(id.clone()),
-                        format!("restart failed ({error}); exit persistence failed ({persist})"),
-                    );
-                }
-                if let Some(notify) = self.waiters.lock().await.get(&id) {
-                    notify.notify_waiters();
-                }
+            let Err(error) = self.launch_locked(container.clone(), false).await else {
+                return;
+            };
+            let mut terminal = container;
+            terminal.state = ContainerState::Exited {
+                result: ExitStatus::Fault { status: -1, detail: 0 },
+                finished_at_ms: now_ms(),
+            };
+            if let Err(persist) = self.containers.replace(&terminal).await {
+                self.failures.lock().await.insert(
+                    JournalId::container(id.clone()),
+                    format!("restart failed ({error}); exit persistence failed ({persist})"),
+                );
+            }
+            if let Some(notify) = self.waiters.lock().await.get(&id) {
+                notify.notify_waiters();
             }
         })
     }
