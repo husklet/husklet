@@ -159,6 +159,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn socket(&self, domain: i32, raw_type: u32, protocol: i32) -> LinuxResult {
+        let result = self.socket_result(domain, raw_type, protocol);
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "socket domain={domain} type={raw_type:#x} protocol={protocol} result={:#x}",
+            result.encode(),
+        );
+        result
+    }
+
+    fn socket_result(&self, domain: i32, raw_type: u32, protocol: i32) -> LinuxResult {
         if domain == 17 || (matches!(domain, 2 | 10) && raw_type & 0xf == 3) {
             return LinuxResult::Error(Errno::EPERM);
         }

@@ -24,6 +24,16 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         length_pointer: u64,
         flags: u32,
     ) -> LinuxResult {
+        let result = self.accept4_result(descriptor, address_pointer, length_pointer, flags);
+        hl_log::hl_debug!(
+            hl_log::tag::NET,
+            "accept4 listener={descriptor} address={address_pointer:#x} flags={flags:#x} result={:#x}",
+            result.encode(),
+        );
+        result
+    }
+
+    fn accept4_result(&self, descriptor: i32, address_pointer: u64, length_pointer: u64, flags: u32) -> LinuxResult {
         if flags & !(0x800 | 0x8_0000) != 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
