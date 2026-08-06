@@ -4,15 +4,9 @@
 #include "../include/executor.h"
 #include "arena.h"
 #include "../cache/cache.h"
+#include "ibtc/storage.h"
 
 #include <stdatomic.h>
-
-typedef struct hl_native_ibtc_entry {
-    uint64_t target;
-    void *body;
-} hl_native_ibtc_entry;
-
-#define HL_NATIVE_IBTC_COUNT (1u << 16)
 
 struct hl_native_executor {
     hl_native_arena arena;

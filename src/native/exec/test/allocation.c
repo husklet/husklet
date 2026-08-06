@@ -4,11 +4,16 @@
 #undef malloc
 #undef calloc
 #undef aligned_alloc
+#undef _aligned_malloc
+#undef _aligned_free
 #undef free
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
 
 static _Atomic size_t allocation_calls;
 static _Atomic size_t allocation_live;
@@ -35,9 +40,26 @@ void *hl_test_calloc(size_t count, size_t size) {
 
 void *hl_test_aligned_alloc(size_t alignment, size_t size) {
     if (!allocation_admit()) return NULL;
+#if defined(_MSC_VER)
+    void *value = _aligned_malloc(size, alignment);
+#else
     void *value = aligned_alloc(alignment, size);
+#endif
     if (value != NULL) atomic_fetch_add_explicit(&allocation_live, 1, memory_order_relaxed);
     return value;
+}
+
+void *hl_test_msvc_aligned_alloc(size_t size, size_t alignment) {
+    return hl_test_aligned_alloc(alignment, size);
+}
+
+void hl_test_msvc_aligned_free(void *value) {
+    if (value != NULL) atomic_fetch_sub_explicit(&allocation_live, 1, memory_order_relaxed);
+#if defined(_MSC_VER)
+    _aligned_free(value);
+#else
+    free(value);
+#endif
 }
 
 void hl_test_free(void *value) {

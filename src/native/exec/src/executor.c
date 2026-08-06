@@ -565,7 +565,7 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
         free(executor);
         return status;
     }
-    executor->ibtc = aligned_alloc(65536, HL_NATIVE_IBTC_COUNT * sizeof(*executor->ibtc));
+    executor->ibtc = hl_native_ibtc_storage_create();
     if (executor->ibtc == NULL) {
         hl_native_cache_destroy(executor->cache);
         hl_native_arena_destroy(&executor->arena);
@@ -1450,7 +1450,7 @@ hl_native_status hl_native_destroy(hl_native_executor *executor) {
         return HL_NATIVE_STATE;
     }
     hl_native_cache_destroy(executor->cache);
-    free(executor->ibtc);
+    hl_native_ibtc_storage_destroy(executor->ibtc);
     hl_native_arena_destroy(&executor->arena);
     free(executor);
     return HL_NATIVE_OK;

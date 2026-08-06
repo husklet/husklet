@@ -116,6 +116,12 @@ stack until detach. Executor destroy refuses a live direct token. Constructor
 failure unwinds these owners in reverse order. Fork repairs inherited mappings
 and retires direct authority but does not create a second allocation owner;
 parent and child subsequently release only their private process copies.
+IBTC storage is an executor-owned aligned allocation rather than part of the
+public execution ABI or generated CPU layout. `src/ibtc/storage.c` pairs C11
+`aligned_alloc` with `free` and, for the MSVC runtime, `_aligned_malloc` with
+`_aligned_free`; callers cannot mix those ownership families. Its fixed size is
+an exact multiple of its 64-KiB alignment, construction reports allocation
+failure through `HL_NATIVE_MEMORY`, and executor teardown releases it once.
 The retained ownership comparison studied
 `src/translator/cache.c::jit_cache_init`, `cache_rotate`, and
 `jit_after_fork`, the exec/fork callers in `src/linux_abi/thread.c` and

@@ -5,6 +5,14 @@
 
 #include <stdlib.h>
 #include <string.h>
+#if defined(_MSC_VER)
+#include <malloc.h>
+#define test_aligned_allocate(alignment, size) _aligned_malloc((size), (alignment))
+#define test_aligned_release(value) _aligned_free(value)
+#else
+#define test_aligned_allocate(alignment, size) aligned_alloc((alignment), (size))
+#define test_aligned_release(value) free(value)
+#endif
 
 typedef struct test_memory {
     void *writable;
@@ -27,11 +35,11 @@ static hl_native_status test_reserve(void *opaque, uint64_t capacity, uint64_t a
     test_memory *memory = opaque;
     memory->reserve_calls++;
     if (dual && memory->fail_dual) return HL_NATIVE_PLATFORM;
-    memory->writable = aligned_alloc((size_t)alignment, (size_t)capacity);
+    memory->writable = test_aligned_allocate((size_t)alignment, (size_t)capacity);
     if (memory->writable == NULL) return HL_NATIVE_MEMORY;
-    memory->executable = dual ? aligned_alloc((size_t)alignment, (size_t)capacity) : memory->writable;
+    memory->executable = dual ? test_aligned_allocate((size_t)alignment, (size_t)capacity) : memory->writable;
     if (memory->executable == NULL) {
-        free(memory->writable);
+        test_aligned_release(memory->writable);
         memory->writable = NULL;
         return HL_NATIVE_MEMORY;
     }
@@ -50,8 +58,8 @@ static hl_native_status test_reserve(void *opaque, uint64_t capacity, uint64_t a
 static hl_native_status test_release(void *opaque, hl_native_handle handle) {
     test_memory *memory = opaque;
     if (handle != 1) return HL_NATIVE_ARGUMENT;
-    if (memory->executable != memory->writable) free(memory->executable);
-    free(memory->writable);
+    if (memory->executable != memory->writable) test_aligned_release(memory->executable);
+    test_aligned_release(memory->writable);
     memory->writable = memory->executable = NULL;
     memory->release_calls++;
     return HL_NATIVE_OK;

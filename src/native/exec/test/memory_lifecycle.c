@@ -61,6 +61,7 @@ static int token_failures(void) {
     hl_native_direct_authority value = authority();
     hl_test_allocation_reset(0);
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    CHECK((uintptr_t)executor->ibtc % UINT64_C(65536) == 0);
     size_t base = hl_test_allocation_live();
     hl_test_allocation_reset(1);
     CHECK(hl_native_direct_register(executor, &value, &direct) == HL_NATIVE_MEMORY && direct == NULL);
