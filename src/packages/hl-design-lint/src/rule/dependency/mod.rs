@@ -452,6 +452,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("hl-engine", "hl-network")
             | ("hl-engine", "hl-linux")
             | ("hl-engine", "hl-execution")
+            | ("hl-engine", "hl-fs")
             | ("hl-engine", "hl-isa")
             | ("hl-engine", "hl-loader")
             | ("hl-engine", "hl-memory")
