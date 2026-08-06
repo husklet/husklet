@@ -43,6 +43,10 @@ static uint32_t a64_imm19(uint32_t instruction, int64_t displacement) {
     return instruction | (((uint32_t)displacement & UINT32_C(0x7ffff)) << 5);
 }
 
+static uint32_t a64_imm14(uint32_t instruction, int64_t displacement) {
+    return instruction | (((uint32_t)displacement & UINT32_C(0x3fff)) << 5);
+}
+
 static uint32_t a64_branch(uint64_t source, uint64_t target) {
     int64_t displacement = target >= source
         ? (int64_t)((target - source) / 4)
@@ -50,13 +54,8 @@ static uint32_t a64_branch(uint64_t source, uint64_t target) {
     return UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
 }
 
-static uint32_t a64_imm14(uint32_t instruction, int64_t displacement) {
-    return instruction | (((uint32_t)displacement & UINT32_C(0x3fff)) << 5);
-}
-
-/* Budgets never exceed HL_NATIVE_MAX_BUDGET, so testing the sign of
- * `budget - count` is exactly the unsigned `budget < count` the retained engine
- * spells with `cmp`, and it leaves the guest NZCV live in the host flags. */
+/* Admission tests the budget by borrow on `sub` rather than by `cmp`, so a
+ * taken edge never touches guest NZCV and needs no save/restore pair. */
 static int a64_edge_admission(uint32_t *hot, uint64_t source_offset,
                               const cache_entry *target) {
     const uint32_t count = target->instruction_count;
@@ -78,16 +77,13 @@ static int a64_edge_admission(uint32_t *hot, uint64_t source_offset,
     hot[5] = a64_imm19(UINT32_C(0xb5000010), 11); /* cbnz x16,cold */
     hot[6] = UINT32_C(0xf9400000) |
         ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
-    hot[7] = UINT32_C(0xd1000210) | (count << 10); /* sub x16,x16,#count */
-    hot[8] = a64_imm14(UINT32_C(0xb7f80010), 7); /* tbnz x16,#63,cold */
+    hot[7] = UINT32_C(0xd1000211) | (count << 10); /* sub x17,x16,#count */
+    hot[8] = a64_imm14(UINT32_C(0xb7f80011), 8); /* tbnz x17,#63,cold */
     hot[9] = UINT32_C(0xf9000000) |
-        ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 17u;
     hot[10] = a64_branch(branch_offset, target->admitted_offset);
-    hot[11] = UINT32_C(0xd503201f);
-    hot[12] = UINT32_C(0xd503201f);
-    hot[13] = UINT32_C(0xd503201f);
-    hot[14] = UINT32_C(0xd503201f);
-    hot[15] = UINT32_C(0x14000001); /* b cold */
+    for (uint32_t index = 11; index < HL_NATIVE_RELOCATION_SPAN_WORDS; index++)
+        hot[index] = UINT32_C(0xd503201f); /* padding the taken edge never reaches */
     return 1;
 }
 

@@ -116,6 +116,11 @@ static void patch_condition(uint32_t *branch, const uint8_t *target) {
     *branch |= (distance & UINT32_C(0x7ffff)) << 5;
 }
 
+static void patch_branch(uint32_t *branch, const uint8_t *target) {
+    uint32_t distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
+    *branch |= distance & UINT32_C(0x03ffffff);
+}
+
 static void publish_execution_identity(hl_a64_assembler *assembler, int scratch) {
     /* Cache execution lookup accepts any address inside the executing entry,
      * tagged in bit zero.  AArch64 instructions are four-byte aligned, so the
@@ -144,25 +149,22 @@ void hl_a64_stub_budget_begin(hl_a64_assembler *assembler, uint64_t pc, hl_a64_b
     hl_a64_emit32(assembler, UINT32_C(0xb5000010)); /* cbnz x16,interrupt */
     patch_condition(guard->token_skip_branch, assembler->cursor);
     hl_a64_ldr(assembler, 16, CPU, OFFSET_BUDGET);
-    hl_a64_emit32(assembler, UINT32_C(0xd53b4211)); /* mrs x17,nzcv */
-    guard->compare = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, UINT32_C(0xf100021f)); /* cmp x16,#count */
-    guard->budget_branch = (uint32_t *)assembler->cursor;
-    hl_a64_emit32(assembler, UINT32_C(0x54000003)); /* b.lo budget */
-    hl_a64_emit32(assembler, UINT32_C(0xd51b4211)); /* msr nzcv,x17 */
     guard->subtract = (uint32_t *)assembler->cursor;
-    hl_a64_subi(assembler, 16, 16, 0);
-    hl_a64_str(assembler, 16, CPU, OFFSET_BUDGET);
+    hl_a64_emit32(assembler, UINT32_C(0xd1000211)); /* sub x17,x16,#count */
+    /* Borrow test, so entry admission leaves guest NZCV alone. The reject arm
+     * is an unconditional branch because a block body can outrange tbnz. */
+    hl_a64_emit32(assembler, UINT32_C(0xb6f80000) | (UINT32_C(2) << 5) | 17u); /* tbz x17,#63,+2 */
+    guard->budget_branch = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, UINT32_C(0x14000000)); /* b budget */
+    hl_a64_str(assembler, 17, CPU, OFFSET_BUDGET);
 }
 
 void hl_a64_stub_budget_finish(hl_a64_assembler *assembler, hl_a64_budget_guard *guard, uint32_t count) {
-    *guard->compare |= count << 10;
     *guard->subtract |= count << 10;
     patch_condition(guard->interrupt_branch, assembler->cursor);
     patch_condition(guard->token_interrupt_branch, assembler->cursor);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_INTERRUPT, guard->pc);
-    patch_condition(guard->budget_branch, assembler->cursor);
-    hl_a64_emit32(assembler, UINT32_C(0xd51b4211)); /* msr nzcv,x17 */
+    patch_branch(guard->budget_branch, assembler->cursor);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_YIELD, guard->pc);
 }
 

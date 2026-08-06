@@ -381,7 +381,7 @@ static int relocation_span(void) {
 
     /* The AArch64 typed span becomes one complete cross-entry transaction:
      * polls precede exact precharge, success enters after the target guard,
-     * and budget rejection restores NZCV before the unchanged cold exit. */
+     * and budget rejection reaches the unchanged cold exit with NZCV intact. */
     const uint32_t nop = UINT32_C(0xd503201f);
     hl_native_relocation admitted = {
         .code_offset = 0,
@@ -401,9 +401,11 @@ static int relocation_span(void) {
     CHECK(source_words[0] != nop && source_words[1] == UINT32_C(0xb50001f0));
     CHECK(source_words[3] == UINT32_C(0xb4000070));
     CHECK(source_words[5] == UINT32_C(0xb5000170));
-    CHECK(source_words[7] == (UINT32_C(0xd1000210) | (23u << 10)));
-    CHECK(source_words[8] == UINT32_C(0xb7f800f0));
-    CHECK(source_words[15] == UINT32_C(0x14000001));
+    CHECK(source_words[7] == (UINT32_C(0xd1000211) | (23u << 10)));
+    CHECK(source_words[8] == UINT32_C(0xb7f80111));
+    CHECK(source_words[10] != nop);
+    for (uint32_t index = 11; index < HL_NATIVE_RELOCATION_SPAN_WORDS; index++)
+        CHECK(source_words[index] == nop);
     CHECK(hl_native_cache_write_begin(fixture.cache) == HL_NATIVE_OK);
     CHECK(hl_native_cache_relocations_invalidate(fixture.cache, 0xb000, 0xb004) == HL_NATIVE_OK);
     CHECK(hl_native_cache_invalidate(fixture.cache, 0xb000, 0xb004, NULL) == HL_NATIVE_OK);

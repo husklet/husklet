@@ -1515,7 +1515,9 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
         request->abi != HL_NATIVE_ABI || request->size < offsetof(hl_native_run_request, source) ||
         request->reserved != 0 || output->abi != HL_NATIVE_ABI || output->size < sizeof(*output) ||
         cpu->architecture != request->architecture ||
-        request->budget > HL_NATIVE_MAX_BUDGET)
+        /* Generated admission tests the budget by borrow, which matches an
+         * unsigned comparison only while the budget stays below the sign bit. */
+        request->budget > (uint64_t)INT64_MAX)
         return HL_NATIVE_ARGUMENT;
     switch (cpu->architecture) {
         case HL_NATIVE_AARCH64:
