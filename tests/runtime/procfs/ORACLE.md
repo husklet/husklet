@@ -1,5 +1,15 @@
 # Procfs retained-C audit
 
+Checkpoint selector prerequisite: the retained C procfs implementation has no
+durable open-description codec or tagged object catalog; its temporary procfs
+files and directories are process-local host artifacts and are rebuilt rather
+than serialized. Rust owns descriptor checkpoint routing independently of
+procfs. `FileObjectCatalog` therefore selects codecs from authoritative identity
+and OFD evidence, and the symmetric `DirectoryObjectCatalog` reserves durable
+nonzero tags while rejecting no-owner or multiple-owner captures. This stage is
+selector infrastructure only: no procfs codec is bound, so checkpoint support
+for open procfs snapshot files and directories remains an explicit gap.
+
 This folder migrates the complete procfs compatibility cohort: the 56 cases
 registered by the canonical inventory for two guest ISAs, plus `peer-fd`, whose
 known descriptor-identity defect kept it out of that inventory. Sources,

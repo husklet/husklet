@@ -13,8 +13,10 @@ use crate::{
     CheckpointParticipant, CheckpointRole, DescriptorImageSlot, PreparedExecParticipant, PreparedProcessImage,
 };
 
+mod directory;
 mod file;
 
+pub use directory::{DirectoryObjectCatalog, DirectoryObjectCheckpoint};
 pub use file::{FileObjectCatalog, FileObjectCheckpoint};
 
 const DEPENDENCIES: [CheckpointRole; 1] = [CheckpointRole::Task];

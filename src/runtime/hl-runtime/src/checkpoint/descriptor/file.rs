@@ -13,7 +13,11 @@ pub struct FileObjectCatalog {
 }
 
 pub trait FileObjectCheckpoint: DescriptorObjectCheckpoint {
-    fn owns(&self, identity: u64) -> Result<bool, DescriptorCheckpointError>;
+    fn owns(
+        &self,
+        identity: u64,
+        object: &dyn hl_descriptor::OpenFileDescription,
+    ) -> Result<bool, DescriptorCheckpointError>;
 }
 
 impl FileObjectCatalog {
@@ -46,7 +50,7 @@ impl DescriptorObjectCheckpoint for FileObjectCatalog {
         }
         let mut selected = None;
         for (tag, codec) in &self.codecs {
-            if !codec.owns(identity)? {
+            if !codec.owns(identity, object)? {
                 continue;
             }
             if selected.is_some() {

@@ -15,8 +15,8 @@ mod task;
 
 pub use control::{Error, Participant, Phase, Role, RuntimeCheckpointCoordinator};
 pub use descriptor::{
-    FileObjectCatalog, FileObjectCheckpoint, ObjectCatalog, Participant as DescriptorCheckpointParticipant,
-    Table as DescriptorTable,
+    DirectoryObjectCatalog, DirectoryObjectCheckpoint, FileObjectCatalog, FileObjectCheckpoint, ObjectCatalog,
+    Participant as DescriptorCheckpointParticipant, Table as DescriptorTable,
 };
 pub use event::{
     BindingRestore, Catalog, CheckpointCodec, DescriptorRebind, DescriptorReference, ObjectBindings,

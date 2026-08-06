@@ -262,7 +262,10 @@ impl DescriptorObjectCheckpoint for Bindings {
 }
 
 impl crate::FileObjectCheckpoint for Bindings {
-    fn owns(&self, identity: u64) -> Result<bool, DescriptorCheckpointError> {
+    fn owns(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError> {
+        if object.kind() != ObjectKind::File {
+            return Ok(false);
+        }
         let state = self
             .registry
             .state

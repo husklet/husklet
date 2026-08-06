@@ -168,8 +168,8 @@ pub use checkpoint::{
     WireCodec as EventWireCodec,
 };
 pub use checkpoint::{
-    DescriptorCheckpointParticipant, DescriptorTable as CheckpointDescriptorTable, FileObjectCatalog,
-    FileObjectCheckpoint, ObjectCatalog as DescriptorObjectCatalog,
+    DescriptorCheckpointParticipant, DescriptorTable as CheckpointDescriptorTable, DirectoryObjectCatalog,
+    DirectoryObjectCheckpoint, FileObjectCatalog, FileObjectCheckpoint, ObjectCatalog as DescriptorObjectCatalog,
 };
 pub use checkpoint::{
     Error as CheckpointError, Participant as CheckpointParticipant, Phase as CheckpointPhase, Role as CheckpointRole,
