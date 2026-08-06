@@ -119,7 +119,7 @@ impl std::fmt::Debug for FutexTable {
             .debug_struct("FutexTable")
             .field("limits", &self.limits)
             .field("waiters", &self.waiter_count.load(Ordering::Acquire))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

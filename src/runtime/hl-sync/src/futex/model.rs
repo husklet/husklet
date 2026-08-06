@@ -18,6 +18,8 @@ impl FutexKey {
         Ok(Self::Shared { backing, offset })
     }
 
+    // The mask spells the futex word's 4-byte alignment requirement more directly than a bit count.
+    #[allow(clippy::verbose_bit_mask)]
     fn validate(coordinate: u64) -> Result<(), FutexError> {
         if coordinate & 3 == 0 {
             Ok(())

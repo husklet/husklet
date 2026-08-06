@@ -362,6 +362,8 @@ impl Interruption {
         self.consume()
     }
 
+    // Callers pass a concrete `Arc<T>`, which only coerces to `Arc<dyn InterruptionWake>` by value.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn observe(&self, observer: Arc<dyn InterruptionWake>) -> InterruptionObservation {
         let identifier = self.state.next_registration.fetch_add(1, Ordering::Relaxed);
         self.state
