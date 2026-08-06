@@ -58,6 +58,11 @@ pub enum DescriptorCheckpointError {
 }
 
 pub trait DescriptorObjectCheckpoint: Send + Sync {
+    /// Returns the exact object-image size for a generation-qualified description.
+    ///
+    /// # Errors
+    /// Returns an error if the description is invalid, exceeds checkpoint limits, or
+    /// the object cannot report a stable checkpoint size.
     fn snapshot_size_identity(
         &self,
         identity: crate::DescriptionIdentity,
@@ -67,6 +72,10 @@ pub trait DescriptorObjectCheckpoint: Send + Sync {
     }
 
     /// Returns the exact number of bytes required by [`Self::snapshot_into`].
+    ///
+    /// # Errors
+    /// Returns an error if the description is invalid, exceeds checkpoint limits, or
+    /// the object cannot report a stable checkpoint size.
     fn snapshot_size(
         &self,
         identity: u64,
@@ -83,6 +92,11 @@ pub trait DescriptorObjectCheckpoint: Send + Sync {
         output: &mut [u8],
     ) -> Result<(), DescriptorCheckpointError>;
 
+    /// Writes a generation-qualified object image into an exactly sized buffer.
+    ///
+    /// # Errors
+    /// Returns an error if the description is invalid, the buffer has the wrong size,
+    /// or object checkpointing fails.
     fn snapshot_into_identity(
         &self,
         identity: crate::DescriptionIdentity,
@@ -93,6 +107,10 @@ pub trait DescriptorObjectCheckpoint: Send + Sync {
     }
 
     /// Allocates an exactly sized standalone object image.
+    ///
+    /// # Errors
+    /// Returns an error if sizing or serialization fails, or if the object image exceeds
+    /// the descriptor checkpoint byte limit.
     fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
         let size = self.snapshot_size(identity, object)?;
         if size > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
