@@ -108,6 +108,7 @@ hl_native_status hl_native_translation_publish(hl_native_executor *executor, con
         block.conditional_self_loop = emission->conditional_self_loop;
         block.cycle_safe = emission->cycle_safe;
         block.successor_region = emission->successor_region;
+        block.decoded_count = emission->decoded_count;
         block.loop_pc = emission->loop_pc;
         status = hl_native_cache_publish_map(executor->cache, &block, emission->size, emission->body_offset,
                                              emission->provenance, emission->provenance_count);

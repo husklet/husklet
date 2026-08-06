@@ -547,6 +547,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     uint32_t charged_prefix = 0;
     int exclusive = 0;
     size_t guard_count = 0;
+    size_t owned_count = 0;
     if (output == NULL || expected_authority == 0) return 0;
     memset(output, 0, sizeof(*output));
     if (buffer == NULL || capacity < HL_A64_STUB_MAX_BYTES || count == 0 ||
@@ -568,16 +569,22 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             else if (planning_exclusive && (word & 0x3fc00000u) == 0x08000000u) planning_exclusive = 0;
         }
         uint64_t next = cursor + 4;
+        int followed = 0;
         if (!planning_exclusive && (word & UINT32_C(0xfc000000)) == UINT32_C(0x14000000)) {
             int64_t displacement = (int64_t)((uint64_t)(word & UINT32_C(0x03ffffff)) << 38) >> 36;
             uint64_t target = cursor + (uint64_t)displacement;
             int seen = 0;
             for (size_t index = 0; index <= planned; ++index)
                 if (planned_pcs[index] == target) seen = 1;
-            if (!seen && hl_a64_source_available(source, target, 1) != 0) next = target;
+            if (!seen && hl_a64_source_available(source, target, 1) != 0) {
+                next = target;
+                followed = 1;
+            }
         }
         planned++;
         cursor = next;
+        hl_a64_instruction_effect effect = hl_a64_trace_effect(word, planned_pcs[planned - 1]);
+        if ((effect.control || effect.terminal) && !followed) break;
     }
     if (planned == 0) return 0;
     count = planned;
@@ -600,6 +607,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         size_t begin = hl_a64_assembler_size(&assembler);
         hl_a64_memory_sites memory_sites = {0};
         uint32_t word = planned_words[index];
+        owned_count = index + 1;
         /* The exclusive monitor may not cross a stitched block-entry poll.
          * CASP is self-contained and therefore does not open this interval. */
         int casp = (word & 0x3fa07c00u) == 0x08207c00u;
@@ -747,9 +755,16 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         memcpy(relocation->span.cold, fallthrough, sizeof(relocation->span.cold));
         hl_a64_stub_exit(&assembler, HL_NATIVE_EXIT_BRANCH, output->source_last);
     }
+    hull_first = planned_pcs[0];
+    hull_last = planned_pcs[0] + 4;
+    for (size_t index = 1; index < owned_count; ++index) {
+        if (planned_pcs[index] < hull_first) hull_first = planned_pcs[index];
+        if (planned_pcs[index] + 4 > hull_last) hull_last = planned_pcs[index] + 4;
+    }
     output->source_first = hull_first;
     output->source_last = hull_last;
-    output->instruction_count = charged_prefix != 0 ? charged_prefix : count;
+    output->decoded_count = (uint32_t)owned_count;
+    output->instruction_count = charged_prefix != 0 ? charged_prefix : owned_count;
     hl_a64_stub_budget_finish(&assembler, &budget_guard, (uint32_t)output->instruction_count);
     for (uint32_t index = 0; index < stitched; index++) {
         uint32_t refund = (uint32_t)output->instruction_count - refund_prefixes[index];
@@ -832,7 +847,7 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
         .direct_generation = authority == NULL ? 0 : executor->direct_generation,
     };
     if (hl_native_translation_lookup(executor, &key, code) == HL_NATIVE_HIT) {
-        if (code->source_last <= key.source_last || code->successor_region) {
+        if (code->decoded_count <= count) {
             *hit = 1;
             return HL_NATIVE_OK;
         }
@@ -872,6 +887,7 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
                                     .instruction_count = (uint32_t)trace.instruction_count,
                                     .cycle_safe = 1};
     emission.successor_region = trace.successor_region;
+    emission.decoded_count = trace.decoded_count;
     for (uint32_t index = 0; index < trace.relocation_count; index++) {
         trace.relocations[index].target_instruction_epoch = 0;
         trace.relocations[index].target_epoch_known = 0;

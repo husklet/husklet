@@ -13,7 +13,8 @@ typedef struct cache_entry {
     uint64_t memory_mode, authority_generation;
     uint64_t loop_pc;
     uint64_t certificate_identity;
-    uint32_t instruction_count, relocation_count, conditional_self_loop, cycle_safe, successor_region, generation, state;
+    uint32_t instruction_count, relocation_count, conditional_self_loop, cycle_safe, successor_region, decoded_count,
+        generation, state;
 } cache_entry;
 
 typedef struct provenance_entry {

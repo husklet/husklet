@@ -133,6 +133,7 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     output->conditional_self_loop = entry->conditional_self_loop; \
     output->cycle_safe = entry->cycle_safe; \
     output->successor_region = entry->successor_region; \
+    output->decoded_count = entry->decoded_count; \
     output->loop_pc = entry->loop_pc; \
     output->identity_token = entry->token; \
     output->mapping_epoch = entry->mapping_epoch; \
@@ -399,6 +400,7 @@ hl_native_status hl_native_cache_publish_map(hl_native_cache *cache, hl_native_b
     entry->conditional_self_loop = block->conditional_self_loop;
     entry->cycle_safe = block->cycle_safe;
     entry->successor_region = block->successor_region;
+    entry->decoded_count = block->decoded_count;
     entry->loop_pc = block->loop_pc;
     /* Publication makes bytes executable first. Provenance is then complete
      * before the live identity can be observed by a dispatcher lookup. */
@@ -488,6 +490,8 @@ int hl_native_cache_execution(const hl_native_cache *cache, uint64_t identity, h
         output->relocation_count = entry->relocation_count;
         output->conditional_self_loop = entry->conditional_self_loop;
         output->cycle_safe = entry->cycle_safe;
+        output->successor_region = entry->successor_region;
+        output->decoded_count = entry->decoded_count;
         output->loop_pc = entry->loop_pc;
         output->identity_token = entry->token;
         output->mapping_epoch = entry->mapping_epoch;
