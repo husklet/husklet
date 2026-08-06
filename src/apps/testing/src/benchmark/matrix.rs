@@ -49,6 +49,41 @@ pub(crate) struct Matrix {
 }
 
 impl Matrix {
+    /// Builds the gate's matrix so engine, wrapper, and provenance wiring is fixed here.
+    #[expect(clippy::too_many_arguments, reason = "one call site fixes every matrix input")]
+    pub(super) fn gated(
+        isa: Isa,
+        binary: PathBuf,
+        c_engine: PathBuf,
+        c_runner: PathBuf,
+        c_engine_tree: String,
+        c_engine_build_id: String,
+        rust_engine: PathBuf,
+        output: PathBuf,
+        repeats: usize,
+        timeout: Duration,
+        guest: Vec<String>,
+    ) -> Self {
+        Self {
+            isa,
+            binary,
+            rootfs: None,
+            c_engine,
+            c_runner: Some(c_runner),
+            c_engine_tree,
+            c_engine_build_id,
+            rust_engine,
+            output,
+            repeats,
+            resume: false,
+            clone_thread_evidence: None,
+            timeout,
+            guest,
+            environment: Vec::new(),
+            engine_options: Vec::new(),
+        }
+    }
+
     pub(super) fn validate(mut self) -> Result<Self, String> {
         let host_matches = matches!(
             (std::env::consts::ARCH, self.isa),
@@ -100,10 +135,15 @@ impl Matrix {
     }
 
     pub(super) fn execute(self, process: &adapter::Process) -> Result<(), String> {
+        let paths = self.produce(process)?;
+        report::Report::new("native", paths).write()
+    }
+
+    pub(super) fn produce(self, process: &adapter::Process) -> Result<Vec<PathBuf>, String> {
         self.execute_with(|run| run.validate()?.execute(process))
     }
 
-    fn execute_with<F>(self, mut execute: F) -> Result<(), String>
+    fn execute_with<F>(self, mut execute: F) -> Result<Vec<PathBuf>, String>
     where
         F: FnMut(Run) -> Result<(), String>,
     {
@@ -151,7 +191,7 @@ impl Matrix {
                 String::from_utf8(evidence).map_err(|_| "matrix evidence is not UTF-8".into())
             },
         )?;
-        report::Report::new("native", paths).write()
+        Ok(paths)
     }
 
     fn run(&self, step: alternating::Step) -> Run {
@@ -244,7 +284,7 @@ impl Matrix {
     }
 }
 
-fn elf_build_id(path: &std::path::Path) -> Result<String, String> {
+pub(super) fn elf_build_id(path: &std::path::Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("read retained C ELF: {error}"))?;
     elf_build_id_bytes(&bytes)
 }

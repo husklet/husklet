@@ -9,8 +9,10 @@ use std::time::Duration;
 
 mod adapter;
 mod alternating;
+mod gate;
 mod matrix;
 pub(crate) mod report;
+mod workload;
 
 use matrix::Matrix;
 
@@ -122,6 +124,10 @@ pub(crate) enum Command {
     Run(Run),
     /// Run the same guest through native, retained-C, and Rust engines.
     Matrix(Matrix),
+    /// Judge one named workload against the committed Rust baseline.
+    Gate(gate::Gate),
+    /// Report the named workloads and the surfaces they do and do not cover.
+    Workloads,
     /// Report provider reachability.
     List(List),
     /// Compare benchmark CSV reports.
@@ -174,6 +180,11 @@ impl Application {
         match command {
             Command::Run(run) => run.validate()?.execute(&self.process),
             Command::Matrix(matrix) => matrix.validate()?.execute(&self.process),
+            Command::Gate(gate) => gate.execute(&self.process),
+            Command::Workloads => {
+                workload::report();
+                Ok(())
+            }
             Command::Report(report) => report.write(),
             Command::List(options) => self.list(options),
         }

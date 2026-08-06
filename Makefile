@@ -1,5 +1,5 @@
 # Husklet workspace product.
-.PHONY: all check design-lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean
+.PHONY: all check design-lint lint-cases clippy fmt fmt-check test test-ci test-compiles containers engine app dmg install uninstall clean bench-guest bench-gate bench-gate-update bench-workloads
 
 TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 VERSION ?= $(or $(TAG),0.0.0-dev)
@@ -43,6 +43,34 @@ test-compiles:
 
 engine:
 	cargo build --release -p engine --bins --locked
+
+# Authoritative Rust-vs-retained-C verdict. The harness selects the retained engine and its
+# exec wrapper from BENCH_C_BUILD, pins one CPU, and refuses a verdict it cannot trust.
+BENCH_WORKLOAD ?= compute
+BENCH_ARCH ?= arm64
+BENCH_C_BUILD ?= $(CURDIR)/../engine/build/unit-audit
+BENCH_GUEST ?= $(CURDIR)/target/testing/bench/combined/$(BENCH_ARCH)/combined-bench
+BENCH_REPEATS ?= 7
+BENCH_DIVISOR ?= 1
+BENCH_GATE = target/release/testing benchmark gate \
+	  --workload $(BENCH_WORKLOAD) --arch $(BENCH_ARCH) --binary $(BENCH_GUEST) \
+	  --c-build $(BENCH_C_BUILD) --rust-engine $(CURDIR)/target/release/hl-engine \
+	  --repeats $(BENCH_REPEATS) --divisor $(BENCH_DIVISOR)
+
+bench-guest:
+	@mkdir -p $(dir $(BENCH_GUEST))
+	cc -O2 -static -o $(BENCH_GUEST) tests/bench/combined/main.c
+
+bench-gate: bench-guest
+	cargo build --release -p engine -p testing --bins --locked
+	$(BENCH_GATE)
+
+bench-gate-update: bench-guest
+	cargo build --release -p engine -p testing --bins --locked
+	$(BENCH_GATE) --update
+
+bench-workloads:
+	cargo run -q --release -p testing --bin testing -- benchmark workloads
 
 app:
 	@chmod +x src/apps/husklet/package/bundle.sh src/apps/husklet/package/make-dmg.sh
