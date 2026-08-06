@@ -96,6 +96,13 @@ too_many_lines = "allow"
 
 # Register and operand names differ by one character by nature (`rax`/`rbx`, `src`/`dst`).
 similar_names = "allow"
+
+# Merging arms in an ISA decode table destroys the per-opcode documentation value.
+match_same_arms = "allow"
+
+# `Result<T, ()>` is a pervasive existing design decision; changing it is an error-type redesign.
+result_unit_err = "allow"
+
 [profile.release]
 opt-level = 2
 panic = "abort"
