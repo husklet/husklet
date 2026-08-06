@@ -19,7 +19,6 @@ const SKIPPED: &[(&str, &str)] =
 /// a program that runs and fails, never one that fails to build.
 const KNOWN_FAILING: &[(&str, &str)] = &[
     ("a64_cycles", "cycle accounting predates this harness"),
-    ("aarch64_addressing", "addressing coverage predates this harness"),
     ("aarch64_trace", "trace path predates this harness"),
     (
         "run",
