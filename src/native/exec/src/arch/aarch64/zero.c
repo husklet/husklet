@@ -23,7 +23,7 @@ int hl_a64_zero_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc,
     hl_a64_emit32(assembler, 0x927AE610u); /* and x16,x16,#-64 */
     hl_a64_guard_begin_mode(assembler, 64, HL_A64_PERMISSION_WRITE,
                             HL_A64_GUARD_LEGACY, guard);
-    hl_a64_guard_write_begin(assembler, 64, pc);
+    hl_a64_guard_write_begin(assembler, 64, pc, guard);
     for (int offset = 0; offset < 64; offset += 16) {
         if (sites != NULL) {
             hl_a64_memory_site *site = &sites->entries[sites->count++];

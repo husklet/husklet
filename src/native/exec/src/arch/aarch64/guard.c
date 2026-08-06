@@ -77,12 +77,13 @@ static void condition(hl_a64_assembler *assembler, uint32_t *instruction,
 }
 
 static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
+static void link(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target);
 
 /* Archive the live exact interval, reusing an existing same-owner record when
  * the ranges overlap or touch. x16 carries the current guest address and is
  * retained in fault_address while x16/x17/x18/x9 execute the bounded reverse
  * scan. The caller has already saved guest x9 and NZCV. */
-static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc) {
+static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
     uint32_t *none, *empty, *different[2], *before, *after, *keep_first, *keep_last,
         *merged, *overflow, *success;
     hl_a64_ldr(assembler, 17, CPU, OFFSET_DIRTY_FIRST);
@@ -177,6 +178,7 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc) {
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
     hl_a64_stub_exit(assembler, HL_NATIVE_EXIT_EPOCH, pc);
     uint8_t *resume = assembler->cursor;
+    hl_a64_ret(assembler);
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, none, resume, 0u);
     condition(assembler, empty, append, 0u);
@@ -192,7 +194,25 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc) {
     branch(assembler, success, resume);
 }
 
-void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc) {
+/* Both archive sites of one guarded store share its pc, so the body is emitted
+ * once and reached by bl; x30 is stolen and dead at every store guard. */
+static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc, uint8_t **archive) {
+    if (*archive == NULL) {
+        uint32_t *over = (uint32_t *)assembler->cursor;
+        hl_a64_emit32(assembler, 0);
+        *archive = assembler->cursor;
+        archive_dirty_body(assembler, pc);
+        if (!hl_a64_assembler_ok(assembler)) return;
+        branch(assembler, over, assembler->cursor);
+    }
+    uint32_t *call = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    if (!hl_a64_assembler_ok(assembler)) return;
+    link(assembler, call, *archive);
+}
+
+void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
+                              hl_a64_guard *guard) {
     uint32_t *empty, *not_contiguous, *contiguous, *different_view[2], *above, *below, *safe;
     hl_a64_str(assembler, 9, CPU, 9 * 8);
     hl_a64_emit32(assembler, 0xD53B4209u); /* mrs x9,nzcv */
@@ -242,7 +262,7 @@ void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint6
     condition(assembler, different_view[1], disjoint, 1u);
     condition(assembler, above, disjoint, 8u);
     condition(assembler, below, disjoint, 3u);
-    archive_dirty(assembler, pc);
+    archive_dirty(assembler, pc, &guard->archive);
     uint8_t *safe_target = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, empty, safe_target, 0u);
@@ -388,6 +408,12 @@ static void branch(hl_a64_assembler *assembler, uint32_t *instruction, const uin
     *instruction = 0x14000000u | ((uint32_t)words & 0x03ffffffu);
 }
 
+static void link(hl_a64_assembler *assembler, uint32_t *instruction, const uint8_t *target) {
+    int64_t words;
+    if (!patch_offset(assembler, instruction, target, 26u, &words)) return;
+    *instruction = 0x94000000u | ((uint32_t)words & 0x03ffffffu);
+}
+
 static void cbnz(hl_a64_assembler *assembler, uint32_t *instruction,
                  const uint8_t *target, unsigned reg) {
     int64_t words;
@@ -484,7 +510,7 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
  * correct projection identity. The slow callback remains authoritative for a
  * view absent from this bounded, generation-qualified cache. */
 static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
-                        const uint8_t *resume) {
+                        const uint8_t *resume, uint8_t **archive) {
     uint32_t *inactive[4];
     uint32_t *next[4][4];
     uint32_t *selected[4];
@@ -540,7 +566,7 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
      * read-view slot in cold fault metadata; every actual fault path replaces
      * this field before exposing it to the dispatcher. */
     hl_a64_str(assembler, 9, CPU, OFFSET_FAULT_SIZE);
-    archive_dirty(assembler, pc);
+    archive_dirty(assembler, pc, archive);
     hl_a64_ldr(assembler, 9, CPU, OFFSET_FAULT_SIZE);
 
     hl_a64_addi(assembler, 18, CPU, OFFSET_READ_VIEWS);
@@ -715,8 +741,10 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     condition(assembler, guard->above, miss, 8);
     test(assembler, guard->permission, miss,
          guard->required == HL_A64_PERMISSION_READ ? 0u : 1u, 17u);
-    if (guard->required == HL_A64_PERMISSION_WRITE)
-        write_cache(assembler, guard->bytes, guard->pc, guard->resume);
+    if (guard->required == HL_A64_PERMISSION_WRITE) {
+        uint8_t *archive = guard->archive;
+        write_cache(assembler, guard->bytes, guard->pc, guard->resume, &archive);
+    }
     if (!hl_a64_assembler_ok(assembler)) return;
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);

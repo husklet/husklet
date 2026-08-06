@@ -72,7 +72,7 @@ int hl_a64_pair_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc, hl
     native = word & ~((UINT32_C(0x7f) << 15) | (3u << 23) | (31u << 10) | (31u << 5) | 31u);
     native |= (2u << 23) | (16u << 5) |
               first_native | (second_native << 10);
-    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc);
+    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc, guard);
     if (!memory.read) {
         if (first_stolen) hl_a64_ldr(assembler, 17, CPU, memory.target * 8);
         if (second_stolen) hl_a64_ldr(assembler, (int)second_native, CPU, memory.target2 * 8);

@@ -46,7 +46,7 @@ int hl_a64_ordered_body(hl_a64_assembler *assembler, uint32_t word,
     hl_a64_guard_begin_mode(assembler, bytes,
                             load ? HL_A64_PERMISSION_READ : HL_A64_PERMISSION_WRITE,
                             HL_A64_GUARD_LEGACY, guard);
-    if (!load) hl_a64_guard_write_begin(assembler, bytes, pc);
+    if (!load) hl_a64_guard_write_begin(assembler, bytes, pc, guard);
     if (!load && target_stolen)
         hl_a64_ldr(assembler, 17, CPU, (int)target * 8);
     if (sites != NULL) {

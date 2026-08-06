@@ -121,7 +121,7 @@ int hl_a64_single_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc, 
         native = literal_native(word, target);
     else
         native = (word & 0xFFC00000u) | 0x39000000u | (16u << 5) | target;
-    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc);
+    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc, guard);
     if (!memory.read && target_stolen) hl_a64_ldr(assembler, 17, CPU, memory.target * 8);
     if (sites != NULL) {
         sites->count = 1;
@@ -186,7 +186,7 @@ int hl_a64_single_direct_body(hl_a64_assembler *assembler, uint32_t word, uint64
                                   guard);
     }
     unsigned target = !memory.vector && memory.target != 31 && stolen(memory.target) ? 17u : memory.target;
-    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc);
+    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc, guard);
     if (!memory.read && target == 17u) hl_a64_ldr(assembler, 17, CPU, memory.target * 8);
     sites->count = 1;
     sites->entries[0] = (hl_a64_memory_site){

@@ -107,7 +107,7 @@ int hl_a64_structure_body(hl_a64_assembler *assembler, uint32_t word, uint64_t p
     hl_a64_guard_begin(assembler, memory.bytes,
                        memory.read ? HL_A64_PERMISSION_READ : HL_A64_PERMISSION_WRITE, guard);
     native = (word & ~(1u << 23) & ~(0x1fu << 16) & ~(0x1fu << 5)) | (16u << 5);
-    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc);
+    if (!memory.read) hl_a64_guard_write_begin(assembler, memory.bytes, pc, guard);
     if (sites != NULL) {
         sites->count = 1;
         sites->entries[0] = (hl_a64_memory_site){
