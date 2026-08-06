@@ -131,6 +131,7 @@ impl View {
         Ok(Self(input))
     }
 
+    #[must_use]
     pub fn bytes(&self) -> Vec<u8> {
         let value = &self.0;
         let mut output = format!("{} (", value.process).into_bytes();

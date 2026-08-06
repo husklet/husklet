@@ -7,6 +7,7 @@ const PRIME: u64 = 1_099_511_628_211;
 pub struct ArtifactDigest(u64);
 
 impl ArtifactDigest {
+    #[must_use]
     pub const fn new(seed: u64) -> Self {
         Self(seed)
     }
@@ -22,10 +23,12 @@ impl ArtifactDigest {
         }
     }
 
+    #[must_use]
     pub const fn value(self) -> u64 {
         self.0
     }
 
+    #[must_use]
     pub fn bytes(seed: u64, bytes: &[u8]) -> u64 {
         let mut digest = Self::new(seed);
         digest.update(bytes);

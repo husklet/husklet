@@ -100,11 +100,11 @@ pub enum ProjectionError {
 impl AuthorityWorker {
     pub fn inherit(descriptor: i32, health: i32) -> Result<Self, EngineError> {
         let mut stream =
-            crate::ffi::linux::InheritedStream::adopt(descriptor).map_err(|_| EngineError::AuthorityFailed)?;
+            crate::ffi::linux::InheritedStream::adopt(descriptor).map_err(|()| EngineError::AuthorityFailed)?;
         let secret = Secret::receive(&mut stream).map_err(|_| EngineError::AuthorityFailed)?;
         let session =
             connect(&mut stream, secret, Limits::new(4096, 8).unwrap()).map_err(|_| EngineError::AuthorityFailed)?;
-        let health = crate::ffi::linux::InheritedStream::adopt(health).map_err(|_| EngineError::AuthorityFailed)?;
+        let health = crate::ffi::linux::InheritedStream::adopt(health).map_err(|()| EngineError::AuthorityFailed)?;
         Ok(Self {
             stream,
             session,
@@ -195,7 +195,7 @@ impl AuthorityWorker {
 #[cfg(unix)]
 impl AuthorityHealth {
     pub fn monitor(&self, done: &AtomicBool, failure: impl FnOnce()) -> Result<(), EngineError> {
-        crate::ffi::linux::InheritedStream::wait_closed(&self.0).map_err(|_| EngineError::AuthorityFailed)?;
+        crate::ffi::linux::InheritedStream::wait_closed(&self.0).map_err(|()| EngineError::AuthorityFailed)?;
         if done.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -460,7 +460,7 @@ impl<S: ProcessSyscalls + 'static> AuthorityAccess for ProcessAuthority<S> {
         let pending = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pending
             .remove(&channel.descriptor().raw());
         if let Some((_, _, _, process)) = pending {

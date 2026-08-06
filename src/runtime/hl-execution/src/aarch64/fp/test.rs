@@ -269,7 +269,7 @@ fn simd_sign_operations_preserve_payloads_and_clear_inactive_half() {
 #[test]
 fn simd_round_integral_decodes_modes_and_accumulates_exceptions() {
     for word in [0x4e21_8bff, 0x6e61_9bff] {
-        assert!(matches!(Aarch64Decoder::decode(word), Ok(_)), "word={word:#010x}");
+        assert!(Aarch64Decoder::decode(word).is_ok(), "word={word:#010x}");
     }
     let mut cpu = Aarch64CpuState {
         pc: 0x3000,

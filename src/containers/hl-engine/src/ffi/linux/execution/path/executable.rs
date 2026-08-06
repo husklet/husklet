@@ -279,7 +279,7 @@ struct OpenedImage {
 
 impl ResolvedPathLease for OpenedImage {
     fn metadata(&self) -> Result<FileMetadata, RuntimePathError> {
-        metadata::HostMetadata::file(&self.file.lock().unwrap_or_else(|error| error.into_inner()))
+        metadata::HostMetadata::file(&self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
     }
 
     fn read_link(&self) -> Result<Vec<u8>, RuntimePathError> {
@@ -291,7 +291,7 @@ impl ResolvedPathLease for OpenedImage {
     }
 
     fn read_image(&self, maximum: usize) -> Result<Vec<u8>, RuntimePathError> {
-        let file = self.file.lock().unwrap_or_else(|error| error.into_inner());
+        let file = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let metadata = file.metadata().map_err(HostError::map)?;
         if metadata.len() > maximum as u64 {
             return Err(RuntimePathError::TooLarge);

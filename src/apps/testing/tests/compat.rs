@@ -20,7 +20,7 @@ fn bootstrap_matrix() {
     let root = corpus();
     let worker = env!("CARGO_BIN_EXE_hl-compat-worker");
     for case in cases(&root) {
-        run(&worker, &root, &case);
+        run(worker, &root, &case);
     }
 }
 
@@ -97,7 +97,7 @@ fn exit_stress() {
         };
         let guest = root.join("prebuilt").join(isa).join("exit");
         for _ in 0..4 {
-            run_guest(worker, guest.clone(), &case, None)
+            run_guest(worker, guest.clone(), &case, None);
         }
     }
 }
@@ -638,7 +638,7 @@ fn run(worker: &str, root: &Path, case: &Case) {
         root.join("prebuilt").join(&case.isa).join(&case.name),
         case,
         None,
-    )
+    );
 }
 
 fn run_guest(worker: &str, guest: PathBuf, case: &Case, rootfs: Option<&str>) {

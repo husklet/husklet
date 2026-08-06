@@ -2,6 +2,7 @@ use crate::{Class, Environment, ExceptionFlags, Result, RoundingMode, Value, bit
 
 impl Environment {
     /// Computes `left * right + addend` with one final rounding.
+    #[must_use]
     pub fn fused_multiply_add(self, left: Value, right: Value, addend: Value) -> Result<Value> {
         assert_eq!(left.format(), right.format());
         assert_eq!(left.format(), addend.format());

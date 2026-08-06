@@ -630,7 +630,7 @@ fn checks_role_edges() {
     .unwrap();
     fs::write(
         directory.join("src/model/value.rs"),
-        r#"
+        r"
 use crate::{model::Value, service::Sessions};
 use crate::modeling::Unrelated;
 
@@ -639,7 +639,7 @@ fn local() {
     let service = 1;
     let _ = service;
 }
-"#,
+",
     )
     .unwrap();
 

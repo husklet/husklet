@@ -161,6 +161,7 @@ pub struct Layout {
 
 impl Layout {
     /// A layout with a single full-area pane, which is focused.
+    #[must_use]
     pub fn new(root: PaneId) -> Layout {
         Layout {
             root: Node::Leaf(root),
@@ -197,6 +198,7 @@ impl Layout {
     }
 
     /// All pane ids, left-to-right / top-to-bottom order.
+    #[must_use]
     pub fn panes(&self) -> Vec<PaneId> {
         let mut v = Vec::new();
         self.root.collect(&mut v);
@@ -204,12 +206,14 @@ impl Layout {
     }
 
     /// Compute each pane's rectangle within `area` (a gap of `gap` px is left between siblings).
+    #[must_use]
     pub fn rects(&self, area: Rect, gap: f32) -> Vec<(PaneId, Rect)> {
         let mut v = Vec::new();
         self.root.rects(area, gap, &mut v);
         v
     }
 
+    #[must_use]
     pub fn focused(&self) -> PaneId {
         self.focused
     }
@@ -235,6 +239,7 @@ impl Layout {
     /// `dir` picks the axis (`Vertical` → left/right, `Horizontal` → up/down) and `toward_end` picks
     /// the sign (`true` → right/down, `false` → left/up). Picks the geometrically nearest pane whose
     /// center lies beyond the focused pane's center in that screen direction.
+    #[must_use]
     pub fn neighbor(&self, dir: Dir, toward_end: bool, area: Rect) -> Option<PaneId> {
         let rects = self.rects(area, 0.0);
         let fr = rects.iter().find(|(id, _)| *id == self.focused)?.1;

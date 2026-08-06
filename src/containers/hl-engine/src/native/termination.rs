@@ -77,7 +77,7 @@ mod unix {
             let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
             action.sa_sigaction = handler as *const () as usize;
             // SAFETY: mask is uniquely writable and retained in action.
-            if unsafe { libc::sigemptyset(&mut action.sa_mask) } != 0 {
+            if unsafe { libc::sigemptyset(&raw mut action.sa_mask) } != 0 {
                 TerminationSignals::restore(&installed);
                 return Err(HostError::Failed);
             }
@@ -85,7 +85,7 @@ mod unix {
             // SAFETY: previous is uniquely writable and action remains live;
             // sigaction copies both values and retains no Rust pointer.
             let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
-            if unsafe { libc::sigaction(signal, &action, &mut previous) } != 0 {
+            if unsafe { libc::sigaction(signal, &raw const action, &raw mut previous) } != 0 {
                 TerminationSignals::restore(&installed);
                 return Err(HostError::Failed);
             }

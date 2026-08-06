@@ -32,7 +32,7 @@ impl ControlTransaction {
                 descriptor,
                 SOL_SOCKET,
                 SO_PASSCRED,
-                (&enabled as *const i32).cast(),
+                (&raw const enabled).cast(),
                 mem::size_of::<i32>() as u32,
             )
         };
@@ -53,7 +53,7 @@ pub(crate) fn send(descriptor: i32, bytes: &[u8], descriptors: &[i32]) -> Result
         return Err(HostError::Invalid);
     }
     let mut control = [0_usize; CONTROL_SPACE / ALIGN];
-    let control_bytes = descriptors.len() * mem::size_of::<i32>();
+    let control_bytes = std::mem::size_of_val(descriptors);
     let used = ControlTransaction::align(HEADER) + ControlTransaction::align(control_bytes);
     let header = control.as_mut_ptr().cast::<ControlHeader>();
     // SAFETY: control is usize-aligned and large enough for header and rights.
@@ -78,14 +78,14 @@ pub(crate) fn send(descriptor: i32, bytes: &[u8], descriptors: &[i32]) -> Result
     let message = MessageHeader {
         name: std::ptr::null_mut(),
         name_length: 0,
-        iov: &mut iov,
+        iov: &raw mut iov,
         iov_length: 1,
         control: control.as_mut_ptr().cast(),
         control_length: used,
         flags: 0,
     };
     // SAFETY: message and its buffers remain live for the synchronous call.
-    let result = unsafe { sendmsg(descriptor, &message, 0) };
+    let result = unsafe { sendmsg(descriptor, &raw const message, 0) };
     result.try_into().map_err(|_| ErrnoMapper::current())
 }
 
@@ -105,14 +105,14 @@ pub(crate) fn receive(
     let mut message = MessageHeader {
         name: std::ptr::null_mut(),
         name_length: 0,
-        iov: &mut iov,
+        iov: &raw mut iov,
         iov_length: 1,
         control: control.as_mut_ptr().cast(),
         control_length: control.len() * ALIGN,
         flags: 0,
     };
     // SAFETY: message and both output buffers are uniquely writable and bounded.
-    let result = unsafe { recvmsg(descriptor, &mut message, MSG_CMSG_CLOEXEC) };
+    let result = unsafe { recvmsg(descriptor, &raw mut message, MSG_CMSG_CLOEXEC) };
     let count: usize = result.try_into().map_err(|_| ErrnoMapper::current())?;
     let parsed = ControlTransaction::parse_control(&control, message.control_length, capacity);
     if message.flags & MSG_CTRUNC != 0 {
@@ -152,7 +152,7 @@ impl ControlTransaction {
             // SAFETY: validated header bounds contain the complete payload.
             let data = unsafe { bytes.add(offset + ControlTransaction::align(HEADER)) };
             match (header.level, header.kind) {
-                (SOL_SOCKET, SCM_RIGHTS) if data_length % mem::size_of::<i32>() == 0 => {
+                (SOL_SOCKET, SCM_RIGHTS) if data_length.is_multiple_of(mem::size_of::<i32>()) => {
                     let count = data_length / mem::size_of::<i32>();
                     // SAFETY: SCM_RIGHTS payload contains aligned native integers.
                     let found = unsafe { std::slice::from_raw_parts(data.cast::<i32>(), count) };

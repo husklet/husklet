@@ -28,7 +28,7 @@ impl StorageAdapter {
         let token = FileToken(self.host.allocate("directory", ResourceKind::Directory)?);
         self.directories
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(token, entries);
         Ok(token)
     }
@@ -37,7 +37,7 @@ impl StorageAdapter {
         let entries = self
             .directories
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
             .cloned()
             .ok_or(FakeHostError::InvalidResource)?;
@@ -50,13 +50,13 @@ impl StorageAdapter {
         let token = FileToken(self.host.allocate("file", ResourceKind::File)?);
         self.files
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(token, bytes);
         Ok(token)
     }
 
     pub fn read(&self, token: FileToken, offset: usize, output: &mut [u8]) -> Result<usize, FakeHostError> {
-        let files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = files.get(&token).ok_or(FakeHostError::InvalidResource)?;
         let available = file.len().saturating_sub(offset);
         let count = available.min(output.len()).min(self.maximum_transfer);
@@ -68,7 +68,7 @@ impl StorageAdapter {
     pub fn write(&self, token: FileToken, offset: usize, input: &[u8]) -> Result<usize, FakeHostError> {
         let count = input.len().min(self.maximum_transfer);
         self.host.record("file", "write", token.0, input.len(), count)?;
-        let mut files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = files.get_mut(&token).ok_or(FakeHostError::InvalidResource)?;
         file.resize(file.len().max(offset + count), 0);
         file[offset..offset + count].copy_from_slice(&input[..count]);
@@ -78,7 +78,7 @@ impl StorageAdapter {
     pub fn close(&self, token: FileToken) -> Result<(), FakeHostError> {
         self.files
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token)
             .ok_or(FakeHostError::InvalidResource)?;
         self.host.release("file", ResourceKind::File, token.0)
@@ -87,7 +87,7 @@ impl StorageAdapter {
     pub fn close_directory(&self, token: FileToken) -> Result<(), FakeHostError> {
         self.directories
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token)
             .ok_or(FakeHostError::InvalidResource)?;
         self.host.release("directory", ResourceKind::Directory, token.0)

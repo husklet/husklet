@@ -174,7 +174,7 @@ impl TerminalChannel {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, TerminalState> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -206,7 +206,7 @@ impl hl_engine::composition::TerminalPort for TerminalChannel {
                     state = self
                         .changed
                         .wait_timeout(state, Self::CANCELLATION_POLL)
-                        .unwrap_or_else(|error| error.into_inner())
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .0;
                 }
             }
@@ -249,7 +249,7 @@ impl hl_engine::composition::TerminalPort for TerminalChannel {
                     drop(
                         self.changed
                             .wait_timeout(state, Self::CANCELLATION_POLL)
-                            .unwrap_or_else(|error| error.into_inner()),
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
                     );
                 }
             }

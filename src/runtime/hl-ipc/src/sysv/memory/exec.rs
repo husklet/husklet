@@ -6,7 +6,7 @@ use crate::{SharedMemoryError, SharedMemoryNamespace};
 
 use super::NamespaceState;
 
-/// Mutation-free plan for detaching every SysV mapping owned by one process.
+/// Mutation-free plan for detaching every `SysV` mapping owned by one process.
 pub struct PreparedMemoryExec {
     namespace: Arc<SharedMemoryNamespace>,
     previous: NamespaceState,
@@ -29,7 +29,7 @@ impl PreparedMemoryExec {
     }
 
     pub fn commit(self) -> Result<CommittedMemoryExec, SharedMemoryError> {
-        let mut state = self.namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state != self.previous {
             return Err(SharedMemoryError::InvalidArgument);
         }
@@ -46,7 +46,7 @@ impl PreparedMemoryExec {
 
 impl CommittedMemoryExec {
     pub fn rollback(self) -> Result<(), SharedMemoryError> {
-        let mut state = self.namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state != self.published {
             return Err(SharedMemoryError::InvalidArgument);
         }
@@ -64,7 +64,7 @@ impl CommittedMemoryExec {
 
 impl SharedMemoryNamespace {
     pub fn prepare_exec(self: &Arc<Self>, process: u32, now: u64) -> Result<PreparedMemoryExec, SharedMemoryError> {
-        let previous = self.state.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let previous = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let mut published = previous.clone();
         let detached = published
             .attachments

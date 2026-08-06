@@ -55,6 +55,7 @@ impl Default for Cell {
 impl Cell {
     /// A blank cell that keeps the given pen's colors/attrs (used when erasing so the cleared region
     /// adopts the current background, matching xterm's "erase with current SGR background" behavior).
+    #[must_use]
     pub fn blank_with(fg: Color, bg: Color, attrs: Attrs) -> Cell {
         Cell {
             ch: ' ',
@@ -64,6 +65,7 @@ impl Cell {
         } // keep only reverse for bg fill
     }
     /// Is this cell visually empty (a space with default colors/attrs)?
+    #[must_use]
     pub fn is_blank(&self) -> bool {
         self.ch == ' ' && self.bg == Color::Default && self.attrs.is_empty()
     }
@@ -84,6 +86,7 @@ pub struct Grid {
 
 impl Grid {
     /// A fresh blank grid of the given size (clamped to at least 1×1).
+    #[must_use]
     pub fn new(cols: usize, rows: usize) -> Grid {
         let cols = cols.max(1);
         let rows = rows.max(1);
@@ -97,9 +100,11 @@ impl Grid {
         }
     }
 
+    #[must_use]
     pub fn cols(&self) -> usize {
         self.cols
     }
+    #[must_use]
     pub fn rows(&self) -> usize {
         self.rows
     }
@@ -110,6 +115,7 @@ impl Grid {
     }
 
     /// The cell at `(row, col)`; `None` if out of bounds.
+    #[must_use]
     pub fn cell(&self, row: usize, col: usize) -> Option<&Cell> {
         if row < self.rows && col < self.cols {
             Some(&self.cells[self.idx(row, col)])
@@ -129,6 +135,7 @@ impl Grid {
     }
 
     /// The visible text of a row, trailing blanks trimmed — a convenience for tests/assertions.
+    #[must_use]
     pub fn row_text(&self, row: usize) -> String {
         if row >= self.rows {
             return String::new();
@@ -159,7 +166,7 @@ impl Grid {
 
     /// Blank every cell (used by ED 2 and reset).
     pub fn clear_all(&mut self, blank: Cell) {
-        for c in self.cells.iter_mut() {
+        for c in &mut self.cells {
             *c = blank;
         }
     }

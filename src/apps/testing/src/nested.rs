@@ -262,11 +262,11 @@ fn prepare_artifact(root: &Path, artifact: &Artifact) -> Result<(), Error> {
     let receipts = cache.receipts(crate::record::ReceiptNamespace::Nested);
     let record = receipts.artifact(key, &build.binary)?;
     let _lock = receipts.lock(key)?;
-    if !record.verify()? {
+    if record.verify()? {
+        println!("REUSED {} key={key}", artifact.path.display());
+    } else {
         build_artifact(root, build, &identity.cargo, &record)?;
         println!("BUILT {} key={key}", artifact.path.display());
-    } else {
-        println!("REUSED {} key={key}", artifact.path.display());
     }
     materialize(record.artifact(), &root.join(&artifact.path))?;
     Ok(())
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn typed_options_are_attached_to_the_layer_they_configure() {
         let chain: Chain = serde_yaml::from_str(
-            r#"
+            r"
 id: arm-amd
 layers:
   - artifact: { path: outer }
@@ -642,7 +642,7 @@ layers:
     guest_isa: amd64
 guest: { path: hello }
 expect: { exit: 42, stdout: hello.txt }
-"#,
+",
         )
         .unwrap();
         let arguments = command(Path::new("/tree"), &chain);

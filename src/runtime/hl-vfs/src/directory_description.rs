@@ -169,7 +169,7 @@ impl<H: VfsDirectoryHost> VfsDirectoryDescription<H> {
     }
 
     fn lock_state(&self) -> std::sync::MutexGuard<'_, DirectoryState> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn ensure_live(&self) -> Result<(), ObjectError> {

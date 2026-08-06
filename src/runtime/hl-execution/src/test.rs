@@ -184,7 +184,7 @@ fn x86_arithmetic_flags() {
         for right in 0_u64..=255 {
             let add = Arithmetic::add(IntegerWidth::Byte, left, right, false);
             assert_eq!(add.result, (left + right) & 255);
-            assert_eq!(add.flags.values() & 1, if left + right > 255 { 1 } else { 0 });
+            assert_eq!(add.flags.values() & 1, u16::from(left + right > 255));
             let sub = Arithmetic::sub(IntegerWidth::Byte, left, right, false);
             assert_eq!(sub.result, left.wrapping_sub(right) & 255);
             assert_eq!(sub.flags.values() & 1 != 0, left < right);

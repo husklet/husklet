@@ -208,13 +208,13 @@ fn clamp_keeps_most_recent() {
 fn cwd_uri_decoding() {
     assert_eq!(
         WorkingDirectory::from_osc7("file://host/root/my%20dir")
-            .map(|path| path.into_string())
+            .map(super::WorkingDirectory::into_string)
             .as_deref(),
         Some("/root/my dir")
     );
     assert_eq!(
         WorkingDirectory::from_osc7("file:///tmp/x")
-            .map(|path| path.into_string())
+            .map(super::WorkingDirectory::into_string)
             .as_deref(),
         Some("/tmp/x")
     );

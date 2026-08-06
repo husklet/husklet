@@ -62,7 +62,7 @@ impl FakeHost {
     }
 
     fn operation(&self, name: &str) -> Result<u64, MemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let call = state.calls;
         state.calls += 1;
         state.transcript.push(name.into());
@@ -89,7 +89,7 @@ impl MappingHost for FakeHost {
         self.operation("remap")
     }
     fn commit(&self, _: &[u64]) -> Result<(), MemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let call = state.calls;
         state.calls += 1;
         state.transcript.push("commit".into());
@@ -100,7 +100,7 @@ impl MappingHost for FakeHost {
         Ok(())
     }
     fn rollback(&self, reservation: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.transcript.push(format!("rollback:{reservation}"));
         state.live.retain(|entry| *entry != reservation);
     }
@@ -181,7 +181,7 @@ impl MemoryAccessHost for FakeHost {
         .map(Some)
     }
     fn read(&self, range: AddressRange, output: &mut [u8], _: Protection) -> Result<(), MemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for (offset, byte) in output.iter_mut().enumerate() {
             *byte = state
                 .bytes
@@ -197,7 +197,7 @@ impl MemoryAccessHost for FakeHost {
         Ok(reservation)
     }
     fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.transcript.push(format!("commit-write:{reservation}"));
         state.live.retain(|entry| *entry != reservation);
         let range = state
@@ -213,7 +213,7 @@ impl MemoryAccessHost for FakeHost {
         Ok(())
     }
     fn commit_external_write(&self, reservation: u64, length: u64) -> Result<(), MemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.transcript.push(format!("commit-external:{reservation}:{length}"));
         state.live.retain(|entry| *entry != reservation);
         let range = state
@@ -590,7 +590,7 @@ fn projection_rollback_epoch() {
         identity: 33,
         shared: false,
     };
-    coordinator.map(executable.clone()).unwrap();
+    coordinator.map(executable).unwrap();
     executable.placement = Placement::Fixed(GuestAddress::new(0x4000));
     executable.backing = Backing::Anonymous {
         identity: 34,
@@ -1519,7 +1519,7 @@ fn every_host_failure() {
         assert_eq!(coordinator.apply(&batch()), Err(MemoryError::InvariantViolation));
         assert_eq!(coordinator.ledger().generation(), 0);
         assert!(coordinator.ledger().regions().is_empty());
-        let state = coordinator.host.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = coordinator.host.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(state.live.is_empty());
         let rollbacks: Vec<_> = state
             .transcript
@@ -1540,7 +1540,7 @@ fn successful_batch_has() {
     assert_eq!(coordinator.apply(&batch()), Ok(vec![GuestAddress::new(0x1000)]));
     assert_eq!(coordinator.ledger().generation(), 1);
     assert!(coordinator.ledger().regions().is_empty());
-    let state = coordinator.host.state.lock().unwrap_or_else(|e| e.into_inner());
+    let state = coordinator.host.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(state.transcript, ["map", "protect", "unmap", "commit"]);
     assert!(state.live.is_empty());
 }

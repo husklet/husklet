@@ -46,6 +46,7 @@ impl Timings {
         }
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> Vec<(&'static str, TimingStat)> {
         self.values.snapshot()
     }

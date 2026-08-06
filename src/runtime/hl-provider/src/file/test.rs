@@ -39,13 +39,13 @@ impl Server {
     fn finished(&self) -> bool {
         self.state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .closes
             >= 2
     }
 
     fn reply(&self, request: &[u8]) -> Vec<u8> {
-        let mut state = self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(error) = state.next_errno.take() {
             let mut reply = vec![0xff];
             reply.extend_from_slice(&error.to_le_bytes());
@@ -224,7 +224,7 @@ fn descriptor_dup_and() {
     let second = harness.open(FileAccess::Read);
     drop(second);
     harness.finish();
-    assert_eq!(state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).closes, 2);
+    assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closes, 2);
 }
 
 #[derive(Default)]
@@ -234,7 +234,7 @@ struct Observer {
 
 impl ReadinessObserver for Observer {
     fn readiness_changed(&self) {
-        *self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+        *self.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
     }
 }
 
@@ -248,7 +248,7 @@ fn readiness_subscription_status() {
     let ready = file.readiness(Readiness::from_bits(Readiness::READ | Readiness::WRITE));
     assert_eq!(ready.bits(), Readiness::READ | Readiness::WRITE);
     assert_eq!(
-        *observer.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        *observer.calls.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         1
     );
     file.set_status_flags(hl_descriptor::StatusFlags::from_bits(
@@ -278,7 +278,7 @@ fn linux_errors_map() {
     harness
         .state
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .next_errno = Some(11);
     let mut output = [0xa5; 4];
     assert_eq!(file.read(&mut output), Err(ObjectError::WouldBlock));

@@ -15,11 +15,13 @@ impl BlockIdentity {
     }
 
     /// Returns the cached block's guest-code byte count.
+    #[must_use]
     pub fn code_size(self) -> u64 {
         self.code_size
     }
 
     /// Returns the cache generation retaining the block.
+    #[must_use]
     pub fn generation(self) -> u64 {
         self.generation
     }
@@ -90,21 +92,25 @@ impl TranslationRequest {
     }
 
     /// Returns the first guest instruction address.
+    #[must_use]
     pub fn guest(self) -> u64 {
         self.guest
     }
 
     /// Returns the executable mapping epoch used for lookup.
+    #[must_use]
     pub fn mapping_epoch(self) -> u64 {
         self.mapping_epoch
     }
 
     /// Returns the half-open decoded source range.
+    #[must_use]
     pub fn source(self) -> (u64, u64) {
         (self.source.first, self.source.last)
     }
 
     /// Returns the maximum permitted emitted byte count.
+    #[must_use]
     pub fn maximum(self) -> u64 {
         self.maximum
     }
@@ -140,6 +146,7 @@ pub struct TranslationEmission {
 
 impl TranslationEmission {
     /// Describes emitted code and its decoded-source identity.
+    #[must_use]
     pub fn new(used: u64, body_offset: u64, provenance_count: u32, source_first: u64, source_last: u64) -> Self {
         Self {
             used,
@@ -153,16 +160,19 @@ impl TranslationEmission {
     }
 
     /// Returns the emitted byte count.
+    #[must_use]
     pub fn used(self) -> u64 {
         self.used
     }
 
     /// Returns the executable body offset within the emission.
+    #[must_use]
     pub fn body_offset(self) -> u64 {
         self.body_offset
     }
 
     /// Returns the number of instruction provenance records.
+    #[must_use]
     pub fn provenance_count(self) -> u32 {
         self.provenance_count
     }

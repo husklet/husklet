@@ -31,6 +31,7 @@ pub struct GuestFeaturePolicy {
 }
 
 impl GuestFeaturePolicy {
+    #[must_use]
     pub fn new(capabilities: HostCapabilities) -> Option<Self> {
         capabilities.integer.then_some(Self { capabilities })
     }

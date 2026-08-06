@@ -39,7 +39,7 @@ impl<H: Host> Coordinator<H> {
     }
 
     pub fn set_transition_observer(&self, observer: Arc<dyn TransitionObserver>) {
-        *self.observer.write().unwrap_or_else(|error| error.into_inner()) = observer;
+        *self.observer.write().unwrap_or_else(std::sync::PoisonError::into_inner) = observer;
     }
 
     /// Publishes one committed mapping transition. Every such transition
@@ -50,7 +50,7 @@ impl<H: Host> Coordinator<H> {
     }
 
     pub(crate) fn transition(&self) -> Transition {
-        let observer = Arc::clone(&self.observer.read().unwrap_or_else(|error| error.into_inner()));
+        let observer = Arc::clone(&self.observer.read().unwrap_or_else(std::sync::PoisonError::into_inner));
         observer.begin();
         Transition { observer }
     }

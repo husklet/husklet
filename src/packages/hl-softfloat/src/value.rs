@@ -8,6 +8,7 @@ pub enum Format {
 }
 
 impl Format {
+    #[must_use]
     pub const fn width(self) -> u8 {
         match self {
             Self::Binary16 => 16,
@@ -80,6 +81,7 @@ pub struct Value {
 }
 
 impl Value {
+    #[must_use]
     pub const fn from_bits(format: Format, bits: u64) -> Self {
         Self {
             format,
@@ -87,10 +89,12 @@ impl Value {
         }
     }
 
+    #[must_use]
     pub const fn format(self) -> Format {
         self.format
     }
 
+    #[must_use]
     pub const fn bits(self) -> u64 {
         self.bits
     }
@@ -116,10 +120,12 @@ impl ExceptionFlags {
     pub const INEXACT: Self = Self(1 << 4);
     pub const INPUT_DENORMAL: Self = Self(1 << 5);
 
+    #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
 
+    #[must_use]
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 != 0
     }

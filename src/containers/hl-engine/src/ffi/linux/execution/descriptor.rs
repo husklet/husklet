@@ -60,7 +60,7 @@ impl Set {
         for (number, object) in objects.into_iter().enumerate() {
             let number = number as i32;
             let reservation = table.reserve_exact(number)?;
-            let access = if number == 0 { 0 } else { 1 };
+            let access = u32::from(number != 0);
             table.commit(
                 reservation,
                 object,
@@ -270,7 +270,7 @@ impl OpenFileDescription for StandardIo {
         };
         input
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .read(output)
             .map_err(|error| Self::io_errno(&error))
     }
@@ -281,7 +281,7 @@ impl OpenFileDescription for StandardIo {
         };
         output
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write(input)
             .map_err(|error| Self::io_errno(&error))
     }

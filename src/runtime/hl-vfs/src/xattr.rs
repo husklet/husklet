@@ -25,7 +25,7 @@ impl XattrName {
     }
 }
 
-/// Linux XATTR_CREATE/XATTR_REPLACE selection.
+/// Linux `XATTR_CREATE/XATTR_REPLACE` selection.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum XattrFlags {
     #[default]
@@ -90,7 +90,7 @@ impl<H: XattrHost> Xattrs<H> {
 
     /// Returns the required value size and copies only when `output` fits.
     pub fn get(&self, name: &XattrName, output: Option<&mut [u8]>) -> Result<usize, XattrError> {
-        let values = self.values.read().unwrap_or_else(|error| error.into_inner());
+        let values = self.values.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let value = values.get(name).ok_or(XattrError::NoData)?;
         let Some(output) = output else {
             return Ok(value.len());
@@ -107,7 +107,7 @@ impl<H: XattrHost> Xattrs<H> {
 
     /// Returns or copies the NUL-separated guest-visible name list.
     pub fn list(&self, output: Option<&mut [u8]>) -> Result<usize, XattrError> {
-        let values = self.values.read().unwrap_or_else(|error| error.into_inner());
+        let values = self.values.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let required = values.keys().map(|name| name.as_bytes().len() + 1).sum::<usize>();
         if required > XATTR_LIST_MAXIMUM {
             return Err(XattrError::ListTooLarge);
@@ -135,11 +135,11 @@ impl<H: XattrHost> Xattrs<H> {
         if value.len() > XATTR_VALUE_MAXIMUM {
             return Err(XattrError::ValueTooLarge);
         }
-        let _serial = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let exists = self
             .values
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains_key(name);
         match (flags, exists) {
             (XattrFlags::Create, true) => return Err(XattrError::AlreadyExists),
@@ -150,11 +150,11 @@ impl<H: XattrHost> Xattrs<H> {
     }
 
     pub fn remove(&self, name: &XattrName) -> Result<(), XattrError> {
-        let _serial = self.mutation.lock().unwrap_or_else(|error| error.into_inner());
+        let _serial = self.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let exists = self
             .values
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains_key(name);
         if !exists {
             return Err(XattrError::NoData);
@@ -170,17 +170,14 @@ impl<H: XattrHost> Xattrs<H> {
         let mut transaction = XattrTransaction::begin(&self.host, self.file)?;
         transaction.stage(mutation.clone())?;
         transaction.commit()?;
-        let mut values = self.values.write().unwrap_or_else(|error| error.into_inner());
-        match replacement {
-            Some((name, value)) => {
-                values.insert(name, value);
-            }
-            None => {
-                let XattrMutation::Remove { name } = mutation else {
-                    return Err(XattrError::Host);
-                };
-                values.remove(name);
-            }
+        let mut values = self.values.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((name, value)) = replacement {
+            values.insert(name, value);
+        } else {
+            let XattrMutation::Remove { name } = mutation else {
+                return Err(XattrError::Host);
+            };
+            values.remove(name);
         }
         Ok(())
     }

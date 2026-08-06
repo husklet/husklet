@@ -1,4 +1,4 @@
-use super::*;
+use super::{Vt, Pen, Attrs, Color, State};
 
 impl Vt {
     pub(super) fn erase_display(&mut self, mode: u32) {

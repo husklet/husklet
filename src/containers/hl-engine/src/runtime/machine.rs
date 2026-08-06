@@ -143,11 +143,10 @@ impl<E, H> RustRuntimeFactory<E, H> {
             .filter(|count| *count != 0)
             .unwrap_or(host_cpus)
             .clamp(1, hl_task::CpuTopology::MAXIMUM);
-        if let Some(limit) = plan.options.get("HL_PIDS_MAX") {
-            if let Ok(limit) = limit.parse::<usize>() {
+        if let Some(limit) = plan.options.get("HL_PIDS_MAX")
+            && let Ok(limit) = limit.parse::<usize>() {
                 config.maximum_processes = limit;
             }
-        }
         Ok((
             config,
             hl_task::CpuTopology::new(online_cpus).map_err(|_| CompositionError::RuntimeConstruction)?,

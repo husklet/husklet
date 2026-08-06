@@ -89,7 +89,7 @@ impl Inotify {
                 token,
             });
         }
-        let mut state = object.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = object.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.slots = slots;
         state.queue = queue;
         state.queue_bytes = queue_bytes;

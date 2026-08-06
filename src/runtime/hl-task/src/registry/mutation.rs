@@ -139,11 +139,10 @@ impl TaskRegistry {
         thread: Option<crate::ThreadId>,
     ) -> Result<(), TaskError> {
         Self::process(state, process)?;
-        if let Some(thread) = thread {
-            if Self::thread(state, thread)?.process != process {
+        if let Some(thread) = thread
+            && Self::thread(state, thread)?.process != process {
                 return Err(TaskError::WrongProcess);
             }
-        }
         Ok(())
     }
 

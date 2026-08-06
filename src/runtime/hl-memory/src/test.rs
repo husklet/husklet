@@ -65,7 +65,7 @@ fn executable_alias_evidence_tracks_identity_protection_and_generation() {
         restored_ledger.executable_aliases(backing).generation,
         snapshot.generation
     );
-    assert_eq!(restored_ledger.executable_aliases(distinct).present, true);
+    assert!(restored_ledger.executable_aliases(distinct).present);
 
     ledger.unmap(range(0x4000, PAGE)).unwrap();
     assert!(!ledger.executable_aliases(distinct).present);

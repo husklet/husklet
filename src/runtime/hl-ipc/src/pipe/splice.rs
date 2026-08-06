@@ -24,7 +24,7 @@ impl PreparedRead {
         if endpoint.direction != EndpointDirection::Read {
             return Err(ObjectError::BadDescriptor);
         }
-        let state = endpoint.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = endpoint.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if nonblocking && state.bytes.is_empty() && state.writers != 0 {
             return Err(ObjectError::WouldBlock);
         }
@@ -56,7 +56,7 @@ impl PreparedRead {
         if !self.active {
             return Ok(());
         }
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.splice_reserved
             || state
                 .bytes
@@ -131,7 +131,7 @@ impl Drop for PreparedRead {
         if !self.active {
             return;
         }
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.splice_reserved = false;
         state.waiters -= 1;
         self.pipe.notify_sleepers(&state);

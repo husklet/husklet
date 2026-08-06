@@ -12,6 +12,7 @@ pub enum Width {
 }
 
 impl Width {
+    #[must_use]
     pub const fn bytes(self) -> u8 {
         match self {
             Self::Byte => 1,

@@ -20,11 +20,10 @@ impl<'host, H: VfsHost> PinStack<'host, H> {
     }
 
     pub(super) fn pop(&mut self) {
-        if self.pins.len() > 1 {
-            if let Some(pin) = self.pins.pop() {
+        if self.pins.len() > 1
+            && let Some(pin) = self.pins.pop() {
                 self.host.close(pin);
             }
-        }
     }
 
     pub(super) fn reset(&mut self) -> Result<(), ResolveError> {

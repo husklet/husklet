@@ -49,14 +49,14 @@ impl<V: Default + Clone> ShardMap<V> {
     #[inline]
     pub fn update<F: FnOnce(&mut V)>(&self, name: &'static str, f: F) {
         let shard = &self.shards[Self::shard_index(name)];
-        let mut map = shard.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = shard.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         f(map.entry(name).or_default());
     }
 
     /// Current value for `name` (default if absent).
     pub fn get(&self, name: &str) -> V {
         let shard = &self.shards[Self::shard_index(name)];
-        let map = shard.lock().unwrap_or_else(|e| e.into_inner());
+        let map = shard.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.get(name).cloned().unwrap_or_default()
     }
 
@@ -66,7 +66,7 @@ impl<V: Default + Clone> ShardMap<V> {
     pub fn snapshot(&self) -> Vec<(&'static str, V)> {
         let mut out = Vec::new();
         for shard in &self.shards {
-            let map = shard.lock().unwrap_or_else(|e| e.into_inner());
+            let map = shard.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             out.extend(map.iter().map(|(k, v)| (*k, v.clone())));
         }
         out.sort_by(|a, b| a.0.cmp(b.0));
@@ -76,7 +76,7 @@ impl<V: Default + Clone> ShardMap<V> {
     /// Clear every shard.
     pub fn clear(&self) {
         for shard in &self.shards {
-            shard.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            shard.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         }
     }
 }

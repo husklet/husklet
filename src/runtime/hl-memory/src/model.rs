@@ -10,6 +10,7 @@ impl Protection {
     pub const WRITE: Self = Self(2);
     pub const EXECUTE: Self = Self(4);
 
+    #[must_use]
     pub const fn from_bits(bits: u8) -> Option<Self> {
         if bits & !7 == 0 { Some(Self(bits)) } else { None }
     }
@@ -170,7 +171,7 @@ impl Region {
         self.backing_offset
             .checked_add(self.range.length())
             .ok_or(MemoryError::BackingOverflow)?;
-        if self.backing_offset % GuestPageSize::LINUX.bytes() != 0 {
+        if !self.backing_offset.is_multiple_of(GuestPageSize::LINUX.bytes()) {
             return Err(MemoryError::Unaligned);
         }
         if self

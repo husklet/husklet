@@ -192,12 +192,11 @@ async fn execute(
         image.release()?;
         return Err("benchmark image identity changed after resume admission".into());
     }
-    if let (Some(artifact), Some(identity)) = (&prepared.artifact, &prepared.artifact_identity) {
-        if file_identity(artifact)? != *identity {
+    if let (Some(artifact), Some(identity)) = (&prepared.artifact, &prepared.artifact_identity)
+        && file_identity(artifact)? != *identity {
             image.release()?;
             return Err("benchmark artifact identity changed after resume admission".into());
         }
-    }
     let image_us = elapsed_us(image_started);
     let outcome = execute_with_image(
         Arc::clone(&benchmark),

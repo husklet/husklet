@@ -67,6 +67,7 @@ pub struct EffectiveAddress {
 }
 
 impl EffectiveAddress {
+    #[must_use]
     pub fn resolve(&self, registers: &[u64; 16], next_instruction: u64, fs: u64, gs: u64) -> u64 {
         let mut value = if self.rip_relative {
             next_instruction

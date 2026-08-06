@@ -365,31 +365,6 @@ fn preflight_structure<T>(
     Ok((bytes, materialize()))
 }
 
-#[cfg(test)]
-mod structural_preflight_test {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-
-    #[test]
-    fn rejects_before_materialization() {
-        let materializations = AtomicUsize::new(0);
-        let codec_writes = AtomicUsize::new(0);
-        let maximum_generations = (DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM - 20) / 8;
-        for generations in [maximum_generations + 1, usize::MAX] {
-            assert_eq!(
-                preflight_structure(generations, 0, || {
-                    materializations.fetch_add(1, Ordering::SeqCst);
-                    codec_writes.fetch_add(1, Ordering::SeqCst);
-                }),
-                Err(DescriptorCheckpointError::Limit)
-            );
-        }
-        assert_eq!(materializations.load(Ordering::SeqCst), 0);
-        assert_eq!(codec_writes.load(Ordering::SeqCst), 0);
-    }
-}
-
 fn snapshot_object(
     objects: &dyn DescriptorObjectCheckpoint,
     identity: crate::DescriptionIdentity,
@@ -479,5 +454,30 @@ impl DescriptorTableImage {
             return Err(DescriptorCheckpointError::MissingDescription);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod structural_preflight_test {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn rejects_before_materialization() {
+        let materializations = AtomicUsize::new(0);
+        let codec_writes = AtomicUsize::new(0);
+        let maximum_generations = (DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM - 20) / 8;
+        for generations in [maximum_generations + 1, usize::MAX] {
+            assert_eq!(
+                preflight_structure(generations, 0, || {
+                    materializations.fetch_add(1, Ordering::SeqCst);
+                    codec_writes.fetch_add(1, Ordering::SeqCst);
+                }),
+                Err(DescriptorCheckpointError::Limit)
+            );
+        }
+        assert_eq!(materializations.load(Ordering::SeqCst), 0);
+        assert_eq!(codec_writes.load(Ordering::SeqCst), 0);
     }
 }

@@ -110,7 +110,7 @@ impl FileSource {
                 Self::SYS_OPENAT2,
                 root.as_raw_fd(),
                 path.as_ptr(),
-                &how as *const super::super::OpenHow,
+                &raw const how,
                 std::mem::size_of::<super::super::OpenHow>(),
             )
         };

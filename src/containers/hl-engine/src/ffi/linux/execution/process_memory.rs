@@ -60,7 +60,7 @@ impl ProcfsSpaces {
     }
 
     pub(super) fn publish(&self, process: hl_task::ProcessId, space: &Arc<AddressSpace>) {
-        self.0.lock().unwrap_or_else(|error| error.into_inner()).insert(
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(
             process,
             ProcfsSpace {
                 live: Arc::downgrade(space),
@@ -72,14 +72,14 @@ impl ProcfsSpaces {
     pub(super) fn capture_exit(self: &Arc<Self>, process: hl_task::ProcessId) -> Result<(), hl_runtime::ProcfsError> {
         let provider = ProcfsMemory::new(Arc::clone(self));
         let stat = hl_runtime::ProcfsStatPort::sample(&provider, process)?;
-        let mut spaces = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut spaces = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = spaces.get_mut(&process).ok_or(hl_runtime::ProcfsError::NotFound)?;
         entry.retired_stat = Some(stat);
         Ok(())
     }
 
     fn memory(&self, process: hl_task::ProcessId) -> Result<ProcessMemory, hl_runtime::ProcfsError> {
-        let spaces = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let spaces = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let space = spaces
             .get(&process)
             .and_then(|entry| entry.live.upgrade())
@@ -90,7 +90,7 @@ impl ProcfsSpaces {
     fn retired_stat(&self, process: hl_task::ProcessId) -> Option<hl_runtime::ProcfsStatMetrics> {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&process)
             .and_then(|entry| entry.retired_stat)
     }
@@ -99,7 +99,7 @@ impl ProcfsSpaces {
     fn contains(&self, process: hl_task::ProcessId) -> bool {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains_key(&process)
     }
 }
@@ -108,7 +108,7 @@ impl hl_runtime::RuntimeReapPort for ProcfsSpaces {
     fn remove(&self, process: hl_task::ProcessId) {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process);
     }
 }

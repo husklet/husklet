@@ -153,7 +153,7 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     let mut actions = unsafe { actions.assume_init() };
     let configured = (|| {
         check_spawn(unsafe {
-            libc::posix_spawn_file_actions_addopen(&mut actions, libc::STDIN_FILENO, null.as_ptr(), libc::O_RDONLY, 0)
+            libc::posix_spawn_file_actions_addopen(&raw mut actions, libc::STDIN_FILENO, null.as_ptr(), libc::O_RDONLY, 0)
         })?;
         for (source, target) in [
             (stdout.1.as_raw_fd(), libc::STDOUT_FILENO),
@@ -162,7 +162,7 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
             // SAFETY: `actions` is initialized and uniquely owned; source is a
             // live pipe descriptor and target is a standard descriptor. The C
             // object copies integers only, retains no Rust pointer, and cannot unwind.
-            check_spawn(unsafe { libc::posix_spawn_file_actions_adddup2(&mut actions, source, target) })?;
+            check_spawn(unsafe { libc::posix_spawn_file_actions_adddup2(&raw mut actions, source, target) })?;
         }
         for descriptor in [
             stdout.0.as_raw_fd(),
@@ -173,14 +173,14 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
             // SAFETY: the initialized action list is uniquely owned and stores
             // only the descriptor value. Pipe owners remain live through spawn;
             // no concurrent mutation or unwind crosses this call.
-            check_spawn(unsafe { libc::posix_spawn_file_actions_addclose(&mut actions, descriptor) })?;
+            check_spawn(unsafe { libc::posix_spawn_file_actions_addclose(&raw mut actions, descriptor) })?;
         }
         Ok::<_, std::io::Error>(())
     })();
     if let Err(error) = configured {
         // SAFETY: the initialized list is still uniquely owned and no spawn is
         // active. Destroy retains no pointer and cannot unwind.
-        unsafe { libc::posix_spawn_file_actions_destroy(&mut actions) };
+        unsafe { libc::posix_spawn_file_actions_destroy(&raw mut actions) };
         return Err(error);
     }
 
@@ -190,7 +190,7 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     let attribute_status = unsafe { libc::posix_spawnattr_init(attributes.as_mut_ptr()) };
     if attribute_status != 0 {
         // SAFETY: actions remains initialized and uniquely owned.
-        unsafe { libc::posix_spawn_file_actions_destroy(&mut actions) };
+        unsafe { libc::posix_spawn_file_actions_destroy(&raw mut actions) };
         return Err(std::io::Error::from_raw_os_error(attribute_status));
     }
     // SAFETY: successful initialization established the C object's lifetime.
@@ -198,9 +198,9 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     let configured = (|| {
         // SAFETY: initialized attributes are uniquely owned; both setters copy
         // scalar values and retain no pointers. No concurrent access exists.
-        check_spawn(unsafe { libc::posix_spawnattr_setflags(&mut attributes, libc::POSIX_SPAWN_SETPGROUP as i16) })?;
+        check_spawn(unsafe { libc::posix_spawnattr_setflags(&raw mut attributes, libc::POSIX_SPAWN_SETPGROUP as i16) })?;
         // SAFETY: as above; group zero requests a new group led by the child.
-        check_spawn(unsafe { libc::posix_spawnattr_setpgroup(&mut attributes, 0) })
+        check_spawn(unsafe { libc::posix_spawnattr_setpgroup(&raw mut attributes, 0) })
     })();
     let mut pid = 0;
     let spawned = configured.and_then(|()| {
@@ -210,10 +210,10 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
         // child receives independent kernel state and the FFI cannot unwind.
         check_spawn(unsafe {
             libc::posix_spawn(
-                &mut pid,
+                &raw mut pid,
                 program.as_ptr(),
-                &actions,
-                &attributes,
+                &raw const actions,
+                &raw const attributes,
                 argument_pointers.as_mut_ptr(),
                 environment_pointers.as_mut_ptr(),
             )
@@ -222,8 +222,8 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     // SAFETY: both initialized C objects are uniquely owned, no spawn call is
     // active, destruction retains no pointer, and neither call can unwind.
     unsafe {
-        libc::posix_spawnattr_destroy(&mut attributes);
-        libc::posix_spawn_file_actions_destroy(&mut actions);
+        libc::posix_spawnattr_destroy(&raw mut attributes);
+        libc::posix_spawn_file_actions_destroy(&raw mut actions);
     }
     spawned?;
     drop(stdout.1);
@@ -261,7 +261,7 @@ fn resolve(program: &std::ffi::OsStr) -> std::io::Result<PathBuf> {
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        format!("host executable {:?} was not found in PATH", program),
+        format!("host executable {program:?} was not found in PATH"),
     ))
 }
 
@@ -578,7 +578,7 @@ fn wait_pid(pid: libc::pid_t, flags: i32) -> std::io::Result<Option<std::process
         let mut status = 0;
         // SAFETY: status is aligned writable integer storage, pid is a child
         // returned by posix_spawn, and waitpid retains no pointer or alias.
-        let waited = unsafe { libc::waitpid(pid, &mut status, flags) };
+        let waited = unsafe { libc::waitpid(pid, &raw mut status, flags) };
         if waited == pid {
             return Ok(Some(std::process::ExitStatus::from_raw(status)));
         }

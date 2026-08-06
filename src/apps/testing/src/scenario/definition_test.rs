@@ -17,12 +17,12 @@ fn load(document: &str) -> Result<Scenario, Box<dyn std::error::Error>> {
 #[test]
 fn legacy_run_is_a_single_typed_argv_action() {
     let scenario = load(
-        r#"cases:
+        r"cases:
   - id: sample/legacy
     image: alpine:3.20
     run: { program: /bin/echo, arguments: [marker] }
     expect: { stdout_contains: golden/contains.txt }
-"#,
+",
     )
     .unwrap();
     let case = &scenario.cases[0];

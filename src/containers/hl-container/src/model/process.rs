@@ -138,6 +138,7 @@ impl Environment {
         self.get_text(name)
     }
 
+    #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.records()
             .iter()

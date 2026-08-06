@@ -617,11 +617,10 @@ impl GuestExecutor {
 
     fn charge_elapsed(account: Option<&hl_task::CpuAccount>, charged_at: &mut Option<u64>) {
         let Some(finished) = Self::thread_cpu() else { return };
-        if let Some(started) = charged_at.replace(finished) {
-            if let Some(account) = account {
+        if let Some(started) = charged_at.replace(finished)
+            && let Some(account) = account {
                 account.charge(finished.saturating_sub(started));
             }
-        }
     }
 
     fn advance(
@@ -796,12 +795,10 @@ impl GuestExecutor {
             address,
             ..
         } = &action
-        {
-            if let Some(boundaries) = &native.boundaries {
+            && let Some(boundaries) = &native.boundaries {
                 eprintln!("hl-native-terminal-sigsegv: code={code} address={address:#x}");
                 boundaries.report(Some(run.process));
             }
-        }
         TurnResult { run, action }
     }
 

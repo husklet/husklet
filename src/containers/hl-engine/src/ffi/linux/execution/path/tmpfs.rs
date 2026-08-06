@@ -153,7 +153,7 @@ impl Budget {
     pub(super) fn open(self: &Arc<Self>, file: &File) -> Result<Lease, ObjectError> {
         let metadata = file.metadata().map_err(Self::object)?;
         let key = Key(metadata.dev(), metadata.ino());
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = state.entries.get_mut(&key) {
             let previous = entry.size;
             let opens = entry.opens.checked_add(1).ok_or(ObjectError::NoSpace)?;
@@ -196,7 +196,7 @@ impl Budget {
         if !last_link {
             return;
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let removable = state.entries.get(&key).is_some_and(|entry| entry.opens == 0);
         if removable {
             state.remove(key);
@@ -204,7 +204,7 @@ impl Budget {
     }
 
     pub(super) fn created(&self, key: Key, size: u64) -> Result<(), ObjectError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.entries.contains_key(&key) {
             return Ok(());
         }
@@ -241,7 +241,7 @@ impl Lease {
         self.budget
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entries
             .get(&self.key)
             .map(|entry| entry.seals)
@@ -249,7 +249,7 @@ impl Lease {
     }
 
     pub(super) fn add_seals(&self, seals: u8) -> Result<u8, ObjectError> {
-        let mut state = self.budget.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.budget.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.entries.get_mut(&self.key).ok_or(ObjectError::Io)?;
         if entry.seals & 1 != 0 {
             return Err(ObjectError::PermissionDenied);
@@ -285,7 +285,7 @@ impl Lease {
         target: u64,
         operation: impl FnOnce(&File) -> Result<T, E>,
     ) -> Result<Result<T, E>, ObjectError> {
-        let mut state = self.budget.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.budget.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = state.entries.get(&self.key).ok_or(ObjectError::Io)?.size;
         let projected = current.max(target);
         let total = state.bytes - current;
@@ -308,7 +308,7 @@ impl Lease {
         target: u64,
         operation: impl FnOnce(&File) -> Result<T, ObjectError>,
     ) -> Result<T, ObjectError> {
-        let mut state = self.budget.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.budget.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = state.entries.get(&self.key).ok_or(ObjectError::Io)?;
         let current = entry.size;
         if entry.seals & (8 | 16) != 0 {
@@ -333,7 +333,7 @@ impl Lease {
     }
 
     pub(super) fn close(self, links: u64) {
-        let mut state = self.budget.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.budget.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let removable = if let Some(entry) = state.entries.get_mut(&self.key) {
             entry.opens = entry.opens.saturating_sub(1);
             entry.opens == 0 && links == 0

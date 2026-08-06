@@ -30,7 +30,7 @@ fn findings(source: &str) -> Vec<crate::Finding> {
 #[test]
 fn reports_capability_clusters() {
     let findings = findings(
-        r#"
+        r"
 pub trait RuntimeService {
     fn create(&self, config: Config) -> Result<Id, Error>;
     fn remove(&self, id: Id) -> Result<(), Error>;
@@ -52,7 +52,7 @@ impl RuntimeService for Host {
     fn inspect(&self, _: Id) -> Result<Snapshot, Error> { todo!() }
     fn status(&self, _: Id) -> Result<Status, Error> { todo!() }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     let finding = &findings[0];
@@ -76,7 +76,7 @@ impl RuntimeService for Host {
 #[test]
 fn noun_capability_presenters() {
     let findings = findings(
-        r#"
+        r"
 pub trait Presenter {
     fn poll_events(&mut self);
     fn take_events(&mut self) -> Vec<Event>;
@@ -87,7 +87,7 @@ pub trait Presenter {
     fn begin_interaction(&mut self, id: SurfaceId, interaction: Interaction);
     fn present(&mut self, image: Image) -> Feedback;
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     let clusters = findings[0]
@@ -107,7 +107,7 @@ pub trait Presenter {
 #[test]
 fn count_is_insufficient() {
     let findings = findings(
-        r#"
+        r"
 pub trait RecordRepository {
     fn create(&self, value: Record) -> Result<Id, Error>;
     fn open(&self, id: Id) -> Result<Record, Error>;
@@ -119,7 +119,7 @@ pub trait RecordRepository {
     fn list(&self) -> Result<Vec<Record>, Error>;
     fn find(&self, query: Query) -> Result<Vec<Record>, Error>;
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }
@@ -127,7 +127,7 @@ pub trait RecordRepository {
 #[test]
 fn preserves_renderer_contracts() {
     let findings = findings(
-        r#"
+        r"
 pub trait Codec {
     fn encode_header(&self, value: Header) -> Bytes;
     fn encode_body(&self, value: Body) -> Bytes;
@@ -168,7 +168,7 @@ pub trait SurfaceProtocol {
     fn inspect_surface(&self, id: SurfaceId) -> SurfaceSnapshot;
     fn status_surface(&self, id: SurfaceId) -> SurfaceStatus;
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }
@@ -176,7 +176,7 @@ pub trait SurfaceProtocol {
 #[test]
 fn ignores_test_traits() {
     let findings = findings(
-        r#"
+        r"
 pub unsafe trait Abi {
     fn create(&self); fn remove(&self);
     fn start(&self); fn stop(&self);
@@ -196,7 +196,7 @@ pub trait Fixture {
     fn inspect(&self); fn status(&self);
     fn configure(&self); fn update(&self);
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }
@@ -204,7 +204,7 @@ pub trait Fixture {
 #[test]
 fn ignores_name_guessing() {
     let findings = findings(
-        r#"
+        r"
 pub trait Odd {
     fn create(&self);
     fn remove(&self);
@@ -217,7 +217,7 @@ pub trait Odd {
     fn epsilon(&self);
     fn zeta(&self);
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }

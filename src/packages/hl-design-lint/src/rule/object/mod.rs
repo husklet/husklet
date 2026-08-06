@@ -383,23 +383,21 @@ impl<'a> MethodAnalysis<'a> {
 
 impl<'ast> Visit<'ast> for MethodAnalysis<'_> {
     fn visit_expr_method_call(&mut self, expression: &'ast ExprMethodCall) {
-        if let Some(field) = receiver_field(&expression.receiver) {
-            if self.known_fields.contains(&field) {
+        if let Some(field) = receiver_field(&expression.receiver)
+            && self.known_fields.contains(&field) {
                 self.calls.insert(field);
             }
-        }
         syn::visit::visit_expr_method_call(self, expression);
     }
 
     fn visit_expr_field(&mut self, expression: &'ast ExprField) {
-        if matches!(expression.base.as_ref(), Expr::Path(path) if path.path.is_ident("self")) {
-            if let Member::Named(field) = &expression.member {
+        if matches!(expression.base.as_ref(), Expr::Path(path) if path.path.is_ident("self"))
+            && let Member::Named(field) = &expression.member {
                 let field = field.to_string();
                 if self.known_fields.contains(&field) {
                     self.fields.insert(field);
                 }
             }
-        }
         syn::visit::visit_expr_field(self, expression);
     }
 

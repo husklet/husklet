@@ -53,7 +53,7 @@ impl BootstrapEnvironment {
         let value = value.trim_start_matches(|character: char| character.is_ascii_whitespace());
         let bytes = value.as_bytes();
         let digits = match bytes.first() {
-            Some(b'+') | Some(b'-') => &bytes[1..],
+            Some(b'+' | b'-') => &bytes[1..],
             _ => bytes,
         };
         if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {

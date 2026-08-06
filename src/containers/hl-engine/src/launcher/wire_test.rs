@@ -58,7 +58,7 @@ fn accepts_extended_header() {
 #[test]
 fn validation_error_precedence() {
     assert_eq!(
-        LaunchWire::parse(&vec![0; HEADER_SIZE - 1]).unwrap_err(),
+        LaunchWire::parse(&[0; HEADER_SIZE - 1]).unwrap_err(),
         WireError::InvalidArgument
     );
     let mut wire = valid_wire();

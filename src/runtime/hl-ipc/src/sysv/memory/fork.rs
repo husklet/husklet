@@ -21,7 +21,7 @@ pub struct ForkAttachmentPlan {
     pub backing: SharedBackingRef,
 }
 
-/// A mutation-free SysV shared-memory fork plan.
+/// A mutation-free `SysV` shared-memory fork plan.
 ///
 /// Commit validates the namespace topology and attachment counter under one
 /// lock before publishing any child attachment. Dropping a plan therefore
@@ -55,7 +55,7 @@ pub struct CommittedMemoryFork {
 
 impl CommittedMemoryFork {
     pub fn rollback(self) -> Result<(), SharedMemoryError> {
-        let mut state = self.namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state != self.published {
             return Err(SharedMemoryError::InvalidArgument);
         }
@@ -123,7 +123,7 @@ impl PreparedMemoryFork<'_> {
         namespace: &SharedMemoryNamespace,
         plan: &ForkPlan,
     ) -> Result<(Vec<InheritedAttachment>, NamespaceState, NamespaceState), SharedMemoryError> {
-        let mut state = namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.next_attachment != plan.expected_next
             || state
                 .attachments
@@ -195,7 +195,7 @@ impl SharedMemoryNamespace {
         if parent == child {
             return Err(SharedMemoryError::InvalidArgument);
         }
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.attachments.values().any(|attachment| attachment.pid == child) {
             return Err(SharedMemoryError::InvalidArgument);
         }

@@ -382,7 +382,7 @@ impl StackPlanner {
 
 /// The two C loaders currently disagree on string placement.
 ///
-/// AArch64 carries the corrected Linux ascending-address order. The x86-64
+/// `AArch64` carries the corrected Linux ascending-address order. The x86-64
 /// oracle still places each list forward while moving the cursor downward.
 /// Preserve both until a native-Linux oracle establishes an intentional
 /// migration away from the x86-64 baseline.

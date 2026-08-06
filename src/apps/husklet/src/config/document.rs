@@ -1,4 +1,4 @@
-use super::*;
+use super::{WorkspaceConfig, io, Arch, PathBuf, Mount, VpnConfig, CudaDevice, TerminalPreferences, Workspace};
 
 #[derive(Default)]
 pub(super) struct WorkspaceDocument {
@@ -104,10 +104,10 @@ impl WsBuilder {
             "gui" => self.gui = Some(Value::new("gui", v).boolean()?),
             "scrollback" => self.scrollback = Some(Value::new("scrollback", v).number()?),
             "vpn" if !v.is_empty() => {
-                self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?)
+                self.vpn = Some(VpnConfig::parse(v).ok_or_else(|| Value::new("vpn", v).invalid())?);
             }
             "cuda" if !v.is_empty() => {
-                self.cuda = Some(CudaDevice::parse(v).ok_or_else(|| Value::new("cuda", v).invalid())?)
+                self.cuda = Some(CudaDevice::parse(v).ok_or_else(|| Value::new("cuda", v).invalid())?);
             }
             "terminal_font" if !v.is_empty() => self.terminal.font_family = Some(v.to_owned()),
             "terminal_size" => self.terminal.font_size = Some(Value::new("terminal_size", v).number()?),
@@ -115,7 +115,7 @@ impl WsBuilder {
             "terminal_background" if !v.is_empty() => self.terminal.background = Some(v.to_owned()),
             "terminal_cursor" if !v.is_empty() => self.terminal.cursor_shape = Some(v.to_owned()),
             "terminal_cursor_blink" => {
-                self.terminal.cursor_blink = Some(Value::new("terminal_cursor_blink", v).boolean()?)
+                self.terminal.cursor_blink = Some(Value::new("terminal_cursor_blink", v).boolean()?);
             }
             "env" => self.set_env(v)?,
             "mount" => self.set_mount(v)?,
@@ -144,7 +144,7 @@ impl WsBuilder {
             return Err(Value::new("mount", value).invalid());
         }
         let mode = fields.next();
-        if !matches!(mode, None | Some("ro") | Some("rw")) || fields.next().is_some() {
+        if !matches!(mode, None | Some("ro" | "rw")) || fields.next().is_some() {
             return Err(Value::new("mount", value).invalid());
         }
         self.mounts.push(Mount {

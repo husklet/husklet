@@ -58,15 +58,14 @@ impl<'ast> Visit<'ast> for References<'_> {
     }
 
     fn visit_expr_path(&mut self, expression: &'ast syn::ExprPath) {
-        if expression.qself.is_none() {
-            if let Some(segment) = expression.path.segments.last() {
+        if expression.qself.is_none()
+            && let Some(segment) = expression.path.segments.last() {
                 self.values.push(Reference {
                     name: segment.ident.to_string(),
                     location: self.source.location(expression.span()),
                     context: self.context.clone(),
                 });
             }
-        }
         syn::visit::visit_expr_path(self, expression);
     }
 }

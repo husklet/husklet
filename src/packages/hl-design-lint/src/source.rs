@@ -45,11 +45,13 @@ impl Source {
     }
 
     /// Extracts text covered by a syntax span.
+    #[must_use]
     pub fn excerpt(&self, span: Span) -> String {
         excerpt_at(&self.text, &self.lines, span)
     }
 
     /// Creates a source location from a syntax span.
+    #[must_use]
     pub fn location(&self, span: Span) -> crate::model::Location {
         let start = span.start();
         crate::model::Location {
@@ -105,6 +107,7 @@ impl Workspace {
     }
 
     /// Returns every parsed source.
+    #[must_use]
     pub fn sources(&self) -> &[Source] {
         &self.sources
     }
@@ -115,16 +118,19 @@ impl Workspace {
     }
 
     /// Returns repository-owned directories with no substantive entries.
+    #[must_use]
     pub fn empty_directories(&self) -> &[PathBuf] {
         &self.empty_directories
     }
 
     /// Returns non-conventional directories containing one substantive file.
+    #[must_use]
     pub fn single_file_directories(&self) -> &[(PathBuf, PathBuf)] {
         &self.single_file_directories
     }
 
     /// Returns the roots explicitly requested by the lint invocation.
+    #[must_use]
     pub fn paths(&self) -> &[PathBuf] {
         &self.paths
     }
@@ -192,7 +198,7 @@ pub fn domain(path: &Path) -> String {
     });
     while let Some(component) = components.next() {
         if component == "src" {
-            return components.next().map(snake_case).unwrap_or_else(|| "root".into());
+            return components.next().map_or_else(|| "root".into(), snake_case);
         }
     }
     "root".to_owned()
@@ -268,7 +274,7 @@ fn rust_files(path: &Path, files: &mut Vec<PathBuf>, include_linter: bool) -> io
         return Ok(());
     }
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
         rust_files(&entry.path(), files, include_linter)?;
     }
@@ -298,7 +304,7 @@ fn source_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
         .map_err(|error| LintError::io("read source directory", path, error))?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|error| LintError::io("read source directory", path, error))?;
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_key(std::fs::DirEntry::path);
     for entry in entries {
         source_files(&entry.path(), files)?;
     }
@@ -321,7 +327,7 @@ fn directory_shapes(
     }
 
     let mut entries = fs::read_dir(path)?.collect::<std::result::Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.path());
+    entries.sort_by_key(std::fs::DirEntry::path);
     let substantive = entries
         .iter()
         .filter(|entry| !placeholder(&entry.path()))

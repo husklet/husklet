@@ -87,6 +87,7 @@ pub struct Registry {
 
 impl Registry {
     /// Creates an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self { rules: Vec::new() }
     }

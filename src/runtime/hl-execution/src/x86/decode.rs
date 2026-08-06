@@ -282,11 +282,7 @@ impl X86Decoder {
             return 1;
         }
         if vector {
-            return if map == 1 && matches!(op, 0x70..=0x73 | 0xc2 | 0xc4..=0xc6) {
-                1
-            } else {
-                0
-            };
+            return u8::from(map == 1 && matches!(op, 0x70..=0x73 | 0xc2 | 0xc4..=0xc6));
         }
         if map == 2 {
             return 0;
@@ -294,11 +290,7 @@ impl X86Decoder {
         if map == 1 {
             return if op & 0xf0 == 0x80 {
                 4
-            } else if matches!(op, 0xba | 0xa4 | 0xac | 0x70..=0x73 | 0xc2 | 0xc4..=0xc6) {
-                1
-            } else {
-                0
-            };
+            } else { u8::from(matches!(op, 0xba | 0xa4 | 0xac | 0x70..=0x73 | 0xc2 | 0xc4..=0xc6)) };
         }
         if op == 0xc2 {
             return 2;
@@ -378,6 +370,7 @@ impl X86Decoder {
 }
 
 impl DecodedInstruction {
+    #[must_use]
     pub const fn rex(&self) -> Option<Rex> {
         match self.encoding {
             Encoding::Legacy { rex, .. } => rex,
@@ -385,6 +378,7 @@ impl DecodedInstruction {
         }
     }
 
+    #[must_use]
     pub const fn byte_register(&self, raw: u8, extension: bool) -> Option<ByteRegister> {
         if raw > 7 {
             return None;

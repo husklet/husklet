@@ -20,7 +20,7 @@ impl RobustListRegistration {
 }
 
 /// The execution/runtime consumer must perform the actual guest-memory
-/// OWNER_DIED transition and futex wake. Missing integration is not success.
+/// `OWNER_DIED` transition and futex wake. Missing integration is not success.
 pub trait RobustExitCleanup {
     type Error;
 

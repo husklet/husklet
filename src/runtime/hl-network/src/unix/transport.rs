@@ -64,13 +64,12 @@ impl EndpointState {
         Some(count)
     }
     fn enqueue(&mut self, input: &[u8], stream: bool) {
-        if stream {
-            if let Some(buffer) = self.incoming.back_mut() {
+        if stream
+            && let Some(buffer) = self.incoming.back_mut() {
                 buffer.extend_from_slice(input);
                 self.bytes += input.len();
                 return;
             }
-        }
         self.incoming.push_back(input.to_vec());
         self.bytes += input.len();
     }
@@ -110,7 +109,7 @@ impl UnixSocketHost {
         let observers = self
             .readiness
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .filter_map(|observer| observer.as_ref().and_then(Weak::upgrade))
             .collect::<Vec<_>>();
@@ -126,11 +125,11 @@ impl UnixSocketHost {
         &self,
         state: std::sync::MutexGuard<'state, UnixState>,
     ) -> std::sync::MutexGuard<'state, UnixState> {
-        self.wake.wait(state).unwrap_or_else(|error| error.into_inner())
+        self.wake.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn shutdown(&self, token: usize, read: bool, write: bool) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if read {
             state.endpoints[token].read_shutdown = true;
             state.endpoints[token].incoming.clear();
@@ -153,7 +152,7 @@ impl UnixSocketHost {
     }
 
     fn peek(&self, token: usize, output: &mut [u8], nonblocking: bool) -> Result<usize, SocketHostError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             let endpoint = &state.endpoints[token];
             if endpoint.canceled {
@@ -180,7 +179,7 @@ impl UnixSocketHost {
             return Err(UnixTransportError::Control(ControlError::TooBig));
         }
         let peer = Self::peer(token);
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if state.endpoints[token].canceled {
                 return Err(UnixTransportError::Canceled);
@@ -206,7 +205,7 @@ impl UnixSocketHost {
     }
 
     fn release_message(&self, token: usize, length: usize) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.endpoints[token].ancillary_bytes = state.endpoints[token].ancillary_bytes.saturating_sub(length);
         drop(state);
         self.notify();
@@ -217,7 +216,7 @@ impl SocketHostIo for UnixSocketHost {
     type Token = usize;
 
     fn read(&self, token: usize, output: &mut [u8], nonblocking: bool) -> Result<usize, SocketHostError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             let endpoint = &mut state.endpoints[token];
             if endpoint.canceled {
@@ -247,7 +246,7 @@ impl SocketHostIo for UnixSocketHost {
 
     fn write(&self, token: usize, input: &[u8], nonblocking: bool) -> Result<usize, SocketHostError> {
         let peer = Self::peer(token);
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if state.endpoints[token].canceled {
                 return Err(SocketHostError::Canceled);
@@ -280,7 +279,7 @@ impl SocketHostIo for UnixSocketHost {
     }
 
     fn readiness(&self, token: usize) -> SocketHostReadiness {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let endpoint = &state.endpoints[token];
         let peer = &state.endpoints[Self::peer(token)];
         SocketHostReadiness {
@@ -305,21 +304,21 @@ impl SocketHostIo for UnixSocketHost {
     }
 
     fn attach_readiness(&self, token: usize, observer: Weak<dyn hl_descriptor::ReadinessObserver>) {
-        self.readiness.lock().unwrap_or_else(|error| error.into_inner())[token] = Some(observer);
+        self.readiness.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[token] = Some(observer);
     }
 
     fn detach_readiness(&self, token: usize) {
-        self.readiness.lock().unwrap_or_else(|error| error.into_inner())[token] = None;
+        self.readiness.lock().unwrap_or_else(std::sync::PoisonError::into_inner)[token] = None;
     }
 
     fn cancel(&self, token: usize) {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).endpoints[token].canceled = true;
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).endpoints[token].canceled = true;
         self.message_wait[token].notify_all();
         self.notify();
     }
 
     fn close(&self, token: usize) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.endpoints[token].closed = true;
         if self.socket_type != SocketType::Datagram {
             state.endpoints[Self::peer(token)].peer_write_shutdown = true;
@@ -346,7 +345,7 @@ impl UnixSocketEndpoint {
         self.host
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .endpoints[self.token]
             .bytes
     }

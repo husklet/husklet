@@ -64,7 +64,7 @@ impl LocalPty {
         // macOS.) The lock is released before `fork` so the child never inherits a held lock.
         static PTY_ALLOC: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let (master, slave_path) = {
-            let _guard = PTY_ALLOC.lock().unwrap_or_else(|p| p.into_inner());
+            let _guard = PTY_ALLOC.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             unsafe {
                 let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
                 if master < 0 {
@@ -140,7 +140,7 @@ impl LocalPty {
 impl PtyBackend for LocalPty {
     fn write(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         while !bytes.is_empty() {
-            let n = unsafe { libc::write(self.master, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
+            let n = unsafe { libc::write(self.master, bytes.as_ptr().cast::<libc::c_void>(), bytes.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() == io::ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EINTR) {
@@ -154,7 +154,7 @@ impl PtyBackend for LocalPty {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = unsafe { libc::read(self.master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+        let n = unsafe { libc::read(self.master, buf.as_mut_ptr().cast::<libc::c_void>(), buf.len()) };
         if n >= 0 {
             return Ok(n as usize);
         }
@@ -189,7 +189,7 @@ impl PtyBackend for LocalPty {
             return self.exited;
         }
         let mut status: libc::c_int = 0;
-        let r = unsafe { libc::waitpid(self.child, &mut status, libc::WNOHANG) };
+        let r = unsafe { libc::waitpid(self.child, &raw mut status, libc::WNOHANG) };
         if r == self.child {
             let code = if libc::WIFEXITED(status) {
                 libc::WEXITSTATUS(status)
@@ -211,7 +211,7 @@ impl Drop for LocalPty {
                 libc::kill(self.child, libc::SIGHUP);
                 // Best-effort reap so we don't leak a zombie.
                 let mut status = 0;
-                libc::waitpid(self.child, &mut status, libc::WNOHANG);
+                libc::waitpid(self.child, &raw mut status, libc::WNOHANG);
             }
             if self.slave >= 0 {
                 libc::close(self.slave);
@@ -245,7 +245,7 @@ mod tests {
                 events: libc::POLLIN,
                 revents: 0,
             };
-            let pr = unsafe { libc::poll(&mut pfd, 1, 20) };
+            let pr = unsafe { libc::poll(&raw mut pfd, 1, 20) };
             if pr > 0 && pfd.revents & libc::POLLIN != 0 {
                 let n = pty.read(&mut buf).unwrap_or(0);
                 if n > 0 {
@@ -260,9 +260,7 @@ mod tests {
                 exited = true;
                 continue; // loop once more to drain the fully-buffered final output
             }
-            if Instant::now() > deadline {
-                panic!("pty test timed out");
-            }
+            assert!(Instant::now() <= deadline, "pty test timed out")
         }
         vt
     }

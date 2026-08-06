@@ -11,7 +11,7 @@ pub(super) struct Slots(pub(super) Vec<Slot>);
 
 impl Slots {
     pub(super) fn handle(index: usize, generation: u16) -> u64 {
-        (u64::from(generation) << 32) | index as u64 + 1
+        (u64::from(generation) << 32) | (index as u64 + 1)
     }
 
     pub(super) fn resolve(&mut self, value: u64) -> Result<&mut Box<dyn TreeObject>, i32> {

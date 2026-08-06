@@ -615,7 +615,7 @@ fn snapshot_content() {
     let count = limits.read(&mut bytes).unwrap();
     let text = std::str::from_utf8(&bytes[..count]).unwrap();
     assert!(text.contains("Max core file size"));
-    assert!(text.contains("0"));
+    assert!(text.contains('0'));
     assert!(text.contains("unlimited"));
 }
 

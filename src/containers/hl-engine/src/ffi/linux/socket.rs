@@ -73,10 +73,10 @@ impl EncodedAddress {
     fn parts(&self) -> (*const SockAddr, u32) {
         match self {
             Self::Inet(value) => (
-                (value as *const SockAddrIn).cast(),
+                std::ptr::from_ref::<SockAddrIn>(value).cast(),
                 core::mem::size_of::<SockAddrIn>() as u32,
             ),
-            Self::Unix(value, length) => ((value as *const SockAddrUnix).cast(), *length),
+            Self::Unix(value, length) => (std::ptr::from_ref::<SockAddrUnix>(value).cast(), *length),
         }
     }
 }
@@ -157,7 +157,7 @@ impl SocketSyscalls for LinuxHost {
                 descriptor,
                 level,
                 option,
-                (&value as *const i32).cast(),
+                (&raw const value).cast(),
                 core::mem::size_of::<i32>() as u32,
             )
         })
@@ -172,8 +172,8 @@ impl SocketSyscalls for LinuxHost {
                 descriptor,
                 SOL_SOCKET,
                 SO_ERROR,
-                (&mut value as *mut i32).cast(),
-                &mut length,
+                (&raw mut value).cast(),
+                &raw mut length,
             )
         })?;
         if length as usize != core::mem::size_of::<i32>() {
@@ -191,7 +191,7 @@ impl SocketSyscalls for LinuxHost {
         };
         let mut length = core::mem::size_of::<SockAddrIn>() as u32;
         // SAFETY: value and length are uniquely writable and correctly bounded.
-        SocketCall::check(unsafe { getsockname(descriptor, (&mut value as *mut SockAddrIn).cast(), &mut length) })?;
+        SocketCall::check(unsafe { getsockname(descriptor, (&raw mut value).cast(), &raw mut length) })?;
         if value.family != AF_INET as u16 || length as usize != core::mem::size_of::<SockAddrIn>() {
             return Err(HostError::Unsupported);
         }

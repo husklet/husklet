@@ -144,80 +144,6 @@ impl Worker {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pool() -> Pool {
-        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
-        Pool::new(&tasks).unwrap()
-    }
-
-    #[test]
-    fn workers_join() {
-        for _ in 0..3 {
-            let pool = pool();
-            let active = Arc::clone(&pool.active);
-            assert_eq!(active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
-            pool.stop();
-            assert_eq!(active.load(Ordering::Acquire), 0);
-        }
-    }
-
-    #[test]
-    fn bounded_growth_joins() {
-        let pool = pool();
-        let active = Arc::clone(&pool.active);
-        {
-            let mut lanes = pool.lanes.lock().unwrap();
-            let mut workers = pool.workers.lock().unwrap();
-            for index in INITIAL_WORKER_COUNT..WORKER_COUNT {
-                let (lane, worker) = Pool::spawn_lane(index, pool.completed.clone(), Arc::clone(&active)).unwrap();
-                lanes.push(lane);
-                workers.push(worker);
-            }
-        }
-        assert_eq!(active.load(Ordering::Acquire), WORKER_COUNT);
-        pool.stop();
-        assert_eq!(active.load(Ordering::Acquire), 0);
-    }
-
-    #[test]
-    fn partial_start_rolls_back_every_started_lane() {
-        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
-        for failure in [
-            StartFailure::Spawn(0),
-            StartFailure::Spawn(INITIAL_WORKER_COUNT / 2),
-            StartFailure::Spawn(INITIAL_WORKER_COUNT - 1),
-            StartFailure::Ready(0),
-            StartFailure::Ready(INITIAL_WORKER_COUNT / 2),
-            StartFailure::Ready(INITIAL_WORKER_COUNT - 1),
-        ] {
-            for _ in 0..8 {
-                let active = Arc::new(AtomicUsize::new(0));
-                let result = Pool::start(&tasks, Some(failure), Some(Arc::clone(&active)));
-                assert!(matches!(result, Err(WaiterStartError::Spawn | WaiterStartError::Ready)));
-                assert_eq!(active.load(Ordering::Acquire), 0);
-            }
-        }
-        let pool = Pool::start(&tasks, None, None).unwrap();
-        assert_eq!(pool.active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
-        pool.stop();
-    }
-
-    #[test]
-    fn subscription_failure_starts_no_lane() {
-        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
-        assert!(matches!(
-            Pool::start(&tasks, Some(StartFailure::Subscribe), None),
-            Err(WaiterStartError::Subscribe)
-        ));
-        let pool = Pool::start(&tasks, None, None).unwrap();
-        assert_eq!(pool.active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
-        pool.stop();
-    }
-}
-
 impl Pool {
     pub(super) fn new(tasks: &Arc<hl_task::TaskRegistry>) -> Result<Self, WaiterStartError> {
         Self::start(
@@ -329,7 +255,7 @@ impl Pool {
                     ready,
                     #[cfg(test)]
                     active,
-                )
+                );
             })
             .map_err(|_| ())?;
         Ok((Lane { jobs, busy }, worker, started))
@@ -340,7 +266,7 @@ impl Pool {
         if self.reject_next.swap(false, Ordering::AcqRel) {
             return Err(run);
         }
-        let mut lanes = self.lanes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut lanes = self.lanes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let start = self.next.fetch_add(1, Ordering::Relaxed) % lanes.len();
         let mut run = run;
         for offset in 0..lanes.len() {
@@ -354,8 +280,8 @@ impl Pool {
             }
             match lane.jobs.try_send(Job::Dispatch(run)) {
                 Ok(()) => return Ok(()),
-                Err(mpsc::TrySendError::Full(Job::Dispatch(returned)))
-                | Err(mpsc::TrySendError::Disconnected(Job::Dispatch(returned))) => {
+                Err(mpsc::TrySendError::Full(Job::Dispatch(returned)) |
+mpsc::TrySendError::Disconnected(Job::Dispatch(returned))) => {
                     lane.busy.store(false, Ordering::Release);
                     run = returned;
                 }
@@ -382,7 +308,7 @@ impl Pool {
             lanes.push(lane);
             self.workers
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(worker);
             return Ok(());
         }
@@ -423,5 +349,79 @@ impl hl_task::SignalActivityWake for SignalWake {
 
     fn process_control_activity(&self, activity: hl_task::SignalActivityEvent) {
         let _ = self.0.send(Event::Signal(activity));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pool() -> Pool {
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        Pool::new(&tasks).unwrap()
+    }
+
+    #[test]
+    fn workers_join() {
+        for _ in 0..3 {
+            let pool = pool();
+            let active = Arc::clone(&pool.active);
+            assert_eq!(active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
+            pool.stop();
+            assert_eq!(active.load(Ordering::Acquire), 0);
+        }
+    }
+
+    #[test]
+    fn bounded_growth_joins() {
+        let pool = pool();
+        let active = Arc::clone(&pool.active);
+        {
+            let mut lanes = pool.lanes.lock().unwrap();
+            let mut workers = pool.workers.lock().unwrap();
+            for index in INITIAL_WORKER_COUNT..WORKER_COUNT {
+                let (lane, worker) = Pool::spawn_lane(index, pool.completed.clone(), Arc::clone(&active)).unwrap();
+                lanes.push(lane);
+                workers.push(worker);
+            }
+        }
+        assert_eq!(active.load(Ordering::Acquire), WORKER_COUNT);
+        pool.stop();
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn partial_start_rolls_back_every_started_lane() {
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        for failure in [
+            StartFailure::Spawn(0),
+            StartFailure::Spawn(INITIAL_WORKER_COUNT / 2),
+            StartFailure::Spawn(INITIAL_WORKER_COUNT - 1),
+            StartFailure::Ready(0),
+            StartFailure::Ready(INITIAL_WORKER_COUNT / 2),
+            StartFailure::Ready(INITIAL_WORKER_COUNT - 1),
+        ] {
+            for _ in 0..8 {
+                let active = Arc::new(AtomicUsize::new(0));
+                let result = Pool::start(&tasks, Some(failure), Some(Arc::clone(&active)));
+                assert!(matches!(result, Err(WaiterStartError::Spawn | WaiterStartError::Ready)));
+                assert_eq!(active.load(Ordering::Acquire), 0);
+            }
+        }
+        let pool = Pool::start(&tasks, None, None).unwrap();
+        assert_eq!(pool.active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
+        pool.stop();
+    }
+
+    #[test]
+    fn subscription_failure_starts_no_lane() {
+        let tasks = Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap());
+        assert!(matches!(
+            Pool::start(&tasks, Some(StartFailure::Subscribe), None),
+            Err(WaiterStartError::Subscribe)
+        ));
+        let pool = Pool::start(&tasks, None, None).unwrap();
+        assert_eq!(pool.active.load(Ordering::Acquire), INITIAL_WORKER_COUNT);
+        pool.stop();
     }
 }

@@ -16,7 +16,7 @@ impl Comparison {
     ) {
         let mut value = 0_u128;
         let sign = 1_u64 << (format.bits() - 1);
-        let magnitude_mask = u64::MAX ^ u64::from(absolute) * sign;
+        let magnitude_mask = u64::MAX ^ (u64::from(absolute) * sign);
         let lane_mask = u64::MAX >> (64 - format.bits());
         for lane in 0..lanes {
             let left_value = cpu.vector_lane(left, format.bits(), lane) & magnitude_mask;
@@ -31,8 +31,7 @@ impl Comparison {
                 operation != FpComparison::Equal,
             );
             staged.fpsr |= compared.fpsr;
-            value |= u128::from(lane_mask) * u128::from(Self::matches(operation, compared.nzcv))
-                << (u32::from(lane) * u32::from(format.bits()));
+            value |= (u128::from(lane_mask) * u128::from(Self::matches(operation, compared.nzcv))) << (u32::from(lane) * u32::from(format.bits()));
         }
         staged.set_vector(destination, value);
     }

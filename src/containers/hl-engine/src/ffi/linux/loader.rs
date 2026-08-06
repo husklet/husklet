@@ -110,7 +110,7 @@ impl TransactionalAddressSpace for AddressSpaceAdapter {
         placement: MappingPlacement,
     ) -> Result<ReservedMapping<Reservation>, AddressSpaceError> {
         const PAGE: u64 = 4096;
-        if size == 0 || size % PAGE != 0 {
+        if size == 0 || !size.is_multiple_of(PAGE) {
             return Err(AddressSpaceError::InvalidRange);
         }
         let address = match placement {

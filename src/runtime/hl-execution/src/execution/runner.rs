@@ -265,7 +265,7 @@ impl ExecutionMachine {
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return StepOutcome::Fault(ExecutionFault::Frozen);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return StepOutcome::Fault(ExecutionFault::Frozen);
         }
@@ -279,7 +279,7 @@ impl ExecutionMachine {
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return StepOutcome::Fault(ExecutionFault::Frozen);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return StepOutcome::Fault(ExecutionFault::Frozen);
         }
@@ -299,31 +299,28 @@ impl ExecutionMachine {
             ExecutionCpuSnapshot::Aarch64(cpu) => self.step_aarch64(cpu, memory),
             ExecutionCpuSnapshot::X86_64(cpu) => {
                 let instruction = cpu.rip;
-                let decoded = match retained {
-                    Some(decoded) => decoded,
-                    None => {
-                        let mut bytes = [0_u8; X86_MAXIMUM_INSTRUCTION];
-                        let length = match memory.fetch(instruction, &mut bytes) {
-                            Ok(length) if length > 0 && length <= bytes.len() => length,
-                            _ => {
-                                return StepOutcome::Fault(ExecutionFault::Fetch(MemoryFault {
-                                    instruction,
-                                    address: instruction,
-                                    access: AccessKind::Execute,
-                                }));
-                            }
-                        };
-                        match X86ScalarDecoder::decode(&bytes[..length], instruction) {
-                            Ok(decoded) => decoded,
-                            Err(_) => {
-                                return StepOutcome::Fault(ExecutionFault::Signal(SynchronousTrap {
-                                    signal: TrapSignal::Illegal,
-                                    code: 2,
-                                    address: instruction,
-                                    instruction,
-                                    state: TrapState::Faulting,
-                                }));
-                            }
+                let decoded = if let Some(decoded) = retained { decoded } else {
+                    let mut bytes = [0_u8; X86_MAXIMUM_INSTRUCTION];
+                    let length = match memory.fetch(instruction, &mut bytes) {
+                        Ok(length) if length > 0 && length <= bytes.len() => length,
+                        _ => {
+                            return StepOutcome::Fault(ExecutionFault::Fetch(MemoryFault {
+                                instruction,
+                                address: instruction,
+                                access: AccessKind::Execute,
+                            }));
+                        }
+                    };
+                    match X86ScalarDecoder::decode(&bytes[..length], instruction) {
+                        Ok(decoded) => decoded,
+                        Err(_) => {
+                            return StepOutcome::Fault(ExecutionFault::Signal(SynchronousTrap {
+                                signal: TrapSignal::Illegal,
+                                code: 2,
+                                address: instruction,
+                                instruction,
+                                state: TrapState::Faulting,
+                            }));
                         }
                     }
                 };
@@ -509,7 +506,7 @@ impl ExecutionMachine {
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return Some(StepOutcome::Fault(ExecutionFault::Frozen));
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return Some(StepOutcome::Fault(ExecutionFault::Frozen));
         }
@@ -528,7 +525,7 @@ impl ExecutionMachine {
             }
             return Some(StepOutcome::Yield);
         };
-        let mut cache = self.x86_blocks.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cache = self.x86_blocks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.synchronize(epoch);
         let mut remaining = budget;
         while remaining > 0 {
@@ -602,7 +599,7 @@ impl ExecutionMachine {
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return StepOutcome::Fault(ExecutionFault::Frozen);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.frozen.load(std::sync::atomic::Ordering::Acquire) {
             return StepOutcome::Fault(ExecutionFault::Frozen);
         }
@@ -619,24 +616,21 @@ impl ExecutionMachine {
             }
             return StepOutcome::Yield;
         };
-        let mut cache = self.blocks.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cache = self.blocks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.synchronize(epoch);
         let mut remaining = budget;
         while remaining > 0 {
-            let current_epoch = match memory.instruction_epoch() {
-                Some(current) => {
-                    cache.synchronize(current);
-                    current
+            let current_epoch = if let Some(current) = memory.instruction_epoch() {
+                cache.synchronize(current);
+                current
+            } else {
+                cache.clear();
+                let outcome = self.step_aarch64(cpu, memory);
+                if outcome != StepOutcome::Continue {
+                    return outcome;
                 }
-                None => {
-                    cache.clear();
-                    let outcome = self.step_aarch64(cpu, memory);
-                    if outcome != StepOutcome::Continue {
-                        return outcome;
-                    }
-                    remaining -= 1;
-                    continue;
-                }
+                remaining -= 1;
+                continue;
             };
             let address = cpu.pc;
             match DispatchDecision::from(cache.observe(address, current_epoch)) {

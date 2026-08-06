@@ -17,6 +17,7 @@ pub struct CacheCompatibility {
 }
 
 impl CacheCompatibility {
+    #[must_use]
     pub const fn is_compatible(self, current: Self) -> bool {
         self.format == current.format && self.translator_abi == current.translator_abi
     }
@@ -33,6 +34,7 @@ impl ArtifactName {
         }
         Ok(Self(name))
     }
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -44,6 +46,7 @@ pub struct ArtifactCursor<'a> {
 }
 
 impl<'a> ArtifactCursor<'a> {
+    #[must_use]
     pub const fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, offset: 0 }
     }
@@ -53,6 +56,7 @@ impl<'a> ArtifactCursor<'a> {
         self.offset = end;
         Ok(value)
     }
+    #[must_use]
     pub const fn remaining(&self) -> usize {
         self.bytes.len() - self.offset
     }

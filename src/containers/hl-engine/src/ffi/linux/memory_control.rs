@@ -193,7 +193,7 @@ impl RuntimeMemoryHost for Control {
                 .snapshot()
                 .regions
                 .into_iter()
-                .map(|region| region.range())
+                .map(hl_memory::Region::range)
                 .collect()
         } else {
             Vec::new()

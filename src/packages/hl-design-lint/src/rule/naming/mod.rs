@@ -157,7 +157,7 @@ fn identifier_words(name: &str) -> Vec<String> {
         .split('_')
         .map(|word| {
             word.chars()
-                .filter(|character| character.is_ascii_alphabetic())
+                .filter(char::is_ascii_alphabetic)
                 .collect::<String>()
         })
         .filter(|word| !word.is_empty())

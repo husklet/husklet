@@ -78,7 +78,7 @@ impl<T: ProviderTransport> ClientCore<T> {
             state = self
                 .changed
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -126,7 +126,7 @@ impl<T: ProviderTransport> ClientCore<T> {
             state = self
                 .changed
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         Ok(())
     }

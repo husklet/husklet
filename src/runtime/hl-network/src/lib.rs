@@ -153,7 +153,7 @@ impl SocketNamespace {
         protocol: SocketProtocol,
         nonblocking: bool,
     ) -> Result<SocketId, SocketError> {
-        let mut slots = self.slots.write().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = slots
             .iter()
             .position(|slot| slot.socket.is_none())
@@ -186,7 +186,7 @@ impl SocketNamespace {
     }
 
     pub fn update(&self, id: SocketId, operation: SocketOperation) -> Result<(), SocketError> {
-        let mut slots = self.slots.write().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let socket = Self::socket_mut(&mut slots, id)?;
         match operation {
             SocketOperation::Bind(address) if socket.state == SocketState::Created => {
@@ -218,7 +218,7 @@ impl SocketNamespace {
     }
 
     pub fn close(&self, id: SocketId) -> Result<(), SocketError> {
-        let mut slots = self.slots.write().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let socket = Self::socket_mut(&mut slots, id)?;
         socket.state = SocketState::Closed;
         let index = usize::from(id.slot) - 1;
@@ -228,7 +228,7 @@ impl SocketNamespace {
 
     #[must_use]
     pub fn snapshot(&self, id: SocketId) -> Option<SocketSnapshot> {
-        let slots = self.slots.read().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = usize::from(id.slot).checked_sub(1)?;
         slots
             .get(index)?
@@ -450,7 +450,7 @@ impl PortRegistry {
             AddressFamily::Inet6 => AddressFamilyKey::Inet6,
             AddressFamily::Unix => return Err(SocketError::InvalidTransition),
         };
-        let mut owners = self.owners.write().unwrap_or_else(|error| error.into_inner());
+        let mut owners = self.owners.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if requested != 0 {
             match owners.entry((key, requested)) {
                 std::collections::btree_map::Entry::Vacant(entry) => {
@@ -477,7 +477,7 @@ impl PortRegistry {
             AddressFamily::Inet6 => AddressFamilyKey::Inet6,
             AddressFamily::Unix => return,
         };
-        let mut owners = self.owners.write().unwrap_or_else(|error| error.into_inner());
+        let mut owners = self.owners.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if owners.get(&(key, port)) == Some(&owner) {
             owners.remove(&(key, port));
         }
@@ -492,7 +492,7 @@ impl PortRegistry {
         };
         self.owners
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(key, port))
             .copied()
     }

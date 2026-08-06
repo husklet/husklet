@@ -289,7 +289,7 @@ impl Images {
     /// # Errors
     /// Returns an error when a catalog update cannot be committed.
     pub fn force_remove(&self, image: &Image) -> Result<Vec<Image>> {
-        self.metadata.remove_target(&image.target.digest().to_string())
+        self.metadata.remove_target(image.target.digest().as_ref())
     }
 }
 

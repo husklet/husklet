@@ -106,9 +106,9 @@ impl super::NativePath {
         let executable = self
             .executable
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let auxiliary = self.auxiliary.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let auxiliary = self.auxiliary.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let tasks = self.tasks.clone();
         let procfs = tasks.as_ref().map(|tasks| {
             let source = source(

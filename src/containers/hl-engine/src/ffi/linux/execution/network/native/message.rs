@@ -53,7 +53,7 @@ impl Native {
         };
         // SAFETY: zero is a valid msghdr initialization.
         let mut header = unsafe { zeroed::<libc::msghdr>() };
-        header.msg_iov = &mut vector;
+        header.msg_iov = &raw mut vector;
         header.msg_iovlen = 1;
         if let Some(route) = message.route {
             let address = if let Some(interface) = route.interface {
@@ -67,7 +67,7 @@ impl Native {
                     .shared
                     .sockets
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&token)
                     .is_none_or(|entry| entry.guest_local.is_none());
                 if needs_source {
@@ -179,7 +179,7 @@ impl Native {
         let mut header = unsafe { zeroed::<libc::msghdr>() };
         header.msg_name = std::ptr::from_mut(&mut source).cast();
         header.msg_namelen = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        header.msg_iov = &mut vector;
+        header.msg_iov = &raw mut vector;
         header.msg_iovlen = 1;
         header.msg_control = control.pointer();
         header.msg_controllen = control.length;
@@ -187,7 +187,7 @@ impl Native {
             | (if peek { libc::MSG_PEEK } else { 0 })
             | libc::MSG_TRUNC;
         // SAFETY: header contains writable payload, address, and aligned control storage for one call.
-        let result = unsafe { libc::recvmsg(descriptor, &mut header, flags) };
+        let result = unsafe { libc::recvmsg(descriptor, &raw mut header, flags) };
         self.arm_read(token);
         if result < 0 {
             return Err(Self::runtime_error());
@@ -215,7 +215,7 @@ impl Native {
 
     fn normalize_source(source: SocketAddress) -> SocketAddress {
         match source {
-            SocketAddress::Unix(path) => Self::switch_source(&path).unwrap_or_else(|| SocketAddress::Unix(path)),
+            SocketAddress::Unix(path) => Self::switch_source(&path).unwrap_or(SocketAddress::Unix(path)),
             source => source,
         }
     }
@@ -254,7 +254,7 @@ impl Native {
         while bytes.len().saturating_sub(offset) >= size_of::<libc::cmsghdr>() {
             // SAFETY: control storage is word-aligned and offset advances by word alignment.
             let message = unsafe { &*bytes.as_ptr().add(offset).cast::<libc::cmsghdr>() };
-            let length = message.cmsg_len as usize;
+            let length = message.cmsg_len;
             if length < header || length > bytes.len() - offset {
                 return Err(RuntimeNetworkError::Invalid);
             }

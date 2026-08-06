@@ -113,7 +113,7 @@ mod tests {
         bounded.validate().unwrap();
         assert_eq!(bounded.duration().as_secs(), 240);
         assert_eq!(
-            bounded.attempts().map(|attempt| attempt.ordinal()).collect::<Vec<_>>(),
+            bounded.attempts().map(super::Attempt::ordinal).collect::<Vec<_>>(),
             vec![1]
         );
 
@@ -123,7 +123,7 @@ mod tests {
         extended.validate().unwrap();
         assert_eq!(extended.total_duration().as_secs(), 2_400);
         assert_eq!(
-            extended.attempts().map(|attempt| attempt.ordinal()).collect::<Vec<_>>(),
+            extended.attempts().map(super::Attempt::ordinal).collect::<Vec<_>>(),
             (1..=10).collect::<Vec<_>>()
         );
         assert_eq!(extended.resources().cpu(), 4);

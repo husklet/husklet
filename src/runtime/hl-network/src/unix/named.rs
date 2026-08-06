@@ -78,13 +78,13 @@ impl NamedSocket {
     pub fn state(&self) -> NamedSocketState {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .lifecycle
             .clone()
     }
 
     pub fn bind(&self, address: UnixAddress) -> Result<(), NamedSocketError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.connecting || state.lifecycle != NamedSocketState::Created {
             return Err(NamedSocketError::InvalidTransition);
         }
@@ -93,7 +93,7 @@ impl NamedSocket {
     }
 
     pub fn listen(&self, backlog: usize) -> Result<(), NamedSocketError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.connecting {
             return Err(NamedSocketError::InvalidTransition);
         }
@@ -139,7 +139,7 @@ impl NamedSocket {
             return Err(NamedSocketError::TypeMismatch);
         }
         {
-            let mut client = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut client = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if client.connecting
                 || !matches!(
                     client.lifecycle,
@@ -151,15 +151,12 @@ impl NamedSocket {
             client.connecting = true;
         }
 
-        let mut state = listener.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = listener.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
-            let backlog = match state.lifecycle {
-                NamedSocketState::Listening { backlog, .. } => backlog,
-                _ => {
-                    drop(state);
-                    self.cancel_connecting();
-                    return Err(NamedSocketError::InvalidTransition);
-                }
+            let backlog = if let NamedSocketState::Listening { backlog, .. } = state.lifecycle { backlog } else {
+                drop(state);
+                self.cancel_connecting();
+                return Err(NamedSocketError::InvalidTransition);
             };
             if state.pending.len() + state.reserved < backlog {
                 state.reserved += 1;
@@ -174,12 +171,12 @@ impl NamedSocket {
                 self.cancel_connecting();
                 return Err(NamedSocketError::WouldBlock);
             }
-            state = listener.wake.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = listener.wake.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
     fn cancel_connecting(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.connecting = false;
         drop(state);
         self.wake.notify_all();
@@ -190,7 +187,7 @@ impl NamedSocket {
         if pair.socket_type() != self.socket_type {
             return Err(NamedSocketError::TypeMismatch);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             let backlog = match state.lifecycle {
                 NamedSocketState::Listening { backlog, .. } => backlog,
@@ -206,13 +203,13 @@ impl NamedSocket {
             if nonblocking {
                 return Err(NamedSocketError::WouldBlock);
             }
-            state = self.wake.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self.wake.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
     /// Removes the oldest pending connection as one atomic FIFO operation.
     pub fn accept(&self, nonblocking: bool) -> Result<Arc<UnixSocketPair>, NamedSocketError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if !matches!(state.lifecycle, NamedSocketState::Listening { .. }) {
                 return Err(NamedSocketError::InvalidTransition);
@@ -226,7 +223,7 @@ impl NamedSocket {
             if nonblocking {
                 return Err(NamedSocketError::WouldBlock);
             }
-            state = self.wake.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self.wake.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -239,7 +236,7 @@ impl NamedSocket {
     pub fn pending(&self) -> usize {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pending
             .len()
     }
@@ -252,11 +249,11 @@ impl ConnectReservation {
         if pair.socket_type() != self.client.socket_type {
             return Err(NamedSocketError::TypeMismatch);
         }
-        let mut listener = self.listener.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut listener = self.listener.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !matches!(listener.lifecycle, NamedSocketState::Listening { .. }) || listener.reserved == 0 {
             return Err(NamedSocketError::InvalidTransition);
         }
-        let mut client = self.client.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut client = self.client.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if !client.connecting
             || !matches!(
                 client.lifecycle,
@@ -285,10 +282,10 @@ impl Drop for ConnectReservation {
         if !self.active {
             return;
         }
-        let mut listener = self.listener.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut listener = self.listener.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         debug_assert_ne!(listener.reserved, 0);
         listener.reserved = listener.reserved.saturating_sub(1);
-        let mut client = self.client.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut client = self.client.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         client.connecting = false;
         drop(client);
         drop(listener);

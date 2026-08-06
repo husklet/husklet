@@ -105,7 +105,7 @@ impl ProcessSyscalls for LinuxHost {
         let result = unsafe {
             // SAFETY: the complete pointer and lifetime proof is immediately above.
             abi::posix_spawnp(
-                &mut pid,
+                &raw mut pid,
                 request.program.as_ptr(),
                 actions.file_actions(),
                 actions.attributes(),
@@ -126,7 +126,7 @@ impl ProcessSyscalls for LinuxHost {
             unsafe {
                 let _ = abi::kill(pid, abi::SIGKILL);
                 let mut status = 0;
-                let _ = abi::waitpid(pid, &mut status, 0);
+                let _ = abi::waitpid(pid, &raw mut status, 0);
             }
             return Err(ErrnoMapper::current());
         }
@@ -146,7 +146,7 @@ impl ProcessSyscalls for LinuxHost {
         let mut status = 0;
         // SAFETY: status is uniquely writable; pid is validated, libc retains
         // nothing, and cannot unwind.
-        let result = unsafe { abi::waitpid(pid, &mut status, abi::WNOHANG) };
+        let result = unsafe { abi::waitpid(pid, &raw mut status, abi::WNOHANG) };
         if result < 0 {
             return Err(ErrnoMapper::current());
         }
@@ -169,7 +169,7 @@ impl ProcessSyscalls for LinuxHost {
         loop {
             // SAFETY: status is uniquely writable; pid is validated, libc
             // retains nothing, and cannot unwind.
-            let result = unsafe { abi::waitpid(pid, &mut status, 0) };
+            let result = unsafe { abi::waitpid(pid, &raw mut status, 0) };
             if result < 0 && ErrnoMapper::current() == HostError::Interrupted {
                 continue;
             }

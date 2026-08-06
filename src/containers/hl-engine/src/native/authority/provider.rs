@@ -12,11 +12,11 @@ impl ProjectedBackend {
         let file = descriptor
             .map(crate::ffi::linux::InheritedFile::adopt)
             .transpose()
-            .map_err(|_| EngineError::AuthorityFailed)?;
+            .map_err(|()| EngineError::AuthorityFailed)?;
         let root = root
             .map(crate::ffi::linux::InheritedFile::adopt)
             .transpose()
-            .map_err(|_| EngineError::AuthorityFailed)?;
+            .map_err(|()| EngineError::AuthorityFailed)?;
         Ok(Self { file, root })
     }
 

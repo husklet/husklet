@@ -101,7 +101,7 @@ impl NetworkAuthority {
             return Err(EngineError::AuthorityFailed);
         }
         let descriptor =
-            crate::ffi::linux::InheritedListener::adopt(rights[0]).map_err(|_| EngineError::AuthorityFailed)?;
+            crate::ffi::linux::InheritedListener::adopt(rights[0]).map_err(|()| EngineError::AuthorityFailed)?;
         let (slot, generation) = self.allocate(descriptor)?;
         self.capture
             .as_mut()
@@ -119,7 +119,7 @@ impl NetworkAuthority {
     fn discard(rights: Vec<i32>) -> Result<(), EngineError> {
         for descriptor in rights {
             let descriptor =
-                crate::ffi::linux::InheritedFile::adopt(descriptor).map_err(|_| EngineError::AuthorityFailed)?;
+                crate::ffi::linux::InheritedFile::adopt(descriptor).map_err(|()| EngineError::AuthorityFailed)?;
             drop(descriptor);
         }
         Ok(())

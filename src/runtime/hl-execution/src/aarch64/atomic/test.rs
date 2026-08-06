@@ -322,7 +322,7 @@ fn decoder_retains_acquire() {
 #[test]
 fn exclusive_interference_range() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut first = Aarch64CpuState {
         pc: 0x1000,
         ..Default::default()
@@ -364,7 +364,7 @@ fn exclusive_interference_range() {
 #[test]
 fn exclusive_address_mismatch() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut cpu = Aarch64CpuState {
         pc: 0x1800,
         ..Default::default()
@@ -390,7 +390,7 @@ fn exclusive_address_mismatch() {
 #[test]
 fn exclusive_width_mismatch() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut cpu = Aarch64CpuState {
         pc: 0x1900,
         ..Default::default()
@@ -414,7 +414,7 @@ fn exclusive_width_mismatch() {
 #[test]
 fn retry_requires_load() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut cpu = Aarch64CpuState {
         pc: 0x1a00,
         ..Default::default()
@@ -449,7 +449,7 @@ fn retry_requires_load() {
 #[test]
 fn clear_exclusive_discards() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut cpu = Aarch64CpuState {
         pc: 0x1d00,
         ..Default::default()
@@ -466,7 +466,7 @@ fn clear_exclusive_discards() {
 #[test]
 fn stale_mapping_fork() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut cpu = Aarch64CpuState {
         pc: 0x2000,
         ..Default::default()
@@ -496,7 +496,7 @@ fn stale_mapping_fork() {
 #[test]
 fn pair_exclusives_and() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     let mut cpu = Aarch64CpuState {
         pc: 0x3000,
         ..Default::default()
@@ -544,7 +544,7 @@ fn pair_exclusives_and() {
 #[test]
 fn lse_contention_model() {
     let mut memory = Memory::default();
-    let mut system = System::default();
+    let mut system = System;
     memory.write(0xc000, 8, 0);
     let mut cpus = [
         Aarch64CpuState {

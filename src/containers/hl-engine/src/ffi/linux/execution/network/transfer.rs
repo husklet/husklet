@@ -112,7 +112,7 @@ impl NativeTransfer {
                 libc::SOL_SOCKET,
                 libc::SO_TYPE,
                 std::ptr::from_mut(&mut kind).cast(),
-                &mut kind_length,
+                &raw mut kind_length,
             )
         } != 0
         {
@@ -133,7 +133,7 @@ impl NativeTransfer {
         let mut local = unsafe { std::mem::zeroed::<libc::sockaddr_storage>() };
         let mut local_length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         // SAFETY: local is writable for local_length and getsockname retains no pointer.
-        if unsafe { libc::getsockname(raw, std::ptr::from_mut(&mut local).cast(), &mut local_length) } != 0 {
+        if unsafe { libc::getsockname(raw, std::ptr::from_mut(&mut local).cast(), &raw mut local_length) } != 0 {
             return Err(Native::runtime_error());
         }
         let local = Native::decode_address(&local, local_length)?;
@@ -146,7 +146,7 @@ impl NativeTransfer {
         let mut peer = unsafe { std::mem::zeroed::<libc::sockaddr_storage>() };
         let mut peer_length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         // SAFETY: peer is writable for peer_length and getpeername retains no pointer.
-        let peer = (unsafe { libc::getpeername(raw, std::ptr::from_mut(&mut peer).cast(), &mut peer_length) } == 0)
+        let peer = (unsafe { libc::getpeername(raw, std::ptr::from_mut(&mut peer).cast(), &raw mut peer_length) } == 0)
             .then(|| Native::decode_address(&peer, peer_length))
             .transpose()?;
         // SAFETY: F_GETFL reads flags without changing descriptor ownership.

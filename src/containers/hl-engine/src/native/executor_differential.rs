@@ -324,12 +324,12 @@ impl TraceCase {
             mapping_incarnation: 1,
             active: 0,
         };
-        let executor = Executor::create().map_err(|_| "native create failed")?;
-        executor.reset(1).map_err(|_| "native reset failed")?;
+        let executor = Executor::create().map_err(|()| "native create failed")?;
+        executor.reset(1).map_err(|()| "native reset failed")?;
         let mut cpu = self.cpu.clone();
         let outcome = executor
             .run_aarch64(&mut cpu, &source, Some(&projection), 1, instruction_count, None, None)
-            .map_err(|_| "native run failed")?;
+            .map_err(|()| "native run failed")?;
         if outcome.0 != Exit::Yield || outcome.4 != 0 || outcome.5 != instruction_count {
             return Err("native checkpoint was not an exact fully-spilled budget exit");
         }
@@ -646,7 +646,7 @@ impl GuestOperandMemory for ReplayMemory {
 
     fn reserve_write_batch(&self, writes: &[(u64, u8)]) -> Result<Self::BatchReservation, u64> {
         for &(address, bytes) in writes {
-            self.reserve_write(address, bytes).map_err(|_| address)?;
+            self.reserve_write(address, bytes).map_err(|()| address)?;
         }
         Ok(writes.to_vec())
     }

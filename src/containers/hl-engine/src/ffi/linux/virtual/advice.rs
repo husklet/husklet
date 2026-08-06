@@ -177,7 +177,7 @@ impl Memory {
     pub(super) fn update_advice(&self, range: AddressRange, advice: Option<ForkAdvice>) -> Result<(), MemoryError> {
         self.advice
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .update(range, advice)
     }
 
@@ -187,7 +187,7 @@ impl Memory {
     ) -> Result<Vec<(AddressRange, Option<ForkAdvice>)>, MemoryError> {
         self.advice
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .segments(range)
     }
 }

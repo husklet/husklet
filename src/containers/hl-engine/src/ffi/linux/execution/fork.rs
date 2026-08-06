@@ -176,15 +176,11 @@ impl Runtime {
                 return Err(error);
             }
         };
-        let context = match self
+        let context = if let Ok(value) = self
             .process
-            .fork_child(source, process, Arc::clone(&space), ipc.child()?)
-        {
-            Ok(value) => value,
-            Err(_) => {
-                let _ = tasks.rollback_fork_process(plan);
-                return Err(Errno::ENOMEM);
-            }
+            .fork_child(source, process, Arc::clone(&space), ipc.child()?) { value } else {
+            let _ = tasks.rollback_fork_process(plan);
+            return Err(Errno::ENOMEM);
         };
         if context.install_threads(&self.threads).is_err() {
             let _ = tasks.rollback_fork_process(plan);
@@ -224,13 +220,10 @@ impl Runtime {
                 _ => Errno::EIO,
             });
         }
-        let mut runnable = match self.threads.stage_fork(&plan, Self::child_cpu(cpu, linux.stack)) {
-            Ok(value) => value,
-            Err(_) => {
-                self.threads.discard(thread);
-                let _ = tasks.rollback_fork_process(plan);
-                return Err(Errno::EIO);
-            }
+        let mut runnable = if let Ok(value) = self.threads.stage_fork(&plan, Self::child_cpu(cpu, linux.stack)) { value } else {
+            self.threads.discard(thread);
+            let _ = tasks.rollback_fork_process(plan);
+            return Err(Errno::EIO);
         };
         ipc.finish()?;
         if vfork {

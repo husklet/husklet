@@ -45,7 +45,7 @@ impl ReadOnlyPaths {
         if path.len() >= READ_ONLY_PATH_CAPACITY {
             return Err(ReadOnlyError::PathTooLong);
         }
-        let mut paths = self.paths.write().unwrap_or_else(|error| error.into_inner());
+        let mut paths = self.paths.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if paths.iter().any(|stored| stored == path) {
             return Ok(());
         }
@@ -71,7 +71,7 @@ impl ReadOnlyPaths {
     fn denies_raw(&self, path: &[u8]) -> bool {
         self.paths
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .any(|root| {
                 path.strip_prefix(root.as_bytes())
@@ -82,7 +82,7 @@ impl ReadOnlyPaths {
     /// Returns the number of distinct configured roots.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.paths.read().unwrap_or_else(|error| error.into_inner()).len()
+        self.paths.read().unwrap_or_else(std::sync::PoisonError::into_inner).len()
     }
 
     /// Returns whether no read-only roots are configured.

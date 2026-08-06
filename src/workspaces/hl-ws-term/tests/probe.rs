@@ -26,13 +26,13 @@ fn nonascii_title_and_cwd_roundtrip() {
 fn osc7_percent_encoded_utf8_path() {
     assert_eq!(
         WorkingDirectory::from_osc7("file://host/tmp/%C3%A9")
-            .map(|path| path.into_string())
+            .map(hl_ws_term::WorkingDirectory::into_string)
             .as_deref(),
         Some("/tmp/é")
     );
     assert_eq!(
         WorkingDirectory::from_osc7("file:///a/%E4%B8%96%E7%95%8C")
-            .map(|path| path.into_string())
+            .map(hl_ws_term::WorkingDirectory::into_string)
             .as_deref(),
         Some("/a/世界")
     );

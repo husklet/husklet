@@ -18,7 +18,7 @@ pub struct CommittedSemaphoreExit {
 
 impl PreparedSemaphoreExit {
     pub fn commit(self) -> Result<CommittedSemaphoreExit, SemaphoreError> {
-        let mut state = self.namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state != self.previous {
             return Err(SemaphoreError::InvalidArgument);
         }
@@ -35,7 +35,7 @@ impl PreparedSemaphoreExit {
 
 impl CommittedSemaphoreExit {
     pub fn rollback(self) -> Result<(), SemaphoreError> {
-        let mut state = self.namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state != self.published {
             return Err(SemaphoreError::InvalidArgument);
         }
@@ -50,7 +50,7 @@ impl CommittedSemaphoreExit {
 
 impl SemaphoreNamespace {
     pub fn prepare_exit(self: &Arc<Self>, process: u32, now: u64) -> Result<PreparedSemaphoreExit, SemaphoreError> {
-        let previous = self.state.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let previous = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         let mut published = previous.clone();
         let adjustments = published
             .undo

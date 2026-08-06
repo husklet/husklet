@@ -308,7 +308,7 @@ impl MemoryLedger {
 
     #[must_use]
     pub fn snapshot(&self) -> MemoryLedgerSnapshot {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         MemoryLedgerSnapshot {
             generation: state.generation,
             regions: state.mappings.regions.clone(),
@@ -324,14 +324,14 @@ impl MemoryLedger {
     pub fn regions(&self) -> Vec<Region> {
         self.state
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .mappings
             .regions
             .clone()
     }
 
     pub(crate) fn executable_aliases(&self, backing: Backing) -> ExecutableAliasEvidence {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         ExecutableAliasEvidence {
             generation: state.generation,
             present: state.mappings.regions.iter().any(|region| {
@@ -343,7 +343,7 @@ impl MemoryLedger {
     pub(crate) fn replace(&self, expected: u64, regions: Vec<Region>) -> Result<u64, MemoryError> {
         let mut mappings = RegionSet { regions };
         mappings.finish()?;
-        let mut live = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut live = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if live.generation != expected {
             return Err(MemoryError::InvariantViolation);
         }
@@ -368,7 +368,7 @@ impl MemoryLedger {
         reserved: bool,
         commit: impl FnOnce(GuestAddress, &[Region]) -> Result<(), MemoryError>,
     ) -> Result<GuestAddress, MemoryError> {
-        let mut live = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut live = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut staged = live.mappings.clone();
         let address = staged.map(request, charge, reserved)?;
         commit(address, &staged.regions)?;
@@ -410,7 +410,7 @@ impl MemoryLedger {
         operations: &[Operation],
         commit: impl FnOnce(&[PlannedOperation], &[Region]) -> Result<(), MemoryError>,
     ) -> Result<Vec<GuestAddress>, MemoryError> {
-        let mut live = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut live = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut staged = live.mappings.clone();
         let mut plan = Vec::new();
         let mut addresses = Vec::new();
@@ -452,7 +452,7 @@ impl MemoryLedger {
     pub fn resolve(&self, address: GuestAddress, required: Protection) -> Option<Resolution> {
         self.state
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .mappings
             .resolve(address, required)
     }
@@ -460,7 +460,7 @@ impl MemoryLedger {
     /// Reports whether every byte in `range` belongs to a logical mapping.
     #[must_use]
     pub fn contains(&self, range: AddressRange) -> bool {
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut cursor = range.start();
         for region in &state.mappings.regions {
             if region.range().end() <= cursor {
@@ -527,7 +527,7 @@ impl MemoryLedger {
     pub fn overlaps(&self, range: AddressRange) -> bool {
         self.state
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .mappings
             .overlaps(range)
     }
@@ -535,7 +535,7 @@ impl MemoryLedger {
     pub fn validate(&self) -> Result<(), MemoryError> {
         self.state
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .mappings
             .validate()
     }
@@ -545,7 +545,7 @@ impl MemoryLedger {
         operation: impl FnOnce(&mut RegionSet) -> Result<(), MemoryError>,
         commit: impl FnOnce(&[Region]) -> Result<(), MemoryError>,
     ) -> Result<(), MemoryError> {
-        let mut live = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut live = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut staged = live.mappings.clone();
         operation(&mut staged)?;
         staged.finish()?;

@@ -357,6 +357,7 @@ impl Interruption {
     }
 
     /// Consumes one pending interruption for an external blocking adapter.
+    #[must_use]
     pub fn take_pending(&self) -> bool {
         self.consume()
     }

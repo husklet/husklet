@@ -35,11 +35,11 @@ impl Reactor {
                 continue;
             }
             if polls[0].revents & libc::POLLIN != 0 {
-                Self::drain(&source)
+                Self::drain(&source);
             }
             let Some(shared) = source.upgrade() else { return };
             Self::disarm(&shared, &tokens, &polls);
-            let observers = shared.observers.lock().unwrap_or_else(|error| error.into_inner());
+            let observers = shared.observers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let ready = tokens
                 .drain(..)
                 .zip(polls.iter().skip(1))
@@ -48,7 +48,7 @@ impl Reactor {
                 .collect::<Vec<_>>();
             drop(observers);
             for observer in ready {
-                observer.readiness_changed()
+                observer.readiness_changed();
             }
         }
     }
@@ -57,7 +57,7 @@ impl Reactor {
         shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .map(|(token, entry)| {
                 (
@@ -91,7 +91,7 @@ impl Reactor {
     }
 
     fn disarm(shared: &Self, tokens: &[Token], polls: &[libc::pollfd]) {
-        let mut sockets = shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for ((token, _, _, _), poll) in tokens.iter().zip(polls.iter().skip(1)) {
             let Some(entry) = sockets.get_mut(token) else { continue };
             if poll.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0 {

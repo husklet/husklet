@@ -10,7 +10,7 @@ struct ReadNotification(Weak<InotifyInner>);
 impl CancellationNotification for ReadNotification {
     fn notify(&self) {
         if let Some(inner) = self.0.upgrade() {
-            let state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             drop(state);
             inner.changed.notify_all();
         }
@@ -42,7 +42,7 @@ impl Inotify {
     ) -> Result<PreparedInotifyRead, InotifyError> {
         let _subscription = cancellation
             .map(|cancellation| cancellation.subscribe(Arc::new(ReadNotification(Arc::downgrade(&self.inner)))));
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             Self::ensure_active(&state)?;
             if !state.queue.is_empty() {
@@ -58,7 +58,7 @@ impl Inotify {
                 .inner
                 .changed
                 .wait(state)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         let mut events = Vec::new();
         let mut size = 0;
@@ -84,7 +84,7 @@ impl Inotify {
     }
 
     pub fn commit_read(&self, prepared: &PreparedInotifyRead) -> Result<(), InotifyError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::ensure_active(&state)?;
         if !state
             .queue

@@ -16,7 +16,7 @@ impl Memory {
     pub(super) fn prepare_canonical(&self, request: hl_memory::MapRequest) -> Result<Option<Canonical>, MemoryError> {
         let (file, offset) = match request.backing {
             hl_memory::Backing::File { identity, shared: true } => {
-                let files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+                let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let file = files
                     .get(&(identity.device, identity.object))
                     .ok_or(MemoryError::Host)?
@@ -134,8 +134,8 @@ impl Memory {
         let (address, length) = self.host_range(offset, request.length)?;
         let native = Self::native_protection(request.protection)?;
         let key = (u64::MAX, identity);
-        let mut files = self.files.lock().unwrap_or_else(|error| error.into_inner());
-        if !files.contains_key(&key) {
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let std::collections::btree_map::Entry::Vacant(e) = files.entry(key) {
             let file = abi::Memfd::create(c"hl-shared").map_err(|()| MemoryError::Host)?;
             file.set_len(
                 request
@@ -144,7 +144,7 @@ impl Memory {
                     .ok_or(MemoryError::InvalidRange)?,
             )
             .map_err(|_| MemoryError::Host)?;
-            files.insert(key, file);
+            e.insert(file);
         }
         let file = files.get(&key).ok_or(MemoryError::Host)?;
         let backing_offset = i64::try_from(request.backing_offset).map_err(|_| MemoryError::InvalidRange)?;
@@ -163,7 +163,7 @@ impl Memory {
     }
 
     pub(super) fn apply_backing(&self, change: hl_memory::BackingChange) -> Result<(), MemoryError> {
-        let files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = files
             .get(&(change.identity.device, change.identity.object))
             .ok_or(MemoryError::Host)?;
@@ -177,7 +177,7 @@ impl Memory {
         };
         let (address, length) = self.host_range(offset, request.length)?;
         let native = Self::native_protection(request.protection)?;
-        let files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = files
             .get(&(identity.device, identity.object))
             .ok_or(MemoryError::Host)?;
@@ -197,7 +197,7 @@ impl Memory {
     }
 
     pub(super) fn register_file(&self, identity: hl_memory::FileIdentity, file: &File) -> Result<(), MemoryError> {
-        let mut files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let mut files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if files.len() >= 1024 && !files.contains_key(&(identity.device, identity.object)) {
             return Err(MemoryError::OutOfMemory);
         }
@@ -229,7 +229,7 @@ impl Memory {
         length: u64,
         address: u64,
     ) -> Result<u64, MemoryError> {
-        let files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = files
             .get(&(identity.device, identity.object))
             .ok_or(MemoryError::Host)?;
@@ -249,7 +249,7 @@ impl Memory {
     }
 
     pub(super) fn file_valid_length(&self, identity: hl_memory::FileIdentity) -> Result<u64, MemoryError> {
-        let files = self.files.lock().unwrap_or_else(|error| error.into_inner());
+        let files = self.files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = files
             .get(&(identity.device, identity.object))
             .ok_or(MemoryError::Host)?;

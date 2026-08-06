@@ -76,7 +76,7 @@ pub(super) struct PipeCancellationWake {
 impl CancellationNotification for PipeCancellationWake {
     fn notify(&self) {
         if let Some(pipe) = self.pipe.upgrade() {
-            let state = pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             pipe.notify_sleepers(&state);
             drop(state);
         }
@@ -138,7 +138,7 @@ impl Pipe {
     }
 
     pub fn snapshot(&self) -> Result<PipeSnapshot, PipeCreateError> {
-        let state = self.reader.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.reader.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.waiters != 0 || state.open_waiters != 0 || state.sleepers != 0 {
             return Err(PipeCreateError::Busy);
         }
@@ -159,7 +159,7 @@ impl Pipe {
         snapshot.validate()?;
         let pipe = Self::with_capacity_mode(snapshot.capacity, false, snapshot.packet_mode)?;
         {
-            let mut state = pipe.reader.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = pipe.reader.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.bytes = snapshot.bytes.iter().copied().collect();
             state.head_fragment = snapshot.head_fragment;
             state.packets = snapshot.packets.iter().copied().collect();
@@ -192,7 +192,7 @@ impl PipeEndpoint {
         self.pipe
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sleepers
     }
 
@@ -201,13 +201,13 @@ impl PipeEndpoint {
         self.pipe
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sleeper_registration = Some(sender);
     }
 
     fn new(pipe: Arc<PipeShared>, direction: EndpointDirection) -> Self {
         let nonblocking = {
-            let state = pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match direction {
                 EndpointDirection::Read => state.read_nonblocking,
                 EndpointDirection::Write => state.write_nonblocking,
@@ -240,7 +240,7 @@ impl PipeEndpoint {
         self.pipe
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .capacity
     }
 
@@ -249,7 +249,7 @@ impl PipeEndpoint {
         self.pipe
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .bytes
             .len()
     }
@@ -262,7 +262,7 @@ impl PipeEndpoint {
         let capacity = requested
             .checked_next_power_of_two()
             .ok_or(ObjectError::PermissionDenied)?;
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if capacity < state.bytes.len() {
             return Err(ObjectError::Busy);
         }
@@ -374,7 +374,7 @@ impl PipeEndpoint {
         &self,
         cancellation: Option<&dyn OperationCancellation>,
     ) -> Result<MutexGuard<'_, PipeState>, ObjectError> {
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut _subscription = None;
         let mut subscribed = cancellation.is_none();
         loop {
@@ -398,7 +398,7 @@ impl PipeEndpoint {
                     }))
                 });
                 subscribed = true;
-                state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+                state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 continue;
             }
             state = self.wait(state);
@@ -429,7 +429,7 @@ impl PipeEndpoint {
         let mut written = 0;
         while written < input.len() {
             let required = {
-                let state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+                let state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 if state.packet_mode {
                     PIPE_BUF.min(input.len() - written)
                 } else {
@@ -466,7 +466,7 @@ impl PipeEndpoint {
         required: usize,
         cancellation: Option<&dyn OperationCancellation>,
     ) -> Result<MutexGuard<'_, PipeState>, ObjectError> {
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut _subscription = None;
         let mut subscribed = cancellation.is_none();
         loop {
@@ -493,7 +493,7 @@ impl PipeEndpoint {
                     }))
                 });
                 subscribed = true;
-                state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+                state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 continue;
             }
             state = self.wait(state);
@@ -507,14 +507,14 @@ impl PipeEndpoint {
         if let Some(sender) = &state.sleeper_registration {
             let _ = sender.send(());
         }
-        let mut state = self.pipe.changed.wait(state).unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         state.sleepers -= 1;
         state
     }
 
     pub(super) fn set_nonblocking(&self, enabled: bool) {
         self.nonblocking.store(enabled, Ordering::Release);
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match self.direction {
             EndpointDirection::Read => state.read_nonblocking = enabled,
             EndpointDirection::Write => state.write_nonblocking = enabled,
@@ -523,7 +523,7 @@ impl PipeEndpoint {
     }
 
     pub(super) fn endpoint_readiness(&self, interests: Readiness) -> Readiness {
-        let state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ready = match self.direction {
             EndpointDirection::Read => {
                 let mut ready = 0;
@@ -552,7 +552,7 @@ impl PipeEndpoint {
         if self.retired.swap(true, Ordering::AcqRel) {
             return;
         }
-        let state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.pipe.notify_sleepers(&state);
         drop(state);
         self.endpoint_registry().notify();
@@ -563,7 +563,7 @@ impl PipeEndpoint {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match self.direction {
             EndpointDirection::Read => state.readers -= 1,
             EndpointDirection::Write => state.writers -= 1,

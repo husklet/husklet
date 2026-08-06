@@ -36,7 +36,7 @@ impl MemoryAccount {
 
 impl hl_runtime::AnonymousMemoryAccount for MemoryAccount {
     fn reserve(&self, bytes: u64) -> bool {
-        let mut current = self.current.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(next) = current.checked_add(bytes).filter(|next| *next <= self.limit) else {
             return false;
         };
@@ -48,13 +48,13 @@ impl hl_runtime::AnonymousMemoryAccount for MemoryAccount {
     }
 
     fn refund(&self, bytes: u64) {
-        let mut current = self.current.lock().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *current = current.saturating_sub(bytes);
         let _ = self.publish(*current);
     }
 
     fn current(&self) -> u64 {
-        *self.current.lock().unwrap_or_else(|error| error.into_inner())
+        *self.current.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

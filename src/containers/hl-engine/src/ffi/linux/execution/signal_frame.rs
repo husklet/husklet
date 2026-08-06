@@ -100,12 +100,9 @@ impl Port {
     fn frozen(&self, thread: ThreadId) -> Result<(super::threads::ThreadRun, ExecutionSnapshot), ()> {
         let run = self.threads.find(thread).ok_or(())?;
         run.machine.freeze().map_err(|_| ())?;
-        match run.machine.snapshot() {
-            Ok(snapshot) => Ok((run, snapshot)),
-            Err(_) => {
-                let _ = run.machine.thaw();
-                Err(())
-            }
+        if let Ok(snapshot) = run.machine.snapshot() { Ok((run, snapshot)) } else {
+            let _ = run.machine.thaw();
+            Err(())
         }
     }
 }
@@ -201,11 +198,10 @@ impl PreparedFramePublication for Publication {
 
 impl Drop for Publication {
     fn drop(&mut self) {
-        if self.published && !self.committed {
-            if let Some(previous) = self.previous_snapshot.take() {
+        if self.published && !self.committed
+            && let Some(previous) = self.previous_snapshot.take() {
                 let _ = self.machine.replace(previous);
             }
-        }
         if !self.committed {
             if let Some(address) = self.address {
                 let memory = self.space.guest_memory();

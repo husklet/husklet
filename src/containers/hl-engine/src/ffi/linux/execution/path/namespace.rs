@@ -184,15 +184,14 @@ impl NativePath {
     }
 
     pub(super) fn procfs_plan(&self, plan: &OpenAbiPlan) -> Result<Option<OpenAbiPlan>, RuntimePathError> {
-        if let (Some(procfs), Some(process)) = (&self.procfs, self.process) {
-            if procfs
+        if let (Some(procfs), Some(process)) = (&self.procfs, self.process)
+            && procfs
                 .uts_namespace(plan.operand.path.as_bytes(), process.number())
                 .map_err(Self::procfs_error)?
                 .is_some()
             {
                 return Ok(None);
             }
-        }
         let Some(mut target) = self.procfs_link(plan.operand.path.as_bytes())? else {
             return Ok(None);
         };
@@ -238,16 +237,14 @@ impl NativePath {
         &self,
         plan: &OpenAbiPlan,
     ) -> Result<Option<Box<dyn PreparedPathOpen>>, RuntimePathError> {
-        if plan.operand.nofollow && plan.intent.bits() & OpenIntent::PATH_ONLY != 0 {
-            if let Some(node) = self.procfs_node(plan.operand.path.as_bytes())? {
-                if node.target().is_some() {
+        if plan.operand.nofollow && plan.intent.bits() & OpenIntent::PATH_ONLY != 0
+            && let Some(node) = self.procfs_node(plan.operand.path.as_bytes())?
+                && node.target().is_some() {
                     if plan.intent.bits() & OpenIntent::DIRECTORY != 0 {
                         return Err(RuntimePathError::NotDirectory);
                     }
                     return Ok(Some(Box::new(ProcfsOpen(Arc::new(node)))));
                 }
-            }
-        }
         if let (Some(procfs), Some(process)) = (&self.procfs, self.process) {
             match procfs.open(plan.operand.path.as_bytes(), process.number(), plan.intent) {
                 Ok(Some(object)) => return Ok(Some(Box::new(ProcfsOpen(object)))),
@@ -282,7 +279,7 @@ impl NativePath {
         }
         match plan.operand.path.as_bytes() {
             b"/proc/self/auxv" | b"proc/self/auxv" => {
-                let bytes = self.auxiliary.lock().unwrap_or_else(|error| error.into_inner()).clone();
+                let bytes = self.auxiliary.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
                 super::auxiliary::AuxiliaryFile::prepare(bytes, plan.intent).map(Some)
             }
             _ => Ok(None),

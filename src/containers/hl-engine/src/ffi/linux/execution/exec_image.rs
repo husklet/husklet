@@ -318,7 +318,7 @@ impl Coordinator {
         match self.stage_inner(process, thread, plan) {
             Ok(prepared) => Ok(prepared),
             Err(error) => {
-                *self.active.lock().unwrap_or_else(|lock| lock.into_inner()) = false;
+                *self.active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
                 Err(error)
             }
         }
@@ -471,7 +471,7 @@ impl Transaction {
         self.retire.rollback();
         self.threads.rollback();
         if let Some(previous) = self.previous_auxiliary.take() {
-            *self.auxiliary_slot.lock().unwrap_or_else(|error| error.into_inner()) = previous;
+            *self.auxiliary_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = previous;
         }
         self.loader.rollback();
         self.descriptors.rollback();
@@ -489,7 +489,7 @@ impl Transaction {
     }
 
     fn release(&self) {
-        *self.active.lock().unwrap_or_else(|error| error.into_inner()) = false;
+        *self.active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
     }
 }
 

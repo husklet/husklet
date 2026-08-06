@@ -226,7 +226,7 @@ impl<T: ProviderTransport> ProjectedFile<T> {
         if whence > 2 {
             return Err(FileError::InvalidArgument);
         }
-        let _sequence = self.sequence.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _sequence = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let remote = self.remote()?;
         let reply = self.client.request(&FileProtocol::seek(remote, offset, whence))?;
         let position = FileProtocol::seek_reply(reply)?;
@@ -275,7 +275,7 @@ impl<T: ProviderTransport> ProjectedFile<T> {
         self.retired.store(true, Ordering::Release);
         self.subscription
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         self.readiness.close();
         Ok(FileRebind { snapshot, capability })
@@ -290,7 +290,7 @@ impl<T: ProviderTransport> ProjectedFile<T> {
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, FileState> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn object_error(error: FileError) -> ObjectError {
@@ -315,7 +315,7 @@ impl<T: ProviderTransport> OpenFileDescription for ProjectedFile<T> {
     }
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
-        let _sequence = self.sequence.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _sequence = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = self.read_at(SEQUENTIAL, output).map_err(Self::object_error)?;
         let mut state = self.state();
         state.offset = state.offset.saturating_add(count as u64);
@@ -323,7 +323,7 @@ impl<T: ProviderTransport> OpenFileDescription for ProjectedFile<T> {
     }
 
     fn write(&self, input: &[u8]) -> Result<usize, ObjectError> {
-        let _sequence = self.sequence.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _sequence = self.sequence.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = self.write_at(SEQUENTIAL, input).map_err(Self::object_error)?;
         let mut state = self.state();
         state.offset = state.offset.saturating_add(count as u64);
@@ -350,7 +350,7 @@ impl<T: ProviderTransport> OpenFileDescription for ProjectedFile<T> {
         let mut remote_subscription = self
             .subscription
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if remote_subscription.is_none() {
             let remote = self.remote().map_err(Self::object_error)?;
             let identity =
@@ -374,7 +374,7 @@ impl<T: ProviderTransport> OpenFileDescription for ProjectedFile<T> {
         self.retired.store(true, Ordering::Release);
         self.subscription
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         self.readiness.close();
     }

@@ -49,7 +49,7 @@ impl RetireImage {
         for thread in obligations {
             let Some(address) = thread.clear_tid else { continue };
             let address = GuestAddress::new(address);
-            if address.get() % 4 != 0 || words.contains_key(&address) {
+            if !address.get().is_multiple_of(4) || words.contains_key(&address) {
                 continue;
             }
             if let Ok(value) = Self::read_u32(&memory, address) {

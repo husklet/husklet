@@ -70,7 +70,7 @@ impl Seccomp {
             libc::prctl(
                 libc::PR_SET_SECCOMP,
                 libc::SECCOMP_MODE_FILTER,
-                &program as *const libc::sock_fprog,
+                &raw const program,
             )
         } != 0
         {

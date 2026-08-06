@@ -157,7 +157,7 @@ impl ControlCodec {
         }
         match word {
             ControlWord::Four => {
-                output.extend_from_slice(&u32::try_from(length).map_err(|_| ControlError::TooBig)?.to_le_bytes())
+                output.extend_from_slice(&u32::try_from(length).map_err(|_| ControlError::TooBig)?.to_le_bytes());
             }
             ControlWord::Eight => {
                 output.extend_from_slice(&(length as u64).to_le_bytes());
@@ -188,7 +188,7 @@ impl ControlCodec {
                 data: data.to_vec(),
             });
         }
-        if data.len() % 4 != 0 || data.len() / 4 > RIGHTS_MAXIMUM {
+        if !data.len().is_multiple_of(4) || data.len() / 4 > RIGHTS_MAXIMUM {
             return Err(ControlError::Invalid);
         }
         Ok(ControlMessage::Rights(

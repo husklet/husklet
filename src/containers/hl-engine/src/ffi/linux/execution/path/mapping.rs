@@ -63,7 +63,7 @@ impl MappingPaths {
         if let Some(path) = self
             .paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&identity)
             .map(|entry| entry.guest.as_str().as_bytes().to_vec())
         {
@@ -112,7 +112,7 @@ impl DescriptorMappingSource for MappingFiles {
         let native = self
             .paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&identity)
             .and_then(|opened| opened.file.upgrade());
         if let Some(file) = native {
@@ -149,7 +149,7 @@ fn zero_device_backing(
     if metadata.kind != 2
         || !matches!(
             device,
-            hl_runtime::DeviceId { major: 1, minor: 5 } | hl_runtime::DeviceId { major: 1, minor: 7 }
+            hl_runtime::DeviceId { major: 1, minor: 5 | 7 }
         )
     {
         return None;
@@ -161,6 +161,22 @@ fn zero_device_backing(
         identity: next.fetch_add(1, Ordering::Relaxed),
         shared,
     })
+}
+
+impl MappingFiles {
+    fn register(&self, identity: (u64, u64), file: &NativeFile) -> Result<(), RuntimeMemoryError> {
+        let guard = file.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let file = guard.as_ref().ok_or(RuntimeMemoryError::BadDescriptor)?;
+        self.arena
+            .register_file(
+                hl_memory::FileIdentity {
+                    device: identity.0,
+                    object: identity.1,
+                },
+                file,
+            )
+            .map_err(|_| RuntimeMemoryError::NoMemory)
+    }
 }
 
 #[cfg(test)]
@@ -218,21 +234,5 @@ mod tests {
                 shared: true,
             })
         );
-    }
-}
-
-impl MappingFiles {
-    fn register(&self, identity: (u64, u64), file: &NativeFile) -> Result<(), RuntimeMemoryError> {
-        let guard = file.file.lock().unwrap_or_else(|error| error.into_inner());
-        let file = guard.as_ref().ok_or(RuntimeMemoryError::BadDescriptor)?;
-        self.arena
-            .register_file(
-                hl_memory::FileIdentity {
-                    device: identity.0,
-                    object: identity.1,
-                },
-                file,
-            )
-            .map_err(|_| RuntimeMemoryError::NoMemory)
     }
 }

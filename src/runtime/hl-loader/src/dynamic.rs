@@ -39,7 +39,7 @@ impl DynamicTable {
     }
 
     pub(crate) fn parse(image: &[u8], offset: u64, size: u64, link_address: u64) -> Result<Self, InspectError> {
-        if size == 0 || size % 16 != 0 {
+        if size == 0 || !size.is_multiple_of(16) {
             return Err(InspectError::InvalidDynamicTable);
         }
         let end = offset.checked_add(size).ok_or(InspectError::InvalidDynamicTable)?;

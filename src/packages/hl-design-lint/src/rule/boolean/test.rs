@@ -30,7 +30,7 @@ fn findings(source: &str) -> Vec<crate::Finding> {
 #[test]
 fn reports_exclusive_constructions() {
     let findings = findings(
-        r#"
+        r"
 struct Connection {
     disconnected: bool,
     connecting: bool,
@@ -42,7 +42,7 @@ fn disconnected() -> Connection {
 fn connected() -> Connection {
     Connection { disconnected: false, connecting: false, connected: true }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].subject, "Connection");
@@ -52,7 +52,7 @@ fn connected() -> Connection {
 #[test]
 fn reports_state_flags() {
     let findings = findings(
-        r#"
+        r"
 struct Session { idle: bool, opening: bool, active: bool }
 impl Session {
     fn activate(&mut self) {
@@ -61,7 +61,7 @@ impl Session {
         self.active = true;
     }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     assert!(findings[0].related[0].label.contains("activate"));
@@ -71,12 +71,12 @@ impl Session {
 fn ignores_independent_capabilities() {
     assert!(
         findings(
-            r#"
+            r"
 struct Permissions { readable: bool, writable: bool, executable: bool }
 fn owner() -> Permissions {
     Permissions { readable: true, writable: true, executable: true }
 }
-"#
+"
         )
         .is_empty()
     );
@@ -86,10 +86,10 @@ fn owner() -> Permissions {
 fn ignores_feature_toggles() {
     assert!(
         findings(
-            r#"
+            r"
 struct Features { clipboard: bool, audio: bool, gpu: bool }
 impl Features { fn disable_audio(&mut self) { self.audio = false; } }
-"#
+"
         )
         .is_empty()
     );
@@ -99,7 +99,7 @@ impl Features { fn disable_audio(&mut self) { self.audio = false; } }
 fn ignores_independent_features() {
     assert!(
         findings(
-            r#"
+            r"
 struct Features { clipboard: bool, audio: bool, gpu: bool }
 impl Features {
     fn disable_all(&mut self) {
@@ -108,7 +108,7 @@ impl Features {
         self.gpu = false;
     }
 }
-"#
+"
         )
         .is_empty()
     );
@@ -117,7 +117,7 @@ impl Features {
 #[test]
 fn reports_transition_methods() {
     let findings = findings(
-        r#"
+        r"
 struct Phase { queued: bool, running: bool, finished: bool }
 impl Phase {
     fn start(&mut self) {
@@ -131,7 +131,7 @@ impl Phase {
         self.finished = true;
     }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].related.len(), 2);
@@ -141,7 +141,7 @@ impl Phase {
 fn ignores_protocol_fields() {
     assert!(
         findings(
-            r#"
+            r"
 struct ProtocolFlags { urgent: bool, acknowledged: bool, compressed: bool }
 fn decode(bits: u8) -> ProtocolFlags {
     ProtocolFlags {
@@ -150,7 +150,7 @@ fn decode(bits: u8) -> ProtocolFlags {
         compressed: bits & 4 != 0,
     }
 }
-"#
+"
         )
         .is_empty()
     );
@@ -160,10 +160,10 @@ fn decode(bits: u8) -> ProtocolFlags {
 fn one_is_insufficient() {
     assert!(
         findings(
-            r#"
+            r"
 struct View { loading: bool, ready: bool, failed: bool }
 fn initial() -> View { View { loading: true, ready: false, failed: false } }
-"#
+"
         )
         .is_empty()
     );
@@ -173,7 +173,7 @@ fn initial() -> View { View { loading: true, ready: false, failed: false } }
 fn ignores_third_flag() {
     assert!(
         findings(
-            r#"
+            r"
 struct Transfer { paused: bool, active: bool, verbose: bool }
 impl Transfer {
     fn resume(&mut self) {
@@ -181,7 +181,7 @@ impl Transfer {
         self.active = true;
     }
 }
-"#
+"
         )
         .is_empty()
     );
@@ -190,7 +190,7 @@ impl Transfer {
 #[test]
 fn reports_invalid_combinations() {
     let findings = findings(
-        r#"
+        r"
 struct Phase { queued: bool, running: bool, finished: bool }
 impl Phase {
     fn valid(&self) -> bool {
@@ -198,7 +198,7 @@ impl Phase {
             && !(self.running && self.finished)
     }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     assert!(findings[0].related[0].label.contains("rejects mutually active"));
@@ -208,7 +208,7 @@ impl Phase {
 fn actions_are_independent() {
     assert!(
         findings(
-            r#"
+            r"
 struct Actions { notify: bool, persist: bool, retry: bool }
 fn success() -> Actions {
     Actions { notify: true, persist: true, retry: false }
@@ -216,7 +216,7 @@ fn success() -> Actions {
 fn failure() -> Actions {
     Actions { notify: true, persist: false, retry: true }
 }
-"#
+"
         )
         .is_empty()
     );

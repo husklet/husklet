@@ -41,7 +41,7 @@ impl ExecutableVersions {
         let era = self.era.load(Ordering::Acquire);
         let first = Self::page(range.start().get());
         let last = Self::page(range.end().get().saturating_sub(1));
-        let pages = self.pages.read().unwrap_or_else(|error| error.into_inner());
+        let pages = self.pages.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let version = pages
             .range(first..=last)
             .map(|(_, version)| *version)
@@ -63,7 +63,7 @@ impl ExecutableVersions {
         if ranges.is_empty() {
             return;
         }
-        let mut pages = self.pages.write().unwrap_or_else(|error| error.into_inner());
+        let mut pages = self.pages.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let version = self.sequence.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         for range in ranges {
             let first = Self::page(range.start().get());
@@ -75,7 +75,7 @@ impl ExecutableVersions {
     }
 
     pub(crate) fn publish_all(&self) {
-        let mut pages = self.pages.write().unwrap_or_else(|error| error.into_inner());
+        let mut pages = self.pages.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let version = self.sequence.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
         for observed in pages.values_mut() {
             *observed = version;

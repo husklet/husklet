@@ -108,7 +108,7 @@ pub struct Result {
 
 /// Consumer-owned correctly-rounded arithmetic boundary.
 ///
-/// Implementations must be deterministic and must implement AArch64 NaN
+/// Implementations must be deterministic and must implement `AArch64` NaN
 /// selection, DN, FZ/FZ16, directed rounding, and tininess-before-rounding.
 /// They must not depend on or mutate ambient host floating-point state.
 pub trait ArithmeticPort {

@@ -75,8 +75,7 @@ impl Database {
                 field: field
                     .ident
                     .as_ref()
-                    .map(|ident| Member::Named(ident.clone()))
-                    .unwrap_or(Member::Unnamed(0.into())),
+                    .map_or(Member::Unnamed(0.into()), |ident| Member::Named(ident.clone())),
                 location: source.location(item.span()),
                 methods: Vec::new(),
                 invalid: false,
@@ -326,7 +325,7 @@ fn path_name(expression: &Expr) -> Option<String> {
     let Expr::Path(path) = strip(expression) else {
         return None;
     };
-    path.path.get_ident().map(|identifier| identifier.to_string())
+    path.path.get_ident().map(std::string::ToString::to_string)
 }
 
 fn strip(expression: &Expr) -> &Expr {

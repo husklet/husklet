@@ -125,11 +125,10 @@ impl Disk {
 
     pub(super) fn remove_journal_sync(&self, id: &JournalId) -> Result<()> {
         let _stripe = self.journal_lock(id)?;
-        if let Err(error) = fs::remove_file(self.log_path(id)) {
-            if error.kind() != std::io::ErrorKind::NotFound {
+        if let Err(error) = fs::remove_file(self.log_path(id))
+            && error.kind() != std::io::ErrorKind::NotFound {
                 return Err(error.into());
             }
-        }
         self.indexes
             .lock()
             .map_err(|_| Error::Corrupt("log cursor lock poisoned".into()))?

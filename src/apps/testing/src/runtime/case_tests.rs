@@ -29,7 +29,7 @@ fn app() -> App {
     }
     fs::write(
         &definition,
-        r#"targets: [arm64, amd64]
+        r"targets: [arm64, amd64]
 image: alpine
 execution: {}
 build: { compiler: { arm64: arm-cc, amd64: amd-cc }, flags: [] }
@@ -55,7 +55,7 @@ cases:
     compat: { class: compatibility }
     run: []
     expect: { exit: 0, stdout: golden/inactive.out }
-"#,
+",
     )
     .unwrap();
     App::load(directory.path(), &definition).unwrap()

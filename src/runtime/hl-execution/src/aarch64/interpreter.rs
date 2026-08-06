@@ -336,18 +336,12 @@ impl Aarch64Interpreter {
                 Aarch64ExecutionExit::Continue
             }
             Aarch64Instruction::BitReverse { source, destination } => {
-                let value = match ir.wide {
-                    true => cpu.register(source).reverse_bits(),
-                    false => u64::from((cpu.register(source) as u32).reverse_bits()),
-                };
+                let value = if ir.wide { cpu.register(source).reverse_bits() } else { u64::from((cpu.register(source) as u32).reverse_bits()) };
                 write_register(&mut staged, ir.wide, destination, value);
                 Aarch64ExecutionExit::Continue
             }
             Aarch64Instruction::CountLeadingZero { source, destination } => {
-                let value = match ir.wide {
-                    true => cpu.register(source).leading_zeros(),
-                    false => (cpu.register(source) as u32).leading_zeros(),
-                };
+                let value = if ir.wide { cpu.register(source).leading_zeros() } else { (cpu.register(source) as u32).leading_zeros() };
                 staged.set_register(destination, u64::from(value));
                 Aarch64ExecutionExit::Continue
             }

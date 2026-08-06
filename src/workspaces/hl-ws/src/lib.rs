@@ -6,7 +6,7 @@
 //! [`launch::Launcher`], and `hl` owns the richer config (the bare [`model::Workspace`]
 //! PLUS feature settings) + its persistence and composes it all.
 //!
-//! It deliberately does NOT own: any feature setting (vpn/cuda/gui/docker_sock/scrollback — those are
+//! It deliberately does NOT own: any feature setting (`vpn/cuda/gui/docker_sock/scrollback` — those are
 //! `hl`-side config), the workspace-config PERSISTENCE (also `hl`-side), or any setting→engine-argument
 //! mapping (that is `hl`'s job).
 //!

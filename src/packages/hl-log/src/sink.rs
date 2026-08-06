@@ -39,7 +39,7 @@ impl Output {
     }
 
     pub fn set(&self, sink: Box<dyn Sink>) {
-        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = sink;
+        *self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
     }
 
     pub fn reset(&self) {
@@ -49,7 +49,7 @@ impl Output {
     pub(crate) fn write(&self, line: &str) {
         self.sink
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write_line(line);
     }
 
@@ -88,7 +88,7 @@ impl Events {
     }
 
     pub fn set(&self, sink: Box<dyn Sink>) {
-        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = sink;
+        *self.sink.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
     }
 
     pub fn reset(&self) {
@@ -98,7 +98,7 @@ impl Events {
     pub(crate) fn write(&self, line: &str) {
         self.sink
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .write_line(line);
     }
 

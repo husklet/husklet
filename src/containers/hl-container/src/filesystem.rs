@@ -110,12 +110,11 @@ impl Filesystem {
             .mounts
             .iter()
             .any(|mount| guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target));
-        if !mounted {
-            if let Some(overlay) = &self.overlay {
+        if !mounted
+            && let Some(overlay) = &self.overlay {
                 let relative = guest.as_path().strip_prefix("/").unwrap_or(guest.as_path());
                 return overlay.archive(relative, writer);
             }
-        }
         let resolved = self.resolve(path.as_ref(), false)?;
         fs::symlink_metadata(&resolved.path)?;
         let name = resolved.path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("."));
@@ -298,11 +297,10 @@ impl Filesystem {
             return Err(Error::InvalidSpec("special archive entries are unsupported".into()));
         }
         #[cfg(unix)]
-        if !kind.is_symlink() {
-            if let Ok(mode) = entry.header().mode() {
+        if !kind.is_symlink()
+            && let Ok(mode) = entry.header().mode() {
                 fs::set_permissions(output, fs::Permissions::from_mode(mode & 0o7777))?;
             }
-        }
         Ok(())
     }
 
@@ -426,12 +424,11 @@ impl Filesystem {
             .iter()
             .filter(|mount| guest.as_path() == mount.target || guest.as_path().starts_with(&mount.target))
             .max_by_key(|mount| mount.target.components().count());
-        if selected.is_none() {
-            if let Some(overlay) = &self.overlay {
+        if selected.is_none()
+            && let Some(overlay) = &self.overlay {
                 let relative = guest.as_path().strip_prefix("/").unwrap_or(guest.as_path());
                 return overlay.resolve(relative, write);
             }
-        }
         let (base, relative, access) = selected.map_or_else(
             || {
                 (

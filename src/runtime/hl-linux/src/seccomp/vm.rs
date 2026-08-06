@@ -322,13 +322,11 @@ impl BpfProgram {
             if instruction.value as usize >= remaining {
                 return Err(VmError::InvalidJump);
             }
-        } else {
-            if !matches!(instruction.code & 0xf0, 0x10 | 0x20 | 0x30 | 0x40)
-                || instruction.jump_true as usize >= remaining
-                || instruction.jump_false as usize >= remaining
-            {
-                return Err(VmError::InvalidJump);
-            }
+        } else if !matches!(instruction.code & 0xf0, 0x10 | 0x20 | 0x30 | 0x40)
+            || instruction.jump_true as usize >= remaining
+            || instruction.jump_false as usize >= remaining
+        {
+            return Err(VmError::InvalidJump);
         }
         Ok(())
     }

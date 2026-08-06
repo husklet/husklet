@@ -33,7 +33,7 @@ impl Default for LocalShellLauncher {
 
 impl Launcher for LocalShellLauncher {
     fn launch(&self, ws: &Workspace, cols: u16, rows: u16) -> io::Result<Box<dyn PtyBackend>> {
-        let argv: Vec<&str> = self.shell.iter().map(|s| s.as_str()).collect();
+        let argv: Vec<&str> = self.shell.iter().map(std::string::String::as_str).collect();
         let mut environment = self.environment.clone();
         environment.insert("TERM".into(), "xterm-256color".into());
         environment.insert("HL_WORKSPACE".into(), ws.name.clone());

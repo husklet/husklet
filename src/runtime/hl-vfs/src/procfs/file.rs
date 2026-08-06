@@ -86,7 +86,7 @@ impl OpenFileDescription for OomFile {
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
         let bytes = self.bytes()?;
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = output.len().min(bytes.len().saturating_sub(*cursor));
         output[..count].copy_from_slice(&bytes[*cursor..*cursor + count]);
         *cursor += count;
@@ -98,7 +98,7 @@ impl OpenFileDescription for OomFile {
         let value = Self::value(input)?;
         self.source
             .write_oom_score_adj(self.process, self.thread, actor, value)?;
-        *self.cursor.lock().unwrap_or_else(|error| error.into_inner()) += input.len();
+        *self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += input.len();
         Ok(input.len())
     }
 
@@ -108,7 +108,7 @@ impl OpenFileDescription for OomFile {
         _context: hl_descriptor::OperationContext<'_>,
     ) -> Result<usize, ObjectError> {
         let bytes = self.bytes()?;
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut copied = 0;
         for target in output {
             let count = target.len().min(bytes.len().saturating_sub(*cursor));
@@ -153,7 +153,7 @@ impl OpenFileDescription for OomFile {
     }
 
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next = match position {
             SeekPosition::Start(value) => i128::from(value),
             SeekPosition::Current(value) => *cursor as i128 + i128::from(value),
@@ -203,7 +203,7 @@ impl OpenFileDescription for CommFile {
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
         let bytes = self.bytes()?;
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = output.len().min(bytes.len().saturating_sub(*cursor));
         output[..count].copy_from_slice(&bytes[*cursor..*cursor + count]);
         *cursor += count;
@@ -222,13 +222,13 @@ impl OpenFileDescription for CommFile {
             .unwrap_or(limit);
         self.source
             .write_comm(self.process, self.thread, actor, &input[..end])?;
-        *self.cursor.lock().unwrap_or_else(|error| error.into_inner()) = 0;
+        *self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
         Ok(input.len())
     }
 
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
         let length = self.bytes()?.len();
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next = match position {
             SeekPosition::Start(value) => i128::from(value),
             SeekPosition::Current(value) => *cursor as i128 + i128::from(value),
@@ -280,7 +280,7 @@ impl OpenFileDescription for UtsFile {
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
         let bytes = self.bytes()?;
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = output.len().min(bytes.len().saturating_sub(*cursor));
         output[..count].copy_from_slice(&bytes[*cursor..*cursor + count]);
         *cursor += count;
@@ -289,7 +289,7 @@ impl OpenFileDescription for UtsFile {
 
     fn write_context(&self, input: &[u8], context: hl_descriptor::OperationContext<'_>) -> Result<usize, ObjectError> {
         let actor = context.actor.ok_or(ObjectError::PermissionDenied)?;
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *cursor != 0 {
             return Err(ObjectError::InvalidArgument);
         }
@@ -397,7 +397,7 @@ impl OpenFileDescription for SnapshotDirectory {
     }
 
     fn read_directory(&self, maximum: usize) -> Result<DirectoryBatch, ObjectError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(DirectoryBatch {
             token: DirectoryBatchToken {
                 generation: state.0,
@@ -408,7 +408,7 @@ impl OpenFileDescription for SnapshotDirectory {
     }
 
     fn commit_directory(&self, token: DirectoryBatchToken, count: usize) -> Result<(), ObjectError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if token.generation != state.0 || token.cookie != state.1 as i64 {
             return Err(ObjectError::InvalidArgument);
         }
@@ -443,7 +443,7 @@ impl OpenFileDescription for SnapshotFile {
     }
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = output.len().min(self.bytes.len().saturating_sub(*cursor));
         output[..count].copy_from_slice(&self.bytes[*cursor..*cursor + count]);
         *cursor += count;
@@ -458,7 +458,7 @@ impl OpenFileDescription for SnapshotFile {
     }
 
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next = match position {
             SeekPosition::Start(value) => i128::from(value),
             SeekPosition::Current(value) => *cursor as i128 + i128::from(value),

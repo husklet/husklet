@@ -16,6 +16,7 @@ pub struct Image {
 
 impl Image {
     /// Encode as a PNG byte stream using uncompressed DEFLATE blocks.
+    #[must_use]
     pub fn to_png(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -37,6 +38,7 @@ impl Image {
         out
     }
     /// The pixel at `(x, y)` as `(r, g, b, a)`.
+    #[must_use]
     pub fn pixel(&self, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let i = ((y * self.width + x) * 4) as usize;
         (self.rgba[i], self.rgba[i + 1], self.rgba[i + 2], self.rgba[i + 3])
@@ -112,11 +114,13 @@ impl Default for CpuRenderer {
 
 impl CpuRenderer {
     /// Pixel size of one cell.
+    #[must_use]
     pub fn cell_px(&self) -> (u32, u32) {
         (GLYPH_W as u32 * self.scale, GLYPH_H as u32 * self.scale)
     }
 
     /// Rasterize `grid` to an [`Image`].
+    #[must_use]
     pub fn render(&self, grid: &Grid) -> Image {
         let (cw, ch) = self.cell_px();
         let width = grid.cols() as u32 * cw;
@@ -138,6 +142,7 @@ impl CpuRenderer {
     }
 
     /// Convenience: rasterize + PNG-encode in one step.
+    #[must_use]
     pub fn render_png(&self, grid: &Grid) -> Vec<u8> {
         self.render(grid).to_png()
     }

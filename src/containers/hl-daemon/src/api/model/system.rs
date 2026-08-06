@@ -44,7 +44,7 @@ pub struct DiskUsage {
     pub images: Vec<ImageSummary>,
     pub containers: Vec<Container>,
     pub volumes: Vec<VolumeUsage>,
-    /// BuildKit cache records. Husklet does not retain BuildKit cache objects,
+    /// `BuildKit` cache records. Husklet does not retain `BuildKit` cache objects,
     /// so the complete response currently projects an empty collection.
     pub build_cache: Vec<serde_json::Value>,
 }

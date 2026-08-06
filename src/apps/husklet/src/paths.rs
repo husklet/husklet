@@ -4,25 +4,29 @@ use std::path::PathBuf;
 
 /// `$HOME`, or `.` as a last resort.
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(Into::into).unwrap_or_else(|| ".".into())
+    std::env::var_os("HOME").map_or_else(|| ".".into(), Into::into)
 }
 
 /// `~/.hl` — state root (images, volumes, state.json, run/).
+#[must_use]
 pub fn hl_root() -> PathBuf {
     home().join(".hl")
 }
 
 /// `~/.hl/run` — runtime dir holding the socket.
+#[must_use]
 pub fn run_dir() -> PathBuf {
     hl_root().join("run")
 }
 
 /// `~/.hl/images` — image rootfs dirs (== `HL_IMAGES`).
+#[must_use]
 pub fn images_dir() -> PathBuf {
     hl_root().join("images")
 }
 
 /// Workspace resource daemon shipped beside the application or in its macOS resource directory.
+#[must_use]
 pub fn daemon_bin() -> PathBuf {
     DaemonBinary::resolve()
 }

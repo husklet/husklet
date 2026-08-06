@@ -13,14 +13,14 @@ impl MapRequest {
         if self.length == 0 {
             return Err(MemoryError::EmptyRange);
         }
-        if self.length % page != 0 || self.alignment < page || !self.alignment.is_power_of_two() {
+        if !self.length.is_multiple_of(page) || self.alignment < page || !self.alignment.is_power_of_two() {
             return Err(MemoryError::Unaligned);
         }
         Ok(())
     }
 
     fn validate_offset(self) -> Result<(), MemoryError> {
-        if self.backing_offset % GuestPageSize::LINUX.bytes() != 0 {
+        if !self.backing_offset.is_multiple_of(GuestPageSize::LINUX.bytes()) {
             return Err(MemoryError::Unaligned);
         }
         self.backing_offset
@@ -37,7 +37,7 @@ impl MapRequest {
     }
 
     fn validate_fixed(self, start: GuestAddress) -> Result<(), MemoryError> {
-        if !start.is_page_aligned(GuestPageSize::LINUX) || start.get() % self.alignment != 0 {
+        if !start.is_page_aligned(GuestPageSize::LINUX) || !start.get().is_multiple_of(self.alignment) {
             return Err(MemoryError::Unaligned);
         }
         start.checked_add(self.length)?;

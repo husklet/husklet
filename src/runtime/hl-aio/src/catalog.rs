@@ -42,7 +42,7 @@ impl Catalog {
         if capacity == 0 || capacity > self.limits.events_per_context {
             return Err(AioError::InvalidArgument);
         }
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = if let Some(slot) = slots.iter().position(|slot| slot.context.is_none()) {
             slot
         } else {
@@ -78,7 +78,7 @@ impl Catalog {
 
     pub fn destroy(&self, id: ContextId) -> Result<(), AioError> {
         let context = {
-            let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+            let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let (slot, generation) = id.parts().ok_or(AioError::InvalidArgument)?;
             let entry = slots.get_mut(slot).ok_or(AioError::InvalidArgument)?;
             if entry.generation != generation {
@@ -96,7 +96,7 @@ impl Catalog {
     }
 
     fn context(&self, id: ContextId) -> Result<Arc<Context>, AioError> {
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (slot, generation) = id.parts().ok_or(AioError::InvalidArgument)?;
         let entry = slots.get(slot).ok_or(AioError::InvalidArgument)?;
         if entry.generation != generation {

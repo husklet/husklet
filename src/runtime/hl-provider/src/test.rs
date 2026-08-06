@@ -152,7 +152,7 @@ struct Model {
 
 impl Model {
     fn exercise(&mut self, namespace: &HandleNamespace, step: u64) {
-        if step % 3 != 0 && self.live.len() < 4 {
+        if !step.is_multiple_of(3) && self.live.len() < 4 {
             let identity = remote(step);
             let handle = namespace.open(identity, HandleKind::Subscription).unwrap();
             self.live.push((handle, identity, 1));
@@ -162,7 +162,7 @@ impl Model {
             return;
         }
         let index = step as usize % self.live.len();
-        if step % 5 == 0 {
+        if step.is_multiple_of(5) {
             namespace.clone_handle(self.live[index].0).unwrap();
             self.live[index].2 += 1;
             return;

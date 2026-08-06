@@ -288,13 +288,13 @@ impl Aarch64FpExecutor {
                     staged.set_register(general, cpu.vector_lane(vector, 64, 1));
                 }
                 (false, true, _) => {
-                    staged.set_vector(vector, u128::from(cpu.register(general) & Self::value_mask(format)))
+                    staged.set_vector(vector, u128::from(cpu.register(general) & Self::value_mask(format)));
                 }
                 (false, false, FpFormat::Double) => {
                     staged.set_register(general, cpu.vector_lane(vector, 64, 0));
                 }
                 (false, false, _) => {
-                    staged.set_narrow_register(general, cpu.vector_lane(vector, format.bits(), 0) as u32)
+                    staged.set_narrow_register(general, cpu.vector_lane(vector, format.bits(), 0) as u32);
                 }
             },
             Aarch64Instruction::FpConvert {

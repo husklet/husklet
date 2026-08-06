@@ -25,7 +25,7 @@ impl Memory {
             VectorSource::Memory(address) if lane == 8 => {
                 let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
                 Self::canonical_range(address, 8, instruction, AccessKind::Read)?;
-                u128::from(memory.read(address, 8).map_err(|_| {
+                u128::from(memory.read(address, 8).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, AccessKind::Read, 8))
                 })?)
             }
@@ -91,7 +91,7 @@ impl Memory {
         let access = if store { AccessKind::Write } else { AccessKind::Read };
         Self::canonical_range(address, 8, instruction, access)?;
         if store {
-            let reservation = memory.reserve_write(address, 8).map_err(|_| {
+            let reservation = memory.reserve_write(address, 8).map_err(|()| {
                 ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, access, 8))
             })?;
             let vector = cpu.vectors[usize::from(vector)];
@@ -100,7 +100,7 @@ impl Memory {
         }
         let value = memory
             .read(address, 8)
-            .map_err(|_| ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, access, 8)))?;
+            .map_err(|()| ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, access, 8)))?;
         let prior = cpu.vectors[usize::from(vector)];
         staged.vectors[usize::from(vector)] = if high {
             (prior & u128::from(u64::MAX)) | (u128::from(value) << 64)

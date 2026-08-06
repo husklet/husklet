@@ -245,11 +245,10 @@ impl ScalarInterpreter {
                     }
                 } else {
                     staged.vector_upper[usize::from(vector)] = 0;
-                    if store {
-                        if let VectorSource::Register(destination) = operand {
+                    if store
+                        && let VectorSource::Register(destination) = operand {
                             staged.vector_upper[usize::from(destination)] = 0;
                         }
-                    }
                     VectorMemory::staged_transfer(staged, cpu, memory, vector, operand, store, false, next, instruction)
                 }
             }
@@ -286,28 +285,7 @@ impl ScalarInterpreter {
                 let masks = [cpu.vectors[usize::from(mask)], cpu.vector_upper[usize::from(mask)]];
                 let data = [cpu.vectors[usize::from(vector)], cpu.vector_upper[usize::from(vector)]];
                 let lanes = if wide { 32 / lane } else { 16 / lane };
-                if !store {
-                    let mut output = [0_u128; 2];
-                    for index in 0..lanes {
-                        let half = usize::from(index / (16 / lane));
-                        let shift = u32::from(index % (16 / lane)) * u32::from(lane) * 8;
-                        if masks[half] >> (shift + u32::from(lane) * 8 - 1) & 1 != 0 {
-                            let lane_address = base + u64::from(index) * u64::from(lane);
-                            let value = memory.read(lane_address, lane).map_err(|()| {
-                                ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                                    instruction,
-                                    lane_address,
-                                    AccessKind::Read,
-                                    u64::from(lane),
-                                ))
-                            })?;
-                            output[half] |= u128::from(value) << shift;
-                        }
-                    }
-                    staged.vectors[usize::from(vector)] = output[0];
-                    staged.vector_upper[usize::from(vector)] = if wide { output[1] } else { 0 };
-                    Ok(Staged::Cpu(staged))
-                } else {
+                if store {
                     let mut reservations = std::array::from_fn(|_| None);
                     let mut values = [0_u64; 8];
                     let mut count = 0_usize;
@@ -336,6 +314,27 @@ impl ScalarInterpreter {
                         base,
                         if wide { 32 } else { 16 },
                     ))
+                } else {
+                    let mut output = [0_u128; 2];
+                    for index in 0..lanes {
+                        let half = usize::from(index / (16 / lane));
+                        let shift = u32::from(index % (16 / lane)) * u32::from(lane) * 8;
+                        if masks[half] >> (shift + u32::from(lane) * 8 - 1) & 1 != 0 {
+                            let lane_address = base + u64::from(index) * u64::from(lane);
+                            let value = memory.read(lane_address, lane).map_err(|()| {
+                                ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                                    instruction,
+                                    lane_address,
+                                    AccessKind::Read,
+                                    u64::from(lane),
+                                ))
+                            })?;
+                            output[half] |= u128::from(value) << shift;
+                        }
+                    }
+                    staged.vectors[usize::from(vector)] = output[0];
+                    staged.vector_upper[usize::from(vector)] = if wide { output[1] } else { 0 };
+                    Ok(Staged::Cpu(staged))
                 }
             }
             ScalarInstruction::VectorMaskedStore {
@@ -625,12 +624,7 @@ impl ScalarInterpreter {
                 Ok(Staged::Cpu(staged))
             }
             ScalarInstruction::VexQword { vector, operand, store } => {
-                if !store {
-                    let value = Self::vex_read_bytes(cpu, memory, operand, 8, next, instruction)?[0] as u64;
-                    staged.vectors[usize::from(vector)] = u128::from(value);
-                    staged.vector_upper[usize::from(vector)] = 0;
-                    Ok(Staged::Cpu(staged))
-                } else {
+                if store {
                     let value = cpu.vectors[usize::from(vector)] as u64;
                     match operand {
                         VectorSource::Register(destination) => {
@@ -651,6 +645,11 @@ impl ScalarInterpreter {
                             Ok(Staged::Write(staged, reservation, value, address, 8))
                         }
                     }
+                } else {
+                    let value = Self::vex_read_bytes(cpu, memory, operand, 8, next, instruction)?[0] as u64;
+                    staged.vectors[usize::from(vector)] = u128::from(value);
+                    staged.vector_upper[usize::from(vector)] = 0;
+                    Ok(Staged::Cpu(staged))
                 }
             }
             ScalarInstruction::VexHalfMove {
@@ -1745,20 +1744,17 @@ impl ScalarInterpreter {
                     guest = u64::from(guest as u32);
                 }
                 guest = guest.wrapping_add(segment);
-                let value = match memory.read(guest, element) {
-                    Ok(value) => value,
-                    Err(()) => {
-                        cpu.vectors[usize::from(destination)] = destination_value[0];
-                        cpu.vector_upper[usize::from(destination)] = destination_value[1];
-                        cpu.vectors[usize::from(mask)] = mask_value[0];
-                        cpu.vector_upper[usize::from(mask)] = mask_value[1];
-                        return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                            instruction,
-                            guest,
-                            AccessKind::Read,
-                            u64::from(element),
-                        ));
-                    }
+                let value = if let Ok(value) = memory.read(guest, element) { value } else {
+                    cpu.vectors[usize::from(destination)] = destination_value[0];
+                    cpu.vector_upper[usize::from(destination)] = destination_value[1];
+                    cpu.vectors[usize::from(mask)] = mask_value[0];
+                    cpu.vector_upper[usize::from(mask)] = mask_value[1];
+                    return ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                        instruction,
+                        guest,
+                        AccessKind::Read,
+                        u64::from(element),
+                    ));
                 };
                 destination_value[mask_half] = destination_value[mask_half] & !(element_mask << mask_offset)
                     | (u128::from(value) & element_mask) << mask_offset;
@@ -1805,7 +1801,7 @@ impl ScalarInterpreter {
         for (index, word) in words[..chunks].iter_mut().enumerate() {
             let cursor = address.wrapping_add((index * 8) as u64);
             let chunk = bytes.saturating_sub((index * 8) as u8).min(8);
-            *word = memory.read(cursor, chunk).map_err(|_| {
+            *word = memory.read(cursor, chunk).map_err(|()| {
                 ExecutionExit::OperandFault(crate::FaultAccess::operand(
                     instruction,
                     cursor,

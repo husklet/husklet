@@ -36,6 +36,7 @@ pub struct AuthoritySocketKey {
 }
 
 impl AuthoritySocketKey {
+    #[must_use]
     pub fn new(slot: u32, generation: u64) -> Option<Self> {
         Some(Self {
             slot: NonZeroU32::new(slot)?,

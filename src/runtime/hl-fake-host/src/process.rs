@@ -29,7 +29,7 @@ impl ProcessAdapter {
         let process = ProcessToken(self.host.allocate("process", ResourceKind::Process)?);
         self.processes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(process, exit);
         Ok(process)
     }
@@ -38,7 +38,7 @@ impl ProcessAdapter {
         let exit = self
             .processes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&process)
             .copied()
             .ok_or(FakeHostError::InvalidResource)?;
@@ -51,7 +51,7 @@ impl ProcessAdapter {
         *self
             .processes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get_mut(&process)
             .ok_or(FakeHostError::InvalidResource)? = ProcessExit::Signal(signal);
         Ok(())
@@ -60,7 +60,7 @@ impl ProcessAdapter {
     pub fn close(&self, process: ProcessToken) -> Result<(), FakeHostError> {
         self.processes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process)
             .ok_or(FakeHostError::InvalidResource)?;
         self.host.release("process", ResourceKind::Process, process.0)

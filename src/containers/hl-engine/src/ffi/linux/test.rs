@@ -141,7 +141,7 @@ fn child_channel_is() {
                 break;
             }
             Err(crate::native_host::ForkWireError::Host(crate::native_host::HostError::WouldBlock)) => {
-                std::thread::yield_now()
+                std::thread::yield_now();
             }
             Err(error) => panic!("wire failure: {error:?}"),
         }

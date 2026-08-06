@@ -33,8 +33,8 @@ impl Rule for CatchAllModule {
             .collect::<BTreeSet<_>>();
 
         for source in workspace.sources() {
-            if let Some(name) = file_module_name(source) {
-                if forbidden(&name) && file_modules.insert(source.path.clone()) {
+            if let Some(name) = file_module_name(source)
+                && forbidden(&name) && file_modules.insert(source.path.clone()) {
                     findings.push(finding(
                         self.id(),
                         source,
@@ -48,7 +48,6 @@ impl Rule for CatchAllModule {
                         "source file or module directory",
                     ));
                 }
-            }
 
             let mut visitor = ModuleVisitor {
                 rule: self.id(),

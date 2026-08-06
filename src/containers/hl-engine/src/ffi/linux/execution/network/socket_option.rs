@@ -26,7 +26,7 @@ pub(super) fn set(
                     descriptor,
                     level,
                     option,
-                    (&scalar as *const i32).cast(),
+                    (&raw const scalar).cast(),
                     size_of::<i32>() as _,
                 )
             }
@@ -42,7 +42,7 @@ pub(super) fn set(
                     descriptor,
                     level,
                     option,
-                    (&linger as *const libc::linger).cast(),
+                    (&raw const linger).cast(),
                     size_of::<libc::linger>() as _,
                 )
             }
@@ -58,7 +58,7 @@ pub(super) fn set(
                     descriptor,
                     level,
                     option,
-                    (&timeout as *const libc::timeval).cast(),
+                    (&raw const timeout).cast(),
                     size_of::<libc::timeval>() as _,
                 )
             }
@@ -118,8 +118,8 @@ pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocke
                 descriptor,
                 level,
                 option,
-                (&mut linger as *mut libc::linger).cast(),
-                &mut length,
+                (&raw mut linger).cast(),
+                &raw mut length,
             )
         };
         return if result == 0 {
@@ -141,14 +141,14 @@ pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocke
                 descriptor,
                 level,
                 option,
-                (&mut timeout as *mut libc::timeval).cast(),
-                &mut length,
+                (&raw mut timeout).cast(),
+                &raw mut length,
             )
         };
         return if result == 0 {
             Ok(GuestSocketOption::Timeval {
-                seconds: timeout.tv_sec as i64,
-                microseconds: timeout.tv_usec as i64,
+                seconds: timeout.tv_sec,
+                microseconds: timeout.tv_usec,
             })
         } else {
             Err(Native::runtime_error())
@@ -157,7 +157,7 @@ pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocke
     let mut scalar = 0_i32;
     let mut length = size_of::<i32>() as libc::socklen_t;
     // SAFETY: scalar and length are writable for getsockopt.
-    let result = unsafe { libc::getsockopt(descriptor, level, option, (&mut scalar as *mut i32).cast(), &mut length) };
+    let result = unsafe { libc::getsockopt(descriptor, level, option, (&raw mut scalar).cast(), &raw mut length) };
     if result == 0 {
         Ok(GuestSocketOption::Scalar(scalar))
     } else {
@@ -179,7 +179,7 @@ impl HostOption {
                 libc::IPPROTO_TCP,
                 libc::TCP_INFO,
                 bytes.as_mut_ptr().cast(),
-                &mut length,
+                &raw mut length,
             )
         };
         if result != 0 {

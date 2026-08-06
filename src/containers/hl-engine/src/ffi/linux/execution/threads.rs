@@ -1032,7 +1032,7 @@ impl PreparedImage {
 impl Drop for PreparedImage {
     fn drop(&mut self) {
         if self.published && !self.complete {
-            self.rollback()
+            self.rollback();
         }
         if self.candidate.take().is_some() {
             let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

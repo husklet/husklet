@@ -89,11 +89,11 @@ fn finds_marker_traits() {
     write(
         &root,
         "src/lib.rs",
-        r#"
+        r"
 trait Forgotten {}
 trait Anything {}
 impl<T> Anything for T {}
-"#,
+",
     );
 
     let findings = findings(&root);
@@ -112,7 +112,7 @@ fn keeps_marker_contracts() {
     write(
         &root,
         "src/lib.rs",
-        r#"
+        r"
 pub trait ExternalTag {}
 trait Selective {}
 struct Linux;
@@ -121,7 +121,7 @@ trait Required {}
 fn require<T: Required>() {}
 trait Aggregate: Send + Sync {}
 unsafe trait Safety {}
-"#,
+",
     );
 
     assert!(findings(&root).is_empty());
@@ -134,7 +134,7 @@ fn finds_forwarding_wrapper() {
     write(
         &root,
         "src/lib.rs",
-        r#"
+        r"
 struct Store;
 impl Store {
     fn read(&self, id: u64) -> usize { id as usize }
@@ -149,7 +149,7 @@ impl Storage {
     fn write(&mut self, id: u64) -> bool { self.inner.write(id) }
     fn remove(&mut self, id: u64) -> bool { self.inner.remove(id) }
 }
-"#,
+",
     );
 
     let findings = findings(&root);
@@ -166,7 +166,7 @@ fn keeps_public_contracts() {
     write(
         &root,
         "src/lib.rs",
-        r#"
+        r"
 struct Store;
 impl Store {
     fn read(&self, id: u64) -> usize { id as usize }
@@ -207,7 +207,7 @@ impl Wire {
     fn write(&self, id: u64) -> bool { self.inner.write(id) }
     fn remove(&self, id: u64) -> bool { self.inner.remove(id) }
 }
-"#,
+",
     );
 
     assert!(findings(&root).is_empty());

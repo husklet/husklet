@@ -16,6 +16,7 @@ pub const EVENT_CHECKPOINT_OBJECT_MAXIMUM: usize = 1 << 20;
 pub struct EventResourceKey(NonZeroU64);
 
 impl EventResourceKey {
+    #[must_use]
     pub const fn new(value: u64) -> Option<Self> {
         match NonZeroU64::new(value) {
             Some(value) => Some(Self(value)),

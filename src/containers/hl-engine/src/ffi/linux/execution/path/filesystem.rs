@@ -41,18 +41,18 @@ impl HostFilesystem {
         let status = unsafe { status.assume_init() };
         let (kind, zero) = Self::kind(guest);
         let restricted = kind != FilesystemKind::Overlay;
-        let filesystem_id = status.f_fsid as u64;
+        let filesystem_id = status.f_fsid;
         FilesystemStats {
             kind,
-            block_size: status.f_bsize as u64,
-            blocks: if zero { 0 } else { status.f_blocks as u64 },
-            blocks_free: if zero { 0 } else { status.f_bfree as u64 },
-            blocks_available: if zero { 0 } else { status.f_bavail as u64 },
-            files: if zero { 0 } else { status.f_files as u64 },
-            files_free: if zero { 0 } else { status.f_ffree as u64 },
+            block_size: status.f_bsize,
+            blocks: if zero { 0 } else { status.f_blocks },
+            blocks_free: if zero { 0 } else { status.f_bfree },
+            blocks_available: if zero { 0 } else { status.f_bavail },
+            files: if zero { 0 } else { status.f_files },
+            files_free: if zero { 0 } else { status.f_ffree },
             filesystem_id: [filesystem_id as u32, (filesystem_id >> 32) as u32],
             name_maximum: 255,
-            fragment_size: status.f_bsize as u64,
+            fragment_size: status.f_bsize,
             read_only: false,
             nosuid: restricted,
             nodev: restricted,

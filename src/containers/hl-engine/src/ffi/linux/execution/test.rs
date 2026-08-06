@@ -610,7 +610,7 @@ fn pidfd_fstat() {
             GuestArchitecture::X86_64 => (5, 32, 3),
         };
         let descriptor = route_call(&router, architecture, 434, [u64::from(process.number()), 0, 0, 0, 0, 0]);
-        assert!(descriptor <= i32::MAX as u64);
+        assert!(i32::try_from(descriptor).is_ok());
         assert_eq!(route_call(&router, architecture, fstat, [descriptor, 0, 0, 0, 0, 0]), 0);
         let alias = route_call(&router, architecture, duplicate, [descriptor, 0, 0, 0, 0, 0]);
         assert_eq!(route_call(&router, architecture, fstat, [alias, 256, 0, 0, 0, 0]), 0);
@@ -1307,7 +1307,7 @@ fn force_stop_interrupts_running() {
     let executor = GuestExecutor::default();
     let assembly = RuntimeAssembly::new(hl_runtime::RuntimeAssemblyConfig::default()).unwrap();
     install_test_ipc(&assembly);
-    let key = &assembly as *const RuntimeAssembly as usize;
+    let key = &raw const assembly as usize;
     let cancellation = Arc::new(super::readiness::Cancellation::new().unwrap());
     let (arena, mappings) = mapped_arena();
     let routed = super::routing::create(

@@ -343,10 +343,7 @@ fn assert_interrupted(initial: u64, write: bool) {
                 actor: None,
                 cancellation: Some(cancellation.as_ref()),
             };
-            match write {
-                true => lease.write_context(&bytes(1), context),
-                false => lease.read_context(&mut [0_u8; 8], context),
-            }
+            if write { lease.write_context(&bytes(1), context) } else { lease.read_context(&mut [0_u8; 8], context) }
         })
     };
     while cancellation.notifications.lock().unwrap().is_empty() {

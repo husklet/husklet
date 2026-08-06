@@ -370,7 +370,7 @@ impl Tree {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, TreeState> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

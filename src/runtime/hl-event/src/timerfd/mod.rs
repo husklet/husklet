@@ -244,7 +244,7 @@ impl TimerFd {
         if !flags.valid() {
             return Err(TimerFdError::InvalidArgument);
         }
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.refresh(&mut state)?;
         let previous = self.current_setting(&state)?;
         let original = state.clone();
@@ -296,7 +296,7 @@ impl TimerFd {
         Ok(previous)
     }
     pub fn get_time(&self) -> Result<TimerSetting, TimerFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.refresh(&mut state)?;
         self.current_setting(&state)
     }
@@ -311,7 +311,7 @@ impl TimerFd {
     }
     #[must_use]
     pub fn readiness(&self, interests: Readiness) -> Readiness {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let ready = match self.refresh(&mut state) {
             Ok(()) if state.retired => Readiness::ERROR,
             Ok(()) if state.pending != 0 || state.canceled => Readiness::READ,
@@ -321,7 +321,7 @@ impl TimerFd {
         Readiness::from_bits(ready & (interests.bits() | Readiness::ERROR | Readiness::HANGUP))
     }
     pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), TimerFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return Err(TimerFdError::Retired);
         }
@@ -339,7 +339,7 @@ impl TimerFd {
     }
     #[must_use]
     pub fn snapshot(&self) -> Result<TimerFdSnapshot, TimerFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.refresh(&mut state)?;
         Ok(TimerFdSnapshot {
             clock: self.inner.clock,
@@ -416,12 +416,12 @@ impl TimerFd {
         self.inner
             .source
             .monotonic_now()
-            .map(|instant| instant.nanoseconds())
+            .map(hl_time::MonotonicInstant::nanoseconds)
             .map_err(TimerFdError::Clock)
     }
 
     fn retire_inner(&self) {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return;
         }

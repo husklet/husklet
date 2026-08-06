@@ -87,7 +87,7 @@ impl PollHost for LinuxPoll {
             returned: 0,
         });
         let timeout = timeout.map(NativeTimeout::new).transpose()?;
-        let timeout_pointer = timeout.as_ref().map_or(core::ptr::null(), |value| &value.0);
+        let timeout_pointer = timeout.as_ref().map_or(core::ptr::null(), |value| &raw const value.0);
         // SAFETY: native is uniquely writable for its initialized length,
         // timeout is either null or a live normalized timespec, all descriptors
         // remain owned for the synchronous call, and libc retains no pointers.
@@ -174,7 +174,7 @@ impl Cancellation {
         let _ = unsafe {
             super::super::abi::write(
                 self.descriptor,
-                (&value as *const u64).cast(),
+                (&raw const value).cast(),
                 core::mem::size_of::<u64>(),
             )
         };
@@ -186,7 +186,7 @@ impl Cancellation {
         let _ = unsafe {
             super::super::abi::read(
                 self.descriptor,
-                (&mut value as *mut u64).cast(),
+                (&raw mut value).cast(),
                 core::mem::size_of::<u64>(),
             )
         };
@@ -242,7 +242,7 @@ impl Wake {
         let _ = unsafe {
             super::super::abi::read(
                 self.descriptor,
-                (&mut value as *mut u64).cast(),
+                (&raw mut value).cast(),
                 core::mem::size_of::<u64>(),
             )
         };
@@ -256,7 +256,7 @@ impl hl_descriptor::ReadinessObserver for Wake {
         let _ = unsafe {
             super::super::abi::write(
                 self.descriptor,
-                (&value as *const u64).cast(),
+                (&raw const value).cast(),
                 core::mem::size_of::<u64>(),
             )
         };
@@ -768,7 +768,7 @@ mod test {
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         assert_eq!(*timeout.lock().unwrap(), Some(Some(Duration::new(1, 2))));
-        assert_eq!(*mask.lock().unwrap(), Some(u64::MAX & !((1 << 8) | (1 << 18))));
+        assert_eq!(*mask.lock().unwrap(), Some(!((1 << 8) | (1 << 18))));
         assert_eq!(fixture.masks.bits.load(Ordering::Acquire), 0);
         let mut copied = [0_u8; 16];
         fixture.memory.read(64, &mut copied).unwrap();

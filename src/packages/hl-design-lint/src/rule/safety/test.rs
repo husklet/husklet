@@ -37,7 +37,7 @@ fn ordinary(source: &str) -> Vec<crate::Finding> {
 #[test]
 fn rejects_approved_boundary() {
     let values = ordinary(
-        r#"
+        r"
 unsafe fn free() {}
 struct Value;
 unsafe trait Contract {
@@ -50,7 +50,7 @@ fn call() {
     // SAFETY: the fixture deliberately exercises a forbidden but documented block.
     unsafe {}
 }
-"#,
+",
     );
 
     for subject in [
@@ -71,13 +71,13 @@ fn call() {
 
 #[test]
 fn permits_ffi_module() {
-    let source = r#"
+    let source = r"
 unsafe fn entry() {}
 fn call() {
     // SAFETY: the pointer contract is validated by the boundary caller.
     unsafe {}
 }
-"#;
+";
     assert!(findings("native-kernel", "runtime", "src/native/execution.rs", source,).is_empty());
     for relative in ["src/ffi.rs", "src/ffi/export.rs"] {
         assert!(
@@ -92,7 +92,7 @@ fn call() {
             "hl-engine",
             "app",
             "src/lib.rs",
-            r#"
+            r"
 mod ffi {
     unsafe fn export() {}
     fn call() {
@@ -100,7 +100,7 @@ mod ffi {
         unsafe {}
     }
 }
-"#,
+",
         )
         .is_empty()
     );
@@ -112,7 +112,7 @@ fn requires_allowed_block() {
         "native-kernel",
         "runtime",
         "src/native/execution.rs",
-        r#"
+        r"
 fn missing() {
     unsafe {}
 }
@@ -121,7 +121,7 @@ fn present() {
     // SAFETY: the allocation remains live and aligned for this access.
     unsafe {}
 }
-"#,
+",
     );
     assert_eq!(values.len(), 1);
     assert_eq!(values[0].subject, "unsafe block without SAFETY rationale");

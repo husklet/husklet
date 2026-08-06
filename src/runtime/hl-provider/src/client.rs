@@ -159,7 +159,7 @@ impl<T: ProviderTransport> Provider<T> {
                 .shared
                 .changed
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         let slot = &mut state.slots[ticket.slot as usize];
         let waiter = slot.waiter.take().ok_or(ProviderError::InvalidTicket)?;
@@ -210,7 +210,7 @@ impl<T: ProviderTransport> Provider<T> {
         let reader = self
             .reader
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(reader) = reader {
             let _ = reader.join();
@@ -218,7 +218,7 @@ impl<T: ProviderTransport> Provider<T> {
         let dispatcher = self
             .dispatcher
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
         if let Some(dispatcher) = dispatcher {
             let _ = dispatcher.join();
@@ -261,7 +261,7 @@ impl<T: ProviderTransport> Drop for Provider<T> {
 
 impl<T: ProviderTransport> ClientCore<T> {
     pub(crate) fn lock(&self) -> MutexGuard<'_, ClientState> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub(crate) fn send(&self, kind: FrameKind, request: u64, payload: &[u8]) -> Result<(), ProviderError> {
@@ -269,7 +269,7 @@ impl<T: ProviderTransport> ClientCore<T> {
             return Err(ProviderError::PayloadTooLarge);
         }
         let header = Header::encode(kind, payload.len(), request)?;
-        let _guard = self.write.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self.write.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.write_exact(&header)?;
         self.write_exact(payload)
     }

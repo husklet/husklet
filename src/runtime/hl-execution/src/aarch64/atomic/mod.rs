@@ -41,10 +41,12 @@ pub struct Value {
 pub struct Generation(u64);
 
 impl Generation {
+    #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
+    #[must_use]
     pub const fn value(self) -> u64 {
         self.0
     }
@@ -60,6 +62,7 @@ pub struct Reservation {
 }
 
 impl Reservation {
+    #[must_use]
     pub const fn new(address: u64, element_bytes: u8, pair: bool, generation: Generation) -> Self {
         Self {
             address,
@@ -70,6 +73,7 @@ impl Reservation {
         }
     }
 
+    #[must_use]
     pub const fn versioned(
         address: u64,
         element_bytes: u8,
@@ -86,26 +90,32 @@ impl Reservation {
         }
     }
 
+    #[must_use]
     pub const fn address(self) -> u64 {
         self.address
     }
 
+    #[must_use]
     pub const fn bytes(self) -> u8 {
         self.element_bytes * if self.pair { 2 } else { 1 }
     }
 
+    #[must_use]
     pub const fn element_bytes(self) -> u8 {
         self.element_bytes
     }
 
+    #[must_use]
     pub const fn pair(self) -> bool {
         self.pair
     }
 
+    #[must_use]
     pub const fn generation(self) -> Generation {
         self.generation
     }
 
+    #[must_use]
     pub const fn write_epoch(self) -> Generation {
         self.writes
     }

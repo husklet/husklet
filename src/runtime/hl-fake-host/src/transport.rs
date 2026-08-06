@@ -57,7 +57,7 @@ impl ProviderEndpoint {
 
 impl ProviderTransport for ProviderEndpoint {
     fn read(&self, output: &mut [u8]) -> Result<usize, TransportError> {
-        let mut state = self.endpoint.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.bytes.is_empty() {
             return if state.closed {
                 Ok(0)
@@ -80,7 +80,7 @@ impl ProviderTransport for ProviderEndpoint {
         self.host
             .record("transport", "write", self.token, input.len(), count)
             .map_err(Self::transport_error)?;
-        let mut state = self.endpoint.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(TransportError::Closed);
         }
@@ -90,12 +90,12 @@ impl ProviderTransport for ProviderEndpoint {
     }
 
     fn wait_readable(&self) -> Result<(), TransportError> {
-        let state = self.endpoint.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(
             self.endpoint
                 .changed
                 .wait_while(state, |state| state.bytes.is_empty() && !state.closed)
-                .unwrap_or_else(|error| error.into_inner()),
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
         Ok(())
     }
@@ -108,7 +108,7 @@ impl ProviderTransport for ProviderEndpoint {
         self.endpoint
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .closed = true;
         self.endpoint.changed.notify_all();
     }
@@ -144,7 +144,7 @@ impl SocketAdapter {
         let token = SocketToken(self.host.allocate("socket", ResourceKind::Socket)?);
         self.sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(token, Arc::new(Endpoint::new()));
         Ok(token)
     }
@@ -162,9 +162,9 @@ impl SocketHostIo for SocketAdapter {
     type Token = SocketToken;
 
     fn read(&self, token: Self::Token, output: &mut [u8], _: bool) -> Result<usize, SocketHostError> {
-        let sockets = self.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let sockets = self.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let endpoint = sockets.get(&token).ok_or(SocketHostError::Io)?;
-        let mut state = endpoint.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.bytes.is_empty() {
             return Err(SocketHostError::WouldBlock);
         }
@@ -183,12 +183,12 @@ impl SocketHostIo for SocketAdapter {
         self.host
             .record("socket", "write", token.0, input.len(), count)
             .map_err(Self::socket_error)?;
-        let sockets = self.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let sockets = self.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let endpoint = sockets.get(&token).ok_or(SocketHostError::Io)?;
         endpoint
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .bytes
             .extend(input[..count].iter().copied());
         endpoint.changed.notify_all();
@@ -196,14 +196,14 @@ impl SocketHostIo for SocketAdapter {
     }
 
     fn readiness(&self, token: Self::Token) -> SocketHostReadiness {
-        let sockets = self.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let sockets = self.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         sockets.get(&token).map_or(
             SocketHostReadiness {
                 error: true,
                 ..SocketHostReadiness::default()
             },
             |endpoint| {
-                let state = endpoint.state.lock().unwrap_or_else(|error| error.into_inner());
+                let state = endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 SocketHostReadiness {
                     readable: !state.bytes.is_empty() || state.closed,
                     priority: false,
@@ -228,10 +228,10 @@ impl SocketHostIo for SocketAdapter {
         if let Some(endpoint) = self
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
         {
-            endpoint.state.lock().unwrap_or_else(|error| error.into_inner()).closed = true;
+            endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed = true;
             endpoint.changed.notify_all();
         }
     }
@@ -240,7 +240,7 @@ impl SocketHostIo for SocketAdapter {
         if self
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token)
             .is_some()
         {

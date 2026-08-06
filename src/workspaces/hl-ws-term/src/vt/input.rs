@@ -1,4 +1,4 @@
-use super::*;
+use super::{Vt, State, Cell, Grid, Attrs};
 
 impl Vt {
     /// Feed a run of bytes.

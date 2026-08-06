@@ -72,7 +72,7 @@ impl SharedMemoryNamespace {
         if request.mode & !0o777 != 0 {
             return Err(SharedMemoryError::InvalidArgument);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if request.key != IPC_PRIVATE {
             if let Some(id) = Self::key_id(&state, request.key) {
                 return self.open_existing(&state, id, request);
@@ -93,7 +93,7 @@ impl SharedMemoryNamespace {
         if flags & !ATTACH_FLAGS != 0 {
             return Err(SharedMemoryError::InvalidArgument);
         }
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let segment = Self::segment(&state, id)?;
         if segment.metadata.marked_for_removal {
             return Err(SharedMemoryError::Removed);
@@ -116,7 +116,7 @@ impl SharedMemoryNamespace {
     }
 
     pub fn commit_attach(&self, plan: AttachPlan, pid: u32, now: u64) -> Result<u64, SharedMemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.attachments.len() >= self.limits.attachments {
             return Err(SharedMemoryError::ResourceLimit);
         }
@@ -147,7 +147,7 @@ impl SharedMemoryNamespace {
     }
 
     pub fn shmdt(&self, attachment: u64, pid: u32, now: u64) -> Result<(), SharedMemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let attached = state
             .attachments
             .get(&attachment)
@@ -161,7 +161,7 @@ impl SharedMemoryNamespace {
     }
 
     pub fn remove(&self, id: SharedMemoryId, actor: Credentials, pid: u32, now: u64) -> Result<(), SharedMemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let segment = Self::segment_mut(&mut state, id)?;
         if actor.uid != 0 && actor.uid != segment.metadata.owner.uid && actor.uid != segment.metadata.creator_uid {
             return Err(SharedMemoryError::Permission);
@@ -188,7 +188,7 @@ impl SharedMemoryNamespace {
         if mode & !0o777 != 0 {
             return Err(SharedMemoryError::InvalidArgument);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let segment = Self::segment_mut(&mut state, id)?;
         if actor.uid != 0 && actor.uid != segment.metadata.owner.uid && actor.uid != segment.metadata.creator_uid {
             return Err(SharedMemoryError::Permission);
@@ -212,7 +212,7 @@ impl SharedMemoryNamespace {
         actor: Credentials,
         _intent: SharedMemoryLockIntent,
     ) -> Result<(), SharedMemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let segment = Self::segment(&state, id)?;
         if segment.metadata.marked_for_removal {
             return Err(SharedMemoryError::Removed);
@@ -224,7 +224,7 @@ impl SharedMemoryNamespace {
     }
 
     pub fn exit(&self, pid: u32, now: u64) -> Result<(), SharedMemoryError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let detached: Vec<_> = state
             .attachments
             .iter()
@@ -239,7 +239,7 @@ impl SharedMemoryNamespace {
     }
 
     pub fn metadata(&self, id: SharedMemoryId) -> Result<SharedMemoryMetadata, SharedMemoryError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(Self::segment(&state, id)?.metadata)
     }
 

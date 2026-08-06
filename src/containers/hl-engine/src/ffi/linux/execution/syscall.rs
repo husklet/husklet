@@ -46,14 +46,14 @@ impl hl_linux::FilesystemSyscalls for FilesystemPort {
     fn may_block(&self, operation: hl_linux::SyscallOperation, arguments: [u64; 6]) -> bool {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .may_block(operation, arguments)
     }
 
     fn handle(&mut self, operation: hl_linux::SyscallOperation, arguments: [u64; 6]) -> hl_linux::LinuxResult {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .handle(operation, arguments)
     }
 }
@@ -72,7 +72,7 @@ impl hl_linux::DescriptorIoSyscalls for DescriptorPort {
     fn may_block(&self, operation: hl_linux::SyscallOperation, arguments: [u64; 6]) -> bool {
         self.filesystem
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .may_block(operation, arguments)
     }
 
@@ -134,7 +134,7 @@ impl hl_linux::DescriptorIoSyscalls for DescriptorPort {
         ) {
             self.filesystem
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .handle(operation, arguments)
         } else {
             self.standard.handle(operation, arguments)
@@ -224,7 +224,7 @@ impl hl_linux::MemorySyscalls for MemoryPort {
     fn handle(&mut self, operation: hl_linux::SyscallOperation, arguments: [u64; 6]) -> hl_linux::LinuxResult {
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .handle(operation, arguments)
     }
 }

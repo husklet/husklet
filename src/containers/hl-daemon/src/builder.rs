@@ -131,13 +131,12 @@ impl Builder {
     async fn resolve_bases(&self, recipe: &Recipe, policy: BaseImages) -> Result<(), BuildError> {
         let images = self.containers.images()?;
         for stage in &recipe.stages {
-            if let Base::Image(reference) = &stage.base {
-                if policy.requires_pull(images.resolve(reference)?.is_some()) {
+            if let Base::Image(reference) = &stage.base
+                && policy.requires_pull(images.resolve(reference)?.is_some()) {
                     images
                         .pull(self.source.as_ref(), reference.clone(), &self.platform)
                         .await?;
                 }
-            }
             for reference in stage.steps.iter().filter_map(|step| match step {
                 Step::Copy {
                     from: Some(CopySource::Image(reference)),
@@ -199,11 +198,10 @@ impl Builder {
             .then(|| cache_name(&cache_key, &recipe, &images, &self.platform, &remotes))
             .transpose()?
             .flatten();
-        if let Some(cache) = &cache {
-            if let Some(hit) = images.resolve(cache)? {
+        if let Some(cache) = &cache
+            && let Some(hit) = images.resolve(cache)? {
                 return Ok(images.tag(&hit, name)?);
             }
-        }
         let mut built = Vec::new();
         for stage in recipe.stages.iter().take(recipe.selected + 1) {
             built.push(self.stage(&context, stage, &built, &images, &remotes).await?);

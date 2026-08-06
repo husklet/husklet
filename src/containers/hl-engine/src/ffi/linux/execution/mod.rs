@@ -308,7 +308,7 @@ impl GuestExecutor {
         routed
             .process
             .install_exec(&exec)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
         let exec_slot = assembly.exec_slot();
         exec_slot
             .register(routed.process.process(), exec)
@@ -316,26 +316,26 @@ impl GuestExecutor {
         routed
             .process
             .install_registration(exec_image::Registration::new(exec_slot, routed.process.process()))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
         let _initial_router = routed.router;
         let contexts = Arc::new(clone::Contexts::new(Arc::clone(&routed.process), Arc::clone(&threads)));
         let clone_runtime = contexts.build();
         contexts
             .install(Arc::clone(&clone_runtime))
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
         routed
             .process
             .install_clone(&contexts)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
         let fork_runtime = fork::Runtime::new(Arc::clone(&routed.process), Arc::clone(&threads));
         routed
             .process
             .install_fork(&fork_runtime)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
         routed
             .process
             .install_threads(&threads)
-            .map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
         let trap = hl_runtime::ThreadCloneTrap::new(clone_runtime, routed.thread);
         let router = Arc::new(
             routed

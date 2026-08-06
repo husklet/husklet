@@ -1,8 +1,8 @@
-use super::*;
+use super::{SharedMemoryNamespace, SharedMemorySnapshot, Arc, SharedMemoryLimits, SharedMemoryError, Slot, Attachment, NamespaceState, SharedMemoryMetadata, Segment};
 
 impl SharedMemoryNamespace {
     pub fn snapshot(&self) -> SharedMemorySnapshot {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         SharedMemorySnapshot {
             generations: state.slots.iter().map(|slot| slot.generation).collect(),
             segments: state
@@ -25,7 +25,7 @@ impl SharedMemoryNamespace {
         snapshot: SharedMemorySnapshot,
     ) -> Result<Self, SharedMemoryError> {
         let namespace = Self::new(memory, limits)?;
-        let mut state = namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if snapshot.generations.len() > limits.segments || snapshot.generations.contains(&0) {
             return Err(SharedMemoryError::ResourceLimit);
         }

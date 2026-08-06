@@ -15,7 +15,7 @@ impl UnixSocketEndpoint {
 
     #[must_use]
     pub fn message_closed(&self) -> bool {
-        let state = self.host.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.host.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let endpoint = &state.endpoints[self.token];
         endpoint.read_shutdown || endpoint.peer_write_shutdown
     }
@@ -48,7 +48,7 @@ impl UnixSocketHost {
         nonblocking: bool,
         peek: bool,
     ) -> Result<(usize, usize), SocketHostError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             let endpoint = &mut state.endpoints[token];
             if endpoint.canceled {

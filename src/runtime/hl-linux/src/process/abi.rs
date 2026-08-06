@@ -289,6 +289,7 @@ impl<'a, M: GuestMemory + ?Sized> Abi<'a, M> {
             .collect())
     }
 
+    #[must_use]
     pub fn identity_user(&self, real: u32, effective: u32, saved: u32) -> IdentityChange {
         IdentityChange::User {
             real: (real != u32::MAX).then_some(real),
@@ -297,6 +298,7 @@ impl<'a, M: GuestMemory + ?Sized> Abi<'a, M> {
         }
     }
 
+    #[must_use]
     pub fn identity_group(&self, real: u32, effective: u32, saved: u32) -> IdentityChange {
         IdentityChange::Group {
             real: (real != u32::MAX).then_some(real),
@@ -486,8 +488,7 @@ impl<'a, M: GuestMemory + ?Sized> Abi<'a, M> {
     fn optional_word(bytes: &[u8], offset: usize) -> u64 {
         bytes
             .get(offset..offset + 8)
-            .map(|part| u64::from_le_bytes(part.try_into().expect("word")))
-            .unwrap_or(0)
+            .map_or(0, |part| u64::from_le_bytes(part.try_into().expect("word")))
     }
 
     fn nonzero_extension(bytes: &[u8]) -> bool {

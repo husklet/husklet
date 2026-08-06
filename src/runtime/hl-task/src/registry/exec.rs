@@ -253,21 +253,18 @@ impl PreparedTaskExec {
     }
 
     fn release(&self, state: &mut super::State) {
-        if let Ok(process) = TaskRegistry::process_mut(state, self.process) {
-            if process.pending_transaction == Some(self.transaction) {
+        if let Ok(process) = TaskRegistry::process_mut(state, self.process)
+            && process.pending_transaction == Some(self.transaction) {
                 process.pending_transaction = None;
             }
-        }
-        if let Ok(thread) = TaskRegistry::thread_mut(state, self.thread) {
-            if thread.pending_transaction == Some(self.transaction) {
+        if let Ok(thread) = TaskRegistry::thread_mut(state, self.thread)
+            && thread.pending_transaction == Some(self.transaction) {
                 thread.pending_transaction = None;
             }
-        }
-        if let Ok(caller) = TaskRegistry::thread_mut(state, self.caller) {
-            if caller.pending_transaction == Some(self.transaction) {
+        if let Ok(caller) = TaskRegistry::thread_mut(state, self.caller)
+            && caller.pending_transaction == Some(self.transaction) {
                 caller.pending_transaction = None;
             }
-        }
     }
 
     fn restore(&self, state: &mut super::State, previous: TaskExecState) {

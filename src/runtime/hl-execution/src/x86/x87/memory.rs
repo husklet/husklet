@@ -63,7 +63,7 @@ impl ExtendedMemory {
             if decoded.opcode == 0xd9
                 && matches!(
                     (group, source),
-                    (2, 0) | (4, 0 | 1 | 5) | (6, 0..=7) | (7, 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7)
+                    (2, 0) | (4, 0 | 1 | 5) | (6 | 7, 0..=7)
                 )
             {
                 return Ok(ScalarInstruction::X87Unary {
@@ -158,7 +158,7 @@ impl ExtendedMemory {
                     integer_bytes: if opcode == 0xda { 4 } else { 2 },
                 })
             }
-            (0xd9, Some(group @ 4 | group @ 6)) => Ok(ScalarInstruction::X87Environment {
+            (0xd9, Some(group @ (4 | 6))) => Ok(ScalarInstruction::X87Environment {
                 address,
                 load: group == 4,
             }),
@@ -167,13 +167,13 @@ impl ExtendedMemory {
                 address,
                 load: decoded.raw_reg == Some(5),
             }),
-            (0xd9, Some(group @ 0 | group @ 2 | group @ 3)) => Ok(ScalarInstruction::X87Float {
+            (0xd9, Some(group @ (0 | 2 | 3))) => Ok(ScalarInstruction::X87Float {
                 address,
                 format: FloatWidth::Single,
                 store: group != 0,
                 pop: group == 3,
             }),
-            (0xdd, Some(group @ 0 | group @ 2 | group @ 3)) => Ok(ScalarInstruction::X87Float {
+            (0xdd, Some(group @ (0 | 2 | 3))) => Ok(ScalarInstruction::X87Float {
                 address,
                 format: FloatWidth::Double,
                 store: group != 0,
@@ -514,7 +514,7 @@ impl ExtendedMemory {
                     staged.x87_classes[top] = class;
                 }
             }
-            (6, 0) | (7, 6 | 7) | (7, 4) => {
+            (6, 0) | (7, 6 | 7 | 4) => {
                 if staged.x87_classes[top] == ExtendedClass::Empty {
                     if Self::raise_stack(&mut staged, false) {
                         *cpu = staged;

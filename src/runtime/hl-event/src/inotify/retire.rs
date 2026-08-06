@@ -3,7 +3,7 @@ use super::Inotify;
 impl Inotify {
     pub(crate) fn retire_inner(&self) {
         let (subscription, tokens) = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }

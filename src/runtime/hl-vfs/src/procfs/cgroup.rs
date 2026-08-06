@@ -48,6 +48,7 @@ pub(super) const ROOT_NAMES: &[&[u8]] = &[
 
 impl View {
     /// Validates bounded topology, resource accounting, and membership identities.
+    #[must_use]
     pub fn new(
         online_cpus: usize,
         cpu_limit: Option<usize>,
@@ -98,7 +99,7 @@ impl View {
             Leaf::Maximum => b"max\n".to_vec(),
             Leaf::CpuMax => self
                 .cpu_limit
-                .map_or_else(|| b"max 100000\n".to_vec(), |cpus| Self::quota(cpus)),
+                .map_or_else(|| b"max 100000\n".to_vec(), Self::quota),
             Leaf::CpuStat => concat!(
                 "usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_periods 0\n",
                 "nr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",

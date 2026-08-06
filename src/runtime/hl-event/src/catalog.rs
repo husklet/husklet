@@ -167,7 +167,7 @@ impl EventCatalog {
         targets: Vec<EpollTargetCheckpoint>,
     ) -> Result<(), EventCatalogError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut state, id)?;
         let Some(CatalogObject::Epoll {
             object,
@@ -185,7 +185,7 @@ impl EventCatalog {
 
     pub fn add_epoll_target(&self, id: EventObjectId, target: EpollTargetCheckpoint) -> Result<(), EventCatalogError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut state, id)?;
         let Some(CatalogObject::Epoll { object, targets }) = slot.object.as_mut() else {
             return Err(EventCatalogError::WrongKind);
@@ -203,7 +203,7 @@ impl EventCatalog {
         descriptor: EventResourceKey,
     ) -> Result<(), EventCatalogError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut state, id)?;
         let Some(CatalogObject::Epoll { object, targets }) = slot.object.as_mut() else {
             return Err(EventCatalogError::WrongKind);
@@ -228,7 +228,7 @@ impl EventCatalog {
         watches: Vec<InotifyWatchCheckpoint>,
     ) -> Result<(), EventCatalogError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut state, id)?;
         let Some(CatalogObject::Inotify {
             object,
@@ -247,7 +247,7 @@ impl EventCatalog {
 
     fn insert(&self, object: CatalogObject) -> Result<EventObjectId, EventCatalogError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = state.slots.iter().position(|slot| slot.object.is_none());
         let index = match index {
             Some(index) => index,
@@ -271,7 +271,7 @@ impl EventCatalog {
 
     pub fn remove(&self, id: EventObjectId) -> Result<(), EventCatalogError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::slot_mut(&mut state, id)?
             .object
             .take()
@@ -354,7 +354,7 @@ impl EventCatalog {
     }
 
     fn object(&self, id: EventObjectId) -> Result<CatalogObject, EventCatalogError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::slot(&state, id)?
             .object
             .clone()
@@ -382,7 +382,7 @@ impl EventCatalog {
 
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
-        drop(self.state.lock().unwrap_or_else(|error| error.into_inner()));
+        drop(self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
 
     pub fn thaw_checkpoint(&self) {
@@ -393,7 +393,7 @@ impl EventCatalog {
         if !self.activity.frozen() {
             return Err(EventCatalogError::Checkpoint(EventCheckpointError::InvalidImage));
         }
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut objects = Vec::new();
         for (slot, value) in state.slots.iter().enumerate() {
             let Some(object) = value.object.as_ref() else { continue };

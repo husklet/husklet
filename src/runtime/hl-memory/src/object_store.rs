@@ -116,7 +116,7 @@ impl SharedObjectStore {
         if size > self.limits.object_bytes {
             return Err(SharedError::ResourceLimit);
         }
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state
             .allocated
             .checked_add(size)
@@ -171,7 +171,7 @@ impl SharedObjectStore {
         let _admission = self.activity.admit();
         let object = self.object(id)?;
         {
-            let mut state = object.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.removed && !removed {
                 return Err(SharedError::NotFound);
             }
@@ -199,7 +199,7 @@ impl SharedObjectStore {
     pub fn pin_count(&self, id: SharedObjectId) -> Result<usize, SharedError> {
         let _admission = self.activity.admit();
         let object = self.object(id)?;
-        let state = object.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(state.pins)
     }
 
@@ -208,13 +208,13 @@ impl SharedObjectStore {
         if size > self.limits.object_bytes {
             return Err(SharedError::ResourceLimit);
         }
-        let mut store = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut store = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = store.slots.get(id.slot as usize).ok_or(SharedError::NotFound)?;
         if slot.generation != id.generation {
             return Err(SharedError::NotFound);
         }
         let object = slot.object.clone().ok_or(SharedError::NotFound)?;
-        let object_state = object.state.lock().unwrap_or_else(|e| e.into_inner());
+        let object_state = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let old = object.backing.len()?;
         if size < old && object_state.seals.contains(SharedSeal::SHRINK)
             || size > old && object_state.seals.contains(SharedSeal::GROW)
@@ -236,13 +236,13 @@ impl SharedObjectStore {
         if end > self.limits.object_bytes {
             return Err(SharedError::ResourceLimit);
         }
-        let mut store = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut store = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = store.slots.get(id.slot as usize).ok_or(SharedError::NotFound)?;
         if slot.generation != id.generation {
             return Err(SharedError::NotFound);
         }
         let object = slot.object.clone().ok_or(SharedError::NotFound)?;
-        let state = object.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.seals.contains(SharedSeal::WRITE) {
             return Err(SharedError::Sealed);
         }
@@ -269,7 +269,7 @@ impl SharedObjectStore {
     pub fn add_seals(&self, id: SharedObjectId, seals: SharedSeal) -> Result<SharedSeal, SharedError> {
         let _admission = self.activity.admit();
         let object = self.object(id)?;
-        let mut state = object.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.seals.contains(SharedSeal::SEAL) {
             return Err(SharedError::Sealed);
         }
@@ -282,13 +282,13 @@ impl SharedObjectStore {
 
     pub fn remove(&self, id: SharedObjectId) -> Result<(), SharedError> {
         let _admission = self.activity.admit();
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = state.slots.get_mut(id.slot as usize).ok_or(SharedError::NotFound)?;
         if slot.generation != id.generation {
             return Err(SharedError::NotFound);
         }
         let object = slot.object.as_ref().ok_or(SharedError::NotFound)?;
-        let mut object_state = object.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut object_state = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if object_state.removed {
             return Err(SharedError::NotFound);
         }
@@ -304,6 +304,7 @@ impl SharedObjectStore {
         Ok(())
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> SharedStoreSnapshot {
         let _admission = self.activity.admit();
         self.snapshot_state().expect("live shared backing remains readable")
@@ -317,7 +318,7 @@ impl SharedObjectStore {
     }
 
     fn snapshot_state(&self) -> Result<SharedStoreSnapshot, SharedError> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let objects = state
             .slots
             .iter()
@@ -330,7 +331,7 @@ impl SharedObjectStore {
 
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
-        drop(self.state.lock().unwrap_or_else(|error| error.into_inner()));
+        drop(self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
 
     pub fn thaw_checkpoint(&self) {
@@ -341,7 +342,7 @@ impl SharedObjectStore {
         let Some(object) = slot.object.as_ref() else {
             return Ok(None);
         };
-        let object = object.state.lock().unwrap_or_else(|e| e.into_inner());
+        let object = object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let backing = &slot.object.as_ref().ok_or(SharedError::NotFound)?.backing;
         let size = backing.len()?;
         let mut bytes = vec![0; size];
@@ -420,7 +421,7 @@ impl SharedObjectStore {
     }
 
     fn object(&self, id: SharedObjectId) -> Result<Arc<Object>, SharedError> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = state.slots.get(id.slot as usize).ok_or(SharedError::NotFound)?;
         if slot.generation != id.generation {
             return Err(SharedError::NotFound);

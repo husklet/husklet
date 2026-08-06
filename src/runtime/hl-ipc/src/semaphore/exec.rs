@@ -5,7 +5,7 @@ use crate::{SemaphoreError, SemaphoreId, SemaphoreNamespace};
 
 type UndoKey = (u32, SemaphoreId, u16);
 
-/// Mutation-free exec guard proving that process-owned SEM_UNDO is preserved.
+/// Mutation-free exec guard proving that process-owned `SEM_UNDO` is preserved.
 pub struct PreparedSemaphoreExec {
     namespace: Arc<SemaphoreNamespace>,
     process: u32,
@@ -14,7 +14,7 @@ pub struct PreparedSemaphoreExec {
 
 impl PreparedSemaphoreExec {
     pub fn commit(self) -> Result<(), SemaphoreError> {
-        let state = self.namespace.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = state
             .undo
             .iter()
@@ -34,7 +34,7 @@ impl SemaphoreNamespace {
         let expected = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .undo
             .iter()
             .filter(|((owner, _, _), _)| *owner == process)

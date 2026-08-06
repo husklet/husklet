@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 
 use crate::{Kind, Metadata, Permissions};
 
-/// Requested access bits corresponding to Linux R_OK/W_OK/X_OK.
+/// Requested access bits corresponding to Linux `R_OK/W_OK/X_OK`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[repr(transparent)]
 pub struct Access(u8);

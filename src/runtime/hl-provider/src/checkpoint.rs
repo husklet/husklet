@@ -82,6 +82,7 @@ impl ProviderCheckpointImage {
 pub struct ProviderResourceKey(NonZeroU64);
 
 impl ProviderResourceKey {
+    #[must_use]
     pub const fn new(value: u64) -> Option<Self> {
         match NonZeroU64::new(value) {
             Some(value) => Some(Self(value)),
@@ -89,6 +90,7 @@ impl ProviderResourceKey {
         }
     }
 
+    #[must_use]
     pub const fn get(self) -> u64 {
         self.0.get()
     }

@@ -14,7 +14,7 @@ pub(crate) fn multiply(
         MultiplyOperation::Add => left.wrapping_mul(right),
         MultiplyOperation::SignedLong => (left as i32 as i64).wrapping_mul(right as i32 as i64) as u64,
         MultiplyOperation::UnsignedLong => u64::from(left as u32) * u64::from(right as u32),
-        MultiplyOperation::SignedHigh => ((left as i64 as i128) * (right as i64 as i128) >> 64) as u64,
+        MultiplyOperation::SignedHigh => (((left as i64 as i128) * (right as i64 as i128)) >> 64) as u64,
         MultiplyOperation::UnsignedHigh => ((u128::from(left) * u128::from(right)) >> 64) as u64,
     };
     if matches!(

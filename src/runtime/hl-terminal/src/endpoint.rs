@@ -84,7 +84,7 @@ impl Description {
                 signals: Arc::clone(&self.signals),
             }),
         );
-        *self.binding.lock().unwrap_or_else(|error| error.into_inner()) = Some((identity, Arc::downgrade(bindings)));
+        *self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((identity, Arc::downgrade(bindings)));
     }
 
     fn error(error: ReadError) -> ObjectError {
@@ -100,11 +100,10 @@ impl Description {
             return;
         }
         self.pair.close_endpoint(self.endpoint);
-        if self.endpoint == Endpoint::Master {
-            if let Some(catalog) = self.catalog.upgrade() {
+        if self.endpoint == Endpoint::Master
+            && let Some(catalog) = self.catalog.upgrade() {
                 let _ = catalog.retire(self.pair.id());
             }
-        }
     }
 
     fn write_actor(&self, input: &[u8], actor: Option<OperationActor>) -> Result<usize, ObjectError> {
@@ -219,11 +218,10 @@ impl OpenFileDescription for Description {
     }
 
     fn close(&self) {
-        if let Some((identity, bindings)) = self.binding.lock().unwrap_or_else(|error| error.into_inner()).take() {
-            if let Some(bindings) = bindings.upgrade() {
+        if let Some((identity, bindings)) = self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            && let Some(bindings) = bindings.upgrade() {
                 bindings.remove(identity);
             }
-        }
         self.close_endpoint();
     }
 }
@@ -306,7 +304,7 @@ impl Bindings {
     pub fn get(&self, identity: DescriptionIdentity) -> Option<Arc<Handle>> {
         self.entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&identity)
             .cloned()
     }
@@ -314,14 +312,14 @@ impl Bindings {
     fn insert(&self, identity: DescriptionIdentity, handle: Arc<Handle>) {
         self.entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(identity, handle);
     }
 
     fn remove(&self, identity: DescriptionIdentity) {
         self.entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&identity);
     }
 }

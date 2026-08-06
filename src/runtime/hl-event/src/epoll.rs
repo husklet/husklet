@@ -183,7 +183,7 @@ impl Epoll {
             .enumerate()
             .map(|(index, watch)| (watch.token, index))
             .collect();
-        *epoll.inner.state.lock().unwrap_or_else(|error| error.into_inner()) = EpollState {
+        *epoll.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = EpollState {
             watches,
             token_index,
             ready,
@@ -207,7 +207,7 @@ impl Epoll {
         let target = target.into_durable();
         let key = EpollWatchKey::from_lease(&target);
         {
-            let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             if state.watches.iter().any(|watch| watch.key == key) {
                 return Err(EpollError::AlreadyExists);
@@ -217,7 +217,7 @@ impl Epoll {
             }
         }
         let token = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let token = state.next_token;
             state.next_token = state.next_token.wrapping_add(1).max(1);
             token
@@ -227,7 +227,7 @@ impl Epoll {
             token,
         });
         let subscription = target.subscribe_readiness(observer)?;
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate_active(&state)?;
         if state.watches.iter().any(|watch| watch.key == key) {
             drop(state);
@@ -265,7 +265,7 @@ impl Epoll {
             return Err(EpollError::InvalidArgument);
         }
         let key = EpollWatchKey::from_lease(target);
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate_active(&state)?;
         let index = state
             .watches
@@ -295,7 +295,7 @@ impl Epoll {
     pub fn delete(&self, target: &OperationLease) -> Result<(), EpollError> {
         let key = EpollWatchKey::from_lease(target);
         let removed = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             let index = state
                 .watches
@@ -315,7 +315,7 @@ impl Epoll {
 
     #[must_use]
     pub fn snapshot(&self) -> EpollSnapshot {
-        let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         EpollSnapshot {
             watch_limit: self.inner.watch_limit,
             next_token: state.next_token,
@@ -353,7 +353,7 @@ impl Epoll {
         self.inner
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .watches
             .len()
     }
@@ -363,7 +363,7 @@ impl Epoll {
             return Readiness::default();
         }
         let watches = {
-            let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return Readiness::from_bits(Readiness::ERROR);
             }
@@ -394,7 +394,7 @@ impl Epoll {
 
     fn refresh_token(inner: &Arc<EpollInner>, token: u64) {
         let snapshot = {
-            let state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }
@@ -405,7 +405,7 @@ impl Epoll {
         };
         let (target, interests, observed, disabled) = snapshot;
         let sampled = target.readiness(interests.readiness());
-        let mut state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(index) = state.token_index.get(&token).copied() else {
             return;
         };
@@ -425,7 +425,7 @@ impl Epoll {
     }
 
     fn signal_token(inner: &Arc<EpollInner>, token: u64) {
-        let mut state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return;
         }
@@ -447,7 +447,7 @@ impl Epoll {
 
     fn prune_retired(&self) {
         let removed = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::take_retired(&mut state)
         };
         for watch in removed {
@@ -496,7 +496,7 @@ impl Epoll {
 
     pub(crate) fn retire_description(&self) {
         let watches = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }
@@ -510,7 +510,7 @@ impl Epoll {
         self.inner
             .retired_watches
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .extend(watches);
     }
 
@@ -522,10 +522,10 @@ impl Epoll {
                 .inner
                 .retired_watches
                 .lock()
-                .unwrap_or_else(|error| error.into_inner()),
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
         for watch in watches {
-            watch.subscription.quiesce()
+            watch.subscription.quiesce();
         }
         self.inner.readiness.close();
     }

@@ -34,7 +34,7 @@ impl Context {
     }
 
     pub(crate) fn admit(self: &Arc<Self>) -> Result<Admission, AioError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closing {
             return Err(AioError::Closing);
         }
@@ -60,7 +60,7 @@ impl Context {
             return Err(AioError::InvalidArgument);
         }
         let deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if state.events.len() >= minimum || state.closing || maximum == 0 {
                 break;
@@ -92,7 +92,7 @@ impl Context {
     ) -> (std::sync::MutexGuard<'a, State>, bool) {
         let Some(deadline) = deadline else {
             return (
-                self.changed.wait(state).unwrap_or_else(|error| error.into_inner()),
+                self.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner),
                 false,
             );
         };
@@ -102,22 +102,22 @@ impl Context {
         let (next, timed) = self
             .changed
             .wait_timeout(state, remaining)
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         (next, timed.timed_out())
     }
 
     pub(crate) fn close(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.closing = true;
         self.changed.notify_all();
         while state.admitted != 0 {
-            state = self.changed.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         state.events.clear();
     }
 
     pub(crate) fn wake(&self) {
-        let _state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let _state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.changed.notify_all();
     }
 }
@@ -129,7 +129,7 @@ pub struct Admission {
 
 impl Admission {
     pub fn complete(mut self, event: Event) -> Result<(), AioError> {
-        let mut state = self.context.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.context.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         debug_assert!(state.reserved != 0);
         state.reserved -= 1;
         state.admitted -= 1;
@@ -145,7 +145,7 @@ impl Drop for Admission {
         if self.completed {
             return;
         }
-        let mut state = self.context.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.context.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.reserved -= 1;
         state.admitted -= 1;
         self.context.changed.notify_all();
@@ -164,7 +164,7 @@ impl EventBatch {
     }
 
     pub fn commit(self) {
-        let mut state = self.context.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.context.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for _ in 0..self.events.len() {
             let _ = state.events.pop_front();
         }

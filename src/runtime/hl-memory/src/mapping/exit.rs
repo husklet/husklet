@@ -97,7 +97,7 @@ impl<H: ExitHost> PreparedAddressExit<H> {
         self.coordinator
             .pins
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         self.state = ExitState::Complete;
         self.coordinator.activity.terminate();

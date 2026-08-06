@@ -261,11 +261,10 @@ impl Path {
         let path = self;
         match entry.header().entry_type() {
             tar::EntryType::Directory => {
-                if let Ok(metadata) = fs::symlink_metadata(destination) {
-                    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                if let Ok(metadata) = fs::symlink_metadata(destination)
+                    && (!metadata.is_dir() || metadata.file_type().is_symlink()) {
                         path.remove(destination)?;
                     }
-                }
                 fs::create_dir_all(destination).map_err(|source| path.io("create directory", source))?;
                 backlog
                     .directories

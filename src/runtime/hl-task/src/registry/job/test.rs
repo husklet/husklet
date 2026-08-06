@@ -678,11 +678,9 @@ fn concurrent_usage() {
                 };
                 if let Ok(PreparedChildWait::Selection(selection)) =
                     registry.prepare_wait_child(parent, ChildSelector::Any, options)
-                {
-                    if selection.commit().is_ok() {
+                    && selection.commit().is_ok() {
                         reaped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
-                }
             })
         })
         .collect::<Vec<_>>();

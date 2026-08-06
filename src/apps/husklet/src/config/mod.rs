@@ -10,7 +10,7 @@
 //!   - [`WorkspaceStore`], the persistence (`~/.hl/workspaces.conf`) that round-trips the full config.
 //!
 //! `hl` (the CLI launcher) maps each setting to the owning crate's PRIMITIVE at launch (vpn→engine egress
-//! arg and docker_sock→mount); this module is pure data + IO only.
+//! arg and `docker_sock→mount`); this module is pure data + IO only.
 
 use hl_ws::{Arch, Mount, Workspace};
 use std::io;
@@ -32,14 +32,15 @@ pub enum VpnKind {
     Socks5,
     /// An HTTP CONNECT proxy `host:port` (modeled + persisted; needs a helper to front it as SOCKS5).
     Http,
-    /// A WireGuard `wg-quick` config path.
+    /// A `WireGuard` `wg-quick` config path.
     Wireguard,
-    /// An OpenVPN config path (needs the userspace-OpenVPN + tun2socks helper).
+    /// An `OpenVPN` config path (needs the userspace-OpenVPN + tun2socks helper).
     Openvpn,
 }
 
 impl VpnKind {
     /// The stable on-disk / config token.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             VpnKind::Socks5 => "socks5",
@@ -49,6 +50,7 @@ impl VpnKind {
         }
     }
     /// Parse the config token (accepts common aliases). `None` = not a recognized kind.
+    #[must_use]
     pub fn parse(s: &str) -> Option<VpnKind> {
         match s.trim().to_ascii_lowercase().as_str() {
             "socks5" | "socks" | "socks5h" => Some(VpnKind::Socks5),
@@ -81,6 +83,7 @@ impl VpnConfig {
     }
     /// Parse a user/CLI spec: `<kind>:<endpoint>` (e.g. `socks5:127.30.0.1:1080`, `wireguard:vpn/wg.conf`),
     /// or a bare `host:port` which defaults to a SOCKS5 proxy. Empty → `None`.
+    #[must_use]
     pub fn parse(s: &str) -> Option<VpnConfig> {
         let s = s.trim();
         if s.is_empty() {
@@ -119,11 +122,13 @@ impl VpnConfig {
             && port.parse::<u16>().is_ok_and(|port| port > 0)
     }
     /// The canonical `<kind>:<endpoint>` persisted form (round-trips through [`VpnConfig::parse`]).
+    #[must_use]
     pub fn to_spec(&self) -> String {
         format!("{}:{}", self.kind.as_str(), self.endpoint)
     }
     /// The SOCKS5 `host:port` the engine's egress redirect should dial, if this config resolves to one
     /// directly. `Socks5` endpoints qualify as-is; the tunnel kinds return `None` (they need a helper).
+    #[must_use]
     pub fn socks_endpoint(&self) -> Option<&str> {
         match self.kind {
             VpnKind::Socks5 => Some(self.endpoint.as_str()),
@@ -159,6 +164,7 @@ pub struct TerminalPreferences {
 
 impl CudaDevice {
     /// A sensible default simulated device (Ampere-class, 4 GiB reported).
+    #[must_use]
     pub fn default_device() -> CudaDevice {
         CudaDevice {
             name: "hl Metal (CUDA-sim) Device".to_string(),
@@ -169,6 +175,7 @@ impl CudaDevice {
     /// Parse the persisted `name | cc | vram_mb` spec (pipe-separated so the name may contain spaces).
     /// A bare non-empty string with no pipes is treated as just the device name with default cc/VRAM.
     /// Empty → `None`.
+    #[must_use]
     pub fn parse(s: &str) -> Option<CudaDevice> {
         let s = s.trim();
         if s.is_empty() {
@@ -212,6 +219,7 @@ impl CudaDevice {
             && minor.bytes().all(|byte| byte.is_ascii_digit())
     }
     /// The canonical persisted form (round-trips through [`CudaDevice::parse`]).
+    #[must_use]
     pub fn to_spec(&self) -> String {
         format!("{}|{}|{}", self.name, self.compute_capability, self.vram_mb)
     }
@@ -255,6 +263,7 @@ impl DerefMut for WorkspaceConfig {
 
 impl WorkspaceConfig {
     /// Stable, whitespace-free identity used at process and filesystem boundaries.
+    #[must_use]
     pub fn key(&self) -> String {
         hl_ws::Workspace::storage_component(&self.name)
     }
@@ -264,6 +273,7 @@ impl WorkspaceConfig {
         WorkspaceConfig::from_ws(Workspace::new(name, image, arch))
     }
     /// Wrap an existing bare `Workspace` with the default feature settings.
+    #[must_use]
     pub fn from_ws(ws: Workspace) -> WorkspaceConfig {
         WorkspaceConfig {
             ws,
@@ -277,6 +287,7 @@ impl WorkspaceConfig {
     }
     /// VTE scrollback-line count to apply. Unlimited (`None`/`0`) maps to a very large, file-backed cap
     /// (same convention as `hl_ws_term::TermConfig::scrollback_lines`).
+    #[must_use]
     pub fn scrollback_lines(&self) -> i64 {
         match self.scrollback {
             None | Some(0) => 10_000_000,
@@ -338,13 +349,16 @@ impl WorkspaceStore {
         Ok(WorkspaceStore { path, items })
     }
 
+    #[must_use]
     pub fn all(&self) -> &[WorkspaceConfig] {
         &self.items
     }
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&WorkspaceConfig> {
         self.items.iter().find(|w| w.name == name)
     }
 
+    #[must_use]
     pub fn get_key(&self, key: &str) -> Option<&WorkspaceConfig> {
         self.items.iter().find(|workspace| workspace.key() == key)
     }

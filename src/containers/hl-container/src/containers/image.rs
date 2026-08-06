@@ -58,8 +58,8 @@ impl Containers {
             crate::Guest::X86_64 => hl_images::Platform::linux_amd64(),
         };
         let images = self.images()?;
-        if let (crate::Rootfs::Image(rootfs), Some(parent_name)) = (&container.spec.rootfs, &container.spec.image) {
-            if let Ok(overlay) = images.roots().open_overlay(rootfs) {
+        if let (crate::Rootfs::Image(rootfs), Some(parent_name)) = (&container.spec.rootfs, &container.spec.image)
+            && let Ok(overlay) = images.roots().open_overlay(rootfs) {
                 let parent = images
                     .resolve(parent_name)?
                     .ok_or_else(|| crate::Error::Corrupt(format!("parent image {parent_name} is missing")))?;
@@ -75,7 +75,6 @@ impl Containers {
                     .commit_child(&parent, std::io::Cursor::new(layer), &name, &metadata)
                     .map_err(Into::into);
             }
-        }
         let mut layer = Vec::new();
         self.filesystem(reference).await?.archive("/", &mut layer)?;
         let metadata = hl_images::Metadata::standalone(platform, runtime.clone()).committed(

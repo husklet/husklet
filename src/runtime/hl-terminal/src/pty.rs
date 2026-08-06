@@ -266,7 +266,7 @@ impl Pair {
                     if cancellation.is_some_and(OperationCancellation::interrupted) {
                         return Err(ReadError::Interrupted);
                     }
-                    state = self.changed.wait(state).unwrap_or_else(|error| error.into_inner());
+                    state = self.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
                 }
                 _ => return result,
             }
@@ -479,7 +479,7 @@ impl Pair {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -504,8 +504,8 @@ impl Catalog {
     /// Acquires a controlling terminal and reports whether this call created
     /// the session binding, so a cross-domain caller can compensate safely.
     pub fn acquire_changed(&self, session: u32, pair: PairId) -> Result<bool, CatalogError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if !state.pairs.get(&pair.index).is_some_and(|current| current.id() == pair) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.pairs.get(&pair.index).is_none_or(|current| current.id() != pair) {
             return Err(CatalogError::Stale);
         }
         if state.controlling.get(&session).copied() == Some(pair) {
@@ -519,7 +519,7 @@ impl Catalog {
     }
 
     pub fn controlling(&self, session: u32) -> Result<Arc<Pair>, CatalogError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = *state.controlling.get(&session).ok_or(CatalogError::NotFound)?;
         state
             .pairs
@@ -530,7 +530,7 @@ impl Catalog {
     }
 
     pub fn detach(&self, session: u32, pair: PairId) -> Result<(), CatalogError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.controlling.get(&session).copied() != Some(pair) {
             return Err(CatalogError::NotFound);
         }
@@ -544,14 +544,14 @@ impl Catalog {
     pub fn controlling_session(&self, pair: PairId) -> Option<u32> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .controlling
             .iter()
             .find_map(|(session, owner)| (*owner == pair).then_some(*session))
     }
 
     pub fn allocate(&self) -> Result<Arc<Pair>, CatalogError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = (0..MAXIMUM_PAIRS)
             .find(|index| !state.pairs.contains_key(index))
             .ok_or(CatalogError::Capacity)?;
@@ -570,7 +570,7 @@ impl Catalog {
     }
 
     pub fn get(&self, id: PairId) -> Result<Arc<Pair>, CatalogError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let pair = state.pairs.get(&id.index).ok_or(CatalogError::NotFound)?;
         if pair.id() != id {
             return Err(CatalogError::Stale);
@@ -581,7 +581,7 @@ impl Catalog {
     pub fn current(&self, index: u16) -> Result<Arc<Pair>, CatalogError> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pairs
             .get(&index)
             .cloned()
@@ -592,7 +592,7 @@ impl Catalog {
     pub fn indices(&self) -> Vec<u16> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pairs
             .keys()
             .copied()
@@ -600,7 +600,7 @@ impl Catalog {
     }
 
     pub fn retire(&self, id: PairId) -> Result<(), CatalogError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let pair = state.pairs.get(&id.index).ok_or(CatalogError::NotFound)?;
         if pair.id() != id {
             return Err(CatalogError::Stale);

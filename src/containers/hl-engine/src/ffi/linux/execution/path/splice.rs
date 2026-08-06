@@ -12,16 +12,16 @@ struct CancellationWake(Arc<CursorGate>);
 
 impl hl_descriptor::CancellationNotification for CancellationWake {
     fn notify(&self) {
-        let _guard = self.0.reserved.lock().unwrap_or_else(|error| error.into_inner());
+        let _guard = self.0.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.0.changed.notify_all();
     }
 }
 
 impl CursorGate {
     pub(super) fn enter(&self) {
-        let mut reserved = self.reserved.lock().unwrap_or_else(|error| error.into_inner());
+        let mut reserved = self.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while *reserved {
-            reserved = self.changed.wait(reserved).unwrap_or_else(|error| error.into_inner());
+            reserved = self.changed.wait(reserved).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -37,7 +37,7 @@ impl CursorGate {
             return Err(ObjectError::Interrupted);
         }
         let subscription = cancellation.map(|value| value.subscribe(Arc::new(CancellationWake(Arc::clone(self)))));
-        let mut reserved = self.reserved.lock().unwrap_or_else(|error| error.into_inner());
+        let mut reserved = self.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while implicit && *reserved {
             if nonblocking {
                 return Err(ObjectError::WouldBlock);
@@ -45,7 +45,7 @@ impl CursorGate {
             if cancellation.is_some_and(OperationCancellation::interrupted) {
                 return Err(ObjectError::Interrupted);
             }
-            reserved = self.changed.wait(reserved).unwrap_or_else(|error| error.into_inner());
+            reserved = self.changed.wait(reserved).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         if implicit {
             *reserved = true;
@@ -68,7 +68,7 @@ impl CursorGate {
     }
 
     fn release(&self) {
-        *self.reserved.lock().unwrap_or_else(|error| error.into_inner()) = false;
+        *self.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
         self.changed.notify_all();
     }
 }

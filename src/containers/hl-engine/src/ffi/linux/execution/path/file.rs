@@ -327,7 +327,7 @@ impl OpenFileDescription for NativeFile {
                 .try_clone()
                 .map_err(Self::object)?;
             transfer(&mut input, &mut Some(clone))
-        } else if (self as *const Self as usize) < (target as *const Self as usize) {
+        } else if (std::ptr::from_ref::<Self>(self) as usize) < (std::ptr::from_ref::<Self>(target) as usize) {
             let mut input = self.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut output = target.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             transfer(&mut input, &mut output)
@@ -686,13 +686,13 @@ impl OpenFileDescription for NativeFile {
                 self.watches.publish(&self.path, hl_event::InotifyMask::MODIFY);
                 return Ok(());
             }
-            return match error.raw_os_error() {
+            match error.raw_os_error() {
                 Some(libc::EINVAL) => Err(ObjectError::InvalidArgument),
                 Some(libc::ENOSPC) => Err(ObjectError::NoSpace),
                 Some(libc::EPERM) => Err(ObjectError::PermissionDenied),
                 Some(code) if code == libc::EOPNOTSUPP || code == libc::ENOSYS => Err(ObjectError::NotSupported),
                 _ => Err(ObjectError::Io),
-            };
+            }
         }
         #[cfg(not(target_os = "linux"))]
         {

@@ -29,7 +29,7 @@ impl InheritedStream {
         };
         loop {
             // SAFETY: poll receives one valid pollfd for the duration of this call.
-            let result = unsafe { libc::poll(&mut event, 1, -1) };
+            let result = unsafe { libc::poll(&raw mut event, 1, -1) };
             if result > 0 && event.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
                 return Ok(());
             }
@@ -67,8 +67,8 @@ impl InheritedListener {
                 descriptor,
                 libc::SOL_SOCKET,
                 libc::SO_ACCEPTCONN,
-                (&mut accepting as *mut i32).cast(),
-                &mut length,
+                (&raw mut accepting).cast(),
+                &raw mut length,
             ) == 0
                 && accepting == 1
         };
@@ -142,7 +142,7 @@ impl PinnedRoot {
                 437_i64,
                 root.as_raw_fd(),
                 name.as_ptr(),
-                &how as *const super::OpenHow,
+                &raw const how,
                 std::mem::size_of::<super::OpenHow>(),
             )
         };

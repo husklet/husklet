@@ -31,21 +31,19 @@ impl Resolver {
         let class = u16::from_be_bytes([query[end + 2], query[end + 3]]);
         let question_end = end + 4;
         let mut addresses = Vec::new();
-        if class == 1 && matches!(kind, 1 | 28) {
-            if let Ok(found) = (name.as_str(), 0).to_socket_addrs() {
+        if class == 1 && matches!(kind, 1 | 28)
+            && let Ok(found) = (name.as_str(), 0).to_socket_addrs() {
                 for address in found {
                     let address = address.ip();
-                    if (kind == 1 && address.is_ipv4()) || (kind == 28 && address.is_ipv6()) {
-                        if !addresses.contains(&address) {
+                    if ((kind == 1 && address.is_ipv4()) || (kind == 28 && address.is_ipv6()))
+                        && !addresses.contains(&address) {
                             addresses.push(address);
                             if addresses.len() == ANSWER_LIMIT {
                                 break;
                             }
                         }
-                    }
                 }
             }
-        }
         let mut output = Vec::with_capacity(question_end + addresses.len() * 28);
         output.extend_from_slice(&query[..2]);
         let request_flags = u16::from_be_bytes([query[2], query[3]]);

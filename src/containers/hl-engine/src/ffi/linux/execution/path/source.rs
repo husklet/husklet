@@ -56,14 +56,14 @@ impl MountPaths {
     fn insert(&self, path: MountPath) {
         self.entries
             .write()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(path);
     }
 
     pub(super) fn root(&self, source: MountSourceId) -> Result<Arc<File>, RuntimePathError> {
         self.entries
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|entry| entry.source == source)
             .map(|entry| Arc::clone(&entry.root))
@@ -71,7 +71,7 @@ impl MountPaths {
     }
 
     fn guest(&self, path: &Path) -> Result<Option<GuestPath>, RuntimePathError> {
-        let entries = self.entries.read().unwrap_or_else(|error| error.into_inner());
+        let entries = self.entries.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let selected = entries
             .iter()
             .filter_map(|entry| path.strip_prefix(&entry.host).ok().map(|relative| (entry, relative)))
@@ -278,7 +278,7 @@ impl OrdinaryContext {
                 leaf,
             });
         }
-        *self.name_binds.write().unwrap_or_else(|error| error.into_inner()) = parsed;
+        *self.name_binds.write().unwrap_or_else(std::sync::PoisonError::into_inner) = parsed;
         Ok(())
     }
 
@@ -298,7 +298,7 @@ impl OrdinaryContext {
             .rfind('/')
             .map(|slash| if slash == 0 { "/" } else { &guest.as_str()[..slash] })
             .ok_or(RuntimePathError::Invalid)?;
-        let rules = self.name_binds.read().unwrap_or_else(|error| error.into_inner());
+        let rules = self.name_binds.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(rule) = rules.iter().find(|rule| rule.exact.contains(&guest)) {
             return Ok(Some(NameBinding {
                 guest,

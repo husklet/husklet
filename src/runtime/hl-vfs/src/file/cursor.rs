@@ -58,7 +58,7 @@ impl Cursor {
     }
 
     pub(super) fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub(super) fn acquire(
@@ -80,7 +80,7 @@ impl Cursor {
             if retired() {
                 return Err(ObjectError::Retired);
             }
-            state = self.wait.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self.wait.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         if cancellation.is_some_and(OperationCancellation::interrupted) {
             return Err(ObjectError::Interrupted);

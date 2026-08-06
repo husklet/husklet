@@ -17,7 +17,7 @@ impl GuestExecutionPort for GuestExecutor {
         assembly: &RuntimeAssembly,
         services: &RuntimeServices,
     ) -> Result<(), EngineError> {
-        let key = assembly as *const RuntimeAssembly as usize;
+        let key = std::ptr::from_ref::<RuntimeAssembly>(assembly) as usize;
         let cancellation = Arc::new(readiness::Cancellation::new().map_err(|_| EngineError::LaunchFailed)?);
         let counter: Arc<dyn hl_execution::ArchitecturalCounter> = Arc::new(task::HostCounter);
         let threads = Arc::new(
@@ -49,7 +49,7 @@ impl GuestExecutionPort for GuestExecutor {
 
     fn wait(&self, assembly: &RuntimeAssembly) -> Result<EngineExit, EngineError> {
         let state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
-        let key = assembly as *const RuntimeAssembly as usize;
+        let key = std::ptr::from_ref::<RuntimeAssembly>(assembly) as usize;
         if let Some(exit) = state.exits.get(&key) {
             return Ok(*exit);
         }
@@ -57,7 +57,7 @@ impl GuestExecutionPort for GuestExecutor {
     }
 
     fn stop(&self, assembly: &RuntimeAssembly, request: StopRequest) -> Result<(), EngineError> {
-        let key = assembly as *const RuntimeAssembly as usize;
+        let key = std::ptr::from_ref::<RuntimeAssembly>(assembly) as usize;
         let mut state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
         if let Some(threads) = state.running.get(&key) {
             if matches!(request, StopRequest::Force) {

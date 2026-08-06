@@ -42,7 +42,7 @@ pub fn emit(tags: Tags, level: Level, module: &str, line: u32, args: std::fmt::A
     let _ = write!(buf, " +{}ms t{} ", millis_since_start(), thread_id());
     buf.push_str(module);
     buf.push(':');
-    let _ = write!(buf, "{}", line);
+    let _ = write!(buf, "{line}");
     buf.push_str(": ");
     let _ = buf.write_fmt(args);
     buf.push('\n');

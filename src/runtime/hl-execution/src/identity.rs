@@ -16,6 +16,7 @@ pub struct FileIdentity {
 pub struct CacheIdentity;
 
 impl CacheIdentity {
+    #[must_use]
     pub fn name(name: Option<&str>) -> u64 {
         let Some(name) = name else { return 0x1357 };
         let mut value = DIGEST_SEED;
@@ -25,6 +26,7 @@ impl CacheIdentity {
         value
     }
 
+    #[must_use]
     pub fn file(file: FileIdentity) -> u64 {
         if !file.regular {
             return 0;
@@ -38,10 +40,12 @@ impl CacheIdentity {
         ])
     }
 
+    #[must_use]
     pub const fn mix(program: u64, interpreter: u64, engine: u64, name: u64) -> u64 {
         (program ^ interpreter.wrapping_mul(PRIME)) ^ engine ^ name.wrapping_mul(PRIME)
     }
 
+    #[must_use]
     pub fn configuration(build: u64, guest: GuestArchitecture, host: HostArchitecture, modes: u64) -> u64 {
         Self::words(&[build, guest as u64, host as u64, modes])
     }

@@ -29,7 +29,7 @@ impl fmt::Debug for AuxiliaryFile {
 
 impl OpenFileDescription for AuxiliaryFile {
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let count = output.len().min(self.bytes.len().saturating_sub(*cursor));
         output[..count].copy_from_slice(&self.bytes[*cursor..*cursor + count]);
         *cursor += count;
@@ -44,7 +44,7 @@ impl OpenFileDescription for AuxiliaryFile {
     }
 
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
-        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cursor = self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let next = match position {
             SeekPosition::Start(value) => i128::from(value),
             SeekPosition::Current(value) => *cursor as i128 + i128::from(value),

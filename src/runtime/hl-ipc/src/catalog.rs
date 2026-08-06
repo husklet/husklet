@@ -154,7 +154,7 @@ impl IpcCatalog {
         writer_binding: Arc<dyn PipeEndpointBinding>,
     ) -> Result<PreparedPipe, IpcCatalogError> {
         let admission = self.activity.admit();
-        let mut slots = self.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = slots
             .iter()
             .position(|slot| slot.object.is_none() && !slot.reserved)
@@ -201,7 +201,7 @@ impl IpcCatalog {
         writer_binding: Arc<dyn PipeEndpointBinding>,
     ) -> Result<IpcPipeId, IpcCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = slots
             .iter()
             .position(|slot| slot.object.is_none() && !slot.reserved)
@@ -234,7 +234,7 @@ impl IpcCatalog {
     /// Removes a pipe only after both endpoint descriptions have closed.
     pub fn retire_pipe(&self, id: IpcPipeId) -> Result<bool, IpcCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::pipe_slot(&mut slots, id)?;
         let object = slot.object.as_ref().ok_or(IpcCatalogError::Stale)?;
         let snapshot = object.pipe.snapshot().map_err(|_| IpcCatalogError::Busy)?;
@@ -247,7 +247,7 @@ impl IpcCatalog {
 
     pub fn remove_pipe(&self, id: IpcPipeId) -> Result<(), IpcCatalogError> {
         let _admission = self.activity.admit();
-        Self::pipe_slot(&mut self.pipes.lock().unwrap_or_else(|error| error.into_inner()), id)?
+        Self::pipe_slot(&mut self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner), id)?
             .object
             .take()
             .ok_or(IpcCatalogError::Stale)?;
@@ -256,7 +256,7 @@ impl IpcCatalog {
 
     pub fn with_pipe<R>(&self, id: IpcPipeId, operation: impl FnOnce(&Pipe) -> R) -> Result<R, IpcCatalogError> {
         let _admission = self.activity.admit();
-        let slots = self.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let object = Self::pipe_slot_ref(&slots, id)?
             .object
             .as_ref()
@@ -281,7 +281,7 @@ impl IpcCatalog {
 
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
-        drop(self.pipes.lock().unwrap_or_else(|error| error.into_inner()));
+        drop(self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
 
     pub fn thaw_checkpoint(&self) {
@@ -292,7 +292,7 @@ impl IpcCatalog {
         if !self.activity.frozen() {
             return Err(IpcCatalogError::Invalid);
         }
-        let pipes = self.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let pipes = self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.messages.checkpoint_waiters() != 0 || self.semaphores.checkpoint_waiters() != 0 {
             return Err(IpcCatalogError::Busy);
         }
@@ -404,7 +404,7 @@ impl IpcCatalog {
             activity: crate::checkpoint_activity::CheckpointActivity::default(),
         });
         let weak = Arc::downgrade(&catalog);
-        let pipes = catalog.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let pipes = catalog.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for (slot, entry) in pipes.iter().enumerate() {
             let Some(object) = &entry.object else { continue };
             let id = IpcPipeId {
@@ -449,7 +449,7 @@ impl PreparedPipe {
     /// Publishes the already-reserved slot without another fallible step.
     #[must_use]
     pub fn publish(mut self) -> IpcPipeId {
-        let mut slots = self.catalog.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.catalog.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = &mut slots[self.id.slot as usize];
         debug_assert!(slot.reserved && slot.generation == self.id.generation);
         slot.object = self.object.take();
@@ -464,7 +464,7 @@ impl Drop for PreparedPipe {
         if self.published {
             return;
         }
-        let mut slots = self.catalog.pipes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.catalog.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(slot) = slots.get_mut(self.id.slot as usize) else {
             return;
         };

@@ -48,7 +48,7 @@ pub struct Namespace {
 
 impl Namespace {
     pub fn bind(&self, requested: UnixAddress, identity: SocketId) -> Result<(UnixAddress, Binding), NamespaceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let address = match requested {
             UnixAddress::Unnamed => Self::autobind(&mut state)?,
             UnixAddress::Pathname(ref value) | UnixAddress::Abstract(ref value) if value.is_empty() => {
@@ -79,7 +79,7 @@ impl Namespace {
     pub fn resolve(&self, address: &UnixAddress) -> Option<SocketId> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .addresses
             .get(address)
             .and_then(|entry| entry.live)
@@ -89,7 +89,7 @@ impl Namespace {
     #[must_use]
     pub fn resolve_pathname(&self, pathname: &[u8]) -> PathnameResolution {
         let address = UnixAddress::Pathname(pathname.to_vec());
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match state.addresses.get(&address) {
             None => PathnameResolution::Missing,
             Some(Entry { live: None, .. }) => PathnameResolution::Stale,
@@ -103,7 +103,7 @@ impl Namespace {
     #[must_use]
     pub fn pathname_binding(&self, pathname: &[u8]) -> Option<Binding> {
         let address = UnixAddress::Pathname(pathname.to_vec());
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.addresses.get(&address).map(|entry| Binding {
             identity: entry.identity,
             generation: entry.generation,
@@ -112,7 +112,7 @@ impl Namespace {
 
     /// Releases an endpoint. Abstract names disappear; pathname entries become stale.
     pub fn release(&self, address: &UnixAddress, binding: Binding) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let matches = state
             .addresses
             .get(address)
@@ -136,7 +136,7 @@ impl Namespace {
     /// The binding generation prevents a delayed unlink from removing a replacement.
     pub fn unlink_pathname(&self, pathname: &[u8], binding: Binding) -> bool {
         let address = UnixAddress::Pathname(pathname.to_vec());
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let matches = state
             .addresses
             .get(&address)

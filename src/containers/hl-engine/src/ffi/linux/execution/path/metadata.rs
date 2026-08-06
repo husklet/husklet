@@ -366,7 +366,7 @@ impl Registry {
         let value = pin.metadata().map_err(HostError::map)?;
         self.0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert((value.dev(), value.ino()), Ownership { _pin: pin, user, group });
         Ok(())
     }
@@ -375,7 +375,7 @@ impl Registry {
         if let Some(owner) = self
             .0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(metadata.identity.device, metadata.identity.inode))
         {
             metadata.user = owner.user;
@@ -387,7 +387,7 @@ impl Registry {
         if let Some(owner) = self
             .0
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(metadata.device, metadata.inode))
         {
             metadata.user = owner.user;

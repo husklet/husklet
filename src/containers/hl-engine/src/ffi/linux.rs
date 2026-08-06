@@ -142,7 +142,7 @@ impl HostSyscalls for LinuxHost {
         let mut value = libc::timespec { tv_sec: 0, tv_nsec: 0 };
         // SAFETY: value is aligned, initialized, uniquely writable, retained by
         // no caller, and libc cannot unwind.
-        if unsafe { libc::clock_gettime(clock, &mut value) } != 0 {
+        if unsafe { libc::clock_gettime(clock, &raw mut value) } != 0 {
             return Err(ErrnoMapper::current());
         }
         let seconds = u64::try_from(value.tv_sec).map_err(|_| HostError::Failed)?;

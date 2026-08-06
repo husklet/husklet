@@ -1,4 +1,4 @@
-use super::address::*;
+use super::address::{LoadExtension, MemoryAddress, SimdLogic, SimdCopy, SimdPermute, SimdUnary, SimdShift};
 use crate::{
     Aarch64BranchCondition as BranchCondition, Aarch64Shift, BitfieldOperation, CompareOperand, DivideOperation,
     FpBinaryOperation, FpFormat, FpRoundingMode, FpUnaryOperation, LogicalOperation, MemoryWidth, MoveWideOperation,

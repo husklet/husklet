@@ -6,6 +6,7 @@ use crate::{
 pub struct Lane;
 
 impl Lane {
+    #[must_use]
     pub fn carryless_multiply(left: u64, right: u64) -> u128 {
         let mut product = 0_u128;
         for bit in 0..64 {
@@ -16,6 +17,7 @@ impl Lane {
         product
     }
 
+    #[must_use]
     pub fn ssse3(left: u128, right: u128, lane: u8, operation: crate::x86::Ssse3Operation) -> u128 {
         let bits = u32::from(lane) * 8;
         let count = 128 / bits;
@@ -49,7 +51,7 @@ impl Lane {
                 crate::x86::Ssse3Operation::RoundedMultiply => {
                     let first = Self::signed(Self::element(left, index, bits), bits);
                     let second = Self::signed(Self::element(right, index, bits), bits);
-                    (((first * second) >> 14) + 1 >> 1) as u128 & Self::mask(bits)
+                    ((((first * second) >> 14) + 1) >> 1) as u128 & Self::mask(bits)
                 }
                 crate::x86::Ssse3Operation::MultiplyAdd => {
                     let byte = index * 2;
@@ -117,7 +119,7 @@ impl Lane {
                         access: AccessKind::Read,
                     });
                 }
-                memory.read(address, 2).map_err(|_| {
+                memory.read(address, 2).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, AccessKind::Read, 2))
                 })?
             }
@@ -130,6 +132,7 @@ impl Lane {
         Ok(Staged::Cpu(staged))
     }
 
+    #[must_use]
     pub fn integer(left: u128, right: u128, lane: u8, operation: VectorArithmetic) -> u128 {
         if operation == VectorArithmetic::SumAbsoluteDifferences {
             let mut result = 0_u128;
@@ -245,6 +248,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn extend(value: u128, source_lane: u8, destination_lane: u8, signed: bool) -> u128 {
         let source_bits = u32::from(source_lane) * 8;
         let destination_bits = u32::from(destination_lane) * 8;
@@ -264,6 +268,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn blend(left: u128, right: u128, selectors: u128, lane: u8, implicit: bool) -> u128 {
         let bits = u32::from(lane) * 8;
         let lane_mask = (1_u128 << bits) - 1;
@@ -282,6 +287,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn horizontal_minimum(value: u128) -> u128 {
         let mut best = value as u16;
         let mut position = 0_u16;
@@ -295,6 +301,7 @@ impl Lane {
         u128::from(best) | (u128::from(position) << 16)
     }
 
+    #[must_use]
     pub fn sad(left: u128, right: u128, control: u8) -> u128 {
         let left_offset = u32::from(control >> 2 & 1) * 4;
         let right_offset = u32::from(control & 3) * 4;
@@ -311,6 +318,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn dot(left: u128, right: u128, control: u8, format: crate::FloatWidth, mxcsr: u32) -> (u128, u32) {
         use crate::x86::scalar::arithmetic::Arithmetic;
         let environment = Arithmetic::environment(mxcsr);
@@ -352,6 +360,7 @@ impl Lane {
         (result, exceptions)
     }
 
+    #[must_use]
     pub const fn shift_bytes(value: u128, count: u8, left: bool) -> u128 {
         if count >= 16 {
             return 0;
@@ -360,6 +369,7 @@ impl Lane {
         if left { value << bits } else { value >> bits }
     }
 
+    #[must_use]
     pub fn shift(value: u128, lane: u8, count: u8, kind: VectorShiftKind) -> u128 {
         let bits = u32::from(lane) * 8;
         let mask = (1_u128 << bits) - 1;
@@ -389,6 +399,7 @@ impl Lane {
         }
     }
 
+    #[must_use]
     pub const fn bitwise(left: u128, right: u128, operation: VectorOperation) -> u128 {
         match operation {
             VectorOperation::And => left & right,
@@ -398,6 +409,7 @@ impl Lane {
         }
     }
 
+    #[must_use]
     pub fn shuffle(left: u128, right: u128, selectors: u8, mode: VectorShuffleMode) -> u128 {
         if mode == VectorShuffleMode::PackedSingle {
             return Self::shuffle_single(left, right, selectors);
@@ -416,6 +428,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn shuffle_bytes(data: u128, control: u128) -> u128 {
         let mut result = 0;
         for lane in 0..16 {
@@ -459,6 +472,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn compare(left: u128, right: u128, lane: u8, comparison: VectorComparison) -> u128 {
         let bits = u32::from(lane) * 8;
         let mask = (1_u128 << bits) - 1;
@@ -479,6 +493,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn sign_mask(value: u128, lane: u8) -> u16 {
         let bits = u32::from(lane) * 8;
         let mut result = 0;
@@ -488,6 +503,7 @@ impl Lane {
         result
     }
 
+    #[must_use]
     pub fn write_mask(mut cpu: CpuState, destination: ScalarRegister, source: u8, lane: u8) -> CpuState {
         let value = Self::sign_mask(cpu.vectors[usize::from(source)], lane);
         cpu.write_register(destination, ScalarWidth::Dword, u64::from(value));
@@ -509,10 +525,10 @@ impl Lane {
         };
         let address = address.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
         Self::canonical(address, instruction)?;
-        let low = memory.read(address, 8).map_err(|_| {
+        let low = memory.read(address, 8).map_err(|()| {
             ExecutionExit::OperandFault(crate::FaultAccess::operand(instruction, address, AccessKind::Read, 16))
         })?;
-        let high = memory.read(address + 8, 8).map_err(|_| {
+        let high = memory.read(address + 8, 8).map_err(|()| {
             ExecutionExit::OperandFault(crate::FaultAccess::operand(
                 instruction,
                 address + 8,
@@ -523,6 +539,7 @@ impl Lane {
         Ok(u128::from(low) | (u128::from(high) << 64))
     }
 
+    #[must_use]
     pub fn unpack(left: u128, right: u128, lane: u8, high: bool) -> u128 {
         let bits = u32::from(lane) * 8;
         let mask = (1_u128 << bits) - 1;

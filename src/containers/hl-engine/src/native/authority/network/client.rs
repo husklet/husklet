@@ -138,7 +138,7 @@ impl Client<'_> {
             NetworkAuthority::discard(rights)?;
             return Err(EngineError::AuthorityFailed);
         }
-        crate::ffi::linux::InheritedFile::adopt(rights[0]).map_err(|_| EngineError::AuthorityFailed)
+        crate::ffi::linux::InheritedFile::adopt(rights[0]).map_err(|()| EngineError::AuthorityFailed)
     }
 
     fn restore_transition(&mut self, operation: Operation) -> Result<(), EngineError> {

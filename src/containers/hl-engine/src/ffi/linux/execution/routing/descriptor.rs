@@ -10,7 +10,7 @@ impl ProcessContext {
         &self,
         thread: hl_task::ThreadId,
     ) -> Arc<hl_runtime::RuntimeDescriptorTable> {
-        let mut files = self.thread_files.lock().unwrap_or_else(|error| error.into_inner());
+        let mut files = self.thread_files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         files.retain(|_, private| private.table.strong_count() != 0);
         files
             .get(&thread)
@@ -28,13 +28,13 @@ impl ProcessContext {
             let permit = self
                 .thread_files
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(&source)
                 .map(|private| Arc::clone(&private.permit))
                 .expect("private descriptor table has admission");
             self.thread_files
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(
                     child,
                     super::PrivateTable {
@@ -49,7 +49,7 @@ impl ProcessContext {
     pub(in crate::ffi::linux::execution) fn forget_files(&self, thread: hl_task::ThreadId) {
         self.thread_files
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&thread);
     }
 
@@ -84,7 +84,7 @@ impl ProcessContext {
             });
         self.thread_files
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 thread,
                 super::PrivateTable {

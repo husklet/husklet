@@ -69,7 +69,7 @@ impl WatchDecoder {
             }
             let raw_name = &bytes[offset + HEADER..end];
             let name_length = raw_name.iter().position(|byte| *byte == 0).unwrap_or(raw_name.len());
-            let interests = (if mask & IN_MODIFY != 0 { 1 } else { 0 })
+            let interests = u32::from(mask & IN_MODIFY != 0)
                 | (if mask & IN_CREATE != 0 { 2 } else { 0 })
                 | (if mask & IN_DELETE != 0 { 4 } else { 0 })
                 | (if mask & (IN_MOVED_FROM | IN_MOVED_TO) != 0 {

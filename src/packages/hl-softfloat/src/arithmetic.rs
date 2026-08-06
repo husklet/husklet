@@ -25,14 +25,17 @@ impl Default for Environment {
 }
 
 impl Environment {
+    #[must_use]
     pub fn add(self, left: Value, right: Value) -> Result<Value> {
         self.add_subtract(left, right, false)
     }
 
+    #[must_use]
     pub fn subtract(self, left: Value, right: Value) -> Result<Value> {
         self.add_subtract(left, right, true)
     }
 
+    #[must_use]
     pub fn multiply(self, left: Value, right: Value) -> Result<Value> {
         assert_eq!(left.format(), right.format());
         let format = left.format();
@@ -70,6 +73,7 @@ impl Environment {
 
     /// ARM's extended multiply: identical to IEEE multiplication except that
     /// zero times infinity produces signed 2.0 instead of an invalid NaN.
+    #[must_use]
     pub fn multiply_extended(self, left: Value, right: Value) -> Result<Value> {
         assert_eq!(left.format(), right.format());
         let format = left.format();
@@ -92,6 +96,7 @@ impl Environment {
         }
     }
 
+    #[must_use]
     pub fn divide(self, left: Value, right: Value) -> Result<Value> {
         assert_eq!(left.format(), right.format());
         let format = left.format();
@@ -147,6 +152,7 @@ impl Environment {
         self.round_pack(format, sign, exponent, quotient, flags)
     }
 
+    #[must_use]
     pub fn square_root(self, operand: Value) -> Result<Value> {
         let format = operand.format();
         let (operand, flags) = self.unpack(operand);
@@ -172,30 +178,37 @@ impl Environment {
         self.round_pack(format, false, operand.exponent.div_euclid(2), root, flags)
     }
 
+    #[must_use]
     pub fn from_signed(self, format: Format, value: i64) -> Result<Value> {
         conversion::from_integer(self, format, value.unsigned_abs(), value.is_negative())
     }
 
+    #[must_use]
     pub fn from_unsigned(self, format: Format, value: u64) -> Result<Value> {
         conversion::from_integer(self, format, value, false)
     }
 
+    #[must_use]
     pub fn to_signed(self, value: Value, width: u8) -> Result<u64> {
         conversion::to_integer(self, value, width, true, 0)
     }
 
+    #[must_use]
     pub fn to_unsigned(self, value: Value, width: u8) -> Result<u64> {
         conversion::to_integer(self, value, width, false, 0)
     }
 
+    #[must_use]
     pub fn to_signed_scaled(self, value: Value, width: u8, scale: u8) -> Result<u64> {
         conversion::to_integer(self, value, width, true, scale)
     }
 
+    #[must_use]
     pub fn to_unsigned_scaled(self, value: Value, width: u8, scale: u8) -> Result<u64> {
         conversion::to_integer(self, value, width, false, scale)
     }
 
+    #[must_use]
     pub fn convert(self, value: Value, format: Format) -> Result<Value> {
         conversion::convert(self, value, format)
     }
@@ -417,7 +430,7 @@ impl Environment {
     pub(crate) fn pack_exact(self, format: Format, value: Operand) -> Value {
         Value::from_bits(
             format,
-            value.bits ^ u64::from(value.sign != (value.bits & format.sign_mask() != 0)) * format.sign_mask(),
+            value.bits ^ (u64::from(value.sign != (value.bits & format.sign_mask() != 0)) * format.sign_mask()),
         )
     }
 

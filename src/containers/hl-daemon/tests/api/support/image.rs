@@ -20,7 +20,7 @@ pub(crate) fn write_named_image_archive(
         header.set_mode(0o644);
         header.set_mtime(0);
         header.set_cksum();
-        tar.append_data(&mut header, "fixture.txt", &payload[..])?;
+        tar.append_data(&mut header, "fixture.txt", payload)?;
         tar.finish()?;
     }
     let mut diff_id = String::from("sha256:");

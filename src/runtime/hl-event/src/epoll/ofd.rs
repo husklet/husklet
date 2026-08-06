@@ -14,7 +14,7 @@ impl Default for Epoll {
 
 impl OpenFileDescription for Epoll {
     fn transfer_dependencies(&self) -> Vec<hl_descriptor::DescriptionRef> {
-        let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .watches
             .iter()

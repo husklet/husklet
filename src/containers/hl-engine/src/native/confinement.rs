@@ -6,7 +6,7 @@ pub struct HostConfinement;
 
 impl HostConfinement {
     pub fn apply() -> Result<(), EngineError> {
-        crate::ffi::linux::Seccomp::apply().map_err(|_| EngineError::AuthorityFailed)
+        crate::ffi::linux::Seccomp::apply().map_err(|()| EngineError::AuthorityFailed)
     }
 
     #[must_use]

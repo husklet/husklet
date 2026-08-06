@@ -23,7 +23,7 @@ impl StackFixture {
             .unwrap()
     }
 
-    fn stack_request<'a>(image: &'a ImagePlan) -> StackRequest<'a> {
+    fn stack_request(image: &ImagePlan) -> StackRequest<'_> {
         StackRequest {
             image,
             load_bias: if image.kind() == ImageKind::PositionIndependent {

@@ -98,6 +98,7 @@ pub struct Vt {
 
 impl Vt {
     /// A parser over a fresh `cols × rows` grid.
+    #[must_use]
     pub fn new(cols: usize, rows: usize) -> Vt {
         let g = Grid::new(cols, rows);
         let bot = g.rows() - 1;
@@ -129,6 +130,7 @@ impl Vt {
     }
 
     /// Immutable view of the current screen (for the renderer / tests).
+    #[must_use]
     pub fn grid(&self) -> &Grid {
         &self.grid
     }

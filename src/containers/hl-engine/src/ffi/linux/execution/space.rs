@@ -65,7 +65,7 @@ impl ProcessProjection {
         let mut projection = MemoryProjection::new(ProjectionEffectsControl(Arc::clone(&effects)));
         let query_target = Arc::clone(&target);
         let query: ProjectionQuery = Box::new(move |storage, length| {
-            let arena = query_target.read().unwrap_or_else(|error| error.into_inner());
+            let arena = query_target.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(guest) = arena.guest_address(storage) else {
                 return 0;
             };
@@ -93,7 +93,7 @@ impl ProcessProjection {
     }
 
     fn rebind(&self, arena: Arc<VirtualMemory>) {
-        *self.target.write().unwrap_or_else(|error| error.into_inner()) = arena;
+        *self.target.write().unwrap_or_else(std::sync::PoisonError::into_inner) = arena;
         self.effects.epoch.fetch_add(1, Ordering::AcqRel);
     }
 }
@@ -315,7 +315,7 @@ impl AddressSpace {
         let stack = loaded.usable_stack();
         let mapping = loaded.stack_mapping();
         let guard_end = stack.address();
-        *self.procfs.write().unwrap_or_else(|error| error.into_inner()) = ProcfsProvenance {
+        *self.procfs.write().unwrap_or_else(std::sync::PoisonError::into_inner) = ProcfsProvenance {
             executable: Some((main.address(), main.address().saturating_add(main.size()), executable)),
             environment,
             stack: Some((stack.address(), mapping.address().saturating_add(mapping.size()))),
@@ -324,11 +324,11 @@ impl AddressSpace {
     }
 
     pub(super) fn procfs_provenance(&self) -> ProcfsProvenance {
-        self.procfs.read().unwrap_or_else(|error| error.into_inner()).clone()
+        self.procfs.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     pub(super) fn lease(&self) -> SpaceLease {
-        let current = self.current.read().unwrap_or_else(|error| error.into_inner());
+        let current = self.current.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         SpaceLease {
             generation: current.generation,
             image: Arc::clone(&current.image),
@@ -341,7 +341,7 @@ impl AddressSpace {
         arena: Arc<VirtualMemory>,
         mappings: Arc<MappingCoordinator<MappingHostAdapter>>,
     ) -> Result<SpaceLease, Error> {
-        let mut current = self.current.write().unwrap_or_else(|error| error.into_inner());
+        let mut current = self.current.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if current.generation != expected {
             return Err(Error::Host);
         }
@@ -394,7 +394,7 @@ impl AddressSpace {
     }
 
     pub(super) fn with_execution_memory<R>(self: &Arc<Self>, callback: impl FnOnce(&mut SliceMemory<'_>) -> R) -> R {
-        let current = self.current.read().unwrap_or_else(|error| error.into_inner());
+        let current = self.current.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let lease = SpaceLease {
             generation: current.generation,
             image: Arc::clone(&current.image),
@@ -465,7 +465,7 @@ impl AddressSpace {
             }
         }
         let forked = Self::new(arena, mappings);
-        *forked.procfs.write().unwrap_or_else(|error| error.into_inner()) = self.procfs_provenance();
+        *forked.procfs.write().unwrap_or_else(std::sync::PoisonError::into_inner) = self.procfs_provenance();
         Ok(forked)
     }
 }

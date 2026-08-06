@@ -126,13 +126,13 @@ pub(super) struct Prepared {
 
 impl SparseMappings {
     pub(super) fn is_empty(&self) -> bool {
-        self.views.lock().unwrap_or_else(|error| error.into_inner()).is_empty()
+        self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
     }
 
     pub(super) fn prepare_same(&self, prior: Option<&Prepared>) -> Prepared {
         Prepared {
             views: prior.map_or_else(
-                || self.views.lock().unwrap_or_else(|error| error.into_inner()).clone(),
+                || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
                 |prepared| prepared.views.clone(),
             ),
         }
@@ -145,7 +145,7 @@ impl SparseMappings {
         file: Option<(&File, u64)>,
     ) -> Result<Prepared, MemoryError> {
         let mut views = prior.map_or_else(
-            || self.views.lock().unwrap_or_else(|error| error.into_inner()).clone(),
+            || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
             |prepared| prepared.views.clone(),
         );
         Self::remove(&mut views, guest, length)?;
@@ -171,7 +171,7 @@ impl SparseMappings {
         length: u64,
     ) -> Result<Prepared, MemoryError> {
         let mut views = prior.map_or_else(
-            || self.views.lock().unwrap_or_else(|error| error.into_inner()).clone(),
+            || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
             |prepared| prepared.views.clone(),
         );
         Self::remove(&mut views, guest, length)?;
@@ -188,7 +188,7 @@ impl SparseMappings {
         file: Option<(&File, u64)>,
     ) -> Result<Prepared, MemoryError> {
         let mut views = prior.map_or_else(
-            || self.views.lock().unwrap_or_else(|error| error.into_inner()).clone(),
+            || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
             |prepared| prepared.views.clone(),
         );
         let source_view = Self::find_in(&views, source.start().get(), source.length())?;
@@ -224,7 +224,7 @@ impl SparseMappings {
     }
 
     pub(super) fn publish(&self, prepared: Prepared) {
-        *self.views.lock().unwrap_or_else(|error| error.into_inner()) = prepared.views;
+        *self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = prepared.views;
     }
 
     #[cfg(test)]
@@ -258,7 +258,7 @@ impl SparseMappings {
     }
 
     fn find(&self, guest: u64, length: u64) -> Result<Option<View>, MemoryError> {
-        let views = self.views.lock().unwrap_or_else(|error| error.into_inner());
+        let views = self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::find_in(&views, guest, length)
     }
 
@@ -272,7 +272,7 @@ impl SparseMappings {
 
     #[cfg(test)]
     fn replace(&self, guest: u64, length: u64, backing: Arc<Backing>, offset: u64) -> Result<(), MemoryError> {
-        let mut views = self.views.lock().unwrap_or_else(|error| error.into_inner());
+        let mut views = self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::remove(&mut views, guest, length)?;
         views.insert(
             guest,

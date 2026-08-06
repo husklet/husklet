@@ -11,6 +11,7 @@ pub enum Severity {
 
 impl Severity {
     /// Returns the diagnostic spelling.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Error => "error",
@@ -65,6 +66,7 @@ pub struct Review {
 
 impl Review {
     /// Creates an unresolved error review.
+    #[must_use]
     pub fn error() -> Self {
         Self {
             state: ReviewState::Error,
@@ -121,6 +123,7 @@ impl Finding {
     }
 
     /// Returns whether this finding contributes to rule failure.
+    #[must_use]
     pub fn is_violation(&self) -> bool {
         !matches!(
             self.review.as_ref().map(|review| &review.state),

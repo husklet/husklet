@@ -53,7 +53,7 @@ impl Aarch64SimdInterpreter {
                 second,
                 destination,
             } => {
-                crate::aarch64_simd_sha256::Sha256Unit::execute(cpu, &mut staged, operation, first, second, destination)
+                crate::aarch64_simd_sha256::Sha256Unit::execute(cpu, &mut staged, operation, first, second, destination);
             }
             Aarch64Instruction::SimdImmediate {
                 destination,

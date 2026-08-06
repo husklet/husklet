@@ -26,8 +26,8 @@ impl Service {
                 if matches!(container.state, ContainerState::Restarting { .. }) {
                     self.emit(crate::LifecycleAction::Restart, &container);
                 }
-            } else if let ContainerState::Exited { result, finished_at_ms } = container.state {
-                if container.spec.restart == crate::RestartPolicy::Always && container.restart.manually_stopped {
+            } else if let ContainerState::Exited { result, finished_at_ms } = container.state
+                && container.spec.restart == crate::RestartPolicy::Always && container.restart.manually_stopped {
                     container.restart.manually_stopped = false;
                     container.state = ContainerState::Restarting {
                         result,
@@ -37,7 +37,6 @@ impl Service {
                     self.containers.replace(&container).await?;
                     self.emit(crate::LifecycleAction::Restart, &container);
                 }
-            }
         }
         for mut exec in self.execs.list().await? {
             if exec.state.is_active() && exec.checkpoint.is_none() {

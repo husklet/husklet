@@ -285,19 +285,19 @@ impl<'ast> Visit<'ast> for Discards<'_> {
 
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
         self.scoped(is_test(&function.attrs), |visitor| {
-            syn::visit::visit_item_fn(visitor, function)
+            syn::visit::visit_item_fn(visitor, function);
         });
     }
 
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
         self.scoped(is_test(&function.attrs), |visitor| {
-            syn::visit::visit_impl_item_fn(visitor, function)
+            syn::visit::visit_impl_item_fn(visitor, function);
         });
     }
 
     fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
         self.scoped(is_test(&module.attrs), |visitor| {
-            syn::visit::visit_item_mod(visitor, module)
+            syn::visit::visit_item_mod(visitor, module);
         });
     }
 

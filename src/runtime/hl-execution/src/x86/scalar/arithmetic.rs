@@ -645,11 +645,10 @@ impl Arithmetic {
         if Self::nan(left, format) {
             return left | Self::quiet(format);
         }
-        if let Some(right) = right {
-            if Self::nan(right, format) {
+        if let Some(right) = right
+            && Self::nan(right, format) {
                 return right | Self::quiet(format);
             }
-        }
         if Self::nan(result, format) {
             return match format {
                 FloatWidth::Single => 0xffc0_0000,

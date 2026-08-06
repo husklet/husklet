@@ -123,7 +123,7 @@ impl MountNamespace {
         if guest_path.as_str().len() >= MOUNT_PATH_CAPACITY {
             return Err(MountError::PathTooLong);
         }
-        let mut mounts = self.mounts.write().unwrap_or_else(|error| error.into_inner());
+        let mut mounts = self.mounts.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if mounts.len() == MOUNT_MAXIMUM {
             return Err(MountError::Capacity);
         }
@@ -142,7 +142,7 @@ impl MountNamespace {
     }
 
     pub fn unmount(&self, guest_path: &GuestPath) -> Result<(), MountError> {
-        let mut mounts = self.mounts.write().unwrap_or_else(|error| error.into_inner());
+        let mut mounts = self.mounts.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut found = false;
         for mount in mounts.iter_mut() {
             if mount.snapshot.active && mount.snapshot.guest_path == *guest_path {
@@ -168,7 +168,7 @@ impl MountNamespace {
     }
 
     fn route_for_bytes(&self, path: &[u8]) -> MountRoute {
-        let mounts = self.mounts.read().unwrap_or_else(|error| error.into_inner());
+        let mounts = self.mounts.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut selected = None;
         let mut selected_length = 0;
         for mount in mounts.iter().filter(|mount| mount.matches_bytes(path)) {
@@ -204,7 +204,7 @@ impl MountNamespace {
     fn mounted_at_raw(&self, path: &[u8]) -> Option<MountRoute> {
         self.mounts
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|mount| mount.snapshot.active && mount.snapshot.guest_path.as_str().as_bytes() == path)
             .map(|mount| MountRoute::Mounted {
@@ -249,7 +249,7 @@ impl MountNamespace {
     pub fn snapshot(&self) -> Vec<MountSnapshot> {
         self.mounts
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .map(|mount| mount.snapshot.clone())
             .collect()

@@ -38,7 +38,7 @@ impl std::fmt::Debug for TestQueue {
             .debug_struct("TestQueue")
             .field(
                 "pending",
-                &self.pending.lock().unwrap_or_else(|error| error.into_inner()).len(),
+                &self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len(),
             )
             .finish_non_exhaustive()
     }
@@ -47,14 +47,14 @@ impl std::fmt::Debug for TestQueue {
 impl TestQueue {
     fn push(&self, info: SignalInfo) {
         {
-            let mut pending = self.pending.lock().unwrap_or_else(|error| error.into_inner());
+            let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let insertion = pending
                 .iter()
                 .position(|queued| queued.signal > info.signal)
                 .unwrap_or(pending.len());
             pending.insert(insertion, info);
         }
-        let observers = self.observers.lock().unwrap_or_else(|error| error.into_inner());
+        let observers = self.observers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for entry in observers.iter() {
             if entry.active.load(Ordering::SeqCst) {
                 entry.observer.signal_available();
@@ -66,7 +66,7 @@ impl TestQueue {
         let duplicate = self
             .pending
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .any(|queued| queued.signal == info.signal);
         if !duplicate {
@@ -75,13 +75,13 @@ impl TestQueue {
     }
 
     fn len(&self) -> usize {
-        self.pending.lock().unwrap_or_else(|error| error.into_inner()).len()
+        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
     }
 
     fn active_subscriptions(&self) -> usize {
         self.observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .filter(|entry| entry.active.load(Ordering::SeqCst))
             .count()
@@ -90,7 +90,7 @@ impl TestQueue {
 
 impl SignalQueue for TestQueue {
     fn dequeue(&self, mask: SignalMask) -> Result<Option<SignalInfo>, SignalQueueError> {
-        let mut pending = self.pending.lock().unwrap_or_else(|error| error.into_inner());
+        let mut pending = self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(index) = pending.iter().position(|info| mask.contains(info.signal)) else {
             return Ok(None);
         };
@@ -100,7 +100,7 @@ impl SignalQueue for TestQueue {
     fn has_pending(&self, mask: SignalMask) -> bool {
         self.pending
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .any(|info| mask.contains(info.signal))
     }
@@ -109,7 +109,7 @@ impl SignalQueue for TestQueue {
         let active = Arc::new(AtomicBool::new(true));
         self.observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(ObserverEntry {
                 active: Arc::clone(&active),
                 observer,

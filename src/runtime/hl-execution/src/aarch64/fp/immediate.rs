@@ -1,6 +1,6 @@
 use crate::FpFormat;
 
-/// Architectural VFPExpandImm operation shared by scalar and AdvSIMD FMOV.
+/// Architectural `VFPExpandImm` operation shared by scalar and `AdvSIMD` FMOV.
 pub(crate) struct ImmediateEncoding;
 
 impl ImmediateEncoding {
@@ -25,7 +25,7 @@ impl ImmediateEncoding {
     }
 
     fn exponent(encoded: u64, bits: u8) -> u64 {
-        let high = if encoded & 4 == 0 { 1 } else { 0 };
+        let high = u64::from(encoded & 4 == 0);
         let repeated = if encoded & 4 == 0 { 0 } else { (1_u64 << (bits - 3)) - 1 };
         high << (bits - 1) | repeated << 2 | encoded & 3
     }

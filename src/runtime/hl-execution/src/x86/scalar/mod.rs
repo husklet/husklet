@@ -292,7 +292,7 @@ impl Decoder {
                 segment: decoded.prefixes.segment,
             }),
             0x9b => crate::x86::x87::Control::decode(decoded),
-            0xd8 | 0xd9 | 0xda | 0xdb | 0xdc | 0xdd | 0xde | 0xdf => crate::x86::x87::ExtendedMemory::decode(decoded),
+            0xd8..=0xdf => crate::x86::x87::ExtendedMemory::decode(decoded),
             0xe8 => Ok(ScalarInstruction::Call {
                 target: Self::target(decoded, address)?,
             }),

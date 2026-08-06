@@ -1,7 +1,7 @@
 //! Safe CPU execution contracts, interpreters, and snapshots.
 
 mod aarch64;
-pub(crate) use aarch64::*;
+pub(crate) use aarch64::{aarch64_fp, aarch64_simd_decode, aarch64_integer_support, aarch64_simd_interpreter, aarch64_memory, aarch64_simd_bf16, aarch64_simd_compare, aarch64_simd_reciprocal, aarch64_simd_narrow, aarch64_simd_convert, aarch64_simd_arithmetic, aarch64_simd_aes, aarch64_simd_sha1, aarch64_simd_sha256, aarch64_simd_crypto, aarch64_simd_fcvtzs, aarch64_simd_scvtf, aarch64_simd_fused, aarch64_simd_fp_product, aarch64_simd_fp_reduce, aarch64_simd_dot, aarch64_simd_matrix, aarch64_simd_product, aarch64_simd_high_product, aarch64_simd_long_product, aarch64_simd_saturating_product, aarch64_simd_saturating_unary, aarch64_simd_scalar, aarch64_simd_variable, aarch64_simd_pair, aarch64_simd_immediate, aarch64_simd_lane_interpreter, aarch64_simd_wide_interpreter, aarch64_simd_reduce_interpreter};
 mod digest;
 mod execution;
 mod identity;

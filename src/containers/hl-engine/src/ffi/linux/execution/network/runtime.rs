@@ -112,6 +112,7 @@ impl CheckpointRuntime {
             .publish_host(self.catalog.current(), created, snapshot, status, flags)
     }
 
+    #[must_use]
     pub fn participant(&self) -> Arc<NetworkCheckpointParticipant> {
         Arc::new(NetworkCheckpointParticipant::new(
             Arc::clone(&self.catalog),
@@ -120,6 +121,7 @@ impl CheckpointRuntime {
         ))
     }
 
+    #[must_use]
     pub fn descriptor_binding(&self) -> Arc<dyn hl_descriptor::DescriptorObjectCheckpoint> {
         self.bindings.clone()
     }

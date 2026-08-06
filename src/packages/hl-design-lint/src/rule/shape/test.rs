@@ -186,7 +186,7 @@ fn four_symbols_fail() {
     let root = fixture("symbols");
     fs::write(
         root.join("src/lib.rs"),
-        r#"
+        r"
 struct PreparedSharedMemoryExec;
 struct PreparedSharedMemoryExecTransaction;
 fn prepared_shared_memory_exec() {}
@@ -203,7 +203,7 @@ impl external::Contract for Runner {
 trait Drive {
     fn deliberately_very_long_trait_method_name();
 }
-"#,
+",
     )
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();
@@ -224,7 +224,7 @@ fn declarations_module_noun() {
     fs::create_dir_all(root.join("src/launcher")).unwrap();
     fs::write(
         root.join("src/launcher/plan.rs"),
-        r#"
+        r"
 struct LauncherPlan;
 struct RuntimePlan;
 fn launcher_start() {}
@@ -234,7 +234,7 @@ impl external::Contract for Runner { fn launcher_external_name() {} }
 trait Drive { fn launcher_publish(); }
 #[cfg(test)]
 mod tests { struct LauncherFixture; }
-"#,
+",
     )
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();
@@ -250,11 +250,11 @@ fn naming_test_files() {
     fs::create_dir_all(root.join("src/launcher")).unwrap();
     fs::write(
         root.join("src/launcher/plan_test.rs"),
-        r#"
+        r"
 struct LauncherPlanFixture;
 fn launcher_fixture() {}
 fn deliberately_very_long_test_function_name() {}
-"#,
+",
     )
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();

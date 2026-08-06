@@ -82,7 +82,7 @@ impl UnixSocketPair {
             .host
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         UnixPairSnapshot {
             socket_type: self.endpoints[0].host.socket_type,
             capacity: self.endpoints[0].host.capacity,
@@ -111,11 +111,11 @@ impl UnixSocketPair {
         snapshot.validate()?;
         let queues = [
             Arc::new(
-                UnixMessageQueue::restore(&snapshot.endpoints[0].ancillary, |identity| rebind(identity))
+                UnixMessageQueue::restore(&snapshot.endpoints[0].ancillary, &mut rebind)
                     .map_err(UnixTransportError::Control)?,
             ),
             Arc::new(
-                UnixMessageQueue::restore(&snapshot.endpoints[1].ancillary, |identity| rebind(identity))
+                UnixMessageQueue::restore(&snapshot.endpoints[1].ancillary, rebind)
                     .map_err(UnixTransportError::Control)?,
             ),
         ];

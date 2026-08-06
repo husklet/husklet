@@ -124,13 +124,13 @@ impl ProviderTransport for Endpoint {
             .incoming
             .state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.bytes.is_empty() && !state.closed {
             state = self
                 .incoming
                 .changed
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         if state.bytes.is_empty() {
             return Ok(0);
@@ -153,7 +153,7 @@ impl ProviderTransport for Endpoint {
             .outgoing
             .state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(TransportError::Closed);
         }
@@ -173,7 +173,7 @@ impl ProviderTransport for Endpoint {
 
     fn shutdown(&self) {
         for pipe in [&self.incoming, &self.outgoing] {
-            let mut state = pipe.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.closed = true;
             pipe.changed.notify_all();
         }

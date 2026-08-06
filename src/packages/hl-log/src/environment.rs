@@ -69,10 +69,12 @@ impl EnvironmentConfig {
         Self { config, warnings }
     }
 
+    #[must_use]
     pub const fn config(&self) -> Config {
         self.config
     }
 
+    #[must_use]
     pub fn warnings(&self) -> &[ConfigurationWarning] {
         &self.warnings
     }

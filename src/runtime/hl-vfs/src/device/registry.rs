@@ -68,7 +68,7 @@ impl Registry {
             return Err(Error::RelativePath);
         }
         let key = (registration.scope.into(), registration.path.as_bytes().to_vec());
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.paths.contains_key(&key) {
             return Err(Error::Duplicate);
         }
@@ -150,7 +150,7 @@ impl Registry {
 
     pub fn remove(&self, id: NodeId) -> Result<(), Error> {
         let index = usize::from(id.slot).checked_sub(1).ok_or(Error::Stale)?;
-        let mut state = self.state.write().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = state.slots.get_mut(index).ok_or(Error::Stale)?;
         let node = slot.node.as_ref().filter(|node| node.id == id).ok_or(Error::Stale)?;
         let key = (node.scope.into(), node.path.as_bytes().to_vec());
@@ -165,7 +165,7 @@ impl Registry {
             MountRoute::Root => ScopeKey::Root,
             MountRoute::Mounted { source, .. } => ScopeKey::Mounted(source.get()),
         };
-        let state = self.state.read().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
         state
             .paths
             .get(&(scope, path.as_bytes().to_vec()))
@@ -177,7 +177,7 @@ impl Registry {
     pub fn snapshot(&self) -> Vec<Snapshot> {
         self.state
             .read()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .slots
             .iter()
             .filter_map(|slot| slot.node.as_ref())

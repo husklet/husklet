@@ -256,9 +256,9 @@ mod tests {
     #[test]
     fn accepts_typed_derive_parser() {
         let findings = findings(
-            r#"#[derive(clap::Parser)]
+            r"#[derive(clap::Parser)]
 struct Options { #[arg(long)] isa: String }
-fn parse() -> Options { <Options as clap::Parser>::parse() }"#,
+fn parse() -> Options { <Options as clap::Parser>::parse() }",
         );
         assert!(findings.is_empty());
     }
@@ -277,9 +277,9 @@ fn parse() -> Options { <Options as clap::Parser>::parse() }"#,
     #[test]
     fn ignores_guest_argument_passthrough() {
         let findings = findings(
-            r#"fn launch(arguments: &[String], command: &mut Command) {
+            r"fn launch(arguments: &[String], command: &mut Command) {
     for argument in arguments { command.arg(argument); }
-}"#,
+}",
         );
         assert!(findings.is_empty());
     }

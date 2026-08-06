@@ -247,7 +247,7 @@ mod tests {
             } else {
                 assert!(matches!(decoded, Ok(Aarch64Instruction::SimdVariable {
                     signed, saturating, rounding, lane_bits, wide: decoded_wide, ..
-                }) if signed == !unsigned && saturating == (opcode & 1 != 0)
+                }) if signed != unsigned && saturating == (opcode & 1 != 0)
                     && rounding == (opcode & 2 != 0)
                     && lane_bits == 8 << size && decoded_wide == wide));
             }

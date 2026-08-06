@@ -224,7 +224,7 @@ impl EpollRegistry {
                 .core
                 .quiescent
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         let slot = &mut state.slots[old.slot as usize];
         slot.generation = slot.generation.wrapping_add(1).max(1);
@@ -242,6 +242,7 @@ impl EpollRegistry {
         Ok(replacement)
     }
 
+    #[must_use]
     pub fn find(&self, identity: WatchIdentity) -> Option<WatchToken> {
         self.lock().slots.iter().enumerate().find_map(|(index, slot)| {
             let watch = slot.watch.as_ref()?;
@@ -252,6 +253,7 @@ impl EpollRegistry {
         })
     }
 
+    #[must_use]
     pub fn callback(&self, token: WatchToken) -> Option<CallbackLease> {
         let mut state = self.lock();
         let watch = Self::watch_mut(&mut state, token).ok()?;
@@ -304,7 +306,7 @@ impl EpollRegistry {
                 .core
                 .quiescent
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         state.slots[token.slot as usize].watch = None;
         Ok(())
@@ -336,6 +338,7 @@ impl EpollRegistry {
         }
     }
 
+    #[must_use]
     pub fn reset(&self) -> RegistrySnapshot {
         let mut state = self.lock();
         let watches = Self::active_snapshots(&state);
@@ -345,7 +348,7 @@ impl EpollRegistry {
                 .core
                 .quiescent
                 .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         state.clear();
         RegistrySnapshot {
@@ -364,7 +367,7 @@ impl EpollRegistry {
     }
 
     fn lock(&self) -> MutexGuard<'_, RegistryState> {
-        self.core.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.core.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn active_snapshots(state: &RegistryState) -> Vec<WatchSnapshot> {
@@ -418,7 +421,7 @@ pub struct CallbackLease {
 
 impl CallbackLease {
     pub fn ready(&self, readiness: u32) {
-        let mut state = self.core.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.core.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Ok(watch) = EpollRegistry::watch_mut(&mut state, self.token) {
             watch.ready |= readiness & watch.config.interests;
         }
@@ -430,7 +433,7 @@ impl Drop for CallbackLease {
         if !self.active {
             return;
         }
-        let mut state = self.core.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = self.core.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Ok(watch) = EpollRegistry::watch_mut(&mut state, self.token) {
             watch.callbacks -= 1;
             if watch.callbacks == 0 {

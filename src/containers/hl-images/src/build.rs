@@ -88,11 +88,10 @@ impl Recipe {
                     .or_else(|| words[0].parse::<usize>().ok().filter(|index| *index < stages.len()))
                     .map_or_else(|| words[0].parse().map(Base::Image), |index| Ok(Base::Stage(index)))?;
                 let index = stages.len();
-                if let Some(name) = &name {
-                    if names.insert(name.clone(), index).is_some() {
+                if let Some(name) = &name
+                    && names.insert(name.clone(), index).is_some() {
                         return Err(Error::MalformedOci(format!("duplicate stage {name}")));
                     }
-                }
                 let mut draft = Draft::new(index, name, base, platform);
                 draft.stage.history.push(History::instruction("FROM", &raw, true));
                 current = Some(draft);

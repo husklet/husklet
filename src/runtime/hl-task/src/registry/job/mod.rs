@@ -117,28 +117,25 @@ impl TaskRegistry {
         Self::ensure_process_unreserved(&state, target)?;
         Self::validate_group_change(&state, caller, target)?;
         let session = Self::process(&state, target)?.session;
-        let group = match destination {
-            Some(group) => {
-                if Self::process_group(&state, group)?.session != session {
-                    return Err(TaskError::InvalidProcessGroup);
-                }
-                group
+        let group = if let Some(group) = destination {
+            if Self::process_group(&state, group)?.session != session {
+                return Err(TaskError::InvalidProcessGroup);
             }
-            None => {
-                let group = Self::allocate_process_group(&mut state, target)?;
-                Self::install_process_group(
-                    &mut state,
-                    group,
-                    ProcessGroup {
-                        session,
-                        leader: target,
-                        members: BTreeSet::new(),
-                        orphaned: false,
-                    },
-                )?;
-                Self::session_mut(&mut state, session)?.process_groups.insert(group);
-                group
-            }
+            group
+        } else {
+            let group = Self::allocate_process_group(&mut state, target)?;
+            Self::install_process_group(
+                &mut state,
+                group,
+                ProcessGroup {
+                    session,
+                    leader: target,
+                    members: BTreeSet::new(),
+                    orphaned: false,
+                },
+            )?;
+            Self::session_mut(&mut state, session)?.process_groups.insert(group);
+            group
         };
         if Self::process(&state, target)?.process_group == group {
             return Ok(group);
@@ -170,11 +167,10 @@ impl TaskRegistry {
         }
         process_state.execed = true;
         drop(state);
-        if let Err(error) = self.trace_stop(process, crate::TraceStop::Exec) {
-            if error != crate::TraceError::InvalidLink {
+        if let Err(error) = self.trace_stop(process, crate::TraceStop::Exec)
+            && error != crate::TraceError::InvalidLink {
                 return Err(TaskError::InvalidLifecycle);
             }
-        }
         Ok(())
     }
 

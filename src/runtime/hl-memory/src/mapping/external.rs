@@ -25,7 +25,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         operation: impl FnOnce() -> Result<usize, E>,
     ) -> Result<Result<usize, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let total = self.validate(spans, Protection::READ)?;
         let result = operation();
         if result.as_ref().is_ok_and(|count| *count as u64 > total) {
@@ -43,7 +43,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     ) -> Result<Result<usize, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let total = self.validate(spans, Protection::WRITE)?;
         let mut prepared = Vec::with_capacity(spans.len());
         for span in spans.iter().filter(|span| span.length != 0) {
@@ -111,7 +111,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     ) -> Result<Result<usize, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self
             .ledger
@@ -166,7 +166,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         operation: impl FnOnce() -> Result<usize, E>,
     ) -> Result<Result<usize, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self
             .ledger

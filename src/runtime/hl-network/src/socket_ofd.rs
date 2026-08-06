@@ -71,7 +71,7 @@ impl<H: SocketHostIo> SocketDescription<H> {
         }
         self.token
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .ok_or(ObjectError::Retired)
     }
 
@@ -136,7 +136,7 @@ impl<H: SocketHostIo> SocketDescription<H> {
 
     pub fn connect(&self) -> Result<(), SocketConnectError> {
         let token = self.token().map_err(|_| SocketConnectError::Canceled)?;
-        let mut state = self.connect.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.connect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match *state {
             SocketConnectStatus::Pending => return Err(SocketConnectError::Already),
             SocketConnectStatus::Connected => return Err(SocketConnectError::Connected),
@@ -181,7 +181,7 @@ impl<H: SocketHostIo> SocketDescription<H> {
 
     pub fn poll_connect(&self) -> Result<(), SocketConnectError> {
         let token = self.token().map_err(|_| SocketConnectError::Canceled)?;
-        let mut state = self.connect.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.connect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state == SocketConnectStatus::Pending {
             *state = self.host.poll_connect(token);
             if *state != SocketConnectStatus::Pending {
@@ -197,7 +197,7 @@ impl<H: SocketHostIo> SocketDescription<H> {
     }
 
     pub fn take_connect_error(&self) -> Option<SocketConnectError> {
-        let mut state = self.connect.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.connect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let SocketConnectStatus::Failed(error) = *state else {
             return None;
         };
@@ -210,7 +210,7 @@ impl<H: SocketHostIo> SocketDescription<H> {
         match self.poll_connect() {
             Ok(()) | Err(_) => {}
         }
-        *self.connect.lock().unwrap_or_else(|error| error.into_inner())
+        *self.connect.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Commits delivery of a previously observed connect error.
@@ -218,7 +218,7 @@ impl<H: SocketHostIo> SocketDescription<H> {
     /// A changed state is left untouched, so callers may copy the observed
     /// value to guest memory before committing the one-shot consumption.
     pub fn commit_connect_error(&self, observed: SocketConnectError) {
-        let mut state = self.connect.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.connect.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state == SocketConnectStatus::Failed(observed) {
             *state = SocketConnectStatus::Idle;
         }
@@ -396,7 +396,7 @@ impl<H: SocketHostIo> OpenFileDescription for SocketDescription<H> {
         if self.retired.swap(true, Ordering::AcqRel) {
             return;
         }
-        if let Some(token) = *self.token.lock().unwrap_or_else(|error| error.into_inner()) {
+        if let Some(token) = *self.token.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
             self.host.cancel(token);
         }
         self.listener.cancel_and_drain();
@@ -404,7 +404,7 @@ impl<H: SocketHostIo> OpenFileDescription for SocketDescription<H> {
     }
 
     fn close(&self) {
-        if let Some(token) = self.token.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some(token) = self.token.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
             self.host.detach_readiness(token);
             self.host.close(token);
         }

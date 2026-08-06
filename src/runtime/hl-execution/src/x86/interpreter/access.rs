@@ -111,7 +111,7 @@ impl ScalarInterpreter {
                 let address = address.resolve(&staged.registers, next, staged.fs_base, staged.gs_base);
                 let bytes = Self::bytes(width);
                 Self::canonical(address, bytes, instruction, AccessKind::Write)?;
-                let reservation = memory.reserve_write(address, bytes).map_err(|_| {
+                let reservation = memory.reserve_write(address, bytes).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(
                         instruction,
                         address,
@@ -131,7 +131,7 @@ impl ScalarInterpreter {
         instruction: u64,
     ) -> Result<u64, ExecutionExit> {
         Self::canonical(address, bytes, instruction, AccessKind::Read)?;
-        memory.read(address, bytes).map_err(|_| {
+        memory.read(address, bytes).map_err(|()| {
             ExecutionExit::OperandFault(crate::FaultAccess::operand(
                 instruction,
                 address,

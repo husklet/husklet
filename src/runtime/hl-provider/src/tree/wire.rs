@@ -18,6 +18,7 @@ impl Wire {
     pub const MAX_WRITE_DATA: usize = 4096 - 21;
     pub const MAX_APPEND_DATA: usize = 4096 - 13;
 
+    #[must_use]
     pub fn is_request(request: &[u8]) -> bool {
         request.first().is_some_and(|kind| (OPEN..=TRUNCATE).contains(kind))
     }
@@ -90,6 +91,7 @@ impl Wire {
         Self::data_reply(reply, READ, maximum)
     }
 
+    #[must_use]
     pub fn stat(handle: u64) -> Vec<u8> {
         Self::handle_request(STAT, handle)
     }
@@ -110,6 +112,7 @@ impl Wire {
         Self::data_reply(reply, DENTS, maximum)
     }
 
+    #[must_use]
     pub fn close(handle: u64) -> Vec<u8> {
         Self::handle_request(CLOSE, handle)
     }
@@ -153,6 +156,7 @@ impl Wire {
         Ok((count, WireBytes::u64(reply, 5)?))
     }
 
+    #[must_use]
     pub fn truncate(handle: u64, size: u64) -> Vec<u8> {
         let mut value = Self::handle_request(TRUNCATE, handle);
         WireBytes::put_u64(&mut value, size);
@@ -238,11 +242,11 @@ pub(super) struct WireBytes;
 
 impl WireBytes {
     pub(super) fn put_u32(output: &mut Vec<u8>, value: u32) {
-        output.extend(value.to_le_bytes())
+        output.extend(value.to_le_bytes());
     }
 
     pub(super) fn put_u64(output: &mut Vec<u8>, value: u64) {
-        output.extend(value.to_le_bytes())
+        output.extend(value.to_le_bytes());
     }
 
     pub(super) fn u32(input: &[u8], offset: usize) -> Result<u32, i32> {

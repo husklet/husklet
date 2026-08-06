@@ -170,11 +170,10 @@ impl Visit<'_> for Collector<'_, '_> {
 
     fn visit_type_trait_object(&mut self, object: &syn::TypeTraitObject) {
         for bound in &object.bounds {
-            if let TypeParamBound::Trait(bound) = bound {
-                if let Some(name) = bound.path.segments.last().map(|part| part.ident.to_string()) {
+            if let TypeParamBound::Trait(bound) = bound
+                && let Some(name) = bound.path.segments.last().map(|part| part.ident.to_string()) {
                     self.database.uses.insert((self.source.package.clone(), name));
                 }
-            }
         }
         syn::visit::visit_type_trait_object(self, object);
     }

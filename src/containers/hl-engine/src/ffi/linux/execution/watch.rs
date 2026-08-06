@@ -26,7 +26,7 @@ pub(super) struct Hub {
 
 impl std::fmt::Debug for Hub {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sources = self.sources.lock().unwrap_or_else(|error| error.into_inner());
+        let sources = self.sources.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         formatter.debug_struct("Hub").field("sources", &sources.len()).finish()
     }
 }
@@ -63,7 +63,7 @@ impl Hub {
     pub(super) fn publish(&self, path: &Path, mask: u32) {
         self.publish_dnotify(path, mask);
         let sources = {
-            let mut state = self.sources.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.sources.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.retain(|source| source.strong_count() != 0);
             state.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
         };
@@ -79,7 +79,7 @@ impl Hub {
     fn publish_child_cookie(&self, parent: &Path, name: &[u8], mask: u32, cookie: u32) {
         self.publish_dnotify(parent, mask);
         let sources = {
-            let mut state = self.sources.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.sources.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.retain(|source| source.strong_count() != 0);
             state.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
         };
@@ -110,7 +110,7 @@ impl Hub {
         });
         self.sources
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(Arc::downgrade(&source));
         source
     }
@@ -129,14 +129,14 @@ impl Hub {
         });
         self.dnotify
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(Arc::downgrade(&entry));
         Box::new(DnotifySubscription(entry))
     }
 
     fn publish_dnotify(&self, path: &Path, event: u32) {
         let entries = {
-            let mut entries = self.dnotify.lock().unwrap_or_else(|error| error.into_inner());
+            let mut entries = self.dnotify.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             entries.retain(|entry| entry.strong_count() != 0);
             entries.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
         };
@@ -194,7 +194,7 @@ impl DnotifyEntry {
     }
 
     fn event_mask(event: u32) -> u32 {
-        (if event & InotifyMask::ACCESS != 0 { 1 } else { 0 })
+        u32::from(event & InotifyMask::ACCESS != 0)
             | (if event & InotifyMask::MODIFY != 0 { 2 } else { 0 })
             | (if event & InotifyMask::CREATE != 0 { 4 } else { 0 })
             | (if event & (InotifyMask::DELETE | InotifyMask::DELETE_SELF) != 0 {
@@ -244,7 +244,7 @@ struct Source {
 
 impl std::fmt::Debug for Source {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         formatter
             .debug_struct("Source")
             .field("watches", &state.watches.len())
@@ -255,7 +255,7 @@ impl std::fmt::Debug for Source {
 impl Source {
     fn publish(&self, path: &Path, mask: u32) {
         let (observer, active, events) = {
-            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some((observer, active)) = &state.observer else {
                 return;
             };
@@ -285,7 +285,7 @@ impl Source {
 
     fn publish_child(&self, parent: &Path, name: &[u8], mask: u32, cookie: u32) {
         let (observer, active, events) = {
-            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some((observer, active)) = &state.observer else {
                 return;
             };
@@ -328,7 +328,7 @@ impl WatchSource for Source {
         self.hub
             .paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(identity, path);
         Ok(WatchBinding {
             node: WatchNodeIdentity {
@@ -341,7 +341,7 @@ impl WatchSource for Source {
     }
 
     fn add(&self, binding: WatchBinding, token: u64, mask: InotifyMask) -> Result<(), WatchSourceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.watches.len() >= WATCH_LIMIT {
             return Err(WatchSourceError::ResourceLimit);
         }
@@ -349,7 +349,7 @@ impl WatchSource for Source {
             .hub
             .paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&binding.path)
             .cloned()
             .ok_or(WatchSourceError::NotFound)?;
@@ -358,7 +358,7 @@ impl WatchSource for Source {
     }
 
     fn modify(&self, token: u64, mask: InotifyMask) -> Result<(), WatchSourceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.watches.get_mut(&token).ok_or(WatchSourceError::NotFound)?.mask = mask;
         Ok(())
     }
@@ -366,7 +366,7 @@ impl WatchSource for Source {
     fn remove(&self, token: u64) -> Result<(), WatchSourceError> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .watches
             .remove(&token)
             .map(|_| ())
@@ -378,7 +378,7 @@ impl WatchSource for Source {
         observer: Arc<dyn WatchSourceObserver>,
     ) -> Result<Box<dyn WatchSourceSubscription>, WatchSourceError> {
         let active = Arc::new(AtomicBool::new(true));
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).observer = Some((observer, Arc::clone(&active)));
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).observer = Some((observer, Arc::clone(&active)));
         Ok(Box::new(Subscription(active)))
     }
 

@@ -61,14 +61,13 @@ impl CompareExchange {
                 }
             };
             let value = AtomicValue { low, high };
-            if value == expected {
-                if memory
+            if value == expected
+                && memory
                     .commit_write_batch(reservation, &[replacement.low, replacement.high])
                     .is_err()
                 {
                     return Self::wide_fault(instruction, address, total, AccessKind::Write);
                 }
-            }
             value
         };
         let equal = observed == expected;
@@ -156,7 +155,7 @@ impl CompareExchange {
             ScalarOperand::Memory(effective) => {
                 let address = effective.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
                 Self::validate(address, Self::byte_count(width), instruction, AccessKind::Read)?;
-                let old = memory.read(address, Self::byte_count(width)).map_err(|_| {
+                let old = memory.read(address, Self::byte_count(width)).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(
                         instruction,
                         address,
@@ -178,7 +177,7 @@ impl CompareExchange {
             }
             (ScalarOperand::Memory(_), Some(address)) => {
                 Self::validate(address, Self::byte_count(width), instruction, AccessKind::Write)?;
-                let reservation = memory.reserve_write(address, Self::byte_count(width)).map_err(|_| {
+                let reservation = memory.reserve_write(address, Self::byte_count(width)).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(
                         instruction,
                         address,

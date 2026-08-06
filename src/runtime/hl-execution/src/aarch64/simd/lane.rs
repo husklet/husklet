@@ -361,7 +361,7 @@ mod test {
                     0,
                     0,
                 ),
-                (SimdLaneOperation::HalvingSubtract { unsigned: true }, mask - 1 >> 1, 0),
+                (SimdLaneOperation::HalvingSubtract { unsigned: true }, (mask - 1) >> 1, 0),
                 (SimdLaneOperation::HalvingSubtract { unsigned: false }, mask, sign),
             ] {
                 let result = execute(&cpu, operation, lane_bits, 1, 2, 0, true);

@@ -396,7 +396,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            app.cases[0].inputs.iter().map(|path| path.name()).collect::<Vec<_>>(),
+            app.cases[0].inputs.iter().map(super::input::ManifestPath::name).collect::<Vec<_>>(),
             vec!["include/a.h", "z.ld"]
         );
     }

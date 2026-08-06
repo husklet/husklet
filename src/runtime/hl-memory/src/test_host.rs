@@ -6,6 +6,7 @@ use crate::{Backing, MapRequest, MappingHost, MemoryError, Placement, Protection
 pub struct TestMappingHost;
 
 impl TestMappingHost {
+    #[must_use]
     pub fn shared_request(object: SharedObjectId) -> MapRequest {
         MapRequest {
             placement: Placement::Fixed(GuestAddress::new(0x1000)),

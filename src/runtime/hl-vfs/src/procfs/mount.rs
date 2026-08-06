@@ -24,6 +24,7 @@ impl MountEntry {
     /// Creates one bounded record. Paths are escaped when rendered; option
     /// tokens must already represent single Linux mountinfo fields.
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         id: u32,
         parent: u32,
@@ -168,6 +169,7 @@ pub struct MountView {
 
 impl MountView {
     /// Rejects oversized views and duplicate mount identities.
+    #[must_use]
     pub fn new(entries: Vec<MountEntry>) -> Option<Self> {
         if entries.len() > ENTRY_LIMIT {
             return None;

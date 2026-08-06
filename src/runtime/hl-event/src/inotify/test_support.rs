@@ -27,7 +27,7 @@ pub(crate) struct Source {
 
 impl std::fmt::Debug for Source {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         formatter
             .debug_struct("Source")
             .field("nodes", &state.nodes.len())
@@ -40,7 +40,7 @@ impl Source {
     fn add_node(&self, path: &[u8], object: u64, is_directory: bool) {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .nodes
             .insert(
                 path.to_vec(),
@@ -58,7 +58,7 @@ impl Source {
         let observer = self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .observer
             .clone();
         if let Some((observer, active)) = observer
@@ -78,7 +78,7 @@ impl Source {
         *self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .masks
             .keys()
             .next()
@@ -86,13 +86,13 @@ impl Source {
     }
 
     pub(crate) fn mask(&self, token: u64) -> InotifyMask {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).masks[&token]
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).masks[&token]
     }
 
     pub(crate) fn removes(&self) -> Vec<u64> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .removes
             .clone()
     }
@@ -110,7 +110,7 @@ impl WatchSourceSubscription for Subscription {
 
 impl WatchSource for Source {
     fn resolve(&self, request: WatchRequest<'_>) -> Result<WatchBinding, WatchSourceError> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let node = state.nodes.get(request.path).ok_or(WatchSourceError::NotFound)?;
         if request.mask.contains(InotifyMask::ONLY_DIRECTORY) && !node.binding.is_directory {
             return Err(WatchSourceError::NotDirectory);
@@ -121,20 +121,20 @@ impl WatchSource for Source {
     fn add(&self, _binding: WatchBinding, token: u64, mask: InotifyMask) -> Result<(), WatchSourceError> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .masks
             .insert(token, mask);
         Ok(())
     }
 
     fn modify(&self, token: u64, mask: InotifyMask) -> Result<(), WatchSourceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *state.masks.get_mut(&token).ok_or(WatchSourceError::NotFound)? = mask;
         Ok(())
     }
 
     fn remove(&self, token: u64) -> Result<(), WatchSourceError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.removes.push(token);
         state.masks.remove(&token).map(|_| ()).ok_or(WatchSourceError::NotFound)
     }
@@ -144,7 +144,7 @@ impl WatchSource for Source {
         observer: Arc<dyn WatchSourceObserver>,
     ) -> Result<Box<dyn WatchSourceSubscription>, WatchSourceError> {
         let active = Arc::new(AtomicBool::new(true));
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).observer = Some((observer, active.clone()));
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).observer = Some((observer, active.clone()));
         Ok(Box::new(Subscription { active }))
     }
 }

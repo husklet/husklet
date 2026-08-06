@@ -30,7 +30,7 @@ impl Catalog {
         descriptors: &Arc<DescriptorTable>,
         working: &Arc<WorkingDirectory>,
     ) {
-        self.0.lock().unwrap_or_else(|error| error.into_inner()).insert(
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(
             process,
             Resources {
                 descriptors: Arc::downgrade(descriptors),
@@ -44,7 +44,7 @@ impl Catalog {
         process: ProcessId,
         select: impl FnOnce(&Resources) -> Option<Arc<T>>,
     ) -> Result<Arc<T>, ProcfsError> {
-        let mut entries = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut entries = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(value) = entries.get(&process).and_then(select) else {
             entries.remove(&process);
             return Err(ProcfsError::NotFound);

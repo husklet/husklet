@@ -49,7 +49,7 @@ impl<H: BackingChangeHost + MemoryAccessHost> Coordinator<H> {
     pub fn backing_changed(&self, change: BackingChange) -> Result<usize, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut transition = self.transition();
         let mappings: Vec<_> = self
             .ledger

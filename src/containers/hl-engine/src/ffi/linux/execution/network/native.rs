@@ -117,9 +117,7 @@ impl Native {
     fn with_authority(authority: Option<Arc<Mutex<crate::native::AuthorityWorker>>>) -> Self {
         let mut wake = [0_i32; 2];
         // SAFETY: wake points to two writable integers; successful pipe returns two owned descriptors.
-        if unsafe { libc::pipe(wake.as_mut_ptr()) } != 0 {
-            panic!("native network wake pipe creation failed");
-        }
+        assert!(unsafe { libc::pipe(wake.as_mut_ptr()) } == 0, "native network wake pipe creation failed");
         // SAFETY: both descriptors are newly owned and valid for fcntl flag mutation.
         unsafe {
             libc::fcntl(wake[0], libc::F_SETFL, libc::O_NONBLOCK);
@@ -146,7 +144,7 @@ impl Native {
 
     pub(super) fn insert(&self, descriptor: i32) -> Result<u64, RuntimeNetworkError> {
         let kind = Self::descriptor_type(descriptor).ok();
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if sockets.len() >= SOCKET_LIMIT {
             // SAFETY: descriptor is newly owned here and no other owner can close it.
             unsafe {
@@ -166,7 +164,7 @@ impl Native {
             self.shared
                 .switch_paths
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get(&path)
                 .and_then(Weak::upgrade)
         });
@@ -209,7 +207,7 @@ impl Native {
         let mut storage = unsafe { zeroed::<libc::sockaddr_storage>() };
         let mut length = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
         // SAFETY: storage and length are writable and descriptor is live for this non-mutating query.
-        if unsafe { libc::getsockname(descriptor, &mut storage as *mut _ as *mut _, &mut length) } != 0
+        if unsafe { libc::getsockname(descriptor, (&raw mut storage).cast(), &raw mut length) } != 0
             || i32::from(storage.ss_family) != libc::AF_UNIX
         {
             return None;
@@ -224,14 +222,14 @@ impl Native {
         self.shared
             .sockets
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
             .map(|entry| entry.descriptor)
             .ok_or(RuntimeNetworkError::Invalid)
     }
 
     fn arm_read(&self, token: u64) {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let changed = sockets.get_mut(&token).is_some_and(Entry::arm_read);
         drop(sockets);
         if changed {
@@ -245,7 +243,7 @@ impl Native {
         match address {
             SocketAddress::Inet4 { address, port } => {
                 // SAFETY: storage is aligned and large enough for sockaddr_in.
-                let value = unsafe { &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in) };
+                let value = unsafe { &mut *(&raw mut storage).cast::<libc::sockaddr_in>() };
                 value.sin_family = libc::AF_INET as _;
                 value.sin_port = port.to_be();
                 value.sin_addr.s_addr = u32::from_ne_bytes(*address);
@@ -253,7 +251,7 @@ impl Native {
             }
             SocketAddress::Inet6 { address, port, scope } => {
                 // SAFETY: storage is aligned and large enough for sockaddr_in6.
-                let value = unsafe { &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in6) };
+                let value = unsafe { &mut *(&raw mut storage).cast::<libc::sockaddr_in6>() };
                 value.sin6_family = libc::AF_INET6 as _;
                 value.sin6_port = port.to_be();
                 value.sin6_scope_id = *scope;
@@ -265,7 +263,7 @@ impl Native {
                     return Err(RuntimeNetworkError::Invalid);
                 }
                 // SAFETY: storage is aligned and large enough for sockaddr_un.
-                let value = unsafe { &mut *(&mut storage as *mut _ as *mut libc::sockaddr_un) };
+                let value = unsafe { &mut *(&raw mut storage).cast::<libc::sockaddr_un>() };
                 value.sun_family = libc::AF_UNIX as _;
                 for (target, source) in value.sun_path.iter_mut().zip(path) {
                     *target = *source as libc::c_char;
@@ -283,7 +281,7 @@ impl Native {
         match i32::from(storage.ss_family) {
             libc::AF_INET => {
                 // SAFETY: family identifies initialized sockaddr_in storage.
-                let value = unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
+                let value = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_in>() };
                 Ok(SocketAddress::Inet4 {
                     address: value.sin_addr.s_addr.to_ne_bytes(),
                     port: u16::from_be(value.sin_port),
@@ -291,7 +289,7 @@ impl Native {
             }
             libc::AF_INET6 => {
                 // SAFETY: family identifies initialized sockaddr_in6 storage.
-                let value = unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
+                let value = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_in6>() };
                 Ok(SocketAddress::Inet6 {
                     address: value.sin6_addr.s6_addr,
                     port: u16::from_be(value.sin6_port),
@@ -300,11 +298,11 @@ impl Native {
             }
             libc::AF_UNIX => {
                 // SAFETY: family identifies initialized sockaddr_un storage.
-                let value = unsafe { &*(storage as *const _ as *const libc::sockaddr_un) };
+                let value = unsafe { &*std::ptr::from_ref(storage).cast::<libc::sockaddr_un>() };
                 let available = (length as usize)
                     .saturating_sub(std::mem::offset_of!(libc::sockaddr_un, sun_path))
                     .min(value.sun_path.len());
-                let mut bytes: Vec<u8> = value.sun_path[..available].iter().map(|byte| *byte as u8).collect();
+                let mut bytes: Vec<u8> = value.sun_path[..available].to_vec();
                 if bytes.first() != Some(&0) {
                     Self::trim_unix(&mut bytes);
                 }
@@ -321,7 +319,7 @@ impl Native {
 
     fn address_of(&self, token: u64, peer: bool) -> Result<SocketAddress, RuntimeNetworkError> {
         {
-            let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let projected = sockets.get(&token).and_then(|entry| {
                 if peer {
                     entry.guest_peer.clone()
@@ -340,9 +338,9 @@ impl Native {
         // SAFETY: pointers reference writable storage of the supplied length for the duration of the call.
         let result = unsafe {
             if peer {
-                libc::getpeername(descriptor, &mut storage as *mut _ as *mut _, &mut length)
+                libc::getpeername(descriptor, (&raw mut storage).cast(), &raw mut length)
             } else {
-                libc::getsockname(descriptor, &mut storage as *mut _ as *mut _, &mut length)
+                libc::getsockname(descriptor, (&raw mut storage).cast(), &raw mut length)
             }
         };
         if result == 0 {
@@ -442,7 +440,7 @@ impl Native {
 
     fn socket_type(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
         let descriptor = {
-            let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get(&token).ok_or(RuntimeNetworkError::Invalid)?;
             if let Some(kind) = entry.kind {
                 return Ok(kind);
@@ -450,7 +448,7 @@ impl Native {
             entry.descriptor
         };
         let kind = Self::descriptor_type(descriptor)?;
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         entry.kind = Some(kind);
         Ok(kind)
@@ -465,8 +463,8 @@ impl Native {
                 descriptor,
                 libc::SOL_SOCKET,
                 libc::SO_TYPE,
-                (&mut kind as *mut i32).cast(),
-                &mut kind_length,
+                (&raw mut kind).cast(),
+                &raw mut kind_length,
             )
         } == 0
         {
@@ -477,7 +475,7 @@ impl Native {
     }
 
     fn switch_socket(&self, token: u64, expected: i32) -> Result<i32, RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if entry.switched {
             return Ok(entry.descriptor);
@@ -503,7 +501,7 @@ impl Native {
     }
 
     fn restore_inet_socket(&self, token: u64, expected: i32) -> Result<(), RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if !entry.switched {
             return Err(RuntimeNetworkError::Invalid);
@@ -529,7 +527,7 @@ impl Native {
         family: i32,
         switched: bool,
     ) -> Result<(), RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if !entry.switched {
             return Err(RuntimeNetworkError::Invalid);
@@ -575,8 +573,8 @@ impl Native {
             }
         }
         for ((level, option), value) in &entry.options {
-            if !switch_transport || Self::switch_option(*level, *option) {
-                if let Err(error) = super::socket_option::set(replacement, *level, *option, value.clone()) {
+            if (!switch_transport || Self::switch_option(*level, *option))
+                && let Err(error) = super::socket_option::set(replacement, *level, *option, value.clone()) {
                     if switch_transport {
                         continue;
                     }
@@ -584,7 +582,6 @@ impl Native {
                     unsafe { libc::close(replacement) };
                     return Err(error);
                 }
-            }
         }
         // SAFETY: dup2 atomically replaces the table descriptor. replacement
         // remains solely owned here and is closed on both outcomes.
@@ -607,7 +604,7 @@ impl Native {
         option: i32,
         value: hl_linux::GuestSocketOption,
     ) -> Result<(), RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         super::socket_option::set(entry.descriptor, level, option, value.clone())?;
         if (level, option) == (1, 27) {
@@ -619,7 +616,7 @@ impl Native {
     }
 
     fn duplicate_descriptor(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
-        let sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        let sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptor = sockets.get(&token).ok_or(RuntimeNetworkError::Invalid)?.descriptor;
         // SAFETY: descriptor remains live under the table lock and dup returns independent ownership.
         let duplicate = unsafe { libc::dup(descriptor) };
@@ -650,7 +647,7 @@ impl Native {
         self.shared
             .bindings
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|(guest, _)| match (guest, address) {
                 (
@@ -752,13 +749,31 @@ impl Native {
             .shared
             .observers
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
             .and_then(Weak::upgrade);
         if let Some(observer) = observer {
             observer.readiness_changed();
         }
         self.wake();
+    }
+}
+
+impl Drop for Native {
+    fn drop(&mut self) {
+        // Wake the reactor before this owner's Arc is released. Once the poll returns,
+        // its Weak upgrade fails and the thread exits without an idle polling loop.
+        self.wake();
+    }
+}
+
+impl Drop for Reactor {
+    fn drop(&mut self) {
+        // SAFETY: Reactor owns both pipe descriptors and drops after the thread releases its last upgrade.
+        unsafe {
+            libc::close(self.wake_read);
+            libc::close(self.wake_write);
+        }
     }
 }
 
@@ -882,23 +897,5 @@ mod kind_cache_test {
         let (_, binding_path) = Native::switch_path(&interface, [10, 0, 0, 9], 8080).unwrap();
         let destination_path = Native::switch_destination_path(&interface, [10, 0, 0, 9], 8080).unwrap();
         assert_eq!(destination_path, binding_path);
-    }
-}
-
-impl Drop for Native {
-    fn drop(&mut self) {
-        // Wake the reactor before this owner's Arc is released. Once the poll returns,
-        // its Weak upgrade fails and the thread exits without an idle polling loop.
-        self.wake();
-    }
-}
-
-impl Drop for Reactor {
-    fn drop(&mut self) {
-        // SAFETY: Reactor owns both pipe descriptors and drops after the thread releases its last upgrade.
-        unsafe {
-            libc::close(self.wake_read);
-            libc::close(self.wake_write);
-        }
     }
 }

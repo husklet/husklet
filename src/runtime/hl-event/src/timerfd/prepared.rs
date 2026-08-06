@@ -23,7 +23,7 @@ impl TimerFd {
                 .inner
                 .changed
                 .wait(state)
-                .unwrap_or_else(|error| error.into_inner()));
+                .unwrap_or_else(std::sync::PoisonError::into_inner));
         };
         let remaining = deadline.saturating_sub(self.now(state.basis)?);
         let duration = std::time::Duration::from_nanos(remaining);
@@ -36,7 +36,7 @@ impl TimerFd {
     }
 
     pub fn prepare_read(&self) -> Result<PreparedTimerRead, TimerFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             self.refresh(&mut state)?;
             if state.retired {
@@ -58,7 +58,7 @@ impl TimerFd {
     }
 
     pub fn commit_read(&self, prepared: PreparedTimerRead) -> Result<(), TimerFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return Err(TimerFdError::Retired);
         }

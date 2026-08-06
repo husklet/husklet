@@ -40,7 +40,7 @@ impl Aarch64Interpreter {
         } else if system::Executor::handles(ir.instruction) {
             system::Executor::execute(cpu, system, ir)
         } else if Aarch64FpExecutor::is_fp(ir.instruction) {
-            Aarch64FpExecutor::execute(cpu, &mut Aarch64SoftFloat::default(), ir)
+            Aarch64FpExecutor::execute(cpu, &mut Aarch64SoftFloat, ir)
         } else {
             Self::execute(cpu, coordinates, ir)
         }

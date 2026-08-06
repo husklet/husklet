@@ -57,11 +57,11 @@ impl<H: SocketHostIo> ListenerQueue<H> {
     }
 
     pub fn set_backlog(&self, backlog: usize) {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).backlog = backlog.max(1);
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).backlog = backlog.max(1);
     }
 
     pub fn publish(&self, accepted: AcceptedToken<H::Token>) -> Result<(), AcceptError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let error = if state.canceled {
             Some(AcceptError::Canceled)
         } else if state.queue.len() >= state.backlog {
@@ -81,7 +81,7 @@ impl<H: SocketHostIo> ListenerQueue<H> {
     }
 
     pub fn accept(&self, nonblocking: bool) -> Result<AcceptedToken<H::Token>, AcceptError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if nonblocking {
             return state.queue.pop_front().ok_or(if state.canceled {
                 AcceptError::Canceled
@@ -100,7 +100,7 @@ impl<H: SocketHostIo> ListenerQueue<H> {
             if state.canceled {
                 return Err(AcceptError::Canceled);
             }
-            state = self.wake.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self.wake.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -108,14 +108,14 @@ impl<H: SocketHostIo> ListenerQueue<H> {
         !self
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .queue
             .is_empty()
     }
 
     pub fn cancel_and_drain(&self) {
         let tokens = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.canceled {
                 return;
             }
@@ -133,7 +133,7 @@ impl<H: SocketHostIo> ListenerQueue<H> {
 
     #[cfg(test)]
     pub fn waiting(&self) -> u64 {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.next_ticket - state.serving_ticket
     }
 }

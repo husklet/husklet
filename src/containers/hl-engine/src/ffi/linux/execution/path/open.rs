@@ -138,7 +138,7 @@ impl PendingOpen {
             }
             Err(_) => return Err(RuntimePathError::Io),
         };
-        *self.file.shm_lease.lock().unwrap_or_else(|error| error.into_inner()) = Some(lease);
+        *self.file.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         Ok(())
     }
 }
@@ -201,11 +201,11 @@ impl PreparedPathOpen for PendingOpen {
         if bits & OpenIntent::WRITE != 0 && bits & OpenIntent::PATH_ONLY == 0 {
             let identity = (metadata.dev(), metadata.ino());
             let writes = Arc::clone(&self.file.writes);
-            *self.file.write_lease.lock().unwrap_or_else(|error| error.into_inner()) =
+            *self.file.write_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(lease::WriteLease::acquire(identity, writes));
         }
         if bits & OpenIntent::TEMPORARY != 0 && bits & OpenIntent::PATH_ONLY == 0 {
-            *self.file.file.lock().unwrap_or_else(|error| error.into_inner()) = Some(opened);
+            *self.file.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(opened);
             return Ok(());
         }
         let guest = if let Some(guest) = &self.guest {
@@ -230,7 +230,7 @@ impl PreparedPathOpen for PendingOpen {
             filesystem,
             file: Arc::downgrade(&self.file),
         };
-        let mut paths = self.paths.lock().unwrap_or_else(|error| error.into_inner());
+        let mut paths = self.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match paths.entry(identity) {
             std::collections::btree_map::Entry::Occupied(mut entry) if entry.get().file.upgrade().is_none() => {
                 entry.insert(opened_path);
@@ -247,9 +247,9 @@ impl PreparedPathOpen for PendingOpen {
             if guest.as_str() == "/dev/pts" {
                 directory = directory.with_terminals(Arc::clone(&self.terminals));
             }
-            *self.file.directory.lock().unwrap_or_else(|error| error.into_inner()) = Some(directory);
+            *self.file.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(directory);
         }
-        *self.file.file.lock().unwrap_or_else(|error| error.into_inner()) = Some(opened);
+        *self.file.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(opened);
         if created
             && !temporary
             && let (Some(parent), Some(name)) = (self.path.parent(), self.path.file_name())

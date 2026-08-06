@@ -68,6 +68,7 @@ impl WritePublication {
     /// [`ProjectionLease::write_publication`] for the active contract.
     /// This pure value classifier allocates nothing and retains no token,
     /// backing, reservation, or host state.
+    #[must_use]
     pub fn classify_candidate(
         backing: Backing,
         protection: Protection,
@@ -128,7 +129,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         incarnation: u64,
     ) -> Result<ProjectionLease<'_, H>, MemoryError> {
         let admission = self.activity.admit_memory()?;
-        let transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mapping_requests = self.mapping_requests.load(Ordering::Acquire);
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self
@@ -394,7 +395,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
         let region = resolution.region.range();
         let aligned = address.get() / maximum * maximum;
         let first = aligned.max(region.start().get());
-        let last = first.checked_add(maximum).unwrap_or(u64::MAX).min(region.end().get());
+        let last = first.saturating_add(maximum).min(region.end().get());
         if last < access.end().get() {
             return self.project_additional(address, length, required);
         }

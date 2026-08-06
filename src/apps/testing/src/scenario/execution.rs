@@ -213,7 +213,7 @@ async fn execute_image(
     });
     combine(
         outcome.map_err(Into::into),
-        cleanup.map(|_| ()).map_err(|error| format!("cleanup failed: {error}")),
+        cleanup.map_err(|error| format!("cleanup failed: {error}")),
     )
 }
 

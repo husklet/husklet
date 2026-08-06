@@ -116,14 +116,14 @@ struct Subscription {
 impl Subscription {
     fn notify(&self) {
         {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.active {
                 return;
             }
             state.callbacks_in_flight += 1;
         }
         (self.observer)(self.token);
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.callbacks_in_flight -= 1;
         if state.callbacks_in_flight == 0 {
             self.quiescent.notify_all();
@@ -131,10 +131,10 @@ impl Subscription {
     }
 
     fn quiesce(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.active = false;
         while state.callbacks_in_flight != 0 {
-            state = self.quiescent.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = self.quiescent.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }
@@ -203,7 +203,7 @@ impl EventFd {
     }
 
     pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), EventFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return Err(EventFdError::Retired);
         }
@@ -214,7 +214,7 @@ impl EventFd {
 
     #[must_use]
     pub fn readiness(&self, interests: EventInterest) -> EventInterest {
-        let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut ready = 0;
         if state.retired {
             ready |= EventInterest::ERROR;
@@ -239,7 +239,7 @@ impl EventFd {
     }
 
     pub fn subscribe(&self, token: u64, observer: Arc<Observer>) -> Result<EventSubscription, EventFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return Err(EventFdError::Retired);
         }
@@ -271,13 +271,13 @@ impl EventFd {
         self.inner
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .counter
     }
 
     #[must_use]
     pub fn snapshot(&self) -> EventFdSnapshot {
-        let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         EventFdSnapshot {
             counter: state.counter,
             semaphore: state.semaphore,
@@ -290,13 +290,13 @@ impl EventFd {
         self.inner
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retired
     }
 
     fn retire_inner(&self) {
         let subscriptions = {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }
@@ -341,7 +341,7 @@ impl Drop for EventSubscription {
         let subscription = eventfd
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .subscriptions
             .remove(&self.identity);
         if let Some(subscription) = subscription {

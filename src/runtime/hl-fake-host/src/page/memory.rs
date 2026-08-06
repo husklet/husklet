@@ -47,13 +47,13 @@ pub struct GuestPageStore {
 
 impl GuestPageStore {
     pub fn map(&self, address: u64, protection: Protection) -> Result<u64, GuestFault> {
-        if address % PAGE_SIZE != 0 {
+        if !address.is_multiple_of(PAGE_SIZE) {
             return Err(GuestFault {
                 address,
                 access: GuestAccess::Write,
             });
         }
-        let mut pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if pages.contains_key(&address) {
             return Err(GuestFault {
                 address,
@@ -73,8 +73,8 @@ impl GuestPageStore {
     }
 
     pub fn alias(&self, source: u64, target: u64, protection: Protection) -> Result<u64, GuestFault> {
-        let mut pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
-        if target % PAGE_SIZE != 0 || pages.contains_key(&target) {
+        let mut pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !target.is_multiple_of(PAGE_SIZE) || pages.contains_key(&target) {
             return Err(GuestFault {
                 address: target,
                 access: GuestAccess::Write,
@@ -100,7 +100,7 @@ impl GuestPageStore {
     }
 
     pub fn protect(&self, address: u64, protection: Protection) -> Result<(), GuestFault> {
-        let mut pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let page = pages.get_mut(&address).ok_or(GuestFault {
             address,
             access: GuestAccess::Write,
@@ -113,7 +113,7 @@ impl GuestPageStore {
     pub fn unmap(&self, address: u64) -> Result<(), GuestFault> {
         self.pages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&address)
             .ok_or(GuestFault {
                 address,
@@ -126,19 +126,19 @@ impl GuestPageStore {
     pub fn generation_at(&self, address: u64) -> Option<u64> {
         self.pages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(address / PAGE_SIZE * PAGE_SIZE))
             .map(|page| page.generation)
     }
 
     fn generation(&self) -> u64 {
-        let mut generation = self.next_generation.lock().unwrap_or_else(|error| error.into_inner());
+        let mut generation = self.next_generation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *generation = generation.saturating_add(1);
         *generation
     }
 
     fn transfer(&self, address: u64, bytes: &mut [u8], access: GuestAccess) -> Result<usize, GuestFault> {
-        let pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut copied = 0;
         while copied < bytes.len() {
             let current = address.checked_add(copied as u64).ok_or(GuestFault {
@@ -158,7 +158,7 @@ impl GuestPageStore {
             };
             let offset = (current - base) as usize;
             let count = (PAGE_SIZE as usize - offset).min(bytes.len() - copied);
-            let page_bytes = page.bytes.read().unwrap_or_else(|error| error.into_inner());
+            let page_bytes = page.bytes.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             if access == GuestAccess::Read {
                 bytes[copied..copied + count].copy_from_slice(&page_bytes[offset..offset + count]);
             }
@@ -170,7 +170,7 @@ impl GuestPageStore {
 
 impl GuestMemory for GuestPageStore {
     fn probe(&self, address: u64, length: usize, access: GuestAccess) -> Result<usize, GuestFault> {
-        let pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut copied = 0;
         while copied < length {
             let current = address.checked_add(copied as u64).ok_or(GuestFault {
@@ -199,7 +199,7 @@ impl GuestMemory for GuestPageStore {
     }
 
     fn write(&self, address: u64, source: &[u8]) -> Result<usize, GuestFault> {
-        let mut pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut copied = 0;
         while copied < source.len() {
             let current = address.checked_add(copied as u64).ok_or(GuestFault {
@@ -222,7 +222,7 @@ impl GuestMemory for GuestPageStore {
             };
             let offset = (current - base) as usize;
             let count = (PAGE_SIZE as usize - offset).min(source.len() - copied);
-            page.bytes.write().unwrap_or_else(|error| error.into_inner())[offset..offset + count]
+            page.bytes.write().unwrap_or_else(std::sync::PoisonError::into_inner)[offset..offset + count]
                 .copy_from_slice(&source[copied..copied + count]);
             copied += count;
         }
@@ -232,7 +232,7 @@ impl GuestMemory for GuestPageStore {
 
 impl InstructionFetch for GuestPageStore {
     fn fetch(&self, address: u64, destination: &mut [u8]) -> Result<(), FetchError> {
-        let pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for index in 0..destination.len() {
             let current = address.checked_add(index as u64).ok_or(FetchError)?;
             let base = current / PAGE_SIZE * PAGE_SIZE;
@@ -241,7 +241,7 @@ impl InstructionFetch for GuestPageStore {
                 .filter(|page| page.protection.0 & Protection::EXECUTE.0 != 0)
                 .ok_or(FetchError)?;
             destination[index] =
-                page.bytes.read().unwrap_or_else(|error| error.into_inner())[(current - base) as usize];
+                page.bytes.read().unwrap_or_else(std::sync::PoisonError::into_inner)[(current - base) as usize];
         }
         Ok(())
     }
@@ -285,13 +285,13 @@ impl GuestOperandMemory for GuestPageStore {
         if reservations.len() != values.len() {
             return Err(());
         }
-        let mut pages = self.pages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for (reservation, value) in reservations.into_iter().zip(values) {
             let base = reservation.address / PAGE_SIZE * PAGE_SIZE;
             let page = pages.get_mut(&base).ok_or(())?;
             let offset = (reservation.address - base) as usize;
             let length = usize::from(reservation.bytes);
-            page.bytes.write().unwrap_or_else(|error| error.into_inner())[offset..offset + length]
+            page.bytes.write().unwrap_or_else(std::sync::PoisonError::into_inner)[offset..offset + length]
                 .copy_from_slice(&value.to_le_bytes()[..length]);
         }
         Ok(())

@@ -102,7 +102,7 @@ impl Host {
         self.pins
             .entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(identity, Arc::new(PinEntry { guest, candidates }));
         Ok(NodeHandle::from_raw(LAYERED_HANDLE_BIT | identity))
     }
@@ -112,7 +112,7 @@ impl Host {
             .pins
             .entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(node.raw() & !LAYERED_HANDLE_BIT))
             .cloned()
             .ok_or(ResolveHostError::NotFound)?;
@@ -134,7 +134,7 @@ impl Host {
 
     fn cached_directory(&self, guest: &GuestPathBytes, epoch: u64) -> Option<Vec<LayerPin>> {
         let borrowed = {
-            let mut cache = self.pins.paths.lock().unwrap_or_else(|error| error.into_inner());
+            let mut cache = self.pins.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.epoch != epoch {
                 cache.entries.clear();
                 cache.epoch = epoch;
@@ -149,7 +149,7 @@ impl Host {
         if self.epoch.load(Ordering::Acquire) != epoch {
             return;
         }
-        let mut cache = self.pins.paths.lock().unwrap_or_else(|error| error.into_inner());
+        let mut cache = self.pins.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if cache.epoch != epoch {
             cache.entries.clear();
             cache.epoch = epoch;
@@ -357,161 +357,6 @@ impl Host {
     }
 }
 
-#[cfg(test)]
-mod overlay_tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::mpsc;
-    use std::time::Duration;
-
-    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver, VfsHost};
-
-    use super::Host;
-
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-
-    fn fixture(name: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "hl-overlay-pin-{name}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        std::fs::create_dir_all(&path).unwrap();
-        path
-    }
-
-    fn layered_host(upper: &std::path::Path, lower: &std::path::Path) -> Host {
-        Host::layered(
-            vec![
-                std::sync::Arc::new(std::fs::File::open(upper).unwrap()),
-                std::sync::Arc::new(std::fs::File::open(lower).unwrap()),
-            ],
-            std::sync::Arc::new(super::super::source::MountPaths::default()),
-        )
-    }
-
-    fn resolve(host: &Host, path: &[u8]) -> Result<std::path::PathBuf, hl_runtime::ResolveError> {
-        let mounts = MountNamespace::new();
-        let resolver = Resolver::new(host.clone(), &mounts);
-        let root = GuestPathBytes::new(b"/").unwrap();
-        let path = GuestPathBytes::new(path).unwrap();
-        let resolved = resolver.resolve(ResolveRequest {
-            path: &path,
-            base: &root,
-            nofollow_final: true,
-            no_symlinks: false,
-            allow_missing_final: false,
-        })?;
-        let parent = resolved.duplicate_parent().map_err(hl_runtime::ResolveError::Host)?;
-        let name = resolved
-            .final_name()
-            .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
-        Host::path(&parent, &name).map_err(|_| hl_runtime::ResolveError::Host(hl_runtime::ResolveHostError::Io))
-    }
-
-    #[test]
-    fn layered_directory_retains_lower_candidates() {
-        let upper = fixture("upper");
-        let lower = fixture("lower");
-        std::fs::create_dir(upper.join("etc")).unwrap();
-        std::fs::create_dir(lower.join("etc")).unwrap();
-        std::fs::write(lower.join("etc/lower"), b"lower").unwrap();
-        std::fs::write(upper.join("etc/upper"), b"upper").unwrap();
-        let host = layered_host(&upper, &lower);
-        assert_eq!(resolve(&host, b"/etc/lower").unwrap(), lower.join("etc/lower"));
-        assert_eq!(resolve(&host, b"/etc/upper").unwrap(), upper.join("etc/upper"));
-        std::fs::remove_dir_all(upper).unwrap();
-        std::fs::remove_dir_all(lower).unwrap();
-    }
-
-    #[test]
-    fn upper_whiteout_and_opaque_directory_hide_lower_children() {
-        let upper = fixture("whiteout-upper");
-        let lower = fixture("whiteout-lower");
-        std::fs::create_dir(upper.join("dir")).unwrap();
-        std::fs::create_dir(lower.join("dir")).unwrap();
-        std::fs::write(upper.join("dir/.wh.hidden"), b"").unwrap();
-        std::fs::write(lower.join("dir/hidden"), b"lower").unwrap();
-        std::fs::write(lower.join("dir/cut"), b"lower").unwrap();
-        let host = layered_host(&upper, &lower);
-        assert!(resolve(&host, b"/dir/hidden").is_err());
-        std::fs::write(upper.join("dir/.wh..wh..opq"), b"").unwrap();
-        let host = layered_host(&upper, &lower);
-        assert!(resolve(&host, b"/dir/cut").is_err());
-        std::fs::remove_dir_all(upper).unwrap();
-        std::fs::remove_dir_all(lower).unwrap();
-    }
-
-    #[test]
-    fn layered_pin_syscalls_do_not_hold_registry_lock() {
-        let upper = fixture("concurrent-upper");
-        let lower = fixture("concurrent-lower");
-        let host = layered_host(&upper, &lower);
-        let root = host.pin_root().unwrap();
-        let closing = host.clone();
-        let (entered_tx, entered_rx) = mpsc::channel();
-        let (closed_tx, closed_rx) = mpsc::channel();
-        let closer = std::thread::spawn(move || {
-            entered_rx.recv().unwrap();
-            closing.close(root);
-            closed_tx.send(()).unwrap();
-        });
-
-        host.with_entry(root, |_| {
-            entered_tx.send(()).unwrap();
-            closed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        })
-        .unwrap();
-        closer.join().unwrap();
-        std::fs::remove_dir_all(upper).unwrap();
-        std::fs::remove_dir_all(lower).unwrap();
-    }
-
-    #[test]
-    fn directory_cache_is_bounded_and_epoch_invalidated() {
-        let upper = fixture("cache-upper");
-        let lower = fixture("cache-lower");
-        std::fs::create_dir_all(lower.join("a/b")).unwrap();
-        let host = layered_host(&upper, &lower);
-        assert_eq!(resolve(&host, b"/a/b").unwrap(), lower.join("a/b"));
-        let epoch = host.epoch.load(Ordering::Acquire);
-        let guest = GuestPathBytes::new(b"/a").unwrap();
-        assert!(host.cached_directory(&guest, epoch).is_some());
-
-        host.epoch.fetch_add(1, Ordering::Release);
-        assert!(host.cached_directory(&guest, epoch).is_none());
-
-        let current = host.epoch.load(Ordering::Acquire);
-        for index in 0..=4_096 {
-            let path = GuestPathBytes::new(format!("/cached/{index}").as_bytes()).unwrap();
-            host.cache_directory(&path, &[], current);
-        }
-        let cache = host.pins.paths.lock().unwrap_or_else(|error| error.into_inner());
-        assert!(cache.entries.len() <= 4_096);
-        drop(cache);
-        std::fs::remove_dir_all(upper).unwrap();
-        std::fs::remove_dir_all(lower).unwrap();
-    }
-
-    #[test]
-    fn new_root_host_has_an_independent_namespace_generation() {
-        let upper = fixture("generation-upper");
-        let lower = fixture("generation-lower");
-        std::fs::create_dir_all(lower.join("a/b")).unwrap();
-        let first = layered_host(&upper, &lower);
-        assert_eq!(resolve(&first, b"/a/b").unwrap(), lower.join("a/b"));
-        let second = layered_host(&upper, &lower);
-        assert!(second
-            .pins
-            .paths
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .entries
-            .is_empty());
-        std::fs::remove_dir_all(upper).unwrap();
-        std::fs::remove_dir_all(lower).unwrap();
-    }
-}
-
 impl VfsHost for Host {
     type ParentLease = ParentLease;
 
@@ -644,7 +489,7 @@ impl VfsHost for Host {
         self.pins
             .entries
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&(node.raw() & !LAYERED_HANDLE_BIT));
     }
 }
@@ -846,5 +691,160 @@ impl Host {
             }
         }
         Ok(flags)
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use hl_runtime::{GuestPathBytes, MountNamespace, ResolveRequest, Resolver, VfsHost};
+
+    use super::Host;
+
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "hl-overlay-pin-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn layered_host(upper: &std::path::Path, lower: &std::path::Path) -> Host {
+        Host::layered(
+            vec![
+                std::sync::Arc::new(std::fs::File::open(upper).unwrap()),
+                std::sync::Arc::new(std::fs::File::open(lower).unwrap()),
+            ],
+            std::sync::Arc::new(super::super::source::MountPaths::default()),
+        )
+    }
+
+    fn resolve(host: &Host, path: &[u8]) -> Result<std::path::PathBuf, hl_runtime::ResolveError> {
+        let mounts = MountNamespace::new();
+        let resolver = Resolver::new(host.clone(), &mounts);
+        let root = GuestPathBytes::new(b"/").unwrap();
+        let path = GuestPathBytes::new(path).unwrap();
+        let resolved = resolver.resolve(ResolveRequest {
+            path: &path,
+            base: &root,
+            nofollow_final: true,
+            no_symlinks: false,
+            allow_missing_final: false,
+        })?;
+        let parent = resolved.duplicate_parent().map_err(hl_runtime::ResolveError::Host)?;
+        let name = resolved
+            .final_name()
+            .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
+        Host::path(&parent, &name).map_err(|_| hl_runtime::ResolveError::Host(hl_runtime::ResolveHostError::Io))
+    }
+
+    #[test]
+    fn layered_directory_retains_lower_candidates() {
+        let upper = fixture("upper");
+        let lower = fixture("lower");
+        std::fs::create_dir(upper.join("etc")).unwrap();
+        std::fs::create_dir(lower.join("etc")).unwrap();
+        std::fs::write(lower.join("etc/lower"), b"lower").unwrap();
+        std::fs::write(upper.join("etc/upper"), b"upper").unwrap();
+        let host = layered_host(&upper, &lower);
+        assert_eq!(resolve(&host, b"/etc/lower").unwrap(), lower.join("etc/lower"));
+        assert_eq!(resolve(&host, b"/etc/upper").unwrap(), upper.join("etc/upper"));
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn upper_whiteout_and_opaque_directory_hide_lower_children() {
+        let upper = fixture("whiteout-upper");
+        let lower = fixture("whiteout-lower");
+        std::fs::create_dir(upper.join("dir")).unwrap();
+        std::fs::create_dir(lower.join("dir")).unwrap();
+        std::fs::write(upper.join("dir/.wh.hidden"), b"").unwrap();
+        std::fs::write(lower.join("dir/hidden"), b"lower").unwrap();
+        std::fs::write(lower.join("dir/cut"), b"lower").unwrap();
+        let host = layered_host(&upper, &lower);
+        assert!(resolve(&host, b"/dir/hidden").is_err());
+        std::fs::write(upper.join("dir/.wh..wh..opq"), b"").unwrap();
+        let host = layered_host(&upper, &lower);
+        assert!(resolve(&host, b"/dir/cut").is_err());
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn layered_pin_syscalls_do_not_hold_registry_lock() {
+        let upper = fixture("concurrent-upper");
+        let lower = fixture("concurrent-lower");
+        let host = layered_host(&upper, &lower);
+        let root = host.pin_root().unwrap();
+        let closing = host.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (closed_tx, closed_rx) = mpsc::channel();
+        let closer = std::thread::spawn(move || {
+            entered_rx.recv().unwrap();
+            closing.close(root);
+            closed_tx.send(()).unwrap();
+        });
+
+        host.with_entry(root, |_| {
+            entered_tx.send(()).unwrap();
+            closed_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        })
+        .unwrap();
+        closer.join().unwrap();
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn directory_cache_is_bounded_and_epoch_invalidated() {
+        let upper = fixture("cache-upper");
+        let lower = fixture("cache-lower");
+        std::fs::create_dir_all(lower.join("a/b")).unwrap();
+        let host = layered_host(&upper, &lower);
+        assert_eq!(resolve(&host, b"/a/b").unwrap(), lower.join("a/b"));
+        let epoch = host.epoch.load(Ordering::Acquire);
+        let guest = GuestPathBytes::new(b"/a").unwrap();
+        assert!(host.cached_directory(&guest, epoch).is_some());
+
+        host.epoch.fetch_add(1, Ordering::Release);
+        assert!(host.cached_directory(&guest, epoch).is_none());
+
+        let current = host.epoch.load(Ordering::Acquire);
+        for index in 0..=4_096 {
+            let path = GuestPathBytes::new(format!("/cached/{index}").as_bytes()).unwrap();
+            host.cache_directory(&path, &[], current);
+        }
+        let cache = host.pins.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(cache.entries.len() <= 4_096);
+        drop(cache);
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
+    }
+
+    #[test]
+    fn new_root_host_has_an_independent_namespace_generation() {
+        let upper = fixture("generation-upper");
+        let lower = fixture("generation-lower");
+        std::fs::create_dir_all(lower.join("a/b")).unwrap();
+        let first = layered_host(&upper, &lower);
+        assert_eq!(resolve(&first, b"/a/b").unwrap(), lower.join("a/b"));
+        let second = layered_host(&upper, &lower);
+        assert!(second
+            .pins
+            .paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entries
+            .is_empty());
+        std::fs::remove_dir_all(upper).unwrap();
+        std::fs::remove_dir_all(lower).unwrap();
     }
 }

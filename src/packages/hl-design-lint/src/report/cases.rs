@@ -22,6 +22,7 @@ pub struct Cases<Output = io::Stderr> {
 
 impl Cases<io::Stderr> {
     /// Creates a case reporter with status written to standard error.
+    #[must_use]
     pub fn new(root: PathBuf) -> Self {
         Self::with_output(root, io::stderr())
     }
@@ -56,9 +57,7 @@ impl<Output> Cases<Output> {
         fs::create_dir_all(&queue).map_err(|error| LintError::io("create", &queue, error))?;
         let timestamp = timestamp();
         let domain = domain(&finding.location.path);
-        let package = package(&finding.location.path)
-            .map(|name| snake_case(&name))
-            .unwrap_or_else(|| "unknown_package".to_owned());
+        let package = package(&finding.location.path).map_or_else(|| "unknown_package".to_owned(), |name| snake_case(&name));
         let output = queue.join(format!(
             "{}_{}_{}_{}.md",
             timestamp,

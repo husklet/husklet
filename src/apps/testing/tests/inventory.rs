@@ -280,8 +280,8 @@ fn inventory_matrix() {
             stop.store(true, Ordering::Release);
         }
     }
-    let remaining = deferred + queue.lock().unwrap_or_else(|error| error.into_inner()).len();
-    let mut results = std::mem::take(&mut *results.lock().unwrap_or_else(|error| error.into_inner()));
+    let remaining = deferred + queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len();
+    let mut results = std::mem::take(&mut *results.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     results.sort_by(|a, b| (&a.case.isa, &a.case.suite, &a.case.name).cmp(&(&b.case.isa, &b.case.suite, &b.case.name)));
     if remaining == 0 {
         report.write(&results);
@@ -335,7 +335,7 @@ fn work(
         if stop.load(Ordering::Acquire) {
             break;
         }
-        let case = queue.lock().unwrap_or_else(|error| error.into_inner()).pop_front();
+        let case = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop_front();
         let Some(case) = case else { break };
         let panic_case = case.clone();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -354,14 +354,14 @@ fn work(
             result.diagnostic = format!("ledger={error}");
             result.mismatch = "engine:harness-ledger".into();
         }
-        results.lock().unwrap_or_else(|error| error.into_inner()).push(result);
+        results.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(result);
         let count = completed.fetch_add(1, Ordering::Relaxed) + 1;
         progress(count, total);
     }
 }
 
 fn progress(count: u64, total: u64) {
-    if count == total || count % 100 == 0 {
+    if count == total || count.is_multiple_of(100) {
         eprintln!("compat progress={count}/{total}");
     }
 }
@@ -967,8 +967,7 @@ fn stamped_input(path: &Path, required: bool) -> io::Result<Vec<u8>> {
 
 const DEFAULT_JOBS: usize = 1;
 fn corpus_path(root: Option<&str>) -> PathBuf {
-    root.map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy"))
+    root.map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy"), PathBuf::from)
 }
 
 fn corpus() -> PathBuf {

@@ -65,7 +65,7 @@ fn local_service() {
         match listener.accept() {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
-                std::thread::yield_now()
+                std::thread::yield_now();
             }
             Err(error) => panic!("local accept failed: {error}"),
         }
@@ -371,7 +371,7 @@ fn selected_interface_stream_connect_retries_a_dead_on_arrival_listener() {
                 match host.accept(token) {
                     Ok(accepted) => return accepted,
                     Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => {
-                        std::thread::yield_now()
+                        std::thread::yield_now();
                     }
                     Err(error) => panic!("switch accept failed: {error:?}"),
                 }
@@ -915,7 +915,7 @@ fn selected_interface_datagrams_preserve_source_and_connected_peer() {
             match host.receive_from(token, output, false, false) {
                 Ok(value) => break value,
                 Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => {
-                    std::thread::yield_now()
+                    std::thread::yield_now();
                 }
                 result => panic!("switch datagram receive failed: {result:?}"),
             }

@@ -30,7 +30,7 @@ fn findings(source: &str) -> Vec<crate::Finding> {
 #[test]
 fn reports_closure_blocks() {
     let values = findings(
-        r#"
+        r"
 fn fail() -> Result<(), Error> { todo!() }
 fn run() {
     let _ = fail();
@@ -39,7 +39,7 @@ fn run() {
     fail().ok();
     let closure = || { fail(); };
 }
-"#,
+",
     );
     assert_eq!(values.len(), 5);
     assert!(values.iter().all(crate::Finding::is_violation));
@@ -48,7 +48,7 @@ fn run() {
 #[test]
 fn reports_methods_awaits() {
     let values = findings(
-        r#"
+        r"
 struct Store;
 impl Store {
     fn save(&self) -> std::io::Result<()> { todo!() }
@@ -61,7 +61,7 @@ async fn run() {
     async_result().await;
 }
 async fn async_result() -> Result<(), Error> { todo!() }
-"#,
+",
     );
     assert_eq!(values.len(), 3);
 }
@@ -69,12 +69,12 @@ async fn async_result() -> Result<(), Error> { todo!() }
 #[test]
 fn constructors_need_none() {
     let values = findings(
-        r#"
+        r"
 fn run() {
     Result::Err::<(), Error>(error());
     let _ = Result::Ok::<(), Error>(());
 }
-"#,
+",
     );
     assert_eq!(values.len(), 2);
 }
@@ -82,7 +82,7 @@ fn run() {
 #[test]
 fn ignores_option_discards() {
     let values = findings(
-        r#"
+        r"
 fn fail() -> Result<(), Error> { todo!() }
 fn maybe() -> Option<()> { None }
 fn run() -> Result<(), Error> {
@@ -95,7 +95,7 @@ fn run() -> Result<(), Error> {
     drop(maybe());
     Ok(())
 }
-"#,
+",
     );
     assert!(values.is_empty());
 }
@@ -103,7 +103,7 @@ fn run() -> Result<(), Error> {
 #[test]
 fn ambiguous_syntactic_proof() {
     let values = findings(
-        r#"
+        r"
 fn operation() -> Result<(), Error> { todo!() }
 mod other { fn operation() {} }
 struct First;
@@ -115,7 +115,7 @@ fn run(first: First) {
     first.save();
     unknown_but_fallible_sounding();
 }
-"#,
+",
     );
     assert!(values.is_empty());
 }
@@ -123,13 +123,13 @@ fn run(first: First) {
 #[test]
 fn excludes_modules_functions() {
     let values = findings(
-        r#"
+        r"
 fn fail() -> Result<(), Error> { todo!() }
 #[cfg(test)]
 mod tests { fn case() { fail(); } }
 #[test]
 fn test_function() { fail(); }
-"#,
+",
     );
     assert!(values.is_empty());
 }

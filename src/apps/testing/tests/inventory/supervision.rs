@@ -139,15 +139,14 @@ pub(super) fn configure(command: &mut Command) {
 pub(super) fn stall_budget(wall: Duration) -> Option<Duration> {
     let configured = std::env::var("HL_COMPAT_STALL_MS")
         .ok()
-        .map(|value| {
+        .map_or(STALL_FLOOR, |value| {
             value
                 .parse::<u64>()
                 .ok()
                 .filter(|value| *value != 0)
                 .map(Duration::from_millis)
                 .expect("HL_COMPAT_STALL_MS must be a positive integer")
-        })
-        .unwrap_or(STALL_FLOOR);
+        });
     (configured < wall).then_some(configured)
 }
 
@@ -338,7 +337,7 @@ fn process_table() -> Vec<ProcessRecord> {
             processes: Vec::new(),
         })
     });
-    let mut snapshot = snapshot.lock().unwrap_or_else(|error| error.into_inner());
+    let mut snapshot = snapshot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if now.duration_since(snapshot.sampled) >= PROCESS_SAMPLE_INTERVAL {
         snapshot.processes = read_process_table();
         snapshot.sampled = now;

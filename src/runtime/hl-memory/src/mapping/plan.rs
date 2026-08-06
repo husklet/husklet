@@ -27,6 +27,7 @@ pub struct Batch {
 }
 
 impl Batch {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

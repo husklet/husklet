@@ -1,13 +1,13 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
-use super::*;
+use super::{NetworkCatalog, NetworkCatalogError, CatalogSocket, PortEntry, Slot};
 use crate::{NETWORK_CHECKPOINT_VERSION, NetworkCatalogRestore, NetworkCheckpointImage, NetworkSocketState};
 
 impl NetworkCatalog {
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
-        drop(self.slots.lock().unwrap_or_else(|error| error.into_inner()));
+        drop(self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     }
 
     pub fn thaw_checkpoint(&self) {
@@ -18,7 +18,7 @@ impl NetworkCatalog {
         if !self.activity.frozen() {
             return Err(NetworkCatalogError::Invalid);
         }
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sockets = Vec::new();
         for (index, slot) in slots.iter().enumerate() {
             let Some(socket) = slot.socket.as_deref() else { continue };
@@ -54,7 +54,7 @@ impl NetworkCatalog {
         let mut ports = self
             .ports
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .filter_map(|entry| match entry {
                 PortEntry::Published(checkpoint) => Some(checkpoint.clone()),

@@ -443,7 +443,7 @@ impl ExecutableMemory {
 
     #[cfg(target_os = "linux")]
     unsafe fn allocate_dual(capacity: usize) -> Result<(*mut c_void, *mut c_void, i32), u32> {
-        let descriptor = unsafe { libc::memfd_create(c"hl-native-code".as_ptr(), libc::MFD_CLOEXEC as u32) };
+        let descriptor = unsafe { libc::memfd_create(c"hl-native-code".as_ptr(), libc::MFD_CLOEXEC) };
         if descriptor < 0 {
             return Err(2);
         }
@@ -595,10 +595,10 @@ unsafe extern "C" fn release(context: *mut c_void, handle: u64) -> u32 {
     memory.descriptor = -1;
     memory.releases += 1;
     let writable_status = unsafe { libc::munmap(writable, capacity) };
-    let executable_status = if writable != executable {
-        unsafe { libc::munmap(executable, capacity) }
-    } else {
+    let executable_status = if writable == executable {
         0
+    } else {
+        unsafe { libc::munmap(executable, capacity) }
     };
     if descriptor >= 0 {
         let _ = unsafe { libc::close(descriptor) };
@@ -734,7 +734,7 @@ unsafe extern "C" fn repair(context: *mut c_void, mapping: *mut Mapping, preserv
         if preserve == 0 {
             current.content = 0;
         }
-        return 0;
+        0
     }
     #[cfg(not(target_os = "linux"))]
     0
@@ -1131,11 +1131,10 @@ unsafe impl HostFaultOwner for NativeFaultOwner {
 
     unsafe fn unpublish(&self, view: HostFaultView) {
         let generation = FAULT_GENERATION.with(|current| current.replace(0));
-        if generation != 0 {
-            if unsafe { hl_native_fault_thread_unpublish(&raw const view.0, generation) } != 0 {
+        if generation != 0
+            && unsafe { hl_native_fault_thread_unpublish(&raw const view.0, generation) } != 0 {
                 FAULT_GENERATION.with(|current| current.set(generation));
             }
-        }
     }
 }
 
@@ -1849,13 +1848,11 @@ impl Executor {
         if state.ordinal == 0 || state.calls != state.ordinal || state.result.is_some() {
             return;
         }
-        let captured = (|| {
-            Ok(BoundaryCapture {
+        let captured = Ok(BoundaryCapture {
                 cpu: cpu.clone(),
                 sources: Vec::new(),
                 views: Vec::new(),
-            })
-        })();
+            });
         state.result = Some(captured);
         for source in sources {
             state.append_source(source.guest_first, source.bytes, token);
@@ -2572,7 +2569,7 @@ impl Executor {
         let mut poll = poll;
         let (quantum_context, quantum_poll, quantum_grant) = match poll.as_mut() {
             Some(callback) => (
-                (callback as *mut &mut dyn FnMut(u64, u64) -> bool).cast(),
+                std::ptr::from_mut::<&mut dyn FnMut(u64, u64) -> bool>(callback).cast(),
                 Some(poll_quantum as unsafe extern "C" fn(*mut c_void, u64, u64) -> u32),
                 budget,
             ),

@@ -57,6 +57,7 @@ pub enum PasteMode {
 
 impl PasteMode {
     /// Encode pasted text for the selected terminal protocol.
+    #[must_use]
     pub fn encode(self, text: &str) -> Vec<u8> {
         match self {
             Self::Raw => text.as_bytes().to_vec(),
@@ -119,6 +120,7 @@ impl Key {
 }
 
 /// Encode one keypress into the bytes to write to the PTY. Returns empty for keys with no encoding.
+#[must_use]
 pub fn encode_key(key: Key, mods: Mods, cursor: CursorKeys) -> Vec<u8> {
     let app = cursor == CursorKeys::Application;
     match key {
@@ -132,12 +134,9 @@ pub fn encode_key(key: Key, mods: Mods, cursor: CursorKeys) -> Vec<u8> {
                     'a'..='z' | 'A'..='Z' | '[' | '\\' | ']' | '^' | '_' => Some(c as u8 & 0x1f),
                     _ => None,
                 };
-                match control {
-                    Some(b) => vec![b],
-                    None => {
-                        let mut buf = [0u8; 4];
-                        c.encode_utf8(&mut buf).as_bytes().to_vec()
-                    }
+                if let Some(b) = control { vec![b] } else {
+                    let mut buf = [0u8; 4];
+                    c.encode_utf8(&mut buf).as_bytes().to_vec()
                 }
             } else {
                 let mut buf = [0u8; 4];

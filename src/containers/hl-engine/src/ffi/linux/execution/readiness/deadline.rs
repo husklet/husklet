@@ -26,7 +26,7 @@ struct InterruptionWake(Arc<QueueState>);
 
 impl hl_sync::InterruptionWake for InterruptionWake {
     fn wake(&self) {
-        let _state = self.0.state.lock().unwrap_or_else(|error| error.into_inner());
+        let _state = self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.0.changed.notify_all();
     }
 }
@@ -38,7 +38,7 @@ pub(in crate::ffi::linux::execution) struct Queue {
 
 impl std::fmt::Debug for Queue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         formatter
             .debug_struct("Queue")
             .field("registrations", &state.tokens.len())
@@ -100,7 +100,7 @@ impl Queue {
 
     fn insert(&self, deadline: u64, callback: Option<Arc<dyn Fn() + Send + Sync>>) -> Result<u64, hl_time::ClockError> {
         self.start_worker()?;
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.stopped || state.tokens.len() == DEADLINE_LIMIT {
             return Err(hl_time::ClockError::Failed);
         }
@@ -131,7 +131,7 @@ impl Queue {
     }
 
     pub(in crate::ffi::linux::execution) fn cancel(&self, token: u64) {
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(deadline) = state.tokens.remove(&token) {
             state.deadlines.remove(&(deadline, token));
             state.callbacks.remove(&token);
@@ -151,7 +151,7 @@ impl Queue {
         let token = self.schedule(deadline).map_err(|_| ())?;
         let observer: Arc<dyn hl_sync::InterruptionWake> = Arc::new(InterruptionWake(Arc::clone(&self.inner)));
         let _observation = interruption.map(|value| value.observe(observer.clone()));
-        let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !state.stopped
             && !interruption.is_some_and(hl_sync::Interruption::is_pending)
             && u64::try_from(self.inner.origin.elapsed().as_nanos()).unwrap_or(u64::MAX) < deadline
@@ -160,7 +160,7 @@ impl Queue {
                 .inner
                 .changed
                 .wait(state)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         let stopped = state.stopped;
         let interrupted = interruption.is_some_and(hl_sync::Interruption::take_pending);
@@ -173,17 +173,17 @@ impl Queue {
         let mut value = 0_u64;
         // SAFETY: value is uniquely writable for eight bytes, descriptor is
         // owned by self, and nonblocking read retains no pointer.
-        let _ = unsafe { read(self.inner.descriptor, (&mut value as *mut u64).cast(), 8) };
+        let _ = unsafe { read(self.inner.descriptor, (&raw mut value).cast(), 8) };
     }
 
     fn serve(inner: Arc<QueueState>) {
-        let mut state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if state.stopped {
                 return;
             }
             let Some((deadline, token)) = state.deadlines.first().copied() else {
-                state = inner.scheduled.wait(state).unwrap_or_else(|error| error.into_inner());
+                state = inner.scheduled.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
                 continue;
             };
             let now = u64::try_from(inner.origin.elapsed().as_nanos()).unwrap_or(u64::MAX);
@@ -207,8 +207,8 @@ impl Queue {
             // SAFETY: value is readable for eight bytes, the worker shares the
             // live owned descriptor, and write retains no pointer. Callback
             // effects are published before readiness becomes observable.
-            let _ = unsafe { write(inner.descriptor, (&value as *const u64).cast(), 8) };
-            state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let _ = unsafe { write(inner.descriptor, (&raw const value).cast(), 8) };
+            state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             inner.changed.notify_all();
         }
     }
@@ -217,12 +217,12 @@ impl Queue {
 impl Drop for Queue {
     fn drop(&mut self) {
         {
-            let mut state = self.inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stopped = true;
             self.inner.changed.notify_all();
             self.inner.scheduled.notify_all();
         }
-        if let Some(worker) = self.worker.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some(worker) = self.worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
             let _ = worker.join();
         }
         // SAFETY: the worker has joined and self surrenders its owned descriptor once.
@@ -267,20 +267,20 @@ mod test {
                 0,
                 Arc::new(move || {
                     let (state, changed) = &*callback_gate;
-                    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+                    let mut state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     state.entered = true;
                     changed.notify_all();
                     while !state.released {
-                        state = changed.wait(state).unwrap_or_else(|error| error.into_inner());
+                        state = changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
                     }
                 }),
             )
             .unwrap();
 
         let (state, changed) = &*gate;
-        let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !state.entered {
-            state = changed.wait(state).unwrap_or_else(|error| error.into_inner());
+            state = changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         let mut descriptor = libc::pollfd {
             fd: queue.descriptor(),
@@ -288,12 +288,12 @@ mod test {
             revents: 0,
         };
         // SAFETY: descriptor points to one initialized pollfd for the call duration.
-        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 0) }, 0);
+        assert_eq!(unsafe { libc::poll(&raw mut descriptor, 1, 0) }, 0);
         state.released = true;
         changed.notify_all();
         drop(state);
         // SAFETY: descriptor points to one initialized pollfd for the call duration.
-        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 1_000) }, 1);
+        assert_eq!(unsafe { libc::poll(&raw mut descriptor, 1, 1_000) }, 1);
     }
 
     #[test]

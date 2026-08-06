@@ -224,11 +224,7 @@ pub(super) fn prepare(
             pin_entry(host, base(1)?, to, !*exchange)?,
             if *exchange {
                 2
-            } else if *no_replace {
-                1
-            } else {
-                0
-            },
+            } else { u32::from(*no_replace) },
         ),
         hl_linux::FsMutationPlan::Link { from, to, follow } => {
             let source_base = base(0)?;

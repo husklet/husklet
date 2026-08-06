@@ -232,7 +232,7 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
         coordinator: Arc<AdvisoryLockCoordinator>,
         owner: FlockOwnerToken,
     ) -> Result<(), LockError> {
-        let mut binding = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let mut binding = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(existing) = binding.as_ref() {
             return if existing.owner == owner && Arc::ptr_eq(&existing.coordinator, &coordinator) {
                 Ok(())
@@ -250,7 +250,7 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
         blocking: bool,
         cancellation: &LockCancellation,
     ) -> Result<(), LockError> {
-        let binding = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let binding = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let binding = binding.as_ref().ok_or(LockError::InvalidArgument)?;
         binding
             .coordinator
@@ -492,7 +492,7 @@ impl<H: VfsFileHost> OpenFileDescription for VfsFileDescription<H> {
 
 impl<H: VfsFileHost> VfsFileDescription<H> {
     fn release_flock(&self) {
-        let binding = self.locks.lock().unwrap_or_else(|error| error.into_inner());
+        let binding = self.locks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(binding) = binding.as_ref() else {
             return;
         };

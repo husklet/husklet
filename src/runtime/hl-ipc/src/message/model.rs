@@ -73,7 +73,7 @@ pub struct QueueMetadata {
     pub mode: u16,
     /// Maximum payload bytes retained by this queue.
     ///
-    /// This is the domain representation of SysV `msg_qbytes`; guest ABI
+    /// This is the domain representation of `SysV` `msg_qbytes`; guest ABI
     /// layouts remain outside `hl-ipc`.
     pub maximum_bytes: usize,
     pub bytes: usize,

@@ -233,6 +233,7 @@ pub enum MemoryRegionLabel {
 }
 
 impl AddressSpaceView {
+    #[must_use]
     pub fn new(generation: u64, page_bytes: u64, regions: Vec<MemoryRegionView>) -> Option<Self> {
         if generation == 0 || !page_bytes.is_power_of_two() {
             return None;
@@ -444,6 +445,7 @@ impl SystemView {
 }
 
 impl CpuView {
+    #[must_use]
     pub fn new(online: usize, model: CpuModel) -> Option<Self> {
         if online == 0 || online > 64 {
             return None;
@@ -631,7 +633,7 @@ pub struct DescriptorView {
     pub target: Option<Vec<u8>>,
 }
 
-/// Linux-visible values for one AF_UNIX row in a coherent network snapshot.
+/// Linux-visible values for one `AF_UNIX` row in a coherent network snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnixSocketView {
     pub identity: u64,

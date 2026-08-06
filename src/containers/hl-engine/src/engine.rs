@@ -209,15 +209,12 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             }
         }
 
-        let workspace = match self.material.as_ref().map_or_else(
+        let workspace = if let Ok(workspace) = self.material.as_ref().map_or_else(
             || self.shared.workspaces.prepare(),
             |material| self.shared.workspaces.prepare_material(material),
-        ) {
-            Ok(workspace) => workspace,
-            Err(_) => {
-                self.fail_start(EngineError::WorkspaceFailed)?;
-                return Err(EngineError::WorkspaceFailed);
-            }
+        ) { workspace } else {
+            self.fail_start(EngineError::WorkspaceFailed)?;
+            return Err(EngineError::WorkspaceFailed);
         };
         {
             let mut lifecycle = self.lock()?;
@@ -351,11 +348,10 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
         if matches!(
             phase,
             EnginePhase::Running | EnginePhase::Starting | EnginePhase::Created
-        ) {
-            if let Err(error) = self.terminate(StopRequest::Force) {
+        )
+            && let Err(error) = self.terminate(StopRequest::Force) {
                 failure = Some(error);
             }
-        }
         let exit = if matches!(self.phase()?, EnginePhase::Running | EnginePhase::Stopping) {
             match self.wait() {
                 Ok(exit) => Some(exit),
@@ -373,11 +369,10 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             self.shared.changed.notify_all();
             lifecycle.workspace.take()
         };
-        if let Some(workspace) = workspace {
-            if self.shared.workspaces.cleanup(workspace).is_err() {
+        if let Some(workspace) = workspace
+            && self.shared.workspaces.cleanup(workspace).is_err() {
                 failure.get_or_insert(EngineError::WorkspaceFailed);
             }
-        }
         if let Some(error) = failure {
             return Err(error);
         }

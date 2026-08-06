@@ -330,7 +330,7 @@ definitions!(
     (32768, 34, "pause", TaskSignalTime)
 );
 
-/// x86-64 operations whose Linux ABI has no AArch64 syscall-number peer.
+/// x86-64 operations whose Linux ABI has no `AArch64` syscall-number peer.
 pub const X86_LEGACY_SYSCALLS: &[LegacyDefinition] = &[
     LegacyDefinition {
         raw_number: 132,

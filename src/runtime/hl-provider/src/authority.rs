@@ -13,6 +13,7 @@ pub struct ServerLimits {
 }
 
 impl ServerLimits {
+    #[must_use]
     pub const fn new(handles: usize, read_bytes: usize) -> Option<Self> {
         if handles == 0 || handles > u16::MAX as usize || read_bytes == 0 || read_bytes > 65_536 {
             None
@@ -161,7 +162,7 @@ impl<B: FileBackend> FileAuthority<B> {
     }
 
     const fn handle(index: usize, generation: u16) -> u64 {
-        ((generation as u64) << 32) | index as u64 + 1
+        ((generation as u64) << 32) | (index as u64 + 1)
     }
 
     fn decode(handle: u64) -> Result<(usize, u16), i32> {
@@ -193,6 +194,7 @@ impl FileWire {
     /// A read reply reserves one operation byte and one u32 length.
     pub const MAX_READ_DATA: usize = 4096 - 5;
 
+    #[must_use]
     pub fn open(service: u64, access: u8) -> Vec<u8> {
         let mut request = vec![OPEN];
         WireBytes::put_u64(&mut request, service);
@@ -229,12 +231,14 @@ impl FileWire {
         Ok(reply[5..].to_vec())
     }
 
+    #[must_use]
     pub fn close(handle: u64) -> Vec<u8> {
         let mut request = vec![CLOSE];
         WireBytes::put_u64(&mut request, handle);
         request
     }
 
+    #[must_use]
     pub fn info(handle: u64) -> Vec<u8> {
         let mut request = vec![INFO];
         WireBytes::put_u64(&mut request, handle);

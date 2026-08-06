@@ -31,8 +31,8 @@ impl<'a> InstructionParser<'a> {
             }
             if line.is_empty() && raw.trim_start().starts_with('#') {
                 let comment = raw.trim_start().trim_start_matches('#').trim();
-                if !self.started {
-                    if let Some(value) = comment.strip_prefix("escape=") {
+                if !self.started
+                    && let Some(value) = comment.strip_prefix("escape=") {
                         let mut characters = value.chars();
                         self.escape = match (characters.next(), characters.next()) {
                             (Some(value @ ('\\' | '`')), None) => value,
@@ -43,7 +43,6 @@ impl<'a> InstructionParser<'a> {
                             }
                         };
                     }
-                }
                 continue;
             }
             self.started = true;

@@ -21,6 +21,7 @@ static LOGGING: Logging = Logging {
 
 impl Logging {
     #[inline(always)]
+    #[must_use]
     pub fn global() -> &'static Self {
         &LOGGING
     }
@@ -66,6 +67,7 @@ static PROFILING: Profiling = Profiling {
 
 impl Profiling {
     #[inline(always)]
+    #[must_use]
     pub fn global() -> &'static Self {
         &PROFILING
     }

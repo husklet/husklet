@@ -251,13 +251,12 @@ impl PlanState {
     }
 
     fn validate_alignment(header: ProgramHeader) -> Result<(), InspectError> {
-        if header.alignment > 1 {
-            if !header.alignment.is_power_of_two()
-                || header.virtual_address % header.alignment != header.offset % header.alignment
+        if header.alignment > 1
+            && (!header.alignment.is_power_of_two()
+                || header.virtual_address % header.alignment != header.offset % header.alignment)
             {
                 return Err(InspectError::InvalidSegmentAlignment);
             }
-        }
         Ok(())
     }
 
@@ -305,7 +304,7 @@ impl PlanState {
         }
         self.segments.sort_by_key(LoadSegment::guest_address);
         self.validate_relro()?;
-        if entry % u64::from(architecture.instruction_alignment()) != 0 {
+        if !entry.is_multiple_of(u64::from(architecture.instruction_alignment())) {
             return Err(InspectError::MisalignedEntry);
         }
         if !self

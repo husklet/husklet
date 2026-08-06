@@ -296,7 +296,7 @@ impl NativePath {
         let path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(host));
         let resolved = path.canonicalize().map_err(HostError::map)?;
         let guest = self.guest_path(&resolved)?;
-        *self.executable.lock().unwrap_or_else(|error| error.into_inner()) = guest.as_str().as_bytes().to_vec();
+        *self.executable.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = guest.as_str().as_bytes().to_vec();
         Ok(())
     }
 
@@ -304,7 +304,7 @@ impl NativePath {
         if !guest.starts_with(b"/") || guest.contains(&0) || guest.len() > 4096 {
             return Err(RuntimePathError::Invalid);
         }
-        *self.executable.lock().unwrap_or_else(|error| error.into_inner()) = guest.to_vec();
+        *self.executable.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = guest.to_vec();
         Ok(())
     }
 
@@ -313,7 +313,7 @@ impl NativePath {
     }
 
     pub(super) fn set_auxiliary(&self, bytes: Vec<u8>) {
-        *self.auxiliary.lock().unwrap_or_else(|error| error.into_inner()) = bytes;
+        *self.auxiliary.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = bytes;
     }
 
     pub(super) fn terminal_bindings(&self) -> Arc<hl_runtime::TerminalBindings> {
@@ -400,7 +400,7 @@ impl NativePath {
         let filesystem = filesystem::HostFilesystem::synthetic(&guest);
         self.synthetic_paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 (metadata.device, metadata.inode),
                 SyntheticProvenance { guest, filesystem },
@@ -445,7 +445,7 @@ impl RuntimePathHost for NativePath {
         if let Some(path) = self
             .synthetic_paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
             .map(|provenance| provenance.guest.clone())
         {
@@ -459,7 +459,7 @@ impl RuntimePathHost for NativePath {
         let opened = self
             .paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&key)
             .cloned()
             .ok_or(RuntimePathError::NotFound)?;
@@ -505,13 +505,13 @@ impl RuntimePathHost for NativePath {
         let filesystem = self
             .paths
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&identity)
             .map(|opened| opened.filesystem)
             .or_else(|| {
                 self.synthetic_paths
                     .lock()
-                    .unwrap_or_else(|error| error.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get(&identity)
                     .map(|provenance| provenance.filesystem)
             });
@@ -559,9 +559,8 @@ impl RuntimePathHost for NativePath {
                     return projected::Node::resolve(context, base, &target, &self.projected);
                 }
                 return self.resolve_node(base, &target);
-            } else {
-                return Ok(Box::new(node));
             }
+            return Ok(Box::new(node));
         }
         if !base.confines_root() && operand.path.as_bytes() == b"/proc/self/exe" {
             return self.resolve_node(base, operand);
@@ -722,8 +721,8 @@ impl RuntimePathHost for NativePath {
             let status = unsafe { status.assume_init() };
             if status.st_mode & libc::S_IFMT == libc::S_IFIFO {
                 let key = hl_ipc::NamedFifoKey {
-                    device: status.st_dev as u64,
-                    inode: status.st_ino as u64,
+                    device: status.st_dev,
+                    inode: status.st_ino,
                 };
                 return self.fifos.prepare(key, plan);
             }

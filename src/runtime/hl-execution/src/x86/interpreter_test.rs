@@ -2684,7 +2684,7 @@ fn movbe_semantics() {
             ExecutionExit::Continue
         );
         let register = match width {
-            ScalarWidth::Word => (u64::MAX & !0xffff) | expected,
+            ScalarWidth::Word => !0xffff | expected,
             ScalarWidth::Dword | ScalarWidth::Qword => expected,
             ScalarWidth::Byte => unreachable!(),
         };
@@ -5605,7 +5605,7 @@ fn x87_float_addresses() {
         for group in 0..8_u8 {
             let decoded = X86ScalarDecoder::decode(&[opcode, group << 3], 0);
             let valid = matches!(group, 0 | 2 | 3)
-                || opcode == 0xd9 && matches!(group, 4 | 5 | 6 | 7)
+                || opcode == 0xd9 && matches!(group, 4..=7)
                 || opcode == 0xdd && matches!(group, 1 | 4 | 6 | 7);
             assert_eq!(decoded.is_ok(), valid, "opcode={opcode:x} group={group}");
             let register = X86ScalarDecoder::decode(&[opcode, 0xc0 | group << 3], 0);
@@ -9338,7 +9338,7 @@ fn single_nan_rounding() {
 
 #[test]
 fn scalar_single_conversions() {
-    let upper = u128::from(0xfeed_face_cafe_beef_dead_beef_u128) << 32;
+    let upper = 0xfeed_face_cafe_beef_dead_beef_u128 << 32;
     let mut cpu = CpuState {
         rip: 0x47800,
         ..Default::default()
@@ -12702,7 +12702,7 @@ fn vex_full_lane_permutation_family() {
     assert_eq!(cpu.vector_upper[2], u128::from(0x22_u64) | (u128::from(0x44_u64) << 64));
 
     cpu.rip = 0x7790;
-    cpu.vectors[2] = 2 | (0_u128 << 32) | (7_u128 << 64) | (4_u128 << 96);
+    cpu.vectors[2] = 2 | (7_u128 << 64) | (4_u128 << 96);
     cpu.vector_upper[2] = 1 | (6_u128 << 32) | (3_u128 << 64) | (5_u128 << 96);
     cpu.vectors[3] = 10 | (20_u128 << 32) | (30_u128 << 64) | (40_u128 << 96);
     cpu.vector_upper[3] = 50 | (60_u128 << 32) | (70_u128 << 64) | (80_u128 << 96);
@@ -13305,13 +13305,13 @@ impl GuestOperandMemory for GatherMemory {
     fn reserve_write(&self, _: u64, _: u8) -> Result<(), ()> {
         Err(())
     }
-    fn commit_write(&mut self, _: (), _: u64) -> Result<(), ()> {
+    fn commit_write(&mut self, (): (), _: u64) -> Result<(), ()> {
         Err(())
     }
     fn reserve_write_batch(&self, _: &[(u64, u8)]) -> Result<(), u64> {
         Err(0)
     }
-    fn commit_write_batch(&mut self, _: (), _: &[u64]) -> Result<(), ()> {
+    fn commit_write_batch(&mut self, (): (), _: &[u64]) -> Result<(), ()> {
         Err(())
     }
 }

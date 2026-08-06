@@ -15,6 +15,7 @@ impl IntegerWidth {
             Self::Qword => 64,
         }
     }
+    #[must_use]
     pub const fn mask(self) -> u64 {
         if self.bits() == 64 {
             u64::MAX
@@ -48,19 +49,24 @@ impl Flag {
 pub struct FlagState(u16);
 
 impl FlagState {
+    #[must_use]
     pub const fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
+    #[must_use]
     pub const fn contains(self, flag: Flag) -> bool {
         self.0 & flag.mask() != 0
     }
+    #[must_use]
     pub const fn bits(self) -> u16 {
         self.0
     }
+    #[must_use]
     pub const fn with(self, flag: Flag, value: bool) -> Self {
         let mask = flag.mask();
         Self((self.0 & !mask) | if value { mask } else { 0 })
     }
+    #[must_use]
     pub const fn apply(self, update: FlagUpdate) -> Self {
         Self((self.0 & !update.defined) | (update.values & update.defined))
     }
@@ -74,18 +80,23 @@ pub struct FlagUpdate {
 }
 
 impl FlagUpdate {
+    #[must_use]
     pub const fn values(self) -> u16 {
         self.values
     }
+    #[must_use]
     pub const fn defined(self) -> u16 {
         self.defined
     }
+    #[must_use]
     pub const fn undefined(self) -> u16 {
         self.undefined
     }
+    #[must_use]
     pub const fn preserved(self, flag: Flag) -> bool {
         (self.defined | self.undefined) & flag.mask() == 0
     }
+    #[must_use]
     pub const fn overflow_and_carry(value: bool) -> Self {
         let mask = Flag::Carry.mask() | Flag::Overflow.mask();
         Self {
@@ -95,6 +106,7 @@ impl FlagUpdate {
         }
     }
 
+    #[must_use]
     pub fn truncated_multiply(width: IntegerWidth, result: u64, overflow: bool) -> Self {
         let result = width.truncate(result);
         let mut values = Arithmetic::common(width, result);
@@ -118,10 +130,12 @@ pub struct Arithmetic {
 }
 
 impl Arithmetic {
+    #[must_use]
     pub fn shift_left_double(width: IntegerWidth, value: u64, fill: u64, count: u8) -> Self {
         Self::double_shift(width, value, fill, count, false)
     }
 
+    #[must_use]
     pub fn shift_right_double(width: IntegerWidth, value: u64, fill: u64, count: u8) -> Self {
         Self::double_shift(width, value, fill, count, true)
     }
@@ -169,6 +183,7 @@ impl Arithmetic {
         }
     }
 
+    #[must_use]
     pub fn retained_sub_nzcv(width: IntegerWidth, left: u64, right: u64) -> u64 {
         let operation = Self::sub(width, left, right, false);
         let negative = operation.flags.values & Flag::Sign.mask() != 0;
@@ -181,6 +196,7 @@ impl Arithmetic {
             | (u64::from(overflow) << 28)
     }
 
+    #[must_use]
     pub fn add(width: IntegerWidth, left: u64, right: u64, carry: bool) -> Self {
         let mask = width.mask();
         let a = left & mask;
@@ -192,6 +208,7 @@ impl Arithmetic {
         Self::full(width, result, carry, overflow, (a ^ b ^ result) & 0x10 != 0)
     }
 
+    #[must_use]
     pub fn sub(width: IntegerWidth, left: u64, right: u64, borrow: bool) -> Self {
         let mask = width.mask();
         let a = left & mask;
@@ -203,6 +220,7 @@ impl Arithmetic {
         Self::full(width, result, carry, overflow, (a ^ b ^ result) & 0x10 != 0)
     }
 
+    #[must_use]
     pub fn logic(width: IntegerWidth, result: u64) -> Self {
         let result = width.truncate(result);
         let defined = Flag::Carry.mask()
@@ -222,12 +240,14 @@ impl Arithmetic {
         }
     }
 
+    #[must_use]
     pub fn increment(width: IntegerWidth, value: u64) -> Self {
         let mut operation = Self::add(width, value, 1, false);
         operation.flags.defined &= !Flag::Carry.mask();
         operation
     }
 
+    #[must_use]
     pub fn decrement(width: IntegerWidth, value: u64) -> Self {
         let mut operation = Self::sub(width, value, 1, false);
         operation.flags.defined &= !Flag::Carry.mask();
@@ -256,7 +276,7 @@ impl Arithmetic {
     }
 
     fn common(width: IntegerWidth, result: u64) -> u16 {
-        let parity = (result as u8).count_ones() % 2 == 0;
+        let parity = (result as u8).count_ones().is_multiple_of(2);
         (if parity { Flag::Parity.mask() } else { 0 })
             | (if result == 0 { Flag::Zero.mask() } else { 0 })
             | (if result >> (width.bits() - 1) & 1 != 0 {
@@ -266,30 +286,37 @@ impl Arithmetic {
             })
     }
 
+    #[must_use]
     pub fn shift_left(width: IntegerWidth, value: u64, count: u8) -> Self {
         Self::shift(width, value, count, Shift::Left)
     }
 
+    #[must_use]
     pub fn shift_right(width: IntegerWidth, value: u64, count: u8) -> Self {
         Self::shift(width, value, count, Shift::Right)
     }
 
+    #[must_use]
     pub fn shift_arithmetic_right(width: IntegerWidth, value: u64, count: u8) -> Self {
         Self::shift(width, value, count, Shift::ArithmeticRight)
     }
 
+    #[must_use]
     pub fn rotate_left(width: IntegerWidth, value: u64, count: u8) -> Self {
         Self::rotate(width, value, count, false)
     }
 
+    #[must_use]
     pub fn rotate_right(width: IntegerWidth, value: u64, count: u8) -> Self {
         Self::rotate(width, value, count, true)
     }
 
+    #[must_use]
     pub fn rotate_carry_left(width: IntegerWidth, value: u64, count: u8, carry: bool) -> Self {
         Self::rotate_carry(width, value, count, carry, false)
     }
 
+    #[must_use]
     pub fn rotate_carry_right(width: IntegerWidth, value: u64, count: u8, carry: bool) -> Self {
         Self::rotate_carry(width, value, count, carry, true)
     }

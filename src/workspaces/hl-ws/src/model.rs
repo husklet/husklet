@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// Target architecture for a workspace's image. Maps to the engine's `Guest` / `--platform` (an x86_64
+/// Target architecture for a workspace's image. Maps to the engine's `Guest` / `--platform` (an `x86_64`
 /// image runs on an arm64 mac through the jit86 translator).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Arch {
@@ -20,6 +20,7 @@ pub enum Arch {
 
 impl Arch {
     /// The stable on-disk / config token.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Arch::Arm64 => "arm64",
@@ -27,6 +28,7 @@ impl Arch {
         }
     }
     /// Parse the config token (also accepts common aliases).
+    #[must_use]
     pub fn parse(s: &str) -> Option<Arch> {
         match s.trim() {
             "arm64" | "aarch64" | "linux/arm64" => Some(Arch::Arm64),
@@ -35,6 +37,7 @@ impl Arch {
         }
     }
     /// A proper, human-readable `os/arch` display label: `linux/aarch64`, `linux/x86_64`.
+    #[must_use]
     pub fn os_arch_label(self) -> &'static str {
         match self {
             Arch::Arm64 => "linux/aarch64",
@@ -42,6 +45,7 @@ impl Arch {
         }
     }
     /// The Docker `--platform` string the image resolver uses to pick which arch to pull.
+    #[must_use]
     pub fn platform(self) -> Option<&'static str> {
         match self {
             Arch::Arm64 => Some("linux/arm64"),
@@ -59,7 +63,7 @@ pub struct Mount {
 }
 
 /// A configured workspace: identity (name + image + arch) plus the isolated-environment config needed to
-/// RUN it. This is the bare run primitive; feature settings (vpn/cuda/gui/docker_sock/scrollback) live in
+/// RUN it. This is the bare run primitive; feature settings (`vpn/cuda/gui/docker_sock/scrollback`) live in
 /// `hl`-side config that wraps this type. All fields are plain data.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Workspace {
@@ -94,18 +98,21 @@ impl Workspace {
         }
     }
     /// The on-disk directory holding this workspace's persistent state (honors a configured `storage`).
+    #[must_use]
     pub fn storage_dir(&self, base: &Path) -> PathBuf {
         self.storage
             .clone()
             .unwrap_or_else(|| base.join("workspaces").join(Self::storage_component(&self.name)))
     }
     /// The default shell command to run in the workspace.
+    #[must_use]
     pub fn default_shell() -> Vec<String> {
         vec!["/bin/bash".to_string(), "-l".to_string()]
     }
 
     /// Encode a workspace name as one safe path component.
     /// Reversible, traversal-safe filesystem component for a workspace identity.
+    #[must_use]
     pub fn storage_component(name: &str) -> String {
         if name.is_empty() {
             return "%00".to_owned();

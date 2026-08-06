@@ -71,7 +71,7 @@ fn package_findings(
 #[test]
 fn reports_bearing_model() {
     let found = findings(
-        r#"
+        r"
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct WireImage {
     pub id: u64,
@@ -98,7 +98,7 @@ impl From<Image> for WireImage {
         }
     }
 }
-"#,
+",
     );
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].severity, crate::Severity::Warning);
@@ -133,7 +133,7 @@ impl Node {
 #[test]
 fn ignores_abi_layouts() {
     let found = findings(
-        r#"
+        r"
 #[derive(serde::Serialize)]
 pub struct ImageResponse {
     pub id: u64,
@@ -155,7 +155,7 @@ pub struct Image {
 impl Image {
     pub fn validate(&self) -> bool { !self.name.is_empty() }
 }
-"#,
+",
     );
     assert!(found.is_empty());
 }
@@ -163,7 +163,7 @@ impl Image {
 #[test]
 fn ignores_concept_evidence() {
     let found = findings(
-        r#"
+        r"
 #[derive(serde::Serialize)]
 pub struct WireNetwork {
     pub id: u64,
@@ -178,7 +178,7 @@ pub struct Volume {
 impl Volume {
     pub fn mount(&self) {}
 }
-"#,
+",
     );
     assert!(found.is_empty());
 }
@@ -186,7 +186,7 @@ impl Volume {
 #[test]
 fn ignores_composes_base() {
     let found = findings(
-        r#"
+        r"
 #[derive(serde::Serialize)]
 pub struct WireImage {
     pub image: Image,
@@ -201,7 +201,7 @@ pub struct Image {
 impl Image {
     pub fn validate(&self) -> bool { !self.name.is_empty() }
 }
-"#,
+",
     );
     assert!(found.is_empty());
 }
@@ -209,7 +209,7 @@ impl Image {
 #[test]
 fn ignores_overlap_shapes() {
     let found = findings(
-        r#"
+        r"
 #[derive(serde::Serialize)]
 pub struct WireImage {
     pub id: u64,
@@ -229,14 +229,14 @@ pub struct Image {
 impl Image {
     pub fn validate(&self) -> bool { !self.name.is_empty() }
 }
-"#,
+",
     );
     assert!(found.is_empty());
 }
 
 #[test]
 fn reports_dependency_edge() {
-    let owner = r#"
+    let owner = r"
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ApiImage {
     pub id: u64,
@@ -244,8 +244,8 @@ pub struct ApiImage {
     pub rootfs: String,
     pub arch: String,
 }
-"#;
-    let client = r#"
+";
+    let client = r"
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct WireImage {
     pub id: u64,
@@ -253,7 +253,7 @@ pub struct WireImage {
     pub rootfs: String,
     pub arch: String,
 }
-"#;
+";
     let found = package_findings(
         "containers",
         ("api-owner", owner),
@@ -266,14 +266,14 @@ pub struct WireImage {
 
 #[test]
 fn ignores_packages_domains() {
-    let model = r#"
+    let model = r"
 #[derive(serde::Serialize)]
 pub struct ApiImage {
     pub id: u64,
     pub name: String,
     pub rootfs: String,
 }
-"#;
+";
     let found = package_findings("containers", ("api-owner", model), "gpu", ("unrelated", model, None));
     assert!(found.is_empty());
 }

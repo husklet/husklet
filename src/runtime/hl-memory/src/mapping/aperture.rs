@@ -63,7 +63,7 @@ pub struct ApertureLease<'a, H: MemoryAccessHost> {
 impl<H: MemoryAccessHost> Coordinator<H> {
     pub fn project_aperture(&self, incarnation: u64) -> Result<Option<ApertureLease<'_, H>>, MemoryError> {
         let admission = self.activity.admit_memory()?;
-        let transaction = self.transaction.lock().unwrap_or_else(|error| error.into_inner());
+        let transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mapping_requests = self.mapping_requests.load(std::sync::atomic::Ordering::Acquire);
         let Some(aperture) = self.host.host.project_aperture()? else {
             return Ok(None);

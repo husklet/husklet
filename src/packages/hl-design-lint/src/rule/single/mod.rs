@@ -103,7 +103,7 @@ impl<'ast> Visit<'ast> for Definitions<'_> {
                 location: self.source.location(span),
             });
         }
-        syn::visit::visit_item_fn(self, function)
+        syn::visit::visit_item_fn(self, function);
     }
 
     fn visit_item_mod(&mut self, module: &'ast ItemMod) {

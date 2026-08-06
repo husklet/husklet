@@ -76,7 +76,7 @@ impl GuestOperandMemory for Memory {
 
     fn reserve_write_batch(&self, writes: &[(u64, u8)]) -> Result<Self::BatchReservation, u64> {
         for (address, bytes) in writes {
-            self.reserve_write(*address, *bytes).map_err(|_| *address)?;
+            self.reserve_write(*address, *bytes).map_err(|()| *address)?;
         }
         Ok(writes.to_vec())
     }

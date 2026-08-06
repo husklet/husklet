@@ -3,22 +3,27 @@ use core::cmp::Ordering;
 use crate::{Class, Comparison, Environment, ExceptionFlags, Result, Value};
 
 impl Environment {
+    #[must_use]
     pub fn minimum(self, left: Value, right: Value) -> Result<Value> {
         self.select(left, right, false, false)
     }
 
+    #[must_use]
     pub fn maximum(self, left: Value, right: Value) -> Result<Value> {
         self.select(left, right, true, false)
     }
 
+    #[must_use]
     pub fn minimum_number(self, left: Value, right: Value) -> Result<Value> {
         self.select(left, right, false, true)
     }
 
+    #[must_use]
     pub fn maximum_number(self, left: Value, right: Value) -> Result<Value> {
         self.select(left, right, true, true)
     }
 
+    #[must_use]
     pub fn compare(self, left: Value, right: Value, signal_quiet_nan: bool) -> Result<Comparison> {
         assert_eq!(left.format(), right.format());
         let left_value = left;
@@ -49,25 +54,26 @@ impl Environment {
         Result { value, flags }
     }
 
+    #[must_use]
     pub fn total_order(self, left: Value, right: Value) -> Ordering {
         assert_eq!(left.format(), right.format());
         left.order_key().cmp(&right.order_key())
     }
 
+    #[must_use]
     pub fn round_to_integral(self, operand: Value, exact: bool) -> Result<Value> {
         let format = operand.format();
         let (operand, mut flags) = self.unpack(operand);
         if operand.class >= Class::QuietNaN {
             return self.nan_result(format, &[operand], flags);
         }
-        if matches!(operand.class, Class::Infinity | Class::Zero) || operand.exponent >= 0 {
-            if operand.exponent >= i32::from(format.fraction_bits()) {
+        if (matches!(operand.class, Class::Infinity | Class::Zero) || operand.exponent >= 0)
+            && operand.exponent >= i32::from(format.fraction_bits()) {
                 return Result {
                     value: self.pack_exact(format, operand),
                     flags,
                 };
             }
-        }
         let shift = i32::from(format.fraction_bits()) - operand.exponent;
         if shift <= 0 {
             return Result {

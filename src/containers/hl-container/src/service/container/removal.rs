@@ -12,11 +12,10 @@ impl Service {
         if force {
             let container = self.resolve(reference).await?;
             if container.state.is_active() {
-                if let Err(error) = self.stop_signal(reference, Signal::Kill).await {
-                    if !matches!(&error, Error::InvalidState { .. }) {
+                if let Err(error) = self.stop_signal(reference, Signal::Kill).await
+                    && !matches!(&error, Error::InvalidState { .. }) {
                         return Err(error);
                     }
-                }
                 self.wait(reference, WaitCondition::NotRunning).await?;
             }
             self.stop_and_wait_executions(&container.id).await?;

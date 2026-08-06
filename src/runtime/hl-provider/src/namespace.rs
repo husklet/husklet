@@ -22,10 +22,12 @@ pub struct TransferCapability {
 }
 
 impl TransferCapability {
+    #[must_use]
     pub fn remote(&self) -> RemoteId {
         self.remote
     }
 
+    #[must_use]
     pub fn kind(&self) -> HandleKind {
         self.kind
     }
@@ -47,10 +49,12 @@ pub struct Close {
 }
 
 impl Close {
+    #[must_use]
     pub fn remote(&self) -> RemoteId {
         self.remote
     }
 
+    #[must_use]
     pub fn kind(&self) -> HandleKind {
         self.kind
     }
@@ -86,13 +90,13 @@ impl RemoteLease {
     }
 
     fn acquire(&self) -> Result<(), NamespaceError> {
-        let mut owners = self.owners.lock().unwrap_or_else(|error| error.into_inner());
+        let mut owners = self.owners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *owners = owners.checked_add(1).ok_or(NamespaceError::ReferenceLimit)?;
         Ok(())
     }
 
     fn release(&self) -> Option<Close> {
-        let mut owners = self.owners.lock().unwrap_or_else(|error| error.into_inner());
+        let mut owners = self.owners.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *owners -= 1;
         (*owners == 0).then_some(Close {
             remote: self.remote,
@@ -101,7 +105,7 @@ impl RemoteLease {
     }
 
     fn is_sole(&self) -> bool {
-        *self.owners.lock().unwrap_or_else(|error| error.into_inner()) == 1
+        *self.owners.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == 1
     }
 }
 
@@ -420,11 +424,11 @@ impl HandleNamespace {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn release_all(self) {
-        let state = self.state.into_inner().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut slots = state.slots;
         Self::release_slots(&mut slots);
     }

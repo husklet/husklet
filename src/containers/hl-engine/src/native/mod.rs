@@ -251,7 +251,7 @@ pub struct OwnedMapping<S: HostSyscalls> {
 impl<S: HostSyscalls> OwnedMapping<S> {
     pub fn allocate(syscalls: Arc<S>, size: usize, protection: Protection) -> Result<Self, HostError> {
         let page = syscalls.page_size()?;
-        if size == 0 || !page.is_power_of_two() || size % page != 0 {
+        if size == 0 || !page.is_power_of_two() || !size.is_multiple_of(page) {
             return Err(HostError::Invalid);
         }
         let mapping = syscalls.map(size, protection)?;

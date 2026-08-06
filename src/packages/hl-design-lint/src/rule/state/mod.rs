@@ -319,11 +319,10 @@ impl<'ast> Visit<'ast> for Strings<'_> {
     }
 
     fn visit_expr_method_call(&mut self, item: &'ast ExprMethodCall) {
-        if item.args.len() == 1 {
-            if let Some(argument) = item.args.first() {
+        if item.args.len() == 1
+            && let Some(argument) = item.args.first() {
                 self.record_target(&item.method.to_string(), argument);
             }
-        }
         syn::visit::visit_expr_method_call(self, item);
     }
 }

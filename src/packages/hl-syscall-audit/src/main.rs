@@ -184,7 +184,7 @@ impl Audit {
             .into_iter()
             .filter(|status| *status != "not-applicable")
             .collect::<Vec<_>>();
-        if applicable.iter().any(|status| *status == "missing") {
+        if applicable.contains(&"missing") {
             "missing"
         } else if applicable.iter().all(|status| *status == "supported") {
             "supported"

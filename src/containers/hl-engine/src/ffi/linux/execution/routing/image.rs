@@ -165,7 +165,7 @@ impl WorkspaceRoot {
             return Some(root.clone());
         }
         let executable = plan.executable_host.as_deref()?;
-        executable.into_iter().rposition(|byte| *byte == b'/').map(|index| {
+        executable.iter().rposition(|byte| *byte == b'/').map(|index| {
             if index == 0 {
                 b"/".to_vec()
             } else {
@@ -466,12 +466,12 @@ impl ProcessContext {
         if let Some(coordinator) = self.exec_coordinator.get().and_then(Weak::upgrade) {
             candidate
                 .install_exec(&coordinator)
-                .map_err(|_| EngineError::LaunchFailed)?;
+                .map_err(|()| EngineError::LaunchFailed)?;
         }
         if let Some(registration) = self.exec_registration.get() {
             candidate
                 .install_registration(Arc::clone(registration))
-                .map_err(|_| EngineError::LaunchFailed)?;
+                .map_err(|()| EngineError::LaunchFailed)?;
         }
         Ok(candidate)
     }
@@ -489,12 +489,12 @@ impl ProcessContext {
         let clone_runtime = contexts.build();
         contexts
             .install(Arc::clone(&clone_runtime))
-            .map_err(|_| EngineError::LaunchFailed)?;
-        self.install_clone(&contexts).map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
+        self.install_clone(&contexts).map_err(|()| EngineError::LaunchFailed)?;
         let fork_runtime = super::super::fork::Runtime::new(Arc::clone(self), Arc::clone(threads));
         self.install_fork(&fork_runtime)
-            .map_err(|_| EngineError::LaunchFailed)?;
-        self.install_threads(threads).map_err(|_| EngineError::LaunchFailed)?;
+            .map_err(|()| EngineError::LaunchFailed)?;
+        self.install_threads(threads).map_err(|()| EngineError::LaunchFailed)?;
         let trap = hl_runtime::ThreadCloneTrap::new(clone_runtime, thread);
         Ok(Arc::new(self.router(thread, cancellation, Some(Box::new(trap)))))
     }

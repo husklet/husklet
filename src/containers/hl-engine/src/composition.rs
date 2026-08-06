@@ -30,6 +30,7 @@ pub enum CompositionError {
 }
 
 impl CompositionError {
+    #[must_use]
     pub const fn construction(cause: ConstructionError) -> Self {
         Self::Construction(cause)
     }
@@ -165,14 +166,11 @@ impl Terminal {
                     }
                 }
             });
-        let output = match output {
-            Ok(output) => output,
-            Err(_) => {
-                self.port.close();
-                master.close();
-                let _ = input.join();
-                return Err(CompositionError::RuntimeConstruction);
-            }
+        let output = if let Ok(output) = output { output } else {
+            self.port.close();
+            master.close();
+            let _ = input.join();
+            return Err(CompositionError::RuntimeConstruction);
         };
         *bridge = Some(TerminalBridge {
             master,

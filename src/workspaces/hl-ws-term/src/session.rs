@@ -13,9 +13,9 @@ use std::{collections::HashSet, io};
 /// Split orientation of a [`PaneNode::Split`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SplitDir {
-    /// Panes side by side (a horizontal GtkPaned).
+    /// Panes side by side (a horizontal `GtkPaned`).
     Horizontal,
-    /// Panes stacked (a vertical GtkPaned).
+    /// Panes stacked (a vertical `GtkPaned`).
     Vertical,
 }
 
@@ -52,10 +52,12 @@ pub struct Pane {
 }
 
 impl PaneNode {
+    #[must_use]
     pub fn leaf() -> PaneNode {
         PaneNode::Leaf(Pane::default())
     }
     /// Iterate the leaves left-to-right (pre-order), for assigning/reading history files.
+    #[must_use]
     pub fn leaves(&self) -> Vec<&Pane> {
         let mut out = Vec::new();
         self.collect(&mut out);
@@ -109,6 +111,7 @@ pub struct Session {
 
 impl Session {
     /// The session directory for a workspace storage dir.
+    #[must_use]
     pub fn dir(storage_dir: &Path) -> PathBuf {
         storage_dir.join("session")
     }
@@ -117,6 +120,7 @@ impl Session {
     }
 
     /// Serialize to the prefix-notation text format.
+    #[must_use]
     pub fn serialize(&self) -> String {
         let mut out = String::from("# hl session layout\nversion 1\n");
         for tab in &self.tabs {
@@ -373,10 +377,12 @@ impl<'a> Layout<'a> {
 pub struct History<'a>(&'a str);
 
 impl<'a> History<'a> {
+    #[must_use]
     pub fn new(text: &'a str) -> Self {
         Self(text)
     }
 
+    #[must_use]
     pub fn replay(&self) -> Vec<u8> {
         let trimmed = self.0.trim_end_matches(['\n', '\r', ' ', '\t']);
         if trimmed.is_empty() {
@@ -392,6 +398,7 @@ impl<'a> History<'a> {
 
     /// Clamp saved history to at most `max_lines` (keep the most recent), so a huge scrollback dump doesn't
     /// balloon the on-disk session or the replay.
+    #[must_use]
     pub fn clamp(&self, max_lines: usize) -> String {
         let lines: Vec<&str> = self.0.trim_end_matches('\n').split('\n').collect();
         if lines.len() <= max_lines {
@@ -407,6 +414,7 @@ impl<'a> History<'a> {
 pub struct WorkingDirectory(String);
 
 impl WorkingDirectory {
+    #[must_use]
     pub fn from_osc7(uri: &str) -> Option<Self> {
         let rest = uri.strip_prefix("file://")?;
         // Strip the authority (hostname) up to the first '/'.
@@ -422,6 +430,7 @@ impl WorkingDirectory {
         }
     }
 
+    #[must_use]
     pub fn into_string(self) -> String {
         self.0
     }

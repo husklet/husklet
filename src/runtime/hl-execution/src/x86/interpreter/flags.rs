@@ -80,7 +80,7 @@ impl ScalarInterpreter {
     pub(super) fn control(mut staged: CpuState, cpu: &CpuState, operation: ControlFlag) -> CpuState {
         match operation {
             ControlFlag::ComplementCarry => {
-                staged.flags = staged.flags.with(Flag::Carry, !cpu.flags.contains(Flag::Carry))
+                staged.flags = staged.flags.with(Flag::Carry, !cpu.flags.contains(Flag::Carry));
             }
             ControlFlag::ClearCarry => staged.flags = staged.flags.with(Flag::Carry, false),
             ControlFlag::SetCarry => staged.flags = staged.flags.with(Flag::Carry, true),

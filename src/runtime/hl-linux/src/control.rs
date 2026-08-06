@@ -94,7 +94,7 @@ impl<M: crate::GuestMemory + ?Sized> crate::ProcessAbi<'_, M> {
     fn set_name(&self, address: u64) -> Result<PrctlPlan, crate::ProcessMarshalError> {
         let mut name = [0; 16];
         for index in 0..15 {
-            let target = &mut name[index..index + 1];
+            let target = &mut name[index..=index];
             if self
                 .marshaller
                 .copy_from(address + index as u64, target)

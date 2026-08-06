@@ -67,7 +67,7 @@ impl DynamicLoaderHandoff {
         tls.modules()
             .iter()
             .find(|module| module.role() == role)
-            .map(|module| module.module_id())
+            .map(super::tls::TlsModulePlacement::module_id)
     }
 
     #[must_use]

@@ -441,10 +441,10 @@ fn platforms(values: Vec<Platform>, default_all: bool, id: &str) -> Result<Vec<T
 
 fn unique<T: Ord + Copy>(values: Vec<T>, id: &str, noun: &str) -> Result<Vec<T>, Error> {
     let set = values.iter().copied().collect::<BTreeSet<_>>();
-    if set.len() != values.len() {
-        Err(format!("{id} repeats a {noun}").into())
-    } else {
+    if set.len() == values.len() {
         Ok(values)
+    } else {
+        Err(format!("{id} repeats a {noun}").into())
     }
 }
 

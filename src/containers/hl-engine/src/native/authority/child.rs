@@ -44,14 +44,14 @@ impl Child {
         writable: bool,
     ) -> Result<(), EngineError> {
         let mut session =
-            crate::ffi::linux::InheritedStream::adopt(session).map_err(|_| EngineError::AuthorityFailed)?;
+            crate::ffi::linux::InheritedStream::adopt(session).map_err(|()| EngineError::AuthorityFailed)?;
         let mut bootstrap =
-            crate::ffi::linux::InheritedStream::adopt(bootstrap).map_err(|_| EngineError::AuthorityFailed)?;
+            crate::ffi::linux::InheritedStream::adopt(bootstrap).map_err(|()| EngineError::AuthorityFailed)?;
         let secret = Secret::receive(&mut bootstrap).map_err(|_| EngineError::AuthorityFailed)?;
         drop(bootstrap);
-        let _health = crate::ffi::linux::InheritedStream::adopt(health).map_err(|_| EngineError::AuthorityFailed)?;
+        let _health = crate::ffi::linux::InheritedStream::adopt(health).map_err(|()| EngineError::AuthorityFailed)?;
         let transfer =
-            crate::ffi::linux::InheritedDatagram::adopt(transfer).map_err(|_| EngineError::AuthorityFailed)?;
+            crate::ffi::linux::InheritedDatagram::adopt(transfer).map_err(|()| EngineError::AuthorityFailed)?;
         let backend = ProjectedBackend::new(file, root)?;
         let tree = backend.tree(writable).ok();
         let mut authenticated =

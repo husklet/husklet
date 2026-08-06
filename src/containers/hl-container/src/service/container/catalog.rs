@@ -98,8 +98,8 @@ impl Service {
                 .await?;
         }
         if let Err(error) = self.containers.replace(&container).await {
-            if let Some(old) = old.as_deref() {
-                if let Err(rollback) = self
+            if let Some(old) = old.as_deref()
+                && let Err(rollback) = self
                     .networks
                     .rename_generated_endpoint(&container.id, container.spec.name.as_deref().expect("assigned"), old)
                     .await
@@ -108,7 +108,6 @@ impl Service {
                         "rename failed ({error}); network-name rollback also failed ({rollback})"
                     )));
                 }
-            }
             return Err(error);
         }
         Ok(container)

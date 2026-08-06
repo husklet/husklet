@@ -309,12 +309,12 @@ impl VectorTerminal for VectorAdapter {
             })
         };
         let mappings = projection.lease.mappings();
-        let result = match request.direction {
+
+        match request.direction {
             VectorDirection::Read => mappings.write_vectors(&projection.spans, operation),
             VectorDirection::Write => mappings.read_vectors(&projection.spans, operation),
         }
-        .map_err(|_| VectorError::Fault)?;
-        result
+        .map_err(|_| VectorError::Fault)?
     }
 }
 

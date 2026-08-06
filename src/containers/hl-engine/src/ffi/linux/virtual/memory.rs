@@ -81,7 +81,7 @@ impl Memory {
         // SAFETY: sysconf receives no pointer, retains no state, and cannot unwind.
         let page = unsafe { abi::sysconf(abi::_SC_PAGESIZE) };
         let page = usize::try_from(page).map_err(|_| MemoryError::Host)?;
-        if length == 0 || !page.is_power_of_two() || length % page != 0 {
+        if length == 0 || !page.is_power_of_two() || !length.is_multiple_of(page) {
             return Err(MemoryError::InvalidRange);
         }
         let reservation_length = length
@@ -477,9 +477,7 @@ impl Memory {
             let (coordinate, mapping_end) = state.mappings.reservation(address)?;
             let epochs = if coordinate.shared() {
                 self.shared
-                    .as_ref()
-                    .map(|store| store.reservation_epochs())
-                    .unwrap_or_else(|| Arc::clone(&self.reservations))
+                    .as_ref().map_or_else(|| Arc::clone(&self.reservations), |store| store.reservation_epochs())
             } else {
                 Arc::clone(&self.reservations)
             };

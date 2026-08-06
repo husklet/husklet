@@ -18,7 +18,7 @@ impl Sink for Collect {
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn turn() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|error| error.into_inner())
+    SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn collector() -> (Arc<Mutex<Vec<String>>>, Box<Collect>) {

@@ -28,7 +28,7 @@ impl VirtualClock {
 
 impl MonotonicClock for VirtualClock {
     fn monotonic_now(&self) -> Result<MonotonicInstant, ClockError> {
-        let mut value = self.monotonic.lock().unwrap_or_else(|error| error.into_inner());
+        let mut value = self.monotonic.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.host.record("clock", "monotonic", 0, 0, 0).map_err(Self::error)?;
         let current = *value;
         *value = value.saturating_add(1);
@@ -37,7 +37,7 @@ impl MonotonicClock for VirtualClock {
 
     fn sleep_until(&self, deadline: Deadline) -> Result<(), ClockError> {
         self.host.record("clock", "sleep", 0, 0, 0).map_err(Self::error)?;
-        let mut value = self.monotonic.lock().unwrap_or_else(|error| error.into_inner());
+        let mut value = self.monotonic.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *value = (*value).max(deadline.nanoseconds());
         Ok(())
     }
@@ -45,7 +45,7 @@ impl MonotonicClock for VirtualClock {
 
 impl RealtimeClock for VirtualClock {
     fn realtime_now(&self) -> Result<Timespec, ClockError> {
-        let mut value = self.realtime.lock().unwrap_or_else(|error| error.into_inner());
+        let mut value = self.realtime.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.host.record("clock", "realtime", 0, 0, 0).map_err(Self::error)?;
         let current = *value;
         *value = value.saturating_add(1);

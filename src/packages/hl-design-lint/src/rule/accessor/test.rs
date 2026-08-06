@@ -30,7 +30,7 @@ fn findings(source: &str) -> Vec<crate::Finding> {
 #[test]
 fn reports_public_fields() {
     let findings = findings(
-        r#"
+        r"
 pub struct Metadata {
     pub labels: Vec<String>,
     pub options: Vec<String>,
@@ -41,7 +41,7 @@ impl Metadata {
     pub fn options(&self) -> Vec<String> { self.options.clone() }
     pub fn set_labels(&mut self, labels: Vec<String>) { self.labels = labels; }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 3);
     assert!(
@@ -54,7 +54,7 @@ impl Metadata {
 #[test]
 fn reports_accessor_review() {
     let findings = findings(
-        r#"
+        r"
 pub struct Image {
     reference: String,
 }
@@ -63,7 +63,7 @@ impl Image {
     pub fn reference(&self) -> &String { &self.reference }
     pub fn image_reference(&self) -> &String { &self.reference }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].subject, "Image::image_reference");
@@ -73,7 +73,7 @@ impl Image {
 #[test]
 fn preserves_field_boundaries() {
     let findings = findings(
-        r#"
+        r"
 pub struct Account {
     balance: i64,
     tags: Vec<String>,
@@ -88,7 +88,7 @@ impl Account {
     }
     pub fn debit(&mut self, amount: i64) { self.balance -= amount; }
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }
@@ -96,7 +96,7 @@ impl Account {
 #[test]
 fn documentation_public_access() {
     let findings = findings(
-        r#"
+        r"
 /// Plain data.
 pub struct Data {
     /// Public value.
@@ -107,7 +107,7 @@ impl Data {
     /// Returns the already-public value.
     pub fn value(&self) -> u32 { self.value }
 }
-"#,
+",
     );
     assert_eq!(findings.len(), 1);
 }
@@ -161,7 +161,7 @@ impl Model {
 #[test]
 fn ignores_ffi_models() {
     let findings = findings(
-        r#"
+        r"
 #[derive(serde::Serialize)]
 pub struct Wire { pub value: String }
 impl Wire {
@@ -173,7 +173,7 @@ pub struct Ffi { pub value: u32 }
 impl Ffi {
     pub fn value(&self) -> u32 { self.value }
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }
@@ -181,13 +181,13 @@ impl Ffi {
 #[test]
 fn compare_shapes_duplicates() {
     let findings = findings(
-        r#"
+        r"
 pub struct Data { values: Vec<String> }
 impl Data {
     pub fn values(&self) -> &Vec<String> { &self.values }
     pub fn values_owned(&self) -> Vec<String> { self.values.clone() }
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }
@@ -195,13 +195,13 @@ impl Data {
 #[test]
 fn compare_contracts_duplicates() {
     let findings = findings(
-        r#"
+        r"
 pub struct Data { value: String }
 impl Data {
     pub fn value(&self) -> &String { &self.value }
     pub fn value_str(&self) -> &str { &self.value }
 }
-"#,
+",
     );
     assert!(findings.is_empty());
 }

@@ -19,6 +19,7 @@ pub enum Level {
 impl Level {
     /// Single-character tag used in emitted lines: `E W I D T`.
     #[inline]
+    #[must_use]
     pub const fn short(self) -> char {
         match self {
             Level::Error => 'E',
@@ -31,6 +32,7 @@ impl Level {
 
     /// Lowercase name for configuration adapters.
     #[inline]
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Level::Error => "error",
@@ -43,6 +45,7 @@ impl Level {
 
     /// Parse a level from its lowercase name (case-insensitive). Returns `None`
     /// for unknown strings.
+    #[must_use]
     pub fn from_name(s: &str) -> Option<Level> {
         match s.trim().to_ascii_lowercase().as_str() {
             "error" | "err" | "1" => Some(Level::Error),
@@ -57,6 +60,7 @@ impl Level {
     /// Reconstruct a `Level` from its stored `u8`. Out-of-range values clamp to
     /// the nearest valid level (0 -> Error, >5 -> Trace).
     #[inline]
+    #[must_use]
     pub const fn from_u8(v: u8) -> Level {
         match v {
             0 | 1 => Level::Error,

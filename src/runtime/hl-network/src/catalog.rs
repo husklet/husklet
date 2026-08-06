@@ -104,7 +104,7 @@ pub struct InternetSocketView {
     pub peer: Option<crate::SocketAddress>,
 }
 
-/// A live AF_UNIX socket as observed while holding the catalog lock once.
+/// A live `AF_UNIX` socket as observed while holding the catalog lock once.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnixSocketView {
     pub id: SocketId,
@@ -149,7 +149,7 @@ impl NetworkCatalog {
         accepted: Vec<AcceptedSocketCheckpoint>,
     ) -> Result<SocketId, NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = Self::allocate(&mut slots)?;
         snapshot.id = id;
         if !crate::SocketNamespace::valid_checkpoint_snapshot(&snapshot) {
@@ -171,7 +171,7 @@ impl NetworkCatalog {
         pair: Arc<UnixSocketPair>,
     ) -> Result<[SocketId; 2], NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let [first, second] = Self::allocate_pair(&mut slots)?;
         endpoints[0].id = first;
         endpoints[1].id = second;
@@ -190,7 +190,7 @@ impl NetworkCatalog {
 
     pub fn insert_unix(&self, mut snapshot: SocketSnapshot) -> Result<SocketId, NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let id = Self::allocate(&mut slots)?;
         snapshot.id = id;
         if snapshot.family != crate::AddressFamily::Unix
@@ -274,7 +274,7 @@ impl NetworkCatalog {
 
     pub fn claim_port(&self, checkpoint: PortCheckpoint) -> Result<(), NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let owner = match Self::slot(&slots, checkpoint.owner)?.socket.as_deref() {
             Some(CatalogSocket::Host { snapshot, .. }) => snapshot,
             Some(CatalogSocket::UnixPair { endpoints, .. }) => endpoints
@@ -287,7 +287,7 @@ impl NetworkCatalog {
         if !Self::owns_port(owner, &checkpoint) {
             return Err(NetworkCatalogError::Invalid);
         }
-        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if ports.iter().any(|port| {
             let port = port.checkpoint();
             port.family == checkpoint.family && port.port == checkpoint.port
@@ -312,7 +312,7 @@ impl NetworkCatalog {
         if installed.id != port.owner || !crate::SocketNamespace::valid_checkpoint_snapshot(&installed) {
             return Err(NetworkCatalogError::Invalid);
         }
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut slots, port.owner)?;
         let Some(previous) = slot.socket.as_ref().filter(|socket| matches!(socket.as_ref(), CatalogSocket::Host { .. }))
         else {
@@ -322,7 +322,7 @@ impl NetworkCatalog {
             return Err(NetworkCatalogError::Invalid);
         }
         let previous = previous.clone();
-        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if ports.iter().any(|reserved| {
             let reserved = reserved.checkpoint();
             reserved.family == port.family && reserved.port == port.port
@@ -353,7 +353,7 @@ impl NetworkCatalog {
         if prepared.finalized {
             return Ok(());
         }
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut slots, prepared.port.owner)?;
         let Some(current) = slot.socket.as_ref() else {
             return Err(NetworkCatalogError::Stale);
@@ -370,7 +370,7 @@ impl NetworkCatalog {
             binding: binding.clone(),
             accepted: accepted.clone(),
         });
-        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(entry) = ports.iter_mut().find(|entry| matches!(
             entry,
             PortEntry::Prepared { checkpoint, generation }
@@ -389,8 +389,8 @@ impl NetworkCatalog {
         if prepared.finalized {
             return Ok(());
         }
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
-        let mut ports = self.ports.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(index) = ports.iter().position(|entry| matches!(
             entry,
             PortEntry::Prepared { checkpoint, generation }
@@ -419,7 +419,7 @@ impl NetworkCatalog {
 
     pub fn remove(&self, id: SocketId) -> Result<(), NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let object = Self::slot_mut(&mut slots, id)?
             .socket
             .take()
@@ -459,16 +459,16 @@ impl NetworkCatalog {
         self.advance_generation();
         self.ports
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|port| port.checkpoint().owner != id);
         Ok(())
     }
 
-    /// Captures every live AF_UNIX endpoint from a single catalog state.
+    /// Captures every live `AF_UNIX` endpoint from a single catalog state.
     #[must_use]
     pub fn namespace_view(&self) -> NetworkNamespaceView {
         let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut unix = Vec::new();
         let mut internet = Vec::new();
         for (index, slot) in slots.iter().enumerate() {
@@ -537,7 +537,7 @@ impl NetworkCatalog {
         if snapshot.id != id || !crate::SocketNamespace::valid_checkpoint_snapshot(&snapshot) {
             return Err(NetworkCatalogError::Invalid);
         }
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut slots, id)?;
         slot.socket = Some(match slot.socket.as_deref() {
             Some(CatalogSocket::Host {
@@ -580,7 +580,7 @@ impl NetworkCatalog {
         operation: impl FnOnce(&SocketSnapshot) -> R,
     ) -> Result<R, NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match Self::slot(&slots, id)?.socket.as_deref() {
             Some(CatalogSocket::Host { snapshot, binding, .. }) => {
                 let _binding_lifetime = binding;
@@ -598,7 +598,7 @@ impl NetworkCatalog {
 
     pub fn unix_datagram(&self, id: SocketId) -> Result<Arc<crate::UnixDatagramSocket>, NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match Self::slot(&slots, id)?.socket.as_deref() {
             Some(CatalogSocket::Unix {
                 datagram: Some(socket), ..

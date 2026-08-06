@@ -12,7 +12,7 @@ use super::queue::{
 impl UnixMessageQueue {
     #[must_use]
     pub fn snapshot(&self) -> QueueSnapshot {
-        let messages = self.messages.lock().unwrap_or_else(|error| error.into_inner());
+        let messages = self.messages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         QueueSnapshot {
             messages: messages.iter().map(Self::snapshot_message).collect(),
         }

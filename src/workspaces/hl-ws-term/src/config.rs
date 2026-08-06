@@ -16,6 +16,7 @@ pub enum CursorShape {
 }
 
 impl CursorShape {
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             CursorShape::Block => "block",
@@ -23,6 +24,7 @@ impl CursorShape {
             CursorShape::Underline => "underline",
         }
     }
+    #[must_use]
     pub fn parse(s: &str) -> Option<CursorShape> {
         match s.trim().to_ascii_lowercase().as_str() {
             "block" => Some(CursorShape::Block),
@@ -70,7 +72,7 @@ impl Default for TermConfig {
             cursor_blink: true,
             foreground: "#e7e9ee".to_string(),
             background: "#1a1d23".to_string(), // BG2 in term.rs
-            palette: DEFAULT_PALETTE.map(|s| s.to_string()),
+            palette: DEFAULT_PALETTE.map(std::string::ToString::to_string),
             keybindings: Vec::new(),
         }
     }
@@ -78,11 +80,13 @@ impl Default for TermConfig {
 
 impl TermConfig {
     /// The default config path, `<hl_root>/term.conf`.
+    #[must_use]
     pub fn path(hl_root: &Path) -> PathBuf {
         hl_root.join("term.conf")
     }
 
     /// The Pango font description string VTE wants, e.g. `"Menlo 12"`.
+    #[must_use]
     pub fn font_string(&self) -> String {
         // Trim a trailing `.0` so integer sizes read cleanly.
         if (self.font_size.fract()).abs() < f64::EPSILON {
@@ -94,6 +98,7 @@ impl TermConfig {
 
     /// VTE scrollback-line count (same convention as `Workspace::scrollback_lines`: unlimited maps to a
     /// large file-backed cap).
+    #[must_use]
     pub fn scrollback_lines(&self) -> i64 {
         match self.scrollback {
             None | Some(0) => 10_000_000,
@@ -102,6 +107,7 @@ impl TermConfig {
     }
 
     /// Look up a keybinding override by action name.
+    #[must_use]
     pub fn keybinding(&self, action: &str) -> Option<&str> {
         self.keybindings
             .iter()
@@ -216,6 +222,7 @@ impl TermConfig {
     }
 
     /// A commented sample config (written on first run so users have something to edit).
+    #[must_use]
     pub fn sample() -> String {
         let mut s =
             String::from("# hl terminal config — ~/.hl/term.conf\n# edit + save; open terminals live-reload.\n\n");

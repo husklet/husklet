@@ -36,11 +36,10 @@ impl Rule for IntegrationCandidate {
             }
             for item in &source.syntax.items {
                 let Item::Mod(module) = item else { continue };
-                if requires_test(&module.attrs) {
-                    if let Some((_, items)) = &module.content {
+                if requires_test(&module.attrs)
+                    && let Some((_, items)) = &module.content {
                         inspect_module(self.id(), source, module, items, &api, &mut findings);
                     }
-                }
             }
         }
         Ok(findings)
@@ -150,9 +149,7 @@ fn inspect_unit(
 
     let subject = source.path.file_name().and_then(|name| name.to_str()).unwrap_or("test");
     let span = items
-        .first()
-        .map(Item::span)
-        .unwrap_or_else(proc_macro2::Span::call_site);
+        .first().map_or_else(proc_macro2::Span::call_site, Item::span);
     let mut finding = Finding::warning(rule, subject, source.location(span));
     finding.message =
         "source unit tests use only the ordinary public crate API and are integration-test candidates".into();
@@ -197,11 +194,11 @@ impl Evidence<'_> {
     }
 
     fn inspect_import(&mut self, prefix: &[String], leaf: &str) {
-        let first = prefix.first().map(String::as_str).unwrap_or(leaf);
+        let first = prefix.first().map_or(leaf, String::as_str);
         if first == "super" || first == "self" {
             self.private = true;
         } else if first == "crate" {
-            let root = prefix.get(1).map(String::as_str).unwrap_or(leaf);
+            let root = prefix.get(1).map_or(leaf, String::as_str);
             if self.public.contains(root) {
                 self.public_reference = true;
             } else {

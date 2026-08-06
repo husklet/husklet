@@ -222,7 +222,7 @@ impl<'a, M: GuestMemory> Abi<'a, M> {
         }
         Ok(Placement::Anywhere {
             minimum: GuestAddress::new(PAGE),
-            maximum: GuestAddress::new(u64::MAX & !(PAGE - 1)),
+            maximum: GuestAddress::new(!(PAGE - 1)),
             hint: (address.get() != 0).then_some(address.page_base(GuestPageSize::LINUX)),
         })
     }

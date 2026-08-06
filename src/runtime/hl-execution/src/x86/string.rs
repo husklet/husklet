@@ -73,7 +73,7 @@ impl StringInterpreter {
             StringOperation::Move => {
                 let value = Self::read(memory, source, bytes, origin)?;
                 let reservation = Self::reserve(memory, destination, bytes, origin)?;
-                memory.commit_write(reservation, value).map_err(|_| {
+                memory.commit_write(reservation, value).map_err(|()| {
                     ExecutionExit::OperandFault(crate::FaultAccess::operand(
                         origin,
                         destination,
@@ -88,7 +88,7 @@ impl StringInterpreter {
                 let reservation = Self::reserve(memory, destination, bytes, origin)?;
                 memory
                     .commit_write(reservation, cpu.registers[0] & Self::mask(width))
-                    .map_err(|_| {
+                    .map_err(|()| {
                         ExecutionExit::OperandFault(crate::FaultAccess::operand(
                             origin,
                             destination,
@@ -180,7 +180,7 @@ impl StringInterpreter {
         instruction: u64,
     ) -> Result<u64, ExecutionExit> {
         Self::canonical(address, bytes, instruction, AccessKind::Read)?;
-        memory.read(address, bytes).map_err(|_| {
+        memory.read(address, bytes).map_err(|()| {
             ExecutionExit::OperandFault(crate::FaultAccess::operand(
                 instruction,
                 address,
@@ -197,7 +197,7 @@ impl StringInterpreter {
         instruction: u64,
     ) -> Result<M::Reservation, ExecutionExit> {
         Self::canonical(address, bytes, instruction, AccessKind::Write)?;
-        memory.reserve_write(address, bytes).map_err(|_| {
+        memory.reserve_write(address, bytes).map_err(|()| {
             ExecutionExit::OperandFault(crate::FaultAccess::operand(
                 instruction,
                 address,

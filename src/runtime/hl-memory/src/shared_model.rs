@@ -11,8 +11,8 @@ pub struct SharedBackingRef {
     pub length: u64,
     /// Whether this mapping may write back to the shared object. Linux memfd
     /// write seals use this independently of the current page protection:
-    /// even a read-only MAP_SHARED mapping blocks F_SEAL_WRITE, while a
-    /// writable MAP_PRIVATE mapping does not.
+    /// even a read-only `MAP_SHARED` mapping blocks `F_SEAL_WRITE`, while a
+    /// writable `MAP_PRIVATE` mapping does not.
     pub write_shared: bool,
 }
 
@@ -26,15 +26,19 @@ impl SharedSeal {
     pub const WRITE: u8 = 8;
     pub const FUTURE_WRITE: u8 = 16;
 
+    #[must_use]
     pub const fn from_bits(bits: u8) -> Self {
         Self(bits)
     }
+    #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
+    #[must_use]
     pub const fn contains(self, bits: u8) -> bool {
         self.0 & bits == bits
     }
+    #[must_use]
     pub const fn intersects(self, bits: u8) -> bool {
         self.0 & bits != 0
     }

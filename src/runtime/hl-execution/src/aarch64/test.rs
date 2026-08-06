@@ -355,10 +355,7 @@ fn carry_family() {
         assert_eq!(cpu.execute_word(word), Aarch64ExecutionExit::Continue);
         assert_eq!(cpu.register(destination as u8), expected, "{word:#x}");
         let flags = if set_flags {
-            u32::from(expected & sign != 0) * Nzcv::NEGATIVE
-                | u32::from(expected == 0) * Nzcv::ZERO
-                | u32::from(sum >> bits != 0) * Nzcv::CARRY
-                | u32::from(overflow) * Nzcv::OVERFLOW
+            (u32::from(expected & sign != 0) * Nzcv::NEGATIVE) | (u32::from(expected == 0) * Nzcv::ZERO) | (u32::from(sum >> bits != 0) * Nzcv::CARRY) | (u32::from(overflow) * Nzcv::OVERFLOW)
         } else if carry {
             Nzcv::CARRY
         } else {
@@ -633,7 +630,7 @@ fn reserved_encoding_sweeps() {
         let op3 = op3_values[index / 3 % 3];
         let op4 = op4_values[index % 3];
         let word = 0xd600_0000 | opcode << 21 | op2 << 16 | op3 << 10 | 1 << 5 | op4;
-        let valid = op2 == 31 && op3 == 0 && op4 == 0 && matches!(opcode, 0 | 1 | 2);
+        let valid = op2 == 31 && op3 == 0 && op4 == 0 && matches!(opcode, 0..=2);
         assert_eq!(Aarch64Decoder::decode(word).is_ok(), valid, "{word:#010x}");
     }
 
@@ -977,10 +974,7 @@ fn clz_family() {
         .flat_map(|(wide, width)| (0..=width).map(move |leading| (wide, width, leading)));
     for (wide, width, leading) in cases {
         let word = u32::from(wide) << 31 | 0x5ac0_1000 | 1 << 5;
-        let source = match leading == width {
-            true => 0,
-            false => 1_u64 << (width - leading - 1),
-        };
+        let source = if leading == width { 0 } else { 1_u64 << (width - leading - 1) };
         let mut cpu = Aarch64CpuState::default();
         let source = source | source.saturating_sub(1);
         cpu.set_register(1, source | if wide { 0 } else { 0xffff_ffff_0000_0000 });

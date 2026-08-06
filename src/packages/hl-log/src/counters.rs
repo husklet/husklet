@@ -29,10 +29,12 @@ impl Counters {
         self.values.update(name, |value| *value += n);
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> u64 {
         self.values.get(name)
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> Vec<(&'static str, u64)> {
         self.values.snapshot()
     }

@@ -7,7 +7,7 @@ use super::{SemaphoreNamespace, State};
 
 type UndoKey = (u32, SemaphoreId, u16);
 
-/// Mutation-free child SEM_UNDO reset plan.
+/// Mutation-free child `SEM_UNDO` reset plan.
 pub struct PreparedSemaphoreFork {
     namespace: Arc<SemaphoreNamespace>,
     child: u32,

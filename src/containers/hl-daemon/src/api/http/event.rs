@@ -35,7 +35,7 @@ impl QueryParameters {
             .filters
             .map(|value| docker_filter_values(&value))
             .transpose()
-            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.to_string()))?
+            .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.clone()))?
             .unwrap_or_default();
         for key in filters.keys() {
             if !matches!(
@@ -96,13 +96,11 @@ impl std::str::FromStr for Time {
         if let Ok(seconds) = value.parse::<i64>() {
             return Ok(Self::Absolute(seconds));
         }
-        if let Some((seconds, fraction)) = value.split_once('.') {
-            if !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit()) {
-                if let Ok(seconds) = seconds.parse::<i64>() {
+        if let Some((seconds, fraction)) = value.split_once('.')
+            && !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit())
+                && let Ok(seconds) = seconds.parse::<i64>() {
                     return Ok(Self::Absolute(seconds));
                 }
-            }
-        }
         if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(value) {
             return Ok(Self::Absolute(timestamp.timestamp()));
         }

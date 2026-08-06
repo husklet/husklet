@@ -5,9 +5,7 @@ use super::DescriptorPort;
 
 impl DescriptorPort {
     fn result(result: Result<i32, Errno>) -> LinuxResult {
-        result
-            .map(|descriptor| LinuxResult::Value(descriptor as u64))
-            .unwrap_or_else(LinuxResult::Error)
+        result.map_or_else(LinuxResult::Error, |descriptor| LinuxResult::Value(descriptor as u64))
     }
 
     fn fcntl(&self, descriptor: i32, command: u32, argument: u64) -> LinuxResult {
@@ -21,24 +19,16 @@ impl DescriptorPort {
             ),
             1 => self
                 .descriptors
-                .flags(descriptor)
-                .map(|flags| LinuxResult::Value(flags.bits() as u64))
-                .unwrap_or_else(LinuxResult::Error),
+                .flags(descriptor).map_or_else(LinuxResult::Error, |flags| LinuxResult::Value(flags.bits() as u64)),
             2 => self
                 .descriptors
-                .update_flags(descriptor, DescriptorFlags::from_fcntl(argument as u32))
-                .map(|()| LinuxResult::Value(0))
-                .unwrap_or_else(LinuxResult::Error),
+                .update_flags(descriptor, DescriptorFlags::from_fcntl(argument as u32)).map_or_else(LinuxResult::Error, |()| LinuxResult::Value(0)),
             3 => self
                 .descriptors
-                .status(descriptor)
-                .map(|status| LinuxResult::Value(status.bits() as u64))
-                .unwrap_or_else(LinuxResult::Error),
+                .status(descriptor).map_or_else(LinuxResult::Error, |status| LinuxResult::Value(status.bits() as u64)),
             4 => self
                 .descriptors
-                .update_status(descriptor, argument as u32)
-                .map(|()| LinuxResult::Value(0))
-                .unwrap_or_else(LinuxResult::Error),
+                .update_status(descriptor, argument as u32).map_or_else(LinuxResult::Error, |()| LinuxResult::Value(0)),
             1030 => Self::result(self.descriptors.duplicate(
                 descriptor,
                 argument as i32,
@@ -54,9 +44,7 @@ impl DescriptorIoSyscalls for DescriptorPort {
         match operation.name {
             "close" => self
                 .descriptors
-                .close(arguments[0] as i32)
-                .map(|()| LinuxResult::Value(0))
-                .unwrap_or_else(LinuxResult::Error),
+                .close(arguments[0] as i32).map_or_else(LinuxResult::Error, |()| LinuxResult::Value(0)),
             "dup" => Self::result(
                 self.descriptors
                     .duplicate(arguments[0] as i32, 0, DescriptorFlags::default()),

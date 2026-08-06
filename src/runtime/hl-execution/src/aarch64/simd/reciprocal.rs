@@ -396,7 +396,7 @@ impl Reciprocal {
     }
     fn recip_table(a: u32) -> u32 {
         let b = (1 << 19) / (a * 2 + 1);
-        (b + 1) / 2
+        b.div_ceil(2)
     }
     fn sqrt_table(a: u32) -> u32 {
         let a = if a < 256 { a * 2 + 1 } else { ((a >> 1) * 2 + 1) * 2 };
@@ -414,7 +414,7 @@ impl Reciprocal {
                 high = candidate;
             }
         }
-        ((low + 1) / 2) as u32
+        low.div_ceil(2) as u32
     }
     fn class(bits: u64, format: FpFormat) -> u8 {
         let e = bits >> Self::mantissa(format) & Self::inf_exp(format);
@@ -898,7 +898,7 @@ mod test {
     }
 
     fn recip_reference(a: u32) -> u32 {
-        (((1_u32 << 19) / (2 * a + 1)) + 1) / 2
+        ((1_u32 << 19) / (2 * a + 1)).div_ceil(2)
     }
     fn sqrt_reference(a: u32) -> u32 {
         let scale = if a < 256 { 2 * a + 1 } else { 2 * (2 * (a / 2) + 1) };
@@ -906,7 +906,7 @@ mod test {
         while u64::from(scale) * (candidate + 1).pow(2) < 1 << 28 {
             candidate += 1;
         }
-        ((candidate + 1) / 2) as u32
+        candidate.div_ceil(2) as u32
     }
     fn normal_reference(bits: u64, format: FpFormat, sqrt: bool) -> u64 {
         let mantissa = Reciprocal::mantissa(format);
@@ -944,7 +944,7 @@ mod test {
         let index = value >> 23;
         if !sqrt {
             let divisor = index * 2 + 1;
-            return ((((1_u32 << 19) / divisor) + 1) / 2) << 23;
+            return ((1_u32 << 19) / divisor).div_ceil(2) << 23;
         }
         let scaled = if index < 256 {
             index * 2 + 1
@@ -955,7 +955,7 @@ mod test {
         while u64::from(scaled) * (candidate + 1) * (candidate + 1) < 1 << 28 {
             candidate += 1;
         }
-        (((candidate + 1) / 2) as u32) << 23
+        (candidate.div_ceil(2) as u32) << 23
     }
     fn unsigned_indexes(sqrt: bool, tail: u32) {
         let first = if sqrt { 128 } else { 256 };

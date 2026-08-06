@@ -29,17 +29,17 @@ impl Gate {
     }
 
     fn release(&self) {
-        *self.released.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        *self.released.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
         self.changed.notify_all();
     }
 
     fn wait(&self) {
-        let mut released = self.released.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut released = self.released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*released {
             released = self
                 .changed
                 .wait(released)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 }

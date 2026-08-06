@@ -6,7 +6,7 @@ use crate::{
     SharedMemoryStatus, ShmInfo, StagedSysvCopyout,
 };
 
-impl<'a, M: GuestMemory> Abi<'a, M> {
+impl<M: GuestMemory> Abi<'_, M> {
     pub fn import_permissions(&self, source: u64) -> Result<IpcPermissions, AbiError> {
         Ok(Self::decode_permissions(&self.read(source, 48)?))
     }

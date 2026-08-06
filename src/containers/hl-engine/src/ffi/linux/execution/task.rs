@@ -89,9 +89,7 @@ impl hl_runtime::RuntimeSleepPort for SleepPort {
     ) -> Result<hl_runtime::RuntimeSleepOutcome, ()> {
         let value = requested.checked_nanoseconds().ok_or(())?;
         let now = u64::try_from(self.0.elapsed().as_nanos()).unwrap_or(u64::MAX);
-        let deadline = if !absolute {
-            now.checked_add(value).ok_or(())?
-        } else {
+        let deadline = if absolute {
             let current = match clock {
                 hl_linux::ClockIdentity::Realtime => {
                     let realtime = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| ())?;
@@ -105,6 +103,8 @@ impl hl_runtime::RuntimeSleepPort for SleepPort {
                     .map_err(|_| ())?,
             };
             now.checked_add(value.saturating_sub(current)).ok_or(())?
+        } else {
+            now.checked_add(value).ok_or(())?
         };
         if self.0.wait_interruptible(deadline, interruption)? {
             let now = u64::try_from(self.0.elapsed().as_nanos()).unwrap_or(u64::MAX);
@@ -148,67 +148,6 @@ impl ClockIdentity {
             resource,
             tasks,
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use super::{ClockIdentity, CooperativeYield, TaskAdapter};
-    use hl_event::TimerClockSource;
-    use hl_runtime::RuntimeYieldPort;
-    use hl_time::MonotonicClock;
-
-    #[test]
-    fn timer_wake_projects_host_deadline_to_queue_origin() {
-        assert_eq!(ClockIdentity::queue_deadline(25, 10_000, 10_075).unwrap(), 100);
-        assert_eq!(ClockIdentity::queue_deadline(25, 10_000, 9_999).unwrap(), 25);
-        assert!(ClockIdentity::queue_deadline(u64::MAX, 10_000, 10_001).is_err());
-    }
-
-    #[test]
-    fn cooperative_yield_completes_without_host_wait() {
-        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
-        let thread = hl_task::ThreadId::from_wire(1, 1).unwrap();
-        assert_eq!(CooperativeYield.yield_task(process, thread), Ok(()));
-    }
-
-    #[test]
-    fn legacy_pause_routes() {
-        assert!(TaskAdapter::signal_wait("pause"));
-        assert!(TaskAdapter::signal_wait("rt_sigsuspend"));
-        assert!(!TaskAdapter::signal_wait("mkdirat"));
-    }
-
-    #[test]
-    fn projected_timer_wake_notifies_deadline_descriptor() {
-        let deadlines = super::super::readiness::deadline::Queue::new().unwrap();
-        let clock = ClockIdentity::new(
-            0,
-            0,
-            hl_task::ProcessId::from_wire(1, 1).unwrap(),
-            deadlines.clone(),
-            Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap()),
-        );
-        let now = clock.monotonic_now().unwrap().nanoseconds();
-        let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let callback_notified = Arc::clone(&notified);
-        clock
-            .schedule_callback(
-                now + 10_000_000,
-                Arc::new(move || callback_notified.store(true, std::sync::atomic::Ordering::Release)),
-            )
-            .unwrap();
-        let mut descriptor = libc::pollfd {
-            fd: deadlines.descriptor(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: descriptor points to one initialized pollfd for the call duration.
-        assert_eq!(unsafe { libc::poll(&mut descriptor, 1, 1_000) }, 1);
-        assert_ne!(descriptor.revents & libc::POLLIN, 0);
-        assert!(notified.load(std::sync::atomic::Ordering::Acquire));
     }
 }
 
@@ -325,7 +264,7 @@ impl FutexInterrupt {
     pub(super) fn register(&self, thread: hl_task::ThreadId, interruption: Arc<hl_sync::Interruption>) {
         self.threads
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(thread, Arc::downgrade(&interruption));
     }
 }
@@ -334,7 +273,7 @@ impl hl_runtime::FutexInterruptionSource for FutexInterrupt {
     fn interruption(&self, thread: hl_task::ThreadId) -> Option<Arc<hl_sync::Interruption>> {
         self.threads
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&thread)
             .and_then(Weak::upgrade)
     }
@@ -342,7 +281,7 @@ impl hl_runtime::FutexInterruptionSource for FutexInterrupt {
     fn identity(&self, number: u32) -> Option<hl_task::ThreadId> {
         self.threads
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .keys()
             .find(|thread| thread.number() == number)
             .copied()
@@ -399,5 +338,66 @@ impl TaskSignalTimeSyscalls for TaskAdapter {
             "setpriority" | "getpriority" => self.process.handle(operation, arguments),
             _ => LinuxResult::Error(Errno::ENOSYS),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use super::{ClockIdentity, CooperativeYield, TaskAdapter};
+    use hl_event::TimerClockSource;
+    use hl_runtime::RuntimeYieldPort;
+    use hl_time::MonotonicClock;
+
+    #[test]
+    fn timer_wake_projects_host_deadline_to_queue_origin() {
+        assert_eq!(ClockIdentity::queue_deadline(25, 10_000, 10_075).unwrap(), 100);
+        assert_eq!(ClockIdentity::queue_deadline(25, 10_000, 9_999).unwrap(), 25);
+        assert!(ClockIdentity::queue_deadline(u64::MAX, 10_000, 10_001).is_err());
+    }
+
+    #[test]
+    fn cooperative_yield_completes_without_host_wait() {
+        let process = hl_task::ProcessId::from_wire(1, 1).unwrap();
+        let thread = hl_task::ThreadId::from_wire(1, 1).unwrap();
+        assert_eq!(CooperativeYield.yield_task(process, thread), Ok(()));
+    }
+
+    #[test]
+    fn legacy_pause_routes() {
+        assert!(TaskAdapter::signal_wait("pause"));
+        assert!(TaskAdapter::signal_wait("rt_sigsuspend"));
+        assert!(!TaskAdapter::signal_wait("mkdirat"));
+    }
+
+    #[test]
+    fn projected_timer_wake_notifies_deadline_descriptor() {
+        let deadlines = super::super::readiness::deadline::Queue::new().unwrap();
+        let clock = ClockIdentity::new(
+            0,
+            0,
+            hl_task::ProcessId::from_wire(1, 1).unwrap(),
+            deadlines.clone(),
+            Arc::new(hl_task::TaskRegistry::new(hl_task::RegistryConfig::default()).unwrap()),
+        );
+        let now = clock.monotonic_now().unwrap().nanoseconds();
+        let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let callback_notified = Arc::clone(&notified);
+        clock
+            .schedule_callback(
+                now + 10_000_000,
+                Arc::new(move || callback_notified.store(true, std::sync::atomic::Ordering::Release)),
+            )
+            .unwrap();
+        let mut descriptor = libc::pollfd {
+            fd: deadlines.descriptor(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: descriptor points to one initialized pollfd for the call duration.
+        assert_eq!(unsafe { libc::poll(&raw mut descriptor, 1, 1_000) }, 1);
+        assert_ne!(descriptor.revents & libc::POLLIN, 0);
+        assert!(notified.load(std::sync::atomic::Ordering::Acquire));
     }
 }

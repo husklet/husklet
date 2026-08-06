@@ -52,7 +52,7 @@ fn load() {
 #[test]
 fn resolves_similar_names() {
     let values = findings(
-        r#"
+        r"
 use dirs as locations;
 use dirs::config_dir as preferences;
 fn load() {
@@ -60,7 +60,7 @@ fn load() {
     let _ = preferences();
     let _ = my_dirs::home_dir();
 }
-"#,
+",
         "src/lib.rs",
     );
     assert_eq!(values.len(), 2);
@@ -105,7 +105,7 @@ fn structurally_boundaries_permitted() {
 #[test]
 fn configuration_semantic_evidence() {
     let values = findings(
-        r#"
+        r"
 use std::sync::{Mutex, OnceLock};
 struct AppConfig;
 struct State;
@@ -113,7 +113,7 @@ static CONFIG: OnceLock<AppConfig> = OnceLock::new();
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 static LOCKS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static REGISTRY: OnceLock<Vec<String>> = OnceLock::new();
-"#,
+",
         "src/lib.rs",
     );
     assert_eq!(values.len(), 2);

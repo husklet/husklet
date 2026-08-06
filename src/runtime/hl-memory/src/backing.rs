@@ -34,23 +34,23 @@ impl SharedBackingFactory for MemoryFactory {
 
 impl SharedBacking for MemoryBacking {
     fn len(&self) -> Result<usize, SharedError> {
-        Ok(self.0.lock().unwrap_or_else(|error| error.into_inner()).len())
+        Ok(self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len())
     }
 
     fn resize(&self, size: usize) -> Result<(), SharedError> {
-        self.0.lock().unwrap_or_else(|error| error.into_inner()).resize(size, 0);
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).resize(size, 0);
         Ok(())
     }
 
     fn read(&self, offset: usize, output: &mut [u8]) -> Result<(), SharedError> {
-        let bytes = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let bytes = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let end = offset.checked_add(output.len()).ok_or(SharedError::Range)?;
         output.copy_from_slice(bytes.get(offset..end).ok_or(SharedError::Range)?);
         Ok(())
     }
 
     fn write(&self, offset: usize, input: &[u8]) -> Result<(), SharedError> {
-        let mut bytes = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut bytes = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let end = offset.checked_add(input.len()).ok_or(SharedError::Range)?;
         bytes
             .get_mut(offset..end)

@@ -37,7 +37,7 @@ impl EventSyscalls for LinuxHost {
     fn event_read(&self, descriptor: i32) -> Result<u64, HostError> {
         let mut value = 0_u64;
         // SAFETY: value is uniquely writable for exactly eight bytes.
-        let count = unsafe { abi::read(descriptor, (&mut value as *mut u64).cast(), core::mem::size_of::<u64>()) };
+        let count = unsafe { abi::read(descriptor, (&raw mut value).cast(), core::mem::size_of::<u64>()) };
         if count == 8 {
             Ok(value)
         } else if count < 0 {
@@ -49,7 +49,7 @@ impl EventSyscalls for LinuxHost {
 
     fn event_write(&self, descriptor: i32, value: u64) -> Result<(), HostError> {
         // SAFETY: value is readable for exactly eight bytes.
-        let count = unsafe { abi::write(descriptor, (&value as *const u64).cast(), core::mem::size_of::<u64>()) };
+        let count = unsafe { abi::write(descriptor, (&raw const value).cast(), core::mem::size_of::<u64>()) };
         if count == 8 {
             Ok(())
         } else if count < 0 {
@@ -71,7 +71,7 @@ impl EventSyscalls for LinuxHost {
             initial: EpollConversion::time(setting.initial_ns)?,
         };
         // SAFETY: setting is initialized and borrowed for the synchronous call.
-        let result = unsafe { timerfd_settime(descriptor, 0, &setting, core::ptr::null_mut()) };
+        let result = unsafe { timerfd_settime(descriptor, 0, &raw const setting, core::ptr::null_mut()) };
         (result == 0).then_some(()).ok_or_else(ErrnoMapper::current)
     }
 
@@ -141,7 +141,7 @@ impl EpollConversion {
     }
 
     fn ready(event: EpollEvent) -> (u32, u64) {
-        let events = (if event.events & EPOLLIN != 0 { 1 } else { 0 })
+        let events = u32::from(event.events & EPOLLIN != 0)
             | (if event.events & EPOLLOUT != 0 { 2 } else { 0 })
             | (if event.events & EPOLLHUP != 0 { 4 } else { 0 })
             | (if event.events & EPOLLERR != 0 { 8 } else { 0 });

@@ -6,7 +6,7 @@ use super::{Inotify, InotifyInner, InotifyState, QueuedEvent};
 impl Inotify {
     pub(crate) fn accept_source_event(inner: &Arc<InotifyInner>, event: WatchSourceEvent) {
         let (notify, remove) = {
-            let mut state = inner.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }

@@ -129,37 +129,37 @@ impl<'ast> Visit<'ast> for Depth {
 
     fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
         self.enter("match", expression.match_token.span, |visitor| {
-            syn::visit::visit_expr_match(visitor, expression)
+            syn::visit::visit_expr_match(visitor, expression);
         });
     }
 
     fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
         self.enter("for", expression.for_token.span, |visitor| {
-            syn::visit::visit_expr_for_loop(visitor, expression)
+            syn::visit::visit_expr_for_loop(visitor, expression);
         });
     }
 
     fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
         self.enter("while", expression.while_token.span, |visitor| {
-            syn::visit::visit_expr_while(visitor, expression)
+            syn::visit::visit_expr_while(visitor, expression);
         });
     }
 
     fn visit_expr_loop(&mut self, expression: &'ast syn::ExprLoop) {
         self.enter("loop", expression.loop_token.span, |visitor| {
-            syn::visit::visit_expr_loop(visitor, expression)
+            syn::visit::visit_expr_loop(visitor, expression);
         });
     }
 
     fn visit_expr_closure(&mut self, expression: &'ast syn::ExprClosure) {
         self.enter("closure", expression.span(), |visitor| {
-            syn::visit::visit_expr_closure(visitor, expression)
+            syn::visit::visit_expr_closure(visitor, expression);
         });
     }
 
     fn visit_expr_async(&mut self, expression: &'ast syn::ExprAsync) {
         self.enter("async block", expression.async_token.span, |visitor| {
-            syn::visit::visit_expr_async(visitor, expression)
+            syn::visit::visit_expr_async(visitor, expression);
         });
     }
 }
@@ -235,11 +235,11 @@ fn summarize(row: &ResultRow) {
     #[test]
     fn ignores_inline_test_harness_nesting() {
         let findings = findings(
-            r#"#[cfg(test)] mod tests {
+            r"#[cfg(test)] mod tests {
     #[test] fn exhaustive_fixture() {
         for a in 0..2 { for b in 0..2 { match (a, b) { _ => {} } } }
     }
-}"#,
+}",
         );
         assert!(findings.is_empty());
     }

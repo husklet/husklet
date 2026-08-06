@@ -154,7 +154,7 @@ impl FakeHost {
             self.shared
                 .changed
                 .wait_while(state, |state| !state.barriers.get(name).copied().unwrap_or(false))
-                .unwrap_or_else(|error| error.into_inner()),
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
     }
 
@@ -217,6 +217,6 @@ impl FakeHost {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.shared.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }

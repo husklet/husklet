@@ -192,7 +192,7 @@ fn malformed_signal_frames_rejected() {
                         stack_pointer: 0x20_000,
                     };
                     33
-                ]
+                ];
             }
             2 => {
                 signals.frames = vec![SignalFrameScope {

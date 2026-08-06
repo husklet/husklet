@@ -76,14 +76,14 @@ fn rejects_inline_test_module_dependency() {
     let root = fixture("inline-dependency");
     fs::write(
         root.join("src/lib.rs"),
-        r#"
+        r"
 #[cfg(test)] mod alpha {
     use super::beta::Fixture;
 }
 #[cfg(test)] mod beta {
     pub struct Fixture;
 }
-"#,
+",
     )
     .unwrap();
     let workspace = Workspace::load([root.clone()]).unwrap();

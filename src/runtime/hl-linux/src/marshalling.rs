@@ -154,6 +154,7 @@ impl VectorTransfer {
         }
     }
 
+    #[must_use]
     pub fn input(&self) -> Vec<IoSlice<'_>> {
         self.buffers.iter().map(|bytes| IoSlice::new(bytes)).collect()
     }
@@ -162,6 +163,7 @@ impl VectorTransfer {
         self.buffers.iter_mut().map(|bytes| IoSliceMut::new(bytes)).collect()
     }
 
+    #[must_use]
     pub fn publish<M: GuestMemory + ?Sized>(&self, marshaller: &GuestMarshaller<'_, M>, count: usize) -> CopyProgress {
         let mut copied = 0;
         for (vector, bytes) in self.vectors.iter().zip(&self.buffers) {
@@ -215,6 +217,7 @@ impl<'a, M: GuestMemory + ?Sized> GuestMarshaller<'a, M> {
         CopyProgress::complete(copied)
     }
 
+    #[must_use]
     pub fn copy_to(&self, destination: u64, source: &[u8]) -> CopyProgress {
         let Some(_) = destination.checked_add(source.len() as u64) else {
             return CopyProgress::fault(0, Self::fault(destination, GuestAccess::Write));

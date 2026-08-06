@@ -75,6 +75,7 @@ pub struct Multiplication {
 }
 
 impl Multiplication {
+    #[must_use]
     pub fn widening(width: IntegerWidth, left: u64, right: u64, signed: bool) -> Self {
         let bits = width.mask().count_ones();
         let mask = width.mask();
@@ -97,6 +98,7 @@ impl Multiplication {
         }
     }
 
+    #[must_use]
     pub fn truncating(width: IntegerWidth, left: u64, right: u64) -> Self {
         let bits = width.mask().count_ones();
         let mask = width.mask();
@@ -131,6 +133,7 @@ pub struct BitPlan {
 }
 
 impl BitPlan {
+    #[must_use]
     pub fn memory(index: i64, byte: u8, action: BitAction) -> Self {
         let bit = (index & 7) as u8;
         let mask = 1 << bit;
@@ -157,15 +160,19 @@ pub struct BitScan {
 }
 
 impl BitScan {
+    #[must_use]
     pub fn forward(width: IntegerWidth, source: u64) -> Self {
         Self::scan(width, source, false, false)
     }
+    #[must_use]
     pub fn reverse(width: IntegerWidth, source: u64) -> Self {
         Self::scan(width, source, true, false)
     }
+    #[must_use]
     pub fn trailing_zero_count(width: IntegerWidth, source: u64) -> Self {
         Self::scan(width, source, false, true)
     }
+    #[must_use]
     pub fn leading_zero_count(width: IntegerWidth, source: u64) -> Self {
         Self::scan(width, source, true, true)
     }

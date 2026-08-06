@@ -8,26 +8,32 @@ impl Nzcv {
     pub const OVERFLOW: u32 = 1 << 28;
     pub const MASK: u32 = Self::NEGATIVE | Self::ZERO | Self::CARRY | Self::OVERFLOW;
 
+    #[must_use]
     pub const fn from_bits(bits: u32) -> Self {
         Self(bits & Self::MASK)
     }
 
+    #[must_use]
     pub const fn bits(self) -> u32 {
         self.0
     }
 
+    #[must_use]
     pub const fn negative(self) -> bool {
         self.0 & Self::NEGATIVE != 0
     }
 
+    #[must_use]
     pub const fn zero(self) -> bool {
         self.0 & Self::ZERO != 0
     }
 
+    #[must_use]
     pub const fn carry(self) -> bool {
         self.0 & Self::CARRY != 0
     }
 
+    #[must_use]
     pub const fn overflow(self) -> bool {
         self.0 & Self::OVERFLOW != 0
     }

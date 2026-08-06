@@ -1,4 +1,4 @@
-use super::*;
+use super::{Vt, State, Pen, Cell};
 
 impl Vt {
     pub(super) fn enter_esc(&mut self) {
@@ -194,8 +194,7 @@ impl Vt {
                     .get(1)
                     .copied()
                     .filter(|&v| v != 0)
-                    .map(|v| v as usize - 1)
-                    .unwrap_or(rows - 1);
+                    .map_or(rows - 1, |v| v as usize - 1);
                 if top < bot && bot < rows {
                     self.scroll_top = top;
                     self.scroll_bot = bot;

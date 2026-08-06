@@ -18,11 +18,13 @@ impl Tag {
     }
 
     /// The stable lowercase configuration and display name.
+    #[must_use]
     pub const fn name(self) -> &'static str {
         self.name
     }
 
     /// The bit assigned to this tag.
+    #[must_use]
     pub const fn bits(self) -> u64 {
         self.bits
     }
@@ -70,16 +72,19 @@ impl Tags {
     pub const NONE: Self = Self(0);
 
     /// Construct a set from its raw bit representation.
+    #[must_use]
     pub const fn from_bits(bits: u64) -> Self {
         Self(bits)
     }
 
     /// The raw bit representation used by the atomic runtime gate.
+    #[must_use]
     pub const fn bits(self) -> u64 {
         self.0
     }
 
     /// Whether this set intersects `other`.
+    #[must_use]
     pub const fn intersects(self, other: Self) -> bool {
         self.0 & other.0 != 0
     }
@@ -97,11 +102,13 @@ pub struct TagList<'a> {
 
 impl TagList<'_> {
     /// The enabled tag mask represented by this list.
+    #[must_use]
     pub const fn tags(&self) -> Tags {
         self.tags
     }
 
     /// Names ignored while constructing the mask.
+    #[must_use]
     pub fn unrecognised(&self) -> &[&str] {
         &self.unrecognised
     }

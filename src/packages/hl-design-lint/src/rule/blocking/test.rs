@@ -77,7 +77,7 @@ async fn fixture() { let _ = std::fs::read("x"); }
 #[test]
 fn diagnoses_runtime_methods() {
     let values = findings(
-        r#"
+        r"
 use std::sync::Mutex as StdMutex;
 use tokio::sync::{mpsc::Receiver, Mutex as AsyncMutex};
 
@@ -90,7 +90,7 @@ async fn locks(
     let _ = async_lock.lock().await;
     let _ = channel.blocking_recv();
 }
-"#,
+",
     );
     assert_eq!(values.len(), 2);
     assert!(values.iter().any(|value| value.subject == "lock"));
@@ -100,7 +100,7 @@ async fn locks(
 #[test]
 fn reports_dropped_guard() {
     let values = findings(
-        r#"
+        r"
 use std::sync::Mutex;
 async fn guards(lock: &Mutex<Vec<u8>>) {
     {
@@ -114,7 +114,7 @@ async fn guards(lock: &Mutex<Vec<u8>>) {
         ready().await;
     }
 }
-"#,
+",
     );
     assert_eq!(
         values
@@ -128,7 +128,7 @@ async fn guards(lock: &Mutex<Vec<u8>>) {
 #[test]
 fn async_method_names() {
     let values = findings(
-        r#"
+        r"
 struct Builder;
 impl Builder {
     fn blocking_recv(&self) {}
@@ -143,7 +143,7 @@ fn closures(builder: Builder) {
         builder.output();
     };
 }
-"#,
+",
     );
     assert_eq!(values.len(), 1);
     assert!(values[0].message.contains("sleep"));

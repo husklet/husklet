@@ -22,7 +22,7 @@ pub(super) fn runtime(
     terminals: Option<Arc<hl_runtime::TerminalCatalog>>,
 ) -> Arc<hl_runtime::ExitRuntime> {
     let exit_clock = Arc::clone(&clock);
-    let now = Arc::new(move || exit_clock.realtime_now().map(|value| value.seconds()).unwrap_or(0));
+    let now = Arc::new(move || exit_clock.realtime_now().map(hl_time::Timespec::seconds).unwrap_or(0));
     Arc::new(hl_runtime::ExitRuntime::new(
         Arc::new(hl_runtime::RobustExitHandler::new(
             Arc::clone(&tasks),

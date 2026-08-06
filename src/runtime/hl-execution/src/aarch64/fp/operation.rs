@@ -192,7 +192,7 @@ impl Aarch64FpExecutor {
         let exponent = bits >> mantissa & ((1_u64 << exponent_bits) - 1);
         let fraction = bits & fraction_mask;
         if exponent == 0 {
-            if fraction == 0 { 0 } else { 1 }
+            u8::from(fraction != 0)
         } else if exponent != (1_u64 << exponent_bits) - 1 {
             2
         } else if fraction == 0 {

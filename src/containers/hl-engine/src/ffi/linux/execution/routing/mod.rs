@@ -289,13 +289,13 @@ impl ProcessContext {
             let coordinator = parent.fork(Arc::clone(&child));
             child
                 .install_exec(&coordinator)
-                .map_err(|_| EngineError::LaunchFailed)?;
+                .map_err(|()| EngineError::LaunchFailed)?;
             self.exec
                 .register(process, coordinator)
                 .map_err(|_| EngineError::LaunchFailed)?;
             child
                 .install_registration(super::exec_image::Registration::new(Arc::clone(&self.exec), process))
-                .map_err(|_| EngineError::LaunchFailed)?;
+                .map_err(|()| EngineError::LaunchFailed)?;
         }
         Ok(child)
     }
@@ -416,7 +416,7 @@ impl ProcessContext {
                 .with_memfds(
                     self.memory
                         .lock()
-                        .unwrap_or_else(|error| error.into_inner())
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .memfd_registry(),
                 )
                 .with_working_directory(Arc::clone(&self.working))

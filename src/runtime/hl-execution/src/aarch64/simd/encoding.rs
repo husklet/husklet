@@ -43,7 +43,7 @@ impl Aarch64SimdDecoder {
     pub(super) fn byte_mask(imm8: u64) -> u64 {
         let mut value = 0;
         for byte in 0..8 {
-            value |= ((imm8 >> byte) & 1) * 0xff << (8 * byte);
+            value |= (((imm8 >> byte) & 1) * 0xff) << (8 * byte);
         }
         value
     }

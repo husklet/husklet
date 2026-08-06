@@ -74,7 +74,7 @@ impl NativePath {
             let target = self
                 .executable
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
             if target.is_empty() {
                 return Err(RuntimePathError::NotFound);

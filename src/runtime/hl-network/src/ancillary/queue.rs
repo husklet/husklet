@@ -122,7 +122,7 @@ impl UnixMessageQueue {
                 rights.push(QueuedRights { rights: exported });
             }
         }
-        let mut messages = self.messages.lock().unwrap_or_else(|error| error.into_inner());
+        let mut messages = self.messages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if messages.len() >= QUEUE_MESSAGE_MAXIMUM {
             return Err(ControlError::TooBig);
         }
@@ -178,7 +178,7 @@ impl UnixMessageQueue {
         !self
             .messages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 
@@ -234,7 +234,7 @@ impl UnixMessageQueue {
         let Some(message) = self
             .messages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop_front()
         else {
             return Ok(None);
@@ -311,7 +311,7 @@ impl UnixMessageQueue {
         let Some(message) = self
             .messages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop_front()
         else {
             return Ok(None);
@@ -334,7 +334,7 @@ impl UnixMessageQueue {
         let message = self
             .messages
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .front()
             .map(Self::clone_message);
         let Some(message) = message else {

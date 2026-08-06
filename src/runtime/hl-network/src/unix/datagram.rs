@@ -101,7 +101,7 @@ impl DatagramSocket {
         if peer == UnixAddress::Unnamed {
             return Err(UnixDatagramError::Invalid);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(UnixDatagramError::Closed);
         }
@@ -112,7 +112,7 @@ impl DatagramSocket {
     pub fn connected(&self) -> Option<UnixAddress> {
         self.state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .connected
             .clone()
     }
@@ -121,7 +121,7 @@ impl DatagramSocket {
         if payload.len() > self.capacity {
             return Err(UnixDatagramError::MessageTooLarge);
         }
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(UnixDatagramError::Closed);
         }
@@ -139,7 +139,7 @@ impl DatagramSocket {
     }
 
     pub fn receive(&self, output: &mut [u8], peek: bool) -> Result<UnixDatagramReceive, UnixDatagramError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(record) = state.records.front() else {
             return if state.closed {
                 Err(UnixDatagramError::Closed)
@@ -164,7 +164,7 @@ impl DatagramSocket {
     }
 
     pub fn close(&self) {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).closed = true;
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed = true;
         self.readable.notify_all();
         self.writable.notify_all();
     }
@@ -180,7 +180,7 @@ impl DatagramSocket {
     }
 
     pub fn snapshot(&self) -> UnixDatagramSnapshot {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         UnixDatagramSnapshot {
             capacity: self.capacity,
             connected: state.connected.clone(),

@@ -31,11 +31,13 @@ pub struct Linter {
 
 impl Linter {
     /// Creates a linter from an explicit rule registry.
+    #[must_use]
     pub fn new(registry: Registry) -> Self {
         Self { registry }
     }
 
     /// Creates the repository's standard rule set.
+    #[must_use]
     pub fn standard() -> Self {
         Self::new(
             Registry::new()
@@ -374,14 +376,14 @@ fn twice() {}
     #[test]
     fn nesting_two_levels() {
         let values = findings(
-            r#"
+            r"
 fn shallow(value: bool) {
     if value {} else if value {} else if value {}
 }
 fn deep(value: bool) {
     if value { for _ in 0..1 { match value { true => {}, false => {} } } }
 }
-"#,
+",
             "maximum-nesting",
         );
         assert_eq!(values.len(), 1);
@@ -391,12 +393,12 @@ fn deep(value: bool) {
     #[test]
     fn duplicate_typed_fields() {
         let values = findings(
-            r#"
+            r"
 struct Image { id: u64, name: String, path: String }
 struct DiscoveredImage { id: u64, name: String, path: String, score: u8 }
 struct Unrelated { id: u64, name: String, path: String }
 struct WrongTypes { id: String, name: String, path: String }
-"#,
+",
             "duplicate-entity-base",
         );
         assert_eq!(values.len(), 1);
@@ -435,7 +437,7 @@ impl Workspaces {
     #[test]
     fn receiver_versions_exclusions() {
         let values = findings(
-            r#"
+            r"
 struct Directory;
 impl Directory {
     fn create_directory(&self) {}
@@ -469,7 +471,7 @@ trait Foreign {
 impl Foreign for Directory {
     fn remove_directory(&self) {}
 }
-"#,
+",
             "receiver-name-repetition",
         );
         let subjects = values

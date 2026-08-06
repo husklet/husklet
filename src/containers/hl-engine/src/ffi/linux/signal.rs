@@ -44,7 +44,7 @@ impl SignalSyscalls for LinuxHost {
         let bits = mask.bits();
         // SAFETY: bits is an initialized Linux 64-bit signal set, consumed only
         // for this call. The returned descriptor transfers to NativeDescriptor.
-        let descriptor = unsafe { signalfd(-1, &bits, NONBLOCK | CLOEXEC) };
+        let descriptor = unsafe { signalfd(-1, &raw const bits, NONBLOCK | CLOEXEC) };
         (descriptor >= 0).then_some(descriptor).ok_or_else(ErrnoMapper::current)
     }
 
@@ -55,7 +55,7 @@ impl SignalSyscalls for LinuxHost {
         let count = unsafe {
             abi::read(
                 descriptor,
-                (&mut info as *mut SignalFdInfo).cast(),
+                (&raw mut info).cast(),
                 core::mem::size_of::<SignalFdInfo>(),
             )
         };
@@ -81,7 +81,7 @@ impl SignalSyscalls for LinuxHost {
         // SAFETY: both signal sets have the libc sigset_t size and alignment,
         // remain live for the call, and are not retained. pthread_sigmask
         // affects only the calling thread and cannot unwind.
-        let result = unsafe { pthread_sigmask(SIG_BLOCK, &selected, &mut previous) };
+        let result = unsafe { pthread_sigmask(SIG_BLOCK, &raw const selected, &raw mut previous) };
         if result != 0 {
             return Err(LibcSignalSet::error(result));
         }
@@ -92,7 +92,7 @@ impl SignalSyscalls for LinuxHost {
         let previous = LibcSignalSet { words: previous.words };
         // SAFETY: previous is a complete initialized libc signal set, borrowed
         // only for this call. pthread_sigmask cannot unwind.
-        let result = unsafe { pthread_sigmask(SIG_SETMASK, &previous, core::ptr::null_mut()) };
+        let result = unsafe { pthread_sigmask(SIG_SETMASK, &raw const previous, core::ptr::null_mut()) };
         (result == 0).then_some(()).ok_or_else(|| LibcSignalSet::error(result))
     }
 

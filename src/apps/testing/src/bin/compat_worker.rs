@@ -15,13 +15,12 @@ fn main() {
     let report = PathBuf::from(&arguments[4]);
     let fixture = arguments
         .get(5)
-        .map(String::as_str)
-        .unwrap_or("executable")
+        .map_or("executable", String::as_str)
         .parse::<Fixture>()
         .unwrap_or_else(|()| std::process::exit(64));
-    let launch_arguments = arguments.get(6).map(String::as_str).unwrap_or("-");
-    let side_files = arguments.get(7).map(String::as_str).unwrap_or("-");
-    let rootfs = arguments.get(8).map(String::as_str).unwrap_or("-");
+    let launch_arguments = arguments.get(6).map_or("-", String::as_str);
+    let side_files = arguments.get(7).map_or("-", String::as_str);
+    let rootfs = arguments.get(8).map_or("-", String::as_str);
     let guest_executable = arguments.get(9).filter(|value| value.as_str() != "trace");
     let trace = arguments.iter().skip(9).any(|value| value == "trace");
     if run(
@@ -73,26 +72,6 @@ impl std::str::FromStr for Fixture {
             "special-device" => Ok(Self::Device),
             _ => Err(()),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::Fixture;
-
-    #[test]
-    fn process_is_typed() {
-        assert!(matches!(
-            "multi-process-service".parse::<Fixture>(),
-            Ok(Fixture::Process)
-        ));
-        assert!("external-process-service".parse::<Fixture>().is_err());
-    }
-
-    #[test]
-    fn device_is_typed() {
-        assert!(matches!("special-device".parse::<Fixture>(), Ok(Fixture::Device)));
-        assert!("host-device".parse::<Fixture>().is_err());
     }
 }
 
@@ -280,7 +259,7 @@ fn fixture_input(
     }
     match fixture {
         Fixture::SideFile => {
-            return Ok(builder.with_input(hl_engine::runtime::Input::File {
+            Ok(builder.with_input(hl_engine::runtime::Input::File {
                 source: guest
                     .parent()
                     .and_then(|path| path.parent())
@@ -291,21 +270,21 @@ fn fixture_input(
                     .join(side_files),
                 relative: PathBuf::from("tmp/hl_pclib_blob.bin"),
                 executable: false,
-            }));
+            }))
         }
         Fixture::Directory => {
-            return Ok(builder.with_input(hl_engine::runtime::Input::Directory {
+            Ok(builder.with_input(hl_engine::runtime::Input::Directory {
                 source: None,
                 relative: PathBuf::from("volume"),
-            }));
+            }))
         }
         Fixture::Symlink => {
-            return Ok(builder
+            Ok(builder
                 .with_input(hl_engine::runtime::Input::Symlink {
                     relative: PathBuf::from("entry"),
                     target: PathBuf::from("guest"),
                 })
-                .with_entry("entry"));
+                .with_entry("entry"))
         }
         Fixture::Executable
         | Fixture::Network
@@ -313,7 +292,7 @@ fn fixture_input(
         | Fixture::RootExecutable
         | Fixture::RootTree
         | Fixture::RootInterpreter
-        | Fixture::Device => return Err(()),
+        | Fixture::Device => Err(()),
     }
 }
 
@@ -342,4 +321,24 @@ fn options(
         }
     }
     Ok(builder)
+}
+
+#[cfg(test)]
+mod test {
+    use super::Fixture;
+
+    #[test]
+    fn process_is_typed() {
+        assert!(matches!(
+            "multi-process-service".parse::<Fixture>(),
+            Ok(Fixture::Process)
+        ));
+        assert!("external-process-service".parse::<Fixture>().is_err());
+    }
+
+    #[test]
+    fn device_is_typed() {
+        assert!(matches!("special-device".parse::<Fixture>(), Ok(Fixture::Device)));
+        assert!("host-device".parse::<Fixture>().is_err());
+    }
 }

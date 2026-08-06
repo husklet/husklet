@@ -163,7 +163,7 @@ impl Decoder {
                 store: false,
                 wide: length != 0,
             }),
-            (1, 0xe6, 1 | 2 | 3) if source == 0 => Ok(ScalarInstruction::VexPackedDoubleConvert {
+            (1, 0xe6, 1..=3) if source == 0 => Ok(ScalarInstruction::VexPackedDoubleConvert {
                 destination: decoded.register.ok_or(ScalarIrError::Invalid)?,
                 source: Self::source(decoded)?,
                 from_integer: pp == 2,
@@ -738,7 +738,7 @@ impl Decoder {
             (1, 0x71..=0x73, 1) => {
                 let extension = decoded.raw_reg.ok_or(ScalarIrError::Invalid)?;
                 let operation = match (decoded.opcode, extension) {
-                    (0x71 | 0x72, 2) | (0x73, 2) => VexImmediateShift::LogicalRight,
+                    (0x71..=0x73, 2) => VexImmediateShift::LogicalRight,
                     (0x71 | 0x72, 4) => VexImmediateShift::ArithmeticRight,
                     (0x71..=0x73, 6) => VexImmediateShift::LogicalLeft,
                     (0x73, 3) => VexImmediateShift::ByteRight,

@@ -29,7 +29,7 @@ impl MappingAdapter {
             .map_err(|_| MemoryError::InvariantViolation)?;
         self.reservations
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(reservation, operation);
         Ok(reservation)
     }
@@ -52,7 +52,7 @@ impl MappingHost for MappingAdapter {
         for reservation in reservations {
             self.reservations
                 .lock()
-                .unwrap_or_else(|error| error.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(reservation)
                 .ok_or(MemoryError::InvariantViolation)?;
             self.host
@@ -66,7 +66,7 @@ impl MappingHost for MappingAdapter {
         if self
             .reservations
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation)
             .is_some()
         {

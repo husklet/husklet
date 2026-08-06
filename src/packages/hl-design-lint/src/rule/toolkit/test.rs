@@ -41,7 +41,7 @@ fn detects_public_api() {
     write(
         &root,
         "lib.rs",
-        r#"
+        r"
 use gtk as native;
 use vte4::Terminal as NativeTerminal;
 
@@ -53,7 +53,7 @@ pub trait Render {
     type Native: glib::ObjectExt;
     fn render<T: Into<gdk::RGBA>>(&self, value: T) -> Result<(), native::glib::Error>;
 }
-"#,
+",
     );
     let values = findings(&root);
     assert_eq!(values.len(), 3);
@@ -84,7 +84,7 @@ fn detects_private_surfaces() {
     write(
         &root,
         "adapter.rs",
-        r#"
+        r"
 pub struct Renderer(gtk::Window);
 impl Renderer {
     pub fn native(&self) -> &gtk::Window { &self.0 }
@@ -93,7 +93,7 @@ impl Renderer {
 pub(crate) fn crate_only() -> gtk::Button { todo!() }
 struct Hidden;
 impl Hidden { pub fn misleading() -> gtk::Window { todo!() } }
-"#,
+",
     );
     write(&root, "private.rs", "pub fn hidden() -> gtk::Window { todo!() }");
     write(&root, "crate_only.rs", "pub fn hidden() -> gtk::Window { todo!() }");
@@ -118,11 +118,11 @@ fn ignores_owned_modules() {
     write(
         &gui,
         "lib.rs",
-        r#"
+        r"
 pub mod gtk { pub struct Window; }
 pub mod glib { pub struct Error; }
 pub fn owned(value: crate::gtk::Window) -> crate::glib::Error { todo!() }
-"#,
+",
     );
     assert!(findings(&gui).is_empty());
     fs::remove_dir_all(gui).unwrap();
@@ -134,10 +134,10 @@ fn reports_signature_context() {
     write(
         &root,
         "lib.rs",
-        r#"
+        r"
 pub type Native = Option<gtk::Button>;
 pub fn qualified() -> <gtk::Window as Widget>::State { todo!() }
-"#,
+",
     );
     let values = findings(&root);
     assert_eq!(values.len(), 2);
@@ -159,11 +159,11 @@ fn detects_public_reexports() {
     write(
         &root,
         "lib.rs",
-        r#"
+        r"
 pub use gtk::Button as NativeButton;
 pub struct Generic<T: gtk::glib::ObjectType>(T);
 pub trait NativeRender: gdk::prelude::GdkCairoContextExt {}
-"#,
+",
     );
     let values = findings(&root);
     assert_eq!(values.len(), 3);
@@ -190,7 +190,7 @@ fn follows_public_reexports() {
     write(
         &root,
         "adapter.rs",
-        r#"
+        r"
 pub struct Exported;
 impl Exported {
     pub fn native(&self) -> gtk::Window { todo!() }
@@ -199,7 +199,7 @@ pub struct Internal;
 impl Internal {
     pub fn native(&self) -> gtk::Button { todo!() }
 }
-"#,
+",
     );
     let values = findings(&root);
     assert_eq!(values.len(), 1);

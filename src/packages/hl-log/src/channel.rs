@@ -48,7 +48,7 @@ struct Transport<T> {
 
 impl<T> Transport<T> {
     fn lock(&self) -> MutexGuard<'_, State<T>> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner())
+        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -173,7 +173,7 @@ impl<T> Receiver<T> {
                 .shared
                 .available
                 .wait(state)
-                .unwrap_or_else(|error| error.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 

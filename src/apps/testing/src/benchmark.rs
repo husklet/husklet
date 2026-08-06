@@ -479,16 +479,13 @@ fn host_affinity() -> String {
 #[cfg(target_os = "linux")]
 fn host_snapshot() -> String {
     let load = std::fs::read_to_string("/proc/loadavg")
-        .ok()
-        .map(|value| value.split_whitespace().take(3).collect::<Vec<_>>().join("/"))
-        .unwrap_or_else(|| "unknown".into());
+        .ok().map_or_else(|| "unknown".into(), |value| value.split_whitespace().take(3).collect::<Vec<_>>().join("/"));
     let memory = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let field = |name: &str| {
         memory
             .lines()
             .find_map(|line| line.strip_prefix(name))
-            .map(str::trim)
-            .unwrap_or("unknown")
+            .map_or("unknown", str::trim)
     };
     format!(
         "arch={} cpu_affinity={} load_1_5_15={} mem_available={} swap_free={}",
@@ -531,7 +528,7 @@ impl Phase {
 impl Summary {
     fn median(values: &mut [u64]) -> u64 {
         values.sort_unstable();
-        if values.len() % 2 == 0 {
+        if values.len().is_multiple_of(2) {
             values[values.len() / 2 - 1].saturating_add(values[values.len() / 2]) / 2
         } else {
             values[values.len() / 2]

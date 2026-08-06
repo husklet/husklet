@@ -23,6 +23,7 @@ pub struct FaultAccess {
 }
 
 impl FaultAccess {
+    #[must_use]
     pub const fn new(fault: MemoryFault, length: u64) -> Option<Self> {
         match NonZeroU64::new(length) {
             Some(length) => Some(Self { fault, length }),
@@ -44,18 +45,23 @@ impl FaultAccess {
         }
     }
 
+    #[must_use]
     pub const fn fault(self) -> MemoryFault {
         self.fault
     }
+    #[must_use]
     pub const fn length(self) -> u64 {
         self.length.get()
     }
+    #[must_use]
     pub const fn instruction(self) -> u64 {
         self.fault.instruction
     }
+    #[must_use]
     pub const fn address(self) -> u64 {
         self.fault.address
     }
+    #[must_use]
     pub const fn access(self) -> AccessKind {
         self.fault.access
     }
@@ -80,6 +86,7 @@ pub trait GuestOperandMemory {
 
     fn commit_write_batch(&mut self, reservation: Self::BatchReservation, values: &[u64]) -> Result<(), ()>;
 }
+use std::num::NonZeroU64;
 
 #[cfg(test)]
 mod tests {
@@ -98,4 +105,3 @@ mod tests {
         assert_eq!(access.length(), 16);
     }
 }
-use std::num::NonZeroU64;

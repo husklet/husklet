@@ -1,4 +1,4 @@
-use super::*;
+use super::{NetworkCatalog, SocketId, SocketSnapshot, Arc, UnixSocketPair, NetworkCatalogError, CatalogSocket, Slot, NETWORK_CHECKPOINT_SOCKET_MAXIMUM};
 
 impl NetworkCatalog {
     pub fn connect_unix_pair(
@@ -10,7 +10,7 @@ impl NetworkCatalog {
         pair: Arc<UnixSocketPair>,
     ) -> Result<SocketId, NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (listener_snapshot, listener_pending) = match Self::slot(&slots, listener)?.socket.as_deref() {
             Some(CatalogSocket::Unix { snapshot, pending, .. }) => (snapshot.clone(), pending.clone()),
             Some(_) => return Err(NetworkCatalogError::Invalid),
@@ -86,14 +86,14 @@ impl NetworkCatalog {
 
     pub fn accept_pending_unix(&self, listener: SocketId) -> Result<SocketId, NetworkCatalogError> {
         let _admission = self.activity.admit();
-        let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
+        let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let (snapshot, mut pending) = match Self::slot(&slots, listener)?.socket.as_deref() {
             Some(CatalogSocket::Unix { snapshot, pending, .. })
                 if matches!(snapshot.state, crate::SocketState::Listening { .. }) =>
             {
                 (snapshot.clone(), pending.clone())
             }
-            Some(CatalogSocket::Unix { .. }) | Some(_) => return Err(NetworkCatalogError::Invalid),
+            Some(CatalogSocket::Unix { .. } | _) => return Err(NetworkCatalogError::Invalid),
             None => return Err(NetworkCatalogError::Stale),
         };
         let accepted = pending.first().copied().ok_or(NetworkCatalogError::Stale)?;

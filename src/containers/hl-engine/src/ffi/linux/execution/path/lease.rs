@@ -23,7 +23,7 @@ impl WriteLease {
     pub(super) fn acquire(identity: (u64, u64), writes: Registry) -> Self {
         *writes
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(identity)
             .or_insert(0) += 1;
         Self { identity, writes }
@@ -32,7 +32,7 @@ impl WriteLease {
 
 impl Drop for WriteLease {
     fn drop(&mut self) {
-        let mut writes = self.writes.lock().unwrap_or_else(|error| error.into_inner());
+        let mut writes = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(count) = writes.get_mut(&self.identity) else {
             return;
         };

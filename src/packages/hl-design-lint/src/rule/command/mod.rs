@@ -244,8 +244,8 @@ impl<'ast> Visit<'ast> for Commands<'_> {
         if let (Pat::Ident(binding), Some(initializer)) = (&local.pat, &local.init) {
             self.staged.remove(&binding.ident.to_string());
             if let Expr::Call(call) = initializer.expr.as_ref() {
-                if self.program_path(call).is_some() {
-                    if let Some(shell) = call
+                if self.program_path(call).is_some()
+                    && let Some(shell) = call
                         .args
                         .first()
                         .and_then(string_literal)
@@ -254,14 +254,11 @@ impl<'ast> Visit<'ast> for Commands<'_> {
                         self.staged
                             .insert(binding.ident.to_string(), Staged { shell, armed: false });
                     }
-                }
-            } else if let Expr::Path(alias) = initializer.expr.as_ref() {
-                if let Some(original) = alias.path.get_ident().map(ToString::to_string) {
-                    if let Some(command) = self.staged.get(&original).cloned() {
+            } else if let Expr::Path(alias) = initializer.expr.as_ref()
+                && let Some(original) = alias.path.get_ident().map(ToString::to_string)
+                    && let Some(command) = self.staged.get(&original).cloned() {
                         self.staged.insert(binding.ident.to_string(), command);
                     }
-                }
-            }
         }
         syn::visit::visit_local(self, local);
     }
