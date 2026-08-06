@@ -114,13 +114,35 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         match port.fork(self.process, self.thread, plan) {
             Ok(child) => {
                 self.system.observe_fork();
+                hl_log::hl_info!(
+                    hl_log::tag::TASK,
+                    "process forked parent={} child={} thread={} flags={:#x}",
+                    self.process.number(),
+                    child.process.number(),
+                    child.thread.number(),
+                    plan.flags,
+                );
                 LinuxResult::Value(child.process.number() as u64)
             }
-            Err(RuntimeForkError::Unsupported) => LinuxResult::Error(Errno::ENOSYS),
-            Err(RuntimeForkError::Invalid) => LinuxResult::Error(Errno::EINVAL),
-            Err(RuntimeForkError::Again) => LinuxResult::Error(Errno::EAGAIN),
-            Err(RuntimeForkError::NoMemory) => LinuxResult::Error(Errno::ENOMEM),
-            Err(RuntimeForkError::Failed) => LinuxResult::Error(Errno::EIO),
+            Err(error) => {
+                hl_log::hl_debug!(
+                    hl_log::tag::TASK,
+                    "process fork refused parent={} flags={:#x} error={error:?}",
+                    self.process.number(),
+                    plan.flags,
+                );
+                Self::fork_error(error)
+            }
+        }
+    }
+
+    const fn fork_error(error: RuntimeForkError) -> LinuxResult {
+        match error {
+            RuntimeForkError::Unsupported => LinuxResult::Error(Errno::ENOSYS),
+            RuntimeForkError::Invalid => LinuxResult::Error(Errno::EINVAL),
+            RuntimeForkError::Again => LinuxResult::Error(Errno::EAGAIN),
+            RuntimeForkError::NoMemory => LinuxResult::Error(Errno::ENOMEM),
+            RuntimeForkError::Failed => LinuxResult::Error(Errno::EIO),
         }
     }
 }

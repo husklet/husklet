@@ -145,6 +145,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     fn release_reaped(&self, child: hl_task::ProcessId) {
+        hl_log::hl_info!(
+            hl_log::tag::TASK,
+            "process reaped parent={} child={}",
+            self.process.number(),
+            child.number(),
+        );
         let retained = self
             .tasks
             .snapshot()

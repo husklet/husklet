@@ -187,8 +187,26 @@ impl<M: GuestMemory> Trap<M> {
 impl<M: GuestMemory + Send + Sync> TrapPort for Trap<M> {
     fn clone(&self, cpu: &ExecutionCpuSnapshot, plan: ClonePlan) -> LinuxResult {
         match self.runtime.spawn(self.source, cpu, plan) {
-            Ok(thread) => LinuxResult::Value(u64::from(thread.number())),
-            Err(error) => LinuxResult::Error(Self::errno(error)),
+            Ok(thread) => {
+                hl_log::hl_info!(
+                    hl_log::tag::TASK,
+                    "thread spawned source={} thread={} flags={:#x} stack={:#x}",
+                    self.source.number(),
+                    thread.number(),
+                    plan.flags,
+                    plan.stack,
+                );
+                LinuxResult::Value(u64::from(thread.number()))
+            }
+            Err(error) => {
+                hl_log::hl_debug!(
+                    hl_log::tag::TASK,
+                    "thread spawn refused source={} flags={:#x} error={error:?}",
+                    self.source.number(),
+                    plan.flags,
+                );
+                LinuxResult::Error(Self::errno(error))
+            }
         }
     }
 }

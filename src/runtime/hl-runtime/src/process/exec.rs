@@ -169,6 +169,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(port) = &self.exec else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
+        // `comm` is a fixed 16-byte array, so naming the image costs no allocation
+        // on the path where logging is disabled.
+        let comm = plan.comm();
+        let (arguments, flags) = (plan.arguments.len(), plan.flags);
         let result = port.prepare(self.process, self.thread, plan).and_then(|prepared| {
             let prepared = match &self.timers {
                 Some(timers) => Box::new(TimerExec {
@@ -183,8 +187,25 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             }
         });
         match result {
-            Ok(()) => LinuxResult::Value(0),
-            Err(error) => Self::exec_error(error),
+            Ok(()) => {
+                hl_log::hl_info!(
+                    hl_log::tag::TASK,
+                    "process image replaced process={} thread={} name={} arguments={arguments} flags={flags:#x}",
+                    self.process.number(),
+                    self.thread.number(),
+                    String::from_utf8_lossy(comm.split(|byte| *byte == 0).next().unwrap_or_default()),
+                );
+                LinuxResult::Value(0)
+            }
+            Err(error) => {
+                hl_log::hl_debug!(
+                    hl_log::tag::TASK,
+                    "process exec refused process={} name={} error={error:?}",
+                    self.process.number(),
+                    String::from_utf8_lossy(comm.split(|byte| *byte == 0).next().unwrap_or_default()),
+                );
+                Self::exec_error(error)
+            }
         }
     }
 

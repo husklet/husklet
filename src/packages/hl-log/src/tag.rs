@@ -254,6 +254,8 @@ pub const FS: Tag = Tag::new(1 << 20, "fs");
 pub const NET: Tag = Tag::new(1 << 21, "net");
 /// Guest memory boundaries: mapping, protection, faults, and translation-cache invalidation.
 pub const MEMORY: Tag = Tag::new(1 << 22, "memory");
+/// Guest task lifecycle: fork, thread spawn, exec image replacement, and reaping.
+pub const TASK: Tag = Tag::new(1 << 23, "task");
 
 /// Every tag enabled.
 pub const ALL: Tags = Tags::ALL;
@@ -266,7 +268,7 @@ pub const NONE: Tags = Tags::NONE;
 /// display, and every macro then pick it up automatically.
 pub const TAGS: &[Tag] = &[
     GPU, WGPU, VULKAN, GL, CUDA, COMPOSITOR, TRANSPORT, WIRE, PRESENT, EXEC, SHIM, RUNTIME, CPU, EGL, WAYLAND,
-    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY,
+    CONTAINER, IMAGE, DAEMON, UI, SYSCALL, FS, NET, MEMORY, TASK,
 ];
 
 #[cfg(test)]
