@@ -201,7 +201,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                request->guest_bytes[cursor] == 0x58u ||
                request->guest_bytes[cursor] == 0x59u || request->guest_bytes[cursor] == 0x5cu ||
                request->guest_bytes[cursor] == 0x5eu ||
-               request->guest_bytes[cursor] == 0x5bu ||
+               request->guest_bytes[cursor] == 0x5bu || request->guest_bytes[cursor] == 0x2cu ||
                request->guest_bytes[cursor] == 0xbcu || request->guest_bytes[cursor] == 0xbdu ||
                (cursor + 1u < request->guest_size && request->guest_bytes[cursor] == 0x1eu &&
                 (request->guest_bytes[cursor + 1u] == 0xfau || request->guest_bytes[cursor + 1u] == 0xfbu ||
@@ -701,9 +701,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 item->memory_operand = 1u;
                 item->source = 16u;
             }
-        } else if (semantic_prefix == 0xf2u && opcode == 0x0fu && cursor < request->guest_size &&
-                   request->guest_bytes[cursor] == 0x2cu) {
+        } else if ((semantic_prefix == 0xf2u || semantic_prefix == 0xf3u) && opcode == 0x0fu &&
+                   cursor < request->guest_size && request->guest_bytes[cursor] == 0x2cu) {
             uint8_t modrm;
+            /* F3 truncates a single, F2 a double; REX.W picks the integer width. */
+            uint8_t lane = semantic_prefix == 0xf3u ? 4u : 8u;
             ++cursor;
             if (cursor >= request->guest_size || cursor - start >= 15u) {
                 cursor = start; block->status = HL_X86_A64_TRUNCATED;
@@ -712,6 +714,7 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             modrm = request->guest_bytes[cursor];
             item->operation = OP_VECTOR;
             item->width = (rex & 8u) != 0u ? 8u : 4u;
+            item->vector_lane = lane;
             item->destination = (uint8_t)(((modrm >> 3) & 7u) | ((rex & 4u) << 1));
             item->source = (uint8_t)((modrm & 7u) | ((rex & 1u) << 3));
             item->vector_kind = VECTOR_TRUNC_DOUBLE_SIGNED;
@@ -721,7 +724,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                 if (!hl_x86_decode_address(request, block, item, rex, 0, address_32, start, &cursor)) break;
                 item->operation = OP_VECTOR;
                 item->width = (rex & 8u) != 0u ? 8u : 4u;
-                item->vector_memory_width = 8u;
+                item->vector_lane = lane;
+                item->vector_memory_width = lane;
                 item->memory_operand = 1u;
                 item->source = 16u;
             }

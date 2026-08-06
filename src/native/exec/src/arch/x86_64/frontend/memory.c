@@ -851,6 +851,15 @@ void hl_x86_emit_cmpxchg(uint32_t *words, uint32_t *cursor, const instruction *i
     branch(published, &words[*cursor], 14u);
 }
 
+/* vector_lane 4 means the source is a single; the threshold is 2^31 or 2^63 in
+ * that format, and the integer width picks x86's indefinite value. */
+static void trunc_scalar_constants(const instruction *item, uint64_t *threshold, uint64_t *indefinite) {
+    *threshold = item->vector_lane == 4u ?
+                     (item->width == 8u ? UINT64_C(0x5f000000) : UINT64_C(0x4f000000)) :
+                     (item->width == 8u ? UINT64_C(0x43e0000000000000) : UINT64_C(0x41e0000000000000));
+    *indefinite = item->width == 8u ? UINT64_C(0x8000000000000000) : UINT64_C(0x80000000);
+}
+
 static uint32_t vector_operation_words(const instruction *item) {
     switch (item->vector_kind) {
     case VECTOR_BYTE_MASK: return 7u;
@@ -861,11 +870,12 @@ static uint32_t vector_operation_words(const instruction *item) {
     case VECTOR_SCALAR_DIV_DOUBLE:
         return 28u + constant_words(item->pc) + (item->live_chain != 0u ? 18u : 0u);
     case VECTOR_SCALAR_COMPARE_DOUBLE: return 13u;
-    case VECTOR_TRUNC_DOUBLE_SIGNED:
-        return 4u + constant_words(item->width == 8u ? UINT64_C(0x43e0000000000000) :
-                                                      UINT64_C(0x41e0000000000000)) +
-               constant_words(item->width == 8u ? UINT64_C(0x8000000000000000) :
-                                                  UINT64_C(0x80000000));
+    case VECTOR_TRUNC_DOUBLE_SIGNED: {
+        uint64_t threshold;
+        uint64_t indefinite;
+        trunc_scalar_constants(item, &threshold, &indefinite);
+        return 4u + constant_words(threshold) + constant_words(indefinite);
+    }
     case VECTOR_FLOAT_ARITHMETIC:
         return 28u + constant_words(item->pc) + (item->live_chain != 0u ? 18u : 0u);
     case VECTOR_SHUFFLE_DWORD:
@@ -1147,15 +1157,18 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         words[(*cursor)++] = UINT32_C(0xaa000000) | 21u << 16 | 2u << 10 | 22u << 5 | 22u; /* PF */
         words[(*cursor)++] = store_word(22u, offsetof(hl_native_x86_64_cpu, flags));
     } else if (item->vector_kind == VECTOR_TRUNC_DOUBLE_SIGNED) {
-        uint64_t threshold = item->width == 8u ? UINT64_C(0x43e0000000000000) :
-                                                 UINT64_C(0x41e0000000000000);
-        uint64_t indefinite = item->width == 8u ? UINT64_C(0x8000000000000000) :
-                                                  UINT64_C(0x80000000);
-        words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9e780000) : UINT32_C(0x1e780000)) |
-                             source << 5 | destination; /* fcvtzs x/w destination,dsource */
+        uint32_t single = item->vector_lane == 4u;
+        uint64_t threshold;
+        uint64_t indefinite;
+        trunc_scalar_constants(item, &threshold, &indefinite);
+        uint32_t convert = item->width == 8u ? UINT32_C(0x9e780000) : UINT32_C(0x1e780000);
+        if (single != 0u) convert &= ~UINT32_C(0x00400000); /* type field 01 (double) -> 00 (single) */
+        words[(*cursor)++] = convert | source << 5 | destination; /* fcvtzs x/w destination,s/d source */
         emit_constant(words, cursor, 20u, threshold);
-        words[(*cursor)++] = UINT32_C(0x9e670000) | 20u << 5 | 19u; /* fmov d19,x20 */
-        words[(*cursor)++] = UINT32_C(0x1e602000) | 19u << 16 | source << 5; /* fcmp dsource,d19 */
+        words[(*cursor)++] = (single != 0u ? UINT32_C(0x1e270000) : UINT32_C(0x9e670000)) |
+                             20u << 5 | 19u; /* fmov s/d 19,w/x 20 */
+        words[(*cursor)++] = (single != 0u ? UINT32_C(0x1e202000) : UINT32_C(0x1e602000)) |
+                             19u << 16 | source << 5; /* fcmp source,19 */
         emit_constant(words, cursor, 20u, indefinite);
         words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x9a800000) : UINT32_C(0x1a800000)) |
                              destination << 16 | 2u << 12 | 20u << 5 | destination; /* csel result,indef,result,cs */

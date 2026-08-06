@@ -495,6 +495,121 @@ fn x86_sse_scalar_compare_flags_match_interpreter_at_each_boundary() {
     }
 }
 
+/// `cvttss2si`/`cvttsd2si` to both a 32- and a 64-bit integer, exercising the
+/// saturation edges where x86 yields the integer indefinite value: at and just
+/// past 2^31 and 2^63, negative overflow, and NaN.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_sse_truncating_float_to_integer_matches_interpreter_at_each_boundary() {
+    // xmm0 walks the interesting single-precision inputs, xmm1 the double ones.
+    let cases: [(u128, u128); 7] = [
+        (0x3fc0_0000, 0x3ff8_0000_0000_0000),                     // 1.5
+        (0xbfc0_0000, 0xbff8_0000_0000_0000),                     // -1.5
+        (0x4f00_0000, 0x41e0_0000_0000_0000),                     // 2^31
+        (0xcf00_0000, 0xc1e0_0000_0000_0000),                     // -2^31
+        (0x5f00_0000, 0x43e0_0000_0000_0000),                     // 2^63
+        (0xdf00_0000, 0xc3e0_0000_0000_0000),                     // -2^63
+        (0x7fc0_0000, 0x7ff8_0000_0000_0000),                     // NaN
+    ];
+    let bytes = [
+        0xf3, 0x0f, 0x2c, 0xd8, // cvttss2si %xmm0,%ebx
+        0xf3, 0x48, 0x0f, 0x2c, 0xd8, // cvttss2si %xmm0,%rbx
+        0xf2, 0x0f, 0x2c, 0xd9, // cvttsd2si %xmm1,%ebx
+        0xf2, 0x48, 0x0f, 0x2c, 0xd9, // cvttsd2si %xmm1,%rbx
+        0xf3, 0x0f, 0x2c, 0x5e, 0x08, // cvttss2si 0x8(%rsi),%ebx
+        0xf3, 0x48, 0x0f, 0x2c, 0x5e, 0x08, // cvttss2si 0x8(%rsi),%rbx
+        0xf2, 0x0f, 0x2c, 0x1e, // cvttsd2si (%rsi),%ebx
+        0xf2, 0x48, 0x0f, 0x2c, 0x1e, // cvttsd2si (%rsi),%rbx
+    ];
+    let instruction_ends = [4, 9, 13, 18, 23, 29, 33, 38];
+    for (case, &(single, double)) in cases.iter().enumerate() {
+        let mut initial = X86CpuState {
+            rip: 0x402720,
+            ..X86CpuState::default()
+        };
+        initial.registers[6] = 0x7000;
+        initial.vectors[0] = single;
+        initial.vectors[1] = double;
+        // The double case sits at offset 0 and the single case at offset 8.
+        let mut memory_operand = [0u8; 16];
+        memory_operand[..8].copy_from_slice(&(double as u64).to_le_bytes());
+        memory_operand[8..12].copy_from_slice(&(single as u32).to_le_bytes());
+        for (index, &end) in instruction_ends.iter().enumerate() {
+            let mut prefix = bytes[..end].to_vec();
+            prefix.extend_from_slice(&[0x0f, 0x05]);
+            let source = [super::BorrowedSource {
+                guest_first: 0x402720,
+                bytes: &prefix,
+            }];
+            let mut native = initial.clone();
+            let mut storage = memory_operand;
+            let view = ProjectionView {
+                guest_first: 0x7000,
+                guest_last: 0x7010,
+                host_first: storage.as_mut_ptr() as usize as u64,
+                mapping_incarnation: 1,
+                permissions: 3,
+                write_policy: super::WRITE_EXACT,
+                write_index: 0,
+            };
+            let projection = Projection {
+                views: &raw const view,
+                count: 1,
+                mapping_incarnation: 1,
+                active: 0,
+            };
+            let executor = Executor::create().expect("native executor");
+            let mut resolve = |_: u64, _: &mut [u8]| None;
+            let outcome = executor
+                .run_x86(
+                    &mut native,
+                    &source,
+                    1,
+                    index as u64 + 1,
+                    64,
+                    false,
+                    Some(&projection),
+                    &mut resolve,
+                )
+                .unwrap()
+                .0;
+            assert_eq!(outcome.exit, Exit::Syscall, "case {case} boundary {} outcome {outcome:?}", index + 1);
+
+            let mut memory = ReplayMemory {
+                sources: vec![ReplaySource {
+                    first: 0x402720,
+                    bytes: prefix.clone(),
+                }],
+                data: vec![ReplayView {
+                    first: 0x7000,
+                    data: memory_operand.to_vec(),
+                }],
+                generation: 1,
+            };
+            let machine = ExecutionMachine::new(ExecutionSnapshot {
+                version: EXECUTION_SNAPSHOT_VERSION,
+                cpu: ExecutionCpuSnapshot::X86_64(initial.clone()),
+                cache_epoch: 1,
+                fault: None,
+            })
+            .unwrap();
+            let step = machine.run_slice(1, index as u64 + 3, &mut memory);
+            assert!(matches!(step, StepOutcome::Syscall { .. }), "case {case} boundary {} step {step:?}", index + 1);
+            machine.freeze().unwrap();
+            let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
+                unreachable!()
+            };
+            assert_eq!(
+                native,
+                interpreted,
+                "case {case} first state divergence after instruction {} ending at {:#x}",
+                index + 1,
+                0x402720 + end
+            );
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TraceResult {
     checkpoint: TraceCheckpoint,
