@@ -2028,6 +2028,7 @@ impl Executor {
         interrupt: &InterruptToken,
         budget: u64,
         resolve: &mut dyn FnMut(u64, &mut [u8]) -> Option<(usize, ExecutableToken)>,
+        mut poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(RunOutcome, RunStatistics), ()> {
         if sources.is_empty() || sources.len() > 8 || sources.iter().any(|span| span.bytes.is_empty()) {
             return Err(());
@@ -2156,6 +2157,7 @@ impl Executor {
                 None,
                 Some(interrupt),
                 Some(identity),
+                poll.as_mut().map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
             );
             lease = authority.into_lease()?.into_projection();
             result
@@ -2176,6 +2178,7 @@ impl Executor {
                 Some(((&raw mut operand).cast(), resolve_operand::<H>)),
                 Some(interrupt),
                 None,
+                poll.as_mut().map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
             )
         };
         let (exit, instruction, _, code, remaining, executed, writes) = result?;
@@ -2241,6 +2244,7 @@ impl Executor {
             operand,
             None,
             None,
+            None,
         )
     }
 
@@ -2255,7 +2259,16 @@ impl Executor {
         operand: Option<(*mut c_void, OperandResolve)>,
         interrupt: Option<&InterruptToken>,
         direct: Option<(*const DirectToken, u64, u64)>,
+        mut poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(Exit, u64, u64, u64, u64, u64, NativeWrites), ()> {
+        let (quantum_context, quantum_poll, quantum_grant) = match poll.as_mut() {
+            Some(callback) => (
+                (callback as *mut &mut dyn FnMut(u64, u64) -> bool).cast(),
+                Some(poll_quantum as unsafe extern "C" fn(*mut c_void, u64, u64) -> u32),
+                budget,
+            ),
+            None => (std::ptr::null_mut(), None, 0),
+        };
         let mut native = NativeAarch64::capture(state);
         native.0.interrupt_token = interrupt.map_or(0, InterruptToken::as_raw);
         let mut cpu = CpuHandle {
@@ -2289,9 +2302,9 @@ impl Executor {
             authority_generation: direct.map_or(0, |identity| identity.1),
             direct_token: direct.map_or(std::ptr::null(), |identity| identity.0),
             authority_identity: direct.map_or(0, |identity| identity.2),
-            quantum_context: std::ptr::null_mut(),
-            quantum_poll: None,
-            quantum_grant: 0,
+            quantum_context,
+            quantum_poll,
+            quantum_grant,
             certificate: std::ptr::null(),
         };
         let mut output = RunExit {
@@ -5680,7 +5693,7 @@ mod test {
             ..Aarch64CpuState::default()
         };
         let outcome = executor
-            .run_aarch64_inner(&mut cpu, &source, None, 1, u64::MAX / 2, None, None, Some(&token), None)
+            .run_aarch64_inner(&mut cpu, &source, None, 1, u64::MAX / 2, None, None, Some(&token), None, None)
             .expect("interruptible run");
         setter.join().unwrap();
         assert!(token.is_set());

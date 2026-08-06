@@ -1264,6 +1264,15 @@ impl GuestExecutor {
         let diagnostics = pool.diagnostics;
         let executor = pool.executor(run.process)?;
         let source = [crate::native::NativeSource { guest_first: pc, bytes }];
+        let checkpoint = projection.checkpoint_continuation();
+        let mapping = projection.request_continuation();
+        // A still-current grant extends the run in place at the same instruction
+        // granularity the budget would have yielded at.
+        let mut poll = |_: u64, _: u64| {
+            checkpoint.is_current()
+                && mapping.is_current()
+                && continuation.is_some_and(threads::SchedulerContinuation::is_current)
+        };
         let mut fallback = false;
         let mut fallback_pc = None;
         let mut statistics = None;
@@ -1294,7 +1303,16 @@ impl GuestExecutor {
             };
             let original = cpu.clone();
             let Ok((result, stats)) =
-                executor.run_lease(cpu, &source, projection, token, &run.interrupt, native_budget, &mut resolve)
+                executor.run_lease(
+                    cpu,
+                    &source,
+                    projection,
+                    token,
+                    &run.interrupt,
+                    native_budget,
+                    &mut resolve,
+                    continuation.map(|_| &mut poll as &mut dyn FnMut(u64, u64) -> bool),
+                )
             else {
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);

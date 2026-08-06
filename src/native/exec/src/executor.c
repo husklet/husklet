@@ -1028,6 +1028,10 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     const hl_a64_projection *projection = request->projection;
     uint8_t scratch[HL_A64_TRACE_MAX_BYTES];
     uint64_t budget = request->budget;
+    uint64_t cumulative_budget = request->budget;
+    hl_native_quantum_poll quantum_poll = NULL;
+    void *quantum_context = NULL;
+    uint64_t quantum_grant = 0;
     int translated = 0;
     hl_native_execution execution = {0};
     hl_native_source_resolve resolver = NULL;
@@ -1084,6 +1088,12 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         direct_token = request->direct_token;
     if (request->size >= offsetof(hl_native_run_request, certificate))
         authority_identity = request->authority_identity;
+    if (request->size >= offsetof(hl_native_run_request, quantum_grant)) {
+        quantum_context = request->quantum_context;
+        quantum_poll = request->quantum_poll;
+    }
+    if (request->size >= sizeof(*request)) quantum_grant = request->quantum_grant;
+    if ((quantum_poll == NULL) != (quantum_grant == 0)) return HL_NATIVE_ARGUMENT;
     if ((fault_publish == NULL) != (fault_unpublish == NULL)) return HL_NATIVE_ARGUMENT;
     if (source == NULL || !hl_a64_source_validate(source) ||
         source->mapping_incarnation != request->mapping_epoch ||
@@ -1130,9 +1140,18 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 return HL_NATIVE_STATE;
             }
         }
-        if (cpu->interrupt != 0 || budget == 0) {
-            return run_exit(&execution, output, cpu->interrupt != 0 ? HL_NATIVE_EXIT_INTERRUPT : HL_NATIVE_EXIT_YIELD,
-                            instruction);
+        if (cpu->interrupt != 0)
+            return run_exit(&execution, output, HL_NATIVE_EXIT_INTERRUPT, instruction);
+        if (budget == 0) {
+            /* The spilled loop head is the same architecturally precise point a
+             * yield would return from, so a still-current grant extends here. */
+            if (quantum_poll == NULL || !quantum_poll(quantum_context, cpu->executed, cumulative_budget))
+                return run_exit(&execution, output, HL_NATIVE_EXIT_YIELD, instruction);
+            if (cumulative_budget > UINT64_MAX - quantum_grant || cpu->executed > cumulative_budget)
+                return run_fatal(&execution, output, 1);
+            cumulative_budget += quantum_grant;
+            budget = quantum_grant;
+            cpu->budget = budget;
         }
         size_t limit = budget < HL_A64_SOURCE_MAX_WORDS ? (size_t)budget : HL_A64_SOURCE_MAX_WORDS;
         if (limit > HL_A64_TRACE_MAX_WORDS) limit = HL_A64_TRACE_MAX_WORDS;
@@ -1267,8 +1286,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
         active_view_clear(cpu);
-        if (cpu->budget > request->budget) return run_fatal(&execution, output, 1);
-        cpu->executed = request->budget - cpu->budget;
+        if (cpu->budget > cumulative_budget) return run_fatal(&execution, output, 1);
+        cpu->executed = cumulative_budget - cpu->budget;
         if (executor->diagnostics) {
             atomic_fetch_add_explicit(&executor->a64_guard_fast, cpu->diagnostic_guard_fast, memory_order_relaxed);
             atomic_fetch_add_explicit(&executor->a64_guard_full, cpu->diagnostic_guard_full, memory_order_relaxed);
@@ -1355,7 +1374,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             uint64_t charged = executed_code.instruction_count;
             if (charged < completed || cpu->executed < charged)
                 return run_fatal(&execution, output, 1);
-            if (cpu->budget > request->budget - (charged - completed))
+            if (cpu->budget > cumulative_budget - (charged - completed))
                 return run_fatal(&execution, output, 1);
             uint64_t refund = charged - completed;
             cpu->executed -= refund;
@@ -1403,7 +1422,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             }
             return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
         }
-        if (cpu->budget > budget || cpu->executed > request->budget) return run_fatal(&execution, output, 1);
+        if (cpu->budget > budget || cpu->executed > cumulative_budget) return run_fatal(&execution, output, 1);
         budget = cpu->budget;
         if (cpu->reason == HL_NATIVE_EXIT_BRANCH) {
             continue;

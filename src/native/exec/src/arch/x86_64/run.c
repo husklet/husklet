@@ -597,7 +597,6 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
     hl_native_quantum_poll quantum_poll = NULL;
     void *quantum_context = NULL;
     uint64_t quantum_grant = 0;
-    int rep_boundary = 0;
     uint64_t memory_mode = 0;
     uint64_t authority_generation = 0;
     uint64_t authority_identity = 0;
@@ -675,7 +674,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         }
         if (cpu->interrupt != 0) return leave_exit(&execution, output, HL_NATIVE_EXIT_INTERRUPT, pc);
         if (budget == 0) {
-            if (!rep_boundary || quantum_poll == NULL ||
+            if (quantum_poll == NULL ||
                 !quantum_poll(quantum_context, cpu->executed, cumulative_budget))
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_YIELD, pc);
             if (cumulative_budget > UINT64_MAX - quantum_grant ||
@@ -684,7 +683,6 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             cumulative_budget += quantum_grant;
             budget = quantum_grant;
             cpu->budget = budget;
-            rep_boundary = 0;
         }
         size = source_bytes(source, pc, &bytes);
         x86_rep rep;
@@ -695,11 +693,7 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
         if (rep_result == X86_REP_EPOCH) return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, pc);
         if (rep_result == X86_REP_COMPLETE) {
             /* Both an incomplete REP and its completed architectural boundary
-             * have fully published RCX/RSI/RDI and exact write bookkeeping.
-             * Let the generation-qualified poll admit the following quantum
-             * here so exact-quantum completion does not force a public run
-             * round-trip before the next instruction. */
-            rep_boundary = budget == 0;
+             * have fully published RCX/RSI/RDI and exact write bookkeeping. */
             if ((cpu->executable_written & 4u) != 0)
                 return leave_exit(&execution, output, HL_NATIVE_EXIT_EPOCH, cpu->program);
             continue;
