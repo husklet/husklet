@@ -155,6 +155,10 @@ pub(super) struct NativePool {
     suppressed: BTreeSet<NativeSite>,
     fallbacks: BTreeSet<NativeSite>,
     observations: BTreeMap<NativeSite, u8>,
+    /// Diagnostics-only: how often each guest PC forced a fallback, and how
+    /// often each entry PC was refused because a previous fallback suppressed it.
+    fallback_weight: BTreeMap<u64, u64>,
+    suppressed_weight: BTreeMap<u64, u64>,
     sources: BTreeMap<NativeSource, hl_memory::ExecutableToken>,
     source_incarnations: BTreeMap<hl_task::ProcessId, u64>,
     instruction_epochs: BTreeMap<hl_task::ProcessId, u64>,
@@ -183,6 +187,8 @@ impl NativePool {
             suppressed: BTreeSet::new(),
             fallbacks: BTreeSet::new(),
             observations: BTreeMap::new(),
+            fallback_weight: BTreeMap::new(),
+            suppressed_weight: BTreeMap::new(),
             sources: BTreeMap::new(),
             source_incarnations: BTreeMap::new(),
             instruction_epochs: BTreeMap::new(),
@@ -220,6 +226,9 @@ impl NativePool {
     }
 
     fn record_fallback(&mut self, entry: NativeSite, instruction: NativeSite) {
+        if self.diagnostics {
+            *self.fallback_weight.entry(instruction.4).or_default() += 1;
+        }
         if self.suppressed.len() < NATIVE_SITE_LIMIT {
             self.suppressed.insert(entry);
         }
@@ -429,6 +438,16 @@ impl Drop for NativePool {
                 self.fallbacks.len(),
                 self.counters.services,
             );
+            let mut fallback: Vec<_> = self.fallback_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
+            fallback.sort_unstable_by(|a, b| b.cmp(a));
+            for (count, pc) in fallback.iter().take(24) {
+                eprintln!("hl-native-fallback-pc: pc={pc:#x} count={count}");
+            }
+            let mut refused: Vec<_> = self.suppressed_weight.iter().map(|(pc, n)| (*n, *pc)).collect();
+            refused.sort_unstable_by(|a, b| b.cmp(a));
+            for (count, pc) in refused.iter().take(24) {
+                eprintln!("hl-native-suppressed-entry: pc={pc:#x} refused={count}");
+            }
         }
     }
 }
@@ -1409,6 +1428,9 @@ impl GuestExecutor {
             pc,
         );
         if pool.suppressed.contains(&key) {
+            if pool.diagnostics {
+                *pool.suppressed_weight.entry(pc).or_default() += 1;
+            }
             return None;
         }
         if !pool.observations.contains_key(&key) && pool.observations.len() == NATIVE_SITE_LIMIT {
