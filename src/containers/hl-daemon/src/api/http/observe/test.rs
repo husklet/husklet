@@ -238,10 +238,7 @@ async fn status_order() {
         Query(custom_top("user,args")),
     )
     .await;
-    let missing = match missing {
-        Ok(_) => panic!("missing container must fail"),
-        Err(error) => error,
-    };
+    let Err(missing) = missing else { panic!("missing container must fail") };
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
 
     let stopped = top(
@@ -250,19 +247,15 @@ async fn status_order() {
         Query(custom_top("user,args")),
     )
     .await;
-    let stopped = match stopped {
-        Ok(_) => panic!("stopped container must fail"),
-        Err(error) => error,
-    };
+    let Err(stopped) = stopped else { panic!("stopped container must fail") };
     assert_eq!(stopped.status, StatusCode::CONFLICT);
 }
 
 #[test]
 fn active_pid_contract() {
     let without_pid = custom_top("user,args").columns().unwrap();
-    let error = match Top::for_container(&running(), &without_pid) {
-        Ok(_) => panic!("active result without PID must fail"),
-        Err(error) => error,
+    let Err(error) = Top::for_container(&running(), &without_pid) else {
+        panic!("active result without PID must fail")
     };
     assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(format!("{error:?}").contains("Couldn't find PID"));
@@ -278,10 +271,7 @@ fn active_pid_contract() {
         finished_at_ms: 2,
         ready_at_ms: 3,
     };
-    let error = match Top::for_container(&restarting, &without_pid) {
-        Ok(_) => panic!("restarting container must fail"),
-        Err(error) => error,
-    };
+    let Err(error) = Top::for_container(&restarting, &without_pid) else { panic!("restarting container must fail") };
     assert_eq!(error.status, StatusCode::CONFLICT);
 }
 
