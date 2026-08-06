@@ -79,10 +79,9 @@ int main(void) {
     int chmod_missing      = fail_is(chmod(P(p1, "nope"), 0644), ENOENT);
     int chown_missing      = fail_is(chown(P(p1, "nope"), 0, 0), ENOENT);
 
-    // access X_OK on a non-exec file: EACCES for a non-root uid; root's DAC override makes X_OK succeed.
+    // Linux requires at least one execute bit even for a privileged caller's X_OK check.
     close(open(P(p1, "noexec"), O_CREAT | O_WRONLY, 0600));
-    int access_xok = getuid() == 0 ? (access(P(p1, "noexec"), X_OK) == 0)
-                                   : fail_is(access(P(p1, "noexec"), X_OK), EACCES);
+    int access_xok = fail_is(access(P(p1, "noexec"), X_OK), EACCES);
 
     printf("errno-matrix rmdir=%d rename=%d renameat2=%d mkdir=%d linksym=%d trunc=%d access=%d\n",
            rmdir_dot_einval && rmdir_dotdot_ne && rmdir_nonempty && rmdir_onfile && rmdir_missing,

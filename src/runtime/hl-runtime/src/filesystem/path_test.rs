@@ -331,6 +331,26 @@ fn absolute_flags_isas() {
 }
 
 #[test]
+fn openat2_beneath_rejects_absolute_path_before_host() {
+    for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
+        let (adapter, host) = Host::fixture(architecture, false);
+        {
+            let mut bytes = adapter.memory.0.lock().unwrap();
+            bytes[64..72].copy_from_slice(&0_u64.to_le_bytes());
+            bytes[72..80].copy_from_slice(&0_u64.to_le_bytes());
+            bytes[80..88].copy_from_slice(&0x8_u64.to_le_bytes());
+        }
+        assert_eq!(
+            adapter.openat([u64::MAX, 32, 64, 24, 0, 0], true),
+            LinuxResult::Error(hl_linux::Errno::EXDEV)
+        );
+        assert_eq!(host.roots.load(Ordering::Acquire), 0);
+        assert_eq!(host.descriptors.load(Ordering::Acquire), 0);
+        assert_eq!(host.prepares.load(Ordering::Acquire), 0);
+    }
+}
+
+#[test]
 fn host_publishes_descriptor() {
     let (adapter, host) = Host::fixture(GuestArchitecture::Aarch64, true);
     assert_eq!(

@@ -27,6 +27,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let Ok(plan) = plan else {
             return false;
         };
+        if plan.resolve.beneath && plan.operand.path.is_absolute() {
+            return false;
+        }
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
             && super::proc::DescriptorLink::resolve(plan.operand.path.as_bytes()).is_some()
         {
@@ -88,6 +91,13 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             }
             Err(error) => return LinuxResult::Error(FileErrno::marshal(error)),
         };
+        // RESOLVE_BENEATH rejects an absolute pathname before selecting a
+        // root, descriptor, projected, or synthetic path adapter. Keeping
+        // this Linux invariant at syscall admission prevents special path
+        // providers from bypassing the pinned resolver's equivalent check.
+        if plan.resolve.beneath && plan.operand.path.is_absolute() {
+            return LinuxResult::Error(Errno::EXDEV);
+        }
         if plan.intent.bits() & hl_vfs::OpenIntent::NOFOLLOW == 0
             && let Some(source) = super::proc::DescriptorLink::resolve(plan.operand.path.as_bytes())
         {
