@@ -411,7 +411,7 @@ impl ProcfsSource for TaskProcfs {
         process: ProcfsProcessIdentity,
         thread: Option<ProcfsThreadIdentity>,
     ) -> Result<i16, ProcfsError> {
-        let process = self.process_id(process)?;
+        let process = ProcessId::from_wire(process.slot(), process.generation()).ok_or(ProcfsError::NotFound)?;
         let thread = thread.map(|thread| self.thread_id(thread)).transpose()?;
         self.tasks
             .task_oom_score_adj(process, thread)
