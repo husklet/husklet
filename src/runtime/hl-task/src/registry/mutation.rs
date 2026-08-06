@@ -89,11 +89,56 @@ impl TaskRegistry {
     }
 
     pub fn set_oom_score_adj(&self, process: ProcessId, value: i16) -> Result<(), TaskError> {
+        self.set_task_oom_score_adj(process, None, value)
+    }
+
+    /// Reads one process OOM adjustment after atomically validating an optional exact thread owner.
+    pub fn task_oom_score_adj(&self, process: ProcessId, thread: Option<crate::ThreadId>) -> Result<i16, TaskError> {
+        let state = self.lock();
+        Self::validate_oom_target(&state, process, thread)?;
+        Ok(Self::process(&state, process)?.oom_score_adj)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn task_oom_score_adj_with_hook(
+        &self,
+        process: ProcessId,
+        thread: Option<crate::ThreadId>,
+        hook: impl FnOnce(),
+    ) -> Result<i16, TaskError> {
+        let state = self.lock();
+        Self::validate_oom_target(&state, process, thread)?;
+        hook();
+        Ok(Self::process(&state, process)?.oom_score_adj)
+    }
+
+    /// Sets one process OOM adjustment after atomically validating an optional exact thread owner.
+    pub fn set_task_oom_score_adj(
+        &self,
+        process: ProcessId,
+        thread: Option<crate::ThreadId>,
+        value: i16,
+    ) -> Result<(), TaskError> {
         if !(-1000..=1000).contains(&value) {
             return Err(TaskError::InvalidLimit);
         }
         let mut state = self.lock();
+        Self::validate_oom_target(&state, process, thread)?;
         Self::process_mut(&mut state, process)?.oom_score_adj = value;
+        Ok(())
+    }
+
+    fn validate_oom_target(
+        state: &super::State,
+        process: ProcessId,
+        thread: Option<crate::ThreadId>,
+    ) -> Result<(), TaskError> {
+        Self::process(state, process)?;
+        if let Some(thread) = thread {
+            if Self::thread(state, thread)?.process != process {
+                return Err(TaskError::WrongProcess);
+            }
+        }
         Ok(())
     }
 

@@ -193,7 +193,10 @@ task-qualified open description to keep naming that exact thread lifetime.
 
 Rust carries an optional exact `ThreadIdentity` only for task-qualified OOM
 files. Data reads and valid writes revalidate that identity and its owning
-process, returning `ESRCH` after exit, reuse, or cross-process mismatch without
+process under the same `hl-task` registry-state lock used to read or mutate the
+OOM value. Exit/reap/reuse therefore linearizes wholly before or after the
+operation, never between identity validation and access. Missing or mismatched
+identities return `ESRCH` after exit, reuse, or cross-process mismatch without
 mutating a replacement. Process-level OOM files retain their prior behavior.
 Metadata size and seek arithmetic use the length cached at open and remain usable
 after task exit. Empty, malformed, or out-of-range writes fail `EINVAL` before

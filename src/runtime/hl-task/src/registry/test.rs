@@ -122,6 +122,59 @@ fn process_number_tracks_zombie_reap_and_generation() {
 }
 
 #[test]
+fn task_oom_access_is_atomic_with_exit_and_rejects_reuse() {
+    use std::sync::{Barrier, mpsc};
+
+    let (registry, parent, leader) = Fixture::registry(2, 2);
+    let registry = Arc::new(registry);
+    let (child, child_thread) = registry
+        .commit_fork_process(registry.begin_fork_process(leader).unwrap())
+        .unwrap();
+    registry.set_task_oom_score_adj(child, Some(child_thread), 321).unwrap();
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let reader = {
+        let registry = Arc::clone(&registry);
+        let entered = Arc::clone(&entered);
+        let release = Arc::clone(&release);
+        thread::spawn(move || {
+            registry.task_oom_score_adj_with_hook(child, Some(child_thread), || {
+                entered.wait();
+                release.wait();
+            })
+        })
+    };
+    entered.wait();
+    let (sent, received) = mpsc::channel();
+    let exiting = {
+        let registry = Arc::clone(&registry);
+        thread::spawn(move || {
+            let result = registry.exit_process(child, ExitStatus::Code(0));
+            sent.send(result).unwrap();
+        })
+    };
+    assert!(received.try_recv().is_err());
+    release.wait();
+    assert_eq!(reader.join().unwrap(), Ok(321));
+    assert_eq!(received.recv().unwrap(), Ok(()));
+    exiting.join().unwrap();
+    registry.reap(parent, child).unwrap();
+    let (replacement, replacement_thread) = registry
+        .commit_fork_process(registry.begin_fork_process(leader).unwrap())
+        .unwrap();
+    assert_eq!(replacement.number(), child.number());
+    assert_eq!(replacement_thread.number(), child_thread.number());
+    assert_eq!(
+        registry.set_task_oom_score_adj(child, Some(child_thread), 999),
+        Err(TaskError::InvalidProcess)
+    );
+    assert_eq!(
+        registry.task_oom_score_adj(replacement, Some(replacement_thread)),
+        Ok(0)
+    );
+}
+
+#[test]
 fn process_number_concurrently_returns_exact_identity() {
     let (registry, process, _) = Fixture::registry(2, 2);
     let registry = Arc::new(registry);

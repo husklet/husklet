@@ -412,19 +412,9 @@ impl ProcfsSource for TaskProcfs {
         thread: Option<ProcfsThreadIdentity>,
     ) -> Result<i16, ProcfsError> {
         let process = self.process_id(process)?;
-        if let Some(thread) = thread {
-            let thread = self.thread_id(thread)?;
-            let snapshot = self.tasks.snapshot();
-            snapshot
-                .threads
-                .iter()
-                .any(|candidate| candidate.id == thread && candidate.process == process)
-                .then_some(())
-                .ok_or(ProcfsError::NotFound)?;
-        }
+        let thread = thread.map(|thread| self.thread_id(thread)).transpose()?;
         self.tasks
-            .process_snapshot(process)
-            .map(|snapshot| snapshot.oom_score_adj)
+            .task_oom_score_adj(process, thread)
             .map_err(|_| ProcfsError::NotFound)
     }
 
@@ -440,22 +430,16 @@ impl ProcfsSource for TaskProcfs {
                 hl_descriptor::ObjectError::NoSuchProcess
             })
         })?;
-        if let Some(thread) = thread {
-            let thread = self
-                .thread_id(thread)
-                .map_err(|_| hl_descriptor::ObjectError::NoSuchProcess)?;
-            let snapshot = self.tasks.snapshot();
-            if !snapshot
-                .threads
-                .iter()
-                .any(|candidate| candidate.id == thread && candidate.process == process)
-            {
-                return Err(hl_descriptor::ObjectError::NoSuchProcess);
-            }
-        }
+        let thread = thread
+            .map(|thread| self.thread_id(thread))
+            .transpose()
+            .map_err(|_| hl_descriptor::ObjectError::NoSuchProcess)?;
         self.tasks
-            .set_oom_score_adj(process, value)
-            .map_err(|_| hl_descriptor::ObjectError::InvalidArgument)
+            .set_task_oom_score_adj(process, thread, value)
+            .map_err(|error| match error {
+                hl_task::TaskError::InvalidLimit => hl_descriptor::ObjectError::InvalidArgument,
+                _ => hl_descriptor::ObjectError::NoSuchProcess,
+            })
     }
 
     fn cmdline(&self, process: ProcfsProcessIdentity) -> Result<Vec<u8>, ProcfsError> {
