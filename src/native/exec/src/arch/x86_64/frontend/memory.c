@@ -19,7 +19,13 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
 }
 
 #define HL_X86_READ_VIEWS 4u
-#define HL_X86_WRITE_CACHE_WORDS 100u
+#define HL_X86_WRITE_CACHE_WORDS 94u
+
+/* The empty-journal sentinel is UINT64_MAX.  emit_constant reaches it with a
+ * movz and three movk; MOVN writes the same all-ones pattern in one word. */
+static uint32_t ones_word(unsigned destination) {
+    return UINT32_C(0x92800000) | destination;
+}
 
 /* The entry trampolines bound the published count against this capacity as a
  * literal, so it must keep tracking the record. */
@@ -183,7 +189,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     uint32_t *keep_last = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xf9000e74); /* str current last,[x19,#24] */
     uint32_t *merged = &words[*cursor];
-    emit_constant(words, cursor, 20, UINT64_MAX);
+    words[(*cursor)++] = ones_word(20);
     words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
     words[(*cursor)++] = store_word(31, offsetof(hl_native_x86_64_cpu, dirty_last));
     uint32_t *merged_install = &words[(*cursor)++];
@@ -208,7 +214,7 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = UINT32_C(0xa9015674); /* stp x20,x21,[x19,#16] */
     words[(*cursor)++] = UINT32_C(0x91000631); /* add x17,x17,#1 */
     words[(*cursor)++] = store_word(17, offsetof(hl_native_x86_64_cpu, dirty_count));
-    emit_constant(words, cursor, 20, UINT64_MAX);
+    words[(*cursor)++] = ones_word(20);
     words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, dirty_first));
     words[(*cursor)++] = store_word(31, offsetof(hl_native_x86_64_cpu, dirty_last));
     uint32_t *install = &words[*cursor];

@@ -2107,6 +2107,134 @@ static int write_cache_contract(void) {
     return 0;
 }
 
+static uint32_t scalar_cmpxchg_fragment(uint32_t *host) {
+    instruction item;
+    uint32_t cursor = 0;
+    memset(&item, 0, sizeof item);
+    item.pc = UINT64_C(0x45690000);
+    item.operation = OP_CMPXCHG;
+    item.source = 1;
+    item.width = 8;
+    item.address_base = 3;
+    item.address_index = UINT8_MAX;
+    hl_x86_emit_cmpxchg(host, &cursor, &item);
+    CHECK(cursor == hl_x86_cmpxchg_words(&item));
+    host[cursor++] = UINT32_C(0xd65f03c0);
+    return cursor;
+}
+
+/* A store that selects a different published view must archive the outgoing
+ * view's exact dirty interval before any projection state changes: append a
+ * record the first time an owner is seen, merge into that record afterwards,
+ * and re-arm the empty sentinel each time.  Nothing else exercises the archive,
+ * append and merge blocks of the write cache. */
+static int dirty_journal_contract(void) {
+    _Alignas(16) uint64_t low[8] = {0};
+    _Alignas(16) uint64_t high[8] = {0};
+    uint64_t low_delta = (uint64_t)(uintptr_t)low - UINT64_C(0x1000);
+    uint64_t high_delta = (uint64_t)(uintptr_t)high - UINT64_C(0x2000);
+    uint32_t host[256] = {0};
+    uint32_t count = scalar_write_fragment(host);
+    hl_native_x86_64_cpu cpu;
+
+    memset(&cpu, 0, sizeof cpu);
+    cpu.registers[1] = UINT64_C(0x0123456789abcdef);
+    cpu.dirty_first = UINT64_MAX;
+    cpu.read_token = 21;
+    cpu.read_incarnation = 21;
+    cpu.read_count = 2;
+    cpu.read_views[0][0] = UINT64_C(0x1000);
+    cpu.read_views[0][1] = UINT64_C(0x1020);
+    cpu.read_views[0][2] = low_delta;
+    cpu.read_views[0][3] = 3;
+    cpu.read_views[1][0] = UINT64_C(0x2000);
+    cpu.read_views[1][1] = UINT64_C(0x2020);
+    cpu.read_views[1][2] = high_delta;
+    cpu.read_views[1][3] = 3;
+
+    /* First store installs the low view and opens an exact interval. */
+    cpu.registers[3] = UINT64_C(0x1000);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(cpu.reason == 0 && low[0] == UINT64_C(0x0123456789abcdef));
+    CHECK(cpu.memory_first == UINT64_C(0x1000) && cpu.dirty_count == 0);
+    CHECK(cpu.dirty_first == UINT64_C(0x1000) && cpu.dirty_last == UINT64_C(0x1008));
+
+    /* Crossing to the high view archives the low view's interval verbatim. */
+    cpu.registers[3] = UINT64_C(0x2000);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(cpu.reason == 0 && high[0] == UINT64_C(0x0123456789abcdef));
+    CHECK(cpu.dirty_count == 1);
+    CHECK(cpu.dirty_records[0][0] == UINT64_C(0x1000) && cpu.dirty_records[0][1] == UINT64_C(0x1020));
+    CHECK(cpu.dirty_records[0][2] == UINT64_C(0x1000) && cpu.dirty_records[0][3] == UINT64_C(0x1008));
+    CHECK(cpu.memory_first == UINT64_C(0x2000) && cpu.dirty_view_first == UINT64_C(0x2000));
+    CHECK(cpu.dirty_first == UINT64_C(0x2000) && cpu.dirty_last == UINT64_C(0x2008));
+
+    /* An unseen owner appends rather than merging into the existing record. */
+    cpu.registers[3] = UINT64_C(0x1008);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(cpu.reason == 0 && low[1] == UINT64_C(0x0123456789abcdef));
+    CHECK(cpu.dirty_count == 2);
+    CHECK(cpu.dirty_records[1][0] == UINT64_C(0x2000) && cpu.dirty_records[1][1] == UINT64_C(0x2020));
+    CHECK(cpu.dirty_records[1][2] == UINT64_C(0x2000) && cpu.dirty_records[1][3] == UINT64_C(0x2008));
+    CHECK(cpu.dirty_first == UINT64_C(0x1008) && cpu.dirty_last == UINT64_C(0x1010));
+
+    /* Returning to a known owner widens its record instead of appending. */
+    cpu.registers[3] = UINT64_C(0x2010);
+    CHECK(execute_fragment(host, count, &cpu) == 0);
+    CHECK(cpu.reason == 0 && high[2] == UINT64_C(0x0123456789abcdef));
+    CHECK(cpu.dirty_count == 2);
+    CHECK(cpu.dirty_records[0][0] == UINT64_C(0x1000) && cpu.dirty_records[0][1] == UINT64_C(0x1020));
+    CHECK(cpu.dirty_records[0][2] == UINT64_C(0x1000) && cpu.dirty_records[0][3] == UINT64_C(0x1010));
+    CHECK(cpu.dirty_first == UINT64_C(0x2010) && cpu.dirty_last == UINT64_C(0x2018));
+
+    /* A CMPXCHG whose comparison fails publishes no interval, so the sentinel
+     * the archive re-armed is what C observes.  This is the only reachable
+     * shape where that value is not immediately overwritten by the dirty
+     * publication, and it must remain exactly UINT64_MAX. */
+    {
+        uint32_t swap[512] = {0};
+        uint32_t swap_count = scalar_cmpxchg_fragment(swap);
+
+        CHECK(swap_count != 0);
+        memset(&cpu, 0, sizeof cpu);
+        cpu.dirty_first = UINT64_MAX;
+        cpu.read_token = 22;
+        cpu.read_incarnation = 22;
+        cpu.read_count = 2;
+        cpu.read_views[0][0] = UINT64_C(0x1000);
+        cpu.read_views[0][1] = UINT64_C(0x1020);
+        cpu.read_views[0][2] = low_delta;
+        cpu.read_views[0][3] = 3;
+        cpu.read_views[1][0] = UINT64_C(0x2000);
+        cpu.read_views[1][1] = UINT64_C(0x2020);
+        cpu.read_views[1][2] = high_delta;
+        cpu.read_views[1][3] = 3;
+
+        /* Open an interval on the low view. */
+        cpu.registers[1] = UINT64_C(0x0123456789abcdef);
+        cpu.registers[3] = UINT64_C(0x1000);
+        CHECK(execute_fragment(host, count, &cpu) == 0);
+        CHECK(cpu.reason == 0 && cpu.dirty_first == UINT64_C(0x1000));
+
+        /* Cross to the high view with a comparison that cannot succeed. */
+        high[0] = UINT64_C(0x1111111111111111);
+        cpu.registers[3] = UINT64_C(0x2000);
+        cpu.registers[0] = UINT64_C(0xdeadbeefdeadbeef);
+        cpu.registers[1] = UINT64_C(0x5555555555555555);
+        CHECK(execute_fragment(swap, swap_count, &cpu) == 0);
+        CHECK(cpu.reason == 0);
+        CHECK(high[0] == UINT64_C(0x1111111111111111)); /* no architectural mutation */
+        CHECK(cpu.memory_first == UINT64_C(0x2000));    /* the high view was installed */
+        CHECK(cpu.dirty_count == 1);                    /* the low interval was archived */
+        CHECK(cpu.dirty_records[0][0] == UINT64_C(0x1000) &&
+              cpu.dirty_records[0][2] == UINT64_C(0x1000) &&
+              cpu.dirty_records[0][3] == UINT64_C(0x1008));
+        /* No interval was published, so the re-armed sentinel is what C sees. */
+        CHECK(cpu.dirty_first == UINT64_MAX && cpu.dirty_last == 0);
+    }
+    return 0;
+}
+
 static int read_cache_contract(void) {
     _Alignas(16) uint64_t storage[4] = {UINT64_C(0x1122334455667788), UINT64_C(0x99aabbccddeeff00)};
     uint64_t delta = (uint64_t)(uintptr_t)storage - UINT64_C(0x1000);
@@ -2203,6 +2331,7 @@ static int read_cache_contract(void) {
 #else
 static int read_cache_contract(void) { return 0; }
 static int write_cache_contract(void) { return 0; }
+static int dirty_journal_contract(void) { return 0; }
 #endif
 
 static int cumulative_checkpoint_contract(void) {
@@ -6037,6 +6166,8 @@ int main(void) {
     status = read_cache_contract();
     if (status != 0) return status;
     status = write_cache_contract();
+    if (status != 0) return status;
+    status = dirty_journal_contract();
     if (status != 0) return status;
     status = cumulative_checkpoint_contract();
     if (status != 0) return status;
