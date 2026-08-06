@@ -301,7 +301,7 @@ impl Matrix {
         for value in &self.guest {
             identity_field(&mut digest, value.as_bytes());
         }
-        Ok(super::hex_digest(digest.finalize()))
+        Ok(crate::record::FramedIdentity::hex(&digest.finalize()))
     }
 }
 

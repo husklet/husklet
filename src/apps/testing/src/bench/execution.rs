@@ -4,7 +4,6 @@ use super::{
 };
 use crate::{runtime::image::TestImage, suite::Target};
 use hl_container::{Config, ContainerSpec, Entry, ExitStatus, Isolation, Process, Sandbox, Session};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -77,7 +76,7 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     };
     setup.insert("provenance_build".into(), elapsed_us(started));
     let started = Instant::now();
-    let artifact_identity = artifact.as_deref().map(file_identity).transpose()?;
+    let artifact_identity = artifact.as_deref().map(crate::record::FramedIdentity::of_file).transpose()?;
     setup.insert("provenance_artifact_identity".into(), elapsed_us(started));
     let compiler = benchmark
         .rootfs_executable
@@ -104,7 +103,7 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     setup.insert("provenance_image_identity".into(), elapsed_us(started));
     let started = Instant::now();
     let runner = std::env::current_exe()?;
-    let runner_identity = file_identity(&runner)?;
+    let runner_identity = crate::record::FramedIdentity::of_file(&runner)?;
     let definition = fs::read(benchmark.directory.join("test.yaml"))?;
     let source = artifact.as_ref().map_or_else(
         || Ok(benchmark.rootfs_executable.as_deref().unwrap_or_default().as_bytes().to_vec()),
@@ -112,7 +111,7 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     )?;
     let golden = fs::read(&case.stdout_contains)?;
     let execution = format!("{:?}", benchmark.execution);
-    let identity = provenance_identity(&[
+    let identity = crate::record::FramedIdentity::over(&[
         b"husklet-benchmark-provenance-v1".as_slice(),
         target.name().as_bytes(),
         execution.as_bytes(),
@@ -133,19 +132,6 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
         identity,
         setup,
     })
-}
-
-fn provenance_identity(fields: &[&[u8]]) -> std::result::Result<String, Error> {
-    let mut digest = Sha256::new();
-    for field in fields {
-        digest.update(
-            u64::try_from(field.len())
-                .map_err(|_| "benchmark provenance field is too large")?
-                .to_be_bytes(),
-        );
-        digest.update(field);
-    }
-    Ok(hex(&digest.finalize()))
 }
 
 pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target, prepared: Prepared) -> Result {
@@ -193,7 +179,7 @@ async fn execute(
         return Err("benchmark image identity changed after resume admission".into());
     }
     if let (Some(artifact), Some(identity)) = (&prepared.artifact, &prepared.artifact_identity)
-        && file_identity(artifact)? != *identity {
+        && crate::record::FramedIdentity::of_file(artifact)? != *identity {
             image.release()?;
             return Err("benchmark artifact identity changed after resume admission".into());
         }
@@ -277,14 +263,6 @@ async fn execute_with_image(
 
 fn elapsed_us(started: Instant) -> u128 {
     started.elapsed().as_micros()
-}
-
-fn file_identity(path: &std::path::Path) -> std::result::Result<String, Error> {
-    Ok(hex(&Sha256::digest(fs::read(path)?)))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn isolated_state() -> std::result::Result<tempfile::TempDir, Error> {
@@ -650,7 +628,7 @@ fn parse_phases(stdout: &[u8]) -> std::result::Result<Vec<(String, u128, u64)>, 
 mod tests {
     use super::{
         Benchmark, CAPTURE_LIMIT, DIAGNOSTIC_OUTPUT, bounded, capture_size, isolated_state, output_excerpt,
-        parse_phases, provenance_identity, stdout_contains,
+        parse_phases, stdout_contains,
     };
     use hl_container::{Entry, Stream};
 
@@ -680,19 +658,19 @@ mod tests {
             b"runner",
             b"definition",
         ];
-        let expected = provenance_identity(&baseline).unwrap();
+        let expected = crate::record::FramedIdentity::over(&baseline).unwrap();
         for index in 0..baseline.len() {
             let mut changed = baseline;
             changed[index] = b"changed";
             assert_ne!(
-                provenance_identity(&changed).unwrap(),
+                crate::record::FramedIdentity::over(&changed).unwrap(),
                 expected,
                 "field {index} did not bind provenance"
             );
         }
         assert_ne!(
-            provenance_identity(&[b"ab", b"c"]).unwrap(),
-            provenance_identity(&[b"a", b"bc"]).unwrap(),
+            crate::record::FramedIdentity::over(&[b"ab", b"c"]).unwrap(),
+            crate::record::FramedIdentity::over(&[b"a", b"bc"]).unwrap(),
         );
     }
 

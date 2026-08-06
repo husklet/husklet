@@ -82,7 +82,31 @@ impl FramedIdentity {
     }
 
     pub(crate) fn finish(self) -> String {
-        hex(self.0.finalize().as_ref())
+        Self::hex(self.0.finalize().as_ref())
+    }
+
+    /// The unframed SHA-256 of the bytes, in the same lower-case hex the receipts carry.
+    pub(crate) fn of(bytes: &[u8]) -> String {
+        Self::hex(Sha256::digest(bytes).as_ref())
+    }
+
+    /// The identity of a file's contents.
+    pub(crate) fn of_file(path: &Path) -> Result<String, Error> {
+        Ok(Self::of(&fs::read(path)?))
+    }
+
+    /// The framed identity of a domain tag followed by its fields.
+    pub(crate) fn over(fields: &[&[u8]]) -> Result<String, Error> {
+        let (domain, rest) = fields.split_first().ok_or("framed identity needs a domain")?;
+        let mut identity = Self::new(domain)?;
+        for field in rest {
+            identity.field(field)?;
+        }
+        Ok(identity.finish())
+    }
+
+    pub(crate) fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 }
 
@@ -157,7 +181,7 @@ impl ArtifactRecord {
             return Err("testing record key already identifies different content".into());
         }
         let parent = self.directory.parent().ok_or("testing record has no parent")?;
-        let digest = sha256(bytes);
+        let digest = FramedIdentity::of(bytes);
         let stored = self.publish_content(bytes, &digest)?;
         fs::create_dir_all(parent)?;
         let stage = tempfile::tempdir_in(parent)?;
@@ -198,7 +222,7 @@ impl ArtifactRecord {
             .open(locks.join(format!("{digest}.lock")))?;
         lock.lock_exclusive()?;
         let destination = directory.join(digest);
-        if destination.is_file() && sha256(&fs::read(&destination)?) == digest {
+        if destination.is_file() && FramedIdentity::of(&fs::read(&destination)?) == digest {
             return Ok(destination);
         }
 
@@ -211,7 +235,7 @@ impl ArtifactRecord {
         match temporary.persist_noclobber(&destination) {
             Ok(_) => {}
             Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => {
-                if sha256(&fs::read(&destination)?) != digest {
+                if FramedIdentity::of(&fs::read(&destination)?) != digest {
                     return Err("testing object digest changed during publication".into());
                 }
             }
@@ -222,7 +246,7 @@ impl ArtifactRecord {
 }
 
 fn receipt(key: &str, bytes: &[u8]) -> String {
-    receipt_with_digest(key, &sha256(bytes))
+    receipt_with_digest(key, &FramedIdentity::of(bytes))
 }
 
 fn receipt_with_digest(key: &str, digest: &str) -> String {
@@ -253,20 +277,12 @@ fn validate_digest(label: &str, value: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn sha256(bytes: &[u8]) -> String {
-    hex(Sha256::digest(bytes).as_ref())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn key(value: &[u8]) -> String {
-        sha256(value)
+        FramedIdentity::of(value)
     }
 
     #[test]
@@ -305,7 +321,7 @@ mod tests {
         let stored = workspace
             .path()
             .join(".cache/testing/store/artifacts/sha256")
-            .join(sha256(b"first"));
+            .join(FramedIdentity::of(b"first"));
         assert_eq!(fs::read(&stored).unwrap(), b"first");
         assert_eq!(fs::metadata(&stored).unwrap().permissions().mode() & 0o222, 0);
 
@@ -328,7 +344,7 @@ mod tests {
         let stored = workspace
             .path()
             .join(".cache/testing/store/artifacts/sha256")
-            .join(sha256(b"expected"));
+            .join(FramedIdentity::of(b"expected"));
         fs::set_permissions(&stored, fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(&stored, b"corrupt").unwrap();
         assert!(!record.verify().unwrap());

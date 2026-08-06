@@ -104,7 +104,7 @@ where
             step.cycle,
             provider(step.provider),
             mode(step.mode),
-            hex(evidence.as_bytes())
+            crate::record::FramedIdentity::hex(evidence.as_bytes())
         )
         .map_err(|error| error.to_string())?;
         output.sync_data().map_err(|error| error.to_string())?;
@@ -167,10 +167,6 @@ fn parse_mode(value: &str) -> Result<Mode, String> {
         _ => Err("invalid mode".into()),
     }
 }
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Mode, Provider, plan, plan_over, run};

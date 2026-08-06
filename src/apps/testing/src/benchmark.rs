@@ -427,7 +427,7 @@ impl Run {
             identity_field(&mut digest, rootfs.as_os_str().as_encoded_bytes());
         }
         identity_field(&mut digest, host_affinity().as_bytes());
-        hex_digest(digest.finalize())
+        crate::record::FramedIdentity::hex(&digest.finalize())
     }
 
     fn host_binary(&self) -> PathBuf {
@@ -449,13 +449,9 @@ fn identity_field(digest: &mut sha2::Sha256, value: &[u8]) {
     digest.update(value);
 }
 
-fn file_identity(path: &std::path::Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("hash {}: {error}", path.display()))?;
-    Ok(hex_digest(sha2::Sha256::digest(bytes)))
-}
-
-fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
-    bytes.as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
+/// Reports the identity of a file, spelling failures the way the benchmark reports them.
+pub(super) fn file_identity(path: &std::path::Path) -> Result<String, String> {
+    crate::record::FramedIdentity::of_file(path).map_err(|error| format!("hash {}: {error}", path.display()))
 }
 
 #[cfg(target_os = "linux")]

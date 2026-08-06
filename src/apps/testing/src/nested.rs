@@ -307,10 +307,10 @@ fn build_key_with_environment(
 ) -> Result<String, Error> {
     let mut digest = crate::record::FramedIdentity::new(b"husklet-nested-build-v2")?;
     for value in [&build.package, &build.target, &build.profile, &build.binary] {
-        hash_field(&mut digest, value.as_bytes())?;
+        digest.field(value.as_bytes())?;
     }
     for value in &build.rustflags {
-        hash_field(&mut digest, value.as_bytes())?;
+        digest.field(value.as_bytes())?;
     }
     for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
         let path = root.join(name);
@@ -325,8 +325,8 @@ fn build_key_with_environment(
     }
     let rustc = environment("RUSTC").unwrap_or_else(|| "rustc".into());
     for (name, value) in values {
-        hash_field(&mut digest, name.as_bytes())?;
-        hash_field(&mut digest, value.as_bytes())?;
+        digest.field(name.as_bytes())?;
+        digest.field(value.as_bytes())?;
     }
     hash_tool(&mut digest, "cargo", cargo, &["-V"])?;
     hash_tool(&mut digest, "rustc", &rustc, &["-vV"])?;
@@ -379,9 +379,9 @@ fn cargo_configs(root: &Path) -> Vec<PathBuf> {
 }
 
 fn hash_source_named(digest: &mut crate::record::FramedIdentity, name: &[u8], path: &Path) -> Result<(), Error> {
-    hash_field(digest, name)?;
-    hash_field(digest, path.as_os_str().as_encoded_bytes())?;
-    hash_field(digest, &fs::read(path)?)
+    digest.field(name)?;
+    digest.field(path.as_os_str().as_encoded_bytes())?;
+    digest.field(&fs::read(path)?)
 }
 
 fn hash_tool(
@@ -397,10 +397,10 @@ fn hash_tool(
     if output.status != Some(0) {
         return Err(format!("{name} identity command exited {:?}", output.status).into());
     }
-    hash_field(digest, name.as_bytes())?;
-    hash_field(digest, program.as_bytes())?;
-    hash_field(digest, &output.stdout)?;
-    hash_field(digest, &output.stderr)
+    digest.field(name.as_bytes())?;
+    digest.field(program.as_bytes())?;
+    digest.field(&output.stdout)?;
+    digest.field(&output.stderr)
 }
 
 fn hash_tree(digest: &mut crate::record::FramedIdentity, root: &Path, directory: &Path) -> Result<(), Error> {
@@ -415,9 +415,9 @@ fn hash_tree(digest: &mut crate::record::FramedIdentity, root: &Path, directory:
             hash_source(digest, root, &path)?;
         } else if kind.is_symlink() {
             let relative = path.strip_prefix(root)?;
-            hash_field(digest, b"symlink")?;
-            hash_field(digest, relative.as_os_str().as_bytes())?;
-            hash_field(digest, fs::read_link(&path)?.as_os_str().as_bytes())?;
+            digest.field(b"symlink")?;
+            digest.field(relative.as_os_str().as_bytes())?;
+            digest.field(fs::read_link(&path)?.as_os_str().as_bytes())?;
         } else {
             return Err(format!("nested build input is not a regular file: {}", path.display()).into());
         }
@@ -427,13 +427,9 @@ fn hash_tree(digest: &mut crate::record::FramedIdentity, root: &Path, directory:
 
 fn hash_source(digest: &mut crate::record::FramedIdentity, root: &Path, path: &Path) -> Result<(), Error> {
     let relative = path.strip_prefix(root)?;
-    hash_field(digest, relative.as_os_str().as_encoded_bytes())?;
-    hash_field(digest, &fs::read(path)?)?;
+    digest.field(relative.as_os_str().as_encoded_bytes())?;
+    digest.field(&fs::read(path)?)?;
     Ok(())
-}
-
-fn hash_field(digest: &mut crate::record::FramedIdentity, value: &[u8]) -> Result<(), Error> {
-    digest.field(value)
 }
 
 fn build_artifact(
