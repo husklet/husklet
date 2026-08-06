@@ -87,6 +87,8 @@ pub struct Aarch64Cpu {
     pub code_arena_upper: u64,
     pub entry_certificate_identity: u64,
     pub fault_completed: u64,
+    pub ibtc_base: u64,
+    pub execution_identity: u64,
 }
 
 #[repr(C)]
@@ -240,7 +242,9 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, code_arena_upper) == 2376);
     assert!(std::mem::offset_of!(Aarch64Cpu, entry_certificate_identity) == 2384);
     assert!(std::mem::offset_of!(Aarch64Cpu, fault_completed) == 2392);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2400);
+    assert!(std::mem::offset_of!(Aarch64Cpu, ibtc_base) == 2400);
+    assert!(std::mem::offset_of!(Aarch64Cpu, execution_identity) == 2408);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2416);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 

@@ -1301,10 +1301,10 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             cpu->diagnostic_dirty_merged = 0;
         }
         int executed_identity = 0;
-        if ((cpu->indirect_site & 3u) == 1u) {
-            if (!hl_native_cache_execution(executor->cache, cpu->indirect_site, &executed_code))
+        if ((cpu->execution_identity & 3u) == 1u) {
+            if (!hl_native_cache_execution(executor->cache, cpu->execution_identity, &executed_code))
                 return run_fatal(&execution, output, 1);
-            cpu->indirect_site = 0;
+            cpu->execution_identity = 0;
             executed_identity = 1;
         }
         if (executor->diagnostics) {
@@ -1461,6 +1461,8 @@ static hl_native_status run_inner(hl_native_executor *executor, hl_native_cpu *c
             cpu->state.aarch64->code_arena_lower = 0;
             cpu->state.aarch64->code_arena_upper = 0;
             cpu->state.aarch64->entry_certificate_identity = 0;
+            /* Executor-owned, so a caller-supplied value can never steer a probe. */
+            cpu->state.aarch64->ibtc_base = (uint64_t)(uintptr_t)executor->ibtc;
             instruction = cpu->state.aarch64->program;
             interrupt = &cpu->state.aarch64->interrupt;
             break;

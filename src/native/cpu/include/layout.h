@@ -91,6 +91,12 @@ typedef struct hl_native_aarch64_cpu {
     uint64_t code_arena_upper;
     uint64_t entry_certificate_identity;
     uint64_t fault_completed;
+    /* Generated indirect probes load the shared IBTC base from here instead of
+     * materialising the pointer inline. */
+    uint64_t ibtc_base;
+    /* Diagnostic execution identity. Separate from indirect_site so publishing
+     * it cannot discard a pending IBTC fill. */
+    uint64_t execution_identity;
 } hl_native_aarch64_cpu;
 
 typedef struct hl_native_x86_64_cpu {
@@ -245,7 +251,9 @@ HL_CPU_ASSERT(hl_native_aarch64_cpu, code_arena_lower, 2368);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, code_arena_upper, 2376);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, entry_certificate_identity, 2384);
 HL_CPU_ASSERT(hl_native_aarch64_cpu, fault_completed, 2392);
-_Static_assert(sizeof(hl_native_aarch64_cpu) == 2400, "aarch64 native CPU prefix size drifted");
+HL_CPU_ASSERT(hl_native_aarch64_cpu, ibtc_base, 2400);
+HL_CPU_ASSERT(hl_native_aarch64_cpu, execution_identity, 2408);
+_Static_assert(sizeof(hl_native_aarch64_cpu) == 2416, "aarch64 native CPU prefix size drifted");
 
 _Static_assert(_Alignof(hl_native_aarch64_cpu) == 8, "aarch64 native CPU prefix alignment drifted");
 

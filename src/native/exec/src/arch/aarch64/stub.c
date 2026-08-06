@@ -128,7 +128,7 @@ static void publish_execution_identity(hl_a64_assembler *assembler, int scratch)
     hl_a64_emit32(assembler, UINT32_C(0x10000000) | (uint32_t)scratch); /* adr scratch,. */
     hl_a64_addi(assembler, scratch, scratch, 1);
     hl_a64_str(assembler, scratch, 28,
-               (int)offsetof(hl_native_aarch64_cpu, indirect_site));
+               (int)offsetof(hl_native_aarch64_cpu, execution_identity));
 }
 
 void hl_a64_stub_publish_execution_identity(hl_a64_assembler *assembler) {
