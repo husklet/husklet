@@ -157,7 +157,21 @@ int main(void) {
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_STATE);
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_STATE);
     CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
-    CHECK(host.repair_calls == 1);
+
+    /* A public run retains a fork-only lease across its admission-free cold
+     * trace and IBTC work. Model both concurrent callers at the gate boundary:
+     * fork must remain nonblocking and cannot close until the outermost run
+     * has returned. Mutation admission remains independent. */
+    atomic_store_explicit(&executor->fork_runs, 2, memory_order_release);
+    CHECK(hl_native_before_fork(executor) == HL_NATIVE_STATE);
+    CHECK(hl_native_executor_gate_enter(executor) == HL_NATIVE_OK);
+    hl_native_executor_gate_leave(executor);
+    atomic_store_explicit(&executor->fork_runs, 1, memory_order_release);
+    CHECK(hl_native_before_fork(executor) == HL_NATIVE_STATE);
+    atomic_store_explicit(&executor->fork_runs, 0, memory_order_release);
+    CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
+    CHECK(hl_native_after_fork(executor, 1) == HL_NATIVE_OK);
+    CHECK(host.repair_calls == 2);
     CHECK(aarch64.certificate_cache_identity == 0);
     atomic_store_explicit(&executor->next_certificate_cache_identity,
                           UINT64_MAX - 1, memory_order_relaxed);

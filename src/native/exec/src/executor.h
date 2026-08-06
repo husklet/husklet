@@ -15,6 +15,9 @@ struct hl_native_executor {
     /* High 32 bits are mutation state; low 32 bits are execution leases.  One
      * atomic word makes close versus admission a race-free transition. */
     _Atomic uint64_t admission;
+    /* High bit closes public-run admission across fork repair; remaining bits
+     * count whole hl_native_run calls, including admission-free cold work. */
+    _Atomic uint64_t fork_runs;
     /* Monotonic activation identity. Zero means certificate-ineligible. Once
      * exhausted it stays at UINT64_MAX and execution continues uncertified. */
     _Atomic uint64_t activation_generation;

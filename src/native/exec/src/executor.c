@@ -24,6 +24,25 @@ extern int madvise(void *, size_t, int);
 
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "executor admission requires lock-free uint64 atomics");
 
+#define FORK_RUNS_CLOSED (UINT64_C(1) << 63)
+#define FORK_RUNS_COUNT_MASK (FORK_RUNS_CLOSED - 1)
+
+static hl_native_status run_lifecycle_enter(hl_native_executor *executor) {
+    uint64_t current = atomic_load_explicit(&executor->fork_runs, memory_order_acquire);
+    for (;;) {
+        if ((current & FORK_RUNS_CLOSED) != 0) return HL_NATIVE_STATE;
+        if ((current & FORK_RUNS_COUNT_MASK) == FORK_RUNS_COUNT_MASK) return HL_NATIVE_CAPACITY;
+        if (atomic_compare_exchange_weak_explicit(&executor->fork_runs, &current, current + 1,
+                                                  memory_order_acquire, memory_order_relaxed))
+            return HL_NATIVE_OK;
+    }
+}
+
+static void run_lifecycle_leave(hl_native_executor *executor) {
+    uint64_t prior = atomic_fetch_sub_explicit(&executor->fork_runs, 1, memory_order_release);
+    (void)prior;
+}
+
 #if defined(__aarch64__)
 static void a64_fallback_word(hl_native_executor *executor, uint32_t word, int entry_rejection) {
     _Atomic uint64_t *counter;
@@ -516,6 +535,7 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     /* Dynamically allocated atomic state is initialized with atomic_init before
      * its first operation; zeroed storage alone is not a C11 initializer. */
     atomic_init(&executor->admission, ADMISSION(MUTATION_OPEN, 0));
+    atomic_init(&executor->fork_runs, 0);
     atomic_init(&executor->activation_generation, 0);
     atomic_init(&executor->next_certificate_cache_identity, 0);
     executor->diagnostics = (config->flags & HL_NATIVE_DIAGNOSTICS) != 0;
@@ -578,14 +598,22 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
 }
 
 hl_native_status hl_native_before_fork(hl_native_executor *executor) {
+    uint64_t runs_expected = 0;
     uint64_t expected = ADMISSION(MUTATION_OPEN, 0);
     if (executor == NULL) return HL_NATIVE_ARGUMENT;
-    if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
-                                                 ADMISSION(MUTATION_FORK, 0),
+    if (!atomic_compare_exchange_strong_explicit(&executor->fork_runs, &runs_expected,
+                                                 FORK_RUNS_CLOSED,
                                                  memory_order_seq_cst, memory_order_relaxed))
         return HL_NATIVE_STATE;
+    if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
+                                                 ADMISSION(MUTATION_FORK, 0),
+                                                 memory_order_seq_cst, memory_order_relaxed)) {
+        atomic_store_explicit(&executor->fork_runs, 0, memory_order_release);
+        return HL_NATIVE_STATE;
+    }
     if (!hl_native_cache_available(executor->cache)) {
         atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
+        atomic_store_explicit(&executor->fork_runs, 0, memory_order_release);
         return HL_NATIVE_STATE;
     }
     return HL_NATIVE_OK;
@@ -640,6 +668,7 @@ hl_native_status hl_native_after_fork(hl_native_executor *executor, uint32_t pre
     executor->retained_authority_identity = 0;
     (void)direct_generation(executor);
     atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
+    atomic_store_explicit(&executor->fork_runs, 0, memory_order_release);
     return status;
 }
 
@@ -1356,20 +1385,12 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
 }
 #endif
 
-hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
-                               const hl_native_run_request *request, hl_native_exit *output) {
+static hl_native_status run_inner(hl_native_executor *executor, hl_native_cpu *cpu,
+                                  const hl_native_run_request *request, hl_native_exit *output) {
     hl_native_execution execution = {0};
     uint64_t instruction;
     volatile uint64_t *interrupt;
     hl_native_status status;
-
-    if (executor == NULL || cpu == NULL || request == NULL || output == NULL ||
-        cpu->abi != HL_NATIVE_ABI || cpu->size < sizeof(*cpu) || cpu->reserved != 0 ||
-        request->abi != HL_NATIVE_ABI || request->size < offsetof(hl_native_run_request, source) ||
-        request->reserved != 0 ||
-        output->abi != HL_NATIVE_ABI || output->size < sizeof(*output) ||
-        cpu->architecture != request->architecture)
-        return HL_NATIVE_ARGUMENT;
 
     switch (cpu->architecture) {
         case HL_NATIVE_AARCH64:
@@ -1444,6 +1465,22 @@ hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
         hl_native_aarch64_enter(cpu->state.aarch64, hl_native_aarch64_fallback);
 #endif
     return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, instruction);
+}
+
+hl_native_status hl_native_run(hl_native_executor *executor, hl_native_cpu *cpu,
+                               const hl_native_run_request *request, hl_native_exit *output) {
+    hl_native_status status;
+    if (executor == NULL || cpu == NULL || request == NULL || output == NULL ||
+        cpu->abi != HL_NATIVE_ABI || cpu->size < sizeof(*cpu) || cpu->reserved != 0 ||
+        request->abi != HL_NATIVE_ABI || request->size < offsetof(hl_native_run_request, source) ||
+        request->reserved != 0 || output->abi != HL_NATIVE_ABI || output->size < sizeof(*output) ||
+        cpu->architecture != request->architecture)
+        return HL_NATIVE_ARGUMENT;
+    status = run_lifecycle_enter(executor);
+    if (status != HL_NATIVE_OK) return status;
+    status = run_inner(executor, cpu, request, output);
+    run_lifecycle_leave(executor);
+    return status;
 }
 
 hl_native_status hl_native_destroy(hl_native_executor *executor) {

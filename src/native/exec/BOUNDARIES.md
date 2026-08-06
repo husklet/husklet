@@ -191,6 +191,22 @@ publication capabilities are installed at `create`; no ambient environment,
 filesystem, Linux syscall dispatcher, task registry, or application singleton
 is visible here.
 
+Every structurally valid public `run` holds a fork-only lifecycle lease until
+its outer return. The lease remains held while dispatcher execution admission is
+temporarily released for cold trace construction, relocation, and indirect-
+branch-cache fill. `before_fork` is nonblocking and returns `STATE` while any
+such call exists; after it succeeds, new runs return `STATE` until `after_fork`
+repairs the cache and reopens run admission. Ordinary cache mutation continues
+to use the narrower execution/mutation gate and is not serialized by this
+fork-only lease. Destruction retains its separate externally serialized API
+contract.
+
+This matches the retained dispatcher lifecycle in
+`../engine/src/core/dispatch.c::run_guest` and the fork repair in
+`../engine/src/translator/cache.c::jit_after_fork`: a public dispatcher remains
+live across translation, while fork repair treats a peer's in-progress
+translation as inherited state that must not be consumed before repair.
+
 ## Smallest honest implementation slice
 
 The first runnable slice targets an AArch64 host and imports both retained guest
