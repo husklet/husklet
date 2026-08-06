@@ -56,7 +56,7 @@ static int power_of_two(uint32_t value) {
 }
 
 static uint32_t home(const hl_native_cache *cache, uint64_t guest) {
-    return (uint32_t)((guest >> cache->hash_shift) * 2654435761u) & (cache->capacity - 1);
+    return hl_native_cache_home(cache, guest);
 }
 
 static int insertion(const hl_native_cache *cache, uint64_t guest) {
@@ -105,6 +105,9 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     atomic_init(&cache->published_generation, 1);
     atomic_init(&cache->provenance_epoch, 0);
     cache->hash_shift = hash_shift;
+    cache->hash_rotate = 63;
+    for (uint32_t bits = 1; bits < 32; bits++)
+        if ((capacity >> bits) == 1u) { cache->hash_rotate = 64u - bits; break; }
     atomic_init(&cache->mapping_epoch, mapping_epoch);
     atomic_init(&cache->instruction_epoch, 0);
     atomic_init(&cache->memory_mode, 0);
@@ -114,13 +117,16 @@ hl_native_status hl_native_cache_create(hl_native_cache **output, hl_native_aren
     return HL_NATIVE_OK;
 }
 
+/* A hit assigns every hl_native_code field, so only the non-hit exits clear it. */
 #define PROBE_KEY_VALID(EPOCH_SINK, MISS_SINK, HIT_SINK) do { \
     if (mapping_epoch != cache->mapping_epoch || memory_mode != cache->memory_mode || \
-        authority_generation != cache->authority_generation) { EPOCH_SINK; return HL_NATIVE_EPOCH; } \
+        authority_generation != cache->authority_generation) { \
+        EPOCH_SINK; return HL_NATIVE_EPOCH; } \
     slot = hl_native_cache_find_identity(cache, guest, memory_mode, authority_generation); \
     if (slot < 0) { MISS_SINK; return HL_NATIVE_MISS; } \
     entry = &cache->entries[slot]; \
-    if (entry->instruction_epoch != instruction_epoch) { MISS_SINK; return HL_NATIVE_MISS; } \
+    if (entry->instruction_epoch != instruction_epoch) { \
+        MISS_SINK; return HL_NATIVE_MISS; } \
     output->entry = cache->arena->executable + entry->code_offset; \
     output->body = cache->arena->executable + entry->body_offset; \
     output->admitted = cache->arena->executable + entry->admitted_offset; \

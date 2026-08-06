@@ -7,15 +7,17 @@
 
 enum entry_state { ENTRY_EMPTY, ENTRY_RESERVED, ENTRY_LIVE, ENTRY_TOMBSTONE };
 
+/* Probe keys and the hit path's code pointers occupy the leading 64 bytes so a
+ * probe step reads one cache line instead of the three the old order spanned. */
 typedef struct cache_entry {
-    uint64_t guest, source_first, source_last, code_offset, code_size, body_offset, admitted_offset;
-    uint64_t mapping_epoch, instruction_epoch, token;
-    uint64_t memory_mode, authority_generation;
-    uint64_t loop_pc;
-    uint64_t certificate_identity;
+    uint64_t guest, memory_mode, authority_generation, instruction_epoch;
+    uint32_t generation, state;
+    uint64_t code_offset, body_offset, admitted_offset;
+    uint64_t source_first, source_last, code_size, mapping_epoch, token;
+    uint64_t loop_pc, certificate_identity;
     uint32_t instruction_count;
     uint16_t relocation_count, decoded_count;
-    uint32_t conditional_self_loop, cycle_safe, generation, state;
+    uint32_t conditional_self_loop, cycle_safe;
 } cache_entry;
 
 typedef struct provenance_entry {
@@ -53,7 +55,7 @@ struct hl_native_cache {
     uint32_t capacity, provenance_capacity, provenance_next, live_count, generation;
     _Atomic uint32_t published_generation;
     _Atomic uint64_t provenance_epoch;
-    uint32_t hash_shift;
+    uint32_t hash_shift, hash_rotate;
     _Atomic uint64_t mapping_epoch, instruction_epoch;
     _Atomic uint64_t memory_mode, authority_generation;
     uint64_t next_token, active_token;
@@ -81,9 +83,16 @@ static inline int hl_native_cache_occupied(const hl_native_cache *cache, uint32_
     return cache->entries[slot].generation == cache->generation && cache->entries[slot].state != ENTRY_EMPTY;
 }
 
+/* Fibonacci hash read from the product's high bits. The low bits carry no
+ * mixing, and aligned guest PCs left the bottom index bits permanently zero. */
+static inline uint32_t hl_native_cache_home(const hl_native_cache *cache, uint64_t guest) {
+    return (uint32_t)(((guest >> cache->hash_shift) * UINT64_C(0x9E3779B97F4A7C15)) >> cache->hash_rotate) &
+           (cache->capacity - 1);
+}
+
 static inline int hl_native_cache_find_identity(const hl_native_cache *cache, uint64_t guest,
                                                 uint64_t memory_mode, uint64_t authority_generation) {
-    uint32_t start = (uint32_t)((guest >> cache->hash_shift) * 2654435761u) & (cache->capacity - 1);
+    uint32_t start = hl_native_cache_home(cache, guest);
     for (uint32_t probe = 0; probe < cache->capacity; probe++) {
         uint32_t slot = (start + probe) & (cache->capacity - 1);
         if (!hl_native_cache_occupied(cache, slot)) return -1;
