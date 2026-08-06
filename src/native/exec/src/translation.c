@@ -2,6 +2,18 @@
 
 #include <string.h>
 
+int hl_native_target_metadata_valid(const hl_native_target_metadata *metadata, uint64_t image_size) {
+    if (metadata == NULL) return 0;
+    if (metadata->certificate_literal_offset == 0 && metadata->authenticated_offset == 0)
+        return 1;
+    if ((metadata->certificate_literal_offset & 7u) != 0 ||
+        (metadata->authenticated_offset & 3u) != 0 ||
+        metadata->certificate_literal_offset > UINT64_MAX - sizeof(uint64_t) ||
+        metadata->certificate_literal_offset + sizeof(uint64_t) != metadata->authenticated_offset)
+        return 0;
+    return metadata->authenticated_offset < image_size;
+}
+
 static int certificate_eligible(const hl_native_certificate_record *record) {
     if (record->architecture != HL_NATIVE_AARCH64 && record->architecture != HL_NATIVE_X86_64)
         return 0;

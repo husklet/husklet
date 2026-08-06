@@ -33,10 +33,35 @@ int main(void) {
     hl_native_direct_authority expected = authority();
     hl_native_direct_authority observed = {0};
 
+    size_t authenticated_bytes = 0;
+    CHECK(!hl_native_ibtc_authenticated_storage_bytes(
+        SIZE_MAX / sizeof(hl_native_ibtc_authenticated_entry) + 1, &authenticated_bytes));
+    CHECK(hl_native_ibtc_authenticated_storage_bytes(HL_NATIVE_IBTC_COUNT,
+                                                     &authenticated_bytes));
+    CHECK(authenticated_bytes == HL_NATIVE_IBTC_AUTHENTICATED_BYTES);
+    hl_native_ibtc_authenticated_entry *authenticated =
+        hl_native_ibtc_authenticated_storage_create();
+    CHECK(authenticated != NULL && ((uintptr_t)authenticated & UINT64_C(65535)) == 0);
+    for (size_t index = 0; index < HL_NATIVE_IBTC_COUNT; ++index)
+        CHECK(authenticated[index].target == 0 && authenticated[index].authenticated_ingress == 0 &&
+              authenticated[index].target_identity == 0 &&
+              atomic_load_explicit(&authenticated[index].sequence, memory_order_relaxed) == 0);
+    authenticated[7].target = UINT64_C(0xaaaa);
+    authenticated[7].authenticated_ingress = UINT64_C(0xbbbb);
+    authenticated[7].target_identity = UINT64_C(0xcccc);
+    atomic_store_explicit(&authenticated[7].sequence, UINT64_C(2), memory_order_relaxed);
+    hl_native_ibtc_authenticated_storage_clear(authenticated);
+    CHECK(authenticated[7].target == 0 && authenticated[7].authenticated_ingress == 0 &&
+          authenticated[7].target_identity == 0 &&
+          atomic_load_explicit(&authenticated[7].sequence, memory_order_relaxed) == 0);
+    hl_native_ibtc_authenticated_storage_destroy(authenticated);
+
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    CHECK(executor->authenticated_ibtc == NULL);
     hl_native_ibtc_fill_shared(executor, UINT64_C(0x1234), (void *)(uintptr_t)UINT64_C(0x5678));
     CHECK(executor->ibtc[(UINT64_C(0x1234) >> 2) & (HL_NATIVE_IBTC_COUNT - 1)].target == UINT64_C(0x1234));
     CHECK(hl_native_synchronize_epoch(executor, 0, 0, 1, 40) == HL_NATIVE_OK);
+    CHECK(executor->authenticated_ibtc == NULL);
     CHECK(executor->memory_mode == 1 && executor->authority_generation == 40);
     CHECK(executor->ibtc[(UINT64_C(0x1234) >> 2) & (HL_NATIVE_IBTC_COUNT - 1)].target == 0);
     CHECK(hl_native_synchronize_epoch(executor, 0, 0, 1, 41) == HL_NATIVE_OK);

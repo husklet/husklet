@@ -23,6 +23,22 @@ static void *publish(void *opaque) {
 }
 
 int main(void) {
+    const hl_native_target_metadata absent = {0};
+    const hl_native_target_metadata valid = {.certificate_literal_offset = 8,
+                                             .authenticated_offset = 16};
+    CHECK(hl_native_target_metadata_valid(&absent, 1));
+    CHECK(hl_native_target_metadata_valid(&valid, 20));
+    CHECK(!hl_native_target_metadata_valid(NULL, 20));
+    CHECK(!hl_native_target_metadata_valid(&valid, 16));
+    CHECK(!hl_native_target_metadata_valid(
+        &(hl_native_target_metadata){.certificate_literal_offset = 9,
+                                     .authenticated_offset = 17}, 32));
+    CHECK(!hl_native_target_metadata_valid(
+        &(hl_native_target_metadata){.certificate_literal_offset = 8,
+                                     .authenticated_offset = 20}, 32));
+    CHECK(!hl_native_target_metadata_valid(
+        &(hl_native_target_metadata){.certificate_literal_offset = UINT64_MAX - 3,
+                                     .authenticated_offset = 4}, UINT64_MAX));
     test_memory host = {0};
     hl_native_memory memory = test_services(&host);
     hl_native_config config = test_config(&memory, 0);
@@ -66,6 +82,7 @@ int main(void) {
     workers[0].executor = executor;
     workers[1].executor = executor;
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
+    CHECK(executor->authenticated_ibtc == NULL);
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_MISS);
     CHECK(pthread_create(&threads[0], NULL, publish, &workers[0]) == 0);
     CHECK(pthread_create(&threads[1], NULL, publish, &workers[1]) == 0);

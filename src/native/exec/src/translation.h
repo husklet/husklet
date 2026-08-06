@@ -16,6 +16,15 @@ typedef struct hl_native_translation_key {
     uint64_t direct_generation;
 } hl_native_translation_key;
 
+/* Dormant target-owned address metadata. Zero/zero means absent. A present
+ * value names one aligned u64 literal immediately before an aligned ingress. */
+typedef struct hl_native_target_metadata {
+    uint64_t certificate_literal_offset;
+    uint64_t authenticated_offset;
+} hl_native_target_metadata;
+
+int hl_native_target_metadata_valid(const hl_native_target_metadata *, uint64_t);
+
 typedef struct hl_native_emission {
     const uint8_t *bytes;
     uint64_t size;
