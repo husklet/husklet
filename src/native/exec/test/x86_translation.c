@@ -2030,6 +2030,33 @@ static int read_cache_contract(void) {
     EXPECT_SCALAR_FALLBACK(); /* access crosses the cached view */
 #undef EXPECT_SCALAR_FALLBACK
 
+    /* A retired token or a view that loses read must fall through to the latched
+     * window, which stays authoritative for both success and fault delivery. */
+    cpu.registers[3] = UINT64_C(0x1000);
+    cpu.memory_first = UINT64_C(0x1000);
+    cpu.memory_last = UINT64_C(0x1020);
+    cpu.memory_delta = delta;
+    cpu.memory_permissions = 1;
+    publish_read_view(&cpu, 0, 7, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
+    cpu.registers[0] = UINT64_C(0xfeedface);
+    cpu.reason = cpu.fault_access = cpu.fault_size = 0;
+    CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+    CHECK(cpu.registers[0] == storage[0] && cpu.reason == 0 && cpu.fault_access == 0);
+
+    publish_read_view(&cpu, 7, 7, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 0);
+    cpu.registers[0] = UINT64_C(0xfeedface);
+    cpu.reason = cpu.fault_access = cpu.fault_size = 0;
+    CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+    CHECK(cpu.registers[0] == storage[0] && cpu.reason == 0);
+
+    cpu.memory_permissions = 2; /* the latched window loses read as the view did */
+    cpu.registers[0] = UINT64_C(0xfeedface);
+    cpu.reason = cpu.fault_access = cpu.fault_size = cpu.fault_address = 0;
+    CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+    CHECK(cpu.registers[0] == UINT64_C(0xfeedface));
+    CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.fault_access == 1 && cpu.fault_size == 8);
+    CHECK(cpu.fault_address == UINT64_C(0x1000) && cpu.program == UINT64_C(0x45670000));
+
     memset(&cpu, 0, sizeof cpu);
     cpu.registers[3] = UINT64_C(0x1000);
     publish_read_view(&cpu, 11, 11, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);

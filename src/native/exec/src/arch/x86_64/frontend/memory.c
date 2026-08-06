@@ -37,9 +37,12 @@ void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
     words[(*cursor)++] = UINT32_C(0xb1000000) | width << 10 | 16u << 5 | 18u; /* adds x18,x16,#width */
     words[(*cursor)++] = UINT32_C(0xeb10025f); /* cmp x18,x16 */
     overflow = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, read_token));
+    /* The release-published token orders the immutable view payload, so an LDAR
+     * of it supplies the acquire without a global DMB on every translated read. */
+    words[(*cursor)++] = UINT32_C(0x91000011) |
+                         (uint32_t)offsetof(hl_native_x86_64_cpu, read_token) << 10 | 28u << 5;
+    words[(*cursor)++] = UINT32_C(0xc8dffe31); /* ldar x17,[x17] */
     unpublished = &words[(*cursor)++]; /* cbz x17, active */
-    words[(*cursor)++] = UINT32_C(0xd50339bf); /* dmb ishld: acquire published views */
     words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, read_incarnation));
     words[(*cursor)++] = UINT32_C(0xeb14023f); /* cmp x17,x20 */
     wrong_incarnation = &words[(*cursor)++];
@@ -121,9 +124,10 @@ static void emit_write_cache(uint32_t *words, uint32_t *cursor, unsigned width) 
     words[(*cursor)++] = UINT32_C(0xb1000000) | width << 10 | 16u << 5 | 18u;
     words[(*cursor)++] = UINT32_C(0xeb10025f); /* cmp end,address */
     overflow = &words[(*cursor)++];
-    words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, read_token));
+    words[(*cursor)++] = UINT32_C(0x91000011) |
+                         (uint32_t)offsetof(hl_native_x86_64_cpu, read_token) << 10 | 28u << 5;
+    words[(*cursor)++] = UINT32_C(0xc8dffe31); /* ldar x17,[x17]: acquire published views */
     unpublished = &words[(*cursor)++];
-    words[(*cursor)++] = UINT32_C(0xd50339bf); /* acquire published views */
     words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, read_incarnation));
     words[(*cursor)++] = UINT32_C(0xeb14023f);
     wrong_incarnation = &words[(*cursor)++];
