@@ -13,6 +13,14 @@ pub struct FileObjectCatalog {
 }
 
 pub trait FileObjectCheckpoint: DescriptorObjectCheckpoint {
+    fn payload_size_identity(
+        &self,
+        identity: hl_descriptor::DescriptionIdentity,
+        object: &dyn hl_descriptor::OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
+        self.payload_size(identity.identity, object)
+    }
+
     fn payload_size(
         &self,
         identity: u64,
@@ -23,6 +31,14 @@ pub trait FileObjectCheckpoint: DescriptorObjectCheckpoint {
         identity: u64,
         object: &dyn hl_descriptor::OpenFileDescription,
     ) -> Result<bool, DescriptorCheckpointError>;
+
+    fn owns_identity(
+        &self,
+        identity: hl_descriptor::DescriptionIdentity,
+        object: &dyn hl_descriptor::OpenFileDescription,
+    ) -> Result<bool, DescriptorCheckpointError> {
+        self.owns(identity.identity, object)
+    }
 }
 
 impl FileObjectCatalog {
@@ -45,6 +61,56 @@ impl FileObjectCatalog {
 }
 
 impl DescriptorObjectCheckpoint for FileObjectCatalog {
+    fn snapshot_size_identity(
+        &self,
+        identity: hl_descriptor::DescriptionIdentity,
+        object: &dyn hl_descriptor::OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
+        let mut selected = None;
+        for (tag, codec) in &self.codecs {
+            if !codec.owns_identity(identity, object)? {
+                continue;
+            }
+            if selected.is_some() {
+                return Err(DescriptorCheckpointError::Object);
+            }
+            selected = Some((*tag, codec));
+        }
+        let (_, codec) = selected.ok_or(DescriptorCheckpointError::Object)?;
+        4_usize
+            .checked_add(codec.payload_size_identity(identity, object)?)
+            .ok_or(DescriptorCheckpointError::Limit)
+    }
+
+    fn snapshot_into_identity(
+        &self,
+        identity: hl_descriptor::DescriptionIdentity,
+        object: &dyn hl_descriptor::OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        let mut selected = None;
+        for (tag, codec) in &self.codecs {
+            if !codec.owns_identity(identity, object)? {
+                continue;
+            }
+            if selected.is_some() {
+                return Err(DescriptorCheckpointError::Object);
+            }
+            selected = Some((*tag, codec));
+        }
+        let (tag, codec) = selected.ok_or(DescriptorCheckpointError::Object)?;
+        let payload_size = codec.payload_size_identity(identity, object)?;
+        if output.len()
+            != 4_usize
+                .checked_add(payload_size)
+                .ok_or(DescriptorCheckpointError::Limit)?
+        {
+            return Err(DescriptorCheckpointError::Object);
+        }
+        output[..4].copy_from_slice(&tag.to_le_bytes());
+        codec.snapshot_into_identity(identity, object, &mut output[4..])
+    }
+
     fn snapshot_size(
         &self,
         identity: u64,

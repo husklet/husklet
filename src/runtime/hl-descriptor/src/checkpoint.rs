@@ -58,6 +58,14 @@ pub enum DescriptorCheckpointError {
 }
 
 pub trait DescriptorObjectCheckpoint: Send + Sync {
+    fn snapshot_size_identity(
+        &self,
+        identity: crate::DescriptionIdentity,
+        object: &dyn OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
+        self.snapshot_size(identity.identity, object)
+    }
+
     /// Returns the exact number of bytes required by [`Self::snapshot_into`].
     fn snapshot_size(
         &self,
@@ -74,6 +82,15 @@ pub trait DescriptorObjectCheckpoint: Send + Sync {
         object: &dyn OpenFileDescription,
         output: &mut [u8],
     ) -> Result<(), DescriptorCheckpointError>;
+
+    fn snapshot_into_identity(
+        &self,
+        identity: crate::DescriptionIdentity,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        self.snapshot_into(identity.identity, object, output)
+    }
 
     /// Allocates an exactly sized standalone object image.
     fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
@@ -153,28 +170,20 @@ impl DescriptorTable {
         if !state.reservations.is_empty() {
             return Err(DescriptorCheckpointError::StaleGeneration);
         }
-        let generations: Vec<DescriptorGenerationImage> = state
-            .generations
-            .iter()
-            .map(|(number, generation)| DescriptorGenerationImage {
-                number: *number,
-                generation: *generation,
-            })
-            .collect();
-        let mut checkpoint_bytes = 20_usize
-            .checked_add(
-                generations
-                    .len()
-                    .checked_mul(8)
-                    .ok_or(DescriptorCheckpointError::Limit)?,
-            )
-            .and_then(|size| size.checked_add(state.entries.len().checked_mul(20)?))
-            .ok_or(DescriptorCheckpointError::Limit)?;
-        if checkpoint_bytes > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
-            return Err(DescriptorCheckpointError::Limit);
-        }
+        let (mut checkpoint_bytes, (generations, mut entries)) =
+            preflight_structure(state.generations.len(), state.entries.len(), || {
+                let generations: Vec<DescriptorGenerationImage> = state
+                    .generations
+                    .iter()
+                    .map(|(number, generation)| DescriptorGenerationImage {
+                        number: *number,
+                        generation: *generation,
+                    })
+                    .collect();
+                let entries = Vec::with_capacity(state.entries.len());
+                (generations, entries)
+            })?;
         let mut descriptions = BTreeMap::new();
-        let mut entries = Vec::with_capacity(state.entries.len());
         for (number, descriptor) in &state.entries {
             let description = &descriptor.description;
             entries.push(DescriptorEntryImage {
@@ -192,7 +201,10 @@ impl DescriptorTable {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let object = snapshot_object(
                 objects,
-                description.identity,
+                crate::DescriptionIdentity {
+                    identity: description.identity,
+                    generation: description.generation,
+                },
                 description.object.as_ref(),
                 &mut checkpoint_bytes,
             )?;
@@ -218,7 +230,10 @@ impl DescriptorTable {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let object = snapshot_object(
                 objects,
-                description.identity,
+                crate::DescriptionIdentity {
+                    identity: description.identity,
+                    generation: description.generation,
+                },
                 description.object.as_ref(),
                 &mut checkpoint_bytes,
             )?;
@@ -317,13 +332,53 @@ impl DescriptorTable {
     }
 }
 
+fn preflight_structure<T>(
+    generations: usize,
+    entries: usize,
+    materialize: impl FnOnce() -> T,
+) -> Result<(usize, T), DescriptorCheckpointError> {
+    let bytes = 20_usize
+        .checked_add(generations.checked_mul(8).ok_or(DescriptorCheckpointError::Limit)?)
+        .and_then(|size| size.checked_add(entries.checked_mul(20)?))
+        .ok_or(DescriptorCheckpointError::Limit)?;
+    if bytes > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
+        return Err(DescriptorCheckpointError::Limit);
+    }
+    Ok((bytes, materialize()))
+}
+
+#[cfg(test)]
+mod structural_preflight_test {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn rejects_before_materialization() {
+        let materializations = AtomicUsize::new(0);
+        let codec_writes = AtomicUsize::new(0);
+        let maximum_generations = (DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM - 20) / 8;
+        for generations in [maximum_generations + 1, usize::MAX] {
+            assert_eq!(
+                preflight_structure(generations, 0, || {
+                    materializations.fetch_add(1, Ordering::SeqCst);
+                    codec_writes.fetch_add(1, Ordering::SeqCst);
+                }),
+                Err(DescriptorCheckpointError::Limit)
+            );
+        }
+        assert_eq!(materializations.load(Ordering::SeqCst), 0);
+        assert_eq!(codec_writes.load(Ordering::SeqCst), 0);
+    }
+}
+
 fn snapshot_object(
     objects: &dyn DescriptorObjectCheckpoint,
-    identity: u64,
+    identity: crate::DescriptionIdentity,
     object: &dyn OpenFileDescription,
     checkpoint_bytes: &mut usize,
 ) -> Result<Vec<u8>, DescriptorCheckpointError> {
-    let object_bytes = objects.snapshot_size(identity, object)?;
+    let object_bytes = objects.snapshot_size_identity(identity, object)?;
     let next = checkpoint_bytes
         .checked_add(32)
         .and_then(|size| size.checked_add(object_bytes))
@@ -332,7 +387,7 @@ fn snapshot_object(
         return Err(DescriptorCheckpointError::Limit);
     }
     let mut output = vec![0; object_bytes];
-    objects.snapshot_into(identity, object, &mut output)?;
+    objects.snapshot_into_identity(identity, object, &mut output)?;
     *checkpoint_bytes = next;
     Ok(output)
 }

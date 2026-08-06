@@ -182,6 +182,43 @@ impl Bindings {
         }
     }
 
+    fn with_bound<T>(
+        &self,
+        identity: DescriptionIdentity,
+        object: &dyn OpenFileDescription,
+        operation: impl FnOnce(&RuntimeMemfd) -> Result<T, DescriptorCheckpointError>,
+    ) -> Result<Option<T>, DescriptorCheckpointError> {
+        let Some(object) = object
+            .domain_extension()
+            .and_then(|extension| extension.downcast_ref::<RuntimeMemfd>())
+        else {
+            return Ok(None);
+        };
+        let state = self
+            .registry
+            .state
+            .lock()
+            .map_err(|_| DescriptorCheckpointError::Object)?;
+        let binding = object.binding.lock().map_err(|_| DescriptorCheckpointError::Object)?;
+        let Some((registry, bound, epoch)) = binding.as_ref() else {
+            return Ok(None);
+        };
+        let Some(registry) = registry.upgrade() else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(&registry, &self.registry)
+            || *epoch != state.epoch
+            || *bound != identity
+            || !state
+                .objects
+                .get(bound)
+                .is_some_and(|candidate| std::ptr::eq(candidate.as_ref(), object))
+        {
+            return Ok(None);
+        }
+        operation(object).map(Some)
+    }
+
     fn encode(object: &RuntimeMemfd) -> Result<[u8; PAYLOAD_BYTES], DescriptorCheckpointError> {
         let position = object.position.lock().map_err(|_| DescriptorCheckpointError::Object)?;
         if position.splice_reserved {
@@ -226,6 +263,30 @@ impl Bindings {
 }
 
 impl DescriptorObjectCheckpoint for Bindings {
+    fn snapshot_size_identity(
+        &self,
+        _: DescriptionIdentity,
+        _: &dyn OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
+        Ok(PAYLOAD_BYTES)
+    }
+
+    fn snapshot_into_identity(
+        &self,
+        identity: DescriptionIdentity,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != PAYLOAD_BYTES {
+            return Err(DescriptorCheckpointError::Object);
+        }
+        let encoded = self
+            .with_bound(identity, object, Self::encode)?
+            .ok_or(DescriptorCheckpointError::Object)?;
+        output.copy_from_slice(&encoded);
+        Ok(())
+    }
+
     fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
         Ok(PAYLOAD_BYTES)
     }
@@ -236,25 +297,8 @@ impl DescriptorObjectCheckpoint for Bindings {
         object: &dyn OpenFileDescription,
         output: &mut [u8],
     ) -> Result<(), DescriptorCheckpointError> {
-        if output.len() != PAYLOAD_BYTES {
-            return Err(DescriptorCheckpointError::Object);
-        }
-        if object.kind() != ObjectKind::File {
-            return Err(DescriptorCheckpointError::Object);
-        }
-        let state = self
-            .registry
-            .state
-            .lock()
-            .map_err(|_| DescriptorCheckpointError::Object)?;
-        let identity = state
-            .objects
-            .keys()
-            .find(|key| key.identity == identity)
-            .ok_or(DescriptorCheckpointError::Object)?;
-        let encoded = Self::encode(&state.objects[identity])?;
-        output.copy_from_slice(&encoded);
-        Ok(())
+        let _ = (identity, object, output);
+        Err(DescriptorCheckpointError::Object)
     }
 
     fn rebind(
@@ -276,36 +320,21 @@ impl DescriptorObjectCheckpoint for Bindings {
 }
 
 impl crate::FileObjectCheckpoint for Bindings {
+    fn owns_identity(
+        &self,
+        identity: DescriptionIdentity,
+        object: &dyn OpenFileDescription,
+    ) -> Result<bool, DescriptorCheckpointError> {
+        Ok(self.with_bound(identity, object, |_| Ok(()))?.is_some())
+    }
+
     fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
         Ok(PAYLOAD_BYTES)
     }
 
     fn owns(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError> {
-        let Some(object) = object
-            .domain_extension()
-            .and_then(|extension| extension.downcast_ref::<RuntimeMemfd>())
-        else {
-            return Ok(false);
-        };
-        let state = self
-            .registry
-            .state
-            .lock()
-            .map_err(|_| DescriptorCheckpointError::Object)?;
-        let binding = object.binding.lock().map_err(|_| DescriptorCheckpointError::Object)?;
-        let Some((registry, bound, epoch)) = binding.as_ref() else {
-            return Ok(false);
-        };
-        let Some(registry) = registry.upgrade() else {
-            return Ok(false);
-        };
-        Ok(Arc::ptr_eq(&registry, &self.registry)
-            && *epoch == state.epoch
-            && bound.identity == identity
-            && state
-                .objects
-                .get(bound)
-                .is_some_and(|candidate| std::ptr::eq(candidate.as_ref(), object)))
+        let _ = (identity, object);
+        Ok(false)
     }
 }
 
@@ -558,22 +587,74 @@ mod tests {
     fn binding_exact() {
         let (_, _, bindings, table, number, object) = fixture();
         let identity = table.pin(number).unwrap().description_identity();
-        assert!(crate::FileObjectCheckpoint::owns(bindings.as_ref(), identity.identity, object.as_ref()).unwrap());
-        assert!(!crate::FileObjectCheckpoint::owns(bindings.as_ref(), identity.identity, &CollidingFile).unwrap());
-        assert!(!crate::FileObjectCheckpoint::owns(bindings.as_ref(), identity.identity + 1, object.as_ref()).unwrap());
+        assert!(crate::FileObjectCheckpoint::owns_identity(bindings.as_ref(), identity, object.as_ref()).unwrap());
+        assert!(!crate::FileObjectCheckpoint::owns_identity(bindings.as_ref(), identity, &CollidingFile).unwrap());
+        assert!(!crate::FileObjectCheckpoint::owns_identity(
+            bindings.as_ref(),
+            DescriptionIdentity {
+                generation: identity.generation + 1,
+                ..identity
+            },
+            object.as_ref(),
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn generation_selects_object() {
+        let store = Arc::new(SharedObjectStore::new(SharedLimits::default()).unwrap());
+        let registry = Arc::new(Registry::new());
+        registry.configure(store, 7).unwrap();
+        let first = registry.create(true).unwrap();
+        first.write(b"first").unwrap();
+        first.seek(SeekPosition::Start(1)).unwrap();
+        let second = registry.create(false).unwrap();
+        second.write(b"second object").unwrap();
+        second.seek(SeekPosition::Start(4)).unwrap();
+        let first_identity = DescriptionIdentity {
+            identity: 77,
+            generation: 1,
+        };
+        let second_identity = DescriptionIdentity {
+            identity: 77,
+            generation: 2,
+        };
+        registry.register(first_identity, first.clone()).unwrap();
+        registry.register(second_identity, second.clone()).unwrap();
+        let bindings = Bindings::new(registry);
+        let mut first_bytes = [0; PAYLOAD_BYTES];
+        let mut second_bytes = [0; PAYLOAD_BYTES];
+        bindings
+            .snapshot_into_identity(first_identity, first.as_ref(), &mut first_bytes)
+            .unwrap();
+        bindings
+            .snapshot_into_identity(second_identity, second.as_ref(), &mut second_bytes)
+            .unwrap();
+        assert_eq!(u64::from_le_bytes(first_bytes[9..17].try_into().unwrap()), 5);
+        assert_eq!(u64::from_le_bytes(first_bytes[17..25].try_into().unwrap()), 1);
+        assert_eq!(u64::from_le_bytes(second_bytes[9..17].try_into().unwrap()), 13);
+        assert_eq!(u64::from_le_bytes(second_bytes[17..25].try_into().unwrap()), 4);
+        assert!(bindings
+            .snapshot_into_identity(first_identity, second.as_ref(), &mut first_bytes)
+            .is_err());
+        assert!(bindings
+            .snapshot_into_identity(first_identity, &CollidingFile, &mut first_bytes)
+            .is_err());
     }
 
     #[test]
     fn splice_capture_rejected() {
         let (_, _, bindings, table, number, object) = fixture();
-        let identity = table.pin(number).unwrap().description_identity().identity;
+        let identity = table.pin(number).unwrap().description_identity();
         let prepared = object.prepare_splice_read(None, 1, false, None).unwrap().unwrap();
         assert_eq!(
-            bindings.snapshot(identity, object.as_ref()),
+            bindings.snapshot_into_identity(identity, object.as_ref(), &mut [0; PAYLOAD_BYTES]),
             Err(DescriptorCheckpointError::Object),
         );
         drop(prepared);
-        assert!(bindings.snapshot(identity, object.as_ref()).is_ok());
+        assert!(bindings
+            .snapshot_into_identity(identity, object.as_ref(), &mut [0; PAYLOAD_BYTES])
+            .is_ok());
     }
 
     #[test]

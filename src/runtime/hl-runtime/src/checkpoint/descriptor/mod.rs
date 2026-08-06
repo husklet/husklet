@@ -62,6 +62,24 @@ impl ObjectCatalog {
 }
 
 impl DescriptorObjectCheckpoint for ObjectCatalog {
+    fn snapshot_size_identity(
+        &self,
+        identity: hl_descriptor::DescriptionIdentity,
+        object: &dyn hl_descriptor::OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
+        self.codec(object.kind())?.snapshot_size_identity(identity, object)
+    }
+
+    fn snapshot_into_identity(
+        &self,
+        identity: hl_descriptor::DescriptionIdentity,
+        object: &dyn hl_descriptor::OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        self.codec(object.kind())?
+            .snapshot_into_identity(identity, object, output)
+    }
+
     fn snapshot_size(
         &self,
         identity: u64,

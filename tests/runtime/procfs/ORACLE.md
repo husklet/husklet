@@ -10,7 +10,12 @@ nonzero tags while rejecting no-owner or multiple-owner captures. This stage is
 bounded by an exact-size contract and writes into caller-owned slices. The
 descriptor table accounts its header, generation records, entry records,
 description envelopes, selector tags, and payloads against one running 4 MiB
-limit before allocating each payload or invoking its codec writer. Restore
+limit. Fixed table structure is checked before generation or entry vectors are
+materialized; each description is checked before allocating its payload or
+invoking its codec writer. The memfd route carries the complete description
+identity and serializes only the passed concrete `RuntimeMemfd` after proving
+its registry instance, epoch, full generation-bearing key, and exact object
+pointer. Restore
 rejects a rebound object whose
 kind differs from the catalog route. The memfd file codec additionally proves
 the concrete `RuntimeMemfd` and its complete generation-bearing registry binding,
