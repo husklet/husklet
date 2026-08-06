@@ -114,8 +114,8 @@ impl Depth {
 
 impl<'ast> Visit<'ast> for Depth {
     fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
+        self.visit_expr(&expression.cond);
         self.enter("if", expression.if_token.span, |visitor| {
-            visitor.visit_expr(&expression.cond);
             visitor.visit_block(&expression.then_branch);
             if let Some((_, branch)) = &expression.else_branch {
                 if let Expr::If(next) = branch.as_ref() {
@@ -128,20 +128,25 @@ impl<'ast> Visit<'ast> for Depth {
     }
 
     fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
+        self.visit_expr(&expression.expr);
         self.enter("match", expression.match_token.span, |visitor| {
-            syn::visit::visit_expr_match(visitor, expression);
+            for arm in &expression.arms {
+                visitor.visit_arm(arm);
+            }
         });
     }
 
     fn visit_expr_for_loop(&mut self, expression: &'ast syn::ExprForLoop) {
+        self.visit_expr(&expression.expr);
         self.enter("for", expression.for_token.span, |visitor| {
-            syn::visit::visit_expr_for_loop(visitor, expression);
+            visitor.visit_block(&expression.body);
         });
     }
 
     fn visit_expr_while(&mut self, expression: &'ast syn::ExprWhile) {
+        self.visit_expr(&expression.cond);
         self.enter("while", expression.while_token.span, |visitor| {
-            syn::visit::visit_expr_while(visitor, expression);
+            visitor.visit_block(&expression.body);
         });
     }
 
@@ -152,6 +157,10 @@ impl<'ast> Visit<'ast> for Depth {
     }
 
     fn visit_expr_closure(&mut self, expression: &'ast syn::ExprClosure) {
+        if !matches!(expression.body.as_ref(), Expr::Block(_)) {
+            syn::visit::visit_expr_closure(self, expression);
+            return;
+        }
         self.enter("closure", expression.span(), |visitor| {
             syn::visit::visit_expr_closure(visitor, expression);
         });
@@ -227,6 +236,57 @@ fn summarize(row: &ResultRow) {
         None => println!("{} has no samples", row.name),
     }
 }"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn accepts_predicate_closures_inside_conditions() {
+        let findings = findings(
+            r#"fn validate(options: &mut Vec<String>) -> bool {
+    for name in ["ro", "readonly"] {
+        if options.iter().any(|option| option == name) {
+            return false;
+        }
+    }
+    true
+}"#,
+        );
+
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn reports_control_flow_inside_a_braced_closure_body() {
+        let findings = findings(
+            r#"fn schedule(cases: &[u8]) {
+    for case in cases {
+        cases.iter().for_each(|other| {
+            if other > case {
+                println!("{other}");
+            }
+        });
+    }
+}"#,
+        );
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("depth 3"));
+    }
+
+    #[test]
+    fn accepts_a_scrutinee_call_beside_a_nested_match() {
+        let findings = findings(
+            r"fn classify(values: &[u8]) -> u8 {
+    match values.iter().max_by_key(|value| **value) {
+        Some(value) => match value {
+            0 => 1,
+            other => *other,
+        },
+        None => 0,
+    }
+}",
         );
 
         assert!(findings.is_empty());
