@@ -578,12 +578,11 @@ fn prepared_wait_reservation() {
         no_hang: true,
         ..ChildWaitOptions::default()
     };
-    let first = match registry
+    let PreparedChildWait::Selection(first) = registry
         .prepare_wait_child(parent, ChildSelector::Any, options)
         .unwrap()
-    {
-        PreparedChildWait::Selection(value) => value,
-        _ => panic!("missing prepared event"),
+    else {
+        panic!("missing prepared event")
     };
     assert!(matches!(
         registry
@@ -592,12 +591,11 @@ fn prepared_wait_reservation() {
         PreparedChildWait::NoChange,
     ));
     drop(first);
-    let retry = match registry
+    let PreparedChildWait::Selection(retry) = registry
         .prepare_wait_child(parent, ChildSelector::Any, options)
         .unwrap()
-    {
-        PreparedChildWait::Selection(value) => value,
-        _ => panic!("reservation was not released"),
+    else {
+        panic!("reservation was not released")
     };
     assert_eq!(retry.commit().unwrap().child, child);
     assert!(matches!(
