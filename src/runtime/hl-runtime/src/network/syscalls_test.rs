@@ -605,6 +605,25 @@ fn bind_rejects_an_address_no_namespace_interface_owns() {
 }
 
 #[test]
+fn bind_rejects_a_unix_address_on_an_internet_socket() {
+    let fixture = Fixture::new();
+    let mut runtime = fixture
+        .runtime(GuestArchitecture::X86_64)
+        .with_network_policy(hl_network::NetworkPolicy::from_launch(false, b"", b"", b"").unwrap());
+    let LinuxResult::Value(fd) = runtime.handle(Fixture::operation("socket"), [2, 1, 6, 0, 0, 0]) else {
+        panic!("stream socket creation failed")
+    };
+    let mut sockaddr = [0_u8; 110];
+    sockaddr[..2].copy_from_slice(&1_u16.to_le_bytes());
+    sockaddr[2..22].copy_from_slice(b"/tmp/ltp_neterr.sock");
+    fixture.memory.put(64, &sockaddr);
+    assert_eq!(
+        runtime.handle(Fixture::operation("bind"), [fd, 64, 110, 0, 0, 0]),
+        LinuxResult::Error(Errno::EAFNOSUPPORT),
+    );
+}
+
+#[test]
 fn exit_catalog_ownership() {
     let catalog = Arc::new(NetworkCatalog::new(
         NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),

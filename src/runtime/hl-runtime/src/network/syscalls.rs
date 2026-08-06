@@ -409,6 +409,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let Some(host) = &self.host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
+        // An internet socket cannot carry a unix address.
+        if matches!(address, SocketAddress::Unix(_)) {
+            return LinuxResult::Error(Errno::EAFNOSUPPORT);
+        }
         if !self.host_projection && !Self::local_projection(&address) {
             // Only an address a namespace interface owns is bindable; Linux
             // reports EADDRNOTAVAIL for every other non-loopback address.
