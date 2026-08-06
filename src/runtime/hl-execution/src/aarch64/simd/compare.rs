@@ -21,16 +21,15 @@ impl Comparison {
             let left_value = cpu.vector_lane(left, format.bits(), lane) & magnitude_mask;
             let right_value =
                 right.map_or(0, |register| cpu.vector_lane(register, format.bits(), lane)) & magnitude_mask;
-            let mut compared = cpu.clone();
-            crate::Aarch64FpExecutor::compare(
-                &mut compared,
+            let (flags, nzcv) = crate::Aarch64FpExecutor::compare_flags(
+                cpu.fpcr,
                 format,
                 left_value,
                 right_value,
                 operation != FpComparison::Equal,
             );
-            cpu.fpsr |= compared.fpsr;
-            value |= (u128::from(lane_mask) * u128::from(Self::matches(operation, compared.nzcv))) << (u32::from(lane) * u32::from(format.bits()));
+            cpu.fpsr |= flags;
+            value |= (u128::from(lane_mask) * u128::from(Self::matches(operation, nzcv))) << (u32::from(lane) * u32::from(format.bits()));
         }
         cpu.set_vector(destination, value);
     }

@@ -137,18 +137,31 @@ impl Aarch64FpExecutor {
     }
 
     pub(crate) fn compare(cpu: &mut Aarch64CpuState, format: FpFormat, left: u64, right: u64, signaling: bool) {
+        let (flags, nzcv) = Self::compare_flags(cpu.fpcr, format, left, right, signaling);
+        cpu.fpsr |= flags;
+        cpu.nzcv = nzcv;
+    }
+
+    /// Returns the FPSR bits to raise and the resulting NZCV, so vector lanes need no CPU state.
+    pub(crate) fn compare_flags(
+        fpcr: u64,
+        format: FpFormat,
+        left: u64,
+        right: u64,
+        signaling: bool,
+    ) -> (u64, Nzcv) {
+        let mut fpsr = 0_u64;
         let left_class = Self::classify(left, format);
         let right_class = Self::classify(right, format);
         if left_class >= 4 || right_class >= 4 {
             if signaling || left_class == 5 || right_class == 5 {
-                cpu.fpsr |= u64::from(FPSR_INVALID);
+                fpsr |= u64::from(FPSR_INVALID);
             }
-            cpu.nzcv = Nzcv::from_bits(Nzcv::CARRY | Nzcv::OVERFLOW);
-            return;
+            return (fpsr, Nzcv::from_bits(Nzcv::CARRY | Nzcv::OVERFLOW));
         }
-        let flush = Self::flushes(cpu.fpcr as u32, format);
+        let flush = Self::flushes(fpcr as u32, format);
         if flush && (left_class == 1 || right_class == 1) && format != FpFormat::Half {
-            cpu.fpsr |= u64::from(FPSR_INPUT_DENORMAL);
+            fpsr |= u64::from(FPSR_INPUT_DENORMAL);
         }
         let left = if flush && left_class == 1 {
             left & Self::sign_mask(format)
@@ -161,13 +174,14 @@ impl Aarch64FpExecutor {
             right
         };
         let both_zero = left & !Self::sign_mask(format) == 0 && right & !Self::sign_mask(format) == 0;
-        cpu.nzcv = if both_zero || left == right {
+        let nzcv = if both_zero || left == right {
             Nzcv::from_bits(Nzcv::ZERO | Nzcv::CARRY)
         } else if Self::ordered_key(left, format) < Self::ordered_key(right, format) {
             Nzcv::from_bits(Nzcv::NEGATIVE)
         } else {
             Nzcv::from_bits(Nzcv::CARRY)
         };
+        (fpsr, nzcv)
     }
 
     pub(super) fn ordered_key(bits: u64, format: FpFormat) -> u64 {
