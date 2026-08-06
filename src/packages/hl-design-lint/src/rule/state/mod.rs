@@ -141,10 +141,7 @@ impl Strings<'_> {
     }
 
     fn record(&mut self, expression: &Expr, literal: &Expr, kind: EvidenceKind) {
-        let (value, span) = match string_literal(literal) {
-            Some(value) => value,
-            None => return,
-        };
+        let Some((value, span)) = string_literal(literal) else { return };
         let Some(concept) = self.concept(expression) else {
             return;
         };
