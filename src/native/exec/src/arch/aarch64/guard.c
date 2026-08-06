@@ -512,9 +512,14 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
 static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
                         const uint8_t *resume, uint8_t **archive) {
     uint32_t *inactive[4];
-    uint32_t *next[4][4];
-    uint32_t *selected[4];
-    uint8_t *starts[4];
+    uint32_t *exhausted;
+    uint32_t *below;
+    uint32_t *above;
+    uint32_t *denied;
+    uint32_t *chosen;
+    uint32_t *again;
+    uint8_t *loop;
+    uint8_t *following;
 
     hl_a64_addi(assembler, 9, 16, (unsigned)bytes);
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp end,address: wrapped */
@@ -535,33 +540,36 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     inactive[3] = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
 
-    for (unsigned index = 0; index < 4; ++index) {
-        int base = OFFSET_READ_VIEWS + (int)(index * 4u * sizeof(uint64_t));
-        starts[index] = assembler->cursor;
-        hl_a64_emit32(assembler, 0xF100023Fu | ((index + 1u) << 10));
-        next[index][0] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 18, CPU, base);
-        hl_a64_emit32(assembler, 0xEB12021Fu); /* cmp address,first */
-        next[index][1] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        hl_a64_ldr(assembler, 18, CPU, base + (int)sizeof(uint64_t));
-        hl_a64_emit32(assembler, 0xEB12013Fu); /* cmp end,last */
-        next[index][2] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-        /* x17 still carries read_count for the next slot's bound check. */
-        hl_a64_ldr(assembler, 18, CPU, base + 3 * (int)sizeof(uint64_t));
-        next[index][3] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-
-        hl_a64_movz(assembler, 9, index, 0);
-        selected[index] = (uint32_t *)assembler->cursor;
-        hl_a64_emit32(assembler, 0);
-    }
-
-    uint32_t *to_miss = (uint32_t *)assembler->cursor;
+    hl_a64_addi(assembler, 30, CPU, OFFSET_READ_VIEWS);
+    loop = assembler->cursor;
+    hl_a64_emit32(assembler, 0xF1000631u); /* subs x17,x17,#1: slots remaining */
+    exhausted = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, 0);
+    hl_a64_emit32(assembler, 0xEB12021Fu); /* cmp address,first */
+    below = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, (int)sizeof(uint64_t));
+    hl_a64_emit32(assembler, 0xEB12013Fu); /* cmp end,last */
+    above = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    hl_a64_ldr(assembler, 18, 30, 3 * (int)sizeof(uint64_t));
+    denied = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+    chosen = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
+    following = assembler->cursor;
+    hl_a64_addi(assembler, 30, 30, 4u * (unsigned)sizeof(uint64_t));
+    again = (uint32_t *)assembler->cursor;
+    hl_a64_emit32(assembler, 0);
+
     uint8_t *selected_target = assembler->cursor;
+    /* The countdown consumed the slot number the unrolled scan used to
+     * materialise, so recover it as read_count - remaining - 1. */
+    hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_COUNT);
+    hl_a64_emit32(assembler, UINT32_C(0xcb110252)); /* sub x18,x18,x17 */
+    hl_a64_subi(assembler, 9, 18, 1);
     /* archive_dirty uses x9 while scanning records. Preserve the selected
      * read-view slot in cold fault metadata; every actual fault path replaces
      * this field before exposing it to the dispatcher. */
@@ -595,20 +603,17 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
 
     uint8_t *miss = assembler->cursor;
     if (!hl_a64_assembler_ok(assembler)) return;
-    branch(assembler, to_miss, miss);
-    for (unsigned index = 0; index < 4; ++index) branch(assembler, selected[index], selected_target);
+    branch(assembler, chosen, selected_target);
     branch(assembler, retry, resume);
     condition(assembler, inactive[0], miss, 3u);
     condition(assembler, inactive[1], miss, 0u);
     condition(assembler, inactive[2], miss, 1u);
     condition(assembler, inactive[3], miss, 8u);
-    for (unsigned index = 0; index < 4; ++index) {
-        const uint8_t *following = index + 1u < 4 ? starts[index + 1u] : miss;
-        condition(assembler, next[index][0], miss, 3u);
-        condition(assembler, next[index][1], following, 3u);
-        condition(assembler, next[index][2], following, 8u);
-        test(assembler, next[index][3], following, 1u, 18u);
-    }
+    condition(assembler, exhausted, miss, 3u);
+    condition(assembler, below, following, 3u);
+    condition(assembler, above, following, 8u);
+    test(assembler, denied, following, 1u, 18u);
+    branch(assembler, again, loop);
 }
 
 static void legacy_begin(hl_a64_assembler *assembler, uint64_t bytes, uint32_t required,
