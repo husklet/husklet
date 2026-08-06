@@ -355,10 +355,10 @@ fn conventional_single_directory(path: &Path) -> bool {
     });
     matches!(
         name,
-        Some("tests" | "benches" | "examples" | "migrations" | "bin" | ".cargo")
+        Some("test" | "tests" | "benches" | "examples" | "migrations" | "bin" | ".cargo")
     ) || artifact_boundary
         || (name == Some("src") && path.join("../Cargo.toml").is_file())
-        || (path.join("tests.rs").is_file()
+        || ((path.join("test.rs").is_file() || path.join("tests.rs").is_file())
             && path
                 .parent()
                 .zip(name)

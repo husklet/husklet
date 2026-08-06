@@ -363,4 +363,4 @@ pub(super) async fn named(State(state): State<DockerState>, Path(path): Path<Str
 }
 
 #[cfg(test)]
-mod tests;
+mod test;

@@ -463,4 +463,4 @@ impl Screenshot {
 }
 
 #[cfg(test)]
-mod tests;
+mod test;

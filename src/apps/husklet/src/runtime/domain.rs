@@ -342,4 +342,4 @@ impl Domain {
 }
 
 #[cfg(test)]
-mod tests;
+mod test;

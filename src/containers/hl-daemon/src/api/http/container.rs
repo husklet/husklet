@@ -75,4 +75,4 @@ use archive::ArchiveQuery;
 use logs::LogsQuery;
 
 #[cfg(test)]
-mod tests;
+mod test;

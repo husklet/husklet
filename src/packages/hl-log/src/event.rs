@@ -256,5 +256,5 @@ pub fn emit_verdict(tags: Tags, event: &str, module: &str, line: u32, fields: &[
 }
 
 #[cfg(test)]
-#[path = "event/tests.rs"]
-mod tests;
+#[path = "event/test.rs"]
+mod test;

@@ -458,5 +458,5 @@ impl WorkingDirectory {
 }
 
 #[cfg(test)]
-#[path = "session/tests.rs"]
-mod tests;
+#[path = "session/test.rs"]
+mod test;

@@ -222,4 +222,4 @@ mod journal;
 mod record;
 
 #[cfg(test)]
-mod tests;
+mod test;

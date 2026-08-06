@@ -185,4 +185,4 @@ impl History {
 }
 
 #[cfg(test)]
-mod tests;
+mod test;

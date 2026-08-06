@@ -452,4 +452,4 @@ impl WorkspaceStore {
 }
 
 #[cfg(test)]
-mod tests;
+mod test;

@@ -298,4 +298,4 @@ mod pull;
 use document::{Blob, ConfigDocument, IndexDocument, ManifestDocument};
 
 #[cfg(test)]
-mod tests;
+mod test;
