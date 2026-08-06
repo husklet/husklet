@@ -936,6 +936,9 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
     if context.is_null() || output.is_null() {
         return 0;
     }
+    // SAFETY: `context` is the null-checked pointer to the `OperandProvider` the caller
+    // stack-pins for the duration of the run; generated code calls this synchronously on
+    // the running thread, so this `&mut` is the only live reference.
     let provider = unsafe { &mut *context.cast::<OperandProvider<'_, '_, H>>() };
     let generation = provider.lease.generation();
     if generation.incarnation != mapping_incarnation {
@@ -967,6 +970,9 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .append_view(&projected);
             }
+            // SAFETY: `output` was null-checked and is the engine's writable out-parameter
+            // for this call, aligned for ProjectionView and disjoint from `context`;
+            // `write` needs no valid prior value.
             unsafe {
                 output.write(projected);
             }
@@ -1148,6 +1154,9 @@ impl HostFaultView {
     /// # Safety
     /// The view must still be inside its matching publish/unpublish interval.
     unsafe fn contains(self, host_pc: u64) -> bool {
+        // SAFETY: the caller's `# Safety` contract puts this inside the matching
+        // publish/unpublish interval, so the scope's executor and cpu are still live;
+        // the pointer is to a local copy and the query only reads.
         unsafe { hl_native_fault_scope_contains(&raw const self.0, host_pc) != 0 }
     }
 }
@@ -1187,6 +1196,8 @@ pub(crate) struct NativeFaultOwner;
 #[cfg(target_os = "linux")]
 impl NativeFaultOwner {
     pub(crate) fn create() -> Result<std::sync::Arc<dyn HostFaultOwner>, ()> {
+        // SAFETY: takes no arguments and installs the process-wide fault dispatcher; the
+        // matching release runs in this type's Drop, so acquire/release stay balanced.
         (unsafe { hl_native_fault_process_acquire() } == 0)
             .then(|| std::sync::Arc::new(Self) as std::sync::Arc<dyn HostFaultOwner>)
             .ok_or(())
@@ -1196,6 +1207,8 @@ impl NativeFaultOwner {
 #[cfg(target_os = "linux")]
 unsafe impl HostFaultOwner for NativeFaultOwner {
     fn attach(&self) -> Result<(), ()> {
+        // SAFETY: argument-free, and the `NativeFaultOwner` receiver proves the process
+        // dispatcher is still acquired; this installs the alternate stack for this thread.
         let attached = unsafe { hl_native_fault_thread_attach() } == 0;
         if attached {
             FAULT_GENERATION.with(|generation| generation.set(0));
@@ -1208,12 +1221,17 @@ unsafe impl HostFaultOwner for NativeFaultOwner {
     fn detach(&self) {
         let inactive = FAULT_GENERATION.with(|generation| generation.get() == 0);
         if inactive {
+            // SAFETY: the zero thread-local generation proves no view is still published
+            // on this thread, so tearing down its alternate stack strands no fault scope.
             let _ = unsafe { hl_native_fault_thread_detach() };
         }
     }
 
     unsafe fn publish(&self, view: HostFaultView) -> Result<(), ()> {
         let mut generation = 0;
+        // SAFETY: the trait's contract guarantees the view's executor and cpu stay live
+        // until the matching unpublish; both pointers are live locals for the call, and
+        // the scope is only made visible to this thread's own fault handler.
         if unsafe { hl_native_fault_thread_publish(&raw const view.0, &raw mut generation) } != 0 {
             return Err(());
         }
@@ -1223,7 +1241,10 @@ unsafe impl HostFaultOwner for NativeFaultOwner {
 
     unsafe fn unpublish(&self, view: HostFaultView) {
         let generation = FAULT_GENERATION.with(|current| current.replace(0));
+        // The generation is restored below if the retire fails.
         if generation != 0
+            // SAFETY: a nonzero thread-local generation proves a matching publish is
+            // outstanding on this thread, so this retires that scope exactly once.
             && unsafe { hl_native_fault_thread_unpublish(&raw const view.0, generation) } != 0 {
                 FAULT_GENERATION.with(|current| current.set(generation));
             }
@@ -1233,6 +1254,9 @@ unsafe impl HostFaultOwner for NativeFaultOwner {
 #[cfg(target_os = "linux")]
 impl Drop for NativeFaultOwner {
     fn drop(&mut self) {
+        // SAFETY: Drop runs once and only after every Arc clone is gone, balancing the
+        // single acquire in `create`; the trait contract has this owner outlive every
+        // attachment and executor that used it.
         let _ = unsafe { hl_native_fault_process_release() };
     }
 }
@@ -1241,7 +1265,13 @@ unsafe extern "C" fn fault_publish(context: *mut c_void, scope: *const FaultScop
     if context.is_null() || scope.is_null() {
         return 1;
     }
+    // SAFETY: `context` is the null-checked pointer to the `fault_owner` Arc field of the
+    // Executor borrowed for this run, so it outlives the callback; the reference is shared
+    // and `HostFaultOwner: Sync`.
     let owner = unsafe { &*context.cast::<std::sync::Arc<dyn HostFaultOwner>>() };
+    // SAFETY: the engine calls this on the running thread while the scope it points at is
+    // live, so `*scope` copies an initialized record and the publish contract is met;
+    // catch_unwind keeps a panic from unwinding across the C frame.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         owner.publish(HostFaultView(*scope))
     }))
@@ -1252,8 +1282,14 @@ unsafe extern "C" fn fault_unpublish(context: *mut c_void, scope: *const FaultSc
     if context.is_null() || scope.is_null() {
         return;
     }
+    // SAFETY: `context` is the null-checked pointer to the same Executor-owned
+    // `fault_owner` Arc, still borrowed for this run; the reference is shared and
+    // `HostFaultOwner: Sync`.
     let owner = unsafe { &*context.cast::<std::sync::Arc<dyn HostFaultOwner>>() };
+    // catch_unwind keeps a panic from unwinding across the C frame.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: paired with the `fault_publish` above on the same thread, so `*scope`
+        // reads the same live record and retires exactly that publish.
         unsafe { owner.unpublish(HostFaultView(*scope)) };
     }));
 }
