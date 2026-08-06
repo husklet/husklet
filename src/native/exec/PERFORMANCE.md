@@ -1505,41 +1505,6 @@ before transfer. Indirect calls read the target before replacing guest x30.
 | generation-safe invalidation/publication | native cache and executor admission | implemented |
 | PAC hints as no-op; `retaa`/`retab` as `ret x30` | `system.c`, `indirect.c` | implemented here |
 | shadow return stack / host RAS call-return pairing | none | missing optimization |
-
-#### IBTC diagnostic-counter oracle audit
-
-Retained oracle `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc` was read at
-`src/translator/cache.c::{g_ibtc,ibtc_publish,ibtc_clear_lazy,ibtc_drop_target,jit_after_fork}`,
-`src/translator/guest/aarch64/stubs.c::emit_ibranch_steal`,
-`src/translator/guest/aarch64/dispatch.h::G_IBTC_FILL`, and
-`src/core/dispatch.c::run_guest`. The retained table is one process-global,
-16-byte-entry, direct-mapped 64K cache. Generated AArch64 code first compares a
-site-local target, then reads the shared `{target,body}` pair and branches without
-entering the dispatcher on either hit. A miss spills guest state, records
-`cpu::ic_site`, and returns to `run_guest`; only after lookup/translation finds a
-live body does `G_IBTC_FILL` publish shared state and, when safe, patch the local
-site. Threaded publication is single-writer under `g_jit_lock` with an ordered,
-atomic 16-byte pair store; readers remain lock-free. Single-thread publication
-stores the body before releasing the target. AArch64 has both local and shared
-paths; x86-64 owns a separate two-way frontend cache. Windows lowers the aligned
-pair operation differently, Linux fork normally creates an empty child cache via
-`ibtc_clear_lazy`, while supported fixed-address preservation paths retain valid
-cache state. Reset, SMC, exec, and arena retirement clear or invalidate cache
-entries; the retained profiling totals (`g_prof_miss`, `g_mtfill`, and x86
-`g_ibtc_fill`) are process-lifetime globals and are not cache-hit counters.
-
-Rust maps cache ownership to each `hl_native_executor`, activation-local hit
-scratch to `hl_native_aarch64_cpu`, cumulative observations to relaxed executor
-atomics, and the size-qualified public ABI to `hl_native_diagnostics`. Cache
-reset and fork repair preserve the executor totals; CPU scratch is zeroed before
-entry and drained after return. The three ABI fields are appended at offset 520,
-so a 520-byte caller retains its prior contract. `ibtc_auth_rejections` is only a
-zero-initialized diagnostic prerequisite here; no authentication algorithm or
-rejection site is added. Likewise, zero values from the 10M/collision/two-site
-fixtures on this exact tree prove initialization, aggregation, ABI layout, and
-the absence of behavior changes only. They are explicitly not local-hit,
-shared-hit, or authenticated-ingress evidence: current certificate admission
-routes those AArch64 transfers through cold/nonrelocatable dispatcher returns.
 | megamorphic interpreter-dispatch shared-only probe | none | missing optimization |
 
 The two remaining items are speculative performance mechanisms, not missing
