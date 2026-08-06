@@ -1,3 +1,6 @@
+// The controlling-terminal and descriptor calls in this worker adapter are `unsafe` libc entry points.
+#![allow(unsafe_code)]
+
 use super::{on_winch, Ordering, WINCH};
 use crate::ffi::RawMode;
 use std::io::Write;
@@ -13,16 +16,19 @@ pub(super) struct ControllingTerminal;
 impl ControllingTerminal {
     pub(super) fn claim() -> std::io::Result<()> {
         let descriptor = libc::STDIN_FILENO;
+        // SAFETY: `isatty` only inspects a descriptor number and cannot fault.
         if unsafe { libc::isatty(descriptor) } != 1 {
             return Ok(());
         }
 
+        // SAFETY: both calls only name the inherited stdin descriptor.
         if unsafe { libc::tcgetpgrp(descriptor) } < 0
             && unsafe { libc::ioctl(descriptor, libc::TIOCSCTTY as libc::c_ulong, 0) } < 0
         {
             return Err(std::io::Error::last_os_error());
         }
 
+        // SAFETY: `getpgrp` takes no argument and `tcsetpgrp` names stdin and this process group.
         let group = unsafe { libc::getpgrp() };
         if group < 0 || unsafe { libc::tcsetpgrp(descriptor, group) } < 0 {
             return Err(std::io::Error::last_os_error());
@@ -196,6 +202,7 @@ impl<'a> TerminalSession<'a> {
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `descriptor` is a live, fully initialised `pollfd` owned by this frame.
         let result = unsafe { libc::poll(&mut descriptor, 1, 10) };
         if result < 0 {
             let error = std::io::Error::last_os_error();
@@ -207,6 +214,7 @@ impl<'a> TerminalSession<'a> {
         if result == 0 || descriptor.revents & libc::POLLIN == 0 {
             return Ok(());
         }
+        // SAFETY: the destination is this frame's buffer and the length is its own capacity.
         let count = unsafe {
             libc::read(
                 libc::STDIN_FILENO,
@@ -245,6 +253,7 @@ impl<'a> TerminalSession<'a> {
 
 /// Query the controlling terminal's size (cols, rows).
 pub(super) fn size() -> Option<(u16, u16)> {
+    // SAFETY: `winsize` is plain data, and the pointer names this frame's live value.
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     let r = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) };
     if r == 0 && ws.ws_col > 0 {
@@ -256,6 +265,7 @@ pub(super) fn size() -> Option<(u16, u16)> {
 
 pub(super) fn contract() -> String {
     let descriptor = libc::STDIN_FILENO;
+    // SAFETY: `ttyname` returns null or a buffer valid until the next call on this thread.
     let terminal = unsafe {
         let name = libc::ttyname(descriptor);
         if name.is_null() {
@@ -264,6 +274,7 @@ pub(super) fn contract() -> String {
             std::ffi::CStr::from_ptr(name).to_string_lossy().into_owned()
         }
     };
+    // SAFETY: `rlimit` is plain data, and the pointer names this frame's live value.
     let mut nofile: libc::rlimit = unsafe { std::mem::zeroed() };
     let _ = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut nofile) };
     let mut environment: Vec<_> = std::env::vars().collect();
@@ -295,6 +306,7 @@ impl Descriptors {
             .filter_map(|entry| {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let descriptor = name.parse::<libc::c_int>().ok()?;
+                // SAFETY: `fcntl(F_GETFD)` only reads the flags of a descriptor number.
                 let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
                 let target = std::fs::read_link(entry.path())
                     .map(|path| path.to_string_lossy().into_owned())

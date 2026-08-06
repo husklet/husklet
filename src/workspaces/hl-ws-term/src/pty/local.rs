@@ -65,6 +65,7 @@ impl LocalPty {
         static PTY_ALLOC: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let (master, slave_path) = {
             let _guard = PTY_ALLOC.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // SAFETY: the block only names the master descriptor it just opened, and the `ptsname` buffer is copied while the allocation lock is still held.
             unsafe {
                 let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
                 if master < 0 {
@@ -85,6 +86,7 @@ impl LocalPty {
             }
         };
 
+        // SAFETY: `ws` is a live initialised aggregate, and the fork child only calls async-signal-safe entry points before `execvp`.
         unsafe {
             // Seed the window size on the master so TUIs see a sane size before the first resize.
             let ws = libc::winsize {
@@ -140,6 +142,7 @@ impl LocalPty {
 impl PtyBackend for LocalPty {
     fn write(&mut self, mut bytes: &[u8]) -> io::Result<()> {
         while !bytes.is_empty() {
+            // SAFETY: the source pointer and length come from the same live borrowed slice.
             let n = unsafe { libc::write(self.master, bytes.as_ptr().cast::<libc::c_void>(), bytes.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
@@ -154,6 +157,7 @@ impl PtyBackend for LocalPty {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // SAFETY: the destination pointer and length come from the same live mutable slice.
         let n = unsafe { libc::read(self.master, buf.as_mut_ptr().cast::<libc::c_void>(), buf.len()) };
         if n >= 0 {
             return Ok(n as usize);
@@ -175,6 +179,7 @@ impl PtyBackend for LocalPty {
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
+        // SAFETY: `ws` is a live initialised aggregate borrowed for the duration of the call.
         unsafe {
             libc::ioctl(self.master, libc::TIOCSWINSZ, &ws);
         }
@@ -189,6 +194,7 @@ impl PtyBackend for LocalPty {
             return self.exited;
         }
         let mut status: libc::c_int = 0;
+        // SAFETY: `status` is a live local the kernel writes exclusively for this call.
         let r = unsafe { libc::waitpid(self.child, &raw mut status, libc::WNOHANG) };
         if r == self.child {
             let code = if libc::WIFEXITED(status) {
@@ -206,6 +212,7 @@ impl PtyBackend for LocalPty {
 
 impl Drop for LocalPty {
     fn drop(&mut self) {
+        // SAFETY: the descriptors and child pid are owned by this value and still valid while it drops.
         unsafe {
             if self.exited.is_none() {
                 libc::kill(self.child, libc::SIGHUP);
@@ -245,6 +252,7 @@ mod tests {
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `pfd` is a live, fully initialised `pollfd` owned by this frame.
             let pr = unsafe { libc::poll(&raw mut pfd, 1, 20) };
             if pr > 0 && pfd.revents & libc::POLLIN != 0 {
                 let n = pty.read(&mut buf).unwrap_or(0);

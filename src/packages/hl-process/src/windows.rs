@@ -1,3 +1,6 @@
+// The process control primitives this module wraps are all `unsafe` Win32 entry points.
+#![allow(unsafe_code)]
+
 use super::{Capture, Command as OwnedCommand, Outcome};
 use std::fs::{self, File};
 use std::io::Read;
@@ -50,11 +53,8 @@ pub(super) fn run(
     let directory = ptr::null();
 
     let attributes = Attributes::new([stdin_handle, stdout_handle.raw(), stderr_handle.raw()])?;
-    // SAFETY: both Win32 records are plain C data for which an all-zero value
-    // is the documented empty state. They contain no Rust references or
-    // alignment-sensitive interior pointers. These stack owners remain live
-    // for the call below, are not shared concurrently, and zeroing cannot
-    // unwind across FFI.
+    // SAFETY: both Win32 records are plain C data holding no Rust references, and an all-zero value is their
+    // documented empty state. The stack owners are unshared and zeroing cannot unwind across FFI.
     let (mut startup, mut process): (STARTUPINFOEXW, PROCESS_INFORMATION) =
         unsafe { (std::mem::zeroed(), std::mem::zeroed()) };
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
@@ -64,11 +64,9 @@ pub(super) fn run(
     startup.StartupInfo.hStdError = stderr_handle.raw();
     startup.lpAttributeList = attributes.pointer;
     let mut owned = OwnedProcess::new()?;
-    // SAFETY: `line` and optional directory are live mutable NUL-terminated
-    // UTF-16 buffers. Startup contains inheritable file handles owned above;
-    // process receives initialized owned handles. The stack and handle owners
-    // remain live, no concurrent Rust alias mutates them, and the call cannot
-    // unwind over FFI.
+    // SAFETY: `line` and optional directory are live mutable NUL-terminated UTF-16 buffers. Startup contains
+    // inheritable file handles owned above; process receives initialized owned handles. The stack and handle owners
+    // remain live, no concurrent Rust alias mutates them, and the call cannot unwind over FFI.
     let created = unsafe {
         CreateProcessW(
             ptr::null(),
@@ -100,9 +98,8 @@ pub(super) fn run(
     drop(attributes);
     drop(stdout_handle);
     drop(stderr_handle);
-    // SAFETY: process is still suspended, its valid handles are exclusively
-    // owned by `owned`, and the job is live until `owned` drops. No Rust memory
-    // is shared with the kernel operation, which cannot unwind over FFI.
+    // SAFETY: process is still suspended, its valid handles are exclusively owned by `owned`, and the job is live
+    // until `owned` drops. No Rust memory is shared with the kernel operation, which cannot unwind over FFI.
     // Assignment occurs before any guest instruction can spawn outside the job.
     if unsafe { AssignProcessToJobObject(owned.job, owned.process) } == 0 {
         return Err(std::io::Error::last_os_error());
@@ -171,10 +168,9 @@ fn pipe() -> std::io::Result<(File, OwnedHandle)> {
         lpSecurityDescriptor: ptr::null_mut(),
         bInheritHandle: 1,
     };
-    // SAFETY: the output pointers are aligned, writable, and stack-live, and
-    // the initialized security descriptor is valid for the call. No aliases
-    // access them concurrently; successful handles transfer immediately to
-    // single Rust owners, and the call cannot unwind over FFI.
+    // SAFETY: the output pointers are aligned, writable, and stack-live, and the initialized security descriptor is
+    // valid for the call. No aliases access them concurrently; successful handles transfer immediately to single Rust
+    // owners, and the call cannot unwind over FFI.
     if unsafe { CreatePipe(&mut read, &mut write, &mut security, 0) } == 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -299,10 +295,9 @@ impl Attributes {
         if unsafe { InitializeProcThreadAttributeList(pointer, 1, 0, &mut size) } == 0 {
             return Err(std::io::Error::last_os_error());
         }
-        // SAFETY: `pointer` names the initialized list owned by `storage`, and
-        // `handles` is an aligned, live, immutable three-handle array. Both
-        // owners outlive the attribute list, no concurrent mutation occurs,
-        // and the FFI call cannot unwind.
+        // SAFETY: `pointer` names the initialized list owned by `storage`, and `handles` is an aligned, live,
+        // immutable three-handle array. Both owners outlive the attribute list, no concurrent mutation occurs, and
+        // the FFI call cannot unwind.
         if unsafe {
             UpdateProcThreadAttribute(
                 pointer,
@@ -442,11 +437,11 @@ impl OwnedProcess {
 
     fn terminate(&mut self) {
         if !self.job.is_null() {
-            // SAFETY: the valid job handle is exclusively owned here. Neither
-            // call accesses aliased Rust storage or retains a pointer, and FFI
-            // cannot unwind. Closing activates KILL_ON_JOB_CLOSE before capture
-            // drains can wait for EOF.
+            // SAFETY: the valid job handle is exclusively owned here. Neither call accesses aliased Rust storage or
+            // retains a pointer, and FFI cannot unwind. Closing activates KILL_ON_JOB_CLOSE before capture drains can
+            // wait for EOF.
             unsafe { TerminateJobObject(self.job, 1) };
+            // SAFETY: the job handle is still exclusively owned and is cleared immediately below.
             unsafe { CloseHandle(self.job) };
             self.job = ptr::null_mut();
         }
@@ -468,9 +463,8 @@ impl OwnedProcess {
 impl Drop for OwnedProcess {
     fn drop(&mut self) {
         self.terminate();
-        // SAFETY: each non-null handle was transferred exactly once from the
-        // corresponding Win32 creator and is closed exactly once here. Drop has
-        // exclusive access, the calls retain no pointers or aliases and cannot
+        // SAFETY: each non-null handle was transferred exactly once from the corresponding Win32 creator and is
+        // closed exactly once here. Drop has exclusive access, the calls retain no pointers or aliases and cannot
         // unwind over FFI. Closing the job is the final kill-on-close backstop.
         unsafe {
             if !self.thread.is_null() {

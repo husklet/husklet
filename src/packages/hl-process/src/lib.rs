@@ -16,10 +16,8 @@ const ENVIRONMENT_COUNT_LIMIT: usize = 4096;
 const ENVIRONMENT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 
 #[cfg(unix)]
-#[allow(unsafe_code)]
 mod unix;
 #[cfg(windows)]
-#[allow(unsafe_code)]
 mod windows;
 
 #[derive(Clone, Debug)]

@@ -1,3 +1,6 @@
+// The pty allocation and `posix_spawn` calls in this host adapter are `unsafe` libc entry points.
+#![allow(unsafe_code)]
+
 use crate::*;
 
 pub(crate) struct PtyProcess;
@@ -19,6 +22,7 @@ impl PtyProcess {
         const POSIX_SPAWN_FLAGS: libc::c_short = 0x0400 | 0x4000 | 0x0004 | 0x0008;
         #[cfg(target_os = "linux")]
         const POSIX_SPAWN_FLAGS: libc::c_short = 0x0080 | 0x0004 | 0x0008;
+        // SAFETY: every pointer handed to the pty and spawn calls names storage owned by this frame and outliving the call.
         unsafe {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             if master < 0 {

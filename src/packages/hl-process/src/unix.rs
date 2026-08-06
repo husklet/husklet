@@ -1,3 +1,6 @@
+// The process control primitives this module wraps are all `unsafe` libc entry points.
+#![allow(unsafe_code)]
+
 use super::{Capture, Command as OwnedCommand, Outcome};
 use std::ffi::CString;
 use std::fs::{self, File};
@@ -152,6 +155,7 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     // internal storage to Rust and no concurrent access exists.
     let mut actions = unsafe { actions.assume_init() };
     let configured = (|| {
+        // SAFETY: `actions` is initialized and uniquely owned, and the NUL-terminated path outlives the call.
         check_spawn(unsafe {
             libc::posix_spawn_file_actions_addopen(&raw mut actions, libc::STDIN_FILENO, null.as_ptr(), libc::O_RDONLY, 0)
         })?;
@@ -204,10 +208,10 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     })();
     let mut pid = 0;
     let spawned = configured.and_then(|()| {
-        // SAFETY: all C strings and pointer arrays are NUL-terminated and remain
-        // alive for the call. Actions/attributes are initialized and unaliased;
-        // env order and duplicate pointers are deliberately preserved. The
-        // child receives independent kernel state and the FFI cannot unwind.
+        // All C strings and pointer arrays are NUL-terminated and remain alive for the call.
+        // Actions/attributes are initialized and unaliased; env order and duplicate pointers
+        // are deliberately preserved.
+        // SAFETY: the child receives independent kernel state and the FFI cannot unwind.
         check_spawn(unsafe {
             libc::posix_spawn(
                 &raw mut pid,
@@ -684,9 +688,9 @@ mod tests {
             EnvironmentEntry::new(b"DUP", b"second").unwrap(),
             EnvironmentEntry::new(b"EMPTY", b"").unwrap(),
         ];
-        // SAFETY: this isolated subprocess deliberately relinquishes its three
-        // standard descriptors before exercising descriptor relocation. It
-        // performs no Rust I/O afterward, terminates with _exit, owns no shared
+        // This isolated subprocess deliberately relinquishes its three standard descriptors
+        // before exercising descriptor relocation.
+        // SAFETY: it performs no Rust I/O afterward, terminates with `_exit`, owns no shared
         // process state, and no unwind crosses FFI.
         unsafe {
             libc::close(libc::STDIN_FILENO);
@@ -816,11 +820,11 @@ mod tests {
     fn detached_capture_writer_child() {
         let path = std::env::var_os("HL_PROCESS_DETACHED_PID_FILE").unwrap();
         let report = File::create(path).unwrap();
-        // SAFETY: the fork child invokes only async-signal-safe libc operations,
-        // owns no Rust references after the fork, and terminates with `_exit`.
-        // The parent remains in its original process group until supervision
-        // terminates it; the child creates a new session and deliberately keeps
-        // inherited stdout/stderr open long enough to expose an unbounded drain.
+        // The parent remains in its original process group until supervision terminates it; the
+        // child creates a new session and deliberately keeps inherited stdout/stderr open long
+        // enough to expose an unbounded drain.
+        // SAFETY: the fork child invokes only async-signal-safe libc operations, owns no Rust
+        // references after the fork, and terminates with `_exit`.
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0);
         if pid == 0 {
@@ -832,6 +836,7 @@ mod tests {
             }
             let marker = b"detached\n";
             let mut digits = [0_u8; 32];
+            // SAFETY: `getpid` takes no argument, touches no Rust storage, and cannot fail.
             let mut value = unsafe { libc::getpid() } as u32;
             let mut cursor = digits.len();
             while value != 0 {
@@ -839,10 +844,10 @@ mod tests {
                 digits[cursor] = b'0' + (value % 10) as u8;
                 value /= 10;
             }
-            // SAFETY: stdout remains an inherited live descriptor, and marker
-            // and digits are immutable storage valid for their complete writes.
-            // The report descriptor was opened before fork. write, close,
-            // sleep, and `_exit` retain no Rust pointers and cannot unwind.
+            // Stdout remains an inherited live descriptor, and the report descriptor was opened
+            // before the fork.
+            // SAFETY: marker and digits are immutable storage valid for their complete writes,
+            // and write, close, sleep and `_exit` retain no Rust pointers and cannot unwind.
             unsafe {
                 libc::write(libc::STDOUT_FILENO, marker.as_ptr().cast(), marker.len());
                 libc::write(
