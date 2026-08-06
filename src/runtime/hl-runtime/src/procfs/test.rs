@@ -1,5 +1,5 @@
 use super::*;
-use hl_descriptor::OfdMetadata;
+use hl_descriptor::{OfdMetadata, OpenFileDescription};
 
 #[test]
 fn cpu_model_features() {
@@ -142,7 +142,9 @@ fn descriptor_directory_captures_on_first_nonempty_read_and_freezes() {
         .open(b"/proc/self/fd", process.number(), hl_vfs::OpenIntent::from_bits(0))
         .unwrap()
         .unwrap();
-    assert!(directory.read_directory(0).unwrap().entries.is_empty());
+    let empty = directory.read_directory(0).unwrap();
+    assert!(empty.entries.is_empty());
+    directory.commit_directory(empty.token, 0).unwrap();
     let first = table
         .install(
             0,
@@ -177,6 +179,99 @@ fn descriptor_directory_captures_on_first_nonempty_read_and_freezes() {
     let batch = independent.read_directory(8).unwrap();
     assert_eq!(batch.entries[2].name, b"1");
     assert_eq!(batch.entries[2].file_type, 8);
+}
+
+#[test]
+fn descriptor_directory_captures_its_own_installed_descriptor() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (process, _) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let table = Arc::new(DescriptorTable::new(8).unwrap());
+    let source = TaskProcfs::with_descriptors(Arc::clone(&tasks), process, Arc::clone(&table), Arc::new(Targets));
+    let directory = hl_vfs::Procfs::new(Arc::new(source))
+        .open(b"/proc/self/fd", process.number(), hl_vfs::OpenIntent::from_bits(0))
+        .unwrap()
+        .unwrap();
+    let number = table
+        .install(0, Arc::clone(&directory), hl_descriptor::DescriptorFlags::default())
+        .unwrap();
+
+    let batch = directory.read_directory(8).unwrap();
+    assert!(
+        batch
+            .entries
+            .iter()
+            .any(|entry| entry.name == number.to_string().as_bytes())
+    );
+}
+
+#[test]
+fn descriptor_directory_duplicate_and_fork_aliases_share_cursor() {
+    let table = Arc::new(DescriptorTable::new(8).unwrap());
+    let metadata = DescriptorObject(11).metadata().unwrap();
+    let directory: Arc<dyn hl_descriptor::OpenFileDescription> = Arc::new(super::descriptor::DescriptorDirectory::new(
+        Arc::clone(&table),
+        10,
+        metadata,
+    ));
+    let source = table
+        .install(0, directory, hl_descriptor::DescriptorFlags::default())
+        .unwrap();
+    let alias = table
+        .duplicate(source, 1, hl_descriptor::DescriptorFlags::default())
+        .unwrap();
+    let child = table.fork();
+
+    let first = table.pin(alias).unwrap().read_directory(2).unwrap();
+    let same = child.pin(source).unwrap().read_directory(2).unwrap();
+    assert_eq!(same, first);
+    child
+        .pin(source)
+        .unwrap()
+        .commit_directory(first.token, first.entries.len())
+        .unwrap();
+    let next = table.pin(alias).unwrap().read_directory(8).unwrap();
+    assert_eq!(next.token.cookie, 2);
+    assert!(next.entries.iter().any(|entry| entry.name == b"0"));
+    assert!(next.entries.iter().any(|entry| entry.name == b"1"));
+}
+
+#[test]
+fn descriptor_directory_concurrent_first_reads_share_one_coherent_capture() {
+    use std::sync::Barrier;
+
+    let table = Arc::new(DescriptorTable::new(16).unwrap());
+    table
+        .install(
+            3,
+            Arc::new(DescriptorObject(11)),
+            hl_descriptor::DescriptorFlags::default(),
+        )
+        .unwrap();
+    let directory: Arc<dyn hl_descriptor::OpenFileDescription> = Arc::new(super::descriptor::DescriptorDirectory::new(
+        Arc::clone(&table),
+        10,
+        DescriptorObject(12).metadata().unwrap(),
+    ));
+    let barrier = Arc::new(Barrier::new(5));
+    let readers = (0..4)
+        .map(|_| {
+            let directory = Arc::clone(&directory);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                directory.read_directory(16).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let batches = readers
+        .into_iter()
+        .map(|reader| reader.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(batches.windows(2).all(|pair| pair[0] == pair[1]));
+    assert_eq!(batches[0].entries[2].name, b"3");
 }
 
 #[test]
