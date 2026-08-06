@@ -614,30 +614,90 @@ mod tests {
         assert!(temporary.path().join("one/two/three").is_dir());
     }
 
-    #[test]
-    fn traversal_failures() {
-        let temporary = tempfile::tempdir().unwrap();
-        let directory = Publication::new(&temporary.path().join("target")).unwrap().directory;
-        let open = directory.child_with(
-            c"opened",
-            |_| Ok(()),
-            |directory, name| rustix::fs::mkdirat(&directory.0, name, rustix::fs::Mode::from_raw_mode(0o755)),
-            |_, _| Err(io::Error::other("open")),
-            Directory::sync,
-            Directory::sync,
-        );
-        assert!(matches!(open, Err(CreateError::AncestorsCreated { count: 1, .. })));
-        assert!(temporary.path().join("opened").is_dir());
+    #[derive(Clone, Copy, Debug)]
+    enum TraversalFailure {
+        Probe,
+        Mkdir,
+        Reopen,
+        ChildSync,
+        ParentSync,
+    }
 
-        let sync = directory.child_with(
-            c"synced",
-            |_| Ok(()),
-            |directory, name| rustix::fs::mkdirat(&directory.0, name, rustix::fs::Mode::from_raw_mode(0o755)),
-            |directory, name| Directory::open_at(&directory.0, name),
-            |_| Err(io::Error::other("sync")),
-            Directory::sync,
-        );
-        assert!(matches!(sync, Err(CreateError::AncestorsCreated { count: 1, .. })));
-        assert!(temporary.path().join("synced").is_dir());
+    fn assert_flat_ancestors(error: CreateError, count: usize, unsupported: bool) {
+        let CreateError::AncestorsCreated { count: actual, cause } = error else {
+            panic!("expected ancestor report, got {error:?}");
+        };
+        assert_eq!(actual, count);
+        if unsupported {
+            assert!(matches!(cause.as_ref(), CreateError::Unsupported));
+        } else {
+            assert!(matches!(cause.as_ref(), CreateError::Io(_)));
+        }
+        assert!(!matches!(cause.as_ref(), CreateError::AncestorsCreated { .. }));
+    }
+
+    #[test]
+    fn traversal_matrix() {
+        for (failure, expected_count, current_exists, unsupported) in [
+            (TraversalFailure::Probe, 2, false, true),
+            (TraversalFailure::Mkdir, 2, false, false),
+            (TraversalFailure::Reopen, 3, true, false),
+            (TraversalFailure::ChildSync, 3, true, false),
+            (TraversalFailure::ParentSync, 3, true, false),
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let publication = Publication::new(&temporary.path().join("one/two/target")).unwrap();
+            assert_eq!(publication.created_ancestors, 2);
+            let current = temporary.path().join("one/two/current");
+            let cause = match failure {
+                TraversalFailure::Probe => publication.directory.child_with(
+                    c"current",
+                    |_| Err(CreateError::Unsupported),
+                    |_, _| unreachable!(),
+                    |directory, name| Directory::open_at(&directory.0, name),
+                    Directory::sync,
+                    Directory::sync,
+                ),
+                TraversalFailure::Mkdir => publication.directory.child_with(
+                    c"current",
+                    |_| Ok(()),
+                    |_, _| Err(rustix::io::Errno::IO),
+                    |directory, name| Directory::open_at(&directory.0, name),
+                    Directory::sync,
+                    Directory::sync,
+                ),
+                TraversalFailure::Reopen => publication.directory.child_with(
+                    c"current",
+                    |_| Ok(()),
+                    |directory, name| rustix::fs::mkdirat(&directory.0, name, rustix::fs::Mode::from_raw_mode(0o755)),
+                    |_, _| Err(io::Error::other("reopen")),
+                    Directory::sync,
+                    Directory::sync,
+                ),
+                TraversalFailure::ChildSync => publication.directory.child_with(
+                    c"current",
+                    |_| Ok(()),
+                    |directory, name| rustix::fs::mkdirat(&directory.0, name, rustix::fs::Mode::from_raw_mode(0o755)),
+                    |directory, name| Directory::open_at(&directory.0, name),
+                    |_| Err(io::Error::other("child fsync")),
+                    Directory::sync,
+                ),
+                TraversalFailure::ParentSync => publication.directory.child_with(
+                    c"current",
+                    |_| Ok(()),
+                    |directory, name| rustix::fs::mkdirat(&directory.0, name, rustix::fs::Mode::from_raw_mode(0o755)),
+                    |directory, name| Directory::open_at(&directory.0, name),
+                    Directory::sync,
+                    |_| Err(io::Error::other("parent fsync")),
+                ),
+            };
+            let cause = match cause {
+                Err(error) => error,
+                Ok(_) => panic!("injected traversal boundary must fail"),
+            };
+            let error = Publication::with_ancestors(publication.created_ancestors, cause);
+            assert_flat_ancestors(error, expected_count, unsupported);
+            assert_eq!(current.is_dir(), current_exists, "{failure:?}");
+        }
     }
 }
