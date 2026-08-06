@@ -180,6 +180,7 @@ impl Set {
     pub(super) fn object_errno(error: ObjectError) -> Errno {
         match error {
             ObjectError::BadDescriptor | ObjectError::Retired => Errno::EBADF,
+            ObjectError::NoSuchProcess => Errno::ESRCH,
             ObjectError::InvalidArgument => Errno::EINVAL,
             ObjectError::WouldBlock => Errno::EAGAIN,
             ObjectError::Interrupted | ObjectError::Canceled => Errno::EINTR,

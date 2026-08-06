@@ -796,6 +796,118 @@ fn oom_reuse() {
 }
 
 #[test]
+fn task_oom_reuse_preserves_metadata_seek_and_orders_data_errors() {
+    use std::io::{IoSlice, IoSliceMut};
+
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_processes: 2,
+            max_threads: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
+    let (parent, parent_thread) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let (child, child_thread) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    let source = Arc::new(TaskProcfs::new(Arc::clone(&tasks)));
+    let procfs = hl_vfs::Procfs::new(source.clone());
+    let path = format!("/proc/{}/task/{}/oom_score_adj", child.number(), child_thread.number());
+    let old = procfs
+        .open(
+            path.as_bytes(),
+            parent.number(),
+            hl_vfs::OpenIntent::from_bits(hl_vfs::OpenIntent::WRITE),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(old.metadata().unwrap().size, 2);
+    let process_file = procfs
+        .open(
+            format!("/proc/{}/oom_score_adj", child.number()).as_bytes(),
+            parent.number(),
+            hl_vfs::OpenIntent::default(),
+        )
+        .unwrap()
+        .unwrap();
+    let aliases = DescriptorTable::new(2).unwrap();
+    let installed = aliases
+        .install(0, Arc::clone(&process_file), hl_descriptor::DescriptorFlags::default())
+        .unwrap();
+    let duplicate = aliases
+        .duplicate(installed, 1, hl_descriptor::DescriptorFlags::default())
+        .unwrap();
+    let mut first_byte = [0; 1];
+    assert_eq!(aliases.pin(installed).unwrap().read(&mut first_byte), Ok(1));
+    let mut second_byte = [0; 1];
+    assert_eq!(aliases.pin(duplicate).unwrap().read(&mut second_byte), Ok(1));
+    assert_eq!([first_byte[0], second_byte[0]], *b"0\n");
+
+    tasks.exit_process(child, ExitStatus::Code(0)).unwrap();
+    tasks.reap(parent, child).unwrap();
+    let (replacement, replacement_thread) = tasks
+        .commit_fork_process(tasks.begin_fork_process(parent_thread).unwrap())
+        .unwrap();
+    assert_eq!(replacement.number(), child.number());
+    assert_eq!(replacement_thread.number(), child_thread.number());
+    assert_eq!(old.metadata().unwrap().size, 2);
+    assert_eq!(old.seek(hl_descriptor::SeekPosition::Start(1)), Ok(1));
+    assert_eq!(old.seek(hl_descriptor::SeekPosition::Current(1)), Ok(2));
+    assert_eq!(old.seek(hl_descriptor::SeekPosition::End(-1)), Ok(1));
+
+    let (process, process_generation) = parent.wire_parts();
+    let (thread, thread_generation) = parent_thread.wire_parts();
+    let context = hl_descriptor::OperationContext {
+        actor: Some(hl_descriptor::OperationActor {
+            process,
+            process_generation,
+            thread,
+            thread_generation,
+        }),
+        cancellation: None,
+    };
+    assert_eq!(old.read(&mut []), Err(hl_descriptor::ObjectError::NoSuchProcess));
+    let mut empty = [];
+    assert_eq!(
+        old.read_vector_context(&mut [IoSliceMut::new(&mut empty)], context),
+        Err(hl_descriptor::ObjectError::NoSuchProcess)
+    );
+    assert_eq!(
+        old.read_vector_at(0, &mut [IoSliceMut::new(&mut empty)]),
+        Err(hl_descriptor::ObjectError::NoSuchProcess)
+    );
+    for invalid in [b"".as_slice(), b"x", b"1001"] {
+        assert_eq!(
+            old.write_context(invalid, context),
+            Err(hl_descriptor::ObjectError::InvalidArgument)
+        );
+    }
+    assert_eq!(
+        old.write_vector_context(&[IoSlice::new(b"")], context),
+        Err(hl_descriptor::ObjectError::InvalidArgument)
+    );
+    assert_eq!(
+        old.write_context(b"500\n", context),
+        Err(hl_descriptor::ObjectError::NoSuchProcess)
+    );
+    let (stale_slot, stale_generation) = child_thread.wire_parts();
+    let stale_thread = ProcfsThreadIdentity::new(stale_slot, stale_generation).unwrap();
+    assert_eq!(
+        source.write_oom_score_adj(
+            identity(&source, replacement.number()),
+            Some(stale_thread),
+            context.actor.unwrap(),
+            600
+        ),
+        Err(hl_descriptor::ObjectError::NoSuchProcess)
+    );
+    assert_eq!(tasks.process_snapshot(replacement).unwrap().oom_score_adj, 0);
+}
+
+#[test]
 fn live_working_directory() {
     let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
     let (process, _) = tasks

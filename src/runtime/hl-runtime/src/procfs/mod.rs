@@ -406,9 +406,24 @@ impl ProcfsSource for TaskProcfs {
         self.view(process)
     }
 
-    fn oom_score_adj(&self, process: ProcfsProcessIdentity) -> Result<i16, ProcfsError> {
+    fn oom_score_adj(
+        &self,
+        process: ProcfsProcessIdentity,
+        thread: Option<ProcfsThreadIdentity>,
+    ) -> Result<i16, ProcfsError> {
+        let process = self.process_id(process)?;
+        if let Some(thread) = thread {
+            let thread = self.thread_id(thread)?;
+            let snapshot = self.tasks.snapshot();
+            snapshot
+                .threads
+                .iter()
+                .any(|candidate| candidate.id == thread && candidate.process == process)
+                .then_some(())
+                .ok_or(ProcfsError::NotFound)?;
+        }
         self.tasks
-            .process_snapshot(self.process_id(process)?)
+            .process_snapshot(process)
             .map(|snapshot| snapshot.oom_score_adj)
             .map_err(|_| ProcfsError::NotFound)
     }
@@ -416,12 +431,26 @@ impl ProcfsSource for TaskProcfs {
     fn write_oom_score_adj(
         &self,
         process: ProcfsProcessIdentity,
+        thread: Option<ProcfsThreadIdentity>,
         _actor: hl_descriptor::OperationActor,
         value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {
         let process = self
             .process_id(process)
             .map_err(|_| hl_descriptor::ObjectError::Retired)?;
+        if let Some(thread) = thread {
+            let thread = self
+                .thread_id(thread)
+                .map_err(|_| hl_descriptor::ObjectError::NoSuchProcess)?;
+            let snapshot = self.tasks.snapshot();
+            if !snapshot
+                .threads
+                .iter()
+                .any(|candidate| candidate.id == thread && candidate.process == process)
+            {
+                return Err(hl_descriptor::ObjectError::NoSuchProcess);
+            }
+        }
         self.tasks
             .set_oom_score_adj(process, value)
             .map_err(|_| hl_descriptor::ObjectError::InvalidArgument)

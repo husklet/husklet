@@ -12,6 +12,7 @@ pub enum ObjectError {
     Busy,
     BrokenPipe,
     Retired,
+    NoSuchProcess,
     NotSupported,
     Io,
 }

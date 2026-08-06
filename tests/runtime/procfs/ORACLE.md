@@ -184,6 +184,24 @@ path is absent and reap retires the pinned process identity. Rust intentionally
 provides stronger peer-thread identity than the retained numeric peer-leader
 projection.
 
+### Task-qualified oom identity
+
+The retained C procfs projection folds task-qualified `oom_score_adj` onto the
+process leaf after numeric TID membership validation and has no generation token;
+a reused TID can therefore retarget a later operation. Linux instead requires a
+task-qualified open description to keep naming that exact thread lifetime.
+
+Rust carries an optional exact `ThreadIdentity` only for task-qualified OOM
+files. Data reads and valid writes revalidate that identity and its owning
+process, returning `ESRCH` after exit, reuse, or cross-process mismatch without
+mutating a replacement. Process-level OOM files retain their prior behavior.
+Metadata size and seek arithmetic use the length cached at open and remain usable
+after task exit. Empty, malformed, or out-of-range writes fail `EINVAL` before
+task validation; scalar and vector reads, including zero-length and positional
+reads, validate first. Duplicate descriptors share the ordinary OFD cursor.
+There is no guest-ISA branch or blocking, cancellation, partial-result, or wakeup
+path in this scalar procfs control.
+
 ### Magic-link open lifetime
 
 The `/proc/[self|pid]/{root,cwd}` open and lifetime path was audited directly in

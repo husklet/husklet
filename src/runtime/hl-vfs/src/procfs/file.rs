@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::{IoSlice, IoSliceMut};
 use std::sync::Mutex;
 
 use hl_descriptor::{
@@ -31,7 +32,9 @@ pub(super) struct CommFile {
 pub(super) struct OomFile {
     source: std::sync::Arc<dyn super::Source>,
     process: super::ProcessIdentity,
+    thread: Option<super::ThreadIdentity>,
     cursor: Mutex<usize>,
+    length: usize,
     metadata: OfdMetadata,
 }
 
@@ -39,21 +42,34 @@ impl OomFile {
     pub(super) const fn new(
         source: std::sync::Arc<dyn super::Source>,
         process: super::ProcessIdentity,
+        thread: Option<super::ThreadIdentity>,
+        length: usize,
         metadata: OfdMetadata,
     ) -> Self {
         Self {
             source,
             process,
+            thread,
             cursor: Mutex::new(0),
+            length,
             metadata,
         }
     }
 
     fn bytes(&self) -> Result<Vec<u8>, ObjectError> {
         self.source
-            .oom_score_adj(self.process)
+            .oom_score_adj(self.process, self.thread)
             .map(|value| format!("{value}\n").into_bytes())
-            .map_err(|_| ObjectError::Retired)
+            .map_err(|_| self.thread.map_or(ObjectError::Retired, |_| ObjectError::NoSuchProcess))
+    }
+
+    fn value(input: &[u8]) -> Result<i16, ObjectError> {
+        let value = input.strip_suffix(b"\n").unwrap_or(input);
+        std::str::from_utf8(value)
+            .ok()
+            .and_then(|value| value.parse::<i16>().ok())
+            .filter(|value| (-1000..=1000).contains(value))
+            .ok_or(ObjectError::InvalidArgument)
     }
 }
 
@@ -65,9 +81,7 @@ impl fmt::Debug for OomFile {
 
 impl OpenFileDescription for OomFile {
     fn metadata(&self) -> Result<OfdMetadata, ObjectError> {
-        let mut metadata = self.metadata.clone();
-        metadata.size = self.bytes()?.len() as u64;
-        Ok(metadata)
+        Ok(self.metadata.clone())
     }
 
     fn read(&self, output: &mut [u8]) -> Result<usize, ObjectError> {
@@ -81,24 +95,69 @@ impl OpenFileDescription for OomFile {
 
     fn write_context(&self, input: &[u8], context: hl_descriptor::OperationContext<'_>) -> Result<usize, ObjectError> {
         let actor = context.actor.ok_or(ObjectError::PermissionDenied)?;
-        let value = input.strip_suffix(b"\n").unwrap_or(input);
-        let value = std::str::from_utf8(value)
-            .ok()
-            .and_then(|value| value.parse::<i16>().ok())
-            .filter(|value| (-1000..=1000).contains(value))
-            .ok_or(ObjectError::InvalidArgument)?;
-        self.source.write_oom_score_adj(self.process, actor, value)?;
+        let value = Self::value(input)?;
+        self.source
+            .write_oom_score_adj(self.process, self.thread, actor, value)?;
         *self.cursor.lock().unwrap_or_else(|error| error.into_inner()) += input.len();
         Ok(input.len())
     }
 
+    fn read_vector_context(
+        &self,
+        output: &mut [IoSliceMut<'_>],
+        _context: hl_descriptor::OperationContext<'_>,
+    ) -> Result<usize, ObjectError> {
+        let bytes = self.bytes()?;
+        let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
+        let mut copied = 0;
+        for target in output {
+            let count = target.len().min(bytes.len().saturating_sub(*cursor));
+            target[..count].copy_from_slice(&bytes[*cursor..*cursor + count]);
+            *cursor += count;
+            copied += count;
+            if count < target.len() {
+                break;
+            }
+        }
+        Ok(copied)
+    }
+
+    fn read_vector_at(&self, offset: u64, output: &mut [IoSliceMut<'_>]) -> Result<usize, ObjectError> {
+        let bytes = self.bytes()?;
+        let mut position = usize::try_from(offset).map_err(|_| ObjectError::InvalidArgument)?;
+        let mut copied = 0;
+        for target in output {
+            let count = target.len().min(bytes.len().saturating_sub(position));
+            target[..count].copy_from_slice(&bytes[position..position + count]);
+            position += count;
+            copied += count;
+            if count < target.len() {
+                break;
+            }
+        }
+        Ok(copied)
+    }
+
+    fn write_vector_context(
+        &self,
+        input: &[IoSlice<'_>],
+        context: hl_descriptor::OperationContext<'_>,
+    ) -> Result<usize, ObjectError> {
+        let length = input
+            .iter()
+            .try_fold(0usize, |length, part| length.checked_add(part.len()))
+            .ok_or(ObjectError::InvalidArgument)?;
+        let mut bytes = Vec::with_capacity(length);
+        input.iter().for_each(|part| bytes.extend_from_slice(part));
+        self.write_context(&bytes, context)
+    }
+
     fn seek(&self, position: SeekPosition) -> Result<u64, ObjectError> {
-        let length = self.bytes()?.len();
         let mut cursor = self.cursor.lock().unwrap_or_else(|error| error.into_inner());
         let next = match position {
             SeekPosition::Start(value) => i128::from(value),
             SeekPosition::Current(value) => *cursor as i128 + i128::from(value),
-            SeekPosition::End(value) => length as i128 + i128::from(value),
+            SeekPosition::End(value) => self.length as i128 + i128::from(value),
             SeekPosition::Data(_) | SeekPosition::Hole(_) => return Err(ObjectError::InvalidArgument),
         };
         *cursor = usize::try_from(next).map_err(|_| ObjectError::InvalidArgument)?;

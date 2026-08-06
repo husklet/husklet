@@ -78,7 +78,11 @@ impl super::Source for Source {
             .ok_or(Error::NotFound)
     }
 
-    fn oom_score_adj(&self, process: super::ProcessIdentity) -> Result<i16, Error> {
+    fn oom_score_adj(
+        &self,
+        process: super::ProcessIdentity,
+        _thread: Option<super::ThreadIdentity>,
+    ) -> Result<i16, Error> {
         (process_number(process) == self.process.process)
             .then(|| *self.oom_score_adj.lock().unwrap())
             .ok_or(Error::NotFound)
@@ -87,6 +91,7 @@ impl super::Source for Source {
     fn write_oom_score_adj(
         &self,
         process: super::ProcessIdentity,
+        _thread: Option<super::ThreadIdentity>,
         _actor: OperationActor,
         value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {

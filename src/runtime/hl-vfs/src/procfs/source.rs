@@ -39,12 +39,13 @@ pub trait Source: Send + Sync {
     fn environment(&self, _process: ProcessIdentity) -> Result<Vec<u8>, Error> {
         Err(Error::NotFound)
     }
-    fn oom_score_adj(&self, _process: ProcessIdentity) -> Result<i16, Error> {
+    fn oom_score_adj(&self, _process: ProcessIdentity, _thread: Option<ThreadIdentity>) -> Result<i16, Error> {
         Err(Error::NotFound)
     }
     fn write_oom_score_adj(
         &self,
         _process: ProcessIdentity,
+        _thread: Option<ThreadIdentity>,
         _actor: hl_descriptor::OperationActor,
         _value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {

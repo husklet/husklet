@@ -335,11 +335,18 @@ impl Procfs {
                 self.source.environment(identity.ok_or(Error::NotFound)?)?,
             ),
             model::Node::OomScore | model::Node::OomAdj => self.snapshot_file(process, leaf, b"0\n".to_vec()),
-            model::Node::OomScoreAdj => Ok(Some(Arc::new(file::OomFile::new(
-                Arc::clone(&self.source),
-                identity.ok_or(Error::NotFound)?,
-                leaf.metadata(process, 0),
-            )))),
+            model::Node::OomScoreAdj => {
+                let identity = identity.ok_or(Error::NotFound)?;
+                let value = self.source.oom_score_adj(identity, thread_identity)?;
+                let length = format!("{value}\n").len();
+                Ok(Some(Arc::new(file::OomFile::new(
+                    Arc::clone(&self.source),
+                    identity,
+                    thread_identity,
+                    length,
+                    leaf.metadata(process, length as u64),
+                ))))
+            }
             model::Node::Limits => {
                 let bytes = self.source.process(identity.ok_or(Error::NotFound)?)?.limits();
                 let metadata = leaf.metadata(process, bytes.len() as u64);
@@ -902,7 +909,11 @@ impl Procfs {
             model::Node::Cmdline => self.source.cmdline(process_identity()?)?.len() as u64,
             model::Node::Environ => self.source.environment(process_identity()?)?.len() as u64,
             model::Node::OomScore | model::Node::OomAdj => 2,
-            model::Node::OomScoreAdj => format!("{}\n", self.source.oom_score_adj(process_identity()?)?).len() as u64,
+            model::Node::OomScoreAdj => format!(
+                "{}\n",
+                self.source.oom_score_adj(process_identity()?, thread_identity)?
+            )
+            .len() as u64,
             model::Node::Root => {
                 self.source.root(process_identity()?)?;
                 0
