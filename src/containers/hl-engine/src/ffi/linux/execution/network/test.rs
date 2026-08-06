@@ -575,6 +575,89 @@ fn wildcard_alias_failure_removes_partial_paths_and_resets_the_socket() {
     host.close(socket.token);
 }
 
+/// Publishes one switch pathname, then renames its directory away and puts a foreign entry of the
+/// same name in a replacement directory before the owner releases the socket.
+fn published_switch_path_under_a_replaced_parent(
+    label: &str,
+    ipv4: [u8; 4],
+    port: u16,
+    aliased: bool,
+) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let bridge = format!("{label}-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [10, 100, 0, 2],
+    };
+    let alias = EgressInterface {
+        bridge: format!("{bridge}-alias").into_bytes(),
+        index: 3,
+        ipv4,
+    };
+    let published = if aliased { &alias } else { &interface };
+    let directory = std::path::PathBuf::from(format!(
+        "/tmp/.hl-bridge-{}",
+        String::from_utf8(published.bridge.clone()).unwrap()
+    ));
+    let moved = std::path::PathBuf::from(format!("{}-moved", directory.display()));
+    let name = format!("{}.{}.{}.{}:{port}", ipv4[0], ipv4[1], ipv4[2], ipv4[3]);
+    let host = Native::new();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.bind_route(
+        socket.token,
+        BindRoute {
+            address: SocketAddress::Inet4 { address: [0; 4], port },
+            interface: Some(interface),
+            aliases: if aliased { vec![alias] } else { Vec::new() },
+        },
+    )
+    .unwrap();
+    assert!(directory.join(&name).exists(), "the transaction publishes the name");
+
+    std::fs::rename(&directory, &moved).unwrap();
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::write(directory.join(&name), b"foreign").unwrap();
+
+    host.close(socket.token);
+    (directory, moved, name)
+}
+
+#[test]
+fn switch_release_after_a_parent_rename_frees_the_held_directory_not_the_replacement() {
+    let port = 43_000 + (std::process::id() % 20_000) as u16;
+    let (directory, moved, name) =
+        published_switch_path_under_a_replaced_parent("parent-rename", [10, 100, 0, 2], port, false);
+
+    assert!(!moved.join(&name).exists(), "the owner releases the entry it published");
+    assert_eq!(
+        std::fs::read(directory.join(&name)).unwrap(),
+        b"foreign",
+        "an entry in a replacement directory is never released"
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
+    std::fs::remove_dir_all(&moved).unwrap();
+}
+
+#[test]
+fn wildcard_alias_release_after_a_parent_rename_frees_the_held_directory_not_the_replacement() {
+    let port = 44_000 + (std::process::id() % 20_000) as u16;
+    let (directory, moved, name) =
+        published_switch_path_under_a_replaced_parent("alias-parent-rename", [10, 105, 0, 2], port, true);
+
+    assert!(!moved.join(&name).exists(), "the owner releases the alias it published");
+    assert_eq!(
+        std::fs::read(directory.join(&name)).unwrap(),
+        b"foreign",
+        "an alias name in a replacement directory is never released"
+    );
+    std::fs::remove_dir_all(&directory).unwrap();
+    std::fs::remove_dir_all(&moved).unwrap();
+    let primary = std::path::PathBuf::from(format!("/tmp/.hl-bridge-alias-parent-rename-{}", std::process::id()));
+    std::fs::remove_dir_all(&primary).unwrap();
+}
+
 #[test]
 fn wildcard_alias_collision_preserves_foreign_path_and_resets_the_socket() {
     let bridge = format!("alias-owner-{}", std::process::id());

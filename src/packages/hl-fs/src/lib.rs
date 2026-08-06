@@ -161,6 +161,11 @@ impl File {
 }
 
 #[cfg(target_os = "linux")]
+mod anchor;
+#[cfg(target_os = "linux")]
+pub use anchor::{Anchor, Publication};
+
+#[cfg(target_os = "linux")]
 mod publication;
 
 #[cfg(not(target_os = "linux"))]

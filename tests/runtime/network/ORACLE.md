@@ -11,16 +11,49 @@ keeps the publication with the shared socket lifetime until final close. Host
 calls occur without a guest descriptor-table lock. Publication has no guest-ISA
 branch and does not change routing or checkpoint schema.
 
-Rust keeps the same ownership in the native adapter. `PreparedPublication`
-owns the successfully created primary and alias pathnames until the complete
-set can be attached to the socket `Entry`; dropping it reverses only those
-paths. Publication transfers that set once into the existing `Arc<SwitchPath>`.
-Duplicate descriptors discover and share that owner through the reactor's weak
-pathname registry, while the last `Entry` close drops the final strong owner
-and unlinks each pathname exactly once. A pre-existing foreign alias is never
-unlinked. Tests cover injected partial-alias failure, a foreign-path collision,
-concurrent primary publication, socket reset after rollback, duplicate
-ownership, and final-close cleanup through the production native host path.
+Rust keeps the same ownership in the native adapter, composed from the
+general-purpose `hl_fs::Anchor` and `hl_fs::Publication`. The switch directory
+is held by descriptor for the socket's lifetime, so every subsequent operation
+on the rendezvous names inside it is descriptor-relative. Publication owns the
+successfully created primary and alias pathnames until the complete set can be
+attached to the socket `Entry`; dropping it reverses only those names, in the
+reverse of the order they were reserved. Duplicate descriptors discover and
+share that owner through the reactor's weak pathname registry, while the last
+`Entry` close drops the final strong owner and removes each name exactly once.
+
+Two deliberate divergences from the retained owner, both closing an
+unsafe-publish window it has:
+
+- The retained owner unlinks each rendezvous name by absolute pathname at final
+  close. Rust removes it with `unlinkat` against the held directory. Renaming or
+  replacing the switch directory between publication and close therefore cannot
+  make the release remove a live peer's identically named endpoint, nor leak the
+  owner's own entry in the renamed-away directory.
+- The retained owner publishes each wildcard alias with `unlink` followed by
+  `symlink`. Rust creates the alias under a quarantine name in the held
+  directory and commits it with `renameat2(RENAME_NOREPLACE)`, so the alias is
+  never visible before the transaction commits, an occupied name is reported as
+  `AddressInUse` instead of being clobbered, and a parent rename cannot redirect
+  the commit.
+
+The primary AF_UNIX name must still be created by `bind` addressed by pathname,
+because the switch protocol reads it back with `getsockname` as the datagram
+source and as the duplicate-ownership key. Rust therefore adopts it: after
+`bind` it confirms with `statat` that the pathname still names the very entry
+the held directory contains, and refuses the publication otherwise.
+
+Tests cover injected partial-alias failure, a foreign-path collision, concurrent
+primary publication, socket reset after rollback, duplicate ownership,
+final-close cleanup, and release of both a primary and an alias after the parent
+directory was renamed and replaced, through the production native host path.
+
+Remaining gap: `bind` has no descriptor-relative form, so a parent rename inside
+the bind window can still place the primary entry in the replacement directory.
+That is detected by adoption and never published, but the stray entry is leaked
+rather than removed, because removing it would itself be a pathname race. The
+pathname components above the switch directory are resolved by name when the
+directory is first held, and an alias link target is resolved by the dialing
+peer rather than by this owner.
 
 The retained implementation was studied read-only in
 `../engine/src/linux_abi/syscall/net.c`, especially `svc_net`,

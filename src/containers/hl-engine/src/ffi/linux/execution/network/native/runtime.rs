@@ -10,7 +10,7 @@ use hl_runtime::{
     RuntimeNetworkHost,
 };
 
-use super::{Native, PreparedPublication};
+use super::{Native, SwitchPath};
 
 impl RuntimeNetworkHost for Native {
     type Attachment = OwnedFd;
@@ -192,68 +192,66 @@ impl RuntimeNetworkHost for Native {
         let mut descriptor = None;
         for offset in 0..attempts {
             let candidate = first.wrapping_add(offset as u16).max(1024);
-            let (directory, mut path) = Self::switch_path(&interface, interface.ipv4, candidate)?;
-            if ipv6_only {
-                path.extend_from_slice(b".v6only");
-            }
-            Self::mkdir_switch(&directory)?;
-            let (storage, length) = Self::socket_address(&SocketAddress::Unix(path.clone()))?;
-            let descriptor = match descriptor {
-                Some(descriptor) => descriptor,
+            let bound = match descriptor {
+                Some(bound) => bound,
                 None => {
                     let value = self.switch_socket(token, kind)?;
                     descriptor = Some(value);
                     value
                 }
             };
-            // SAFETY: storage contains a bounded sockaddr_un and descriptor remains table-owned.
-            if unsafe { libc::bind(descriptor, &storage as *const _ as *const _, length) } == 0 {
-                let local = SocketAddress::Inet4 {
-                    address: interface.ipv4,
-                    port: candidate,
-                };
-                let mut publication = PreparedPublication::primary(path.clone());
-                let aliases = (|| {
-                    if address != [0; 4] || kind != libc::SOCK_STREAM {
-                        return Ok(());
+            let mut publication = hl_fs::Publication::default();
+            let staged = (|| {
+                let (anchor, path) = Self::switch_reservation(&interface, candidate, ipv6_only)?;
+                let (storage, length) = Self::socket_address(&SocketAddress::Unix(path.clone()))?;
+                // SAFETY: storage contains a bounded sockaddr_un and descriptor remains table-owned.
+                if unsafe { libc::bind(bound, &storage as *const _ as *const _, length) } != 0 {
+                    return Err(Self::runtime_error());
+                }
+                // The peer protocol reads this name back with getsockname, so the bind must address it
+                // by pathname; adoption confirms the entry it created is the one the anchor holds.
+                publication
+                    .adopt(&anchor, Self::switch_name(&path)?, path.clone())
+                    .map_err(Self::publication_error)?;
+                if address == [0; 4] && kind == libc::SOCK_STREAM {
+                    for alias in &route.aliases {
+                        let (alias_anchor, alias_path) = Self::switch_reservation(alias, candidate, ipv6_only)?;
+                        let alias_name = Self::switch_name(&alias_path)?.to_vec();
+                        publication
+                            .reserve_link(&alias_anchor, &alias_name, alias_path, &path)
+                            .map_err(Self::publication_error)?;
                     }
-                    for alias in route.aliases {
-                        let (alias_directory, mut alias_path) = Self::switch_path(&alias, alias.ipv4, candidate)?;
-                        if ipv6_only {
-                            alias_path.extend_from_slice(b".v6only");
-                        }
-                        Self::mkdir_switch(&alias_directory)?;
-                        publication.add_alias(&path, alias_path)?;
-                    }
-                    Ok(())
-                })();
-                if let Err(error) = aliases {
-                    drop(publication);
+                }
+                publication.commit().map_err(Self::publication_error)
+            })();
+            if let Err(error) = staged {
+                drop(publication);
+                if port != 0 || error != RuntimeNetworkError::AddressInUse {
                     self.restore_inet_socket(token, kind)?;
                     return Err(error);
                 }
-                let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
-                let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
-                entry.guest_local = Some(local.clone());
-                entry.switch_interface = Some(interface.clone());
-                let ownership = publication.publish();
-                let weak = Arc::downgrade(&ownership);
-                let mut registry = self
-                    .shared
-                    .switch_paths
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner());
-                for owned_path in &ownership.0 {
-                    registry.insert(owned_path.clone(), weak.clone());
-                }
-                entry.switch_path = Some(ownership);
-                return Ok(local);
+                continue;
             }
-            let error = Self::runtime_error();
-            if port != 0 || error != RuntimeNetworkError::AddressInUse {
-                self.restore_inet_socket(token, kind)?;
-                return Err(error);
+            let local = SocketAddress::Inet4 {
+                address: interface.ipv4,
+                port: candidate,
+            };
+            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+            entry.guest_local = Some(local.clone());
+            entry.switch_interface = Some(interface.clone());
+            let ownership = Arc::new(SwitchPath::new(publication));
+            let weak = Arc::downgrade(&ownership);
+            let mut registry = self
+                .shared
+                .switch_paths
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for owned_path in ownership.names() {
+                registry.insert(owned_path.clone(), weak.clone());
             }
+            entry.switch_path = Some(ownership);
+            return Ok(local);
         }
         if descriptor.is_some() {
             self.restore_inet_socket(token, kind)?;
@@ -280,7 +278,7 @@ impl RuntimeNetworkHost for Native {
         }
         let kind = self.socket_type(token)?;
         let (directory, path) = Self::switch_path(&interface, address, port)?;
-        Self::mkdir_switch(&directory)?;
+        Self::switch_anchor(&directory)?;
         let peer = SocketAddress::Inet4 { address, port };
         if kind == libc::SOCK_DGRAM {
             let needs_source = self

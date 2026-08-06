@@ -60,55 +60,22 @@ fn arm_interest(armed: &mut bool) -> bool {
     changed
 }
 
-pub(super) struct SwitchPath(Vec<Vec<u8>>);
-
-pub(super) struct PreparedPublication {
-    paths: Vec<Vec<u8>>,
+/// The rendezvous pathnames this socket owns until its final descriptor closes.
+pub(super) struct SwitchPath {
+    names: Vec<Vec<u8>>,
+    _publication: hl_fs::Publication,
 }
 
-impl PreparedPublication {
-    pub(super) fn primary(path: Vec<u8>) -> Self {
-        Self { paths: vec![path] }
-    }
-
-    pub(super) fn add_alias(&mut self, target: &[u8], alias: Vec<u8>) -> Result<(), RuntimeNetworkError> {
-        let target = std::ffi::CString::new(target).map_err(|_| RuntimeNetworkError::Invalid)?;
-        let alias_name = std::ffi::CString::new(alias.clone()).map_err(|_| RuntimeNetworkError::Invalid)?;
-        // SAFETY: target and alias are valid NUL-terminated paths retained only by the filesystem.
-        if unsafe { libc::symlink(target.as_ptr(), alias_name.as_ptr()) } != 0 {
-            return Err(Native::runtime_error());
+impl SwitchPath {
+    fn new(publication: hl_fs::Publication) -> Self {
+        Self {
+            names: publication.paths().map(<[u8]>::to_vec).collect(),
+            _publication: publication,
         }
-        self.paths.push(alias);
-        Ok(())
     }
 
-    pub(super) fn publish(mut self) -> Arc<SwitchPath> {
-        Arc::new(SwitchPath(std::mem::take(&mut self.paths)))
-    }
-}
-
-impl Drop for PreparedPublication {
-    fn drop(&mut self) {
-        SwitchPath(std::mem::take(&mut self.paths));
-    }
-}
-
-impl Drop for SwitchPath {
-    fn drop(&mut self) {
-        cleanup_paths(&self.0, |path| {
-            if let Ok(path) = std::ffi::CString::new(path.clone()) {
-                // SAFETY: path is a live NUL-terminated pathname and unlink retains no pointer.
-                unsafe {
-                    libc::unlink(path.as_ptr());
-                }
-            }
-        });
-    }
-}
-
-fn cleanup_paths(paths: &[Vec<u8>], mut unlink: impl FnMut(&Vec<u8>)) {
-    for path in paths.iter().rev() {
-        unlink(path);
+    pub(super) fn names(&self) -> &[Vec<u8>] {
+        &self.names
     }
 }
 
@@ -436,15 +403,40 @@ impl Native {
         Ok(path)
     }
 
-    fn mkdir_switch(directory: &[u8]) -> Result<(), RuntimeNetworkError> {
-        let path = std::ffi::CString::new(directory).map_err(|_| RuntimeNetworkError::Invalid)?;
-        // SAFETY: path is a live NUL-terminated pathname and mkdir retains no pointer.
-        if unsafe { libc::mkdir(path.as_ptr(), 0o700) } == 0 {
-            return Ok(());
+    /// Holds this interface's switch directory and returns it with the rendezvous pathname it owns.
+    fn switch_reservation(
+        interface: &hl_network::EgressInterface,
+        port: u16,
+        ipv6_only: bool,
+    ) -> Result<(Arc<hl_fs::Anchor>, Vec<u8>), RuntimeNetworkError> {
+        let (directory, mut path) = Self::switch_path(interface, interface.ipv4, port)?;
+        if ipv6_only {
+            path.extend_from_slice(b".v6only");
         }
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(libc::EEXIST) => Ok(()),
-            _ => Err(Self::runtime_error()),
+        Ok((Self::switch_anchor(&directory)?, path))
+    }
+
+    /// Creates the switch directory when absent and holds it, so a later rename of its pathname
+    /// cannot redirect any operation on the rendezvous names inside it.
+    fn switch_anchor(directory: &[u8]) -> Result<Arc<hl_fs::Anchor>, RuntimeNetworkError> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(directory));
+        hl_fs::Anchor::create(path, 0o700).map_err(Self::publication_error)
+    }
+
+    fn switch_name(path: &[u8]) -> Result<&[u8], RuntimeNetworkError> {
+        let separator = path.iter().rposition(|byte| *byte == b'/').ok_or(RuntimeNetworkError::Invalid)?;
+        let name = &path[separator + 1..];
+        if name.is_empty() {
+            return Err(RuntimeNetworkError::Invalid);
+        }
+        Ok(name)
+    }
+
+    fn publication_error(error: std::io::Error) -> RuntimeNetworkError {
+        match error.raw_os_error() {
+            Some(code) => Self::error_for(code),
+            None => RuntimeNetworkError::Failed,
         }
     }
 
@@ -677,7 +669,11 @@ impl Native {
     }
 
     pub(super) fn runtime_error() -> RuntimeNetworkError {
-        match std::io::Error::last_os_error().raw_os_error().unwrap_or(0) {
+        Self::error_for(std::io::Error::last_os_error().raw_os_error().unwrap_or(0))
+    }
+
+    pub(super) fn error_for(errno: i32) -> RuntimeNetworkError {
+        match errno {
             value if value == libc::EAGAIN || value == libc::EWOULDBLOCK => RuntimeNetworkError::WouldBlock,
             libc::EINTR => RuntimeNetworkError::Interrupted,
             libc::EINPROGRESS => RuntimeNetworkError::InProgress,
@@ -768,7 +764,7 @@ impl Native {
 
 #[cfg(test)]
 mod kind_cache_test {
-    use super::{Native, arm_interest, cleanup_paths};
+    use super::{Native, arm_interest};
     use hl_network::SocketHostIo;
     use std::sync::atomic::Ordering;
 
@@ -830,17 +826,6 @@ mod kind_cache_test {
         assert!(!arm_interest(&mut armed));
         armed = false;
         assert!(arm_interest(&mut armed));
-    }
-
-    #[test]
-    fn switch_publication_cleans_aliases_in_reverse_then_primary() {
-        let paths = vec![b"primary".to_vec(), b"alias-one".to_vec(), b"alias-two".to_vec()];
-        let mut removed = Vec::new();
-        cleanup_paths(&paths, |path| removed.push(path.clone()));
-        assert_eq!(
-            removed,
-            vec![b"alias-two".to_vec(), b"alias-one".to_vec(), b"primary".to_vec()]
-        );
     }
 
     #[test]

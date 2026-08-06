@@ -14,6 +14,7 @@ hl-checkpoint = { path = "../../runtime/hl-checkpoint" }
 hl-descriptor = { path = "../../runtime/hl-descriptor" }
 hl-network = { path = "../../runtime/hl-network" }
 hl-execution = { path = "../../runtime/hl-execution" }
+hl-fs = { path = "../../packages/hl-fs", default-features = false }
 hl-event = { path = "../../runtime/hl-event" }
 hl-isa = { path = "../../runtime/hl-isa" }
 hl-ipc = { path = "../../runtime/hl-ipc" }

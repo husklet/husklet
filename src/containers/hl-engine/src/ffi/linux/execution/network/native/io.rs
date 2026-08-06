@@ -396,7 +396,7 @@ impl SocketHostIo for Native {
                     .switch_paths
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
-                for owned_path in &path.0 {
+                for owned_path in path.names() {
                     registry.remove(owned_path);
                 }
             }

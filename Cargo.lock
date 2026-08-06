@@ -1160,6 +1160,7 @@ dependencies = [
  "hl-event",
  "hl-execution",
  "hl-fake-host",
+ "hl-fs",
  "hl-ipc",
  "hl-isa",
  "hl-linux",
