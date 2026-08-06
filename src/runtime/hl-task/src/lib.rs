@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 mod affinity;
+mod child_wait;
+mod credentials;
 mod fork_model;
 mod identity;
 mod model;
@@ -16,6 +18,7 @@ mod resource;
 mod robust_list;
 mod schedule;
 mod signal;
+mod snapshot;
 mod trace;
 pub(crate) use registry::Activity as RegistryActivity;
 
@@ -25,12 +28,17 @@ pub use fork_model::{
     MAX_FORK_PARTICIPANTS,
 };
 pub use identity::{ProcessGroupId, ProcessId, SessionId, ThreadId};
+pub use child_wait::{
+    ChildClass, ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector, ChildWaitOptions, ChildWaitResult,
+    PreparedChildWait, PreparedWaitSelection, WaitEvent, WaitSelector,
+};
+pub use credentials::{CapabilitySets, ProcessCredentials, SetIdAuthority};
 pub use model::{
-    CancellationEvent, CapabilitySets, ChildClass, ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector,
-    ChildWaitOptions, ChildWaitResult, CloneThreadPlan, CpuAccount, CpuUsage, ExitStatus, ForkProcessPlan,
-    PreparedChildWait, PreparedWaitSelection, ProcessCredentials, ProcessGroupSnapshot, ProcessLifecycle,
-    ProcessObservation, ProcessSnapshot, RegistryConfig, RegistrySnapshot, SessionSnapshot, SetIdAuthority,
-    SignalPendingEvent, TaskError, ThreadLifecycle, ThreadSnapshot, WaitEvent, WaitSelector,
+    CancellationEvent, CloneThreadPlan, CpuAccount, CpuUsage, ExitStatus, ForkProcessPlan, ProcessLifecycle,
+    RegistryConfig, SignalPendingEvent, TaskError, ThreadLifecycle,
+};
+pub use snapshot::{
+    ProcessGroupSnapshot, ProcessObservation, ProcessSnapshot, RegistrySnapshot, SessionSnapshot, ThreadSnapshot,
 };
 pub use namespace::{
     IdMap, IdRange, MAX_ID_RANGES, MapError, NamespaceId, NamespaceKind, NamespaceSet, SetgroupsState,
