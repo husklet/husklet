@@ -9,10 +9,13 @@
 mod checkpoint;
 mod checkpoint_activity;
 mod description_state;
+mod flags;
 mod model;
 mod object_contract;
 mod ofd_values;
+mod open_file_description;
 mod operation_lease;
+mod signal_delivery;
 mod readiness;
 mod state;
 mod table;
@@ -25,12 +28,13 @@ pub use checkpoint::{
     DescriptorTableImage, OpenDescriptionImage,
 };
 pub(crate) use checkpoint_activity::CheckpointActivity;
+pub use flags::{DescriptorFlags, StatusFlags};
 pub(crate) use model::Descriptor;
-pub use model::{
-    AccessMode, AllocationRequest, DescriptorError, DescriptorFlags, DescriptorSnapshot, ExactDuplicate, LeaseKind,
-    LinkableInode, OpenFileDescription, OperationLease, SeekPosition, SignalDelivery, SignalOwner, SignalSource,
-    StatusFlags,
+pub use model::{DescriptorError, DescriptorSnapshot, ExactDuplicate, OperationLease};
+pub use open_file_description::{
+    AccessMode, AllocationRequest, LeaseKind, LinkableInode, OpenFileDescription, SeekPosition,
 };
+pub use signal_delivery::{SignalDelivery, SignalOwner, SignalSource};
 pub use object_contract::{
     CancellationNotification, CancellationSubscription, ObjectError, ObjectKind, OperationActor, OperationCancellation,
     OperationContext, PipeTransferEndpoint, PreparedAtomicRead, PreparedSpliceRead, Readiness,
