@@ -275,6 +275,64 @@ static int multiply_kills_nzcv(void) {
     return 0;
 }
 
+/* Total host words for a block emitted with the given extra request flags. */
+static uint32_t block_words(const uint8_t *guest, size_t size, uint64_t extra) {
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[64] = {0};
+    hl_x86_a64_request request = request_for(guest, size, host, provenance);
+    hl_x86_a64_result result;
+
+    request.flags |= extra;
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 0;
+    return result.word_count;
+}
+
+/* Checkpoints exist so an exit can report how many guest instructions retired, so only instructions
+   that can exit need one. A register-only vector op carries no guard and cannot leave the block --
+   except the float arithmetic forms, which bail on an unordered result. */
+/* With checkpoints on, the two passes must agree to the word: one fewer must be refused. */
+static int checkpointed_budget_is_exact(const uint8_t *guest, size_t size) {
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[64] = {0};
+    hl_x86_a64_request request = request_for(guest, size, host, provenance);
+    hl_x86_a64_result result;
+    uint32_t exact = block_words(guest, size, HL_X86_A64_CHECKPOINTS);
+
+    request.flags |= HL_X86_A64_CHECKPOINTS;
+    request.host_capacity = exact - 1u;
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_CAPACITY) return 0;
+    request.host_capacity = exact;
+    return hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK;
+}
+
+static uint32_t checkpoint_cost(const uint8_t *guest, size_t size) {
+    return block_words(guest, size, HL_X86_A64_CHECKPOINTS) - block_words(guest, size, 0);
+}
+
+static int register_vectors_need_no_checkpoint(void) {
+    const uint8_t control[] = {0x01, 0xd8, 0x01, 0xf1, 0x01, 0xd1};
+    const uint8_t pxor[] = {0x01, 0xd8, 0x66, 0x0f, 0xef, 0xc1, 0x01, 0xd1};
+    const uint8_t movaps[] = {0x01, 0xd8, 0x0f, 0x28, 0xc1, 0x01, 0xd1};
+    const uint8_t paddd[] = {0x01, 0xd8, 0x66, 0x0f, 0xfe, 0xc1, 0x01, 0xd1};
+    const uint8_t addsd[] = {0x01, 0xd8, 0xf2, 0x0f, 0x58, 0xc1, 0x01, 0xd1};
+    const uint8_t loaded[] = {0x01, 0xd8, 0x66, 0x0f, 0xef, 0x03, 0x01, 0xd1};
+
+    /* Only the block-end checkpoint remains, exactly as for a block holding no vector op at all. */
+    CHECK(checkpoint_cost(control, sizeof control) > 0u);
+    CHECK(checkpoint_cost(pxor, sizeof pxor) == checkpoint_cost(control, sizeof control));
+    CHECK(checkpoint_cost(movaps, sizeof movaps) == checkpoint_cost(control, sizeof control));
+    CHECK(checkpoint_cost(paddd, sizeof paddd) == checkpoint_cost(control, sizeof control));
+    /* addsd can bail on an unordered result, and a memory operand can fault, so both keep theirs. */
+    CHECK(checkpoint_cost(addsd, sizeof addsd) > checkpoint_cost(control, sizeof control));
+    CHECK(checkpoint_cost(loaded, sizeof loaded) > checkpoint_cost(control, sizeof control));
+
+    /* The budget pass and the emit pass must still agree to the word once the checkpoint is gone. */
+    CHECK(checkpointed_budget_is_exact(pxor, sizeof pxor));
+    CHECK(checkpointed_budget_is_exact(paddd, sizeof paddd));
+    CHECK(checkpointed_budget_is_exact(movaps, sizeof movaps));
+    return 0;
+}
+
 /* Every boundary at which the guest can observe EFLAGS must keep the producer materializing. */
 static int boundaries_materialize(void) {
     const uint8_t block_end[] = {0x01, 0xc8};                   /* add eax,ecx (last in block) */
@@ -329,6 +387,56 @@ static int run_block(const uint8_t *guest, size_t size, const uint64_t *register
     hl_x86_test_enter(cpu, code);
     munmap(code, (size_t)page);
     return 1;
+}
+
+/* Translate with a guest memory window installed, run, and hand back the CPU the block left. */
+static int run_faulting(const uint8_t *guest, size_t size, uint64_t rdx, hl_native_x86_64_cpu *cpu) {
+    uint32_t host[4096] = {0};
+    hl_x86_a64_provenance provenance[64] = {0};
+    hl_x86_a64_request request = request_for(guest, size, host, provenance);
+    hl_x86_a64_result result;
+    static _Alignas(8) uint8_t bytes[32];
+    long page = sysconf(_SC_PAGESIZE);
+    uint8_t *code;
+
+    if (hl_x86_a64_emit(&request, &result) != HL_X86_A64_OK) return 0;
+    code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) return 0;
+    memcpy(code, host, result.word_count * sizeof(uint32_t));
+    ((uint32_t *)code)[result.word_count] = UINT32_C(0xd65f03c0); /* ret */
+    __builtin___clear_cache((char *)code, (char *)code + (result.word_count + 1u) * 4u);
+    if (mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) != 0) return 0;
+    memset(cpu, 0, sizeof *cpu);
+    cpu->registers[0] = UINT64_C(0xffffffffffffffff);
+    cpu->registers[1] = 1u;
+    cpu->registers[2] = rdx;
+    cpu->memory_first = UINT64_C(0x1000);
+    cpu->memory_last = UINT64_C(0x1020);
+    cpu->memory_delta = (uint64_t)(uintptr_t)bytes - UINT64_C(0x1000);
+    cpu->memory_permissions = 7u;
+    cpu->dirty_first = UINT64_MAX;
+    cpu->flags = 2u;
+    hl_x86_test_enter(cpu, code);
+    munmap(code, (size_t)page);
+    return 1;
+}
+
+/* A memory operand can fault before it redefines anything, and the fallback exit publishes the guest
+   flags as they stand -- so a producer ahead of one must have materialized. This is why a memory
+   operand, and mul/div, are excluded from the killer sets. */
+static int faulting_successor_sees_the_producer_flags(void) {
+    const uint8_t pair[] = {0x48, 0x01, 0xc8, 0x48, 0x03, 0x02}; /* add rax,rcx ; add rax,[rdx] */
+    const uint8_t single[] = {0x48, 0x01, 0xc8};                 /* add rax,rcx (block end) */
+    hl_native_x86_64_cpu faulted;
+    hl_native_x86_64_cpu reference;
+
+    /* rdx sits outside the window, so the second add exits before it writes any flag. */
+    CHECK(run_faulting(pair, sizeof pair, UINT64_C(0x9000), &faulted));
+    CHECK(faulted.reason == HL_NATIVE_EXIT_FALLBACK);
+    CHECK(faulted.program == UINT64_C(0x400003));
+    CHECK(run_faulting(single, sizeof single, UINT64_C(0x9000), &reference));
+    CHECK(faulted.flags == reference.flags);
+    return 0;
 }
 
 /* An elided producer must leave exactly the flags its successor defines, and a CF consumer that
@@ -508,7 +616,9 @@ int main(void) {
     if ((status = rotate_elision_fires()) != 0) return status;
     if ((status = rotate_boundaries_materialize()) != 0) return status;
     if ((status = multiply_kills_nzcv()) != 0) return status;
+    if ((status = register_vectors_need_no_checkpoint()) != 0) return status;
 #if defined(__aarch64__)
+    if ((status = faulting_successor_sees_the_producer_flags()) != 0) return status;
     if ((status = execution_matches()) != 0) return status;
     if ((status = pfaf_execution_matches()) != 0) return status;
     if ((status = shift_execution_matches()) != 0) return status;

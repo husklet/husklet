@@ -8,6 +8,14 @@
 #include "frontend/private.h"
 #include "word.h"
 
+/* The only register-only vector lowerings that can leave the block are the double and packed float
+   arithmetic forms, which bail to the interpreter on an unordered result. */
+static int vector_may_exit(const instruction *item) {
+    return (item->vector_kind >= VECTOR_SCALAR_SQRT_DOUBLE &&
+            item->vector_kind <= VECTOR_SCALAR_DIV_DOUBLE) ||
+           item->vector_kind == VECTOR_FLOAT_ARITHMETIC;
+}
+
 static int may_fallback(const instruction *item) {
     return item->memory_operand != 0u || item->operation == OP_LOAD || item->operation == OP_STORE ||
            item->operation == OP_STRING ||
@@ -16,7 +24,7 @@ static int may_fallback(const instruction *item) {
            item->operation == OP_CALL ||
            (item->operation == OP_JUMP && item->source_high != 0u) || item->operation == OP_RETURN ||
            item->operation == OP_LEAVE || item->operation == OP_PUSH || item->operation == OP_POP ||
-           item->operation == OP_VECTOR;
+           (item->operation == OP_VECTOR && vector_may_exit(item));
 }
 
 /* 1 iff the item redefines every flag the NZCV transfer publishes while reading none. adc/sbb read CF,
