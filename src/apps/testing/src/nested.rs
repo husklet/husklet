@@ -12,7 +12,6 @@ use std::{
 
 type Error = Box<dyn std::error::Error>;
 const DEFAULT_CAPTURE_LIMIT: usize = 1024 * 1024;
-const MAXIMUM_LAYERS: usize = 16;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,7 +203,7 @@ fn load(root: &Path, definition: &Path) -> Result<Document, Error> {
     for chain in &document.chains {
         if chain.id.is_empty()
             || !ids.insert(&chain.id)
-            || !(2..=MAXIMUM_LAYERS).contains(&chain.layers.len())
+            || chain.layers.len() < 2
             || !(1..=3600).contains(&chain.timeout_seconds)
             || !(1..=16 * 1024 * 1024).contains(&chain.capture_limit_bytes)
             || !(0..=255).contains(&chain.expect.exit)
@@ -513,80 +512,17 @@ fn safe_relative(path: &Path) -> Result<(), Error> {
     }
 }
 
-#[derive(Debug)]
-struct Bundle {
-    _directory: tempfile::TempDir,
-    layers: Vec<PathBuf>,
-}
-
-impl Bundle {
-    fn new(root: &Path, chain: &Chain) -> Result<Self, Error> {
-        let directory = tempfile::tempdir()?;
-        let mut layers = Vec::with_capacity(chain.layers.len());
-        for (index, layer) in chain.layers.iter().enumerate() {
-            let destination = directory.path().join(format!("layer-{index}"));
-            Self::copy(&root.join(&layer.artifact.path), &destination)?;
-            layers.push(destination);
-        }
-        let guest = directory.path().join("guest");
-        Self::copy(&root.join(&chain.guest.path), &guest)?;
-        Ok(Self {
-            _directory: directory,
-            layers,
-        })
+fn command(root: &Path, chain: &Chain) -> Vec<String> {
+    let mut arguments = Vec::new();
+    for layer in &chain.layers {
+        arguments.push(root.join(&layer.artifact.path).display().to_string());
+        arguments.push("--report-exit".into());
+        arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
+        layer.options.append(&mut arguments);
     }
-
-    fn copy(source: &Path, destination: &Path) -> Result<(), Error> {
-        let metadata = fs::symlink_metadata(source)?;
-        if !metadata.file_type().is_file() {
-            return Err(format!("nested bundle input is not a regular file: {}", source.display()).into());
-        }
-        fs::copy(source, destination)?;
-        fs::set_permissions(destination, fs::Permissions::from_mode(0o555))?;
-        Ok(())
-    }
-
-    fn host(&self, path: &Path) -> Result<String, Error> {
-        path.to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| "nested bundle path is not UTF-8".into())
-    }
-
-    fn guest_layer(index: usize) -> String {
-        format!("/layer-{index}")
-    }
-
-    fn command(&self, chain: &Chain) -> Result<Vec<String>, Error> {
-        let mut arguments = Vec::new();
-        for (index, layer) in chain.layers.iter().enumerate() {
-            // The outer host must open layer 1 before a guest filesystem exists.
-            // Every later path is resolved inside the shared bundle root selected
-            // from that host path, so forwarding another host path would escape
-            // the parent engine's guest-visible namespace.
-            arguments.push(if index < 2 {
-                self.host(&self.layers[index])?
-            } else {
-                Self::guest_layer(index)
-            });
-            arguments.push("--report-exit".into());
-            arguments.extend(["--guest-isa".into(), layer.guest_isa.engine_name().into()]);
-            layer.options.append(&mut arguments);
-        }
-        arguments.push("/guest".into());
-        arguments.extend(chain.arguments.iter().cloned());
-        Ok(arguments)
-    }
-
-    #[cfg(test)]
-    fn path(&self) -> &Path {
-        self._directory.path()
-    }
-}
-
-fn command(root: &Path, chain: &Chain) -> Result<(Bundle, Vec<String>), Error> {
-    let bundle = Bundle::new(root, chain)?;
-    let arguments = bundle.command(chain)?;
-    Ok((bundle, arguments))
+    arguments.push(root.join(&chain.guest.path).display().to_string());
+    arguments.extend(chain.arguments.iter().cloned());
+    arguments
 }
 
 fn unavailable(root: &Path, artifact: &Artifact) -> Option<Outcome> {
@@ -620,10 +556,7 @@ fn execute(root: &Path, definition: &Path, chain: &Chain) -> Outcome {
         Ok(value) => value,
         Err(error) => return Outcome::Failed(format!("cannot read {}: {error}", expected.display())),
     };
-    let (_bundle, arguments) = match command(root, chain) {
-        Ok(value) => value,
-        Err(error) => return Outcome::Failed(format!("nested bundle failed: {error}")),
-    };
+    let arguments = command(root, chain);
     match capture(
         &arguments,
         Duration::from_secs(chain.timeout_seconds),
@@ -698,10 +631,6 @@ mod tests {
 
     #[test]
     fn typed_options_are_attached_to_the_layer_they_configure() {
-        let root = tempfile::tempdir().unwrap();
-        for name in ["outer", "inner", "hello"] {
-            fs::write(root.path().join(name), name).unwrap();
-        }
         let chain: Chain = serde_yaml::from_str(
             r#"
 id: arm-amd
@@ -716,11 +645,11 @@ expect: { exit: 42, stdout: hello.txt }
 "#,
         )
         .unwrap();
-        let (bundle, arguments) = command(root.path(), &chain).unwrap();
+        let arguments = command(Path::new("/tree"), &chain);
         assert_eq!(
             &arguments[..8],
             [
-                bundle.path().join("layer-0").to_str().unwrap(),
+                "/tree/outer",
                 "--report-exit",
                 "--guest-isa",
                 "aarch64",
@@ -732,100 +661,7 @@ expect: { exit: 42, stdout: hello.txt }
         );
         assert_eq!(
             &arguments[8..],
-            [
-                bundle.path().join("layer-1").to_str().unwrap(),
-                "--report-exit",
-                "--guest-isa",
-                "x86_64",
-                "/guest"
-            ]
-        );
-        assert_eq!(fs::read(bundle.path().join("layer-0")).unwrap(), b"outer");
-        assert_eq!(fs::read(bundle.path().join("layer-1")).unwrap(), b"inner");
-        assert_eq!(fs::read(bundle.path().join("guest")).unwrap(), b"hello");
-        for name in ["layer-0", "layer-1", "guest"] {
-            assert_ne!(
-                fs::metadata(bundle.path().join(name)).unwrap().permissions().mode() & 0o111,
-                0
-            );
-        }
-        let directory = bundle.path().to_owned();
-        drop(bundle);
-        assert!(!directory.exists());
-    }
-
-    #[test]
-    fn bundle_projects_only_descendants_into_the_guest_root() {
-        let root = tempfile::tempdir().unwrap();
-        for path in ["first/outer", "second/middle", "third/inner", "leaf/hello"] {
-            let path = root.path().join(path);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"artifact").unwrap();
-        }
-        let chain: Chain = serde_yaml::from_str(
-            r#"
-id: three
-layers:
-  - artifact: { path: first/outer }
-    guest_isa: amd64
-  - artifact: { path: second/middle }
-    guest_isa: arm64
-  - artifact: { path: third/inner }
-    guest_isa: amd64
-guest: { path: leaf/hello }
-expect: { exit: 42, stdout: hello.txt }
-"#,
-        )
-        .unwrap();
-        let (bundle, arguments) = command(root.path(), &chain).unwrap();
-        assert_eq!(arguments[0], bundle.path().join("layer-0").to_str().unwrap());
-        assert_eq!(arguments[4], bundle.path().join("layer-1").to_str().unwrap());
-        assert_eq!(arguments[8], "/layer-2");
-        assert_eq!(arguments[12], "/guest");
-        let names = fs::read_dir(bundle.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(names.len(), 4);
-    }
-
-    #[test]
-    fn bundle_accepts_non_utf8_source_paths_without_exposing_them() {
-        let root = tempfile::tempdir().unwrap();
-        let name = OsString::from_vec(vec![b'e', b'n', b'g', b'i', b'n', b'e', 0xff]);
-        fs::write(root.path().join(&name), b"engine").unwrap();
-        fs::write(root.path().join("inner"), b"inner").unwrap();
-        fs::write(root.path().join("guest"), b"guest").unwrap();
-        let mut chain: Chain = serde_yaml::from_str(
-            "id: bytes\nlayers:\n  - artifact: { path: placeholder }\n    guest_isa: arm64\n  - artifact: { path: inner }\n    guest_isa: arm64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
-        )
-        .unwrap();
-        chain.layers[0].artifact.path = PathBuf::from(name);
-        let (bundle, arguments) = command(root.path(), &chain).unwrap();
-        assert_eq!(fs::read(bundle.path().join("layer-0")).unwrap(), b"engine");
-        assert!(
-            arguments
-                .iter()
-                .all(|argument| !argument.contains(char::REPLACEMENT_CHARACTER))
-        );
-    }
-
-    #[test]
-    fn bundle_rejects_symlink_inputs_without_following_them() {
-        let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("target"), b"engine").unwrap();
-        symlink("target", root.path().join("outer")).unwrap();
-        fs::write(root.path().join("inner"), b"inner").unwrap();
-        fs::write(root.path().join("guest"), b"guest").unwrap();
-        let chain: Chain = serde_yaml::from_str(
-            "id: link\nlayers:\n  - artifact: { path: outer }\n    guest_isa: arm64\n  - artifact: { path: inner }\n    guest_isa: arm64\nguest: { path: guest }\nexpect: { exit: 0, stdout: out }\n",
-        )
-        .unwrap();
-        assert!(
-            command(root.path(), &chain)
-                .unwrap_err()
-                .to_string()
-                .contains("not a regular file")
+            ["/tree/inner", "--report-exit", "--guest-isa", "x86_64", "/tree/hello"]
         );
     }
 
