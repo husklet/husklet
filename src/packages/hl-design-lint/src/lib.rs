@@ -341,13 +341,14 @@ fn reads() {
     let _ = std::env::var_os("B");
     let _ = std::env::vars();
     let _ = std::env::vars_os();
+    // Substituted by the compiler, so not ambient process input.
     let _ = env!("C");
     let _ = option_env!("D");
 }
 "#,
             "environment-variable-access",
         );
-        assert_eq!(values.len(), 6);
+        assert_eq!(values.len(), 4);
         assert!(values.iter().all(Finding::is_violation));
         assert!(values.iter().all(|finding| !finding.related.is_empty()));
     }

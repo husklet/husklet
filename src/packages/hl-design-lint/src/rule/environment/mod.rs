@@ -177,10 +177,6 @@ impl<'ast> Visit<'ast> for Accesses<'_> {
     }
 
     fn visit_expr_macro(&mut self, expression: &'ast ExprMacro) {
-        let name = expression.mac.path.segments.last().map(|part| &part.ident);
-        if let Some(name) = name.filter(|name| *name == "env" || *name == "option_env") {
-            self.report_access(expression.span(), format!("{name}!"));
-        }
         syn::visit::visit_expr_macro(self, expression);
     }
 
@@ -244,12 +240,6 @@ fn has_ambient_input(expression: &Expr, accesses: &Accesses<'_>) -> bool {
             syn::visit::visit_expr_call(self, call);
         }
         fn visit_expr_macro(&mut self, expression: &'ast ExprMacro) {
-            self.found |= expression
-                .mac
-                .path
-                .segments
-                .last()
-                .is_some_and(|part| part.ident == "env" || part.ident == "option_env");
             syn::visit::visit_expr_macro(self, expression);
         }
     }

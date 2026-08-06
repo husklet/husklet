@@ -120,3 +120,18 @@ static REGISTRY: OnceLock<Vec<String>> = OnceLock::new();
     assert!(values.iter().any(|value| value.subject == "CONFIG"));
     assert!(values.iter().any(|value| value.subject == "STATE"));
 }
+
+#[test]
+fn compile_time_environment_is_not_ambient_process_input() {
+    let values = findings(
+        r#"
+fn identity() -> &'static str {
+    let _ = option_env!("HUSKLET_BUILD_ID");
+    let _ = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    env!("CARGO_PKG_VERSION")
+}
+"#,
+        "src/lib.rs",
+    );
+    assert!(values.is_empty(), "{values:?}");
+}
