@@ -15,7 +15,6 @@ pub(super) struct InitSlots {
     pub(super) thread: ThreadId,
     pub(super) session: SessionId,
     pub(super) process_group: ProcessGroupId,
-    pub(super) transaction: u64,
 }
 
 /// An unpublished reservation for the initial process and its identity graph.
@@ -85,7 +84,6 @@ impl TaskRegistry {
             thread,
             session,
             process_group,
-            transaction: Self::next_transaction(&mut state),
         };
         state.init_reservation = Some(slots);
         Ok(InitReservation {
