@@ -213,9 +213,6 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             snapshot.id = id;
             return self.install_one(RuntimeSocket::unix_standalone(id, snapshot, catalog), raw_type);
         }
-        if self.policy.as_ref().is_some_and(|policy| policy.isolated) {
-            return LinuxResult::Error(Errno::ENOSYS);
-        }
         let Some(host) = &self.host else {
             return LinuxResult::Error(Errno::ENOSYS);
         };

@@ -119,8 +119,26 @@ impl NetworkPolicy {
     #[must_use]
     pub fn route(&self, address: &crate::SocketAddress) -> RouteDisposition {
         let crate::SocketAddress::Inet6 { address, .. } = address else {
+            // An isolated namespace keeps its loopback transport but owns no
+            // interface, so only loopback and the unspecified address route.
+            if let crate::SocketAddress::Inet4 { address, .. } = address
+                && self.isolated
+                && address[0] != 127
+                && *address != [0; 4]
+            {
+                return RouteDisposition::NetworkUnreachable;
+            }
             return RouteDisposition::Host;
         };
+        if self.isolated {
+            let unspecified = address.iter().all(|byte| *byte == 0);
+            let loopback = address[..15].iter().all(|byte| *byte == 0) && address[15] == 1;
+            return if unspecified || loopback {
+                RouteDisposition::Host
+            } else {
+                RouteDisposition::NetworkUnreachable
+            };
+        }
         let unspecified = address.iter().all(|byte| *byte == 0);
         let loopback = address[..15].iter().all(|byte| *byte == 0) && address[15] == 1;
         let link_local = address[0] == 0xfe && address[1] & 0xc0 == 0x80;
@@ -278,6 +296,31 @@ mod tests {
         link_local[..2].copy_from_slice(&[0xfe, 0x80]);
         assert_eq!(policy.route(&address(link_local)), RouteDisposition::Host);
         assert_eq!(policy.route(&address([0; 16])), RouteDisposition::Host);
+    }
+
+    #[test]
+    fn isolated_namespace_keeps_loopback_and_drops_external_routes() {
+        let policy = NetworkPolicy::from_launch(true, b"", b"", b"").unwrap();
+        let v4 = |address| crate::SocketAddress::Inet4 { address, port: 443 };
+        assert_eq!(policy.route(&v4([127, 0, 0, 1])), RouteDisposition::Host);
+        assert_eq!(policy.route(&v4([0; 4])), RouteDisposition::Host);
+        assert_eq!(policy.route(&v4([8, 8, 8, 8])), RouteDisposition::NetworkUnreachable);
+        assert_eq!(
+            policy.route(&v4([172, 17, 0, 2])),
+            RouteDisposition::NetworkUnreachable
+        );
+
+        let v6 = |address| crate::SocketAddress::Inet6 {
+            address,
+            port: 443,
+            scope: 0,
+        };
+        let mut loopback = [0_u8; 16];
+        loopback[15] = 1;
+        assert_eq!(policy.route(&v6(loopback)), RouteDisposition::Host);
+        let mut link_local = [0_u8; 16];
+        link_local[..2].copy_from_slice(&[0xfe, 0x80]);
+        assert_eq!(policy.route(&v6(link_local)), RouteDisposition::NetworkUnreachable);
     }
 
     #[test]

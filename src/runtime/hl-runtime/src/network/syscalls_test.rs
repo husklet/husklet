@@ -538,6 +538,32 @@ fn ipv4_policy_rejects_global_ipv6_before_host_io() {
 }
 
 #[test]
+fn isolated_policy_creates_inet_sockets_and_rejects_only_external_routes() {
+    let fixture = Fixture::new();
+    let policy = hl_network::NetworkPolicy::from_launch(true, b"", b"", b"").unwrap();
+    let mut runtime = fixture.runtime(GuestArchitecture::X86_64).with_network_policy(policy);
+    let LinuxResult::Value(stream) = runtime.handle(Fixture::operation("socket"), [2, 1, 6, 0, 0, 0]) else {
+        panic!("isolated namespace must still provide an AF_INET stream socket")
+    };
+    let mut external = [0_u8; 16];
+    external[..2].copy_from_slice(&2_u16.to_le_bytes());
+    external[2..4].copy_from_slice(&80_u16.to_be_bytes());
+    external[4..8].copy_from_slice(&[8, 8, 8, 8]);
+    fixture.memory.put(64, &external);
+    assert_eq!(
+        runtime.handle(Fixture::operation("connect"), [stream, 64, 16, 0, 0, 0]),
+        LinuxResult::Error(Errno::ENETUNREACH),
+    );
+    let mut loopback = external;
+    loopback[4..8].copy_from_slice(&[127, 0, 0, 1]);
+    fixture.memory.put(96, &loopback);
+    assert_eq!(
+        runtime.handle(Fixture::operation("connect"), [stream, 96, 16, 0, 0, 0]),
+        LinuxResult::Value(0),
+    );
+}
+
+#[test]
 fn exit_catalog_ownership() {
     let catalog = Arc::new(NetworkCatalog::new(
         NetworkConfiguration::new(Vec::new(), Vec::new(), Vec::new()).unwrap(),
