@@ -48,6 +48,8 @@ pub(super) struct PipeState {
     pub(super) waiters: usize,
     pub(super) open_waiters: usize,
     pub(super) sleepers: usize,
+    #[cfg(test)]
+    pub(super) sleeper_registration: Option<std::sync::mpsc::Sender<()>>,
     pub(super) splice_reserved: bool,
 }
 
@@ -121,6 +123,8 @@ impl Pipe {
                 waiters: 0,
                 open_waiters: 0,
                 sleepers: 0,
+                #[cfg(test)]
+                sleeper_registration: None,
                 splice_reserved: false,
             }),
             changed: Condvar::new(),
@@ -186,6 +190,15 @@ impl PipeEndpoint {
     #[cfg(test)]
     pub(crate) fn sleeper_count(&self) -> usize {
         self.pipe.state.lock().unwrap_or_else(|error| error.into_inner()).sleepers
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observe_sleeper_registrations(&self, sender: std::sync::mpsc::Sender<()>) {
+        self.pipe
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .sleeper_registration = Some(sender);
     }
 
     fn new(pipe: Arc<PipeShared>, direction: EndpointDirection) -> Self {
@@ -486,6 +499,10 @@ impl PipeEndpoint {
     fn wait<'state>(&self, state: MutexGuard<'state, PipeState>) -> MutexGuard<'state, PipeState> {
         let mut state = state;
         state.sleepers += 1;
+        #[cfg(test)]
+        if let Some(sender) = &state.sleeper_registration {
+            let _ = sender.send(());
+        }
         let mut state = self.pipe.changed.wait(state).unwrap_or_else(|error| error.into_inner());
         state.sleepers -= 1;
         state

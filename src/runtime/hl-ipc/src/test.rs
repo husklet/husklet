@@ -362,6 +362,8 @@ fn blocking_reader_wakes() {
 #[test]
 fn multiple_pipe_sleepers_balance_after_wake() {
     let pipe = Pipe::new(false);
+    let (registered, registrations) = std::sync::mpsc::channel();
+    pipe.reader.observe_sleeper_registrations(registered);
     let first = pipe.reader.clone();
     let second = pipe.reader.clone();
     let first_wait = std::thread::spawn(move || {
@@ -372,12 +374,8 @@ fn multiple_pipe_sleepers_balance_after_wake() {
         let mut byte = [0_u8; 1];
         second.read(&mut byte)
     });
-    for _ in 0..10_000 {
-        if pipe.reader.sleeper_count() == 2 {
-            break;
-        }
-        std::thread::yield_now();
-    }
+    registrations.recv().unwrap();
+    registrations.recv().unwrap();
     assert_eq!(pipe.reader.sleeper_count(), 2);
     assert_eq!(pipe.writer.write(b"ab"), Ok(2));
     assert_eq!(first_wait.join().unwrap(), Ok(1));

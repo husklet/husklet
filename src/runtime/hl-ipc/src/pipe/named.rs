@@ -75,6 +75,8 @@ impl NamedFifo {
                     waiters: 0,
                     open_waiters: 0,
                     sleepers: 0,
+                    #[cfg(test)]
+                    sleeper_registration: None,
                     splice_reserved: false,
                 }),
                 changed: std::sync::Condvar::new(),
