@@ -13,8 +13,10 @@ async fn file_records_survive_reopen_and_are_removed_atomically() {
         .await
         .unwrap();
     first.start("durable").await.unwrap();
-    first.signal("durable", Signal::Terminate).await.unwrap();
-    assert_eq!(first.wait("durable").await.unwrap(), ExitStatus::Code(0));
+    assert_eq!(
+        first.stop("durable", Duration::from_secs(1)).await.unwrap(),
+        ExitStatus::Code(0)
+    );
     drop(first);
     let reopened = test_containers(
         Arc::new(Disk::open(config.root).await.unwrap()),
