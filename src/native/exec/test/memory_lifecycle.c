@@ -2,6 +2,7 @@
 #define HL_NATIVE_ALLOCATION_IMPLEMENTATION
 #include "allocation.h"
 #include "support.h"
+#include "../src/executor.h"
 
 #if defined(__linux__)
 #include <dirent.h>
@@ -122,8 +123,17 @@ static int mapping_failures(void) {
     memory = test_services(&state);
     config = test_config(&memory, 0);
     CHECK(hl_native_create(&config, &executor) == HL_NATIVE_OK);
+    hl_native_ibtc_fill_shared(executor, UINT64_C(0x1234),
+                               (void *)(uintptr_t)UINT64_C(0x5678));
+    CHECK(executor->ibtc[(UINT64_C(0x1234) >> 2) &
+                         (HL_NATIVE_IBTC_COUNT - 1)].target == UINT64_C(0x1234));
     CHECK(hl_native_before_fork(executor) == HL_NATIVE_OK);
     CHECK(hl_native_after_fork(executor, 0) == HL_NATIVE_PLATFORM);
+    CHECK(!hl_native_cache_available(executor->cache));
+    CHECK(executor->ibtc[(UINT64_C(0x1234) >> 2) &
+                         (HL_NATIVE_IBTC_COUNT - 1)].target == 0);
+    hl_native_code old = {0};
+    CHECK(hl_native_cache_lookup(executor->cache, UINT64_C(0x1000), 0, &old) == HL_NATIVE_MISS);
     CHECK(hl_native_destroy(executor) == HL_NATIVE_OK);
     CHECK(state.reserve_calls == 1 && state.release_calls == 1);
     CHECK(hl_test_allocation_live() == 0);

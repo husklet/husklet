@@ -600,6 +600,13 @@ hl_native_status hl_native_after_fork(hl_native_executor *executor, uint32_t pre
                                                  memory_order_acquire, memory_order_relaxed))
         return HL_NATIVE_STATE;
     status = hl_native_arena_repair(&executor->arena, preserve);
+    if (status != HL_NATIVE_OK) {
+        /* Repair may have replaced or invalidated the inherited executable
+         * mapping before reporting failure. Nothing address-bearing may
+         * remain admissible when the fork mutation lease is released. */
+        hl_native_cache_fail(executor->cache);
+        ibtc_clear(executor);
+    }
     if (status == HL_NATIVE_OK && preserve == 0) status = hl_native_cache_reset(executor->cache, 0);
     if (status == HL_NATIVE_OK && preserve != 0) {
         int writing = 0;
