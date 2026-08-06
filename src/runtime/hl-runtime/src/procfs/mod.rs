@@ -21,8 +21,8 @@ use hl_descriptor::DescriptorTable;
 use hl_task::{ProcessId, ProcessLifecycle, Resource, TaskRegistry};
 use hl_vfs::{
     ProcfsCgroupView, ProcfsCpuModel, ProcfsCpuView, ProcfsDescriptorView, ProcfsError, ProcfsLimitResource,
-    ProcfsLimitView, ProcfsProcessState, ProcfsProcessView, ProcfsSource, ProcfsStatView, ProcfsSystemView,
-    ProcfsUtsView,
+    ProcfsLimitView, ProcfsProcessIdentity, ProcfsProcessState, ProcfsProcessView, ProcfsSource, ProcfsStatView,
+    ProcfsSystemView, ProcfsUtsView,
 };
 /// Task-owned producer for typed process-filesystem views.
 pub struct TaskProcfs {
@@ -46,6 +46,15 @@ pub struct TaskProcfs {
 }
 
 impl TaskProcfs {
+    #[cfg(test)]
+    fn process_id(&self, identity: ProcfsProcessIdentity) -> Result<ProcessId, ProcfsError> {
+        let id = ProcessId::from_wire(identity.slot(), identity.generation()).ok_or(ProcfsError::NotFound)?;
+        self.tasks
+            .process_snapshot(id)
+            .map(|_| id)
+            .map_err(|_| ProcfsError::NotFound)
+    }
+
     #[must_use]
     pub fn new(tasks: Arc<TaskRegistry>) -> Self {
         Self {
@@ -303,6 +312,12 @@ impl TaskProcfs {
 }
 
 impl ProcfsSource for TaskProcfs {
+    fn resolve_process(&self, process: u32) -> Result<ProcfsProcessIdentity, ProcfsError> {
+        let id = self.tasks.process_by_number(process).ok_or(ProcfsError::NotFound)?;
+        let (slot, generation) = id.wire_parts();
+        ProcfsProcessIdentity::new(slot, generation).ok_or(ProcfsError::NotFound)
+    }
+
     fn network(&self, process: u32) -> Result<hl_vfs::ProcfsNetworkView, ProcfsError> {
         self.view(process)?;
         self.network

@@ -6,6 +6,17 @@ use crate::{
 };
 
 impl TaskRegistry {
+    /// Resolves a guest-visible process number to its current published,
+    /// generation-qualified identity in one registry lookup.
+    pub fn process_by_number(&self, number: u32) -> Option<ProcessId> {
+        let slot = usize::try_from(number.checked_sub(1)?).ok()?;
+        let state = self.lock();
+        let entry = state.processes.get(slot)?;
+        let process = entry.value.as_ref()?;
+        let slot = u32::try_from(slot).ok()?;
+        (process.lifecycle != crate::ProcessLifecycle::Starting).then(|| ProcessId::new(slot, entry.generation))
+    }
+
     /// Observes the state shared by simple current-process Linux operations.
     pub fn process_observation(&self, id: ProcessId) -> Result<ProcessObservation, crate::TaskError> {
         let state = self.lock();

@@ -1,3 +1,35 @@
+/// Generation-qualified process identity resolved from a guest-visible PID.
+///
+/// Numeric procfs paths are lookup keys only. Consumers that retain a target
+/// across operations must carry this complete identity and explicitly validate
+/// it rather than resolving the number again after PID reuse.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ProcessIdentity {
+    slot: u32,
+    generation: u16,
+}
+
+impl ProcessIdentity {
+    #[must_use]
+    pub const fn new(slot: u32, generation: u16) -> Option<Self> {
+        if generation == 0 {
+            None
+        } else {
+            Some(Self { slot, generation })
+        }
+    }
+
+    #[must_use]
+    pub const fn slot(self) -> u32 {
+        self.slot
+    }
+
+    #[must_use]
+    pub const fn generation(self) -> u16 {
+        self.generation
+    }
+}
+
 /// Linux resource represented in `/proc/<pid>/limits`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum LimitResource {

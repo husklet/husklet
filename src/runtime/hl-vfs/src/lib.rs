@@ -60,10 +60,10 @@ pub use procfs::{
     MemoryRegionLabel as ProcfsMemoryRegionLabel, MemoryRegionView as ProcfsMemoryRegionView,
     MemoryView as ProcfsMemoryView, MountEntry as ProcfsMountEntry, MountView as ProcfsMountView,
     NetworkInterfaceView as ProcfsNetworkInterfaceView, NetworkView as ProcfsNetworkView, NodeKind as ProcfsNodeKind,
-    ProcessState as ProcfsProcessState, ProcessView as ProcfsProcessView, Procfs, Source as ProcfsSource,
-    StatError as ProcfsStatError, StatInput as ProcfsStatInput, StatState as ProcfsStatState,
-    StatView as ProcfsStatView, SystemView as ProcfsSystemView, UnixSocketView as ProcfsUnixSocketView,
-    UtsView as ProcfsUtsView,
+    ProcessIdentity as ProcfsProcessIdentity, ProcessState as ProcfsProcessState, ProcessView as ProcfsProcessView,
+    Procfs, Source as ProcfsSource, StatError as ProcfsStatError, StatInput as ProcfsStatInput,
+    StatState as ProcfsStatState, StatView as ProcfsStatView, SystemView as ProcfsSystemView,
+    UnixSocketView as ProcfsUnixSocketView, UtsView as ProcfsUtsView,
 };
 pub use readonly::{ReadOnlyError, ReadOnlyPaths};
 pub use resolver::{

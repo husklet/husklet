@@ -15,6 +15,13 @@ struct Source {
 }
 
 impl super::Source for Source {
+    fn resolve_process(&self, process: u32) -> Result<super::ProcessIdentity, Error> {
+        if process != self.process.process {
+            return Err(Error::NotFound);
+        }
+        super::ProcessIdentity::new(process.checked_sub(1).ok_or(Error::NotFound)?, 1).ok_or(Error::NotFound)
+    }
+
     fn processes(&self) -> Result<Vec<u32>, Error> {
         Ok(vec![self.process.process])
     }
@@ -221,6 +228,16 @@ impl super::Source for Source {
     }
 }
 
+#[test]
+fn fake_resolves_only_its_exact_process() {
+    let source = fixed_source();
+    assert_eq!(
+        super::Source::resolve_process(&source, source.process.process),
+        Ok(super::ProcessIdentity::new(source.process.process - 1, 1).unwrap())
+    );
+    assert_eq!(super::Source::resolve_process(&source, 0), Err(Error::NotFound));
+}
+
 fn mount(
     identity: (u32, u32),
     device: (u32, u32),
@@ -324,7 +341,11 @@ fn fixed_mounts() -> MountView {
 }
 
 fn procfs() -> Procfs {
-    Procfs::new(Arc::new(Source {
+    Procfs::new(Arc::new(fixed_source()))
+}
+
+fn fixed_source() -> Source {
+    Source {
         process: process(),
         descriptors: vec![DescriptorView {
             number: 4,
@@ -335,7 +356,7 @@ fn procfs() -> Procfs {
             target: Some(b"/data/file".to_vec()),
         }],
         oom_score_adj: Mutex::new(0),
-    }))
+    }
 }
 
 #[test]

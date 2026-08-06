@@ -91,6 +91,60 @@ fn metrics() -> super::StatMetrics {
 }
 
 #[test]
+fn process_identity_matches_task_wire_and_resolves_self_and_peer() {
+    let tasks = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let (parent, thread) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let (peer, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(thread).unwrap())
+        .unwrap();
+    let source = TaskProcfs::new(Arc::clone(&tasks));
+
+    for process in [parent, peer] {
+        let identity = source.resolve_process(process.number()).unwrap();
+        assert_eq!((identity.slot(), identity.generation()), process.wire_parts());
+        assert_eq!(source.process_id(identity), Ok(process));
+    }
+    assert_eq!(source.resolve_process(0), Err(ProcfsError::NotFound));
+    assert_eq!(source.resolve_process(u32::MAX), Err(ProcfsError::NotFound));
+}
+
+#[test]
+fn process_identity_changes_on_reuse_and_stale_identity_is_rejected() {
+    let tasks = Arc::new(
+        TaskRegistry::new(RegistryConfig {
+            max_processes: 2,
+            max_threads: 2,
+            ..RegistryConfig::default()
+        })
+        .unwrap(),
+    );
+    let (parent, thread) = tasks
+        .create_init(ProcessCredentials::new(0, 0, &[], 8).unwrap(), ProcessLimits::default())
+        .unwrap();
+    let source = TaskProcfs::new(Arc::clone(&tasks));
+    let (first, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(thread).unwrap())
+        .unwrap();
+    let stale = source.resolve_process(first.number()).unwrap();
+
+    tasks.exit_process(first, ExitStatus::Code(0)).unwrap();
+    tasks.reap(parent, first).unwrap();
+    assert_eq!(source.process_id(stale), Err(ProcfsError::NotFound));
+    assert_eq!(source.resolve_process(first.number()), Err(ProcfsError::NotFound));
+
+    let (second, _) = tasks
+        .commit_fork_process(tasks.begin_fork_process(thread).unwrap())
+        .unwrap();
+    let current = source.resolve_process(second.number()).unwrap();
+    assert_eq!(current.slot(), stale.slot());
+    assert_ne!(current.generation(), stale.generation());
+    assert_eq!(source.process_id(stale), Err(ProcfsError::NotFound));
+    assert_eq!(source.process_id(current), Ok(second));
+}
+
+#[test]
 fn task_projection() {
     let tasks = Arc::new(
         TaskRegistry::new(RegistryConfig {

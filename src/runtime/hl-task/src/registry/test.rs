@@ -77,6 +77,80 @@ fn publication_is_atomic() {
 }
 
 #[test]
+fn process_number_boundaries_and_publication() {
+    let registry = TaskRegistry::new(RegistryConfig {
+        max_processes: 2,
+        max_threads: 2,
+        ..RegistryConfig::default()
+    })
+    .unwrap();
+    assert_eq!(registry.process_by_number(0), None);
+    assert_eq!(registry.process_by_number(u32::MAX), None);
+    assert_eq!(registry.process_by_number(1), None);
+
+    let reservation = registry
+        .begin_create_init(Fixture::credentials(), Fixture::limits())
+        .unwrap();
+    assert_eq!(registry.process_by_number(1), None);
+    let (init, leader) = reservation.commit().unwrap();
+    assert_eq!(registry.process_by_number(init.number()), Some(init));
+
+    let fork = registry.begin_fork_process(leader).unwrap();
+    let child = fork.process();
+    assert_eq!(registry.process_by_number(child.number()), None);
+    registry.commit_fork_process(fork).unwrap();
+    assert_eq!(registry.process_by_number(child.number()), Some(child));
+}
+
+#[test]
+fn process_number_tracks_zombie_reap_and_generation() {
+    let (registry, parent, leader) = Fixture::registry(2, 2);
+    let (child, _) = registry
+        .commit_fork_process(registry.begin_fork_process(leader).unwrap())
+        .unwrap();
+    registry.exit_process(child, ExitStatus::Code(0)).unwrap();
+    assert_eq!(registry.process_by_number(child.number()), Some(child));
+    registry.reap(parent, child).unwrap();
+    assert_eq!(registry.process_by_number(child.number()), None);
+
+    let replacement = registry.begin_fork_process(leader).unwrap();
+    let replacement_id = replacement.process();
+    assert_eq!(replacement_id.number(), child.number());
+    assert_ne!(replacement_id, child);
+    registry.commit_fork_process(replacement).unwrap();
+    assert_eq!(registry.process_by_number(child.number()), Some(replacement_id));
+}
+
+#[test]
+fn process_number_concurrently_returns_exact_identity() {
+    let (registry, process, _) = Fixture::registry(2, 2);
+    let registry = Arc::new(registry);
+    let readers: Vec<_> = (0..8)
+        .map(|_| {
+            let registry = Arc::clone(&registry);
+            thread::spawn(move || {
+                for _ in 0..1_000 {
+                    assert_eq!(registry.process_by_number(process.number()), Some(process));
+                }
+            })
+        })
+        .collect();
+    for reader in readers {
+        reader.join().unwrap();
+    }
+}
+
+#[test]
+fn process_number_remains_visible_during_unpublished_exec() {
+    let (registry, process, leader) = Fixture::registry(2, 2);
+    let registry = Arc::new(registry);
+    let prepared = registry.prepare_exec(process, leader).unwrap();
+    assert_eq!(registry.process_by_number(process.number()), Some(process));
+    drop(prepared);
+    assert_eq!(registry.process_by_number(process.number()), Some(process));
+}
+
+#[test]
 fn abort_consumes_generation() {
     let registry = TaskRegistry::new(RegistryConfig {
         max_processes: 1,

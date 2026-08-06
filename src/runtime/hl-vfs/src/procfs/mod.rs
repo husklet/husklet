@@ -11,8 +11,8 @@ mod stat;
 pub use cgroup::View as CgroupView;
 pub use model::{
     AddressSpaceView, CpuModel, CpuTicks, CpuView, DescriptorView, InternetSocketView, LimitResource, LimitView,
-    MemoryRegionLabel, MemoryRegionView, MemoryView, NetworkInterfaceView, NetworkView, NodeKind, ProcessState,
-    ProcessView, SystemView, UnixSocketView, UtsView,
+    MemoryRegionLabel, MemoryRegionView, MemoryView, NetworkInterfaceView, NetworkView, NodeKind, ProcessIdentity,
+    ProcessState, ProcessView, SystemView, UnixSocketView, UtsView,
 };
 pub use mount::{MountEntry, MountView};
 pub use source::Source;

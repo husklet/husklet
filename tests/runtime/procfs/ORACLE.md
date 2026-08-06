@@ -54,6 +54,34 @@ publication; retained renderers correspond to `Procfs::open`, `read_link`,
 `self-vm`, `nslinks`, and `peer-identity` are unsupported on the macOS backend
 but remain enforceable on Linux.
 
+### PID reuse identity prerequisite
+
+The retained PID/start-token path was audited in
+`../engine/src/linux_abi/container/vfs.c` at `launch_reg_publish`,
+`proc_reg_write_files`, `proc_reg_publish`, `proc_reg_after_fork`,
+`proc_pid_member`, `proc_reg_mark_child`, and `proc_reg_reap`. A registration is
+owned by the live host process and container process domain. Publication writes
+the numeric host PID plus a sibling `b<pid>` record containing
+`hl_host_process_info.start_time_ns`; fork publishes the child marker and birth
+token before the parent returns, exec atomically replaces presentation data,
+and exit/reap unlinks every record before the host PID can be reused. Registry
+file mutation is bounded and serialized by filesystem create/store/rename;
+there is no blocking, cancellation, partial guest result, guest-ISA branch, or
+Linux errno conversion in this identity publication path. Host differences are
+contained by `hl_host_process_read`.
+
+Rust owns the equivalent lifetime in `hl_task::TaskRegistry`: `ProcessId`
+combines a slot and generation, allocation increments the generation, and
+`process_snapshot` rejects a stale tuple under the registry lock. Procfs now
+owns the pointer-free mirror `ProcessIdentity { slot, generation }` and resolves
+a numeric path to that exact live identity in one registry lookup. Unpublished
+`Starting` processes remain absent, while a running process undergoing staged
+exec remains visible through its old published identity until exec publication,
+matching the retained temp-file rename behavior. Existing numeric procfs
+consumers remain unchanged in this prerequisite; the next consumer migration
+must accept and validate `ProcessIdentity` directly and must not re-resolve its
+PID, which would silently retarget an operation after slot reuse.
+
 ### Magic-link open lifetime
 
 The `/proc/[self|pid]/{root,cwd}` open and lifetime path was audited directly in

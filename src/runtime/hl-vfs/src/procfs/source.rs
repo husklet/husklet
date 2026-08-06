@@ -1,10 +1,16 @@
 use super::{
-    AddressSpaceView, CgroupView, CpuView, DescriptorView, Error, MemoryView, MountView, NetworkView, ProcessView,
-    StatView, SystemView, UtsView,
+    AddressSpaceView, CgroupView, CpuView, DescriptorView, Error, MemoryView, MountView, NetworkView, ProcessIdentity,
+    ProcessView, StatView, SystemView, UtsView,
 };
 
 /// Consumer-owned boundary for obtaining coherent process snapshots.
 pub trait Source: Send + Sync {
+    /// Resolves a numeric procfs lookup to the exact live process identity.
+    ///
+    /// Follow-on operations must migrate to accept this value directly; they
+    /// must not silently resolve the numeric PID a second time.
+    fn resolve_process(&self, process: u32) -> Result<ProcessIdentity, Error>;
+
     fn processes(&self) -> Result<Vec<u32>, Error> {
         Err(Error::NotFound)
     }
