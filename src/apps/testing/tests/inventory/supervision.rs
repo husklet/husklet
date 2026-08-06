@@ -200,7 +200,8 @@ fn timeout_evidence(start: EvidenceSample, end: EvidenceSample, elapsed: Duratio
         (Some(start), Some(end)) => {
             let total = end.total.saturating_sub(start.total);
             let busy = end.busy.saturating_sub(start.busy);
-            (total != 0).then_some(((busy.saturating_mul(100) / total).min(100)) as u8)
+            // then_some would divide before the guard is consulted.
+            (total != 0).then(|| ((busy.saturating_mul(100) / total).min(100)) as u8)
         }
         _ => None,
     };
