@@ -532,9 +532,6 @@ hl_native_status hl_native_create(const hl_native_config *config, hl_native_exec
     atomic_init(&executor->relocation_invalidations, 0);
     atomic_init(&executor->ibtc_site_misses, 0);
     atomic_init(&executor->ibtc_shared_misses, 0);
-    atomic_init(&executor->ibtc_local_hits, 0);
-    atomic_init(&executor->ibtc_shared_hits, 0);
-    atomic_init(&executor->ibtc_auth_rejections, 0);
     atomic_init(&executor->a64_fallback_guard_read, 0);
     atomic_init(&executor->a64_fallback_guard_write, 0);
     atomic_init(&executor->a64_fallback_simd_fp, 0);
@@ -727,7 +724,7 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
     if (output->size >= offsetof(hl_native_diagnostics, a64_branch_exhaustion)) {
         output->x86_public_epochs = executor->x86_public_epochs;
     }
-    if (output->size >= offsetof(hl_native_diagnostics, ibtc_local_hits)) {
+    if (output->size >= sizeof(*output)) {
         output->a64_branch_exhaustion = atomic_load_explicit(&executor->a64_branch_exhaustion, memory_order_relaxed);
         output->a64_branch_cold_relocation = atomic_load_explicit(&executor->a64_branch_cold_relocation, memory_order_relaxed);
         output->a64_branch_nonrelocatable = atomic_load_explicit(&executor->a64_branch_nonrelocatable, memory_order_relaxed);
@@ -739,11 +736,6 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
             output->a64_branch_sample_source_last = executor->a64_branch_sample_source_last;
         }
         output->a64_branch_sample_form = sample_form;
-    }
-    if (output->size >= sizeof(*output)) {
-        output->ibtc_local_hits = atomic_load_explicit(&executor->ibtc_local_hits, memory_order_relaxed);
-        output->ibtc_shared_hits = atomic_load_explicit(&executor->ibtc_shared_hits, memory_order_relaxed);
-        output->ibtc_auth_rejections = atomic_load_explicit(&executor->ibtc_auth_rejections, memory_order_relaxed);
     }
     return HL_NATIVE_OK;
 }
@@ -1199,8 +1191,6 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
         cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
         cpu->diagnostic_dirty_merged = 0;
-        cpu->diagnostic_ibtc_local_hits = cpu->diagnostic_ibtc_shared_hits = 0;
-        cpu->diagnostic_ibtc_auth_rejections = 0;
         hl_native_aarch64_enter(cpu, code.entry);
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
@@ -1215,14 +1205,9 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             atomic_fetch_add_explicit(&executor->a64_dirty_overflow, cpu->diagnostic_dirty_overflow, memory_order_relaxed);
             atomic_fetch_add_explicit(&executor->a64_dirty_committed, cpu->diagnostic_dirty_committed, memory_order_relaxed);
             atomic_fetch_add_explicit(&executor->a64_dirty_merged, cpu->diagnostic_dirty_merged, memory_order_relaxed);
-            atomic_fetch_add_explicit(&executor->ibtc_local_hits, cpu->diagnostic_ibtc_local_hits, memory_order_relaxed);
-            atomic_fetch_add_explicit(&executor->ibtc_shared_hits, cpu->diagnostic_ibtc_shared_hits, memory_order_relaxed);
-            atomic_fetch_add_explicit(&executor->ibtc_auth_rejections, cpu->diagnostic_ibtc_auth_rejections, memory_order_relaxed);
             cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
             cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
             cpu->diagnostic_dirty_merged = 0;
-            cpu->diagnostic_ibtc_local_hits = cpu->diagnostic_ibtc_shared_hits = 0;
-            cpu->diagnostic_ibtc_auth_rejections = 0;
         }
         int executed_identity = 0;
         if ((cpu->indirect_site & 3u) == 1u) {

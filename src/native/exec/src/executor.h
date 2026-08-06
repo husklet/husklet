@@ -45,7 +45,6 @@ struct hl_native_executor {
     _Atomic uint64_t x86_cold_builds, x86_cold_quota_exits;
     _Atomic uint64_t relocation_cold_targets, relocation_cycles, relocation_capacity;
     _Atomic uint64_t relocation_invalidations, ibtc_site_misses, ibtc_shared_misses;
-    _Atomic uint64_t ibtc_local_hits, ibtc_shared_hits, ibtc_auth_rejections;
     _Atomic uint64_t a64_fallback_guard_read, a64_fallback_guard_write;
     _Atomic uint64_t a64_fallback_simd_fp, a64_fallback_memory;
     _Atomic uint64_t a64_fallback_control, a64_fallback_other;
