@@ -86,6 +86,16 @@ int main(void) {
     CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
     CHECK(after.cache_lookups == before.cache_lookups + 1 &&
           after.cache_hits == before.cache_hits + 1);
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
+    CHECK(hl_a64_block_cache(executor, &source, first + 4, scratch, sizeof(scratch),
+                             &cached, &state) == HL_NATIVE_OK);
+    CHECK(state == HL_A64_BLOCK_BUILT && cached.entry != NULL &&
+          cached.source_first == first + 4 && cached.source_last == first + 8);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
+    CHECK(after.cache_lookups == before.cache_lookups + 2 &&
+          after.cache_misses == before.cache_misses + 1 &&
+          after.cache_hits == before.cache_hits + 1 &&
+          after.publications == before.publications + 1);
     context = (hl_native_lookup_context){0};
     CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
                                    sizeof(scratch), &cached, &state) == HL_NATIVE_OK);
@@ -121,9 +131,13 @@ int main(void) {
     replace.mapping_epoch = 2;
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     context = (hl_native_lookup_context){0};
+    CHECK(hl_native_diagnose(executor, &before) == HL_NATIVE_OK);
     CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
                                    sizeof(scratch), &cached, &state) == HL_NATIVE_STATE);
+    CHECK(hl_native_diagnose(executor, &after) == HL_NATIVE_OK);
     CHECK(context.lookups == 1 && context.epoch_rejections == 1);
+    CHECK(after.cache_lookups == before.cache_lookups + 1 &&
+          after.epoch_rejections == before.epoch_rejections + 1);
     context = (hl_native_lookup_context){UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
     CHECK(hl_a64_block_cache_inner(executor, &context, &source, first, scratch,
                                    sizeof(scratch), &cached, &state) == HL_NATIVE_STATE);
