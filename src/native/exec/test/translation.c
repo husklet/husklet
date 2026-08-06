@@ -83,11 +83,22 @@ int main(void) {
     workers[1].executor = executor;
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     CHECK(executor->authenticated_ibtc == NULL);
-    hl_native_lookup_context context = {0};
-    CHECK(hl_native_lookup_context_init(&context, executor) == HL_NATIVE_OK);
-    CHECK(hl_native_translation_lookup_inner(&context, &key, &code) == HL_NATIVE_MISS);
+    hl_native_lookup_context context;
+    hl_native_cache_stats legacy_before, legacy_after;
+    CHECK(hl_native_lookup_context_init(&context) == HL_NATIVE_OK);
+    CHECK(hl_native_lookup_context_init(NULL) == HL_NATIVE_ARGUMENT);
+    hl_native_cache_diagnose(executor->cache, &legacy_before);
+    CHECK(hl_native_translation_lookup_inner(executor, &context, &key, &code) == HL_NATIVE_MISS);
+    hl_native_cache_diagnose(executor->cache, &legacy_after);
     CHECK(context.lookups == 1 && context.misses == 1 && context.hits == 0 &&
           context.epoch_rejections == 0);
+    CHECK(legacy_after.lookups == legacy_before.lookups + 1 &&
+          legacy_after.misses == legacy_before.misses + 1);
+    CHECK(hl_native_translation_lookup_inner(NULL, &context, &key, &code) == HL_NATIVE_MISS);
+    CHECK(hl_native_translation_lookup_inner(executor, NULL, &key, &code) == HL_NATIVE_MISS);
+    CHECK(hl_native_translation_lookup_inner(executor, &context, NULL, &code) == HL_NATIVE_MISS);
+    CHECK(hl_native_translation_lookup_inner(executor, &context, &key, NULL) == HL_NATIVE_MISS);
+    CHECK(context.lookups == 1 && context.misses == 1);
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_MISS);
     CHECK(pthread_create(&threads[0], NULL, publish, &workers[0]) == 0);
     CHECK(pthread_create(&threads[1], NULL, publish, &workers[1]) == 0);
@@ -96,9 +107,13 @@ int main(void) {
     CHECK((workers[0].status == HL_NATIVE_OK && workers[1].status == HL_NATIVE_STATE) ||
           (workers[1].status == HL_NATIVE_OK && workers[0].status == HL_NATIVE_STATE));
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_HIT);
-    CHECK(hl_native_translation_lookup_inner(&context, &key, &code) == HL_NATIVE_HIT);
+    hl_native_cache_diagnose(executor->cache, &legacy_before);
+    CHECK(hl_native_translation_lookup_inner(executor, &context, &key, &code) == HL_NATIVE_HIT);
+    hl_native_cache_diagnose(executor->cache, &legacy_after);
     CHECK(context.lookups == 2 && context.misses == 1 && context.hits == 1 &&
           context.epoch_rejections == 0);
+    CHECK(legacy_after.lookups == legacy_before.lookups + 1 &&
+          legacy_after.hits == legacy_before.hits + 1);
     hl_native_translation_key stale = key;
     stale.instruction_epoch++;
     CHECK(hl_native_translation_lookup(executor, &stale, &code) == HL_NATIVE_MISS);
@@ -112,6 +127,12 @@ int main(void) {
     replace.mapping_epoch = 8;
     CHECK(hl_native_changed(executor, &replace, 1) == HL_NATIVE_OK);
     CHECK(hl_native_translation_lookup(executor, &key, &code) == HL_NATIVE_EPOCH);
+    CHECK(hl_native_translation_lookup_inner(executor, &context, &key, &code) == HL_NATIVE_EPOCH);
+    CHECK(context.lookups == 3 && context.epoch_rejections == 1);
+    context = (hl_native_lookup_context){UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
+    CHECK(hl_native_translation_lookup_inner(executor, &context, &key, &code) == HL_NATIVE_EPOCH);
+    CHECK(context.lookups == UINT64_MAX && context.hits == UINT64_MAX &&
+          context.misses == UINT64_MAX && context.epoch_rejections == UINT64_MAX);
 
     const hl_native_translation_key target = {0x6000, 8, 5, 0x6000, 0x6004, 0, 0, 0, 0, 0};
     const hl_native_translation_key source = {0x7000, 8, 6, 0x7000, 0x7004, 0, 0, 0, 0, 0};

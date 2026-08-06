@@ -19,15 +19,14 @@ typedef struct hl_native_translation_key {
 /* Run-local diagnostic value. It owns no admission lease and is deliberately
  * dormant until the public-run owner supplies aggregate publication. */
 typedef struct hl_native_lookup_context {
-    hl_native_executor *executor;
     uint64_t lookups;
     uint64_t hits;
     uint64_t misses;
     uint64_t epoch_rejections;
 } hl_native_lookup_context;
 
-hl_native_status hl_native_lookup_context_init(hl_native_lookup_context *, hl_native_executor *);
-hl_native_lookup hl_native_translation_lookup_inner(hl_native_lookup_context *,
+hl_native_status hl_native_lookup_context_init(hl_native_lookup_context *);
+hl_native_lookup hl_native_translation_lookup_inner(hl_native_executor *, hl_native_lookup_context *,
                                                     const hl_native_translation_key *, hl_native_code *);
 
 /* Dormant target-owned address metadata. Zero/zero means absent. A present
