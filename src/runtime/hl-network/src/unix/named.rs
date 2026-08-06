@@ -153,7 +153,7 @@ impl NamedSocket {
 
         let mut state = listener.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
-            let backlog = if let NamedSocketState::Listening { backlog, .. } = state.lifecycle { backlog } else {
+            let NamedSocketState::Listening { backlog, .. } = state.lifecycle else {
                 drop(state);
                 self.cancel_connecting();
                 return Err(NamedSocketError::InvalidTransition);
@@ -189,9 +189,8 @@ impl NamedSocket {
         }
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
-            let backlog = match state.lifecycle {
-                NamedSocketState::Listening { backlog, .. } => backlog,
-                _ => return Err(NamedSocketError::InvalidTransition),
+            let NamedSocketState::Listening { backlog, .. } = state.lifecycle else {
+                return Err(NamedSocketError::InvalidTransition)
             };
             if state.pending.len() + state.reserved < backlog {
                 state.pending.push_back(pair);
