@@ -134,6 +134,13 @@ typedef struct hl_native_diagnostics {
     uint64_t a64_branch_sample_source_first;
     uint64_t a64_branch_sample_source_last;
     uint64_t a64_branch_sample_form;
+    /* Dormant authenticated-ingress diagnostic ABI. These fields remain zero
+     * until authenticated publication, consumption, and rejection land as one
+     * coherent capability. Local entries are then derived by checked
+     * subtraction: authenticated_entries - shared_hits. */
+    uint64_t ibtc_authenticated_entries;
+    uint64_t ibtc_shared_hits;
+    uint64_t ibtc_auth_rejections;
 } hl_native_diagnostics;
 
 typedef enum hl_native_change_kind {
@@ -412,7 +419,9 @@ _Static_assert(offsetof(hl_native_diagnostics, a64_fallback_entry_rejection) == 
                "native diagnostics fallback-form extension drifted");
 _Static_assert(offsetof(hl_native_diagnostics, x86_public_epochs) == 448,
                "native diagnostics epoch extension drifted");
-_Static_assert(sizeof(hl_native_diagnostics) == 520, "native diagnostics ABI drifted");
+_Static_assert(offsetof(hl_native_diagnostics, ibtc_authenticated_entries) == 520,
+               "native diagnostics append offset drifted");
+_Static_assert(sizeof(hl_native_diagnostics) == 544, "native diagnostics ABI drifted");
 _Static_assert(sizeof(hl_native_change) == 40, "native change ABI drifted");
 _Static_assert(sizeof(hl_native_fault) == 40, "native fault ABI drifted");
 _Static_assert(sizeof(hl_native_address) == 24, "native address ABI drifted");

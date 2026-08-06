@@ -1250,6 +1250,9 @@ int main(void) {
     const hl_a64_source_span ret_provider_span = {
         0x8200, (const uint8_t *)&provider_ret, sizeof(provider_ret), 7, 8};
     const hl_a64_source ret_provider_source = {&ret_provider_span, 1, 7, 8};
+    hl_native_diagnostics ibtc_before = {.abi = HL_NATIVE_ABI, .size = sizeof(ibtc_before)};
+    hl_native_diagnostics ibtc_after = ibtc_before;
+    CHECK(hl_native_diagnose(run_executor, &ibtc_before) == HL_NATIVE_OK);
     provider.guest = 0x9200;
     run_request.source = &ret_provider_source;
     memset(&run_state, 0, sizeof(run_state));
@@ -1264,6 +1267,10 @@ int main(void) {
     CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
     CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_output.instruction == 0x9200);
     CHECK(registers_match(&run_state, 0x9200));
+    CHECK(hl_native_diagnose(run_executor, &ibtc_after) == HL_NATIVE_OK);
+    CHECK(ibtc_after.ibtc_shared_hits == ibtc_before.ibtc_shared_hits);
+    CHECK(ibtc_after.ibtc_authenticated_entries == ibtc_before.ibtc_authenticated_entries);
+    CHECK(ibtc_after.ibtc_auth_rejections == ibtc_before.ibtc_auth_rejections);
     /* A different return target takes the collision/miss path. */
     provider.guest = 0x9300;
     run_state.program = 0x8200;

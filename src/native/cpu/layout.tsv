@@ -77,6 +77,9 @@ aarch64	certificate_view_index	2312	1	u64
 aarch64	certificate_write_policy	2320	1	u64
 aarch64	certificate_cache_identity	2328	1	u64
 aarch64	certificate_token	2336	1	u64
+aarch64	diagnostic_ibtc_authenticated_entries	2344	1	u64
+aarch64	diagnostic_ibtc_shared_hits	2352	1	u64
+aarch64	diagnostic_ibtc_auth_rejections	2360	1	u64
 x86_64	registers	0	16	u64
 x86_64	program	128	1	u64
 x86_64	flags	136	1	u64

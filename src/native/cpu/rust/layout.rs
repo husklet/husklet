@@ -80,6 +80,9 @@ pub struct Aarch64Cpu {
     pub certificate_write_policy: u64,
     pub certificate_cache_identity: u64,
     pub certificate_token: u64,
+    pub diagnostic_ibtc_authenticated_entries: u64,
+    pub diagnostic_ibtc_shared_hits: u64,
+    pub diagnostic_ibtc_auth_rejections: u64,
 }
 
 #[repr(C)]
@@ -226,7 +229,10 @@ const _: () = {
     assert!(std::mem::offset_of!(Aarch64Cpu, certificate_write_policy) == 2320);
     assert!(std::mem::offset_of!(Aarch64Cpu, certificate_cache_identity) == 2328);
     assert!(std::mem::offset_of!(Aarch64Cpu, certificate_token) == 2336);
-    assert!(std::mem::size_of::<Aarch64Cpu>() == 2344);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_authenticated_entries) == 2344);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_shared_hits) == 2352);
+    assert!(std::mem::offset_of!(Aarch64Cpu, diagnostic_ibtc_auth_rejections) == 2360);
+    assert!(std::mem::size_of::<Aarch64Cpu>() == 2368);
 
     assert!(std::mem::align_of::<Aarch64Cpu>() == 8);
 

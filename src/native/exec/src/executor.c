@@ -724,7 +724,7 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
     if (output->size >= offsetof(hl_native_diagnostics, a64_branch_exhaustion)) {
         output->x86_public_epochs = executor->x86_public_epochs;
     }
-    if (output->size >= sizeof(*output)) {
+    if (output->size >= offsetof(hl_native_diagnostics, ibtc_authenticated_entries)) {
         output->a64_branch_exhaustion = atomic_load_explicit(&executor->a64_branch_exhaustion, memory_order_relaxed);
         output->a64_branch_cold_relocation = atomic_load_explicit(&executor->a64_branch_cold_relocation, memory_order_relaxed);
         output->a64_branch_nonrelocatable = atomic_load_explicit(&executor->a64_branch_nonrelocatable, memory_order_relaxed);
@@ -736,6 +736,11 @@ hl_native_status hl_native_diagnose(const hl_native_executor *executor, hl_nativ
             output->a64_branch_sample_source_last = executor->a64_branch_sample_source_last;
         }
         output->a64_branch_sample_form = sample_form;
+    }
+    if (output->size >= sizeof(*output)) {
+        output->ibtc_authenticated_entries = 0;
+        output->ibtc_shared_hits = 0;
+        output->ibtc_auth_rejections = 0;
     }
     return HL_NATIVE_OK;
 }

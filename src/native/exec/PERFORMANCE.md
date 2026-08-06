@@ -1505,6 +1505,51 @@ before transfer. Indirect calls read the target before replacing guest x30.
 | generation-safe invalidation/publication | native cache and executor admission | implemented |
 | PAC hints as no-op; `retaa`/`retab` as `ret x30` | `system.c`, `indirect.c` | implemented here |
 | shadow return stack / host RAS call-return pairing | none | missing optimization |
+
+#### IBTC diagnostic-counter oracle audit
+
+Retained oracle `7b7bddddfe7fc32f98a74579f38ee92b3a76fcdc` was read at
+`src/translator/cache.c::{g_ibtc,ibtc_publish,ibtc_clear_lazy,ibtc_drop_target,jit_after_fork}`,
+`src/translator/guest/aarch64/stubs.c::emit_ibranch_steal`,
+`src/translator/guest/aarch64/dispatch.h::G_IBTC_FILL`, and
+`src/core/dispatch.c::run_guest`. The retained table is one process-global,
+16-byte-entry, direct-mapped 64K cache. Generated AArch64 code first compares a
+site-local target, then reads the shared `{target,body}` pair and branches without
+entering the dispatcher on either hit. A miss spills guest state, records
+`cpu::ic_site`, and returns to `run_guest`; only after lookup/translation finds a
+live body does `G_IBTC_FILL` publish shared state and, when safe, patch the local
+site. Threaded publication is single-writer under `g_jit_lock` with an ordered,
+atomic 16-byte pair store; readers remain lock-free. Single-thread publication
+stores the body before releasing the target. AArch64 has both local and shared
+paths; x86-64 owns a separate two-way frontend cache. Windows lowers the aligned
+pair operation differently, Linux fork normally creates an empty child cache via
+`ibtc_clear_lazy`, while supported fixed-address preservation paths retain valid
+cache state. Reset, SMC, exec, and arena retirement clear or invalidate cache
+entries; the retained profiling totals (`g_prof_miss`, `g_mtfill`, and x86
+`g_ibtc_fill`) are process-lifetime globals and are not cache-hit counters.
+
+Rust reserves three AArch64 CPU scratch words and three size-qualified public
+diagnostic fields without emitting counter instructions, touching scratch at
+run boundaries, or adding executor atomics. The ABI fields are appended at
+offset 520, so a 520-byte caller retains its prior contract. Until authenticated
+ingress lands, size-544 diagnostics return zero for all three fields.
+
+The future target-owned authenticated ingress increments
+`ibtc_authenticated_entries` after identity acceptance for both local and
+shared routes. The authenticated shared reader increments `ibtc_shared_hits`.
+Local entries are the checked difference `authenticated_entries - shared_hits`;
+diagnostics must reject or flag a state where shared exceeds authenticated. This
+keeps the exact authenticated local edge free of diagnostic-only instructions.
+The future target-ingress increment costs one load, one add, and one store only
+in diagnostics-enabled generated code; diagnostics-off emission remains
+byte-identical. `ibtc_auth_rejections` lands with the same coherent
+authentication capability, not before it.
+
+Zero values from the 10M/collision/two-site fixtures on this exact tree prove
+only dormant initialization, ABI layout, and absence of behavior changes. They
+are explicitly not authenticated-entry, shared-hit, or rejection evidence:
+current certificate admission routes those transfers through
+cold/nonrelocatable dispatcher returns.
 | megamorphic interpreter-dispatch shared-only probe | none | missing optimization |
 
 The two remaining items are speculative performance mechanisms, not missing
