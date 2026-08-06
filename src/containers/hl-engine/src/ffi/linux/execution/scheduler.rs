@@ -1561,7 +1561,15 @@ impl GuestExecutor {
                     *cpu = original;
                     StepOutcome::Yield
                 }
-                crate::native::NativeExit::Fatal => StepOutcome::Fault(hl_execution::ExecutionFault::Frozen),
+                crate::native::NativeExit::Fatal => {
+                    if diagnostics {
+                        eprintln!(
+                            "hl-native-fatal: isa=x86_64 pc={pc:#x} rip={:#x} code={} remaining={} executed={}",
+                            cpu.rip, result.code, result.remaining, result.executed
+                        );
+                    }
+                    StepOutcome::Fault(hl_execution::ExecutionFault::Frozen)
+                }
             }
         });
         if let Some(stats) = statistics {

@@ -535,6 +535,56 @@ static int pcmp_length_boundaries(void) {
     return 0;
 }
 
+/* PCMPISTRI once used w26 as scratch, silently corrupting the live instruction
+ * budget the block prologue keeps there and faulting the run as X86_FATAL_BUDGET. */
+static int pcmpistri_preserves_budget(void) {
+    uint8_t guest[] = {0x66, 0x0f, 0x3a, 0x63, 0xc1, 0x1a};
+    uint32_t host[256] = {0};
+    hl_x86_a64_provenance provenance[8] = {0};
+    hl_x86_a64_request request = request_for(guest, sizeof guest, host, provenance);
+    hl_x86_a64_result result;
+    uint32_t index;
+
+    request.flags |= HL_X86_A64_CHECKPOINTS | HL_X86_A64_LIVE_CHAIN;
+    CHECK(hl_x86_a64_emit(&request, &result) == HL_X86_A64_OK);
+    CHECK(result.instruction_count == 1);
+    for (index = 0; index < result.word_count; ++index) {
+        uint32_t word = host[index];
+        /* Only the checkpoint's own `sub x26,x26,#delta` may name x26. */
+        if ((word & UINT32_C(0x1f)) == 26u) CHECK((word & UINT32_C(0xffc003ff)) == UINT32_C(0xd100035a));
+    }
+#if defined(__aarch64__)
+    {
+        long page = sysconf(_SC_PAGESIZE);
+        uint8_t *code = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        uint32_t *words = (uint32_t *)code;
+        uint32_t cursor = 0;
+        hl_native_x86_64_cpu cpu = {0};
+        static const uint8_t left[16] = {1, 2, 3, 4, 5, 6, 7, 0, 9, 10, 11, 12, 13, 14, 15, 16};
+
+        CHECK(code != MAP_FAILED);
+        words[cursor++] = load_word(26u, offsetof(hl_native_x86_64_cpu, budget));
+        memcpy(words + cursor, host, result.word_count * sizeof(uint32_t));
+        cursor += result.word_count;
+        words[cursor++] = load_word(16u, offsetof(hl_native_x86_64_cpu, budget));
+        words[cursor++] = UINT32_C(0xcb1a0210); /* sub x16,x16,x26 */
+        words[cursor++] = store_word(16u, offsetof(hl_native_x86_64_cpu, scratch));
+        words[cursor++] = UINT32_C(0xd65f03c0);
+        __builtin___clear_cache((char *)code, (char *)code + cursor * 4u);
+        CHECK(mprotect(code, (size_t)page, PROT_READ | PROT_EXEC) == 0);
+        memcpy(&cpu.vectors[0], left, sizeof left);
+        memcpy(&cpu.vectors[2], left, sizeof left);
+        cpu.budget = UINT64_C(65536);
+        cpu.flags = UINT64_C(0xad7);
+        hl_native_x86_64_enter(&cpu, code);
+        CHECK(cpu.scratch[0] <= result.instruction_count);
+        CHECK(munmap(code, (size_t)page) == 0);
+    }
+#endif
+    return 0;
+}
+
 static int pcmpistri_equal_each(void) {
     static const uint8_t controls[] = {
         0x08, 0x0a, 0x18, 0x1a, 0x28, 0x2a, 0x38, 0x3a,
@@ -5942,6 +5992,8 @@ int main(void) {
     status = packed_integer_multiply();
     if (status != 0) return status;
     status = pcmpistri_equal_each();
+    if (status != 0) return status;
+    status = pcmpistri_preserves_budget();
     if (status != 0) return status;
     status = end_branch();
     if (status != 0) return status;

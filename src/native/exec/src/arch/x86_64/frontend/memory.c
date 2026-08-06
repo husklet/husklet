@@ -983,16 +983,17 @@ static void emit_vector_operation(uint32_t *words, uint32_t *cursor, const instr
         emit_constant(words, cursor, 16u, 1u);
         words[(*cursor)++] = UINT32_C(0x1ac02000) | 22u << 16 | 16u << 5 | 25u;
         words[(*cursor)++] = UINT32_C(0x51000400) | 25u << 5 | 25u;
-        words[(*cursor)++] = UINT32_C(0x1ac02000) | 23u << 16 | 16u << 5 | 26u;
-        words[(*cursor)++] = UINT32_C(0x51000400) | 26u << 5 | 26u;
+        /* w18, never w26: x26 carries the live instruction budget. */
+        words[(*cursor)++] = UINT32_C(0x1ac02000) | 23u << 16 | 16u << 5 | 18u;
+        words[(*cursor)++] = UINT32_C(0x51000400) | 18u << 5 | 18u;
         words[(*cursor)++] = UINT32_C(0x0a000000) | 25u << 16 | 19u << 5 | 17u;
-        words[(*cursor)++] = UINT32_C(0x0a000000) | 26u << 16 | 17u << 5 | 17u;
-        words[(*cursor)++] = UINT32_C(0x2a000000) | 26u << 16 | 25u << 5 | 16u;
+        words[(*cursor)++] = UINT32_C(0x0a000000) | 18u << 16 | 17u << 5 | 17u;
+        words[(*cursor)++] = UINT32_C(0x2a000000) | 18u << 16 | 25u << 5 | 16u;
         words[(*cursor)++] = UINT32_C(0x2a200000) | 16u << 16 | 17u << 5 | 17u;
         words[(*cursor)++] = UINT32_C(0x53003c00) | 17u << 5 | 17u;
         if ((immediate & 0x10u) != 0u) {
             if ((immediate & 0x20u) != 0u) {
-                words[(*cursor)++] = UINT32_C(0x4a000000) | 26u << 16 | 17u << 5 | 17u;
+                words[(*cursor)++] = UINT32_C(0x4a000000) | 18u << 16 | 17u << 5 | 17u;
             } else {
                 emit_constant(words, cursor, 16u, UINT64_C(0xffff));
                 words[(*cursor)++] = UINT32_C(0x4a000000) | 16u << 16 | 17u << 5 | 17u;
