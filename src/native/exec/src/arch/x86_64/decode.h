@@ -120,6 +120,7 @@ typedef struct instruction {
     uint8_t has_immediate;
     uint8_t alu_kind;
     uint8_t flags_dead;
+    uint8_t pfaf_dead;
     uint8_t flags_only;
     uint8_t preserve_carry;
     uint8_t preserve_flags;

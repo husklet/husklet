@@ -104,6 +104,51 @@ static int elision_fires(void) {
     return 0;
 }
 
+/* PF and AF form a separate tail that dies to any following ALU op, including the adc/sbb and
+   inc/dec forms that read or preserve CF and so cannot kill the whole flag word. */
+#define PFAF_ELIDED_ADD 27u
+#define PFAF_ELIDED_LOGICAL 23u
+#define FULL_ADD 45u
+
+static int pfaf_elision_fires(void) {
+    const uint8_t adc[] = {0x48, 0x01, 0xc8, 0x48, 0x11, 0xd0};     /* add rax,rcx ; adc rax,rdx */
+    const uint8_t sbb[] = {0x48, 0x01, 0xc8, 0x48, 0x19, 0xd0};     /* add rax,rcx ; sbb rax,rdx */
+    const uint8_t increment[] = {0x48, 0x01, 0xc8, 0xff, 0xc2};     /* add rax,rcx ; inc edx */
+    const uint8_t decrement[] = {0x48, 0x01, 0xc8, 0xff, 0xca};     /* add rax,rcx ; dec edx */
+    const uint8_t logical[] = {0x48, 0x31, 0xd0, 0x48, 0x11, 0xd0}; /* xor rax,rdx ; adc rax,rdx */
+    const uint8_t compare[] = {0x48, 0x39, 0xc8, 0x48, 0x11, 0xd0}; /* cmp rax,rcx ; adc rax,rdx */
+
+    CHECK(words_for(adc, sizeof adc, 0) == PFAF_ELIDED_ADD);
+    CHECK(words_for(sbb, sizeof sbb, 0) == PFAF_ELIDED_ADD);
+    CHECK(words_for(increment, sizeof increment, 0) == PFAF_ELIDED_ADD);
+    CHECK(words_for(decrement, sizeof decrement, 0) == PFAF_ELIDED_ADD);
+    CHECK(words_for(logical, sizeof logical, 0) == PFAF_ELIDED_LOGICAL);
+    /* cmp is flags_only, so it keeps one word fewer than the writing forms. */
+    CHECK(words_for(compare, sizeof compare, 0) == PFAF_ELIDED_ADD - 6u);
+
+    CHECK(budget_is_exact(adc, sizeof adc));
+    CHECK(budget_is_exact(increment, sizeof increment));
+    CHECK(budget_is_exact(logical, sizeof logical));
+    return 0;
+}
+
+static int pfaf_boundaries_materialize(void) {
+    const uint8_t block_end[] = {0x48, 0x01, 0xc8};                 /* add rax,rcx (last in block) */
+    const uint8_t jcc[] = {0x48, 0x01, 0xc8, 0x75, 0x02};           /* add ; jne -- PF leaves the block */
+    const uint8_t pushf[] = {0x48, 0x01, 0xc8, 0x9c};               /* add ; pushfq */
+    const uint8_t memory[] = {0x48, 0x01, 0xc8, 0x48, 0x13, 0x03};  /* add ; adc rax,[rbx] -- may fault */
+    const uint8_t syscall_exit[] = {0x48, 0x01, 0xc8, 0x0f, 0x05};  /* add ; syscall */
+    const uint8_t vector[] = {0x48, 0x01, 0xc8, 0xf2, 0x0f, 0x58, 0xc1}; /* add ; addsd */
+
+    CHECK(words_for(block_end, sizeof block_end, 0) == FULL_ADD);
+    CHECK(words_for(jcc, sizeof jcc, 0) == FULL_ADD);
+    CHECK(words_for(pushf, sizeof pushf, 0) == FULL_ADD);
+    CHECK(words_for(memory, sizeof memory, 0) == FULL_ADD);
+    CHECK(words_for(syscall_exit, sizeof syscall_exit, 0) == FULL_ADD);
+    CHECK(words_for(vector, sizeof vector, 0) == FULL_ADD);
+    return 0;
+}
+
 /* Shifts pay the same flag tax as ALU ops and elide down to the shifted value alone. */
 #define ELIDED_SHIFT 3u
 #define ELIDED_VARIABLE_SHIFT 6u
@@ -294,6 +339,39 @@ static int execution_matches(void) {
     return 0;
 }
 
+/* A producer whose PF/AF alone are elided must still publish its carry, and the successor must
+   still leave the PF and AF it defines. */
+static int pfaf_execution_matches(void) {
+    uint64_t registers[16];
+    hl_native_x86_64_cpu elided;
+    const uint8_t pair[] = {0x48, 0x01, 0xc8, 0x48, 0x11, 0xd0}; /* add rax,rcx ; adc rax,rdx */
+
+    /* rax=~0, rcx=1 -> the add carries out and zeroes rax, so the adc must see CF and add one.
+       0+7+1 = 8: one low-byte bit set, and no carry out of bit 3. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = UINT64_MAX; registers[1] = 1u; registers[2] = 7u;
+    CHECK(run_block(pair, sizeof pair, registers, &elided));
+    CHECK(elided.registers[0] == 8u);
+    CHECK((elided.flags & HL_X86_RFLAGS_PF) == 0u);
+    CHECK((elided.flags & HL_X86_RFLAGS_AF) == 0u);
+
+    /* Without a carry out of the producer the pair lands on 1+1+7 = 9, whose low byte has even parity. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 1u; registers[1] = 1u; registers[2] = 7u;
+    CHECK(run_block(pair, sizeof pair, registers, &elided));
+    CHECK(elided.registers[0] == 9u);
+    CHECK((elided.flags & HL_X86_RFLAGS_PF) != 0u);
+    CHECK((elided.flags & HL_X86_RFLAGS_AF) == 0u);
+
+    /* A carry out of bit 3 in the successor must still reach AF. */
+    memset(registers, 0, sizeof registers);
+    registers[0] = 8u; registers[1] = 0u; registers[2] = 8u;
+    CHECK(run_block(pair, sizeof pair, registers, &elided));
+    CHECK(elided.registers[0] == 16u);
+    CHECK((elided.flags & HL_X86_RFLAGS_AF) != 0u);
+    return 0;
+}
+
 /* An elided shift must still produce the shifted value, and the successor must define the flags. */
 static int shift_execution_matches(void) {
     uint64_t registers[16];
@@ -398,12 +476,15 @@ int main(void) {
 
     if ((status = elision_fires()) != 0) return status;
     if ((status = boundaries_materialize()) != 0) return status;
+    if ((status = pfaf_elision_fires()) != 0) return status;
+    if ((status = pfaf_boundaries_materialize()) != 0) return status;
     if ((status = shift_elision_fires()) != 0) return status;
     if ((status = shift_boundaries_materialize()) != 0) return status;
     if ((status = rotate_elision_fires()) != 0) return status;
     if ((status = rotate_boundaries_materialize()) != 0) return status;
 #if defined(__aarch64__)
     if ((status = execution_matches()) != 0) return status;
+    if ((status = pfaf_execution_matches()) != 0) return status;
     if ((status = shift_execution_matches()) != 0) return status;
     if ((status = rotate_execution_matches()) != 0) return status;
 #endif

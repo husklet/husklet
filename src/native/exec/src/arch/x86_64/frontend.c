@@ -38,11 +38,30 @@ static int flags_dead_at(const decode *block, uint32_t index) {
     return kills_flags(&block->instructions[index + 1u]);
 }
 
+/* 1 iff the item redefines both PF and AF while reading neither, which adc/sbb and inc/dec also do
+   even though they read or preserve CF and so cannot kill the whole flag word. */
+static int kills_pfaf(const instruction *item) {
+    return item->operation == OP_ALU && item->memory_operand == 0u && item->preserve_flags == 0u;
+}
+
+/* The PF/AF substrate is a separate 13-to-18 word tail, so it dies to a wider set of successors than
+   the NZCV half and elides on ALU ops whose full flag word is still live. */
+static int pfaf_dead_at(const decode *block, uint32_t index) {
+    const instruction *item = &block->instructions[index];
+
+    if (item->operation != OP_ALU) return 0;
+    if (item->memory_operand != 0u || item->preserve_flags != 0u) return 0;
+    if (index + 1u >= block->count) return 0;
+    return kills_pfaf(&block->instructions[index + 1u]);
+}
+
 static void mark_dead_flags(decode *block) {
     uint32_t index;
 
-    for (index = 0; index < block->count; ++index)
+    for (index = 0; index < block->count; ++index) {
         block->instructions[index].flags_dead = (uint8_t)flags_dead_at(block, index);
+        block->instructions[index].pfaf_dead = (uint8_t)pfaf_dead_at(block, index);
+    }
 }
 
 static int vector_register_write(const instruction *item) {
