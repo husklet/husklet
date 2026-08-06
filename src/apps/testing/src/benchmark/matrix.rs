@@ -63,13 +63,7 @@ impl Matrix {
         if self.c_engine_tree.trim().is_empty() || self.c_engine_build_id.trim().is_empty() {
             return Err("matrix requires nonempty retained C tree and build identifiers".into());
         }
-        let build_id = elf_build_id(&self.c_engine)?;
-        if !self.c_engine_build_id.eq_ignore_ascii_case(&build_id) {
-            return Err(format!(
-                "retained C BuildID mismatch: expected {}, binary has {build_id}",
-                self.c_engine_build_id
-            ));
-        }
+        verified_elf_build_id(&self.c_engine, &self.c_engine_build_id)?;
         if self.repeats == 0 || self.repeats > LIMIT {
             return Err(format!("repeats must be between 1 and {LIMIT}"));
         }
@@ -252,52 +246,55 @@ impl Matrix {
 
 fn elf_build_id(path: &std::path::Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("read retained C ELF: {error}"))?;
+    elf_build_id_bytes(&bytes)
+}
+
+fn verified_elf_build_id(path: &std::path::Path, expected: &str) -> Result<String, String> {
+    let actual = elf_build_id(path)?;
+    if expected.eq_ignore_ascii_case(&actual) {
+        Ok(actual)
+    } else {
+        Err(format!("retained C BuildID mismatch: expected {expected}, binary has {actual}"))
+    }
+}
+
+fn elf_build_id_bytes(bytes: &[u8]) -> Result<String, String> {
     if bytes.get(..4) != Some(b"\x7fELF") || bytes.get(4) != Some(&2) {
         return Err("retained C engine must be a 64-bit ELF with a GNU BuildID".into());
     }
-    let little = match bytes.get(5) {
-        Some(1) => true,
-        Some(2) => false,
-        _ => return Err("retained C ELF has unsupported byte order".into()),
+    if bytes.get(5) != Some(&1) {
+        return Err("retained C ELF must use supported little-endian encoding".into());
+    }
+    let field = |offset: usize, size: usize| -> Result<&[u8], String> {
+        let end = offset.checked_add(size).ok_or("retained C ELF offset overflow")?;
+        bytes.get(offset..end).ok_or_else(|| "truncated retained C ELF".into())
     };
     let u32_at = |offset: usize| -> Result<u32, String> {
-        let raw: [u8; 4] = bytes
-            .get(offset..offset + 4)
-            .ok_or("truncated retained C ELF")?
-            .try_into()
-            .map_err(|_| "truncated retained C ELF")?;
-        Ok(if little { u32::from_le_bytes(raw) } else { u32::from_be_bytes(raw) })
+        Ok(u32::from_le_bytes(field(offset, 4)?.try_into().map_err(|_| "truncated retained C ELF")?))
     };
     let u64_at = |offset: usize| -> Result<u64, String> {
-        let raw: [u8; 8] = bytes
-            .get(offset..offset + 8)
-            .ok_or("truncated retained C ELF")?
-            .try_into()
-            .map_err(|_| "truncated retained C ELF")?;
-        Ok(if little { u64::from_le_bytes(raw) } else { u64::from_be_bytes(raw) })
+        Ok(u64::from_le_bytes(field(offset, 8)?.try_into().map_err(|_| "truncated retained C ELF")?))
     };
     let section_offset = usize::try_from(u64_at(40)?).map_err(|_| "retained C ELF section offset overflow")?;
-    let section_size = usize::from(if little {
-        u16::from_le_bytes(bytes.get(58..60).ok_or("truncated retained C ELF")?.try_into().map_err(|_| "truncated retained C ELF")?)
-    } else {
-        u16::from_be_bytes(bytes.get(58..60).ok_or("truncated retained C ELF")?.try_into().map_err(|_| "truncated retained C ELF")?)
-    });
-    let section_count = usize::from(if little {
-        u16::from_le_bytes(bytes.get(60..62).ok_or("truncated retained C ELF")?.try_into().map_err(|_| "truncated retained C ELF")?)
-    } else {
-        u16::from_be_bytes(bytes.get(60..62).ok_or("truncated retained C ELF")?.try_into().map_err(|_| "truncated retained C ELF")?)
-    });
+    let section_size = usize::from(u16::from_le_bytes(field(58, 2)?.try_into().map_err(|_| "truncated retained C ELF")?));
+    let section_count = usize::from(u16::from_le_bytes(field(60, 2)?.try_into().map_err(|_| "truncated retained C ELF")?));
+    if section_size < 64 || section_count == 0 {
+        return Err("retained C ELF has unsupported extended or undersized section headers".into());
+    }
+    let table_size = section_count.checked_mul(section_size).ok_or("retained C ELF section overflow")?;
+    field(section_offset, table_size)?;
     for index in 0..section_count {
         let header = section_offset.checked_add(index.checked_mul(section_size).ok_or("retained C ELF section overflow")?).ok_or("retained C ELF section overflow")?;
-        if u32_at(header + 4)? != 7 { continue; }
-        let start = usize::try_from(u64_at(header + 24)?).map_err(|_| "retained C ELF note offset overflow")?;
-        let size = usize::try_from(u64_at(header + 32)?).map_err(|_| "retained C ELF note size overflow")?;
+        if u32_at(header.checked_add(4).ok_or("retained C ELF section overflow")?)? != 7 { continue; }
+        let start = usize::try_from(u64_at(header.checked_add(24).ok_or("retained C ELF section overflow")?)?).map_err(|_| "retained C ELF note offset overflow")?;
+        let size = usize::try_from(u64_at(header.checked_add(32).ok_or("retained C ELF section overflow")?)?).map_err(|_| "retained C ELF note size overflow")?;
         let end = start.checked_add(size).ok_or("retained C ELF note overflow")?;
+        field(start, size)?;
         let mut cursor = start;
-        while cursor + 12 <= end {
+        while cursor.checked_add(12).is_some_and(|note_header_end| note_header_end <= end) {
             let namesz = usize::try_from(u32_at(cursor)?).map_err(|_| "retained C ELF note overflow")?;
-            let descsz = usize::try_from(u32_at(cursor + 4)?).map_err(|_| "retained C ELF note overflow")?;
-            let kind = u32_at(cursor + 8)?;
+            let descsz = usize::try_from(u32_at(cursor.checked_add(4).ok_or("retained C ELF note overflow")?)?).map_err(|_| "retained C ELF note overflow")?;
+            let kind = u32_at(cursor.checked_add(8).ok_or("retained C ELF note overflow")?)?;
             let name = cursor.checked_add(12).ok_or("retained C ELF note overflow")?;
             let padded_name = namesz.checked_add(3).ok_or("retained C ELF note overflow")? & !3;
             let padded_desc = descsz.checked_add(3).ok_or("retained C ELF note overflow")? & !3;
@@ -306,7 +303,7 @@ fn elf_build_id(path: &std::path::Path) -> Result<String, String> {
             if next > end { return Err("truncated retained C ELF note".into()); }
             let name_end = name.checked_add(namesz).ok_or("retained C ELF note overflow")?;
             if kind == 3 && bytes.get(name..name_end) == Some(b"GNU\0") {
-                return Ok(bytes[desc..desc + descsz].iter().map(|byte| format!("{byte:02x}")).collect());
+                return Ok(field(desc, descsz)?.iter().map(|byte| format!("{byte:02x}")).collect());
             }
             cursor = next;
         }
@@ -438,5 +435,57 @@ mod tests {
     fn extracts_authoritative_build_id_from_current_elf() {
         let executable = std::env::current_exe().unwrap();
         assert!(!elf_build_id(&executable).unwrap().is_empty());
+    }
+
+    fn build_id_elf() -> Vec<u8> {
+        let mut bytes = vec![0_u8; 148];
+        bytes[..6].copy_from_slice(b"\x7fELF\x02\x01");
+        bytes[40..48].copy_from_slice(&64_u64.to_le_bytes());
+        bytes[58..60].copy_from_slice(&64_u16.to_le_bytes());
+        bytes[60..62].copy_from_slice(&1_u16.to_le_bytes());
+        bytes[68..72].copy_from_slice(&7_u32.to_le_bytes());
+        bytes[88..96].copy_from_slice(&128_u64.to_le_bytes());
+        bytes[96..104].copy_from_slice(&20_u64.to_le_bytes());
+        bytes[128..132].copy_from_slice(&4_u32.to_le_bytes());
+        bytes[132..136].copy_from_slice(&4_u32.to_le_bytes());
+        bytes[136..140].copy_from_slice(&3_u32.to_le_bytes());
+        bytes[140..144].copy_from_slice(b"GNU\0");
+        bytes[144..148].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+        bytes
+    }
+
+    #[test]
+    fn bounded_elf_build_id_rejects_adversarial_shapes() {
+        assert_eq!(elf_build_id_bytes(&build_id_elf()).unwrap(), "deadbeef");
+
+        let mut big_endian = build_id_elf();
+        big_endian[5] = 2;
+        assert!(elf_build_id_bytes(&big_endian).unwrap_err().contains("little-endian"));
+        assert!(elf_build_id_bytes(&build_id_elf()[..61]).is_err());
+
+        let mut overflow = build_id_elf();
+        overflow[40..48].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(elf_build_id_bytes(&overflow).is_err());
+
+        let mut past_end = build_id_elf();
+        past_end[96..104].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(elf_build_id_bytes(&past_end).is_err());
+
+        let mut malicious_note = build_id_elf();
+        malicious_note[128..132].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(elf_build_id_bytes(&malicious_note).is_err());
+
+        let mut missing = build_id_elf();
+        missing[136..140].copy_from_slice(&1_u32.to_le_bytes());
+        assert!(elf_build_id_bytes(&missing).unwrap_err().contains("no GNU BuildID"));
+    }
+
+    #[test]
+    fn verifies_expected_build_id_without_trusting_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("engine");
+        std::fs::write(&path, build_id_elf()).unwrap();
+        assert_eq!(verified_elf_build_id(&path, "DEADBEEF").unwrap(), "deadbeef");
+        assert!(verified_elf_build_id(&path, "0000").unwrap_err().contains("mismatch"));
     }
 }
