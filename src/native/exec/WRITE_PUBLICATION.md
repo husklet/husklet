@@ -435,8 +435,9 @@ record; this is inventory for the later cache stage, not changed here. A future
 identity may not reuse a slot within one cache generation, and rollover or fork
 must exhaustively invalidate cache entries, relocations, and IBTC before reuse.
 Both parent and child fork repair currently clear IBTC/cache reachability and
-publish no CPU carrier. The appended executor atomic adds eight fixed bytes to
-executor allocation; CPU objects add eight bytes each. No token allocation or
+publish no CPU carrier. The appended eight-byte executor atomic consumes existing
+padding on the verified AArch64 compiler (`sizeof(hl_native_executor)` remains
+768 bytes, delta zero); CPU objects add eight bytes each. No token allocation or
 run-path instruction is added, and activation generation remains a distinct
 admission-lifetime value.
 
