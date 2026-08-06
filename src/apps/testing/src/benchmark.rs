@@ -716,6 +716,23 @@ mod test {
             );
             assert!(arguments.iter().any(|argument| *argument == OsStr::new("/bin/true")));
         }
+        let wrapper = directory.path().join("runner");
+        fs::write(&wrapper, b"ENGINE GUEST [args...]").unwrap();
+        let mut wrapped = rooted(Provider::C, Some(engine.clone()));
+        wrapped.c_runner = Some(wrapper.clone());
+        let command = process.command(&wrapped).unwrap();
+        assert_eq!(command.get_program(), wrapper.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                engine.as_os_str(),
+                OsStr::new("--rootfs"),
+                rootfs.as_os_str(),
+                OsStr::new("/bin/true"),
+                OsStr::new("--phase"),
+                OsStr::new("compute")
+            ]
+        );
     }
 
     #[test]

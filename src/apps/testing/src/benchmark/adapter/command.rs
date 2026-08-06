@@ -25,6 +25,9 @@ impl Process {
                     return Err("C exec wrapper configured as --engine; pass it as --c-runner and provide the retained engine separately".into());
                 }
                 let mut command = if let Some(runner) = &run.c_runner {
+                    if !Process::is_c_exec_wrapper(runner)? {
+                        return Err("--c-runner does not advertise the required ENGINE GUEST [args...] contract".into());
+                    }
                     let mut command = Command::new(runner);
                     command.arg(engine);
                     command
