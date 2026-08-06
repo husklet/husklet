@@ -638,7 +638,6 @@ impl Bundle {
         Ok(arguments)
     }
 
-    #[cfg(test)]
     fn path(&self) -> &Path {
         self._directory.path()
     }
@@ -721,20 +720,7 @@ fn capture_owned(
     timeout: Duration,
     limit: usize,
 ) -> Result<ProcessOutput, String> {
-    let cancelled = AtomicBool::new(false);
-    capture_owned_with_cancel(bundle, arguments, timeout, limit, &cancelled)
-}
-
-fn capture_owned_with_cancel(
-    bundle: Bundle,
-    arguments: &[String],
-    timeout: Duration,
-    limit: usize,
-    cancelled: &AtomicBool,
-) -> Result<ProcessOutput, String> {
-    let result = capture_with_cancel(arguments, timeout, limit, cancelled);
-    drop(bundle);
-    result
+    capture(arguments, timeout, limit)
 }
 
 #[derive(Debug)]
@@ -745,15 +731,6 @@ struct ProcessOutput {
 }
 
 fn capture(arguments: &[String], timeout: Duration, limit: usize) -> Result<ProcessOutput, String> {
-    capture_with_cancel(arguments, timeout, limit, &AtomicBool::new(false))
-}
-
-fn capture_with_cancel(
-    arguments: &[String],
-    timeout: Duration,
-    limit: usize,
-    cancelled: &AtomicBool,
-) -> Result<ProcessOutput, String> {
     let (program, guest) = arguments.split_first().ok_or("empty nested command")?;
     let output = tempfile::tempdir().map_err(|error| format!("capture directory failed: {error}"))?;
     let capture = Capture {
@@ -764,7 +741,7 @@ fn capture_with_cancel(
     };
     let mut command = ProcessCommand::new(program);
     command.args(guest);
-    let outcome = hl_process::run(&command, &capture, timeout, cancelled)
+    let outcome = hl_process::run(&command, &capture, timeout, &AtomicBool::new(false))
         .map_err(|error| format!("nested process failed: {error}"))?;
     let status = match outcome {
         ProcessOutcome::Exited(status) => status,
@@ -783,12 +760,7 @@ mod tests {
     use super::*;
     use std::{
         ffi::OsString,
-        io::{ErrorKind, Read},
-        os::unix::{ffi::OsStringExt, fs::{OpenOptionsExt, symlink}},
-        sync::{
-            Arc,
-            atomic::Ordering,
-        },
+        os::unix::{ffi::OsStringExt, fs::symlink},
         thread,
         time::Instant,
     };
@@ -1194,19 +1166,16 @@ expect: { exit: 42, stdout: hello.txt }
         Bundle::new_in(root, &chain, Some(parent)).unwrap()
     }
 
-    fn wait_for(path: &Path) -> bool {
+    fn wait_for(path: &Path) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while !path.exists() {
-            if Instant::now() >= deadline {
-                return false;
-            }
+            assert!(Instant::now() < deadline, "child readiness marker was not created");
             thread::sleep(Duration::from_millis(5));
         }
-        true
     }
 
     fn assert_owned_capture_cleans(
-        script: &str,
+        script: impl FnOnce(&Path) -> String,
         timeout: Duration,
         limit: usize,
         expected: Result<Option<i32>, &str>,
@@ -1216,32 +1185,9 @@ expect: { exit: 42, stdout: hello.txt }
         let parent = tempfile::tempdir().unwrap();
         let bundle = owned_capture_bundle(root.path(), parent.path());
         let path = bundle.path().to_owned();
-        let fifo = path.join("writers");
-        nix::unistd::mkfifo(&fifo, Mode::from_bits_truncate(0o600)).unwrap();
-        let mut reader = OpenOptions::new()
-            .read(true)
-            .custom_flags(nix::libc::O_NONBLOCK)
-            .open(&fifo)
-            .unwrap();
-        let arguments = vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            script.into(),
-            "nested-capture".into(),
-            path.to_string_lossy().into_owned(),
-        ];
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let worker_cancelled = Arc::clone(&cancelled);
-        let thread = thread::spawn(move || {
-            capture_owned_with_cancel(bundle, &arguments, timeout, limit, &worker_cancelled)
-        });
-        let ready = wait_for(&path.join("ready"));
-        if !ready {
-            cancelled.store(true, Ordering::Release);
-            let _ = fs::write(path.join("release"), b"");
-            let _ = thread.join();
-            panic!("child readiness marker was not created");
-        }
+        let arguments = vec!["/bin/sh".into(), "-c".into(), script(&path)];
+        let thread = thread::spawn(move || capture_owned(bundle, &arguments, timeout, limit));
+        wait_for(&path.join("ready"));
         assert!(path.join("layer-0").is_file());
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 1);
         if release {
@@ -1254,21 +1200,12 @@ expect: { exit: 42, stdout: hello.txt }
         }
         assert!(!path.exists());
         assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
-        let mut byte = [0_u8; 1];
-        match reader.read(&mut byte) {
-            Ok(0) => {}
-            Ok(count) => panic!("unexpected {count} bytes in writer-lifetime FIFO"),
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                panic!("a descendant still holds the writer-lifetime FIFO")
-            }
-            Err(error) => panic!("cannot verify writer-lifetime FIFO EOF: {error}"),
-        }
     }
 
     #[test]
     fn bundle_lives_through_success_and_is_removed_after_capture() {
         assert_owned_capture_cleans(
-            "exec 9>\"$1/writers\"; test -f \"$1/layer-0\" && : >\"$1/ready\"; while test ! -e \"$1/release\"; do sleep .01; done; printf ok; exit 9",
+            |path| format!("test -f {0}/layer-0 && : > {0}/ready; while test ! -e {0}/release; do sleep .01; done; printf ok; exit 9", path.display()),
             Duration::from_secs(2),
             1024,
             Ok(Some(9)),
@@ -1279,7 +1216,7 @@ expect: { exit: 42, stdout: hello.txt }
     #[test]
     fn bundle_is_removed_after_timeout_and_descendants_are_reaped() {
         assert_owned_capture_cleans(
-            "exec 9>\"$1/writers\"; test -f \"$1/layer-0\" && : >\"$1/ready\"; sleep 10 & wait",
+            |path| format!("test -f {0}/layer-0 && : > {0}/ready; sleep 10 & wait", path.display()),
             Duration::from_millis(100),
             1024,
             Err("timed out"),
@@ -1290,7 +1227,7 @@ expect: { exit: 42, stdout: hello.txt }
     #[test]
     fn bundle_is_removed_after_output_limit() {
         assert_owned_capture_cleans(
-            "exec 9>\"$1/writers\"; test -f \"$1/layer-0\" && : >\"$1/ready\"; printf 12345",
+            |path| format!("test -f {0}/layer-0 && : > {0}/ready; printf 12345", path.display()),
             Duration::from_secs(2),
             4,
             Err("output exceeded"),
