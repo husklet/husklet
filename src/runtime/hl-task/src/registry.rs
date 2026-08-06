@@ -55,6 +55,7 @@ struct InitSlots {
 #[must_use = "the initial process reservation must be committed or dropped"]
 pub struct InitReservation<'registry> {
     registry: &'registry TaskRegistry,
+    admission: Option<activity::ActivityAdmission>,
     slots: InitSlots,
     credentials: Option<ProcessCredentials>,
     limits: Option<ProcessLimits>,
@@ -67,6 +68,9 @@ impl InitReservation<'_> {
         let limits = self.limits.take().ok_or(TaskError::InvalidPlan)?;
         let result = self.registry.commit_init(self.slots, credentials, limits);
         self.finished = result.is_ok();
+        if self.finished {
+            drop(self.admission.take());
+        }
         result
     }
 }
@@ -76,6 +80,7 @@ impl Drop for InitReservation<'_> {
         if !self.finished {
             self.registry.abort_init(self.slots);
         }
+        drop(self.admission.take());
     }
 }
 
@@ -241,7 +246,8 @@ impl TaskRegistry {
         if credentials.supplementary_groups().len() > self.max_groups {
             return Err(TaskError::GroupLimit);
         }
-        let mut state = self.lock();
+        let admission = self.activity.admit();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.init.is_some() || state.init_reservation.is_some() {
             return Err(TaskError::InvalidLifecycle);
         }
@@ -264,6 +270,7 @@ impl TaskRegistry {
         state.init_reservation = Some(slots);
         Ok(InitReservation {
             registry: self,
+            admission: Some(admission),
             slots,
             credentials: Some(credentials),
             limits: Some(limits),
@@ -277,7 +284,7 @@ impl TaskRegistry {
         credentials: ProcessCredentials,
         limits: ProcessLimits,
     ) -> Result<(ProcessId, ThreadId), TaskError> {
-        let mut state = self.lock();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.init.is_some() || state.init_reservation != Some(slots) {
             return Err(TaskError::InvalidPlan);
         }
@@ -401,7 +408,7 @@ impl TaskRegistry {
     }
 
     fn abort_init(&self, slots: InitSlots) {
-        let mut state = self.lock();
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.init_reservation == Some(slots) {
             state.init_reservation = None;
         }

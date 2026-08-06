@@ -112,15 +112,66 @@ fn init_reservation_excludes_competitors_and_checkpoint() {
         registry.begin_create_init(Fixture::credentials(), Fixture::limits()),
         Err(TaskError::InvalidLifecycle)
     ));
-    registry.freeze_checkpoint();
-    assert_eq!(registry.checkpoint_snapshot(), Err(TaskError::InvalidLifecycle));
-    registry.thaw_checkpoint();
     drop(reservation);
     assert!(
         registry
             .begin_create_init(Fixture::credentials(), Fixture::limits())
             .is_ok()
     );
+}
+
+#[test]
+fn init_reservation_delays_checkpoint_freeze_until_publication_finishes() {
+    let registry = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    let reservation = registry
+        .begin_create_init(Fixture::credentials(), Fixture::limits())
+        .unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (frozen_tx, frozen_rx) = std::sync::mpsc::channel();
+    let freezer = {
+        let registry = Arc::clone(&registry);
+        thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            registry.freeze_checkpoint();
+            frozen_tx.send(registry.checkpoint_snapshot()).unwrap();
+            registry.thaw_checkpoint();
+        })
+    };
+    started_rx.recv().unwrap();
+    assert_eq!(frozen_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    let (process, _) = reservation.commit().unwrap();
+    let image = frozen_rx.recv().unwrap().unwrap();
+    assert_eq!(image.init, Some(process));
+    assert_eq!(image.processes.len(), 1);
+    freezer.join().unwrap();
+}
+
+#[test]
+fn frozen_checkpoint_delays_init_reservation_until_thaw() {
+    let registry = Arc::new(TaskRegistry::new(RegistryConfig::default()).unwrap());
+    registry.freeze_checkpoint();
+    let image = registry.checkpoint_snapshot().unwrap();
+    assert_eq!(image.init, None);
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (reservation_tx, reservation_rx) = std::sync::mpsc::channel();
+    let beginner = {
+        let registry = Arc::clone(&registry);
+        thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let reservation = registry
+                .begin_create_init(Fixture::credentials(), Fixture::limits())
+                .unwrap();
+            reservation_tx.send(()).unwrap();
+            reservation.commit().unwrap()
+        })
+    };
+    started_rx.recv().unwrap();
+    assert_eq!(reservation_rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+    assert_eq!(registry.checkpoint_snapshot().unwrap(), image);
+    registry.thaw_checkpoint();
+    reservation_rx.recv().unwrap();
+    let (process, _) = beginner.join().unwrap();
+    assert_eq!(registry.snapshot().init, Some(process));
 }
 
 #[test]
