@@ -128,6 +128,40 @@ fn present() {
 }
 
 #[test]
+fn permits_allowed_unsafe_code() {
+    let block = "
+    // SAFETY: the platform call receives a validated descriptor.
+    unsafe {}
+";
+    for source in [
+        format!("#![allow(unsafe_code)]\nunsafe fn entry() {{}}\nfn call() {{{block}}}\n"),
+        format!("#[allow(unsafe_code)]\nmod adapter {{\n    unsafe fn entry() {{}}\n    fn call() {{{block}    }}\n}}\n"),
+        format!("#[allow(unsafe_code)]\nfn call() {{{block}}}\n"),
+        format!("#[allow(clippy::undocumented_unsafe_blocks, unsafe_code)]\nfn call() {{{block}}}\n"),
+    ] {
+        assert!(ordinary(&source).is_empty(), "allowed scope must be a boundary: {source}");
+    }
+}
+
+#[test]
+fn rejects_unsafe_without_allow() {
+    let block = "
+    // SAFETY: the platform call receives a validated descriptor.
+    unsafe {}
+";
+    for source in [
+        format!("fn call() {{{block}}}\n"),
+        format!("#[allow(dead_code)]\nfn call() {{{block}}}\n"),
+        format!("#[allow(unsafe_code)]\nfn other() {{}}\nfn call() {{{block}}}\n"),
+        format!("mod adapter {{\n    #[allow(unsafe_code)]\n    fn other() {{}}\n    fn call() {{{block}    }}\n}}\n"),
+    ] {
+        let values = ordinary(&source);
+        assert_eq!(values.len(), 1, "unsafe outside an allowed scope must error: {source}");
+        assert_eq!(values[0].subject, "unsafe block");
+    }
+}
+
+#[test]
 fn rejects_similar_names() {
     for relative in ["src/not_ffi.rs", "src/model/ffi_value.rs", "src/ffi_adapter.rs"] {
         let values = findings(

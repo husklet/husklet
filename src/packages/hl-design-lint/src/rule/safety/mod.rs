@@ -1,5 +1,7 @@
-use proc_macro2::Span;
-use syn::{ExprUnsafe, ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemTrait, TraitItemFn, spanned::Spanned, visit::Visit};
+use proc_macro2::{Span, TokenTree};
+use syn::{
+    Attribute, ExprUnsafe, ImplItemFn, ItemFn, ItemImpl, ItemMod, ItemTrait, TraitItemFn, spanned::Spanned, visit::Visit,
+};
 
 use crate::{
     Result,
@@ -25,9 +27,10 @@ impl Rule for Boundary {
         for source in workspace.sources() {
             let mut visitor = Syntax {
                 source,
-                boundary: boundary(source),
+                boundary: boundary(source) || allows(&source.syntax.attrs),
                 application: application(source),
                 ffi_depth: 0,
+                allow_depth: 0,
                 findings: Vec::new(),
             };
             visitor.visit_file(&source.syntax);
@@ -42,12 +45,20 @@ struct Syntax<'a> {
     boundary: bool,
     application: bool,
     ffi_depth: usize,
+    allow_depth: usize,
     findings: Vec<Finding>,
 }
 
 impl Syntax<'_> {
     fn allowed(&self) -> bool {
-        self.boundary || self.ffi_depth != 0
+        self.boundary || self.ffi_depth != 0 || self.allow_depth != 0
+    }
+
+    /// Opens the `#[allow(unsafe_code)]` scope of an item, returning the depth to release afterwards.
+    fn enter(&mut self, attributes: &[Attribute]) -> usize {
+        let allow = usize::from(allows(attributes));
+        self.allow_depth += allow;
+        allow
     }
 
     fn report(&mut self, span: Span, subject: String, construct: &'static str) {
@@ -82,17 +93,22 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
     fn visit_item_mod(&mut self, module: &'ast ItemMod) {
         let ffi = self.application && module.ident == "ffi";
         self.ffi_depth += usize::from(ffi);
+        let allow = self.enter(&module.attrs);
         syn::visit::visit_item_mod(self, module);
+        self.allow_depth -= allow;
         self.ffi_depth -= usize::from(ffi);
     }
 
     fn visit_expr_unsafe(&mut self, expression: &'ast ExprUnsafe) {
+        let allow = self.enter(&expression.attrs);
         self.report(expression.unsafe_token.span, "unsafe block".into(), "an unsafe block");
         self.report_missing_rationale(expression);
         syn::visit::visit_expr_unsafe(self, expression);
+        self.allow_depth -= allow;
     }
 
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        let allow = self.enter(&function.attrs);
         if let Some(token) = function.sig.unsafety {
             self.report(
                 token.span,
@@ -101,9 +117,11 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
             );
         }
         syn::visit::visit_item_fn(self, function);
+        self.allow_depth -= allow;
     }
 
     fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
+        let allow = self.enter(&function.attrs);
         if let Some(token) = function.sig.unsafety {
             self.report(
                 token.span,
@@ -112,9 +130,11 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
             );
         }
         syn::visit::visit_impl_item_fn(self, function);
+        self.allow_depth -= allow;
     }
 
     fn visit_trait_item_fn(&mut self, function: &'ast TraitItemFn) {
+        let allow = self.enter(&function.attrs);
         if let Some(token) = function.sig.unsafety {
             self.report(
                 token.span,
@@ -123,20 +143,25 @@ impl<'ast> Visit<'ast> for Syntax<'_> {
             );
         }
         syn::visit::visit_trait_item_fn(self, function);
+        self.allow_depth -= allow;
     }
 
     fn visit_item_impl(&mut self, implementation: &'ast ItemImpl) {
+        let allow = self.enter(&implementation.attrs);
         if let Some(token) = implementation.unsafety {
             self.report(token.span, "unsafe impl".into(), "an unsafe impl");
         }
         syn::visit::visit_item_impl(self, implementation);
+        self.allow_depth -= allow;
     }
 
     fn visit_item_trait(&mut self, item: &'ast ItemTrait) {
+        let allow = self.enter(&item.attrs);
         if let Some(token) = item.unsafety {
             self.report(token.span, format!("unsafe trait `{}`", item.ident), "an unsafe trait");
         }
         syn::visit::visit_item_trait(self, item);
+        self.allow_depth -= allow;
     }
 }
 
@@ -153,6 +178,19 @@ fn boundary(source: &Source) -> bool {
                 && components[2] == "src"
                 && (components[3] == "ffi.rs" || components[3] == "ffi")
         })
+}
+
+/// Recognises the compiler-enforced opt-out from the workspace `unsafe_code = "deny"` policy.
+fn allows(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute.path().is_ident("allow")
+            && attribute.meta.require_list().is_ok_and(|list| {
+                list.tokens
+                    .clone()
+                    .into_iter()
+                    .any(|token| matches!(token, TokenTree::Ident(ident) if ident == "unsafe_code"))
+            })
+    })
 }
 
 fn application(source: &Source) -> bool {
