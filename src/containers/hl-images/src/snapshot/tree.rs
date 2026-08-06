@@ -19,23 +19,43 @@ impl<'a> From<&'a Path> for Tree<'a> {
 impl Tree<'_> {
     /// Make every regular file and directory in this tree durable, children first.
     pub(super) fn sync(&self) -> Result<()> {
-        self.sync_with(&mut |path| fs::File::open(path)?.sync_all())
+        self.sync_with(&mut |path, opened| match opened {
+            Some(file) => file.sync_all(),
+            None => fs::File::open(path)?.sync_all(),
+        })
     }
 
-    fn sync_with(&self, sync: &mut impl FnMut(&Path) -> std::io::Result<()>) -> Result<()> {
+    fn sync_with(&self, sync: &mut impl FnMut(&Path, Option<&fs::File>) -> std::io::Result<()>) -> Result<()> {
         let metadata = fs::symlink_metadata(self.0)?;
         if metadata.file_type().is_symlink() {
             return Ok(());
         }
         if metadata.is_file() {
-            return sync(self.0).map_err(Into::into);
+            return sync(self.0, None).map_err(Into::into);
         }
         if metadata.is_dir() {
-            for entry in fs::read_dir(self.0)? {
-                let path = entry?.path();
-                Tree::from(path.as_path()).sync_with(sync)?;
+            let original = metadata.permissions();
+            let mut accessible = original.clone();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                accessible.set_mode(accessible.mode() | 0o700);
             }
-            sync(self.0)?;
+            #[cfg(not(unix))]
+            accessible.set_readonly(false);
+            fs::set_permissions(self.0, accessible)?;
+            let traversed = (|| -> Result<fs::File> {
+                let directory = fs::File::open(self.0)?;
+                for entry in fs::read_dir(self.0)? {
+                    let path = entry?.path();
+                    Tree::from(path.as_path()).sync_with(sync)?;
+                }
+                Ok(directory)
+            })();
+            let restored = fs::set_permissions(self.0, original);
+            let directory = traversed?;
+            restored?;
+            sync(self.0, Some(&directory))?;
         }
         Ok(())
     }
@@ -301,7 +321,7 @@ mod tests {
         let mut order = Vec::new();
 
         Tree::from(root.path())
-            .sync_with(&mut |path| {
+            .sync_with(&mut |path, _| {
                 order.push(path.strip_prefix(root.path()).unwrap().to_owned());
                 Ok(())
             })
@@ -310,5 +330,22 @@ mod tests {
         assert_eq!(order[0], std::path::Path::new("nested/value"));
         assert_eq!(order[1], std::path::Path::new("nested"));
         assert_eq!(order[2], std::path::Path::new(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_traverses_readonly_directory_and_restores_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let locked = root.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("value"), b"value").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o0)).unwrap();
+
+        Tree::from(root.path()).sync().unwrap();
+
+        assert_eq!(fs::symlink_metadata(&locked).unwrap().permissions().mode() & 0o777, 0);
+        Tree::from(root.path()).writable().unwrap();
     }
 }
