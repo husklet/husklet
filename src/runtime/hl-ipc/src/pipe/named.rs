@@ -74,6 +74,7 @@ impl NamedFifo {
                     write_nonblocking: false,
                     waiters: 0,
                     open_waiters: 0,
+                    sleepers: 0,
                     splice_reserved: false,
                 }),
                 changed: std::sync::Condvar::new(),
@@ -113,7 +114,7 @@ impl NamedFifo {
             EndpointDirection::Write,
             nonblocking,
         ));
-        self.shared.changed.notify_all();
+        self.shared.notify_sleepers(&state);
         drop(state);
         reader.notify_readiness();
         (reader, writer)
@@ -144,13 +145,13 @@ impl NamedFifo {
             nonblocking,
         ));
         if nonblocking || matched {
-            self.shared.changed.notify_all();
+            self.shared.notify_sleepers(&state);
             drop(state);
             endpoint.notify_readiness();
             Ok(NamedFifoOpen::Ready(endpoint))
         } else {
             state.open_waiters += 1;
-            self.shared.changed.notify_all();
+            self.shared.notify_sleepers(&state);
             drop(state);
             endpoint.notify_readiness();
             Ok(NamedFifoOpen::Waiting(NamedFifoWait {
@@ -165,7 +166,7 @@ impl NamedFifo {
 
     pub fn snapshot(&self) -> Result<crate::NamedFifoSnapshot, PipeCreateError> {
         let state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.waiters != 0 || state.open_waiters != 0 {
+        if state.waiters != 0 || state.open_waiters != 0 || state.sleepers != 0 {
             return Err(PipeCreateError::Busy);
         }
         Ok(crate::NamedFifoSnapshot {
@@ -274,11 +275,13 @@ impl NamedFifoWait {
                 drop(state);
                 return self.endpoint.take().expect("completed FIFO wait");
             }
+            state.sleepers += 1;
             state = endpoint
                 .pipe
                 .changed
                 .wait(state)
                 .unwrap_or_else(|error| error.into_inner());
+            state.sleepers -= 1;
             drop(state);
         }
     }

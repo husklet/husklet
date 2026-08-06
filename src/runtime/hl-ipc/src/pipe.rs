@@ -47,6 +47,7 @@ pub(super) struct PipeState {
     pub(super) write_nonblocking: bool,
     pub(super) waiters: usize,
     pub(super) open_waiters: usize,
+    pub(super) sleepers: usize,
     pub(super) splice_reserved: bool,
 }
 
@@ -58,6 +59,14 @@ pub(super) struct PipeShared {
     writer_readiness: ReadinessRegistry,
 }
 
+impl PipeShared {
+    pub(super) fn notify_sleepers(&self, state: &PipeState) {
+        if state.sleepers != 0 {
+            self.changed.notify_all();
+        }
+    }
+}
+
 pub(super) struct PipeCancellationWake {
     pub(super) pipe: std::sync::Weak<PipeShared>,
 }
@@ -66,7 +75,7 @@ impl CancellationNotification for PipeCancellationWake {
     fn notify(&self) {
         if let Some(pipe) = self.pipe.upgrade() {
             let state = pipe.state.lock().unwrap_or_else(|error| error.into_inner());
-            pipe.changed.notify_all();
+            pipe.notify_sleepers(&state);
             drop(state);
         }
     }
@@ -111,6 +120,7 @@ impl Pipe {
                 write_nonblocking: nonblocking,
                 waiters: 0,
                 open_waiters: 0,
+                sleepers: 0,
                 splice_reserved: false,
             }),
             changed: Condvar::new(),
@@ -125,7 +135,7 @@ impl Pipe {
 
     pub fn snapshot(&self) -> Result<PipeSnapshot, PipeCreateError> {
         let state = self.reader.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.waiters != 0 || state.open_waiters != 0 {
+        if state.waiters != 0 || state.open_waiters != 0 || state.sleepers != 0 {
             return Err(PipeCreateError::Busy);
         }
         Ok(PipeSnapshot {
@@ -173,6 +183,11 @@ pub struct PipeEndpoint {
 }
 
 impl PipeEndpoint {
+    #[cfg(test)]
+    pub(crate) fn sleeper_count(&self) -> usize {
+        self.pipe.state.lock().unwrap_or_else(|error| error.into_inner()).sleepers
+    }
+
     fn new(pipe: Arc<PipeShared>, direction: EndpointDirection) -> Self {
         let nonblocking = {
             let state = pipe.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -235,7 +250,7 @@ impl PipeEndpoint {
             return Err(ObjectError::Busy);
         }
         state.capacity = capacity;
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
         drop(state);
         self.notify_readiness();
         Ok(capacity)
@@ -273,7 +288,7 @@ impl PipeEndpoint {
         } else {
             state.head_fragment = (state.head_fragment + consumed) % PIPE_BUF;
         }
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
         drop(state);
         self.notify_readiness();
         Ok(count)
@@ -383,7 +398,7 @@ impl PipeEndpoint {
         if state.packet_mode {
             state.packets.push_back(input.len());
         }
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
         drop(state);
         self.notify_readiness();
         Ok(input.len())
@@ -419,7 +434,7 @@ impl PipeEndpoint {
             }
             written += count;
             let nonblocking = self.nonblocking.load(Ordering::Acquire);
-            self.pipe.changed.notify_all();
+            self.pipe.notify_sleepers(&state);
             drop(state);
             self.notify_readiness();
             if nonblocking {
@@ -470,9 +485,9 @@ impl PipeEndpoint {
 
     fn wait<'state>(&self, state: MutexGuard<'state, PipeState>) -> MutexGuard<'state, PipeState> {
         let mut state = state;
-        state.waiters += 1;
+        state.sleepers += 1;
         let mut state = self.pipe.changed.wait(state).unwrap_or_else(|error| error.into_inner());
-        state.waiters -= 1;
+        state.sleepers -= 1;
         state
     }
 
@@ -483,7 +498,7 @@ impl PipeEndpoint {
             EndpointDirection::Read => state.read_nonblocking = enabled,
             EndpointDirection::Write => state.write_nonblocking = enabled,
         }
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
     }
 
     pub(super) fn endpoint_readiness(&self, interests: Readiness) -> Readiness {
@@ -517,7 +532,7 @@ impl PipeEndpoint {
             return;
         }
         let state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
         drop(state);
         self.endpoint_registry().notify();
         self.endpoint_registry().close();
@@ -532,7 +547,7 @@ impl PipeEndpoint {
             EndpointDirection::Read => state.readers -= 1,
             EndpointDirection::Write => state.writers -= 1,
         }
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
         drop(state);
         self.notify_readiness();
         self.endpoint_registry().close();

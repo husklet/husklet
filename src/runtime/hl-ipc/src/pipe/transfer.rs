@@ -68,8 +68,12 @@ impl PipeTransfer {
 
     fn complete(source: &PipeEndpoint, target: &PipeEndpoint, count: usize) -> usize {
         if count != 0 {
-            source.pipe.changed.notify_all();
-            target.pipe.changed.notify_all();
+            let source_state = source.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+            source.pipe.notify_sleepers(&source_state);
+            drop(source_state);
+            let target_state = target.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
+            target.pipe.notify_sleepers(&target_state);
+            drop(target_state);
             source.notify_readiness();
             target.notify_readiness();
         }

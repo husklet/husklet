@@ -89,7 +89,7 @@ impl PreparedRead {
         state.splice_reserved = false;
         state.waiters -= 1;
         self.active = false;
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
         Ok(())
     }
 }
@@ -134,6 +134,6 @@ impl Drop for PreparedRead {
         let mut state = self.pipe.state.lock().unwrap_or_else(|error| error.into_inner());
         state.splice_reserved = false;
         state.waiters -= 1;
-        self.pipe.changed.notify_all();
+        self.pipe.notify_sleepers(&state);
     }
 }
