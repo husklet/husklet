@@ -555,6 +555,8 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         !hl_a64_assembler_begin(&assembler, buffer, buffer, capacity))
         return 0;
     uint64_t cursor = pc;
+    uint64_t block_heads[16] = {pc};
+    size_t block_head_count = 1;
     int planning_exclusive = 0;
     size_t planned = 0;
     while (planned < count) {
@@ -568,17 +570,20 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
             if ((word & 0x3fc00000u) == 0x08400000u) planning_exclusive = 1;
             else if (planning_exclusive && (word & 0x3fc00000u) == 0x08000000u) planning_exclusive = 0;
         }
+        if (cursor > UINT64_MAX - 4) break;
         uint64_t next = cursor + 4;
         int followed = 0;
         if (!planning_exclusive && (word & UINT32_C(0xfc000000)) == UINT32_C(0x14000000)) {
             int64_t displacement = (int64_t)((uint64_t)(word & UINT32_C(0x03ffffff)) << 38) >> 36;
-            uint64_t target = cursor + (uint64_t)displacement;
+            uint64_t target;
+            if (!add_signed_checked(cursor, displacement, &target)) break;
             int seen = 0;
-            for (size_t index = 0; index <= planned; ++index)
-                if (planned_pcs[index] == target) seen = 1;
-            if (!seen && hl_a64_source_available(source, target, 1) != 0) {
+            for (size_t index = 0; index < block_head_count; ++index)
+                if (block_heads[index] == target) seen = 1;
+            if (!seen && block_head_count < 16 && hl_a64_source_available(source, target, 1) != 0) {
                 next = target;
                 followed = 1;
+                block_heads[block_head_count++] = target;
             }
         }
         planned++;
@@ -878,6 +883,7 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
         if (admitted == 1) return HL_NATIVE_STATE;
         admitted--;
     }
+    key.source_first = trace.source_first;
     key.source_last = trace.source_last;
     if (trace.provenance_count == 0) return HL_NATIVE_STATE;
     emission = (hl_native_emission){.bytes = buffer, .size = trace.code_size,

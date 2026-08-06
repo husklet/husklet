@@ -1280,13 +1280,20 @@ int main(void) {
         CHECK(run_output.kind == HL_NATIVE_EXIT_INTERRUPT && run_output.instruction == 0x8300);
         CHECK(run_state.executed == 0 && run_state.budget == 2 && successor.calls == 0);
 
+        memset(&run_state, 0, sizeof(run_state));
+        run_state.program = 0x8300;
+        CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
+        CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.executed == 2 &&
+              run_state.budget == 0 && successor.calls == 1);
+        successor.calls = 0;
         CHECK(hl_native_before_fork(run_executor) == HL_NATIVE_OK);
         CHECK(hl_native_after_fork(run_executor, 1) == HL_NATIVE_OK);
         memset(&run_state, 0, sizeof(run_state));
         run_state.program = 0x8300;
         CHECK(hl_native_run(run_executor, &run_cpu, &run_request, &run_output) == HL_NATIVE_OK);
         CHECK(run_output.kind == HL_NATIVE_EXIT_SYSCALL && run_state.executed == 2 &&
-              run_state.budget == 0 && successor.calls == 0);
+              run_state.budget == 0 && successor.calls == 1);
+        successor.calls = 0;
 
         const hl_native_change gap = {
             .abi = HL_NATIVE_ABI, .size = sizeof(gap), .kind = HL_NATIVE_INVALIDATE,

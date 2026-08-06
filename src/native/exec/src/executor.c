@@ -1178,9 +1178,13 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 (tail.words[0] & UINT32_C(0xfc000000)) == UINT32_C(0x14000000)) {
                 int64_t displacement = (int64_t)((uint64_t)(tail.words[0] & UINT32_C(0x03ffffff)) << 38) >> 36;
                 uint64_t branch_pc = instruction + (count - 1) * 4;
-                uint64_t target = branch_pc + (uint64_t)displacement;
+                uint64_t magnitude = displacement < 0 ? UINT64_C(0) - (uint64_t)displacement
+                                                      : (uint64_t)displacement;
+                int target_valid = displacement < 0 ? magnitude <= branch_pc
+                                                    : magnitude <= UINT64_MAX - branch_pc;
+                uint64_t target = displacement < 0 ? branch_pc - magnitude : branch_pc + magnitude;
                 hl_native_source_span successor = {0};
-                if (target != instruction && resolver(resolver_context, target, source->mapping_incarnation,
+                if (target_valid && target != instruction && resolver(resolver_context, target, source->mapping_incarnation,
                         source->instruction_epoch, &successor)) {
                     size_t insert = 0;
                     for (size_t index = 0; index < active_source->span_count; ++index)
