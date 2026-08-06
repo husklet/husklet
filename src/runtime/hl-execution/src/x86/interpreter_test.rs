@@ -15892,3 +15892,33 @@ fn vex_high_round_word_family() {
     assert_eq!(cpu.vector_upper[1], words([expected(0x4000, -0x4000); 8]));
     assert!(X86ScalarDecoder::decode(&[0xc4, 0xe2, 0x6c, 0x0b, 0xcb], 0).is_err());
 }
+
+/// A qNaN source operand propagates verbatim through scalar arithmetic, sign bit included.
+#[test]
+fn scalar_arithmetic_propagates_negative_quiet_nan_verbatim() {
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    let nan = 0xfff8_0000_0000_0042_u64;
+    for (opcode, name) in [(0x58_u8, "addsd"), (0x5c, "subsd"), (0x59, "mulsd"), (0x5e, "divsd")] {
+        for (destination, source) in [(0x3ff0_0000_0000_0000_u64, nan), (nan, 0x3ff0_0000_0000_0000)] {
+            let decoded = X86ScalarDecoder::decode(&[0xf2, 0x0f, opcode, 0xc1], 0x4b100).unwrap();
+            let mut cpu = CpuState {
+                rip: 0x4b100,
+                ..Default::default()
+            };
+            cpu.vectors[0] = u128::from(destination);
+            cpu.vectors[1] = u128::from(source);
+            cpu.mxcsr = 0x1f80;
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(cpu.vectors[0] as u64, nan, "{name} destination {destination:#x}");
+        }
+    }
+}

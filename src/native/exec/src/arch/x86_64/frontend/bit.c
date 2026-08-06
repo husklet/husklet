@@ -68,8 +68,12 @@ void hl_x86_emit_bit(uint32_t *words, uint32_t *cursor, const instruction *item)
     unsigned old = item->memory_operand != 0u ? 18u : item->destination;
     instruction memory;
 
+    /* The memory form addresses the containing byte, so only the register form keeps the
+       decoder's already width-masked bit index. */
     if (item->bit_immediate != 0u)
-        emit_constant(words, cursor, 19u, item->operand_immediate & 7u);
+        emit_constant(words, cursor, 19u,
+                      item->memory_operand != 0u ? (item->operand_immediate & 7u) :
+                                                   item->operand_immediate);
     else {
         emit_constant(words, cursor, 19u, item->memory_operand != 0u ? 7u : item->width * 8u - 1u);
         words[(*cursor)++] = (wide ? UINT32_C(0x8a000000) : UINT32_C(0x0a000000)) |

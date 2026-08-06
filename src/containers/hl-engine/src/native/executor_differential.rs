@@ -1885,3 +1885,108 @@ fn capture_decoder_rejects_resource_counts_before_allocation() {
     aggregate.extend_from_slice(&((MEMORY_LIMIT as u64) + 1).to_le_bytes());
     assert_eq!(BoundaryCapture::decode(&aggregate), Err("capture aggregate limit"));
 }
+
+/// `bt`/`bts`/`btr`/`btc` with an immediate bit index: the register form must keep the
+/// full width-masked index, while only the memory form addresses the containing byte.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_bit_test_immediate_matches_interpreter_at_each_boundary() {
+    let bytes = [
+        0x48, 0x0f, 0xba, 0xef, 0x35, // bts $0x35,%rdi
+        0x48, 0x0f, 0xba, 0xf7, 0x35, // btr $0x35,%rdi
+        0x48, 0x0f, 0xba, 0xff, 0x35, // btc $0x35,%rdi
+        0x48, 0x0f, 0xba, 0xe7, 0x35, // bt  $0x35,%rdi
+        0x0f, 0xba, 0xef, 0x14, // bts $0x14,%edi
+        0x0f, 0xba, 0xf7, 0x1f, // btr $0x1f,%edi
+        0x0f, 0xba, 0x2e, 0x35, // btsl $0x35,(%rsi)
+        0x0f, 0xba, 0x3e, 0x0d, // btcl $0xd,(%rsi)
+    ];
+    let instruction_ends = [5, 10, 15, 20, 24, 28, 32, 36];
+    let operand: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.registers[7] = 0x0019_9999_9999_999a;
+    for (index, &end) in instruction_ends.iter().enumerate() {
+        let mut prefix = bytes[..end].to_vec();
+        prefix.extend_from_slice(&[0x0f, 0x05]);
+        let source = [super::BorrowedSource {
+            guest_first: 0x402720,
+            bytes: &prefix,
+        }];
+        let mut native = initial.clone();
+        let mut storage = operand;
+        let view = ProjectionView {
+            guest_first: 0x7000,
+            guest_last: 0x7008,
+            host_first: storage.as_mut_ptr() as usize as u64,
+            mapping_incarnation: 1,
+            permissions: 3,
+            write_policy: super::WRITE_EXACT,
+            write_index: 0,
+        };
+        let projection = Projection {
+            views: &raw const view,
+            count: 1,
+            mapping_incarnation: 1,
+            active: 0,
+        };
+        let executor = Executor::create().expect("native executor");
+        let mut resolve = |_: u64, _: &mut [u8]| None;
+        let outcome = executor
+            .run_x86(
+                &mut native,
+                &source,
+                1,
+                index as u64 + 1,
+                64,
+                false,
+                Some(&projection),
+                &mut resolve,
+            )
+            .unwrap()
+            .0;
+        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+
+        let mut memory = ReplayMemory {
+            sources: vec![ReplaySource {
+                first: 0x402720,
+                bytes: prefix.clone(),
+            }],
+            data: vec![ReplayView {
+                first: 0x7000,
+                data: operand.to_vec(),
+            }],
+            generation: 1,
+        };
+        let machine = ExecutionMachine::new(ExecutionSnapshot {
+            version: EXECUTION_SNAPSHOT_VERSION,
+            cpu: ExecutionCpuSnapshot::X86_64(initial.clone()),
+            cache_epoch: 1,
+            fault: None,
+        })
+        .unwrap();
+        let step = machine.run_slice(1, index as u64 + 3, &mut memory);
+        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        machine.freeze().unwrap();
+        let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
+            unreachable!()
+        };
+        assert_eq!(
+            native,
+            interpreted,
+            "first state divergence after instruction {} ending at {:#x}",
+            index + 1,
+            0x402720 + end
+        );
+        assert_eq!(
+            storage.as_slice(),
+            memory.data[0].data.as_slice(),
+            "first byte divergence after instruction {} ending at {:#x}",
+            index + 1,
+            0x402720 + end
+        );
+    }
+}
