@@ -140,10 +140,11 @@ impl<'ast> Visit<'ast> for Depth {
     }
 
     fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        let branch = self.statement();
         if let Some((_, guard)) = &arm.guard {
             self.visit_expr(guard);
         }
-        self.statement = true;
+        self.statement = branch;
         self.visit_expr(&arm.body);
         self.statement = false;
     }
@@ -180,6 +181,7 @@ impl<'ast> Visit<'ast> for Depth {
         }
         self.enter("match", expression.match_token.span, |visitor| {
             for arm in &expression.arms {
+                visitor.statement = true;
                 visitor.visit_arm(arm);
             }
         });
@@ -381,6 +383,26 @@ fn summarize(row: &ResultRow) {
 
         assert_eq!(findings.len(), 1);
         assert!(findings[0].message.contains("depth 3"));
+    }
+
+    #[test]
+    fn accepts_a_branch_inside_an_arm_of_a_value_match() {
+        let findings = findings(
+            r"fn width(kind: u8, wide: bool) -> u8 {
+    for _ in 0..2 {
+        let size = match kind {
+            0 => if wide { 8 } else { 4 },
+            _ => 1,
+        };
+        if size > 4 {
+            return size;
+        }
+    }
+    0
+}",
+        );
+
+        assert!(findings.is_empty());
     }
 
     #[test]
