@@ -7,8 +7,11 @@ than serialized. Rust owns descriptor checkpoint routing independently of
 procfs. `FileObjectCatalog` therefore selects codecs from authoritative identity
 and OFD evidence, and the symmetric `DirectoryObjectCatalog` reserves durable
 nonzero tags while rejecting no-owner or multiple-owner captures. This stage is
-bounded before codec allocation by a checked tag-plus-payload size contract,
-requires codecs to return that exact size, and rejects a rebound object whose
+bounded by an exact-size contract and writes into caller-owned slices. The
+descriptor table accounts its header, generation records, entry records,
+description envelopes, selector tags, and payloads against one running 4 MiB
+limit before allocating each payload or invoking its codec writer. Restore
+rejects a rebound object whose
 kind differs from the catalog route. The memfd file codec additionally proves
 the concrete `RuntimeMemfd` and its complete generation-bearing registry binding,
 not merely a colliding numeric identity. Descriptor restore constructs each open

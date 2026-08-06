@@ -34,7 +34,19 @@ impl<H: CheckpointHost> ObjectBindings<H> {
 }
 
 impl<H: CheckpointHost> DescriptorObjectCheckpoint for ObjectBindings<H> {
-    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(OBJECT_BYTES)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != OBJECT_BYTES {
+            return Err(DescriptorCheckpointError::Object);
+        }
         if object.kind() != ObjectKind::Socket {
             return Err(DescriptorCheckpointError::Object);
         }
@@ -43,7 +55,8 @@ impl<H: CheckpointHost> DescriptorObjectCheckpoint for ObjectBindings<H> {
             .iter()
             .find_map(|(key, socket)| (key.identity == identity).then_some(socket.id))
             .ok_or(DescriptorCheckpointError::Object)?;
-        Ok(Self::encode(id))
+        output.copy_from_slice(&Self::encode(id));
+        Ok(())
     }
 
     fn rebind(

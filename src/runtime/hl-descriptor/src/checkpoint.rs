@@ -58,10 +58,33 @@ pub enum DescriptorCheckpointError {
 }
 
 pub trait DescriptorObjectCheckpoint: Send + Sync {
+    /// Returns the exact number of bytes required by [`Self::snapshot_into`].
+    fn snapshot_size(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError>;
+
     ///
     /// # Errors
     /// Returns an error if descriptor state is invalid or object checkpointing fails.
-    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError>;
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError>;
+
+    /// Allocates an exactly sized standalone object image.
+    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+        let size = self.snapshot_size(identity, object)?;
+        if size > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
+            return Err(DescriptorCheckpointError::Limit);
+        }
+        let mut output = vec![0; size];
+        self.snapshot_into(identity, object, &mut output)?;
+        Ok(output)
+    }
 
     ///
     /// # Errors
@@ -130,7 +153,7 @@ impl DescriptorTable {
         if !state.reservations.is_empty() {
             return Err(DescriptorCheckpointError::StaleGeneration);
         }
-        let generations = state
+        let generations: Vec<DescriptorGenerationImage> = state
             .generations
             .iter()
             .map(|(number, generation)| DescriptorGenerationImage {
@@ -138,6 +161,18 @@ impl DescriptorTable {
                 generation: *generation,
             })
             .collect();
+        let mut checkpoint_bytes = 20_usize
+            .checked_add(
+                generations
+                    .len()
+                    .checked_mul(8)
+                    .ok_or(DescriptorCheckpointError::Limit)?,
+            )
+            .and_then(|size| size.checked_add(state.entries.len().checked_mul(20)?))
+            .ok_or(DescriptorCheckpointError::Limit)?;
+        if checkpoint_bytes > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
+            return Err(DescriptorCheckpointError::Limit);
+        }
         let mut descriptions = BTreeMap::new();
         let mut entries = Vec::with_capacity(state.entries.len());
         for (number, descriptor) in &state.entries {
@@ -155,7 +190,12 @@ impl DescriptorTable {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let object = objects.snapshot(description.identity, description.object.as_ref())?;
+            let object = snapshot_object(
+                objects,
+                description.identity,
+                description.object.as_ref(),
+                &mut checkpoint_bytes,
+            )?;
             descriptions.insert(
                 description.identity,
                 OpenDescriptionImage {
@@ -176,7 +216,12 @@ impl DescriptorTable {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let object = objects.snapshot(description.identity, description.object.as_ref())?;
+            let object = snapshot_object(
+                objects,
+                description.identity,
+                description.object.as_ref(),
+                &mut checkpoint_bytes,
+            )?;
             descriptions.insert(
                 description.identity,
                 OpenDescriptionImage {
@@ -272,6 +317,26 @@ impl DescriptorTable {
     }
 }
 
+fn snapshot_object(
+    objects: &dyn DescriptorObjectCheckpoint,
+    identity: u64,
+    object: &dyn OpenFileDescription,
+    checkpoint_bytes: &mut usize,
+) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    let object_bytes = objects.snapshot_size(identity, object)?;
+    let next = checkpoint_bytes
+        .checked_add(32)
+        .and_then(|size| size.checked_add(object_bytes))
+        .ok_or(DescriptorCheckpointError::Limit)?;
+    if next > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
+        return Err(DescriptorCheckpointError::Limit);
+    }
+    let mut output = vec![0; object_bytes];
+    objects.snapshot_into(identity, object, &mut output)?;
+    *checkpoint_bytes = next;
+    Ok(output)
+}
+
 impl DescriptorTableImage {
     ///
     /// # Errors
@@ -293,7 +358,18 @@ impl DescriptorTableImage {
             .iter()
             .try_fold(0_usize, |size, value| size.checked_add(value.object.len()))
             .ok_or(DescriptorCheckpointError::Limit)?;
-        if object_bytes > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
+        let checkpoint_bytes = 20_usize
+            .checked_add(
+                self.generations
+                    .len()
+                    .checked_mul(8)
+                    .ok_or(DescriptorCheckpointError::Limit)?,
+            )
+            .and_then(|size| size.checked_add(self.entries.len().checked_mul(20)?))
+            .and_then(|size| size.checked_add(self.descriptions.len().checked_mul(32)?))
+            .and_then(|size| size.checked_add(object_bytes))
+            .ok_or(DescriptorCheckpointError::Limit)?;
+        if checkpoint_bytes > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
             return Err(DescriptorCheckpointError::Limit);
         }
         let mut generations = BTreeMap::new();

@@ -182,18 +182,18 @@ impl Bindings {
         }
     }
 
-    fn encode(object: &RuntimeMemfd) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn encode(object: &RuntimeMemfd) -> Result<[u8; PAYLOAD_BYTES], DescriptorCheckpointError> {
         let position = object.position.lock().map_err(|_| DescriptorCheckpointError::Object)?;
         if position.splice_reserved {
             return Err(DescriptorCheckpointError::Object);
         }
-        let mut bytes = Vec::with_capacity(PAYLOAD_BYTES);
-        bytes.push(VERSION);
-        bytes.extend_from_slice(&object.id.slot.to_le_bytes());
-        bytes.extend_from_slice(&object.id.generation.to_le_bytes());
-        bytes.extend_from_slice(&object.size.load(Ordering::Acquire).to_le_bytes());
-        bytes.extend_from_slice(&position.offset.to_le_bytes());
-        bytes.push(u8::from(object.allow_sealing));
+        let mut bytes = [0; PAYLOAD_BYTES];
+        bytes[0] = VERSION;
+        bytes[1..5].copy_from_slice(&object.id.slot.to_le_bytes());
+        bytes[5..9].copy_from_slice(&object.id.generation.to_le_bytes());
+        bytes[9..17].copy_from_slice(&object.size.load(Ordering::Acquire).to_le_bytes());
+        bytes[17..25].copy_from_slice(&position.offset.to_le_bytes());
+        bytes[25] = u8::from(object.allow_sealing);
         Ok(bytes)
     }
 
@@ -226,7 +226,19 @@ impl Bindings {
 }
 
 impl DescriptorObjectCheckpoint for Bindings {
-    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(PAYLOAD_BYTES)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != PAYLOAD_BYTES {
+            return Err(DescriptorCheckpointError::Object);
+        }
         if object.kind() != ObjectKind::File {
             return Err(DescriptorCheckpointError::Object);
         }
@@ -240,7 +252,9 @@ impl DescriptorObjectCheckpoint for Bindings {
             .keys()
             .find(|key| key.identity == identity)
             .ok_or(DescriptorCheckpointError::Object)?;
-        Self::encode(&state.objects[identity])
+        let encoded = Self::encode(&state.objects[identity])?;
+        output.copy_from_slice(&encoded);
+        Ok(())
     }
 
     fn rebind(
@@ -262,7 +276,7 @@ impl DescriptorObjectCheckpoint for Bindings {
 }
 
 impl crate::FileObjectCheckpoint for Bindings {
-    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+    fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
         Ok(PAYLOAD_BYTES)
     }
 

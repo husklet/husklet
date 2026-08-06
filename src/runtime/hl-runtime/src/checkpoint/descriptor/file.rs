@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hl_descriptor::{
-    DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM, DescriptorCheckpointError, DescriptorObjectCheckpoint, ObjectKind,
-    OpenDescriptionImage,
-};
+use hl_descriptor::{DescriptorCheckpointError, DescriptorObjectCheckpoint, ObjectKind, OpenDescriptionImage};
 
 /// Selects and namespaces codecs within the broad [`ObjectKind::File`] family.
 ///
@@ -16,7 +13,7 @@ pub struct FileObjectCatalog {
 }
 
 pub trait FileObjectCheckpoint: DescriptorObjectCheckpoint {
-    fn snapshot_size(
+    fn payload_size(
         &self,
         identity: u64,
         object: &dyn hl_descriptor::OpenFileDescription,
@@ -48,11 +45,11 @@ impl FileObjectCatalog {
 }
 
 impl DescriptorObjectCheckpoint for FileObjectCatalog {
-    fn snapshot(
+    fn snapshot_size(
         &self,
         identity: u64,
         object: &dyn hl_descriptor::OpenFileDescription,
-    ) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    ) -> Result<usize, DescriptorCheckpointError> {
         if object.kind() != ObjectKind::File {
             return Err(DescriptorCheckpointError::Object);
         }
@@ -66,22 +63,39 @@ impl DescriptorObjectCheckpoint for FileObjectCatalog {
             }
             selected = Some((*tag, codec));
         }
+        let (_, codec) = selected.ok_or(DescriptorCheckpointError::Object)?;
+        4_usize
+            .checked_add(codec.payload_size(identity, object)?)
+            .ok_or(DescriptorCheckpointError::Limit)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn hl_descriptor::OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        let mut selected = None;
+        for (tag, codec) in &self.codecs {
+            if !codec.owns(identity, object)? {
+                continue;
+            }
+            if selected.is_some() {
+                return Err(DescriptorCheckpointError::Object);
+            }
+            selected = Some((*tag, codec));
+        }
         let (tag, codec) = selected.ok_or(DescriptorCheckpointError::Object)?;
-        let payload_size = codec.snapshot_size(identity, object)?;
+        let payload_size = codec.payload_size(identity, object)?;
         let encoded_size = 4_usize
             .checked_add(payload_size)
             .ok_or(DescriptorCheckpointError::Limit)?;
-        if encoded_size > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
-            return Err(DescriptorCheckpointError::Limit);
-        }
-        let payload = codec.snapshot(identity, object)?;
-        if payload.len() != payload_size {
+        if output.len() != encoded_size {
             return Err(DescriptorCheckpointError::Object);
         }
-        let mut encoded = Vec::with_capacity(encoded_size);
-        encoded.extend_from_slice(&tag.to_le_bytes());
-        encoded.extend_from_slice(&payload);
-        Ok(encoded)
+        output[..4].copy_from_slice(&tag.to_le_bytes());
+        codec.snapshot_into(identity, object, &mut output[4..])?;
+        Ok(())
     }
 
     fn rebind(
@@ -106,7 +120,7 @@ impl DescriptorObjectCheckpoint for FileObjectCatalog {
 #[cfg(test)]
 mod test {
     use super::*;
-    use hl_descriptor::{OpenFileDescription, StatusFlags};
+    use hl_descriptor::{OpenFileDescription, StatusFlags, DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM};
 
     #[derive(Debug)]
     struct File(u8);
@@ -133,8 +147,17 @@ mod test {
         wrong_kind: bool,
     }
     impl DescriptorObjectCheckpoint for Codec {
-        fn snapshot(&self, _: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-            Ok(vec![self.owner; self.size])
+        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+            Ok(self.size)
+        }
+        fn snapshot_into(
+            &self,
+            _: u64,
+            _: &dyn OpenFileDescription,
+            output: &mut [u8],
+        ) -> Result<(), DescriptorCheckpointError> {
+            output.fill(self.owner);
+            Ok(())
         }
         fn rebind(&self, _: &OpenDescriptionImage) -> Result<Arc<dyn OpenFileDescription>, DescriptorCheckpointError> {
             if self.wrong_kind {
@@ -145,7 +168,7 @@ mod test {
         }
     }
     impl FileObjectCheckpoint for Codec {
-        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
             Ok(self.size)
         }
         fn owns(&self, _: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError> {

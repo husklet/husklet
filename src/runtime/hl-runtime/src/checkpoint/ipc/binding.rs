@@ -258,7 +258,19 @@ impl Default for PipeBindings {
 }
 
 impl DescriptorObjectCheckpoint for PipeBindings {
-    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(OBJECT_BYTES)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != OBJECT_BYTES {
+            return Err(DescriptorCheckpointError::Object);
+        }
         let state = self.state.lock().map_err(|_| DescriptorCheckpointError::Object)?;
         let resource = state
             .resources
@@ -271,14 +283,13 @@ impl DescriptorObjectCheckpoint for PipeBindings {
         if endpoint.checkpoint_kind() != resource.kind {
             return Err(DescriptorCheckpointError::Object);
         }
-        let mut bytes = Vec::with_capacity(OBJECT_BYTES);
-        bytes.push(OBJECT_VERSION);
-        bytes.push(match resource.kind {
+        output[0] = OBJECT_VERSION;
+        output[1] = match resource.kind {
             PipeEndpointKind::Reader => 1,
             PipeEndpointKind::Writer => 2,
-        });
-        bytes.extend_from_slice(&resource.key.get().to_le_bytes());
-        Ok(bytes)
+        };
+        output[2..].copy_from_slice(&resource.key.get().to_le_bytes());
+        Ok(())
     }
 
     fn rebind(

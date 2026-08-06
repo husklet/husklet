@@ -1,10 +1,11 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::{
-    DESCRIPTOR_CHECKPOINT_VERSION, DescriptorCheckpointError, DescriptorFlags, DescriptorObjectCheckpoint,
-    DescriptorTable, DescriptorTableImage, ObjectError, ObjectKind, OpenDescriptionImage, OpenFileDescription,
-    OperationActor, OperationCancellation, OperationContext, StatusFlags,
+    DescriptorCheckpointError, DescriptorFlags, DescriptorObjectCheckpoint, DescriptorTable, DescriptorTableImage,
+    ObjectError, ObjectKind, OpenDescriptionImage, OpenFileDescription, OperationActor, OperationCancellation,
+    OperationContext, StatusFlags, DESCRIPTOR_CHECKPOINT_VERSION,
 };
 
 #[derive(Debug)]
@@ -51,8 +52,17 @@ struct Objects {
 }
 
 impl DescriptorObjectCheckpoint for Objects {
-    fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        Ok(vec![u8::try_from(identity).expect("test identity fits in one byte")])
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(1)
+    }
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        _: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        output[0] = u8::try_from(identity).expect("test identity fits in one byte");
+        Ok(())
     }
 
     fn rebind(
@@ -81,6 +91,103 @@ fn populated() -> (DescriptorTable, Arc<Objects>, i32, i32) {
         .unwrap();
     let alias = table.duplicate(first, 0, DescriptorFlags::default()).unwrap();
     (table, Arc::new(Objects::default()), first, alias)
+}
+
+#[derive(Debug)]
+struct BudgetObject {
+    bytes: usize,
+    calls: Arc<AtomicUsize>,
+}
+
+impl OpenFileDescription for BudgetObject {
+    fn kind(&self) -> ObjectKind {
+        ObjectKind::File
+    }
+
+    fn domain_extension(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+}
+
+struct BudgetObjects;
+
+impl DescriptorObjectCheckpoint for BudgetObjects {
+    fn snapshot_size(&self, _: u64, object: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(object
+            .domain_extension()
+            .and_then(|value| value.downcast_ref::<BudgetObject>())
+            .ok_or(DescriptorCheckpointError::Object)?
+            .bytes)
+    }
+
+    fn snapshot_into(
+        &self,
+        _: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        let object = object
+            .domain_extension()
+            .and_then(|value| value.downcast_ref::<BudgetObject>())
+            .ok_or(DescriptorCheckpointError::Object)?;
+        object.calls.fetch_add(1, Ordering::SeqCst);
+        output.fill(0);
+        Ok(())
+    }
+
+    fn rebind(&self, _: &OpenDescriptionImage) -> Result<Arc<dyn OpenFileDescription>, DescriptorCheckpointError> {
+        Err(DescriptorCheckpointError::Object)
+    }
+}
+
+fn budget_table(second: usize) -> (DescriptorTable, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let table = DescriptorTable::new(2).unwrap();
+    let first_calls = Arc::new(AtomicUsize::new(0));
+    let second_calls = Arc::new(AtomicUsize::new(0));
+    table
+        .install(
+            0,
+            Arc::new(BudgetObject {
+                bytes: 1,
+                calls: first_calls.clone(),
+            }),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    table
+        .install(
+            0,
+            Arc::new(BudgetObject {
+                bytes: second,
+                calls: second_calls.clone(),
+            }),
+            DescriptorFlags::default(),
+        )
+        .unwrap();
+    (table, first_calls, second_calls)
+}
+
+#[test]
+fn aggregate_budget() {
+    // Header + two generations + two entries + two description envelopes.
+    const STRUCTURAL_BYTES: usize = 20 + 2 * 8 + 2 * 20 + 2 * 32;
+    let exact_second = crate::DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM - STRUCTURAL_BYTES - 1;
+    let (exact, first, second) = budget_table(exact_second);
+    exact.freeze_checkpoint();
+    assert!(exact.checkpoint_image(&BudgetObjects).is_ok());
+    assert_eq!(first.load(Ordering::SeqCst), 1);
+    assert_eq!(second.load(Ordering::SeqCst), 1);
+
+    for rejected_size in [exact_second + 1, usize::MAX] {
+        let (rejected, first, second) = budget_table(rejected_size);
+        rejected.freeze_checkpoint();
+        assert_eq!(
+            rejected.checkpoint_image(&BudgetObjects),
+            Err(DescriptorCheckpointError::Limit)
+        );
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+        assert_eq!(second.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]

@@ -18,7 +18,7 @@ const OBJECT_BYTES: usize = 9;
 
 pub trait ResourceRestore: Send + Sync {
     fn timerfd(&self, snapshot: TimerFdSnapshot, clock: EventResourceKey)
-    -> Result<Arc<TimerFd>, EventCheckpointError>;
+        -> Result<Arc<TimerFd>, EventCheckpointError>;
 
     fn signalfd(
         &self,
@@ -166,7 +166,27 @@ impl ObjectBindings {
 }
 
 impl DescriptorObjectCheckpoint for ObjectBindings {
-    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
+        if matches!(
+            object.kind(),
+            ObjectKind::Event | ObjectKind::EventCounter | ObjectKind::Poll
+        ) {
+            Ok(OBJECT_BYTES)
+        } else {
+            self.fallback.snapshot_size(identity, object)
+        }
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
         if matches!(
             object.kind(),
             ObjectKind::Event | ObjectKind::EventCounter | ObjectKind::Poll
@@ -176,13 +196,15 @@ impl DescriptorObjectCheckpoint for ObjectBindings {
                 .identities
                 .get(&identity)
                 .ok_or(DescriptorCheckpointError::Object)?;
-            let mut bytes = Vec::with_capacity(OBJECT_BYTES);
-            bytes.push(OBJECT_VERSION);
-            bytes.extend_from_slice(&id.slot.to_le_bytes());
-            bytes.extend_from_slice(&id.generation.to_le_bytes());
-            return Ok(bytes);
+            if output.len() != OBJECT_BYTES {
+                return Err(DescriptorCheckpointError::Object);
+            }
+            output[0] = OBJECT_VERSION;
+            output[1..5].copy_from_slice(&id.slot.to_le_bytes());
+            output[5..9].copy_from_slice(&id.generation.to_le_bytes());
+            return Ok(());
         }
-        self.fallback.snapshot(identity, object)
+        self.fallback.snapshot_into(identity, object, output)
     }
 
     fn rebind(
@@ -438,8 +460,17 @@ mod tests {
     struct Fallback;
 
     impl DescriptorObjectCheckpoint for Fallback {
-        fn snapshot(&self, _: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-            Ok(vec![7])
+        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+            Ok(1)
+        }
+        fn snapshot_into(
+            &self,
+            _: u64,
+            _: &dyn OpenFileDescription,
+            output: &mut [u8],
+        ) -> Result<(), DescriptorCheckpointError> {
+            output[0] = 7;
+            Ok(())
         }
 
         fn rebind(
@@ -543,17 +574,15 @@ mod tests {
         bindings.register_descriptor(key, reference).unwrap();
         assert_eq!(bindings.descriptor(key), Ok(reference));
         bindings.register_descriptor(key, reference).unwrap();
-        assert!(
-            bindings
-                .register_descriptor(
-                    key,
-                    DescriptorReference {
-                        number: 4,
-                        generation: 8,
-                    }
-                )
-                .is_err()
-        );
+        assert!(bindings
+            .register_descriptor(
+                key,
+                DescriptorReference {
+                    number: 4,
+                    generation: 8,
+                }
+            )
+            .is_err());
         assert!(bindings.descriptor(EventResourceKey::new(10).unwrap()).is_err());
     }
 

@@ -2,8 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hl_descriptor::{
-    DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM, DescriptorCheckpointError, DescriptorObjectCheckpoint, ObjectKind,
-    OpenDescriptionImage, OpenFileDescription,
+    DescriptorCheckpointError, DescriptorObjectCheckpoint, ObjectKind, OpenDescriptionImage, OpenFileDescription,
 };
 
 /// Selects and namespaces codecs within the broad [`ObjectKind::Directory`] family.
@@ -12,11 +11,8 @@ pub struct DirectoryObjectCatalog {
 }
 
 pub trait DirectoryObjectCheckpoint: DescriptorObjectCheckpoint {
-    fn snapshot_size(
-        &self,
-        identity: u64,
-        object: &dyn OpenFileDescription,
-    ) -> Result<usize, DescriptorCheckpointError>;
+    fn payload_size(&self, identity: u64, object: &dyn OpenFileDescription)
+        -> Result<usize, DescriptorCheckpointError>;
 
     fn owns(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError>;
 }
@@ -41,7 +37,11 @@ impl DirectoryObjectCatalog {
 }
 
 impl DescriptorObjectCheckpoint for DirectoryObjectCatalog {
-    fn snapshot(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+    ) -> Result<usize, DescriptorCheckpointError> {
         if object.kind() != ObjectKind::Directory {
             return Err(DescriptorCheckpointError::Object);
         }
@@ -55,22 +55,39 @@ impl DescriptorObjectCheckpoint for DirectoryObjectCatalog {
             }
             selected = Some((*tag, codec));
         }
+        let (_, codec) = selected.ok_or(DescriptorCheckpointError::Object)?;
+        4_usize
+            .checked_add(codec.payload_size(identity, object)?)
+            .ok_or(DescriptorCheckpointError::Limit)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        let mut selected = None;
+        for (tag, codec) in &self.codecs {
+            if !codec.owns(identity, object)? {
+                continue;
+            }
+            if selected.is_some() {
+                return Err(DescriptorCheckpointError::Object);
+            }
+            selected = Some((*tag, codec));
+        }
         let (tag, codec) = selected.ok_or(DescriptorCheckpointError::Object)?;
-        let payload_size = codec.snapshot_size(identity, object)?;
+        let payload_size = codec.payload_size(identity, object)?;
         let encoded_size = 4_usize
             .checked_add(payload_size)
             .ok_or(DescriptorCheckpointError::Limit)?;
-        if encoded_size > DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM {
-            return Err(DescriptorCheckpointError::Limit);
-        }
-        let payload = codec.snapshot(identity, object)?;
-        if payload.len() != payload_size {
+        if output.len() != encoded_size {
             return Err(DescriptorCheckpointError::Object);
         }
-        let mut encoded = Vec::with_capacity(encoded_size);
-        encoded.extend_from_slice(&tag.to_le_bytes());
-        encoded.extend_from_slice(&payload);
-        Ok(encoded)
+        output[..4].copy_from_slice(&tag.to_le_bytes());
+        codec.snapshot_into(identity, object, &mut output[4..])?;
+        Ok(())
     }
 
     fn rebind(
@@ -95,6 +112,7 @@ impl DescriptorObjectCheckpoint for DirectoryObjectCatalog {
 #[cfg(test)]
 mod test {
     use super::*;
+    use hl_descriptor::DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM;
 
     #[derive(Debug)]
     struct Directory;
@@ -110,8 +128,17 @@ mod test {
     }
 
     impl DescriptorObjectCheckpoint for Codec {
-        fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-            Ok(vec![identity as u8])
+        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+            Ok(1)
+        }
+        fn snapshot_into(
+            &self,
+            identity: u64,
+            _: &dyn OpenFileDescription,
+            output: &mut [u8],
+        ) -> Result<(), DescriptorCheckpointError> {
+            output[0] = identity as u8;
+            Ok(())
         }
 
         fn rebind(
@@ -125,7 +152,7 @@ mod test {
     }
 
     impl DirectoryObjectCheckpoint for Codec {
-        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
             Ok(1)
         }
 
@@ -167,12 +194,10 @@ mod test {
             ambiguous.snapshot(7, &Directory),
             Err(DescriptorCheckpointError::Object)
         );
-        assert!(
-            DirectoryObjectCatalog::rejecting()
-                .bind(1, Arc::new(Codec { owner: 7 }))
-                .rebind(&image(99_u32.to_le_bytes().to_vec()))
-                .is_err()
-        );
+        assert!(DirectoryObjectCatalog::rejecting()
+            .bind(1, Arc::new(Codec { owner: 7 }))
+            .rebind(&image(99_u32.to_le_bytes().to_vec()))
+            .is_err());
     }
 
     #[test]
@@ -186,8 +211,17 @@ mod test {
     struct BoundCodec(usize);
 
     impl DescriptorObjectCheckpoint for BoundCodec {
-        fn snapshot(&self, _: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-            Ok(vec![0; self.0])
+        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+            Ok(self.0)
+        }
+        fn snapshot_into(
+            &self,
+            _: u64,
+            _: &dyn OpenFileDescription,
+            output: &mut [u8],
+        ) -> Result<(), DescriptorCheckpointError> {
+            output.fill(0);
+            Ok(())
         }
 
         fn rebind(&self, _: &OpenDescriptionImage) -> Result<Arc<dyn OpenFileDescription>, DescriptorCheckpointError> {
@@ -196,7 +230,7 @@ mod test {
     }
 
     impl DirectoryObjectCheckpoint for BoundCodec {
-        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
             Ok(self.0)
         }
 
@@ -231,8 +265,19 @@ mod test {
     struct WrongKind;
 
     impl DescriptorObjectCheckpoint for WrongKind {
-        fn snapshot(&self, _: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-            Ok(Vec::new())
+        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+            Ok(0)
+        }
+        fn snapshot_into(
+            &self,
+            _: u64,
+            _: &dyn OpenFileDescription,
+            output: &mut [u8],
+        ) -> Result<(), DescriptorCheckpointError> {
+            if !output.is_empty() {
+                return Err(DescriptorCheckpointError::Object);
+            }
+            Ok(())
         }
 
         fn rebind(&self, _: &OpenDescriptionImage) -> Result<Arc<dyn OpenFileDescription>, DescriptorCheckpointError> {
@@ -241,7 +286,7 @@ mod test {
     }
 
     impl DirectoryObjectCheckpoint for WrongKind {
-        fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
             Ok(0)
         }
 

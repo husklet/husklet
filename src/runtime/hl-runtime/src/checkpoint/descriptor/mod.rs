@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use hl_checkpoint::{CheckpointImage, Section};
 use hl_descriptor::{
-    DESCRIPTOR_CHECKPOINT_VERSION, DescriptorCheckpointError, DescriptorEntryImage, DescriptorFlags,
-    DescriptorGenerationImage, DescriptorObjectCheckpoint, DescriptorTable as HostDescriptorTable,
-    DescriptorTableImage, ObjectKind, OpenDescriptionImage, StatusFlags,
+    DescriptorCheckpointError, DescriptorEntryImage, DescriptorFlags, DescriptorGenerationImage,
+    DescriptorObjectCheckpoint, DescriptorTable as HostDescriptorTable, DescriptorTableImage, ObjectKind,
+    OpenDescriptionImage, StatusFlags, DESCRIPTOR_CHECKPOINT_VERSION,
 };
 
 use crate::{
@@ -62,12 +62,21 @@ impl ObjectCatalog {
 }
 
 impl DescriptorObjectCheckpoint for ObjectCatalog {
-    fn snapshot(
+    fn snapshot_size(
         &self,
         identity: u64,
         object: &dyn hl_descriptor::OpenFileDescription,
-    ) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        self.codec(object.kind())?.snapshot(identity, object)
+    ) -> Result<usize, DescriptorCheckpointError> {
+        self.codec(object.kind())?.snapshot_size(identity, object)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        object: &dyn hl_descriptor::OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        self.codec(object.kind())?.snapshot_into(identity, object, output)
     }
 
     fn rebind(

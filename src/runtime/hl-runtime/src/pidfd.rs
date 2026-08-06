@@ -224,14 +224,27 @@ pub enum ProcessHandleError {
 }
 
 impl DescriptorObjectCheckpoint for ProcessHandleRegistry {
-    fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(8)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        _: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != 8 {
+            return Err(DescriptorCheckpointError::Object);
+        }
         let objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let found = objects
             .iter()
             .find(|(key, _)| key.identity == identity)
             .and_then(|(_, object)| object.upgrade())
             .ok_or(DescriptorCheckpointError::Object)?;
-        Ok(Self::encode_target(found.target).to_vec())
+        output.copy_from_slice(&Self::encode_target(found.target));
+        Ok(())
     }
 
     fn rebind(

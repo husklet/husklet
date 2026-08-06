@@ -52,14 +52,21 @@ impl OpenFileDescription for Directory {
 struct Directories;
 
 impl DescriptorObjectCheckpoint for Directories {
-    fn snapshot(&self, _: u64, object: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(1)
+    }
+    fn snapshot_into(
+        &self,
+        _: u64,
+        object: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
         let directory = object
             .domain_extension()
             .and_then(|value| value.downcast_ref::<Directory>())
             .ok_or(DescriptorCheckpointError::Object)?;
-        Ok(vec![
-            *directory.0.lock().map_err(|_| DescriptorCheckpointError::Object)?,
-        ])
+        output[0] = *directory.0.lock().map_err(|_| DescriptorCheckpointError::Object)?;
+        Ok(())
     }
 
     fn rebind(
@@ -73,7 +80,7 @@ impl DescriptorObjectCheckpoint for Directories {
 }
 
 impl DirectoryObjectCheckpoint for Directories {
-    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+    fn payload_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
         Ok(1)
     }
 
@@ -83,8 +90,17 @@ impl DirectoryObjectCheckpoint for Directories {
 }
 
 impl DescriptorObjectCheckpoint for Objects {
-    fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
-        Ok(vec![identity as u8])
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(1)
+    }
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        _: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        output[0] = identity as u8;
+        Ok(())
     }
 
     fn rebind(

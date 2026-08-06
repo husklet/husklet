@@ -175,7 +175,19 @@ pub enum NamespaceHandleError {
 }
 
 impl DescriptorObjectCheckpoint for NamespaceHandleRegistry {
-    fn snapshot(&self, identity: u64, _: &dyn OpenFileDescription) -> Result<Vec<u8>, DescriptorCheckpointError> {
+    fn snapshot_size(&self, _: u64, _: &dyn OpenFileDescription) -> Result<usize, DescriptorCheckpointError> {
+        Ok(16)
+    }
+
+    fn snapshot_into(
+        &self,
+        identity: u64,
+        _: &dyn OpenFileDescription,
+        output: &mut [u8],
+    ) -> Result<(), DescriptorCheckpointError> {
+        if output.len() != 16 {
+            return Err(DescriptorCheckpointError::Object);
+        }
         let objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let identifier = objects
             .iter()
@@ -183,7 +195,8 @@ impl DescriptorObjectCheckpoint for NamespaceHandleRegistry {
             .and_then(|(_, object)| object.upgrade())
             .map(|object| object.identifier)
             .ok_or(DescriptorCheckpointError::Object)?;
-        Ok(Self::encode(identifier).to_vec())
+        output.copy_from_slice(&Self::encode(identifier));
+        Ok(())
     }
 
     fn rebind(
