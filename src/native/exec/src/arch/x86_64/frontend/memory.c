@@ -18,6 +18,11 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
                    ((uint32_t)distance & UINT32_C(0x3fff)) << 5 | 17u;
 }
 
+static void zero_test(uint32_t *instruction, uint32_t *target, unsigned source) {
+    int64_t distance = target - instruction;
+    *instruction = UINT32_C(0xb4000000) | ((uint32_t)distance & UINT32_C(0x7ffff)) << 5 | source;
+}
+
 #define HL_X86_READ_VIEWS 4u
 #define HL_X86_WRITE_CACHE_WORDS 85u
 
@@ -83,52 +88,54 @@ static void jump(uint32_t *instruction, uint32_t *target) {
 
 /* Token, incarnation and view count are frozen for a whole entry into generated
  * code, so the trampoline validates them once and leaves the usable view count
- * in x29 (zero when the table cannot be trusted). */
+ * in x29 (zero when the table cannot be trusted).  The scan is a count-driven
+ * loop: a pointer and a countdown cost one stp/ldp of x19 and x22, which the
+ * write cache's prologue already spills, and that beats four unrolled copies. */
 uint32_t hl_x86_read_cache_words(unsigned width) {
-    return 3u + HL_X86_READ_VIEWS * (14u + (width == 32u ? 1u : 0u));
+    return 21u + (width == 32u ? 1u : 0u);
 }
 
 void hl_x86_emit_read_cache(uint32_t *words, uint32_t *cursor, unsigned width,
-                            unsigned destination, int vector, uint32_t **hits) {
-    uint32_t *overflow;
-    uint32_t *next[HL_X86_READ_VIEWS][4];
+                            unsigned destination, int vector, uint32_t **hit) {
+    uint32_t *overflow, *empty, *below, *above, *permission, *repeat;
+    words[(*cursor)++] = UINT32_C(0xa9bf5bf3); /* stp x19,x22,[sp,#-16]! */
     words[(*cursor)++] = UINT32_C(0xb1000000) | width << 10 | 16u << 5 | 18u; /* adds x18,x16,#width */
-    words[(*cursor)++] = UINT32_C(0xeb10025f); /* cmp x18,x16 */
     overflow = &words[(*cursor)++];
-    for (unsigned index = 0; index < HL_X86_READ_VIEWS; ++index) {
-        size_t base = offsetof(hl_native_x86_64_cpu, read_views) + index * 4u * sizeof(uint64_t);
-        words[(*cursor)++] =
-            UINT32_C(0xf100001f) | (index + 1u) << 10 | 29u << 5; /* cmp x29,#index+1 */
-        next[index][0] = &words[(*cursor)++];
-        words[(*cursor)++] = load_word(20, base);
-        words[(*cursor)++] = UINT32_C(0xeb14021f); /* cmp x16,x20 */
-        next[index][1] = &words[(*cursor)++];
-        words[(*cursor)++] = load_word(20, base + sizeof(uint64_t));
-        words[(*cursor)++] = UINT32_C(0xeb14025f); /* cmp x18,x20 */
-        next[index][2] = &words[(*cursor)++];
-        words[(*cursor)++] = load_word(17, base + 3u * sizeof(uint64_t));
-        next[index][3] = &words[(*cursor)++];
-        words[(*cursor)++] = load_word(17, base + 2u * sizeof(uint64_t));
-        words[(*cursor)++] = UINT32_C(0x8b110211); /* add x17,x16,x17 */
-        words[(*cursor)++] = vector
-            ? ((width == 4u ? UINT32_C(0xbd400220) :
-                width == 8u ? UINT32_C(0xfd400220) : UINT32_C(0x3dc00220)) | destination)
-            : ((width == 1u ? UINT32_C(0x39400220) :
-                width == 2u ? UINT32_C(0x79400220) :
-                width == 4u ? UINT32_C(0xb9400220) : UINT32_C(0xf9400220)) | destination);
-        if (vector && width == 32u)
-            words[(*cursor)++] = UINT32_C(0x3dc00620) | (destination + 1u); /* ldr qD+1,[x17,#16] */
-        hits[index] = &words[(*cursor)++];
-    }
+    words[(*cursor)++] = UINT32_C(0x91000393) |
+                         (uint32_t)offsetof(hl_native_x86_64_cpu, read_views) << 10; /* x19 = views */
+    words[(*cursor)++] = UINT32_C(0xaa1d03f6); /* x22 = validated count */
+    uint32_t *loop = &words[*cursor];
+    empty = &words[(*cursor)++];
+    words[(*cursor)++] = pair_load(20, 17, 19, 0); /* ldp x20,x17,[x19]: view first,last */
+    words[(*cursor)++] = UINT32_C(0xeb14021f); /* cmp x16,x20 */
+    below = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0xeb11025f); /* cmp x18,x17 */
+    above = &words[(*cursor)++];
+    words[(*cursor)++] = pair_load(20, 17, 19, 2); /* ldp x20,x17,[x19,#16]: delta,permissions */
+    permission = &words[(*cursor)++];
+    words[(*cursor)++] = UINT32_C(0x8b140211); /* add x17,x16,x20 */
+    words[(*cursor)++] = vector
+        ? ((width == 4u ? UINT32_C(0xbd400220) :
+            width == 8u ? UINT32_C(0xfd400220) : UINT32_C(0x3dc00220)) | destination)
+        : ((width == 1u ? UINT32_C(0x39400220) :
+            width == 2u ? UINT32_C(0x79400220) :
+            width == 4u ? UINT32_C(0xb9400220) : UINT32_C(0xf9400220)) | destination);
+    if (vector && width == 32u)
+        words[(*cursor)++] = UINT32_C(0x3dc00620) | (destination + 1u); /* ldr qD+1,[x17,#16] */
+    words[(*cursor)++] = UINT32_C(0xa8c15bf3); /* ldp x19,x22,[sp],#16 */
+    *hit = &words[(*cursor)++];
+    uint32_t *following = &words[*cursor];
+    words[(*cursor)++] = UINT32_C(0x91008273); /* add x19,x19,#32 */
+    words[(*cursor)++] = UINT32_C(0xd10006d6); /* sub x22,x22,#1 */
+    repeat = &words[(*cursor)++];
     uint32_t *active = &words[*cursor];
-    branch(overflow, active, 3u);
-    for (unsigned index = 0; index < HL_X86_READ_VIEWS; ++index) {
-        uint32_t *following = index + 1u < HL_X86_READ_VIEWS ? next[index + 1u][0] - 1 : active;
-        branch(next[index][0], active, 3u); /* count below index+1 means no later entry */
-        branch(next[index][1], following, 3u); /* address below first */
-        branch(next[index][2], following, 8u); /* end above last */
-        test(next[index][3], following, 0u);
-    }
+    words[(*cursor)++] = UINT32_C(0xa8c15bf3); /* ldp x19,x22,[sp],#16 */
+    jump(repeat, loop);
+    branch(overflow, active, 2u); /* address plus width wrapped */
+    zero_test(empty, active, 22u); /* no further published view */
+    branch(below, following, 3u); /* address below first */
+    branch(above, following, 8u); /* end above last */
+    test(permission, following, 0u);
 }
 
 void hl_x86_emit_vector_upper_load(uint32_t *words, uint32_t *cursor,
@@ -151,9 +158,7 @@ void hl_x86_emit_vector_upper_zero(uint32_t *words, uint32_t *cursor, unsigned g
     words[(*cursor)++] = store_word(31u, offset + 8u);
 }
 
-void hl_x86_patch_read_hits(uint32_t **hits, uint32_t *target) {
-    for (unsigned index = 0; index < HL_X86_READ_VIEWS; ++index) jump(hits[index], target);
-}
+void hl_x86_patch_read_hit(uint32_t *hit, uint32_t *target) { jump(hit, target); }
 
 /* Selects an already-published writable projection without returning to the
  * dispatcher.  A view transition archives the old exact dirty owner before
@@ -336,12 +341,12 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
     uint32_t *permission;
     uint32_t *permission_write = NULL;
     uint32_t *skip;
-    uint32_t *cache_hits[HL_X86_READ_VIEWS];
+    uint32_t *cache_hit;
     uint32_t access_width = item->load_width != 0u ? item->load_width : item->width;
     hl_x86_emit_address(words, cursor, item);
     --*cursor;
     if (item->memory_write == 0u)
-        hl_x86_emit_read_cache(words, cursor, access_width, 18u, 0, cache_hits);
+        hl_x86_emit_read_cache(words, cursor, access_width, 18u, 0, &cache_hit);
     else
         emit_write_cache(words, cursor, access_width);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
@@ -382,7 +387,7 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
     }
     words[(*cursor)++] = UINT32_C(0xd65f03c0);
     branch(skip, &words[*cursor], 14u);
-    if (item->memory_write == 0u) hl_x86_patch_read_hits(cache_hits, &words[*cursor]);
+    if (item->memory_write == 0u) hl_x86_patch_read_hit(cache_hit, &words[*cursor]);
     if (item->conditional != 0u)
         hl_x86_emit_cmov(words, cursor, item, 18u);
     else if (item->load_width != 0u) {
@@ -1466,7 +1471,7 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
     uint32_t *permission;
     uint32_t *skip;
     uint32_t *loaded_operation = NULL;
-    uint32_t *cache_hits[HL_X86_READ_VIEWS];
+    uint32_t *cache_hit;
     unsigned required = item->memory_write != 0u ? 2u : 1u;
     uint32_t width = item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
     int scalar_vector = item->vector_kind == VECTOR_INSERT_WORD;
@@ -1488,7 +1493,7 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
         hl_x86_emit_read_cache(words, cursor, width,
                                width == 32u ? 16u :
                                    item->vector_kind == VECTOR_COPY ? item->destination : 16u,
-                               !scalar_vector, cache_hits);
+                               !scalar_vector, &cache_hit);
     else
         emit_write_cache(words, cursor, width);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
@@ -1575,7 +1580,7 @@ void hl_x86_emit_vector(uint32_t *words, uint32_t *cursor, const instruction *it
     }
     branch(skip, &words[*cursor], 14u);
     if (item->memory_write == 0u)
-        hl_x86_patch_read_hits(cache_hits,
-                               item->vector_kind == VECTOR_COPY && width != 32u ?
-                                   &words[*cursor] : loaded_operation);
+        hl_x86_patch_read_hit(cache_hit,
+                              item->vector_kind == VECTOR_COPY && width != 32u ?
+                                  &words[*cursor] : loaded_operation);
 }

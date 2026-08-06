@@ -2017,6 +2017,14 @@ static void publish_read_view(hl_native_x86_64_cpu *cpu, uint64_t token,
     cpu->read_views[0][3] = permissions;
 }
 
+static void publish_read_entry(hl_native_x86_64_cpu *cpu, unsigned index, uint64_t first,
+                               uint64_t last, uint64_t delta, uint64_t permissions) {
+    cpu->read_views[index][0] = first;
+    cpu->read_views[index][1] = last;
+    cpu->read_views[index][2] = delta;
+    cpu->read_views[index][3] = permissions;
+}
+
 static uint32_t scalar_read_fragment(uint32_t *host) {
     instruction item;
     uint32_t cursor = 0;
@@ -2323,6 +2331,98 @@ static int read_cache_contract(void) {
     publish_read_view(&cpu, 11, 11, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
     CHECK(execute_fragment(vector, vector_count, &cpu) == 0);
     CHECK(memcmp(&cpu.vectors[18], storage, 16) == 0 && cpu.reason == 0);
+
+    /* The view scan is a loop over the published table, and nothing above ever
+     * publishes a second entry: every case here lives or dies on the stride,
+     * the countdown and the bound, none of which index zero can exercise. */
+    for (unsigned index = 0; index < 4u; ++index) {
+        memset(&cpu, 0, sizeof cpu);
+        cpu.registers[3] = UINT64_C(0x1000);
+        cpu.read_token = 31;
+        cpu.read_incarnation = 31;
+        cpu.read_count = index + 1u;
+        /* Only the last published entry covers the access; the earlier ones must
+         * be stepped over rather than ending the scan. */
+        for (unsigned earlier = 0; earlier < index; ++earlier)
+            publish_read_entry(&cpu, earlier, UINT64_C(0x8000) + earlier * UINT64_C(0x100),
+                               UINT64_C(0x8080) + earlier * UINT64_C(0x100), 0, 1);
+        publish_read_entry(&cpu, index, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
+        cpu.registers[0] = UINT64_C(0xfeedface);
+        CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+        CHECK(cpu.registers[0] == storage[0] && cpu.reason == 0 && cpu.fault_access == 0);
+
+        /* The same table with the count one short must not reach that entry. */
+        cpu.read_count = index;
+        cpu.registers[3] = UINT64_C(0x1000);
+        cpu.registers[0] = UINT64_C(0xfeedface);
+        cpu.reason = cpu.fault_access = cpu.fault_size = 0;
+        CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+        CHECK(cpu.registers[0] == UINT64_C(0xfeedface));
+        CHECK(cpu.reason == HL_NATIVE_EXIT_FALLBACK && cpu.fault_access == 1);
+    }
+
+    /* A covering entry that lacks read must advance the scan, not end it: the
+     * readable duplicate behind it is still the one that must be selected. */
+    memset(&cpu, 0, sizeof cpu);
+    cpu.registers[3] = UINT64_C(0x1000);
+    cpu.read_token = 33;
+    cpu.read_incarnation = 33;
+    cpu.read_count = 2;
+    publish_read_entry(&cpu, 0, UINT64_C(0x1000), UINT64_C(0x1020), delta, 2);
+    publish_read_entry(&cpu, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
+    cpu.registers[0] = UINT64_C(0xfeedface);
+    CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+    CHECK(cpu.registers[0] == storage[0] && cpu.reason == 0);
+
+    /* An entry the access straddles must also advance rather than end the scan. */
+    memset(&cpu, 0, sizeof cpu);
+    cpu.registers[3] = UINT64_C(0x1000);
+    cpu.read_token = 34;
+    cpu.read_incarnation = 34;
+    cpu.read_count = 2;
+    publish_read_entry(&cpu, 0, UINT64_C(0x1000), UINT64_C(0x1004), delta, 1);
+    publish_read_entry(&cpu, 1, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
+    cpu.registers[0] = UINT64_C(0xfeedface);
+    CHECK(execute_fragment(scalar, scalar_count, &cpu) == 0);
+    CHECK(cpu.registers[0] == storage[0] && cpu.reason == 0);
+
+    /* The scan spills two host registers; a leaked or double-popped slot only
+     * shows up once several cached accesses run inside one entry. */
+    {
+        uint32_t chain[512] = {0};
+        uint32_t chain_count = 0;
+        instruction load;
+
+        memset(&load, 0, sizeof load);
+        load.pc = UINT64_C(0x45672000);
+        load.operation = OP_LOAD;
+        load.width = 8;
+        load.address_base = 3;
+        load.address_index = UINT8_MAX;
+        for (unsigned repeat = 0; repeat < 6u; ++repeat) {
+            load.destination = (uint8_t)(5u + repeat); /* never rbx, which carries the address */
+            hl_x86_emit_load(chain, &chain_count, &load);
+        }
+        for (unsigned repeat = 0; repeat < 6u; ++repeat)
+            chain[chain_count++] = store_word(5u + repeat, offsetof(hl_native_x86_64_cpu, registers) +
+                                                               (5u + repeat) * 8u);
+        chain[chain_count++] = UINT32_C(0xd65f03c0);
+
+        memset(&cpu, 0, sizeof cpu);
+        cpu.registers[3] = UINT64_C(0x1000);
+        cpu.read_token = 35;
+        cpu.read_incarnation = 35;
+        cpu.read_count = 4;
+        publish_read_entry(&cpu, 0, UINT64_C(0x9000), UINT64_C(0x9008), 0, 1);
+        publish_read_entry(&cpu, 1, UINT64_C(0x9100), UINT64_C(0x9108), 0, 1);
+        publish_read_entry(&cpu, 2, UINT64_C(0x9200), UINT64_C(0x9208), 0, 1);
+        publish_read_entry(&cpu, 3, UINT64_C(0x1000), UINT64_C(0x1020), delta, 1);
+        CHECK(execute_fragment(chain, chain_count, &cpu) == 0);
+        CHECK(cpu.reason == 0);
+        for (unsigned repeat = 0; repeat < 6u; ++repeat)
+            CHECK(cpu.registers[5u + repeat] == storage[0]);
+        CHECK(cpu.registers[3] == UINT64_C(0x1000)); /* the address base survived */
+    }
 
     memset(&item, 0, sizeof item);
     item.pc = UINT64_C(0x45671000);

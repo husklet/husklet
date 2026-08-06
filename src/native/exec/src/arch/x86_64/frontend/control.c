@@ -20,14 +20,14 @@ static void test(uint32_t *instruction, uint32_t *target, unsigned bit) {
 /* Checked load with no architectural mutation before all guards pass. */
 static void load_target(uint32_t *words, uint32_t *cursor, const instruction *item, int effective) {
     uint32_t *below, *overflow, *above, *permission, *skip;
-    uint32_t *cache_hits[4];
+    uint32_t *cache_hit;
     if (effective) {
         hl_x86_emit_address(words, cursor, item);
         --*cursor;
     } else {
         words[(*cursor)++] = UINT32_C(0xaa0003f0) | 4u << 16; /* mov x16,x4 */
     }
-    hl_x86_emit_read_cache(words, cursor, 8u, 21u, 0, cache_hits);
+    hl_x86_emit_read_cache(words, cursor, 8u, 21u, 0, &cache_hit);
     words[(*cursor)++] = load_word(17, offsetof(hl_native_x86_64_cpu, memory_first));
     words[(*cursor)++] = UINT32_C(0xeb11021f); below = &words[(*cursor)++];
     words[(*cursor)++] = UINT32_C(0xb1002212); overflow = &words[(*cursor)++]; /* adds x18,x16,#8 */
@@ -56,7 +56,7 @@ static void load_target(uint32_t *words, uint32_t *cursor, const instruction *it
     }
     words[(*cursor)++] = UINT32_C(0xd65f03c0);
     branch(skip, &words[*cursor], 14u);
-    hl_x86_patch_read_hits(cache_hits, &words[*cursor]);
+    hl_x86_patch_read_hit(cache_hit, &words[*cursor]);
 }
 
 uint32_t hl_x86_control_words(const instruction *item) {
