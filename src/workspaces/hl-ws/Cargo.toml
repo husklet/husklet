@@ -13,3 +13,6 @@ path = "src/lib.rs"
 # terminal is an abstract associated type, so hl-ws never names hl-ws-term; the feature seam speaks only
 # hl-ws's own schema/effect types. Add serde ONLY if persistence ever truly needs it (today it does not).
 [dependencies]
+
+[lints]
+workspace = true

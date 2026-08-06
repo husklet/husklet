@@ -26,3 +26,6 @@ release-verbose = []
 # Compile-time HARD-OFF: every macro expands to `{}` and spans become no-ops. For release builds
 # that want the branches gone entirely (even hl_error!).
 disabled = []
+
+[lints]
+workspace = true

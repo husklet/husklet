@@ -6,6 +6,9 @@
 //! no display, no container engine. On macOS the same code also underlies "local shell" workspaces; the
 //! in-container workspace path is the sibling `HlJitPty`.
 
+// The POSIX pty and fork/exec calls this module is made of are all `unsafe` libc entry points.
+#![allow(unsafe_code)]
+
 use super::PtyBackend;
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};

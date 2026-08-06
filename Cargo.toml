@@ -14,6 +14,8 @@ members = [
 exclude = [
     "src/containers/.cache",
 ]
+# hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host, so it stays
+# out of the default set; build it explicitly with `cargo build -p hl-gui` (or `make app`) on macOS.
 default-members = [
     "src/workspaces/hl-ws-term",
     "src/workspaces/hl-ws",
@@ -65,11 +67,35 @@ uuid = "1"
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
-all = "warn"
-pedantic = "warn"
-# hl-gui pulls in GTK4/libadwaita (pkg-config), which isn't present on the Linux dev host.
-# Keep it out of the default set so a bare `cargo build` works everywhere; build it
-# explicitly with `cargo build -p hl-gui` (or `make app`) on the macOS host.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic lints that are wrong for an emulator/runtime workspace. Each is off deliberately, not
+# because nobody got to it; anything not listed here is expected to be fixed at the site.
+
+# Guest/host width conversions are the domain, and `try_from` on a decode path adds a panic edge.
+cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+
+# These demand prose sections, and this repo's style rule is one or two sentences maximum.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+# Opcode, address and mask constants read better as the manuals write them.
+inconsistent_digit_grouping = "allow"
+unreadable_literal = "allow"
+
+# Instruction and syscall handlers carry the arity and flag set the ISA defines.
+fn_params_excessive_bools = "allow"
+struct_excessive_bools = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+
+# Register and operand names differ by one character by nature (`rax`/`rbx`, `src`/`dst`).
+similar_names = "allow"
 [profile.release]
 opt-level = 2
 panic = "abort"

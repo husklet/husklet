@@ -8,3 +8,6 @@ license = "MIT"
 [lib]
 name = "hl_gui"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
