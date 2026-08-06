@@ -198,6 +198,8 @@ OOM value. Exit/reap/reuse therefore linearizes wholly before or after the
 operation, never between identity validation and access. Missing or mismatched
 identities return `ESRCH` after exit, reuse, or cross-process mismatch without
 mutating a replacement. Process-level OOM files retain their prior behavior.
+`TaskProcfs` decodes the wire identities for shape only and performs no registry
+snapshot or liveness preflight; the atomic task operation is the sole authority.
 Metadata size and seek arithmetic use the length cached at open and remain usable
 after task exit. Empty, malformed, or out-of-range writes fail `EINVAL` before
 task validation; scalar and vector reads, including zero-length and positional

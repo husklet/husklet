@@ -327,7 +327,7 @@ impl ProcfsSource for TaskProcfs {
         process: ProcfsProcessIdentity,
         thread: Option<u32>,
     ) -> Result<ProcfsThreadIdentity, ProcfsError> {
-        let process = self.process_id(process)?;
+        let process = ProcessId::from_wire(process.slot(), process.generation()).ok_or(ProcfsError::NotFound)?;
         let snapshot = self.tasks.snapshot();
         let leader = snapshot
             .processes
@@ -425,7 +425,8 @@ impl ProcfsSource for TaskProcfs {
         _actor: hl_descriptor::OperationActor,
         value: i16,
     ) -> Result<(), hl_descriptor::ObjectError> {
-        let process = self.process_id(process).map_err(|_| {
+        let task_qualified = thread.is_some();
+        let process = ProcessId::from_wire(process.slot(), process.generation()).ok_or_else(|| {
             thread.map_or(hl_descriptor::ObjectError::Retired, |_| {
                 hl_descriptor::ObjectError::NoSuchProcess
             })
@@ -438,7 +439,8 @@ impl ProcfsSource for TaskProcfs {
             .set_task_oom_score_adj(process, thread, value)
             .map_err(|error| match error {
                 hl_task::TaskError::InvalidLimit => hl_descriptor::ObjectError::InvalidArgument,
-                _ => hl_descriptor::ObjectError::NoSuchProcess,
+                _ if task_qualified => hl_descriptor::ObjectError::NoSuchProcess,
+                _ => hl_descriptor::ObjectError::Retired,
             })
     }
 

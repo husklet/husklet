@@ -99,19 +99,6 @@ impl TaskRegistry {
         Ok(Self::process(&state, process)?.oom_score_adj)
     }
 
-    #[cfg(test)]
-    pub(crate) fn task_oom_score_adj_with_hook(
-        &self,
-        process: ProcessId,
-        thread: Option<crate::ThreadId>,
-        hook: impl FnOnce(),
-    ) -> Result<i16, TaskError> {
-        let state = self.lock();
-        Self::validate_oom_target(&state, process, thread)?;
-        hook();
-        Ok(Self::process(&state, process)?.oom_score_adj)
-    }
-
     /// Sets one process OOM adjustment after atomically validating an optional exact thread owner.
     pub fn set_task_oom_score_adj(
         &self,
@@ -124,6 +111,24 @@ impl TaskRegistry {
         }
         let mut state = self.lock();
         Self::validate_oom_target(&state, process, thread)?;
+        Self::process_mut(&mut state, process)?.oom_score_adj = value;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_task_oom_score_adj_with_hook(
+        &self,
+        process: ProcessId,
+        thread: Option<crate::ThreadId>,
+        value: i16,
+        hook: impl FnOnce(),
+    ) -> Result<(), TaskError> {
+        if !(-1000..=1000).contains(&value) {
+            return Err(TaskError::InvalidLimit);
+        }
+        let mut state = self.lock();
+        Self::validate_oom_target(&state, process, thread)?;
+        hook();
         Self::process_mut(&mut state, process)?.oom_score_adj = value;
         Ok(())
     }

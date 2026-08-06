@@ -130,15 +130,14 @@ fn task_oom_access_is_atomic_with_exit_and_rejects_reuse() {
     let (child, child_thread) = registry
         .commit_fork_process(registry.begin_fork_process(leader).unwrap())
         .unwrap();
-    registry.set_task_oom_score_adj(child, Some(child_thread), 321).unwrap();
     let entered = Arc::new(Barrier::new(2));
     let release = Arc::new(Barrier::new(2));
-    let reader = {
+    let setter = {
         let registry = Arc::clone(&registry);
         let entered = Arc::clone(&entered);
         let release = Arc::clone(&release);
         thread::spawn(move || {
-            registry.task_oom_score_adj_with_hook(child, Some(child_thread), || {
+            registry.set_task_oom_score_adj_with_hook(child, Some(child_thread), 321, || {
                 entered.wait();
                 release.wait();
             })
@@ -146,16 +145,19 @@ fn task_oom_access_is_atomic_with_exit_and_rejects_reuse() {
     };
     entered.wait();
     let (sent, received) = mpsc::channel();
+    let (attempting, attempted) = mpsc::channel();
     let exiting = {
         let registry = Arc::clone(&registry);
         thread::spawn(move || {
+            attempting.send(()).unwrap();
             let result = registry.exit_process(child, ExitStatus::Code(0));
             sent.send(result).unwrap();
         })
     };
+    attempted.recv().unwrap();
     assert!(received.try_recv().is_err());
     release.wait();
-    assert_eq!(reader.join().unwrap(), Ok(321));
+    assert_eq!(setter.join().unwrap(), Ok(()));
     assert_eq!(received.recv().unwrap(), Ok(()));
     exiting.join().unwrap();
     registry.reap(parent, child).unwrap();
@@ -166,6 +168,10 @@ fn task_oom_access_is_atomic_with_exit_and_rejects_reuse() {
     assert_eq!(replacement_thread.number(), child_thread.number());
     assert_eq!(
         registry.set_task_oom_score_adj(child, Some(child_thread), 999),
+        Err(TaskError::InvalidProcess)
+    );
+    assert_eq!(
+        registry.task_oom_score_adj(child, Some(child_thread)),
         Err(TaskError::InvalidProcess)
     );
     assert_eq!(
