@@ -18,11 +18,14 @@ pub struct Reference {
     pub name: String,
     pub location: Location,
     pub context: Option<Rc<Context>>,
+    /// The reference lives in an attribute body rather than ordinary code.
+    pub attribute: bool,
 }
 
 pub struct References<'a> {
     source: &'a Source,
     context: Option<Rc<Context>>,
+    attribute: bool,
     pub values: Vec<Reference>,
 }
 
@@ -31,6 +34,7 @@ impl<'a> References<'a> {
         Self {
             source,
             context: None,
+            attribute: false,
             values: Vec::new(),
         }
     }
@@ -47,6 +51,7 @@ impl<'a> References<'a> {
             name,
             location: self.source.location(span),
             context: self.context.clone(),
+            attribute: self.attribute,
         });
     }
 
@@ -114,6 +119,8 @@ impl<'ast> Visit<'ast> for References<'_> {
     }
 
     fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+        let previous = std::mem::replace(&mut self.attribute, true);
         self.meta(&attribute.meta);
+        self.attribute = previous;
     }
 }

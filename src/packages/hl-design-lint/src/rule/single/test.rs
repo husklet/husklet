@@ -35,8 +35,8 @@ fn subjects(source: &str) -> Vec<String> {
 }
 
 #[test]
-fn attribute_reference_supplies_the_sole_use() {
-    assert_eq!(
+fn an_attribute_only_use_is_excluded() {
+    assert!(
         subjects(
             r#"
 #[derive(serde::Deserialize)]
@@ -63,8 +63,25 @@ fn gated() -> bool {
     true
 }
 "#,
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn an_ordinary_sole_use_still_fires() {
+    assert_eq!(
+        subjects(
+            r"
+fn fallback() -> u16 {
+    7
+}
+fn build() -> u16 {
+    fallback()
+}
+",
         ),
-        ["fallback", "gated", "platform", "socket"]
+        ["fallback"]
     );
 }
 
