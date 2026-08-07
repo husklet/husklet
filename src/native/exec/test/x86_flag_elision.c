@@ -115,7 +115,8 @@ static int elision_fires(void) {
 /* PF and AF form a separate tail that dies to any following ALU op, including the adc/sbb and
    inc/dec forms that read or preserve CF and so cannot kill the whole flag word. */
 #define PFAF_ELIDED_ADD 27u
-#define PFAF_ELIDED_LOGICAL 23u
+/* A logical op's CF and OF ride in the PF/AF tail, so eliding only that half still owes a clear. */
+#define PFAF_ELIDED_LOGICAL 27u
 #define FULL_ADD 45u
 
 static int pfaf_elision_fires(void) {
@@ -172,8 +173,9 @@ static int shift_elision_fires(void) {
     CHECK(words_for(once, sizeof once, 0) == ELIDED_SHIFT);
     CHECK(words_for(variable, sizeof variable, 0) == ELIDED_VARIABLE_SHIFT);
     CHECK(words_for(wide, sizeof wide, 0) == ELIDED_VARIABLE_SHIFT);
-    /* A shift does not unconditionally define every flag, so it never kills its predecessor. */
-    CHECK(words_for(chained, sizeof chained, 0) > ELIDED_SHIFT);
+    /* A shift never kills its predecessor, but one whose own halves are both elided writes no flag
+     * and reads none, so the scan crosses it to the add that does kill. */
+    CHECK(words_for(chained, sizeof chained, 0) == ELIDED_SHIFT);
     CHECK(words_for(chained, sizeof chained, 1) == ELIDED_SHIFT);
 
     CHECK(budget_is_exact(immediate, sizeof immediate));
@@ -254,6 +256,59 @@ static int rotate_boundaries_materialize(void) {
     CHECK(words_for(pushf, sizeof pushf, 0) > ELIDED_ROTATE);
     CHECK(words_for(inc, sizeof inc, 0) > ELIDED_ROTATE);
     CHECK(words_for(memory, sizeof memory, 0) > ELIDED_ROTATE);
+    CHECK(words_for(syscall_exit, sizeof syscall_exit, 0) > ELIDED_ROTATE);
+    return 0;
+}
+
+/* The elision is a forward scan, not a peephole: comisd redefines every flag while reading none, so
+   it kills producers several instructions back across the imul and the scalar float ops between. */
+static int comisd_kills_across_vectors(void) {
+    const uint8_t loop[] = {
+        0xf2, 0x0f, 0x59, 0xc1,       /* mulsd xmm0,xmm1 */
+        0x48, 0x31, 0xd8,             /* xor rax,rbx */
+        0x48, 0x0f, 0xaf, 0xc2,       /* imul rax,rdx */
+        0x48, 0xc1, 0xc0, 0x0d,       /* rol rax,13 */
+        0xf2, 0x0f, 0x58, 0xd0,       /* addsd xmm2,xmm0 */
+        0x66, 0x0f, 0x2f, 0xd9,       /* comisd xmm3,xmm1 */
+        0x76, 0xe6                    /* jbe */
+    };
+    const uint8_t without[] = {
+        0xf2, 0x0f, 0x59, 0xc1, 0x48, 0x31, 0xd8, 0x48, 0x0f, 0xaf, 0xc2,
+        0x48, 0xc1, 0xc0, 0x0d, 0xf2, 0x0f, 0x58, 0xd0, 0x76, 0xe6
+    };
+    const uint8_t register_load[] = {0xc1, 0xc0, 0x0d,             /* rol eax,13 */
+                                     0xf2, 0x0f, 0x10, 0xc1,       /* movsd xmm0,xmm1 */
+                                     0x66, 0x0f, 0x2f, 0xc1};      /* comisd xmm0,xmm1 */
+
+    CHECK(words_for(loop, sizeof loop, 1) == ELIDED_LOGICAL);
+    /* imul keeps only its product once the overflow test and its transfer are both dead. */
+    CHECK(words_for(loop, sizeof loop, 2) == 2u);
+    CHECK(words_for(loop, sizeof loop, 3) == ELIDED_ROTATE);
+    CHECK(words_for(register_load, sizeof register_load, 0) == ELIDED_ROTATE);
+    /* Delete the comisd and nothing downstream kills: the rotate keeps its whole bit-at-a-time form
+     * and the xor keeps the PF/AF half that only the comisd redefines. */
+    CHECK(words_for(without, sizeof without, 3) > ELIDED_ROTATE);
+    CHECK(words_for(without, sizeof without, 1) > ELIDED_LOGICAL);
+    CHECK(budget_covers_emitted(loop, sizeof loop));
+    return 0;
+}
+
+/* Crossing a vector op is only sound where nothing between the producer and the killer can observe
+   EFLAGS. A faulting operand reaches a guest handler, sete reads ZF, and syscall ends the block. */
+static int observation_points_still_block(void) {
+    const uint8_t faulting[] = {0xc1, 0xc0, 0x0d,             /* rol eax,13 */
+                               0xf2, 0x0f, 0x10, 0x03,        /* movsd xmm0,[rbx] -- may fault */
+                               0x66, 0x0f, 0x2f, 0xc1};       /* comisd xmm0,xmm1 */
+    const uint8_t setcc[] = {0xc1, 0xc0, 0x0d, 0x0f, 0x94, 0xc2, 0x66, 0x0f, 0x2f, 0xc1};
+    const uint8_t syscall_exit[] = {0xc1, 0xc0, 0x0d, 0x0f, 0x05, 0x66, 0x0f, 0x2f, 0xc1};
+
+    /* Each killer is really inside the block, so the assertion below is about the scan, not the end. */
+    CHECK(words_for(faulting, sizeof faulting, 2) > 0u);
+    CHECK(words_for(setcc, sizeof setcc, 2) > 0u);
+    CHECK(words_for(faulting, sizeof faulting, 0) > ELIDED_ROTATE);
+    CHECK(words_for(setcc, sizeof setcc, 0) > ELIDED_ROTATE);
+    /* syscall instead ends the block, so the killer past it is never decoded into the same one. */
+    CHECK(words_for(syscall_exit, sizeof syscall_exit, 2) == 0u);
     CHECK(words_for(syscall_exit, sizeof syscall_exit, 0) > ELIDED_ROTATE);
     return 0;
 }
@@ -628,6 +683,8 @@ int main(void) {
     if ((status = shift_boundaries_materialize()) != 0) return status;
     if ((status = rotate_elision_fires()) != 0) return status;
     if ((status = rotate_boundaries_materialize()) != 0) return status;
+    if ((status = comisd_kills_across_vectors()) != 0) return status;
+    if ((status = observation_points_still_block()) != 0) return status;
     if ((status = multiply_kills_nzcv()) != 0) return status;
     if ((status = register_vectors_need_no_checkpoint()) != 0) return status;
 #if defined(__aarch64__)

@@ -40,9 +40,12 @@ static int may_fallback(const instruction *item) {
 
 /* 1 iff the item redefines every flag the NZCV transfer publishes while reading none. adc/sbb read CF,
    inc/dec preserve it, and a memory operand can fault before the redefinition. imul qualifies: it
-   redefines CF and OF, and this lowering stores SF and ZF too rather than leaving them undefined. */
+   redefines CF and OF, and this lowering stores SF and ZF too rather than leaving them undefined.
+   comisd/ucomisd clear CF, PF, AF, ZF, SF and OF and then rewrite them from the comparison. */
 static int kills_nzcv(const instruction *item) {
     if (item->operation == OP_IMUL) return item->source_high == 0u && item->memory_operand == 0u;
+    if (item->operation == OP_VECTOR)
+        return item->vector_kind == VECTOR_SCALAR_COMPARE_DOUBLE && item->memory_operand == 0u;
     return item->operation == OP_ALU && item->memory_operand == 0u && item->preserve_carry == 0u &&
            item->preserve_flags == 0u && item->alu_kind != 2u && item->alu_kind != 3u;
 }
@@ -50,26 +53,97 @@ static int kills_nzcv(const instruction *item) {
 /* 1 iff the item redefines both PF and AF while reading neither, which adc/sbb and inc/dec also do
    even though they read or preserve CF. imul is absent because this lowering leaves PF and AF alone. */
 static int kills_pfaf(const instruction *item) {
+    if (item->operation == OP_VECTOR)
+        return item->vector_kind == VECTOR_SCALAR_COMPARE_DOUBLE && item->memory_operand == 0u;
     return item->operation == OP_ALU && item->memory_operand == 0u && item->preserve_flags == 0u;
 }
 
-/* A register ALU, shift or rotate op publishes nothing observable besides cpu->flags, so a successor
-   redefining a half it wrote lets it skip that half's materialization. The two halves are tracked
-   apart because their killer sets differ, and each producer consumes the ones it writes. */
+/* Whitelist of items with no flag semantics at all: they read no flag, write none, and cannot leave
+   the block through anything that observes one. Anything unlisted counts as a reader, because missing
+   a reader silently produces a wrong branch while missing a killer only costs words. The float
+   arithmetic forms are listed even though they can bail to the interpreter: the bail resumes the
+   identical guest stream at the same pc, so it reaches this scan's killer before any reader exactly
+   as the translated block would. */
+static int transparent(const instruction *item) {
+    if (item->memory_operand != 0u) return 0;
+    switch (item->operation) {
+        case OP_NOP:
+        case OP_MOV_IMMEDIATE:
+        case OP_MOV_REGISTER:
+        case OP_EXTEND:
+        case OP_BSWAP:
+        case OP_ADDRESS:
+        case OP_EXCHANGE:
+        case OP_VECTOR:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Additionally transparent for the NZCV half: a producer whose own NZCV is already dead emits no flag
+   word at all, and rcl/rcr are excluded because they read CF into the rotated value. */
+static int transparent_nzcv(const instruction *item) {
+    if (transparent(item)) return 1;
+    if (item->memory_operand != 0u) return 0;
+    if (item->operation == OP_IMUL) return item->source_high == 0u && item->nzcv_dead != 0u;
+    if (item->operation == OP_ROTATE)
+        return item->nzcv_dead != 0u && (item->shift_kind == 0u || item->shift_kind == 1u);
+    if (item->operation == OP_SHIFT) return item->nzcv_dead != 0u && item->pfaf_dead != 0u;
+    return 0;
+}
+
+/* Additionally transparent for the PF/AF half: imul and the rotates redefine no part of it and read
+   none of it, whatever they do to CF and OF. */
+static int transparent_pfaf(const instruction *item) {
+    if (transparent(item)) return 1;
+    if (item->memory_operand != 0u) return 0;
+    if (item->operation == OP_IMUL) return item->source_high == 0u;
+    if (item->operation == OP_ROTATE) return 1;
+    if (item->operation == OP_SHIFT) return item->nzcv_dead != 0u && item->pfaf_dead != 0u;
+    return 0;
+}
+
+/* 1 iff no reader sees the half before something redefines it outright. End of block is a reader. */
+static int half_is_dead(const decode *block, uint32_t index, int (*kills)(const instruction *),
+                        int (*crossable)(const instruction *)) {
+    uint32_t scan;
+
+    for (scan = index + 1u; scan < block->count; ++scan) {
+        const instruction *next = &block->instructions[scan];
+
+        if (kills(next)) return 1;
+        if (!crossable(next)) return 0;
+    }
+    return 0;
+}
+
+/* A register ALU, shift, rotate or imul publishes nothing observable besides cpu->flags, so a later
+   instruction redefining a half it wrote lets it skip that half's materialization. The two halves are
+   tracked apart because their killer sets differ, and each producer consumes the ones it writes. The
+   walk runs backwards so an already-elided producer is known to be crossable when it is reached. */
 static void mark_dead_flags(decode *block) {
     uint32_t index;
 
     for (index = 0; index < block->count; ++index) {
+        block->instructions[index].nzcv_dead = 0u;
+        block->instructions[index].pfaf_dead = 0u;
+    }
+    for (index = block->count; index-- > 0;) {
         instruction *item = &block->instructions[index];
 
-        item->nzcv_dead = 0u;
-        item->pfaf_dead = 0u;
+        if (item->memory_operand != 0u) continue;
+        if (item->operation == OP_IMUL) {
+            /* This lowering leaves PF and AF alone, so only the NZCV half is its to elide. */
+            if (item->source_high != 0u) continue;
+            item->nzcv_dead = (uint8_t)half_is_dead(block, index, kills_nzcv, transparent_nzcv);
+            continue;
+        }
         if (item->operation != OP_ALU && item->operation != OP_SHIFT && item->operation != OP_ROTATE)
             continue;
-        if (item->memory_operand != 0u || item->preserve_flags != 0u) continue;
-        if (index + 1u >= block->count) continue;
-        item->nzcv_dead = (uint8_t)kills_nzcv(&block->instructions[index + 1u]);
-        item->pfaf_dead = (uint8_t)kills_pfaf(&block->instructions[index + 1u]);
+        if (item->preserve_flags != 0u) continue;
+        item->nzcv_dead = (uint8_t)half_is_dead(block, index, kills_nzcv, transparent_nzcv);
+        item->pfaf_dead = (uint8_t)half_is_dead(block, index, kills_pfaf, transparent_pfaf);
     }
 }
 

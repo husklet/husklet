@@ -45,7 +45,7 @@ int hl_x86_decode_imul(const hl_x86_a64_request *request, decode *block, instruc
 }
 
 static uint32_t flags_words(void) {
-    return 19u + constant_words(1u) * 2u + constant_words(HL_X86_RFLAGS_NZCV_MASK);
+    return 21u + constant_words(1u) * 2u + constant_words(HL_X86_RFLAGS_NZCV_MASK);
 }
 
 static uint32_t lsl(unsigned destination, unsigned source, unsigned shift);
@@ -298,6 +298,8 @@ void hl_x86_emit_mul(uint32_t *words, uint32_t *cursor, const instruction *item)
 uint32_t hl_x86_imul_words(const instruction *item) {
     uint32_t words = item->source_high != 0u ? hl_x86_load_words(item) : 0u;
     if (item->has_immediate != 0u) words += constant_words(item->operand_immediate);
+    /* With NZCV dead the overflow test and its materialization both go, leaving the product alone. */
+    if (item->nzcv_dead != 0u) return words + (item->width == 8u ? 2u : 4u);
     words += item->width == 8u ? 6u : 7u;
     return words + flags_words();
 }
@@ -332,23 +334,29 @@ void hl_x86_emit_imul(uint32_t *words, uint32_t *cursor, const instruction *item
         right = source;
     }
     if (item->width == 8u) {
-        words[(*cursor)++] = UINT32_C(0x9b407c00) | right << 16 | left << 5 | 21u;
+        if (item->nzcv_dead == 0u)
+            words[(*cursor)++] = UINT32_C(0x9b407c00) | right << 16 | left << 5 | 21u;
         words[(*cursor)++] = UINT32_C(0x9b007c00) | right << 16 | left << 5 | 18u;
-        words[(*cursor)++] = UINT32_C(0x937ffc00) | 18u << 5 | 22u;
-        words[(*cursor)++] = UINT32_C(0xeb1602bf);
+        if (item->nzcv_dead == 0u) {
+            words[(*cursor)++] = UINT32_C(0x937ffc00) | 18u << 5 | 22u;
+            words[(*cursor)++] = UINT32_C(0xeb1602bf);
+        }
     } else {
         uint32_t extend = item->width == 2u ? UINT32_C(0x93403c00) : UINT32_C(0x93407c00);
         words[(*cursor)++] = extend | left << 5 | 21u;
         words[(*cursor)++] = extend | right << 5 | 22u;
         words[(*cursor)++] = UINT32_C(0x9b007c00) | 22u << 16 | 21u << 5 | 18u;
-        words[(*cursor)++] = extend | 18u << 5 | 23u;
-        words[(*cursor)++] = UINT32_C(0xeb17025f);
+        if (item->nzcv_dead == 0u) {
+            words[(*cursor)++] = extend | 18u << 5 | 23u;
+            words[(*cursor)++] = UINT32_C(0xeb17025f);
+        }
     }
-    words[(*cursor)++] = UINT32_C(0x9a9f07f5);
+    if (item->nzcv_dead == 0u) words[(*cursor)++] = UINT32_C(0x9a9f07f5);
     if (item->width == 2u)
         words[(*cursor)++] = UINT32_C(0xb3403c00) | 18u << 5 | item->destination;
     else
         words[(*cursor)++] = move(item->destination, 18u, item->width == 8u);
+    if (item->nzcv_dead != 0u) return;
     emit_constant(words, cursor, 23u, 1u);
     words[(*cursor)++] = UINT32_C(0xca1702b6);
     words[(*cursor)++] = lsl(22u, 22u, 29u);
