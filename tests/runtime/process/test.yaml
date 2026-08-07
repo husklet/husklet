@@ -240,8 +240,8 @@ cases:
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
-    build: { source: source/proc_comm.c, output: proc-self-exe-comm, flags: ["-static-pie", "-O2", "-std=gnu11", "-pthread"] }
-    artifact: { destination: /opt/husklet/proc-self-exe-comm }
+    build: { source: source/proc_comm.c, output: selfexe, flags: ["-static-pie", "-O2", "-std=gnu11", "-pthread"] }
+    artifact: { destination: /opt/husklet/selfexe }
     run: ["comm"]
     timeout: 120
     expect: { exit: 0, stdout: golden/proc_comm.txt }
