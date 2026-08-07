@@ -118,6 +118,7 @@ impl VfsSourceFactory {
             | RuntimePathError::Exists
             | RuntimePathError::CrossDevice
             | RuntimePathError::Unsupported
+            | RuntimePathError::NotSupported
             | RuntimePathError::NoSpace
             | RuntimePathError::Quota
             | RuntimePathError::WouldBlock

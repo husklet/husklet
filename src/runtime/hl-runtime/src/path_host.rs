@@ -273,6 +273,9 @@ pub enum RuntimePathError {
     CrossDevice,
     ReadOnly,
     Unsupported,
+    /// The backing filesystem refuses the operation (`EOPNOTSUPP`), as Linux
+    /// reports for `O_TMPFILE` on a filesystem without anonymous-inode support.
+    NotSupported,
     TooLarge,
     FileTooLarge,
     NoSpace,
@@ -301,6 +304,7 @@ impl RuntimePathError {
             Self::CrossDevice => Errno::EXDEV,
             Self::ReadOnly => Errno::EROFS,
             Self::Unsupported => Errno::ENOSYS,
+            Self::NotSupported => Errno::EOPNOTSUPP,
             Self::TooLarge => Errno::E2BIG,
             Self::FileTooLarge => Errno::EFBIG,
             Self::NoSpace => Errno::ENOSPC,

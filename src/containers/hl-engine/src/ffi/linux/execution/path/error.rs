@@ -18,6 +18,7 @@ impl HostError {
                 libc::EFBIG => RuntimePathError::FileTooLarge,
                 libc::ETXTBSY => RuntimePathError::TextBusy,
                 libc::EDQUOT => RuntimePathError::Quota,
+                libc::EOPNOTSUPP => RuntimePathError::NotSupported,
                 _ => Self::kind(error),
             };
         }
@@ -49,6 +50,7 @@ mod tests {
             (libc::EFBIG, RuntimePathError::FileTooLarge),
             (libc::ETXTBSY, RuntimePathError::TextBusy),
             (libc::EDQUOT, RuntimePathError::Quota),
+            (libc::EOPNOTSUPP, RuntimePathError::NotSupported),
         ];
 
         for (raw, expected) in cases {
