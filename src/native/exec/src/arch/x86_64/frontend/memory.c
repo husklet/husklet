@@ -329,7 +329,7 @@ uint32_t hl_x86_load_words(const instruction *item) {
     if (item->memory_write == 0u) words += hl_x86_read_cache_words(access_width);
     else words += HL_X86_WRITE_CACHE_WORDS;
 
-    if (item->load_width != 0u && item->signed_extend != 0u && item->width == 2u) ++words;
+    if (item->load_width != 0u && item->signed_extend != 0u && item->width <= 2u) ++words;
 
     return item->conditional != 0u ? words - 1u + hl_x86_cmov_words(item) : words;
 }
@@ -394,7 +394,7 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
         unsigned source = 18u;
 
         if (item->signed_extend != 0u) {
-            unsigned target = item->width == 2u ? 17u : item->destination;
+            unsigned target = item->width <= 2u ? 17u : item->destination;
             words[(*cursor)++] = (item->width == 8u ? UINT32_C(0x93400000) : UINT32_C(0x13000000)) |
                                    (access_width == 1u ? UINT32_C(0x1c00) :
                                                         access_width == 2u ? UINT32_C(0x3c00) :
@@ -402,7 +402,13 @@ void hl_x86_emit_load(uint32_t *words, uint32_t *cursor, const instruction *item
                                    source << 5 | target;
             source = target;
         }
-        if (item->width == 2u)
+        /* A one- or two-byte load merges into the destination; only the wider
+         * forms may clear the rest of the register. */
+        if (item->width == 1u)
+            words[(*cursor)++] = (item->destination_high != 0u ? UINT32_C(0xb3781c00) :
+                                                                   UINT32_C(0xb3401c00)) |
+                                 source << 5 | item->destination;
+        else if (item->width == 2u)
             words[(*cursor)++] = UINT32_C(0xb3403c00) | source << 5 | item->destination;
         else if (item->signed_extend == 0u)
             words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |

@@ -2615,3 +2615,264 @@ fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
+
+/// Shared starting point for the emitter-family sweeps below: distinct register
+/// contents so a temporary that leaks into a live value cannot look plausible.
+#[cfg(target_arch = "aarch64")]
+fn sweep_state() -> X86CpuState {
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[0] = 0x1122_3344_5566_7788;
+    initial.registers[1] = 0x0000_0000_0000_0007;
+    initial.registers[2] = 0x0000_0000_0000_0003;
+    initial.registers[3] = 0xfedc_ba98_7654_3210;
+    initial.registers[4] = 0x7100;
+    initial.registers[5] = 0x7120;
+    initial.registers[6] = 0x7040;
+    initial.registers[7] = 0x7080;
+    initial.registers[8] = 0x0f0f_0f0f_0f0f_0f0f;
+    initial.registers[9] = 0x8000_0000_8000_0001;
+    for index in 0..16 {
+        initial.vectors[index] = ((index as u128) << 96) | 0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10;
+    }
+    initial
+}
+
+#[cfg(target_arch = "aarch64")]
+fn sweep_operand() -> Vec<u8> {
+    (0..512_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect()
+}
+
+/// Read-modify-write ALU against memory, in both operand directions and at every
+/// width, so a helper that emits after the caller pinned the host address or the
+/// loaded value shows up as a wrong stored byte rather than a wrong register.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_alu_memory_forms_match_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    for kind in 0..8_u8 {
+        let base = kind << 3;
+        let program: Vec<Vec<u8>> = vec![
+            vec![base, 0x1e],                    // op %bl,(%rsi)
+            vec![base | 1, 0x1e],                // op %ebx,(%rsi)
+            vec![0x48, base | 1, 0x1e],          // op %rbx,(%rsi)
+            vec![base | 2, 0x1e],                // op (%rsi),%bl
+            vec![base | 3, 0x1e],                // op (%rsi),%ebx
+            vec![0x48, base | 3, 0x1e],          // op (%rsi),%rbx
+            vec![0x80, base | 0x06, 0x5a],       // opb $0x5a,(%rsi)
+            vec![0x83, base | 0x06, 0xf9],       // opl $-7,(%rsi)
+            vec![0x48, 0x81, base | 0x06, 0x21, 0x43, 0x65, 0x07], // opq $imm32,(%rsi)
+            vec![base, 0xd8],                    // op %bl,%al
+            vec![0x48, base | 1, 0xd8],          // op %rbx,%rax
+        ];
+        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+    }
+}
+
+/// `xchg`, `xadd` and `cmpxchg` in both their register and memory forms: each one
+/// pins a pre-image in a callee-range temporary across an emitted ALU sequence.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_exchange_forms_match_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x86, 0x1e],             // xchg %bl,(%rsi)
+        vec![0x87, 0x1e],             // xchg %ebx,(%rsi)
+        vec![0x48, 0x87, 0x1e],       // xchg %rbx,(%rsi)
+        vec![0x66, 0x87, 0x1e],       // xchg %bx,(%rsi)
+        vec![0x0f, 0xc0, 0x1e],       // xadd %bl,(%rsi)
+        vec![0x0f, 0xc1, 0x1e],       // xadd %ebx,(%rsi)
+        vec![0x48, 0x0f, 0xc1, 0x1e], // xadd %rbx,(%rsi)
+        vec![0x66, 0x0f, 0xc1, 0x1e], // xadd %bx,(%rsi)
+        vec![0x0f, 0xc0, 0xd8],       // xadd %bl,%al
+        vec![0x0f, 0xc1, 0xd8],       // xadd %ebx,%eax
+        vec![0x48, 0x0f, 0xc1, 0xd8], // xadd %rbx,%rax
+        vec![0x0f, 0xb0, 0x1e],       // cmpxchg %bl,(%rsi)
+        vec![0x0f, 0xb1, 0x1e],       // cmpxchg %ebx,(%rsi)
+        vec![0x48, 0x0f, 0xb1, 0x1e], // cmpxchg %rbx,(%rsi)
+        vec![0x66, 0x0f, 0xb1, 0x1e], // cmpxchg %bx,(%rsi)
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// The high-byte source of an exchange follows the same extraction the plain store
+/// gets wrong when it lands in the bounds-check scratch.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_high_byte_exchange_matches_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x86, 0x26],       // xchg %ah,(%rsi)
+        vec![0x86, 0x2e],       // xchg %ch,(%rsi)
+        vec![0x86, 0x36],       // xchg %dh,(%rsi)
+        vec![0x86, 0x3e],       // xchg %bh,(%rsi)
+        vec![0x0f, 0xc0, 0x26], // xadd %ah,(%rsi)
+        vec![0x0f, 0xc0, 0x36], // xadd %dh,(%rsi)
+        vec![0x0f, 0xb0, 0x26], // cmpxchg %ah,(%rsi)
+        vec![0x0f, 0xb0, 0x36], // cmpxchg %dh,(%rsi)
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// String moves and stores, where the loaded value is pinned in a temporary across
+/// the whole store guard, plus the `rep` forms that also carry a counter.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_string_forms_match_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0xa4],             // movsb
+        vec![0x66, 0xa5],       // movsw
+        vec![0xa5],             // movsl
+        vec![0x48, 0xa5],       // movsq
+        vec![0xaa],             // stosb
+        vec![0xab],             // stosl
+        vec![0x48, 0xab],       // stosq
+        vec![0xac],             // lodsb
+        vec![0xad],             // lodsl
+        vec![0x48, 0xad],       // lodsq
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// Stack traffic: every push and pop form routes through the ordinary store and load
+/// emitters while holding the pushed value or the popped result in a temporary.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_stack_forms_match_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x53],                         // push %rbx
+        vec![0x55],                         // push %rbp
+        vec![0x6a, 0x7f],                   // push $0x7f
+        vec![0x68, 0x21, 0x43, 0x65, 0x07], // push $0x7654321
+        vec![0x5b],                         // pop %rbx
+        vec![0x5d],                         // pop %rbp
+        vec![0x58],                         // pop %rax
+        vec![0x41, 0x50],                   // push %r8
+        vec![0x41, 0x58],                   // pop %r8
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// `setcc` and `cmovcc`, both of which materialise their result in a temporary and
+/// then hand it to the store emitter or a flag rebuild.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_conditional_forms_match_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    for condition in 0..16_u8 {
+        let program: Vec<Vec<u8>> = vec![
+            vec![0x48, 0x39, 0xd8],                   // cmp %rbx,%rax
+            vec![0x0f, 0x90 | condition, 0x06],       // setcc (%rsi)
+            vec![0x0f, 0x90 | condition, 0xc3],       // setcc %bl
+            vec![0x0f, 0x40 | condition, 0xc3],       // cmovcc %ebx,%eax
+            vec![0x48, 0x0f, 0x40 | condition, 0xc3], // cmovcc %rbx,%rax
+            vec![0x48, 0x0f, 0x40 | condition, 0x06], // cmovcc (%rsi),%rax
+            vec![0x66, 0x0f, 0x40 | condition, 0x06], // cmovcc (%rsi),%ax
+        ];
+        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+    }
+}
+
+/// Bit scans and counts, which pin the scanned value and a carry bit across the
+/// flag rebuild that follows them.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_bitscan_forms_match_interpreter_at_each_boundary() {
+    let mut initial = sweep_state();
+    initial.registers[3] = 0x0000_0000_0001_0000;
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0xf3, 0x0f, 0xbc, 0xc3],       // tzcnt %ebx,%eax
+        vec![0xf3, 0x0f, 0xbd, 0xc3],       // lzcnt %ebx,%eax
+        vec![0xf3, 0x48, 0x0f, 0xbc, 0xc3], // tzcnt %rbx,%rax
+        vec![0xf3, 0x48, 0x0f, 0xbd, 0x06], // lzcnt (%rsi),%rax
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// Widening multiplies and divides, whose memory forms route the operand through
+/// the load emitter before the arithmetic reads it back out of a temporary.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_multiply_divide_forms_match_interpreter_at_each_boundary() {
+    let mut initial = sweep_state();
+    initial.registers[0] = 0x0000_0000_1234_5678;
+    initial.registers[2] = 0;
+    initial.registers[3] = 0x0000_0000_0000_0025;
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0xf6, 0xe3],                         // mul %bl
+        vec![0xf7, 0xe3],                         // mul %ebx
+        vec![0x48, 0xf7, 0xe3],                   // mul %rbx
+        vec![0xf6, 0x26],                         // mulb (%rsi)
+        vec![0xf7, 0x26],                         // mull (%rsi)
+        vec![0x48, 0xf7, 0x26],                   // mulq (%rsi)
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// Legacy SSE memory operands, which land in a scratch vector that the per-kind
+/// emitters also use as a free temporary.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_sse_memory_forms_match_interpreter_at_each_boundary() {
+    let initial = sweep_state();
+    let operand = sweep_operand();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0xf3, 0x0f, 0x6f, 0x0e], // movdqu (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xfc, 0x0e], // paddb (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xf8, 0x0e], // psubb (%rsi),%xmm1
+        vec![0x66, 0x0f, 0x74, 0x0e], // pcmpeqb (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xdb, 0x0e], // pand (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xeb, 0x0e], // por (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xef, 0x0e], // pxor (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xe4, 0x0e], // pmulhuw (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xf4, 0x0e], // pmuludq (%rsi),%xmm1
+        vec![0x66, 0x0f, 0x60, 0x0e], // punpcklbw (%rsi),%xmm1
+        vec![0x66, 0x0f, 0x68, 0x0e], // punpckhbw (%rsi),%xmm1
+        vec![0x66, 0x0f, 0xd7, 0xc1], // pmovmskb %xmm1,%eax
+        vec![0xf3, 0x0f, 0x7f, 0x0e], // movdqu %xmm1,(%rsi)
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// `lodsb`/`lodsw` merge into AL/AX; only the wider forms may clear the rest of RAX.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_load_string_merges_into_the_accumulator_at_each_boundary() {
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[0] = 0x1122_3344_5566_7788;
+    initial.registers[6] = 0x7040;
+    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    let program: Vec<Vec<u8>> = vec![
+        vec![0xac],       // lodsb
+        vec![0x66, 0xad], // lodsw
+        vec![0xad],       // lodsl
+        vec![0x48, 0xad], // lodsq
+        vec![0xac],       // lodsb
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
