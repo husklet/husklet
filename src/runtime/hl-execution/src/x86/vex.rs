@@ -725,7 +725,27 @@ impl Decoder {
                 Self::binary(decoded, source, length, VexOperation::Broadcast128)
             }
             (3, 0x18 | 0x38, 1) if length != 0 && !w => Self::binary(decoded, source, length, VexOperation::Insert128),
-            (2, 0x25, 1) => Self::binary(decoded, source, length, VexOperation::WidenSignedDword),
+            (2, 0x20..=0x25 | 0x30..=0x35, 1) if source == 0 => {
+                let (from, to) = match decoded.opcode & 0x0f {
+                    0 => (1, 2),
+                    1 => (1, 4),
+                    2 => (1, 8),
+                    3 => (2, 4),
+                    4 => (2, 8),
+                    _ => (4, 8),
+                };
+                Self::binary(
+                    decoded,
+                    source,
+                    length,
+                    VexOperation::Widen {
+                        from,
+                        to,
+                        signed: decoded.opcode < 0x30,
+                    },
+                )
+            }
+            (3, 0x0f, 1) => Self::binary(decoded, source, length, VexOperation::Align),
             (1, 0x74..=0x76, 1) => Self::binary(
                 decoded,
                 source,

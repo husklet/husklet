@@ -173,7 +173,14 @@ pub enum VexOperation {
     DuplicateLowSingle,
     DuplicateHighSingle,
     Insert128,
-    WidenSignedDword,
+    /// `vpalignr`: byte-rotates `first:second` within each 128-bit lane.
+    Align,
+    /// `vpmovsx`/`vpmovzx`, widening `from` bytes to `to` bytes per element.
+    Widen {
+        from: u8,
+        to: u8,
+        signed: bool,
+    },
     AddQword,
     /// Packed integer compare; `lane` is the element width in bytes.
     Compare {

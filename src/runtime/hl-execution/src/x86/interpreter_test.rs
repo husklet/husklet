@@ -16263,3 +16263,142 @@ fn vex_scalar_ordered_compare_family() {
         }
     }
 }
+
+/// `vpalignr` against the legacy `palignr` it inherits, at every interesting count and
+/// independently in each 128-bit lane.
+#[test]
+fn vex_align_family() {
+    let first = [
+        0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10_u128,
+        0x1112_1314_1516_1718_191a_1b1c_1d1e_1f20,
+    ];
+    let second = [
+        0x2122_2324_2526_2728_292a_2b2c_2d2e_2f30_u128,
+        0x3132_3334_3536_3738_393a_3b3c_3d3e_3f40,
+    ];
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    let legacy = |count: u8, high: usize, memory: &mut ModelMemory| {
+        let mut cpu = CpuState {
+            rip: 0x7000,
+            ..Default::default()
+        };
+        cpu.vectors[0] = first[high];
+        cpu.vectors[1] = second[high];
+        let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x3a, 0x0f, 0xc1, count], cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, memory, decoded),
+            ExecutionExit::Continue
+        );
+        cpu.vectors[0]
+    };
+    for count in [0_u8, 1, 7, 8, 15, 16, 17, 31, 32, 33, 255] {
+        for (prefix, wide) in [(0x71_u8, false), (0x75, true)] {
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.vectors[1] = first[0];
+            cpu.vector_upper[1] = first[1];
+            cpu.vectors[2] = second[0];
+            cpu.vector_upper[2] = second[1];
+            let decoded =
+                X86ScalarDecoder::decode(&[0xc4, 0xe3, prefix, 0x0f, 0xc2, count], cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(cpu.vectors[0], legacy(count, 0, &mut memory), "low count {count}");
+            assert_eq!(
+                cpu.vector_upper[0],
+                if wide { legacy(count, 1, &mut memory) } else { 0 },
+                "upper count {count}"
+            );
+        }
+    }
+}
+
+/// `vpmovsx`/`vpmovzx` at all six width pairs against the legacy `pmovsx`/`pmovzx`, with
+/// the 256-bit form checked against the same routine applied to the upper source half.
+#[test]
+fn vex_widen_family() {
+    let source = 0x8090_a0b0_c0d0_e0f0_0110_2130_4150_6170_u128;
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    for opcode in [0x20_u8, 0x21, 0x22, 0x23, 0x24, 0x25, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35] {
+        let (from, to) = match opcode & 0x0f {
+            0 => (1_u32, 2_u32),
+            1 => (1, 4),
+            2 => (1, 8),
+            3 => (2, 4),
+            4 => (2, 8),
+            _ => (4, 8),
+        };
+        let legacy = |value: u128, memory: &mut ModelMemory| {
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.vectors[1] = value;
+            let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x38, opcode, 0xc1], cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, memory, decoded),
+                ExecutionExit::Continue
+            );
+            cpu.vectors[0]
+        };
+        for (prefix, wide) in [(0x79_u8, false), (0x7d, true)] {
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.vectors[1] = source;
+            let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, prefix, opcode, 0xc1], cpu.rip).unwrap();
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(cpu.vectors[0], legacy(source, &mut memory), "low {opcode:#x}");
+            assert_eq!(
+                cpu.vector_upper[0],
+                if wide {
+                    legacy(source >> (128 * from / to), &mut memory)
+                } else {
+                    0
+                },
+                "upper {opcode:#x}"
+            );
+        }
+
+        // The memory operand is only as wide as the source elements, not the destination.
+        let mut cpu = CpuState {
+            rip: 0x7000,
+            ..Default::default()
+        };
+        cpu.registers[3] = 0x1000;
+        let bytes = (32 * from / to) as usize;
+        let mut narrow = ModelMemory {
+            base: 0x1000,
+            bytes: vec![0x5a; bytes],
+            fail_read: false,
+            fail_write: false,
+            commits: 0,
+        };
+        let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, 0x7d, opcode, 0x03], cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut narrow, decoded),
+            ExecutionExit::Continue,
+            "memory {opcode:#x} reads {bytes} bytes"
+        );
+    }
+}

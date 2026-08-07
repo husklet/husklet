@@ -947,6 +947,9 @@ impl ScalarInterpreter {
                     VexOperation::Broadcast128 => 16,
                     VexOperation::DuplicateDouble if !wide => 8,
                     VexOperation::Insert128 => 16,
+                    VexOperation::Widen { from, to, .. } => {
+                        (if wide { 32 } else { 16 }) * from / to
+                    }
                     _ => {
                         if wide {
                             32
@@ -2350,11 +2353,36 @@ impl ScalarInterpreter {
             }
             return result;
         }
-        if operation == VexOperation::WidenSignedDword {
+        if let VexOperation::Widen { from, to, signed } = operation {
+            let (from, to) = (u32::from(from) * 8, u32::from(to) * 8);
             let mut result = [0_u128; 2];
-            for lane in 0..4 {
-                let source = ((right[0] >> (lane * 32)) as u32 as i32) as i64 as u64;
-                result[lane / 2] |= u128::from(source) << ((lane % 2) * 64);
+            for lane in 0..(if wide { 256 } else { 128 } / to) as usize {
+                let bit = lane as u32 * from;
+                let raw = (if bit >= 128 { right[1] >> (bit - 128) } else { right[0] >> bit })
+                    & ((1_u128 << from) - 1);
+                let value = if signed && raw >> (from - 1) != 0 {
+                    raw | !((1_u128 << from) - 1)
+                } else {
+                    raw
+                } & if to == 128 { u128::MAX } else { (1_u128 << to) - 1 };
+                let position = lane as u32 * to;
+                result[(position / 128) as usize] |= value << (position % 128);
+            }
+            return result;
+        }
+        if operation == VexOperation::Align {
+            let count = u32::from(immediate);
+            let mut result = [0_u128; 2];
+            for half in 0..if wide { 2 } else { 1 } {
+                result[half] = if count == 0 {
+                    right[half]
+                } else if count < 16 {
+                    right[half] >> (count * 8) | left[half] << (128 - count * 8)
+                } else if count < 32 {
+                    left[half] >> ((count - 16) * 8)
+                } else {
+                    0
+                };
             }
             return result;
         }
@@ -2680,7 +2708,7 @@ impl ScalarInterpreter {
                 | VexOperation::MultiplyHighRoundWord
                 | VexOperation::HorizontalMinimumWord
                 | VexOperation::Insert128 => unreachable!(),
-                VexOperation::WidenSignedDword | VexOperation::ShiftRightBytes => unreachable!(),
+                VexOperation::Widen { .. } | VexOperation::Align | VexOperation::ShiftRightBytes => unreachable!(),
                 VexOperation::ShuffleDword | VexOperation::ShuffleSingle => unreachable!(),
                 VexOperation::ShuffleWord { .. } => unreachable!(),
                 VexOperation::ShuffleDouble => unreachable!(),
