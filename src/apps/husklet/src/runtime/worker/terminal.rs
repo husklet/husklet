@@ -167,12 +167,13 @@ impl<'a> TerminalSession<'a> {
             if self.drain_output().is_err() {
                 return 1;
             }
-            if let Some(code) = self.pty.try_wait() {
-                if self.drain_output().is_err() {
-                    return 1;
-                }
-                return code;
+            let Some(code) = self.pty.try_wait() else {
+                continue;
+            };
+            if self.drain_output().is_err() {
+                return 1;
             }
+            return code;
         }
     }
 

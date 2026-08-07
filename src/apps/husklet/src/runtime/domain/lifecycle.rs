@@ -158,17 +158,16 @@ impl Lease {
         loop {
             match Self::acquire(path.clone()) {
                 Ok(lease) => return Ok(lease),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            format!("timed out waiting for {}", path.display()),
-                        ));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error),
             }
+            if std::time::Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("timed out waiting for {}", path.display()),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 

@@ -6,7 +6,7 @@ use crate::config::WorkspaceConfig;
 use crate::ffi::ExclusiveFileLock;
 use crate::paths;
 use crate::runtime::process::CommandSession as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct Daemon {
     directory: PathBuf,
@@ -106,34 +106,37 @@ impl Daemon {
                 std::time::Duration::from_secs(45),
                 || std::os::unix::net::UnixStream::connect(self.socket()),
             ),
-            Close::Checkpoint => {
-                match std::fs::remove_file(&failure) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
-                crate::runtime::process::Peer::new(connection)?.request(libc::SIGHUP)?;
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-                loop {
-                    match std::fs::read_to_string(&failure) {
-                        Ok(message) => return Err(std::io::Error::other(message)),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => return Err(error),
-                    }
-                    match std::os::unix::net::UnixStream::connect(self.socket()) {
-                        Err(error) if crate::runtime::process::Peer::offline(&error) => return Ok(()),
-                        Err(error) => return Err(error),
-                        Ok(_) => {}
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "Docker service did not finish checkpointing",
-                        ));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
+            Close::Checkpoint => self.checkpoint(connection, &failure),
+        }
+    }
+
+    /// Signals the checkpoint and waits for the service to go offline without reporting a failure.
+    fn checkpoint(&self, connection: std::os::unix::net::UnixStream, failure: &Path) -> std::io::Result<()> {
+        match std::fs::remove_file(failure) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        crate::runtime::process::Peer::new(connection)?.request(libc::SIGHUP)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        loop {
+            match std::fs::read_to_string(failure) {
+                Ok(message) => return Err(std::io::Error::other(message)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
+            match std::os::unix::net::UnixStream::connect(self.socket()) {
+                Err(error) if crate::runtime::process::Peer::offline(&error) => return Ok(()),
+                Err(error) => return Err(error),
+                Ok(_) => {}
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Docker service did not finish checkpointing",
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 

@@ -30,19 +30,18 @@ impl Runtime {
                 .map_err(io::Error::other),
             Err(error) => Err(io::Error::other(error)),
         };
-        match checkpoint {
-            Ok(()) => Ok(()),
-            Err(checkpoint) => {
-                if let Some(daemon) = docker {
-                    if let Err(restart) = daemon.ensure() {
-                        return Err(io::Error::other(format!(
-                            "{checkpoint}; workspace Docker service restart failed: {restart}"
-                        )));
-                    }
-                }
-                Err(checkpoint)
-            }
+        let Err(checkpoint) = checkpoint else {
+            return Ok(());
+        };
+        let Some(daemon) = docker else {
+            return Err(checkpoint);
+        };
+        if let Err(restart) = daemon.ensure() {
+            return Err(io::Error::other(format!(
+                "{checkpoint}; workspace Docker service restart failed: {restart}"
+            )));
         }
+        Err(checkpoint)
     }
 
     pub(super) async fn open(workspace: &WorkspaceConfig) -> io::Result<(Containers, Platform)> {
@@ -81,10 +80,11 @@ impl Runtime {
             Ok(container) => {
                 let stored = container.spec.labels.get(SIGNATURE);
                 let session = crate::runtime::session::Session::from_labels(&container.spec.labels);
-                if stored == Some(&signature) && session.is_ok() {
-                    if !container.state.is_active() {
-                        containers.start(CONTAINER).await.map_err(io::Error::other)?;
-                    }
+                let reusable = stored == Some(&signature) && session.is_ok();
+                if reusable && !container.state.is_active() {
+                    containers.start(CONTAINER).await.map_err(io::Error::other)?;
+                }
+                if reusable {
                     return Ok(());
                 }
                 hl_log::hl_info!(
