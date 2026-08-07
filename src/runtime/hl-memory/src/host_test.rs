@@ -611,6 +611,52 @@ fn projection_unbounded_span_stops_at_region() {
     assert_eq!(view.range.end(), GuestAddress::new(0x7000));
 }
 
+/// The native run keeps four permission-keyed views, so a read-only projection
+/// of a writable region costs a second slot that a read/write one does not.
+#[test]
+fn projection_read_write_span_serves_both_accesses_from_one_slot() {
+    let build = || {
+        let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+        coordinator.map(request()).unwrap();
+        let mut mapped = request();
+        mapped.placement = Placement::Fixed(GuestAddress::new(0x3000));
+        mapped.protection = Protection::READ.union(Protection::WRITE);
+        mapped.backing = Backing::Anonymous {
+            identity: 72,
+            shared: false,
+        };
+        coordinator.map(mapped).unwrap();
+        coordinator
+    };
+    let read_write = Protection::READ.union(Protection::WRITE);
+
+    let narrow = build();
+    let mut lease = narrow
+        .project_contiguous(GuestAddress::new(0x1000), 8, Protection::READ, 1)
+        .unwrap();
+    let read = lease
+        .project_bounded(GuestAddress::new(0x3180), 8, Protection::READ, u64::MAX)
+        .unwrap();
+    let write = lease
+        .project_bounded(GuestAddress::new(0x3180), 8, Protection::WRITE, u64::MAX)
+        .unwrap();
+    assert!(!read.protection.contains(Protection::WRITE));
+    assert_ne!(read.index, write.index);
+
+    let wide = build();
+    let mut lease = wide
+        .project_contiguous(GuestAddress::new(0x1000), 8, Protection::READ, 1)
+        .unwrap();
+    let first = lease
+        .project_bounded(GuestAddress::new(0x3180), 8, read_write, u64::MAX)
+        .unwrap();
+    let second = lease
+        .project_bounded(GuestAddress::new(0x3180), 8, Protection::READ, u64::MAX)
+        .unwrap();
+    assert!(first.protection.contains(read_write));
+    assert_eq!(first.index, second.index);
+}
+
 #[test]
 fn projection_rollback_epoch() {
     let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
@@ -1799,7 +1845,7 @@ fn reprotecting_written_data_as_executable_supersedes_its_token() {
 }
 
 #[test]
-fn a_mapping_transition_supersedes_every_range_not_only_the_changed_one() {
+fn a_mapping_transition_supersedes_its_own_range_and_leaves_the_rest_alone() {
     let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
     let mut executable = request();
     executable.protection = Protection::READ.union(Protection::EXECUTE);
@@ -1807,14 +1853,55 @@ fn a_mapping_transition_supersedes_every_range_not_only_the_changed_one() {
         executable.placement = Placement::Fixed(GuestAddress::new(base));
         coordinator.map(executable).unwrap();
     }
+    let transitioned = AddressRange::nonempty(GuestAddress::new(0x3000), 16).unwrap();
     let untouched = AddressRange::nonempty(GuestAddress::new(0x5000), 16).unwrap();
-    let before = coordinator.executable_token(untouched, 1);
+    let transitioned_before = coordinator.executable_token(transitioned, 1);
+    let untouched_before = coordinator.executable_token(untouched, 1);
 
     coordinator
         .unmap(AddressRange::nonempty(GuestAddress::new(0x3000), 4096).unwrap())
         .unwrap();
 
-    assert_ne!(coordinator.executable_token(untouched, 1), before);
+    assert_ne!(coordinator.executable_token(transitioned, 1), transitioned_before);
+    assert_eq!(coordinator.executable_token(untouched, 1), untouched_before);
+}
+
+#[test]
+fn remapping_the_same_address_supersedes_it_for_every_transition_kind() {
+    let range = AddressRange::nonempty(GuestAddress::new(0x3000), 16).unwrap();
+    let page = AddressRange::nonempty(GuestAddress::new(0x3000), 4096).unwrap();
+    let mut executable = request();
+    executable.protection = Protection::READ.union(Protection::EXECUTE);
+    executable.placement = Placement::Fixed(GuestAddress::new(0x3000));
+
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(executable).unwrap();
+    let before = coordinator.executable_token(range, 1);
+    coordinator.unmap(page).unwrap();
+    coordinator.map(executable).unwrap();
+    assert_ne!(coordinator.executable_token(range, 1), before);
+
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(executable).unwrap();
+    let before = coordinator.executable_token(range, 1);
+    coordinator.map(executable).unwrap();
+    assert_ne!(coordinator.executable_token(range, 1), before);
+
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(executable).unwrap();
+    let before = coordinator.executable_token(range, 1);
+    coordinator
+        .protect(page, Protection::READ.union(Protection::WRITE))
+        .unwrap();
+    assert_ne!(coordinator.executable_token(range, 1), before);
+
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(executable).unwrap();
+    let before = coordinator.executable_token(range, 1);
+    let mut batch = MappingBatch::default();
+    batch.push(MappingOperation::Unmap(page));
+    coordinator.apply(&batch).unwrap();
+    assert_ne!(coordinator.executable_token(range, 1), before);
 }
 
 #[test]

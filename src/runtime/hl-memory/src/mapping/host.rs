@@ -1,4 +1,4 @@
-use super::plan::{Batch, PlannedOperation};
+use super::plan::{Batch, PlannedOperation, planned_range};
 use super::port::{Host, MemoryAccessHost};
 use super::transition::{NoopObserver, TransitionObserver};
 use crate::{
@@ -255,8 +255,9 @@ impl<H: Host> Coordinator<H> {
                 self.publish_pins(regions, pins);
                 Ok(())
             });
-        if result.is_ok() {
-            self.publish_transition(&mut transition, self.ledger.generation());
+        if let Ok(address) = result {
+            let mapped = AddressRange::nonempty(address, request.length).ok();
+            self.publish_transition_ranges(&mut transition, self.ledger.generation(), mapped);
         }
         result
     }
@@ -277,7 +278,7 @@ impl<H: Host> Coordinator<H> {
             Ok(())
         });
         if result.is_ok() {
-            self.publish_transition(&mut transition, self.ledger.generation());
+            self.publish_transition_ranges(&mut transition, self.ledger.generation(), [range]);
         }
         result
     }
@@ -298,7 +299,7 @@ impl<H: Host> Coordinator<H> {
             Ok(())
         });
         if result.is_ok() {
-            self.publish_transition(&mut transition, self.ledger.generation());
+            self.publish_transition_ranges(&mut transition, self.ledger.generation(), [range]);
         }
         result
     }
@@ -311,6 +312,7 @@ impl<H: Host> Coordinator<H> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut transition = self.transition();
+        let mut touched = Vec::new();
         let result = self.ledger.batch_transaction(&batch.operations, |plan, regions| {
             let pins = self.prepare_pins(regions)?;
             let reservations = self.stage_plan(plan)?;
@@ -318,11 +320,12 @@ impl<H: Host> Coordinator<H> {
                 self.rollback(&reservations);
                 return Err(error);
             }
+            touched = plan.iter().filter_map(planned_range).collect();
             self.publish_pins(regions, pins);
             Ok(())
         });
         if result.is_ok() {
-            self.publish_transition(&mut transition, self.ledger.generation());
+            self.publish_transition_ranges(&mut transition, self.ledger.generation(), touched);
         }
         result
     }
