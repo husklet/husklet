@@ -2418,6 +2418,55 @@ fn x86_locked_register_arithmetic_matches_interpreter_at_each_boundary() {
     }
 }
 
+/// A locked block dense enough to exceed the emitted word budget, which the frontend splits at an
+/// instruction boundary rather than abandoning. Every boundary must still match the interpreter,
+/// including the ones after the split, where the tail is re-entered as its own block.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_dense_locked_block_splits_and_matches_interpreter() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.registers[3] = 0x0000_0001_0000_0001;
+    let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
+    // 48 x `lock add %rbx,(%rsi)`, comfortably past the 36-instruction wall under a live chain.
+    let program: Vec<Vec<u8>> = (0..48).map(|_| vec![0xf0, 0x48, 0x01, 0x1e]).collect();
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// All five locked immediate ALU kinds in a single block. This used to overrun the emitted word
+/// budget and had to be driven one kind per block; splitting makes the combined block translatable.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_locked_immediate_arithmetic_all_kinds_in_one_block() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for extension in [0x06_u8, 0x0e, 0x26, 0x2e, 0x36] {
+        program.push(vec![0xf0, 0x80, extension, 0x7f]);
+        program.push(vec![0xf0, 0x66, 0x81, extension, 0x34, 0x12]);
+        program.push(vec![0xf0, 0x81, extension, 0x78, 0x56, 0x34, 0x12]);
+        program.push(vec![0xf0, 0x48, 0x81, extension, 0x78, 0x56, 0x34, 0x12]);
+        program.push(vec![0xf0, 0x83, extension, 0x01]);
+        program.push(vec![0xf0, 0x48, 0x83, extension, 0xff]);
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
 /// Flag edge cases for each locked register-form ALU kind: the memory word is stored
 /// unlocked first, so every case pins an exact (memory, operand) pair. `and` in
 /// particular must clear the inverted mask while its flags stay on the original one.
