@@ -109,7 +109,7 @@ impl UnixSocketPair {
         F: FnMut(u64) -> Option<DescriptionRef>,
     {
         snapshot.validate()?;
-        let queues = [
+        let mut queues = [
             Arc::new(
                 UnixMessageQueue::restore(&snapshot.endpoints[0].ancillary, &mut rebind)
                     .map_err(UnixTransportError::Control)?,
@@ -119,8 +119,8 @@ impl UnixSocketPair {
                     .map_err(UnixTransportError::Control)?,
             ),
         ];
-        for token in 0..2 {
-            queues[token].set_passcred(snapshot.endpoints[token].passcred);
+        for (token, queue) in queues.iter_mut().enumerate() {
+            queue.set_passcred(snapshot.endpoints[token].passcred);
         }
         let endpoint_states = std::array::from_fn(|token| {
             let saved = &snapshot.endpoints[token];

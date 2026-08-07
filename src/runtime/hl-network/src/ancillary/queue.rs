@@ -360,6 +360,8 @@ impl UnixMessageQueue {
         }
     }
 
+    // Receiver kept so delivery reads as an operation on the queue it drains.
+    #[allow(clippy::unused_self)]
     fn deliver_transactional<F>(
         &self,
         message: UnixMessage,

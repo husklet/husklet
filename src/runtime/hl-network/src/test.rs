@@ -7,12 +7,7 @@ struct PortModel;
 
 impl PortModel {
     fn first_available(model: &BTreeMap<u16, SocketId>) -> Option<u16> {
-        for port in 50_000..=50_031 {
-            if !model.contains_key(&port) {
-                return Some(port);
-            }
-        }
-        None
+        (50_000..=50_031).find(|port| !model.contains_key(port))
     }
 
     fn releasing(state: u64, expected: SocketId, other: SocketId) -> SocketId {
@@ -266,9 +261,9 @@ fn same_port_contention() {
     let winners: Vec<_> = results.iter().filter(|(_, result)| *result == Ok(8080)).collect();
     assert_eq!(winners.len(), 1);
     assert_eq!(ports.owner(AddressFamily::Inet4, 8080), Some(winners[0].0));
-    winners.iter().for_each(|(owner, _)| {
+    for (owner, _) in &winners {
         ports.release(AddressFamily::Inet4, 8080, *owner);
-    });
+    }
     assert_eq!(ports.owner(AddressFamily::Inet4, 8080), None);
 }
 
@@ -283,7 +278,7 @@ fn deterministic_port_model() {
             slot: (step % 64 + 1) as u16,
             generation: step / 64 + 1,
         };
-        let requested = if state & 3 == 0 {
+        let requested = if state.trailing_zeros() >= 2 {
             0
         } else {
             50_000 + ((state >> 8) % 32) as u16
@@ -385,7 +380,7 @@ fn deterministic_socket_lifecycle() {
                 stale.push(id);
                 current = None;
             }
-            _ => unreachable!("closed sockets are unpublished"),
+            SocketState::Closed => unreachable!("closed sockets are unpublished"),
         }
         if let Some(live) = current {
             let snapshot = namespace.snapshot(live).unwrap();

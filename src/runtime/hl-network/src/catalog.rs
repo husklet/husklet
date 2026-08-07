@@ -313,6 +313,8 @@ impl NetworkCatalog {
         let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match Self::slot(&slots, id)?.socket.as_deref() {
             Some(CatalogSocket::Host { snapshot, binding, .. }) => {
+                // Naming the binding documents that it must outlive the operation below.
+                #[allow(clippy::no_effect_underscore_binding)]
                 let _binding_lifetime = binding;
                 Ok(operation(snapshot))
             }

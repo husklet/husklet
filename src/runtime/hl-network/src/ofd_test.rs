@@ -216,7 +216,9 @@ fn concurrent_close_method() {
             std::thread::spawn(move || socket.close())
         })
         .collect();
-    workers.into_iter().for_each(|worker| worker.join().unwrap());
+    for worker in workers {
+        worker.join().unwrap();
+    }
     assert_eq!(host.closed.load(Ordering::Acquire), 1);
 }
 

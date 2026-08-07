@@ -52,6 +52,8 @@ impl<H: SocketHostIo> SocketDescription<H> {
         Self::restored(host, token, flags, SocketConnectStatus::Idle)
     }
 
+    // Takes the host by value so a restored descriptor owns its share of the handle.
+    #[allow(clippy::needless_pass_by_value)]
     #[must_use]
     pub fn restored(host: Arc<H>, token: H::Token, flags: StatusFlags, connect: SocketConnectStatus) -> Self {
         Self {

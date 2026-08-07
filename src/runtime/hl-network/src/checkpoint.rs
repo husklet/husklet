@@ -75,6 +75,8 @@ pub struct AcceptedSocketCheckpoint {
     pub peer: SocketAddress,
 }
 
+// The Host variant dominates the size; boxing it would allocate on every restore.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NetworkSocketState {
     Host {
