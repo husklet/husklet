@@ -30,9 +30,10 @@ impl Schema for Runtime {
     type Row = Row;
 
     const KIND: &'static str = "runtime";
-    const HEADER: &'static str = "id\ttarget\tstatus\telapsed_ms\thost_load\tdiagnostic\n";
+    const HEADER: &'static str =
+        "id\ttarget\tprofile\tstatus\telapsed_ms\thost_load\tdiagnostic\n";
     const ROW_LIMIT: usize = 16 * 1024;
-    const FIELDS: usize = 6;
+    const FIELDS: usize = 7;
 
     fn key(row: &Row) -> &WorkKey {
         &row.key
@@ -43,9 +44,10 @@ impl Schema for Runtime {
         (!row.key.id.contains(['\t', '\n'])).require("runtime result contains an unsafe delimiter")?;
         let load = super::load::sanitize(&row.host_load);
         let prefix = format!(
-            "{}\t{}\t{}\t{}\t{load}\t",
+            "{}\t{}\t{}\t{}\t{}\t{load}\t",
             row.key.id,
             row.key.target.name(),
+            super::profile::PROFILE,
             row.status,
             row.elapsed_ms
         );
@@ -61,7 +63,8 @@ impl Schema for Runtime {
             target: Target::named(fields[1]).ok_or("invalid runtime resume target")?,
         };
         keys.contains(&key).require("stale runtime resume row")?;
-        let status = match fields[2] {
+        (fields[2] == super::profile::PROFILE).require("runtime resume row measured another engine profile")?;
+        let status = match fields[3] {
             "pass" => PASS,
             "fail" => FAIL,
             NOT_RUN => NOT_RUN,
@@ -70,9 +73,9 @@ impl Schema for Runtime {
         Ok(Some(Row {
             key,
             status,
-            elapsed_ms: fields[3].parse()?,
-            host_load: fields[4].to_owned(),
-            diagnostic: fields[5].to_owned(),
+            elapsed_ms: fields[4].parse()?,
+            host_load: fields[5].to_owned(),
+            diagnostic: fields[6].to_owned(),
         }))
     }
 }
@@ -138,7 +141,8 @@ mod tests {
         };
         let text = super::Runtime::format(&row).unwrap();
         assert!(text.len() <= super::Runtime::ROW_LIMIT, "{}", text.len());
-        assert_eq!(text.matches('\t').count(), 5);
+        assert_eq!(text.matches('\t').count(), 6);
+        assert!(text.contains(super::super::profile::PROFILE), "{text}");
         assert!(text.ends_with("truncated]\n"), "{text}");
     }
 

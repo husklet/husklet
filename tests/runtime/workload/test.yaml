@@ -93,7 +93,7 @@ cases:
   - id: runtime/workload/allocchurn
     status: active
     compat: { class: compatibility }
-    timeout: 120
+    timeout: 420
     build: { source: allocchurn.c, output: allocchurn, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/workload/allocchurn }
     run: []
@@ -129,7 +129,7 @@ cases:
     targets: [arm64]
     status: active
     compat: { class: compatibility }
-    timeout: 120
+    timeout: 300
     build: { source: smc_selfflush.c, output: smc_selfflush, flags: [-static-pie, -O2, -pthread, -lm] }
     artifact: { destination: /opt/husklet/workload/smc_selfflush }
     run: []

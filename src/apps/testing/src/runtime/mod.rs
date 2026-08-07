@@ -8,6 +8,7 @@ pub(crate) mod image;
 mod ledger;
 mod load;
 mod pool;
+pub(crate) mod profile;
 pub(crate) mod scheduler;
 
 use crate::suite::{Error, Target};
@@ -23,12 +24,24 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 }
 
 pub async fn run(options: Options) -> Result<(), Error> {
+    options.engine_profile.require()?;
+    let runner = profile::identity()?;
+    println!(
+        "runtime: engine profile={} runner={}",
+        profile::PROFILE,
+        &runner[..16]
+    );
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
     let planned = require_planned(plan(apps, &options), options.case.as_deref())?;
     let mut work = planned.work;
     let skipped = planned.skipped;
-    let stamp = fingerprint::calculate(&work).await?;
+    // The runner identity joins the stamp so a rebuilt engine cannot resume the previous one's rows.
+    let stamp = format!(
+        "{}\t{}\t{runner}",
+        fingerprint::calculate(&work).await?,
+        profile::PROFILE
+    );
     let keys: std::collections::BTreeSet<WorkKey> = work
         .iter()
         .map(|item| item.key.clone())
@@ -59,7 +72,11 @@ pub async fn run(options: Options) -> Result<(), Error> {
     published?;
     completed.sort_by(|left, right| left.key.cmp(&right.key));
     let (passed, failed) = summarize(&prior, completed);
-    println!("runtime: {passed} passed; {} failed", failed.len());
+    println!(
+        "runtime: {passed} passed; {} failed; profile={}",
+        failed.len(),
+        profile::PROFILE
+    );
     if failed.is_empty() {
         Ok(())
     } else {
@@ -123,6 +140,7 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
         jobs: 1,
         resume: false,
         results: PathBuf::from("target/testing/runtime/worker.tsv"),
+        engine_profile: profile::Requested::Release,
     };
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
@@ -472,6 +490,9 @@ pub(crate) struct Options {
     /// Relative durable result path beneath the repository workspace.
     #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = crate::suite::parse::results)]
     results: PathBuf,
+    /// Engine build profile this sweep is measuring; must match how the runner was built.
+    #[arg(long, value_enum, env = "HL_COMPAT_ENGINE_PROFILE", default_value_t = profile::Requested::Release)]
+    engine_profile: profile::Requested,
 }
 
 impl Options {

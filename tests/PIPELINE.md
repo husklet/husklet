@@ -321,6 +321,14 @@ Reports include minimum, median, p90, p99, coefficient of variation, and setup
 separately. Docker container creation, QEMU boot, image materialization, and
 Husklet startup must not be included in steady-state execution time.
 
+The runtime compatibility engine is linked into the `testing` binary, so the
+runner's cargo profile is the engine profile under measurement. `testing
+runtime` therefore takes `--engine-profile` (default `release`) and refuses to
+run when it disagrees with how the binary was built; per-case time budgets are
+set from measured release timings, and a debug engine cannot reach them. Every
+result row carries a `profile` column, and the runner's SHA-256 joins the
+resume stamp so a rebuilt engine can never resume rows another build measured.
+
 The repository scenario runner records `setup_us`, `execution_us`,
 `payload_us`, and `teardown_us` as separate durable columns. `payload_us` is
 explicitly `unavailable` until a workload supplies an in-guest monotonic phase;

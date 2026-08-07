@@ -35,8 +35,7 @@ impl TestImage {
     /// Concurrent workers share one on-disk snapshot store, so a lost race there is transient.
     pub async fn materialize(name: &str, platform: &Platform) -> Result<Self, Error> {
         for attempt in 1..=MATERIALIZE_ATTEMPTS {
-            let (images, image) = resolve(name, platform).await?;
-            let failure = match Self::from_image(images, &image, platform) {
+            let failure = match Self::attempt(name, platform).await {
                 Ok(fixture) => return Ok(fixture),
                 Err(error) => error.to_string(),
             };
@@ -47,6 +46,12 @@ impl TestImage {
             sleep(Duration::from_millis(200 * u64::from(attempt))).await;
         }
         unreachable!("bounded materialization retry loop always returns")
+    }
+
+    /// Opening the shared store races too, so resolution and unpacking retry together.
+    async fn attempt(name: &str, platform: &Platform) -> Result<Self, Error> {
+        let (images, image) = resolve(name, platform).await?;
+        Self::from_image(images, &image, platform)
     }
 
     fn from_image(images: Images, image: &Image, platform: &Platform) -> Result<Self, Error> {

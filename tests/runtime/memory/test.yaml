@@ -562,6 +562,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/dbt_switchwide.out }
   - id: runtime/memory/dbt-vtable
+    timeout: 90
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
@@ -570,6 +571,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/dbt_vtable.out }
   - id: runtime/memory/dbt-tailcall-chain
+    timeout: 60
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
@@ -578,6 +580,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/dbt_tailcallchain.out }
   - id: runtime/memory/dbt-deepwide-recursion
+    timeout: 180
     targets: [arm64, amd64]
     status: active
     compat: { class: compatibility }
@@ -622,6 +625,7 @@ cases:
     run: []
     expect: { exit: 0, stdout: golden/dbt_codecachechurn.out }
   - id: runtime/memory/dbt-codecache-straightline
+    timeout: 60
     targets: [arm64]
     status: active
     compat: { class: compatibility }

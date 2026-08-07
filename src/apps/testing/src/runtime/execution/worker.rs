@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const CAPTURE_LIMIT: u64 = 1024 * 1024;
+/// Engine diagnostics are per-case and forwarded, not compared, so they need far more room than stdout.
+const DIAGNOSTIC_CAPTURE_LIMIT: u64 = 64 * 1024 * 1024;
 const RESULT_LIMIT: u64 = 1024 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(30);
 
@@ -171,7 +173,7 @@ fn supervise(
         .map_err(|error| format!("create worker workspace: {error}"))?;
     let result = directory.path().join("outcome.yaml");
     let token = token()?;
-    let executable = std::env::current_exe().map_err(|error| format!("resolve runtime worker: {error}"))?;
+    let executable = crate::runtime::profile::runner().map_err(|error| error.to_string())?;
     let mut command = hl_process::Command::new(executable);
     command.args([
         "runtime-worker",
@@ -188,12 +190,12 @@ fn supervise(
         stdout: directory.path().join("stdout"),
         stderr: directory.path().join("stderr"),
         stdout_limit: CAPTURE_LIMIT,
-        stderr_limit: CAPTURE_LIMIT,
+        stderr_limit: DIAGNOSTIC_CAPTURE_LIMIT,
     };
     let outcome = hl_process::run(&command, &capture, timeout.saturating_add(SETUP_ALLOWANCE), cancelled)
         .map_err(|error| format!("supervise runtime worker: {error}"))?;
-    let stdout = read_capture(&capture.stdout)?;
-    let stderr = read_capture(&capture.stderr)?;
+    let stdout = read_capture(&capture.stdout, CAPTURE_LIMIT)?;
+    let stderr = read_capture(&capture.stderr, DIAGNOSTIC_CAPTURE_LIMIT)?;
     match outcome {
         ProcessOutcome::Exited(Some(0 | 1)) => {}
         ProcessOutcome::Exited(code) => return Err(termination(code, &stdout, &stderr)),
@@ -221,7 +223,8 @@ fn supervise(
         }
         ProcessOutcome::OutputLimit => {
             return Err(format!(
-                "runtime worker output exceeded {CAPTURE_LIMIT} bytes; stderr={}; stdout={}",
+                "runtime worker output exceeded its bound ({CAPTURE_LIMIT} stdout, \
+                 {DIAGNOSTIC_CAPTURE_LIMIT} stderr); stderr={}; stdout={}",
                 preview(&stderr),
                 preview(&stdout)
             ));
@@ -231,7 +234,7 @@ fn supervise(
         .lock()
         .write_all(&stderr)
         .map_err(|error| format!("forward runtime worker diagnostics: {error}"))?;
-    let bytes = read_capture(&result)?;
+    let bytes = read_capture(&result, RESULT_LIMIT)?;
     let decoded: Outcome =
         serde_yaml::from_slice(&bytes).map_err(|error| format!("decode runtime worker result: {error}"))?;
     if decoded.token != token {
@@ -256,9 +259,9 @@ fn validate_token(token: &str) -> Result<(), Error> {
     }
 }
 
-fn read_capture(path: &Path) -> Result<Vec<u8>, String> {
+fn read_capture(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     let metadata = fs::metadata(path).map_err(|error| format!("inspect {}: {error}", path.display()))?;
-    if metadata.len() > RESULT_LIMIT {
+    if metadata.len() > limit {
         return Err(format!("{} exceeded its byte bound", path.display()));
     }
     fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))
