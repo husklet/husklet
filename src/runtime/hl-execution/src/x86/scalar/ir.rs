@@ -175,7 +175,11 @@ pub enum VexOperation {
     Insert128,
     WidenSignedDword,
     AddQword,
-    EqualDword,
+    /// Packed integer compare; `lane` is the element width in bytes.
+    Compare {
+        comparison: VectorComparison,
+        lane: u8,
+    },
     ShiftRightBytes,
     ShuffleDword,
     ShuffleSingle,

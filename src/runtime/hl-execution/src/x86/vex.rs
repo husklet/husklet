@@ -714,7 +714,50 @@ impl Decoder {
             }
             (3, 0x18 | 0x38, 1) if length != 0 && !w => Self::binary(decoded, source, length, VexOperation::Insert128),
             (2, 0x25, 1) => Self::binary(decoded, source, length, VexOperation::WidenSignedDword),
-            (1, 0x76, 1) => Self::binary(decoded, source, length, VexOperation::EqualDword),
+            (1, 0x74..=0x76, 1) => Self::binary(
+                decoded,
+                source,
+                length,
+                VexOperation::Compare {
+                    comparison: crate::VectorComparison::Equal,
+                    lane: 1 << (decoded.opcode - 0x74),
+                },
+            ),
+            (1, 0x64..=0x66, 1) => Self::binary(
+                decoded,
+                source,
+                length,
+                VexOperation::Compare {
+                    comparison: crate::VectorComparison::SignedGreater,
+                    lane: 1 << (decoded.opcode - 0x64),
+                },
+            ),
+            (2, 0x29, 1) if !w => Self::binary(
+                decoded,
+                source,
+                length,
+                VexOperation::Compare {
+                    comparison: crate::VectorComparison::Equal,
+                    lane: 8,
+                },
+            ),
+            (2, 0x37, 1) if !w => Self::binary(
+                decoded,
+                source,
+                length,
+                VexOperation::Compare {
+                    comparison: crate::VectorComparison::SignedGreater,
+                    lane: 8,
+                },
+            ),
+            (1, 0x2b, 0 | 1) | (1, 0xe7, 1) if source == 0 && decoded.address.is_some() => {
+                Ok(ScalarInstruction::VexVectorTransport {
+                    vector: decoded.register.ok_or(ScalarIrError::Invalid)?,
+                    operand: Self::source(decoded)?,
+                    store: true,
+                    wide: length != 0,
+                })
+            }
             (1, 0xd1..=0xd3 | 0xe1..=0xe2 | 0xf1..=0xf3, 1) => {
                 let operation = match decoded.opcode {
                     0xd1..=0xd3 => VexImmediateShift::LogicalRight,

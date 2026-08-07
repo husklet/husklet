@@ -240,11 +240,15 @@ impl ScalarInterpreter {
                         ))
                     }
                 } else {
-                    staged.vector_upper[usize::from(vector)] = 0;
-                    if store
-                        && let VectorSource::Register(destination) = operand {
+                    // Only the architectural destination is zero-extended; a store leaves
+                    // the source register, `vector`, alone.
+                    if store {
+                        if let VectorSource::Register(destination) = operand {
                             staged.vector_upper[usize::from(destination)] = 0;
                         }
+                    } else {
+                        staged.vector_upper[usize::from(vector)] = 0;
+                    }
                     VectorMemory::staged_transfer(staged, cpu, memory, vector, operand, store, false, next, instruction)
                 }
             }
@@ -2588,26 +2592,18 @@ impl ScalarInterpreter {
                     }
                     value
                 }
-                VexOperation::MultiplyLowDword | VexOperation::EqualDword => {
+                VexOperation::MultiplyLowDword => {
                     let mut value = 0_u128;
                     for lane in 0..4 {
                         let shift = lane * 32;
                         let a = (left[half] >> shift) as u32;
                         let b = (right[half] >> shift) as u32;
-                        let result = match operation {
-                            VexOperation::MultiplyLowDword => a.wrapping_mul(b),
-                            VexOperation::EqualDword => {
-                                if a == b {
-                                    u32::MAX
-                                } else {
-                                    0
-                                }
-                            }
-                            _ => unreachable!(),
-                        };
-                        value |= u128::from(result) << shift;
+                        value |= u128::from(a.wrapping_mul(b)) << shift;
                     }
                     value
+                }
+                VexOperation::Compare { comparison, lane } => {
+                    crate::VectorLane::compare(left[half], right[half], lane, comparison)
                 }
                 VexOperation::AddByte
                 | VexOperation::AddWord

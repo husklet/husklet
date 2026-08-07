@@ -2441,3 +2441,60 @@ fn x86_bit_register_index_matches_interpreter_at_each_boundary() {
         }
     }
 }
+
+/// `vpcmpeqb/w/d` and `vpcmpgtb/w/d`: the aarch64 frontend lowers these to `cmeq`/`cmgt`,
+/// so the replay is a true native-versus-interpreter differential over every element width
+/// at all-equal, all-different and signed-negative lanes.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_vex_packed_compare_matches_interpreter_at_each_boundary() {
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for opcode in [0x74_u8, 0x75, 0x76, 0x64, 0x65, 0x66] {
+        for prefix in [0xf1_u8, 0xf5] {
+            program.push(vec![0xc5, prefix, opcode, 0xc2]); // vpcmpXX %xmm2,%xmm1,%xmm0
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
+}
+
+/// The `%rsi`-relative forms of the same compares. The native frontend lowers these too but
+/// leaves YMM bits 255:128 of the destination holding the low result instead of zeroing them,
+/// so this differential fails today against a correct interpreter; see the aarch64 VEX
+/// memory-operand completion path.
+#[cfg(target_arch = "aarch64")]
+#[test]
+#[ignore = "native VEX.128 memory-operand compares do not zero the upper lane"]
+fn x86_vex_packed_compare_memory_matches_interpreter_at_each_boundary() {
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for opcode in [0x74_u8, 0x75, 0x76, 0x64, 0x65, 0x66] {
+        for prefix in [0xf1_u8, 0xf5] {
+            program.push(vec![0xc5, prefix, opcode, 0x06]); // vpcmpXX (%rsi),%xmm1,%xmm0
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
+}
+
+#[cfg(target_arch = "aarch64")]
+fn compare_state() -> X86CpuState {
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.vectors[1] = 0x8000_0000_7fff_ffff_0102_0304_ffff_ff00;
+    initial.vectors[2] = 0x8000_0001_7fff_fffe_0102_0304_0000_00ff;
+    initial.vector_upper[1] = 0x0000_0000_ffff_ffff_8080_8080_7f7f_7f7f;
+    initial.vector_upper[2] = 0x0000_0000_ffff_fffe_8080_8081_7f7f_7f7f;
+    initial
+}
+
+#[cfg(target_arch = "aarch64")]
+fn compare_operand() -> Vec<u8> {
+    let state = compare_state();
+    let mut operand = Vec::new();
+    operand.extend_from_slice(&state.vectors[2].to_le_bytes());
+    operand.extend_from_slice(&state.vector_upper[2].to_le_bytes());
+    operand
+}

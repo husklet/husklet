@@ -15922,3 +15922,220 @@ fn scalar_arithmetic_propagates_negative_quiet_nan_verbatim() {
         }
     }
 }
+
+fn packed_compare_reference(left: u128, right: u128, lane: usize, greater: bool) -> u128 {
+    let left_bytes = left.to_le_bytes();
+    let right_bytes = right.to_le_bytes();
+    let mut output = [0_u8; 16];
+    for index in (0..16).step_by(lane) {
+        let a = &left_bytes[index..index + lane];
+        let b = &right_bytes[index..index + lane];
+        let selected = match (lane, greater) {
+            (1, false) => a[0] == b[0],
+            (1, true) => a[0] as i8 > b[0] as i8,
+            (2, false) => a == b,
+            (2, true) => i16::from_le_bytes([a[0], a[1]]) > i16::from_le_bytes([b[0], b[1]]),
+            (4, false) => a == b,
+            (4, true) => {
+                i32::from_le_bytes([a[0], a[1], a[2], a[3]]) > i32::from_le_bytes([b[0], b[1], b[2], b[3]])
+            }
+            (8, false) => a == b,
+            (8, true) => {
+                i64::from_le_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]])
+                    > i64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+            }
+            _ => unreachable!(),
+        };
+        if selected {
+            output[index..index + lane].fill(0xff);
+        }
+    }
+    u128::from_le_bytes(output)
+}
+
+/// `vpcmpeq`/`vpcmpgt` at every element width, against a reference built from Rust's
+/// signed integer types rather than the sign-flip trick the interpreter uses.
+#[test]
+fn vex_integer_compare_family() {
+    let low_left = 0x8000_0000_7fff_ffff_0102_0304_ffff_ff00_u128;
+    let low_right = 0x8000_0001_7fff_fffe_0102_0304_0000_00ff_u128;
+    let high_left = 0x0000_0000_ffff_ffff_8080_8080_7f7f_7f7f_u128;
+    let high_right = 0x0000_0000_ffff_fffe_8080_8081_7f7f_7f7f_u128;
+    let mut memory = ModelMemory {
+        base: 0x1000,
+        bytes: vec![0; 32],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    for (opcode, lane, greater) in [
+        (0x74_u8, 1_usize, false),
+        (0x75, 2, false),
+        (0x76, 4, false),
+        (0x64, 1, true),
+        (0x65, 2, true),
+        (0x66, 4, true),
+    ] {
+        for (prefix, wide) in [(0xf1_u8, false), (0xf5, true)] {
+            let decoded = X86ScalarDecoder::decode(&[0xc5, prefix, opcode, 0xc2], 0x7000).unwrap();
+            assert!(
+                matches!(decoded.instruction, ScalarInstruction::VexBinary {
+                    operation: VexOperation::Compare { comparison, lane: actual },
+                    destination: 0, first: 1, second: VectorSource::Register(2), wide: actual_wide, ..
+                } if usize::from(actual) == lane
+                    && actual_wide == wide
+                    && (comparison == VectorComparison::SignedGreater) == greater),
+                "decode {opcode:#x} prefix {prefix:#x}"
+            );
+
+            let mut cpu = CpuState {
+                rip: 0x7000,
+                ..Default::default()
+            };
+            cpu.vectors[0] = u128::MAX;
+            cpu.vector_upper[0] = u128::MAX;
+            cpu.vectors[1] = low_left;
+            cpu.vectors[2] = low_right;
+            cpu.vector_upper[1] = high_left;
+            cpu.vector_upper[2] = high_right;
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(
+                cpu.vectors[0],
+                packed_compare_reference(low_left, low_right, lane, greater),
+                "low {opcode:#x} wide {wide}"
+            );
+            assert_eq!(
+                cpu.vector_upper[0],
+                if wide {
+                    packed_compare_reference(high_left, high_right, lane, greater)
+                } else {
+                    0
+                },
+                "upper {opcode:#x} wide {wide}"
+            );
+        }
+
+        let mut cpu = CpuState {
+            rip: 0x7100,
+            ..Default::default()
+        };
+        cpu.registers[3] = 0x1000;
+        cpu.vectors[1] = low_left;
+        cpu.vector_upper[1] = high_left;
+        memory.bytes[..16].copy_from_slice(&low_right.to_le_bytes());
+        memory.bytes[16..].copy_from_slice(&high_right.to_le_bytes());
+        let decoded = X86ScalarDecoder::decode(&[0xc5, 0xf5, opcode, 0x03], cpu.rip).unwrap();
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+            ExecutionExit::Continue
+        );
+        assert_eq!(
+            cpu.vectors[0],
+            packed_compare_reference(low_left, low_right, lane, greater),
+            "memory low {opcode:#x}"
+        );
+        assert_eq!(
+            cpu.vector_upper[0],
+            packed_compare_reference(high_left, high_right, lane, greater),
+            "memory upper {opcode:#x}"
+        );
+    }
+}
+
+/// The 0x0f38 qword compares, whose VEX forms share the same decode path.
+#[test]
+fn vex_qword_compare_family() {
+    let left = 0x8000_0000_0000_0000_0000_0000_0000_0001_u128;
+    let right = 0x8000_0000_0000_0001_0000_0000_0000_0001_u128;
+    let mut memory = ModelMemory {
+        base: 0,
+        bytes: vec![],
+        fail_read: false,
+        fail_write: false,
+        commits: 0,
+    };
+    for (opcode, greater) in [(0x29_u8, false), (0x37, true)] {
+        let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, 0x71, opcode, 0xc2], 0x7200).unwrap();
+        let mut cpu = CpuState {
+            rip: 0x7200,
+            ..Default::default()
+        };
+        cpu.vectors[1] = left;
+        cpu.vectors[2] = right;
+        assert_eq!(
+            ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+            ExecutionExit::Continue
+        );
+        assert_eq!(
+            cpu.vectors[0],
+            packed_compare_reference(left, right, 8, greater),
+            "qword {opcode:#x}"
+        );
+    }
+}
+
+/// `vmovntdq`/`vmovntps`/`vmovntpd`: memory-only stores that write the whole
+/// destination and, being stores, leave the source register untouched.
+#[test]
+fn vex_non_temporal_store_family() {
+    for opcode in [0xe7_u8, 0x2b] {
+        for (prefix, wide, bytes) in [(0xf9_u8, false, 16_usize), (0xfd, true, 32)] {
+            let decoded = X86ScalarDecoder::decode(&[0xc5, prefix, opcode, 0x03], 0x7300).unwrap();
+            assert!(
+                matches!(decoded.instruction, ScalarInstruction::VexVectorTransport {
+                    vector: 0, operand: VectorSource::Memory(_), store: true, wide: actual
+                } if actual == wide),
+                "decode {opcode:#x} prefix {prefix:#x}"
+            );
+
+            let mut cpu = CpuState {
+                rip: 0x7300,
+                ..Default::default()
+            };
+            cpu.registers[3] = 0x1000;
+            cpu.vectors[0] = 0x0f1e_2d3c_4b5a_6978_8796_a5b4_c3d2_e1f0;
+            cpu.vector_upper[0] = 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00;
+            let original = cpu.clone();
+            let mut memory = ModelMemory {
+                base: 0x1000,
+                bytes: vec![0xcc; 48],
+                fail_read: false,
+                fail_write: false,
+                commits: 0,
+            };
+            assert_eq!(
+                ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
+                ExecutionExit::Continue
+            );
+            assert_eq!(cpu.vectors[0], original.vectors[0]);
+            assert_eq!(cpu.vector_upper[0], original.vector_upper[0]);
+            let mut expected = vec![0xcc_u8; 48];
+            expected[..16].copy_from_slice(&original.vectors[0].to_le_bytes());
+            if wide {
+                expected[16..32].copy_from_slice(&original.vector_upper[0].to_le_bytes());
+            }
+            assert_eq!(memory.bytes, expected, "store {opcode:#x} bytes {bytes}");
+
+            // A non-temporal store must fault as a whole rather than partially commit.
+            let mut cpu = original.clone();
+            let mut faulting = ModelMemory {
+                base: 0x1000,
+                bytes: vec![0; 48],
+                fail_read: false,
+                fail_write: true,
+                commits: 0,
+            };
+            assert!(matches!(
+                ScalarInterpreter::execute(&mut cpu, &mut faulting, decoded),
+                ExecutionExit::OperandFault(access) if access.length() as usize == bytes
+            ));
+            assert_eq!(cpu, original);
+        }
+
+        // The register form of a non-temporal store does not exist.
+        assert!(X86ScalarDecoder::decode(&[0xc5, 0xf9, opcode, 0xc3], 0x7400).is_err());
+    }
+}
