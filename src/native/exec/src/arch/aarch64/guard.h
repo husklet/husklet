@@ -17,6 +17,9 @@ typedef struct hl_a64_guard {
     uint64_t bytes;
     uint64_t pc;
     uint32_t completed;
+    /* Set by the direct begin, whose single-window compare has no up-front
+     * read cache to fall back on. */
+    uint32_t direct;
     /* The one outlined archive routine this guarded access calls, or NULL
      * before the first call site emits it. */
     uint8_t *archive;

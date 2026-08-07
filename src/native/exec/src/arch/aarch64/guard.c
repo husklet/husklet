@@ -673,6 +673,7 @@ void hl_a64_guard_direct_begin(hl_a64_assembler *assembler, uint64_t bytes, uint
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_guard_full));
     guard->required = required;
     guard->bytes = bytes;
+    guard->direct = 1;
 }
 
 void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard) {
@@ -705,6 +706,13 @@ void hl_a64_guard_finish(hl_a64_assembler *assembler, const hl_a64_guard *guard)
     if (guard->required == HL_A64_PERMISSION_WRITE) {
         uint8_t *archive = guard->archive;
         write_cache(assembler, guard->bytes, guard->pc, guard->resume, &archive);
+    } else if (guard->required == HL_A64_PERMISSION_READ && guard->direct) {
+        /* Mirror write_cache: a direct read outside the window is recoverable
+         * from the same bounded cache instead of leaving to the dispatcher. */
+        uint32_t *hit = NULL;
+        read_cache(assembler, guard->bytes, &hit);
+        if (!hl_a64_assembler_ok(assembler)) return;
+        branch(assembler, hit, guard->resume);
     }
     if (!hl_a64_assembler_ok(assembler)) return;
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
