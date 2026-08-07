@@ -534,9 +534,11 @@ impl GuestExecutor {
             hl_execution::ExecutionFault::Frozen => (0, crate::engine::FaultReason::Frozen, None),
             hl_execution::ExecutionFault::CacheEpoch => (0, crate::engine::FaultReason::CacheEpoch, None),
             hl_execution::ExecutionFault::Protocol => (0, crate::engine::FaultReason::Protocol, None),
+            hl_execution::ExecutionFault::NativeFatal { code } => (code, crate::engine::FaultReason::NativeFatal, None),
         };
         let mut opcode = [0_u8; 15];
-        let opcode_len = if detail == 0 {
+        // `detail` is an invariant code rather than a program counter for a native fatal.
+        let opcode_len = if detail == 0 || reason == crate::engine::FaultReason::NativeFatal {
             0
         } else {
             memory.fetch(detail, &mut opcode).map_or(0, |length| length as u8)

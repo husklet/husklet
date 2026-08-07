@@ -67,13 +67,35 @@ impl FromStr for ContainerId {
     }
 }
 
+/// `detail` is only a faulting program counter, and the reasons that carry no
+/// instruction report zero, so the cause has to travel beside it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaultCause {
+    #[default]
+    Unknown,
+    Fetch,
+    Memory,
+    Decode,
+    Unsupported,
+    Frozen,
+    CacheEpoch,
+    Protocol,
+    NativeFatal,
+}
+
 /// Terminal process result.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ExitStatus {
     Code(i32),
     Signal(i32),
-    Fault { status: i32, detail: u64 },
+    Fault {
+        status: i32,
+        detail: u64,
+        #[serde(default)]
+        reason: FaultCause,
+    },
 }
 
 /// Durable diagnostic produced when the runtime cannot determine a process exit status.
@@ -209,6 +231,24 @@ mod tests {
     use super::*;
     use crate::Process;
     use std::str::FromStr;
+
+    /// Container state persists across upgrades, so a record written before the
+    /// cause was carried must still load.
+    #[test]
+    fn a_persisted_fault_without_a_reason_loads_as_unknown() {
+        let stored = serde_json::json!({"kind": "fault", "value": {"status": -1, "detail": 0}});
+
+        let decoded: ExitStatus = serde_json::from_value(stored).unwrap();
+
+        assert_eq!(
+            decoded,
+            ExitStatus::Fault {
+                status: -1,
+                detail: 0,
+                reason: FaultCause::Unknown
+            }
+        );
+    }
 
     #[test]
     fn engine_namespace_is_stable_and_bounded_for_docker_ids() {

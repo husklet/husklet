@@ -23,7 +23,11 @@ impl Service {
             container.state,
             ContainerState::Running { .. } | ContainerState::Paused { .. }
         ) {
-            let result = ExitStatus::Fault { status: -1, detail: 0 };
+            let result = ExitStatus::Fault {
+                status: -1,
+                detail: 0,
+                reason: crate::FaultCause::Unknown,
+            };
             let finished_at_ms = now_ms();
             container.state = if container.spec.restart.allows_after_daemon_restart() {
                 ContainerState::Restarting {
@@ -120,7 +124,11 @@ impl Service {
         let (result, diagnostic) = match result {
             Ok(result) => (result, None),
             Err(error) => (
-                ExitStatus::Fault { status: -1, detail: 0 },
+                ExitStatus::Fault {
+                    status: -1,
+                    detail: 0,
+                    reason: crate::FaultCause::Unknown,
+                },
                 Some(crate::model::RuntimeDiagnostic::new(error.to_string())),
             ),
         };
@@ -228,7 +236,11 @@ impl Service {
             };
             let mut terminal = container;
             terminal.state = ContainerState::Exited {
-                result: ExitStatus::Fault { status: -1, detail: 0 },
+                result: ExitStatus::Fault {
+                    status: -1,
+                    detail: 0,
+                    reason: crate::FaultCause::Unknown,
+                },
                 finished_at_ms: now_ms(),
             };
             if let Err(persist) = self.containers.replace(&terminal).await {
@@ -250,7 +262,11 @@ fn interrupt_exec(exec: &mut crate::Exec) {
         ExecState::Created | ExecState::Exited { .. } => None,
     };
     exec.state = ExecState::Exited {
-        result: ExitStatus::Fault { status: -1, detail: 0 },
+        result: ExitStatus::Fault {
+            status: -1,
+            detail: 0,
+            reason: crate::FaultCause::Unknown,
+        },
         finished_at_ms: now_ms(),
         process_id,
     };
@@ -273,7 +289,11 @@ mod tests {
         assert!(matches!(
             exec.state,
             ExecState::Exited {
-                result: ExitStatus::Fault { status: -1, detail: 0 },
+                result: ExitStatus::Fault {
+                    status: -1,
+                    detail: 0,
+                    reason: crate::FaultCause::Unknown
+                },
                 process_id: Some(73),
                 ..
             }

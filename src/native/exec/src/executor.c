@@ -313,9 +313,13 @@ static hl_native_status ibtc_fill(hl_native_executor *executor, hl_native_aarch6
                                   uint64_t target, const hl_native_code *code) {
     uintptr_t site = (uintptr_t)cpu->indirect_site;
     uintptr_t rx = (uintptr_t)executor->arena.executable;
+    /* A reset re-reserves the arena, so a site recorded before it addresses the
+     * old mapping. That is a dead site, not a broken invariant. */
     if (site == 0) return HL_NATIVE_OK;
-    if ((site & 15u) != 0 || site < rx || site > rx + executor->arena.mapping.content - 16)
-        return HL_NATIVE_STATE;
+    if ((site & 15u) != 0 || site < rx || site > rx + executor->arena.mapping.content - 16) {
+        cpu->indirect_site = 0;
+        return HL_NATIVE_OK;
+    }
     if (executor->diagnostics) {
         uint64_t previous;
         hl_native_ibtc_entry *shared;
@@ -846,6 +850,18 @@ static hl_native_status run_exit(hl_native_execution *execution, hl_native_exit 
 }
 
 #if defined(__aarch64__)
+/* Every invariant reports its own code; a shared code cannot be classified. */
+enum a64_fatal_code {
+    A64_FATAL_QUANTUM_GRANT = 1,
+    A64_FATAL_ENTER_BUDGET = 2,
+    A64_FATAL_EXECUTION_IDENTITY = 3,
+    A64_FATAL_OPERAND_IDENTITY = 4,
+    A64_FATAL_OPERAND_COMPLETED = 5,
+    A64_FATAL_OPERAND_CHARGED = 6,
+    A64_FATAL_OPERAND_REFUND = 7,
+    A64_FATAL_LOOP_BUDGET = 8,
+};
+
 static hl_native_status run_fatal(hl_native_execution *execution, hl_native_exit *output, uint64_t code) {
     return hl_native_execution_exit(execution, output, HL_NATIVE_EXIT_FATAL, HL_NATIVE_ACCESS_UNKNOWN,
                                     0, 0, 0, code == 0 ? 1 : code);
@@ -1151,7 +1167,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             if (quantum_poll == NULL || !quantum_poll(quantum_context, cpu->executed, cumulative_budget))
                 return run_exit(&execution, output, HL_NATIVE_EXIT_YIELD, instruction);
             if (cumulative_budget > UINT64_MAX - quantum_grant || cpu->executed > cumulative_budget)
-                return run_fatal(&execution, output, 1);
+                return run_fatal(&execution, output, A64_FATAL_QUANTUM_GRANT);
             cumulative_budget += quantum_grant;
             budget = quantum_grant;
             cpu->budget = budget;
@@ -1292,7 +1308,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         if (fault_unpublish != NULL) fault_unpublish(fault_context, &fault_scope);
         cpu->active_authority = 0;
         active_view_clear(cpu);
-        if (cpu->budget > cumulative_budget) return run_fatal(&execution, output, 1);
+        if (cpu->budget > cumulative_budget) return run_fatal(&execution, output, A64_FATAL_ENTER_BUDGET);
         cpu->executed = cumulative_budget - cpu->budget;
         if (executor->diagnostics) {
             atomic_fetch_add_explicit(&executor->a64_guard_fast, cpu->diagnostic_guard_fast, memory_order_relaxed);
@@ -1309,7 +1325,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         int executed_identity = 0;
         if ((cpu->execution_identity & 3u) == 1u) {
             if (!hl_native_cache_execution(executor->cache, cpu->execution_identity, &executed_code))
-                return run_fatal(&execution, output, 1);
+                return run_fatal(&execution, output, A64_FATAL_EXECUTION_IDENTITY);
             cpu->execution_identity = 0;
             executed_identity = 1;
         }
@@ -1373,7 +1389,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             hl_a64_projection resolved_projection;
             uint32_t result;
             if (!executed_identity) {
-                return run_fatal(&execution, output, 1);
+                return run_fatal(&execution, output, A64_FATAL_OPERAND_IDENTITY);
             }
             completed = cpu->fault_completed;
             if (completed != 0 || cpu->program != operand_retry_pc) {
@@ -1382,12 +1398,12 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             }
             if (++operand_retry_count > HL_A64_OPERAND_RETRY_LIMIT)
                 return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
-            if (completed > budget) return run_fatal(&execution, output, 1);
+            if (completed > budget) return run_fatal(&execution, output, A64_FATAL_OPERAND_COMPLETED);
             uint64_t charged = executed_code.instruction_count;
             if (charged < completed || cpu->executed < charged)
-                return run_fatal(&execution, output, 1);
+                return run_fatal(&execution, output, A64_FATAL_OPERAND_CHARGED);
             if (cpu->budget > cumulative_budget - (charged - completed))
-                return run_fatal(&execution, output, 1);
+                return run_fatal(&execution, output, A64_FATAL_OPERAND_REFUND);
             uint64_t refund = charged - completed;
             cpu->executed -= refund;
             cpu->budget += refund;
@@ -1434,7 +1450,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             }
             return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
         }
-        if (cpu->budget > budget || cpu->executed > cumulative_budget) return run_fatal(&execution, output, 1);
+        if (cpu->budget > budget || cpu->executed > cumulative_budget)
+            return run_fatal(&execution, output, A64_FATAL_LOOP_BUDGET);
         budget = cpu->budget;
         if (cpu->reason == HL_NATIVE_EXIT_BRANCH) {
             continue;

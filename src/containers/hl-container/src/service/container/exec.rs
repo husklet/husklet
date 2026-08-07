@@ -157,7 +157,14 @@ impl Service {
         let _guard = self.operations.lock().await;
         let (result, mut failure) = match result {
             Ok(result) => (result, None),
-            Err(error) => (ExitStatus::Fault { status: -1, detail: 0 }, Some(error.to_string())),
+            Err(error) => (
+                ExitStatus::Fault {
+                    status: -1,
+                    detail: 0,
+                    reason: crate::FaultCause::Unknown,
+                },
+                Some(error.to_string()),
+            ),
         };
         if let Ok(mut exec) = self.inspect_exec(&id).await {
             if exec.checkpoint.is_some() {

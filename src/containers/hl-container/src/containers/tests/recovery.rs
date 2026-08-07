@@ -129,7 +129,11 @@ async fn daemon_loss_reclaims_an_active_automatic_removal_container() {
     ));
     assert_eq!(
         containers.wait(&id.to_string()).await.unwrap(),
-        ExitStatus::Fault { status: -1, detail: 0 }
+        ExitStatus::Fault {
+            status: -1,
+            detail: 0,
+            reason: crate::FaultCause::Unknown
+        }
     );
 }
 

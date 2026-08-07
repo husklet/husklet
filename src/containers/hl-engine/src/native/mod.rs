@@ -46,7 +46,7 @@ pub(crate) use executor::NativeFaultOwner;
 #[allow(unused_imports)]
 pub(crate) use executor::{
     BorrowedSource as NativeSource, Executor as NativeExecutor, Exit as NativeExit, HostFaultOwner, HostFaultView,
-    InstructionWord, InterruptToken,
+    InstructionWord, InterruptToken, LeaseStep as NativeLeaseStep,
 };
 pub use fixture::ChildFixture;
 pub use fork_wire::{AttachmentFrame, ChildChannel, ForkFrame, ForkWireError, ForkWireSyscalls, PeerCredentials};
