@@ -185,6 +185,8 @@ cases:
     build: { source: source/getcwd_erange.c, output: getcwd-erange, flags: [-static, -O2, -std=gnu11, -pthread, -lrt] }
     artifact: { destination: /opt/husklet/syscall-edges-getcwd-erange }
     run: []
+    # ERANGE requires a cwd that cannot fit the 2-byte buffer, which the default "/" does.
+    guest: { cwd: /opt/husklet/corpus/working-directory }
     expect: { exit: 0, stdout: golden/getcwd_erange.out }
   - id: runtime/syscall-edges/sc-pipe-eventfd
     status: active

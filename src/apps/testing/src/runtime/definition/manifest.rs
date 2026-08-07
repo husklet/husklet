@@ -1,7 +1,7 @@
 use super::{EngineHost, EnvironmentEntry, HostExclusion, ManifestPath, environment};
 use crate::{
     runtime::scheduler,
-    suite::{Commands, Error, Execution, Target},
+    suite::{Commands, Error, Execution, SafePath as _, Target},
 };
 use serde::Deserialize;
 use std::{collections::BTreeSet, path::PathBuf};
@@ -78,7 +78,27 @@ pub(super) struct Case {
     pub(super) environment: Vec<EnvironmentEntry>,
     #[serde(default = "timeout")]
     pub(super) timeout: u64,
+    #[serde(default)]
+    pub(super) guest: Guest,
     pub(super) expect: Expectation,
+}
+
+/// Guest-side state a case needs before its binary runs, which the image alone does not supply.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Guest {
+    #[serde(default)]
+    files: Vec<GuestFile>,
+    cwd: Option<String>,
+}
+
+/// A regular file staged into the case root filesystem at mode 0600, filled with one repeated byte.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuestFile {
+    path: String,
+    size: u64,
+    fill: u8,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +136,50 @@ pub(crate) enum CompatClass {
 pub(super) struct Expectation {
     pub(super) exit: i32,
     pub(super) stdout: PathBuf,
+    /// Declared stderr line patterns; an absent list keeps the default that stderr must be empty.
+    #[serde(default)]
+    pub(super) stderr: Vec<String>,
+}
+
+/// Guest files are bounded so a manifest typo cannot ask the harness to write an unbounded fixture.
+const GUEST_FILE_LIMIT: u64 = 64 * 1024 * 1024;
+
+impl GuestFile {
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) fn contents(&self) -> Vec<u8> {
+        vec![self.fill; usize::try_from(self.size).unwrap_or(usize::MAX)]
+    }
+}
+
+impl Guest {
+    pub(super) fn validate(self) -> Result<(Vec<GuestFile>, Option<String>), Error> {
+        let mut seen = BTreeSet::new();
+        for file in &self.files {
+            std::path::Path::new(&file.path).safe_absolute()?;
+            if !(1..=GUEST_FILE_LIMIT).contains(&file.size) {
+                return Err(format!("guest file {:?} has an out-of-range size", file.path).into());
+            }
+            if !seen.insert(file.path.clone()) {
+                return Err(format!("guest file {:?} is declared twice", file.path).into());
+            }
+        }
+        if let Some(cwd) = &self.cwd {
+            std::path::Path::new(cwd).safe_absolute()?;
+        }
+        Ok((self.files, self.cwd))
+    }
+}
+
+/// A pattern that matched nothing is a stale declaration, so patterns are validated as text here and
+/// enforced as a two-way match at run time.
+pub(super) fn stderr_patterns(patterns: Vec<String>) -> Result<Vec<String>, Error> {
+    if patterns.iter().any(|pattern| pattern.trim().is_empty()) {
+        return Err("an expected stderr pattern is empty".into());
+    }
+    Ok(patterns)
 }
 
 impl Build {

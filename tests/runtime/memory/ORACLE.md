@@ -99,29 +99,32 @@ The 2026-08-03 ARM64 blocker is also gone.  A full ARM64 pass over the same
 cases completed with case-level results and no `stack smashing detected` abort.
 ARM64 additionally passes `memfd-exec-alias`, which AMD64 still fails.
 
-Twelve remain broken, and none of them fail for the recorded 2026-08-03 reason.
-They fall into four causes:
+Twelve were recorded broken here, and none of them failed for the recorded
+2026-08-03 reason.  Eleven were harness contract gaps rather than engine defects
+and are active and passing on both guest ISAs as of 2026-08-07:
 
-- Seven are unpassable under the runner's stdout/stderr contract rather than
-  broken in the engine.  `allocator-reclamation`, `anonymous-mapping-reclamation`,
-  `fd-reclamation`, `file-mapping-reclamation`, `fork-reclamation`, and
-  `thread-reclamation` emit the retained `memrss.h` debug line on stderr, and all
-  six report `grew=0KB` well inside their thresholds, so the reclamation bound
-  under test holds.  `zz-iso-flag` writes its `A`..`Z` progress markers to fd 2,
-  reaches `Z done`, and exits 0.  The runner rejects any non-empty stderr.
+- Seven were unpassable under the runner's stdout/stderr contract, which
+  rejected any non-empty stderr.  `allocator-reclamation`,
+  `anonymous-mapping-reclamation`, `fd-reclamation`, `file-mapping-reclamation`,
+  `fork-reclamation`, and `thread-reclamation` emit the retained `memrss.h`
+  debug line on stderr, and all six report `grew=0KB` well inside their
+  thresholds, so the reclamation bound under test holds.  `zz-iso-flag` writes
+  its `A`..`Z` progress markers to fd 2, reaches `Z done`, and exits 0.  Each
+  now declares its stderr lines through `expect.stderr`, which requires every
+  emitted line to match a declared pattern and every declared pattern to appear.
 - Three need a writable regular file at `/data`, the retained
   `mapping-data-rootfs` capability recorded in
-  `../engine/tests/compat/memory/manifest.tsv`.  The runtime corpus schema has no
-  field that provisions guest files, so `fixed-file-protection`, `fixed-noreplace`,
-  and `truncate-peer` exit 1 with empty stdout at their first `open("/data")`,
-  before reaching any mapping behaviour, on both guest ISAs.
-- `guard-page-efault` fails on a golden that is not environment independent.
+  `../engine/tests/compat/memory/manifest.tsv`.  `fixed-file-protection`,
+  `fixed-noreplace`, and `truncate-peer` exited 1 with empty stdout at their
+  first `open("/data")` before reaching any mapping behaviour.  Each now
+  declares `guest.files`, which stages the same 12288 bytes of `0x2a` at 0600.
+- `guard-page-efault` failed on a golden that encodes its capture environment.
   Its `ecwd=34` (`ERANGE`) records the long working directory of the retained
-  native-Linux capture host.  The corpus container working directory is short, so
-  `getcwd(guard, 16)` legitimately reaches the buffer probe and reports `EFAULT`.
-  Narrowing the call to `getcwd(guard, 1)` makes the case pass unchanged, which
-  confirms the engine orders `ERANGE` before the buffer probe correctly; the
-  fixture and golden are what encode the capture environment.
+  native-Linux capture host, while the corpus container working directory was
+  short, so `getcwd(guard, 16)` legitimately reached the buffer probe and
+  reported `EFAULT`.  The engine orders `ERANGE` before the buffer probe
+  correctly; the case now pins a long working directory through `guest.cwd`
+  rather than editing the golden.
 - `memfd-exec-alias` is the one genuine engine defect left, and it is AMD64 only.
   Writes through the RW alias of a shared memfd become visible in the RX alias
   (`scalar-visible=1`, `vector-visible=1`, `avx256-visible=1`) but do not retire

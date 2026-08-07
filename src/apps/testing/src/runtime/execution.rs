@@ -80,11 +80,47 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
         )
     })?;
     make_executable(&destination).map_err(|error| context("make executable", &destination, &error))?;
+    provision(fixture.path(), case).await?;
     let results = CaseExecution::new(&app, case, target, fixture.path(), &containers, execution)
         .run()
         .await;
     fixture.release()?;
     Ok(results)
+}
+
+/// Stages the guest-side state a case declares, so a fixture never has to depend on the image alone.
+async fn provision(root: &std::path::Path, case: &super::definition::RuntimeCase) -> Result<(), Error> {
+    for file in &case.guest_files {
+        let path = root.join(file.path().trim_start_matches('/'));
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| context("create guest file directory", parent, &error))?;
+        }
+        tokio::fs::write(&path, file.contents())
+            .await
+            .map_err(|error| context("write guest file", &path, &error))?;
+        set_private(&path).map_err(|error| context("set guest file mode", &path, &error))?;
+    }
+    if let Some(cwd) = &case.working_directory {
+        let path = root.join(cwd.trim_start_matches('/'));
+        tokio::fs::create_dir_all(&path)
+            .await
+            .map_err(|error| context("create guest working directory", &path, &error))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(windows)]
+fn set_private(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// Names the failing operation and its path, so a bare `os error 2` is never the whole diagnostic.
@@ -180,6 +216,9 @@ impl<'a> CaseExecution<'a> {
             self.case.id.replace('/', "-")
         );
         let mut process = Process::new(&self.case.destination).args(self.case.arguments.iter().map(String::as_str));
+        if let Some(cwd) = &self.case.working_directory {
+            process = process.working_dir(cwd);
+        }
         for entry in &self.case.environment {
             process = process.env_bytes(entry.name().to_vec(), entry.value().to_vec());
         }
@@ -234,10 +273,53 @@ impl<'a> CaseExecution<'a> {
         if logs.stdout != expected {
             return Err(super::diagnostic::compare("stdout", &logs.stdout, &expected).into());
         }
-        if !logs.stderr.is_empty() {
-            return Err(format!("unexpected stderr: {}", logs.stderr.preview()).into());
+        if let Some(violation) = stderr_violation(&self.case.stderr, &logs.stderr) {
+            return Err(violation.into());
         }
         Ok(())
+    }
+}
+
+/// Declared stderr patterns are an assertion, not an allowance: every emitted line must match a
+/// declared pattern, and every declared pattern must match a line.
+fn stderr_violation(patterns: &[String], stderr: &[u8]) -> Option<String> {
+    if patterns.is_empty() {
+        return (!stderr.is_empty()).then(|| format!("unexpected stderr: {}", stderr.preview()));
+    }
+    let Ok(text) = std::str::from_utf8(stderr) else {
+        return Some(format!("stderr is not UTF-8: {}", stderr.preview()));
+    };
+    let lines = text.lines().collect::<Vec<_>>();
+    if let Some(line) = lines
+        .iter()
+        .find(|line| !patterns.iter().any(|pattern| glob(pattern, line)))
+    {
+        return Some(format!("undeclared stderr line: {line:?}"));
+    }
+    patterns
+        .iter()
+        .find(|pattern| !lines.iter().any(|line| glob(pattern, line)))
+        .map(|pattern| format!("expected stderr pattern never appeared: {pattern:?}"))
+}
+
+/// `*` matches any run of characters; every other character is literal and the match is anchored.
+fn glob(pattern: &str, text: &str) -> bool {
+    let Some((head, rest)) = pattern.split_once('*') else {
+        return pattern == text;
+    };
+    let Some(mut tail) = text.strip_prefix(head) else {
+        return false;
+    };
+    loop {
+        if glob(rest, tail) {
+            return true;
+        }
+        if tail.is_empty() {
+            return false;
+        }
+        let mut rest_of_tail = tail.chars();
+        rest_of_tail.next();
+        tail = rest_of_tail.as_str();
     }
 }
 
@@ -257,5 +339,47 @@ impl CaseExecution<'_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod stderr_tests {
+    use super::{glob, stderr_violation};
+
+    #[test]
+    fn an_undeclared_stderr_line_still_fails_the_case() {
+        let patterns = vec!["fdrss base=*KB fin=*KB grew=*KB thresh=122880KB".to_owned()];
+        assert!(stderr_violation(&patterns, b"fdrss base=1KB fin=1KB grew=0KB thresh=122880KB\n").is_none());
+        let noisy = b"fdrss base=1KB fin=1KB grew=0KB thresh=122880KB\nhl: internal fault\n";
+        assert!(
+            stderr_violation(&patterns, noisy)
+                .unwrap()
+                .contains("undeclared stderr line")
+        );
+    }
+
+    #[test]
+    fn a_pattern_that_never_appears_fails_rather_than_passing_silently() {
+        let patterns = vec!["A both".to_owned(), "Z done".to_owned()];
+        assert!(
+            stderr_violation(&patterns, b"A both\n")
+                .unwrap()
+                .contains("never appeared")
+        );
+    }
+
+    #[test]
+    fn no_declared_pattern_keeps_the_empty_stderr_default() {
+        assert!(stderr_violation(&[], b"").is_none());
+        assert!(stderr_violation(&[], b"anything").is_some());
+    }
+
+    #[test]
+    fn wildcards_are_anchored_and_literal_elsewhere() {
+        assert!(glob("a*c", "abbbc"));
+        assert!(glob("a*c", "ac"));
+        assert!(!glob("a*c", "abbbcd"));
+        assert!(!glob("abc", "abcd"));
+        assert!(glob("[cache-reuse] kind=*", "[cache-reuse] kind=fork"));
     }
 }

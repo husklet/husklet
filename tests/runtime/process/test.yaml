@@ -361,7 +361,10 @@ cases:
     artifact: { destination: /opt/husklet/chrome-cache-storm }
     run: []
     timeout: 120
-    expect: { exit: 0, stdout: golden/cache_storm.txt }
+    expect:
+      exit: 0
+      stdout: golden/cache_storm.txt
+      stderr: ["[cache-reuse] kind=exec", "[cache-reuse] kind=fork", "[cache-reuse] kind=clone3", "[cache-reuse] kind=parent"]
   - id: runtime/process/waitcore
     targets: [arm64, amd64]
     status: active

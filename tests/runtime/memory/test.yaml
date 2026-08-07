@@ -42,64 +42,70 @@ cases:
     expect: { exit: 0, stdout: golden/vectorpipe.txt }
   - id: runtime/memory/fd-reclamation
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/fdrss.c, inputs: [source/memrss.h], output: fd-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fd-reclamation }
     run: []
-    expect: { exit: 0, stdout: golden/fdrss.out }
+    expect:
+      exit: 0
+      stdout: golden/fdrss.out
+      stderr: ["fdrss base=*KB fin=*KB grew=*KB thresh=122880KB"]
   - id: runtime/memory/fork-reclamation
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/forkrss.c, inputs: [source/memrss.h], output: fork-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fork-reclamation }
     run: []
-    expect: { exit: 0, stdout: golden/forkrss.out }
+    expect:
+      exit: 0
+      stdout: golden/forkrss.out
+      stderr: ["forkrss base=*KB fin=*KB grew=*KB thresh=153600KB"]
   - id: runtime/memory/allocator-reclamation
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/mallocfree.c, inputs: [source/memrss.h], output: allocator-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/allocator-reclamation }
     run: []
-    expect: { exit: 0, stdout: golden/mallocfree.out }
+    expect:
+      exit: 0
+      stdout: golden/mallocfree.out
+      stderr: ["mallocfree base=*KB fin=*KB grew=*KB thresh=204800KB"]
   - id: runtime/memory/file-mapping-reclamation
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/mmapfilerss.c, inputs: [source/memrss.h], output: file-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/file-mapping-reclamation }
     run: []
-    expect: { exit: 0, stdout: golden/mmapfilerss.out }
+    expect:
+      exit: 0
+      stdout: golden/mmapfilerss.out
+      stderr: ["mmapfilerss base=*KB fin=*KB grew=*KB thresh=153600KB"]
   - id: runtime/memory/anonymous-mapping-reclamation
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/mmapfree.c, inputs: [source/memrss.h], output: anonymous-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/anonymous-mapping-reclamation }
     run: []
-    expect: { exit: 0, stdout: golden/mmapfree.out }
+    expect:
+      exit: 0
+      stdout: golden/mmapfree.out
+      stderr: ["mmapfree base=*KB fin=*KB grew=*KB thresh=204800KB"]
   - id: runtime/memory/thread-reclamation
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/threadrss.c, inputs: [source/memrss.h], output: thread-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/thread-reclamation }
     run: []
-    expect: { exit: 0, stdout: golden/threadrss.out }
+    expect:
+      exit: 0
+      stdout: golden/threadrss.out
+      stderr: ["threadrss base=*KB fin=*KB grew=*KB thresh=153600KB"]
   - id: runtime/memory/fixed-replacement
     targets: [arm64, amd64]
     status: active
@@ -110,23 +116,23 @@ cases:
     expect: { exit: 0, stdout: golden/mapfixed.out }
   - id: runtime/memory/fixed-file-protection
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the case requires a writable regular file at /data (the retained mapping-data-rootfs capability) and the runtime corpus schema cannot provision one, so the guest exits 1 with no output before any mapping work on both guest ISAs"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/fixed_fileprotection.c, output: fixed-file-protection, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fixed-file-protection }
     run: []
+    guest:
+      files: [{ path: /data, size: 12288, fill: 42 }]
     expect: { exit: 0, stdout: golden/fixed_fileprotection.out }
   - id: runtime/memory/fixed-noreplace
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the case requires a writable regular file at /data (the retained mapping-data-rootfs capability) and the runtime corpus schema cannot provision one, so the guest exits 1 with no output before any mapping work on both guest ISAs"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/noreplace.c, output: fixed-noreplace, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/fixed-noreplace }
     run: []
+    guest:
+      files: [{ path: /data, size: 12288, fill: 42 }]
     expect: { exit: 0, stdout: golden/noreplace.out }
   - id: runtime/memory/residency-vector
     targets: [arm64, amd64]
@@ -252,13 +258,13 @@ cases:
     expect: { exit: 0, stdout: golden/bus_staterace.out }
   - id: runtime/memory/truncate-peer
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the case requires a writable regular file at /data (the retained mapping-data-rootfs capability) and the runtime corpus schema cannot provision one, so the guest exits 1 with no output before any mapping work on both guest ISAs"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/truncate_peer.c, output: truncate-peer, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/truncate-peer }
     run: []
+    guest:
+      files: [{ path: /data, size: 12288, fill: 42 }]
     expect: { exit: 0, stdout: golden/truncate_peer.out }
   - id: runtime/memory/madvise-dontneed-partial
     targets: [arm64, amd64]
@@ -491,14 +497,15 @@ cases:
     expect: { exit: 0, stdout: golden/madv_removeshared.out }
   - id: runtime/memory/zz-iso-flag
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the retained fixture writes its A..Z isolation progress markers to fd 2 (zz_isoflag.c), which the runtime stdout/stderr contract rejects outright; all five isolation probes reach Z done and exit 0 at head on both guest ISAs"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/zz_isoflag.c, output: zz-iso-flag, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/zz-iso-flag }
     run: []
-    expect: { exit: 0, stdout: golden/zz_isoflag.out }
+    expect:
+      exit: 0
+      stdout: golden/zz_isoflag.out
+      stderr: ["A both", "B neither", "C huge", "D misalign-fixed", "E anon-fd", "Z done"]
   - id: runtime/memory/mprotect-none-cycle
     targets: [arm64, amd64]
     status: !unsupported
@@ -878,13 +885,13 @@ cases:
     expect: { exit: 0, stdout: golden/mmap_einval.out }
   - id: runtime/memory/guard-page-efault
     targets: [arm64, amd64]
-    status: !broken
-      reason: "the checked golden's ecwd=34 encodes the retained capture host's long working directory; the corpus container cwd is short, so getcwd into the guard page correctly reports EFAULT and this case needs an environment-independent golden"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/guard_pageefault.c, output: guard-page-efault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/guard-page-efault }
     run: []
+    # The golden's ecwd=34 needs a cwd longer than the 16-byte buffer, so the case pins one.
+    guest: { cwd: /opt/husklet/corpus/working-directory }
     expect: { exit: 0, stdout: golden/guard_pageefault.out }
   - id: runtime/memory/syscall-logical-uaccess
     targets: [arm64, amd64]
