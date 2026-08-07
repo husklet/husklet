@@ -30,6 +30,8 @@ enum x86_fatal_code {
     X86_FATAL_LOOP_STATE = 2,
     X86_FATAL_BUDGET = 3,
     X86_FATAL_REASON = 4,
+    X86_FATAL_COMPLETED = 5,
+    X86_FATAL_LOOP_OVERFLOW = 6,
 };
 
 typedef struct x86_run_views {
@@ -812,16 +814,18 @@ hl_native_status hl_native_x86_64_run(hl_native_executor *executor, hl_native_x8
             }
             completed = cpu->loop_completed * code.instruction_count;
             if (cpu->reason == HL_NATIVE_EXIT_FALLBACK) {
-                if (cpu->scratch[0] > UINT64_MAX - completed) {
+                /* The chain counter already spans the completed iterations, so
+                 * adding them again charges the finished ones twice. */
+                if (cpu->scratch[0] < completed) {
                     cpu->loop_remaining = cpu->loop_completed = cpu->loop_block_count =
                         cpu->loop_pc = 0;
-                    return fatal_exit(&execution, output, X86_FATAL_LOOP_STATE);
+                    return fatal_exit(&execution, output, X86_FATAL_LOOP_OVERFLOW);
                 }
-                completed += cpu->scratch[0];
+                completed = cpu->scratch[0];
             }
             cpu->loop_remaining = cpu->loop_completed = cpu->loop_block_count = cpu->loop_pc = 0;
         }
-        if (completed > budget) return fatal_exit(&execution, output, X86_FATAL_BUDGET);
+        if (completed > budget) return fatal_exit(&execution, output, X86_FATAL_COMPLETED);
         budget -= completed;
         cpu->budget = budget;
         cpu->executed += completed;

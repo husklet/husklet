@@ -1403,7 +1403,9 @@ impl GuestExecutor {
                 )
             else {
                 *cpu = original;
-                return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
+                return StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal {
+                    code: 100 + u64::from(executor.last_lease_failure()),
+                });
             };
             statistics = Some(stats);
             match result.exit {
@@ -1433,7 +1435,7 @@ impl GuestExecutor {
                         result.remaining,
                         result.executed,
                     );
-                    StepOutcome::Fault(hl_execution::ExecutionFault::Frozen)
+                    StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal { code: result.code })
                 }
             }
         });
@@ -1583,7 +1585,9 @@ impl GuestExecutor {
             };
             let original = cpu.clone();
             let Some(projection) = stack_projection.take() else {
-                return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
+                return StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal {
+                    code: 100 + crate::native::NativeLeaseStep::X86StackProjection as u64,
+                });
             };
             let Ok((result, stats)) = executor.run_x86_lease(
                 cpu,
@@ -1596,7 +1600,9 @@ impl GuestExecutor {
                 Some(&mut poll),
             ) else {
                 *cpu = original;
-                return StepOutcome::Fault(hl_execution::ExecutionFault::Frozen);
+                return StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal {
+                    code: 100 + u64::from(executor.last_lease_failure()),
+                });
             };
             statistics = Some(stats);
             boundary = diagnostics.then(|| NativeBoundary {
@@ -1657,7 +1663,7 @@ impl GuestExecutor {
                         result.remaining,
                         result.executed,
                     );
-                    StepOutcome::Fault(hl_execution::ExecutionFault::Frozen)
+                    StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal { code: result.code })
                 }
             }
         });

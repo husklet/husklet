@@ -1652,6 +1652,23 @@ impl NativeX86 {
     }
 }
 
+/// Which step of a projection lease run refused; a bare `Err(())` names none of them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LeaseStep {
+    Sources = 1,
+    StatisticsBefore = 2,
+    ActiveView = 3,
+    DirectAuthority = 4,
+    DirectIdentity = 5,
+    DirectRelease = 6,
+    Run = 7,
+    PublishWritten = 8,
+    StatisticsAfter = 9,
+    X86Run = 10,
+    X86PublishWritten = 11,
+    X86StackProjection = 12,
+}
+
 /// Unique Rust owner for one opaque native executor instance.
 pub(crate) struct Executor {
     handle: NonNull<Handle>,
@@ -1659,6 +1676,9 @@ pub(crate) struct Executor {
     diagnostics_enabled: bool,
     fault_owner: Option<std::sync::Arc<dyn HostFaultOwner>>,
     view_hints: std::sync::Mutex<ViewHints>,
+    /// A lease failure is a fieldless `Err(())`; without this the scheduler cannot
+    /// name which step refused.
+    lease_failure: std::sync::atomic::AtomicU32,
     #[cfg(test)]
     test_epoch: std::sync::Mutex<Option<(u64, u64)>>,
     #[cfg(test)]
@@ -1879,6 +1899,15 @@ impl BoundaryCaptureState {
 }
 
 impl Executor {
+    fn refuse(&self, step: LeaseStep) {
+        self.lease_failure
+            .store(step as u32, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn last_lease_failure(&self) -> u32 {
+        self.lease_failure.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn direct_scalar_trace(&self, pc: u64, sources: &[BorrowedSource<'_>]) -> Option<Protection> {
         let mut protection = None;
         // A run chains single-instruction blocks across branches, so the window is
@@ -1953,6 +1982,7 @@ impl Executor {
             diagnostics_enabled,
             fault_owner,
             view_hints: std::sync::Mutex::new(ViewHints::default()),
+            lease_failure: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             test_epoch: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -2197,6 +2227,7 @@ impl Executor {
         mut poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(RunOutcome, RunStatistics), ()> {
         if sources.is_empty() || sources.len() > 8 || sources.iter().any(|span| span.bytes.is_empty()) {
+            self.refuse(LeaseStep::Sources);
             return Err(());
         }
         #[cfg(test)]
@@ -2205,7 +2236,9 @@ impl Executor {
         }
         let generation = lease.generation();
         let hint_epoch = [generation.incarnation, generation.mappings, token.version, 0];
-        let before = self.statistics_snapshot()?;
+        let before = self
+            .statistics_snapshot()
+            .inspect_err(|()| self.refuse(LeaseStep::StatisticsBefore))?;
         let spans: Vec<_> = sources
             .iter()
             .map(|span| SourceSpan {
@@ -2283,7 +2316,7 @@ impl Executor {
         let active = views
             .iter()
             .position(|view| (view.guest_first, view.guest_last) == active_range)
-            .ok_or(())?;
+            .ok_or_else(|| self.refuse(LeaseStep::ActiveView))?;
         let projection = Projection {
             views: views.as_ptr(),
             count: views.len(),
@@ -2311,8 +2344,14 @@ impl Executor {
         };
         let mut observed = ViewHints::default();
         let result = if let Some(required) = direct_protection {
-            let authority = self.register_direct(lease.into_direct(required).map_err(|_| ())?)?;
-            let identity = authority.request_identity().ok_or(())?;
+            let authority = self.register_direct(
+                lease
+                    .into_direct(required)
+                    .map_err(|_| self.refuse(LeaseStep::DirectAuthority))?,
+            )?;
+            let identity = authority
+                .request_identity()
+                .ok_or_else(|| self.refuse(LeaseStep::DirectIdentity))?;
             let result = self.run_aarch64_inner(
                 state,
                 &source,
@@ -2326,7 +2365,10 @@ impl Executor {
                 poll.as_mut()
                     .map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
             );
-            lease = authority.into_lease()?.into_projection();
+            lease = authority
+                .into_lease()
+                .inspect_err(|()| self.refuse(LeaseStep::DirectRelease))?
+                .into_projection();
             result
         } else {
             let mut operand = OperandProvider {
@@ -2349,7 +2391,8 @@ impl Executor {
                     .map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
             )
         };
-        let (exit, instruction, _, code, remaining, executed, writes) = result?;
+        let (exit, instruction, _, code, remaining, executed, writes) =
+            result.inspect_err(|()| self.refuse(LeaseStep::Run))?;
         #[cfg(test)]
         finish_live_capture(self.take_boundary_capture());
         {
@@ -2365,10 +2408,16 @@ impl Executor {
         }
         match writes {
             NativeWrites::None => drop(lease),
-            NativeWrites::Exact(ranges) => lease.publish_written_ranges(&ranges).map_err(|_| ())?,
-            NativeWrites::Full => lease.publish_written().map_err(|_| ())?,
+            NativeWrites::Exact(ranges) => lease
+                .publish_written_ranges(&ranges)
+                .map_err(|_| self.refuse(LeaseStep::PublishWritten))?,
+            NativeWrites::Full => lease
+                .publish_written()
+                .map_err(|_| self.refuse(LeaseStep::PublishWritten))?,
         }
-        let after = self.statistics_snapshot()?;
+        let after = self
+            .statistics_snapshot()
+            .inspect_err(|()| self.refuse(LeaseStep::StatisticsAfter))?;
         Ok((
             RunOutcome {
                 exit,
@@ -2685,8 +2734,12 @@ impl Executor {
         }
         match written {
             NativeWrites::None => drop(lease),
-            NativeWrites::Exact(ranges) => lease.publish_written_ranges(&ranges).map_err(|_| ())?,
-            NativeWrites::Full => lease.publish_written().map_err(|_| ())?,
+            NativeWrites::Exact(ranges) => lease
+                .publish_written_ranges(&ranges)
+                .map_err(|_| self.refuse(LeaseStep::X86PublishWritten))?,
+            NativeWrites::Full => lease
+                .publish_written()
+                .map_err(|_| self.refuse(LeaseStep::X86PublishWritten))?,
         }
         Ok((outcome, statistics))
     }
@@ -2705,9 +2758,12 @@ impl Executor {
         poll: Option<&mut dyn FnMut(u64, u64) -> bool>,
     ) -> Result<(X86RunOutcome, RunStatistics, NativeWrites), ()> {
         if sources.is_empty() || sources.len() > 8 || sources.iter().any(|span| span.bytes.is_empty()) {
+            self.refuse(LeaseStep::Sources);
             return Err(());
         }
-        let before = self.statistics_snapshot()?;
+        let before = self
+            .statistics_snapshot()
+            .inspect_err(|()| self.refuse(LeaseStep::StatisticsBefore))?;
         let spans: Vec<_> = sources
             .iter()
             .map(|span| SourceSpan {
@@ -2802,11 +2858,14 @@ impl Executor {
         // locals borrowed for exactly this call, and the `&self` borrow excludes executor
         // destruction; every context pointer inside `request` outlives the run.
         if unsafe { hl_native_run(self.handle.as_ptr(), &raw mut cpu, &raw const request, &raw mut output) } != 0 {
+            self.refuse(LeaseStep::X86Run);
             return Err(());
         }
         native.restore(state);
-        let exit = Exit::try_from(output.kind)?;
-        let after = self.statistics_snapshot()?;
+        let exit = Exit::try_from(output.kind).inspect_err(|()| self.refuse(LeaseStep::X86Run))?;
+        let after = self
+            .statistics_snapshot()
+            .inspect_err(|()| self.refuse(LeaseStep::StatisticsAfter))?;
         Ok((
             X86RunOutcome {
                 exit,

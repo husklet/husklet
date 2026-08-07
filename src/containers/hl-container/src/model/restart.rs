@@ -103,7 +103,14 @@ mod tests {
         assert!(!policy.allows(ExitStatus::Code(0), &restart));
         assert!(policy.allows(ExitStatus::Code(1), &restart));
         restart.automatic();
-        assert!(policy.allows(ExitStatus::Fault { status: -1, detail: 0 }, &restart));
+        assert!(policy.allows(
+            ExitStatus::Fault {
+                status: -1,
+                detail: 0,
+                reason: crate::FaultCause::Unknown
+            },
+            &restart
+        ));
         restart.automatic();
         assert!(!policy.allows(ExitStatus::Code(1), &restart));
         restart.manual();

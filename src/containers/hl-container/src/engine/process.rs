@@ -22,6 +22,29 @@ impl Process {
         NEXT_PROCESS.fetch_add(1, Ordering::Relaxed)
     }
 
+    fn status(exit: hl_engine::engine::EngineExit) -> ExitStatus {
+        match exit.kind {
+            hl_engine::engine::ExitKind::Code => ExitStatus::Code(exit.guest_status),
+            hl_engine::engine::ExitKind::Signal => ExitStatus::Signal(exit.guest_status),
+            hl_engine::engine::ExitKind::Fault | hl_engine::engine::ExitKind::EngineError => ExitStatus::Fault {
+                status: exit.guest_status,
+                detail: exit.detail,
+                reason: exit
+                    .fault
+                    .map_or(crate::FaultCause::Unknown, |fault| match fault.reason {
+                        hl_engine::engine::FaultReason::Fetch => crate::FaultCause::Fetch,
+                        hl_engine::engine::FaultReason::Memory => crate::FaultCause::Memory,
+                        hl_engine::engine::FaultReason::Decode => crate::FaultCause::Decode,
+                        hl_engine::engine::FaultReason::Unsupported => crate::FaultCause::Unsupported,
+                        hl_engine::engine::FaultReason::Frozen => crate::FaultCause::Frozen,
+                        hl_engine::engine::FaultReason::CacheEpoch => crate::FaultCause::CacheEpoch,
+                        hl_engine::engine::FaultReason::Protocol => crate::FaultCause::Protocol,
+                        hl_engine::engine::FaultReason::NativeFatal => crate::FaultCause::NativeFatal,
+                    }),
+            },
+        }
+    }
+
     fn engine(&self) -> Result<Arc<hl_engine::runtime::Engine>> {
         self.child
             .lock()
@@ -68,14 +91,7 @@ impl Running for Process {
             .lock()
             .map_err(|_| Error::Runtime("engine process lock is poisoned".into()))?
             .take();
-        Ok(match exit.kind {
-            hl_engine::engine::ExitKind::Code => ExitStatus::Code(exit.guest_status),
-            hl_engine::engine::ExitKind::Signal => ExitStatus::Signal(exit.guest_status),
-            hl_engine::engine::ExitKind::Fault | hl_engine::engine::ExitKind::EngineError => ExitStatus::Fault {
-                status: exit.guest_status,
-                detail: exit.detail,
-            },
-        })
+        Ok(Self::status(exit))
     }
 
     async fn signal(&self, signal: Signal) -> Result<()> {
@@ -127,5 +143,63 @@ impl Running for Process {
 
     fn take_logs(&self) -> Option<crate::service::LogReceiver> {
         self.logs.lock().ok()?.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Process;
+    use crate::{ExitStatus, FaultCause};
+
+    fn exit(reason: hl_engine::engine::FaultReason) -> hl_engine::engine::EngineExit {
+        hl_engine::engine::EngineExit {
+            kind: hl_engine::engine::ExitKind::Fault,
+            guest_status: 0,
+            detail: 0,
+            fault: Some(hl_engine::engine::FaultDiagnostic {
+                isa: hl_engine::activation::GuestIsa::Aarch64,
+                pc: 0,
+                opcode: [0; 15],
+                opcode_len: 0,
+                reason,
+                address: None,
+                access: None,
+            }),
+        }
+    }
+
+    /// The reasons that carry no faulting instruction are indistinguishable by status and
+    /// detail alone, so a fault that drops its reason cannot be classified at all.
+    #[test]
+    fn reasonless_faults_stay_distinguishable_after_mapping() {
+        for (reason, expected) in [
+            (hl_engine::engine::FaultReason::Frozen, FaultCause::Frozen),
+            (hl_engine::engine::FaultReason::CacheEpoch, FaultCause::CacheEpoch),
+            (hl_engine::engine::FaultReason::Protocol, FaultCause::Protocol),
+        ] {
+            assert_eq!(
+                Process::status(exit(reason)),
+                ExitStatus::Fault {
+                    status: 0,
+                    detail: 0,
+                    reason: expected
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_fault_without_a_diagnostic_reports_unknown() {
+        assert_eq!(
+            Process::status(hl_engine::engine::EngineExit {
+                fault: None,
+                ..exit(hl_engine::engine::FaultReason::Frozen)
+            }),
+            ExitStatus::Fault {
+                status: 0,
+                detail: 0,
+                reason: FaultCause::Unknown
+            }
+        );
     }
 }

@@ -25,7 +25,11 @@ impl Service {
                     return Some(Probe::new(
                         started_at_ms,
                         now_ms(),
-                        ExitStatus::Fault { status: -1, detail: 0 },
+                        ExitStatus::Fault {
+                            status: -1,
+                            detail: 0,
+                            reason: crate::FaultCause::Unknown,
+                        },
                         "health generation is no longer running",
                     ));
                 }
@@ -89,11 +93,11 @@ impl Service {
         let waiting = Arc::clone(&process).wait();
         tokio::pin!(waiting);
         let result = tokio::select! {
-            result = &mut waiting => result.unwrap_or(ExitStatus::Fault { status: -1, detail: 0 }),
+            result = &mut waiting => result.unwrap_or(ExitStatus::Fault { status: -1, detail: 0, reason: crate::FaultCause::Unknown }),
             () = tokio::time::sleep(check.timeout) => {
                 let _ = process.signal(Signal::Kill).await;
                 let _ = waiting.await;
-                ExitStatus::Fault { status: -1, detail: 0 }
+                ExitStatus::Fault { status: -1, detail: 0, reason: crate::FaultCause::Unknown }
             }
             changed = cancel.changed() => {
                 let _ = changed;
@@ -199,7 +203,11 @@ impl Service {
         Probe::new(
             started_at_ms,
             now_ms(),
-            ExitStatus::Fault { status: -1, detail: 0 },
+            ExitStatus::Fault {
+                status: -1,
+                detail: 0,
+                reason: crate::FaultCause::Unknown,
+            },
             error.to_string(),
         )
     }

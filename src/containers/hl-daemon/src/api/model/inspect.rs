@@ -414,9 +414,9 @@ impl From<&ExitStatus> for Exit {
                 code: 128 + signal,
                 error: format!("terminated by signal {signal}"),
             },
-            ExitStatus::Fault { status, detail } => Self {
+            ExitStatus::Fault { status, detail, reason } => Self {
                 code: *status,
-                error: format!("engine fault detail={detail}"),
+                error: format!("engine fault reason={reason:?} detail={detail}"),
             },
         }
     }

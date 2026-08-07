@@ -181,6 +181,10 @@ pub enum Fault {
     Frozen,
     CacheEpoch,
     Protocol,
+    /// A native engine invariant failed; `code` names which one.
+    NativeFatal {
+        code: u64,
+    },
     Fetch(MemoryFault),
     Memory(MemoryFault),
     Operand(crate::FaultAccess),

@@ -15,7 +15,7 @@ mod volume;
 
 pub(crate) use container::RuntimeDiagnostic;
 pub(crate) use container::now_ms;
-pub use container::{Checkpoint, Container, ContainerId, ContainerState, ExitStatus};
+pub use container::{Checkpoint, Container, ContainerId, ContainerState, ExitStatus, FaultCause};
 pub use exec::{Exec, ExecId, ExecSpec, ExecState, Streams};
 pub(crate) use health::OUTPUT_LIMIT;
 pub use health::{Check, Health, HealthStatus, Healthcheck, Probe};

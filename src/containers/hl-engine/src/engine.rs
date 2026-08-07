@@ -57,6 +57,7 @@ pub enum FaultReason {
     Frozen,
     CacheEpoch,
     Protocol,
+    NativeFatal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
