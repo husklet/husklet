@@ -1043,3 +1043,157 @@ fn urgent_data_peek_mark_and_readiness() {
     assert_eq!(byte, *b"Z");
     assert!(!host.readiness(socket.token).priority);
 }
+
+/// A wildcard bind must be reachable from loopback, exactly as one Linux wildcard listener is
+/// reachable at every local address, so the connect falls back to the bridge rendezvous.
+#[test]
+fn wildcard_bind_is_reachable_over_loopback_through_the_bridge() {
+    let bridge = format!("lo-any-{}", std::process::id());
+    let interface = EgressInterface {
+        bridge: bridge.as_bytes().to_vec(),
+        index: 2,
+        ipv4: [172, 28, 0, 5],
+    };
+    let port = 37_000 + (std::process::id() % 20_000) as u16;
+    let loopback = SocketAddress::Inet4 {
+        address: [127, 0, 0, 1],
+        port,
+    };
+    let path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/172.28.0.5:{port}"));
+    let loopback_path = std::path::PathBuf::from(format!("/tmp/.hl-bridge-{bridge}/lo-172.28.0.5:{port}"));
+    let host = Native::new();
+    let listener = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.bind_route(
+        listener.token,
+        BindRoute {
+            address: SocketAddress::Inet4 { address: [0; 4], port },
+            interface: Some(interface.clone()),
+            aliases: Vec::new(),
+        },
+    )
+    .unwrap();
+    host.listen(listener.token, 4).unwrap();
+    assert!(path.exists());
+    assert!(loopback_path.exists());
+
+    let client = host
+        .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+        .unwrap();
+    host.prepare_connect_route(
+        client.token,
+        EgressRoute {
+            address: loopback.clone(),
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        host.start_connect(client.token, false),
+        SocketConnectStatus::Connected | SocketConnectStatus::Pending
+    ));
+    assert_eq!(await_connect(&host, client.token), SocketConnectStatus::Connected);
+    assert_eq!(host.peer_address(client.token), Ok(loopback));
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let accepted = loop {
+        match host.accept(listener.token) {
+            Ok(value) => break value,
+            Err(hl_runtime::RuntimeNetworkError::WouldBlock) if Instant::now() < deadline => std::thread::yield_now(),
+            Err(error) => panic!("loopback accept failed: {error:?}"),
+        }
+    };
+    assert_eq!(host.write(client.token, b"PING", false), Ok(4));
+    let mut input = [0_u8; 4];
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match host.read(accepted.token, &mut input, false) {
+            Ok(4) => break,
+            Err(SocketHostError::WouldBlock) if Instant::now() < deadline => std::thread::yield_now(),
+            result => panic!("loopback read failed: {result:?}"),
+        }
+    }
+    assert_eq!(&input, b"PING");
+    host.close(accepted.token);
+    host.close(client.token);
+    host.close(listener.token);
+    assert!(!path.exists());
+    assert!(!loopback_path.exists());
+}
+
+/// The loopback rendezvous is namespace-private, so two containers sharing one bridge each keep
+/// their own wildcard listener on the same port.
+#[test]
+fn loopback_rendezvous_is_private_to_its_interface_address() {
+    let bridge = format!("lo-private-{}", std::process::id());
+    let port = 38_000 + (std::process::id() % 20_000) as u16;
+    let host = Native::new();
+    let mut listeners = Vec::new();
+    for ipv4 in [[172, 29, 0, 5], [172, 29, 0, 6]] {
+        let interface = EgressInterface {
+            bridge: bridge.as_bytes().to_vec(),
+            index: 2,
+            ipv4,
+        };
+        let listener = host
+            .create(AddressFamily::Inet4, SocketType::Stream, SocketProtocol::Tcp)
+            .unwrap();
+        host.bind_route(
+            listener.token,
+            BindRoute {
+                address: SocketAddress::Inet4 { address: [0; 4], port },
+                interface: Some(interface),
+                aliases: Vec::new(),
+            },
+        )
+        .unwrap();
+        let path = std::path::PathBuf::from(format!(
+            "/tmp/.hl-bridge-{bridge}/lo-{}.{}.{}.{}:{port}",
+            ipv4[0], ipv4[1], ipv4[2], ipv4[3]
+        ));
+        assert!(path.exists());
+        listeners.push((listener.token, path));
+    }
+    for (token, path) in listeners {
+        host.close(token);
+        assert!(!path.exists());
+    }
+}
+
+/// An ICMP socket is answered by the emulated responder, so a bridged destination must not be
+/// routed onto the switch, where it has no port and no rendezvous.
+#[test]
+fn icmp_connect_to_a_bridged_address_stays_on_the_responder() {
+    let interface = EgressInterface {
+        bridge: format!("icmp-{}", std::process::id()).into_bytes(),
+        index: 2,
+        ipv4: [172, 28, 0, 5],
+    };
+    let peer = SocketAddress::Inet4 {
+        address: [172, 28, 0, 9],
+        port: 0,
+    };
+    let host = Native::new();
+    let socket = host
+        .create(AddressFamily::Inet4, SocketType::Datagram, SocketProtocol::Icmp)
+        .unwrap();
+    host.prepare_connect_route(
+        socket.token,
+        EgressRoute {
+            address: peer.clone(),
+            interface: Some(interface),
+        },
+    )
+    .unwrap();
+    assert_eq!(host.start_connect(socket.token, false), SocketConnectStatus::Connected);
+    let request = [8_u8, 0, 0, 0, 0x12, 0x34, 0, 7];
+    assert_eq!(host.write(socket.token, &request, false), Ok(request.len()));
+    let mut reply = [0_u8; 8];
+    let received = host.receive_from(socket.token, &mut reply, false, false).unwrap();
+    assert_eq!(received.count, request.len());
+    assert_eq!(received.source, peer);
+    assert_eq!(reply[0], 0);
+    assert_eq!(reply[4..], request[4..]);
+    host.close(socket.token);
+}

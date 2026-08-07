@@ -74,6 +74,12 @@ impl NetworkPolicy {
     #[must_use]
     pub fn connect_route(&self, address: SocketAddress) -> EgressRoute {
         let interface = match &address {
+            // A wildcard bind lands on the bridge rendezvous, so a loopback connect carries that
+            // bridge as the fallback route reaching the same listener Linux would reach.
+            SocketAddress::Inet4 { address, port } if address[0] == 127 => (*port != 0)
+                .then(|| self.loopback_interface())
+                .flatten()
+                .map(EgressInterface::from),
             SocketAddress::Inet4 { address, .. } => self.connect_interface(*address).map(EgressInterface::from),
             SocketAddress::Inet6 { .. } | SocketAddress::Unix(_) => None,
         };
@@ -118,6 +124,40 @@ mod tests {
         });
         assert_eq!(ipv6.interface.as_ref().unwrap().bridge, b"first");
         assert_eq!(ipv6.aliases, route.aliases);
+    }
+
+    /// A loopback connect carries the bridge a wildcard bind published on, so the switch can
+    /// reach the listener Linux would reach through one wildcard socket.
+    #[test]
+    fn loopback_connect_carries_the_wildcard_bind_bridge() {
+        let policy = NetworkPolicy::from_launch(false, b"", b"", b"first=172.28.0.5/16\nsecond=10.0.0.2/8").unwrap();
+        let route = policy.connect_route(SocketAddress::Inet4 {
+            address: [127, 0, 0, 1],
+            port: 34_567,
+        });
+        let interface = route.interface.unwrap();
+        assert_eq!(interface.bridge, b"first");
+        assert_eq!(interface.ipv4, [172, 28, 0, 5]);
+        assert_eq!(
+            policy
+                .connect_route(SocketAddress::Inet4 {
+                    address: [127, 0, 0, 1],
+                    port: 0,
+                })
+                .interface,
+            None
+        );
+
+        let unbridged = NetworkPolicy::from_launch(false, b"", b"", b"").unwrap();
+        assert_eq!(
+            unbridged
+                .connect_route(SocketAddress::Inet4 {
+                    address: [127, 0, 0, 1],
+                    port: 34_567,
+                })
+                .interface,
+            None
+        );
     }
 
     #[test]

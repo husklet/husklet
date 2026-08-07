@@ -221,6 +221,15 @@ impl RuntimeNetworkHost for Native {
                             .reserve_link(&alias_anchor, &alias_name, alias_path, &path)
                             .map_err(Self::publication_error)?;
                     }
+                    // Linux serves one wildcard listener at every local address, so the same
+                    // publication carries the namespace-private loopback name.
+                    if !ipv6_only {
+                        let loopback = Self::switch_loopback_path(&interface, candidate)?;
+                        let loopback_name = Self::switch_name(&loopback)?.to_vec();
+                        publication
+                            .reserve_link(&anchor, &loopback_name, loopback, &path)
+                            .map_err(Self::publication_error)?;
+                    }
                 }
                 publication.commit().map_err(Self::publication_error)
             })();
@@ -270,11 +279,17 @@ impl RuntimeNetworkHost for Native {
         let Some(interface) = route.interface else {
             return self.prepare_connect(token, route.address);
         };
+        if self.is_icmp(token) {
+            return self.prepare_connect(token, route.address);
+        }
         let SocketAddress::Inet4 { address, port } = route.address else {
             return Err(RuntimeNetworkError::Invalid);
         };
         if port == 0 {
             return Err(RuntimeNetworkError::Invalid);
+        }
+        if address[0] == 127 {
+            return self.prepare_loopback_connect(token, &interface, address, port);
         }
         let kind = self.socket_type(token)?;
         let (directory, path) = Self::switch_path(&interface, address, port)?;
@@ -460,9 +475,15 @@ impl RuntimeNetworkHost for Native {
         let Some(interface) = route.interface else {
             return self.send_to(token, input, route.address, nonblocking);
         };
+        if self.is_icmp(token) {
+            return self.send_to(token, input, route.address, nonblocking);
+        }
         let SocketAddress::Inet4 { address, port } = route.address else {
             return Err(RuntimeNetworkError::Invalid);
         };
+        if address[0] == 127 {
+            return self.send_to(token, input, route.address, nonblocking);
+        }
         if port == 0 || self.socket_type(token)? != libc::SOCK_DGRAM {
             return Err(RuntimeNetworkError::Invalid);
         }
@@ -689,5 +710,26 @@ impl RuntimeNetworkHost for Native {
         option: i32,
     ) -> Result<hl_linux::GuestSocketOption, RuntimeNetworkError> {
         super::super::socket_option::get(self.descriptor(token)?, level, option)
+    }
+}
+
+impl Native {
+    /// Records the bridge rendezvous a refused loopback connect retries against, then dials host
+    /// loopback first so a listener that really bound loopback still wins.
+    fn prepare_loopback_connect(
+        &self,
+        token: u64,
+        interface: &hl_network::EgressInterface,
+        address: [u8; 4],
+        port: u16,
+    ) -> Result<(), RuntimeNetworkError> {
+        let peer = SocketAddress::Inet4 { address, port };
+        if self.socket_type(token)? == libc::SOCK_STREAM {
+            let path = Self::switch_loopback_path(interface, port)?;
+            let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+            let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
+            entry.loopback_switch = Some((path, peer.clone()));
+        }
+        self.prepare_connect(token, peer)
     }
 }

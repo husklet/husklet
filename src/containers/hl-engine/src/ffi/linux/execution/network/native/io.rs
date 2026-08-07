@@ -212,62 +212,24 @@ impl SocketHostIo for Native {
             return SocketConnectStatus::Connected;
         }
         let retry_switch = entry.switched && matches!(address, SocketAddress::Unix(_));
+        let loopback = entry.loopback_switch.take();
         drop(sockets);
-        let Ok((storage, length)) = Self::socket_address(&address) else {
-            return SocketConnectStatus::Failed(SocketConnectError::Io);
+        let (mut status, mut connect_failure) = self.attempt_connect(token, &address, nonblocking, retry_switch);
+        // A nonblocking loopback connect only reports refusal from poll_connect, so the fallback
+        // is retained until the host attempt has actually resolved.
+        let deferred = match (&status, loopback) {
+            (SocketConnectStatus::Failed(_), Some((path, peer))) => {
+                if let Some(fallback) = self.loopback_switch_connect(token, path, peer, nonblocking) {
+                    (status, connect_failure) = fallback;
+                }
+                None
+            }
+            (SocketConnectStatus::Pending, loopback) => loopback,
+            _ => None,
         };
-        let mut status = SocketConnectStatus::Failed(SocketConnectError::Io);
-        let mut connect_failure = None;
-        for attempt in 0..SWITCH_CONNECT_ATTEMPTS {
-            if attempt != 0 && self.reset_switch_socket(token, libc::SOCK_STREAM).is_err() {
-                break;
-            }
-            let Ok(descriptor) = self.duplicate_descriptor(token) else {
-                status = SocketConnectStatus::Failed(SocketConnectError::Canceled);
-                break;
-            };
-            // SAFETY: storage is immutable and descriptor is an independently owned duplicate.
-            let result = unsafe { libc::connect(descriptor, &storage as *const _ as *const _, length) };
-            let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if result == 0 {
-                let dead_on_arrival = retry_switch && Self::switch_dead_on_arrival(descriptor);
-                // SAFETY: this call solely owns the duplicated descriptor.
-                unsafe { libc::close(descriptor) };
-                if !dead_on_arrival {
-                    status = SocketConnectStatus::Connected;
-                    break;
-                }
-                status = SocketConnectStatus::Failed(SocketConnectError::Refused);
-                if attempt + 1 != SWITCH_CONNECT_ATTEMPTS {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    continue;
-                }
-                break;
-            }
-            // SAFETY: this call solely owns the duplicated descriptor.
-            unsafe { libc::close(descriptor) };
-            if error == libc::EINPROGRESS {
-                status = SocketConnectStatus::Pending;
-                break;
-            }
-            if retry_switch && nonblocking && matches!(error, libc::ENOENT | libc::ECONNREFUSED) {
-                status = SocketConnectStatus::Pending;
-                connect_failure = Some(SocketConnectError::Refused);
-                break;
-            }
-            if retry_switch && !nonblocking && matches!(error, libc::ENOENT | libc::ECONNREFUSED) {
-                status = SocketConnectStatus::Failed(SocketConnectError::Refused);
-                if attempt + 1 != SWITCH_CONNECT_ATTEMPTS {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                    continue;
-                }
-            } else {
-                status = Self::connect_error(error);
-            }
-            break;
-        }
         let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(entry) = sockets.get_mut(&token) {
+            entry.loopback_switch = deferred;
             entry.connecting = status == SocketConnectStatus::Pending;
             entry.connect_failure = connect_failure;
         } else {
@@ -311,11 +273,17 @@ impl SocketHostIo for Native {
                 &mut length,
             )
         };
-        let status = if result == 0 {
+        let mut status = if result == 0 {
             Self::connect_error(error)
         } else {
             SocketConnectStatus::Failed(SocketConnectError::Io)
         };
+        if matches!(status, SocketConnectStatus::Failed(_))
+            && let Some((path, peer)) = self.take_loopback_switch(token)
+            && let Some((retried, _)) = self.loopback_switch_connect(token, path, peer, true)
+        {
+            status = retried;
+        }
         if status != SocketConnectStatus::Pending {
             let mut sockets = self.shared.sockets.lock().unwrap_or_else(|poison| poison.into_inner());
             if let Some(entry) = sockets.get_mut(&token) {
@@ -411,6 +379,100 @@ impl SocketHostIo for Native {
 }
 
 impl Native {
+    fn attempt_connect(
+        &self,
+        token: u64,
+        address: &SocketAddress,
+        nonblocking: bool,
+        retry_switch: bool,
+    ) -> (SocketConnectStatus, Option<SocketConnectError>) {
+        let Ok((storage, length)) = Self::socket_address(address) else {
+            return (SocketConnectStatus::Failed(SocketConnectError::Io), None);
+        };
+        let mut status = SocketConnectStatus::Failed(SocketConnectError::Io);
+        let mut connect_failure = None;
+        for attempt in 0..SWITCH_CONNECT_ATTEMPTS {
+            if attempt != 0 && self.reset_switch_socket(token, libc::SOCK_STREAM).is_err() {
+                break;
+            }
+            let Ok(descriptor) = self.duplicate_descriptor(token) else {
+                status = SocketConnectStatus::Failed(SocketConnectError::Canceled);
+                break;
+            };
+            // SAFETY: storage is immutable and descriptor is an independently owned duplicate.
+            let result = unsafe { libc::connect(descriptor, &storage as *const _ as *const _, length) };
+            let error = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if result == 0 {
+                let dead_on_arrival = retry_switch && Self::switch_dead_on_arrival(descriptor);
+                // SAFETY: this call solely owns the duplicated descriptor.
+                unsafe { libc::close(descriptor) };
+                if !dead_on_arrival {
+                    status = SocketConnectStatus::Connected;
+                    break;
+                }
+                status = SocketConnectStatus::Failed(SocketConnectError::Refused);
+                if attempt + 1 != SWITCH_CONNECT_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
+                break;
+            }
+            // SAFETY: this call solely owns the duplicated descriptor.
+            unsafe { libc::close(descriptor) };
+            if error == libc::EINPROGRESS {
+                status = SocketConnectStatus::Pending;
+                break;
+            }
+            if retry_switch && nonblocking && matches!(error, libc::ENOENT | libc::ECONNREFUSED) {
+                status = SocketConnectStatus::Pending;
+                connect_failure = Some(SocketConnectError::Refused);
+                break;
+            }
+            if retry_switch && !nonblocking && matches!(error, libc::ENOENT | libc::ECONNREFUSED) {
+                status = SocketConnectStatus::Failed(SocketConnectError::Refused);
+                if attempt + 1 != SWITCH_CONNECT_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
+            } else {
+                status = Self::connect_error(error);
+            }
+            break;
+        }
+        (status, connect_failure)
+    }
+
+    fn take_loopback_switch(&self, token: u64) -> Option<(Vec<u8>, SocketAddress)> {
+        self.shared
+            .sockets
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_mut(&token)?
+            .loopback_switch
+            .take()
+    }
+
+    /// Retries a refused loopback connect against the wildcard listener's bridge rendezvous.
+    /// A fresh switch socket replaces the INET one, and a failed retry restores it so the guest
+    /// still observes the original loopback failure.
+    fn loopback_switch_connect(
+        &self,
+        token: u64,
+        path: Vec<u8>,
+        peer: SocketAddress,
+        nonblocking: bool,
+    ) -> Option<(SocketConnectStatus, Option<SocketConnectError>)> {
+        self.switch_socket(token, libc::SOCK_STREAM).ok()?;
+        let outcome = self.attempt_connect(token, &SocketAddress::Unix(path), nonblocking, false);
+        if matches!(outcome.0, SocketConnectStatus::Failed(_)) {
+            let _ = self.restore_inet_socket(token, libc::SOCK_STREAM);
+            return None;
+        }
+        let mut sockets = self.shared.sockets.lock().unwrap_or_else(|error| error.into_inner());
+        sockets.get_mut(&token)?.guest_peer = Some(peer);
+        Some(outcome)
+    }
+
     fn switch_dead_on_arrival(descriptor: i32) -> bool {
         let mut poll = libc::pollfd {
             fd: descriptor,

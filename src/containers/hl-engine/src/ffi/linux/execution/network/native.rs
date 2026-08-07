@@ -41,6 +41,8 @@ pub(super) struct Entry {
     pub(super) switch_path: Option<Arc<SwitchPath>>,
     pub(super) switch_interface: Option<hl_network::EgressInterface>,
     pub(super) datagram_peer: Option<Vec<u8>>,
+    /// Bridge rendezvous and guest peer to retry a refused loopback connect against.
+    pub(super) loopback_switch: Option<(Vec<u8>, SocketAddress)>,
     pub(super) switched: bool,
 }
 
@@ -189,6 +191,7 @@ impl Native {
                 switch_path,
                 switch_interface: None,
                 datagram_peer: None,
+                loopback_switch: None,
                 switched: false,
             },
         );
@@ -392,11 +395,28 @@ impl Native {
         address: [u8; 4],
         port: u16,
     ) -> Result<Vec<u8>, RuntimeNetworkError> {
-        let path = format!(
-            "/tmp/.hl-bridge-{bridge}/{}.{}.{}.{}:{port}",
-            address[0], address[1], address[2], address[3]
+        Self::switch_named_path(
+            bridge,
+            &format!("{}.{}.{}.{}:{port}", address[0], address[1], address[2], address[3]),
         )
-        .into_bytes();
+    }
+
+    /// The loopback rendezvous a wildcard bind publishes. Keying it by the owning interface
+    /// address keeps sibling containers on one bridge from sharing a namespace-private name.
+    pub(super) fn switch_loopback_path(
+        interface: &hl_network::EgressInterface,
+        port: u16,
+    ) -> Result<Vec<u8>, RuntimeNetworkError> {
+        let bridge = Self::switch_bridge(interface)?;
+        let owner = interface.ipv4;
+        Self::switch_named_path(
+            bridge,
+            &format!("lo-{}.{}.{}.{}:{port}", owner[0], owner[1], owner[2], owner[3]),
+        )
+    }
+
+    fn switch_named_path(bridge: &str, name: &str) -> Result<Vec<u8>, RuntimeNetworkError> {
+        let path = format!("/tmp/.hl-bridge-{bridge}/{name}").into_bytes();
         if path.contains(&0)
             || path.len() >= size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path)
         {
@@ -443,6 +463,16 @@ impl Native {
             Some(code) => Self::error_for(code),
             None => RuntimeNetworkError::Failed,
         }
+    }
+
+    /// An ICMP socket is answered by the emulated responder, so it never routes onto the switch.
+    pub(super) fn is_icmp(&self, token: u64) -> bool {
+        self.shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&token)
+            .is_some_and(|entry| entry.icmp)
     }
 
     fn socket_type(&self, token: u64) -> Result<i32, RuntimeNetworkError> {

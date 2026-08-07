@@ -184,6 +184,14 @@ impl NetworkPolicy {
             })
     }
 
+    /// Selects the interface whose bridge carries this namespace's loopback rendezvous.
+    ///
+    /// A wildcard bind publishes there, so a loopback connect has somewhere to fall back to.
+    #[must_use]
+    pub fn loopback_interface(&self) -> Option<&InterfaceConfiguration> {
+        self.switch_interfaces().next()
+    }
+
     fn switch_interfaces(&self) -> impl Iterator<Item = &InterfaceConfiguration> {
         self.interfaces.iter().filter(|interface| !interface.bridge.is_empty())
     }
