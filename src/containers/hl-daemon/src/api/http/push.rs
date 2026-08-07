@@ -18,6 +18,8 @@ pub(super) struct Options {
     tag: Option<String>,
 }
 
+// Axum requires the handler signature to be async even when the body never awaits.
+#[allow(clippy::unused_async)]
 pub(super) async fn post(
     State(state): State<DockerState>,
     Path(name): Path<String>,

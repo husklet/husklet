@@ -133,8 +133,10 @@ impl Receipts {
         validate_digest("lock key", key)?;
         let directory = self.root.join("locks");
         fs::create_dir_all(&directory)?;
+        // A lock file is only ever a rendezvous; its contents are never read or replaced.
         let file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(directory.join(format!("{key}.lock")))?;
@@ -217,6 +219,7 @@ impl ArtifactRecord {
         fs::create_dir_all(&locks)?;
         let lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(locks.join(format!("{digest}.lock")))?;

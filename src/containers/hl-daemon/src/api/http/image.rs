@@ -136,6 +136,7 @@ impl DockerState {
         let platform = self.platform.clone();
         let candidates = records.clone();
         let wanted = name.to_owned();
+        #[allow(clippy::items_after_statements, clippy::large_enum_variant)]
         enum IdLookup {
             Found(hl_images::Image),
             Missing,

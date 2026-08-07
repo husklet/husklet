@@ -10,27 +10,6 @@ pub(crate) struct Identity {
     root: PathBuf,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::Identity;
-
-    #[test]
-    fn host_resolver_overrides_only_configured_directives() {
-        let inherited = "# host resolver\nnameserver 10.0.0.2\nsearch host.test\noptions rotate\n".to_owned();
-        let search = crate::Resolver::new(Vec::new(), vec!["container.test".into()], Vec::new()).unwrap();
-        assert_eq!(
-            Identity::override_resolver(inherited.clone(), &search),
-            "# host resolver\nnameserver 10.0.0.2\noptions rotate\nsearch container.test\n"
-        );
-
-        let nameserver = crate::Resolver::new(vec!["192.0.2.53".parse().unwrap()], Vec::new(), Vec::new()).unwrap();
-        assert_eq!(
-            Identity::override_resolver(inherited, &nameserver),
-            "# host resolver\nsearch host.test\noptions rotate\nnameserver 192.0.2.53\n"
-        );
-    }
-}
-
 impl Identity {
     pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
@@ -225,5 +204,26 @@ impl Identity {
                 access,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Identity;
+
+    #[test]
+    fn host_resolver_overrides_only_configured_directives() {
+        let inherited = "# host resolver\nnameserver 10.0.0.2\nsearch host.test\noptions rotate\n".to_owned();
+        let search = crate::Resolver::new(Vec::new(), vec!["container.test".into()], Vec::new()).unwrap();
+        assert_eq!(
+            Identity::override_resolver(inherited.clone(), &search),
+            "# host resolver\nnameserver 10.0.0.2\noptions rotate\nsearch container.test\n"
+        );
+
+        let nameserver = crate::Resolver::new(vec!["192.0.2.53".parse().unwrap()], Vec::new(), Vec::new()).unwrap();
+        assert_eq!(
+            Identity::override_resolver(inherited, &nameserver),
+            "# host resolver\nsearch host.test\noptions rotate\nnameserver 192.0.2.53\n"
+        );
     }
 }

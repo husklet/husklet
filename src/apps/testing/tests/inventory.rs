@@ -1,3 +1,11 @@
+// The inventory fixtures hand each helper the owned records it asserts on.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::format_collect,
+    clippy::format_push_string,
+    clippy::large_stack_arrays
+)]
+
 use std::collections::{BTreeMap, VecDeque};
 mod engine_binary;
 use std::fs;

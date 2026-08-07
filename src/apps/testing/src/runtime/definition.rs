@@ -286,6 +286,8 @@ impl App {
     }
 
     fn command<'a>(&self, oracle: &'a Oracle, target: Target) -> &'a str {
+        // Naming the provider records that command selection is provider-scoped.
+        #[allow(clippy::no_effect_underscore_binding)]
         let _provider = oracle.provider;
         oracle.commands.for_target(target)
     }

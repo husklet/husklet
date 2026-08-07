@@ -183,7 +183,7 @@ mod tests {
                 (1, "blocked".into(), PathBuf::from("blocked")),
             ]),
             move |path| {
-                if path == PathBuf::from("failure") {
+                if path == std::path::Path::new("failure") {
                     return Err(std::io::Error::other("expected failure"));
                 }
                 task_active.fetch_add(1, Ordering::SeqCst);
@@ -224,7 +224,7 @@ mod tests {
                 (1, "second".into(), PathBuf::from("second")),
             ]),
             move |path| {
-                if path == PathBuf::from("second") {
+                if path == std::path::Path::new("second") {
                     if let Some(finished) = second_finished.lock().unwrap().take() {
                         let _ = finished.send(());
                     }

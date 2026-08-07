@@ -1,3 +1,6 @@
+// The fixtures build wire payloads by concatenation; that reads better than a fold here.
+#![allow(clippy::format_collect)]
+
 //! Docker network-list filter contracts over the raw daemon wire.
 
 use crate::api::support::{raw_http, require, wait_for_path};

@@ -30,6 +30,8 @@ pub(in super::super) struct TimeoutQuery {
 }
 
 impl TimeoutQuery {
+    // ApiResult keeps this uniform with the other query accessors.
+    #[allow(clippy::unnecessary_wraps)]
     fn duration(&self, configured_seconds: u64) -> ApiResult<std::time::Duration> {
         let seconds = self.seconds.unwrap_or(configured_seconds);
         Ok(std::time::Duration::from_secs(seconds))

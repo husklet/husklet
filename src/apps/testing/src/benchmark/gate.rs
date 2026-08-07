@@ -337,14 +337,15 @@ impl Gate {
         let (cpu, _) = pinning(&super::host_affinity(), self.cpu)?;
         provenance.print(self.workload.name(), cpu, self.repeats);
         let baseline = self.baseline()?;
-        if let Some(pinned) = baseline.engines.get(self.isa.public()).map(String::as_str) {
-            if !self.update && !pinned.eq_ignore_ascii_case(&provenance.build_id) {
-                return Err(format!(
-                    "retained C build changed: baseline pins {pinned}, {} has {}; re-record with --update",
-                    engine.display(),
-                    provenance.build_id
-                ));
-            }
+        if let Some(pinned) = baseline.engines.get(self.isa.public()).map(String::as_str)
+            && !self.update
+            && !pinned.eq_ignore_ascii_case(&provenance.build_id)
+        {
+            return Err(format!(
+                "retained C build changed: baseline pins {pinned}, {} has {}; re-record with --update",
+                engine.display(),
+                provenance.build_id
+            ));
         }
         if self.update && provenance.dirty() {
             return Err("refusing to record a baseline from a dirty tree; commit first".into());

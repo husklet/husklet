@@ -1,3 +1,6 @@
+// The fixture deliberately leaves the child running; the parent under test reaps it.
+#![allow(clippy::zombie_processes)]
+
 //! Purpose-built native-launch fixture with no engine behavior.
 
 use std::io::Write;

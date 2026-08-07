@@ -210,10 +210,7 @@ impl InputForwarder {
     {
         let mut bytes = vec![0_u8; 16 * 1024];
         loop {
-            let size = match reader.read(&mut bytes).await {
-                Ok(size) => size,
-                Err(_) => 0,
-            };
+            let size = reader.read(&mut bytes).await.unwrap_or_default();
             if size == 0 {
                 self.close().await;
                 let _ = self.ended.send(InputEnd::Closed);

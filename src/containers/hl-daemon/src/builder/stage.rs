@@ -49,7 +49,7 @@ impl Builder {
             exposed_ports.extend(trigger.exposed_ports.clone());
             volumes.extend(trigger.volumes.clone());
             if trigger.healthcheck.is_some() {
-                healthcheck = trigger.healthcheck.clone();
+                trigger.healthcheck.clone_into(&mut healthcheck);
             }
         }
         labels.extend(stage.labels.clone());
@@ -57,10 +57,10 @@ impl Builder {
         exposed_ports.extend(stage.exposed_ports.clone());
         volumes.extend(stage.volumes.clone());
         if stage.healthcheck.is_some() {
-            healthcheck = stage.healthcheck.clone();
+            stage.healthcheck.clone_into(&mut healthcheck);
         }
         if stage.stop_signal.is_some() {
-            stop_signal = stage.stop_signal.clone();
+            stage.stop_signal.clone_into(&mut stop_signal);
         }
         let mut steps = trigger
             .iter()

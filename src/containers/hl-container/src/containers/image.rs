@@ -201,6 +201,21 @@ fn requires_materialized_root(mounts: &[crate::Mount]) -> bool {
     mounts.iter().any(|mount| mount.populate)
 }
 
+fn commit_runtime(container: &Container) -> Result<hl_images::RuntimeConfig> {
+    let process = &container.spec.process;
+    Ok(hl_images::RuntimeConfig {
+        entrypoint: vec![process.program.clone()],
+        command: process.args.clone(),
+        environment: process.env.text()?,
+        working_directory: process.working_dir.to_string_lossy().into_owned(),
+        user: process.uid.map_or_else(String::new, |uid| {
+            process
+                .gid
+                .map_or_else(|| uid.to_string(), |gid| format!("{uid}:{gid}"))
+        }),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::requires_materialized_root;
@@ -217,19 +232,4 @@ mod tests {
         let mounts = [Mount::volume("data", "/data", Access::ReadWrite).populate()];
         assert!(requires_materialized_root(&mounts));
     }
-}
-
-fn commit_runtime(container: &Container) -> Result<hl_images::RuntimeConfig> {
-    let process = &container.spec.process;
-    Ok(hl_images::RuntimeConfig {
-        entrypoint: vec![process.program.clone()],
-        command: process.args.clone(),
-        environment: process.env.text()?,
-        working_directory: process.working_dir.to_string_lossy().into_owned(),
-        user: process.uid.map_or_else(String::new, |uid| {
-            process
-                .gid
-                .map_or_else(|| uid.to_string(), |gid| format!("{uid}:{gid}"))
-        }),
-    })
 }

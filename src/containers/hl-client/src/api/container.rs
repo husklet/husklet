@@ -332,6 +332,8 @@ impl<'a> Containers<'a> {
         Ok(Session::terminal(stream, self.transport.response_limit()))
     }
 
+    // Receiver and borrow keep this uniform with the other path builders.
+    #[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
     fn attach_path(&self, id: &str, options: &AttachOptions) -> String {
         let mut path = format!(
             "/containers/{}/attach?logs={}&stream={}&stdin={}&stdout={}&stderr={}",

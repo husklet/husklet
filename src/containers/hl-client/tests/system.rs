@@ -99,7 +99,7 @@ async fn system_prune_reclaims_unused_resources_and_respects_volume_selection() 
             &RuntimeConfig {
                 entrypoint: Vec::new(),
                 command: vec!["/bin/true".into()],
-                environment: Default::default(),
+                environment: std::collections::BTreeMap::default(),
                 working_directory: "/".into(),
                 user: String::new(),
             },

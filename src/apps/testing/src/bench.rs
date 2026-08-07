@@ -81,7 +81,7 @@ async fn prepare_work(mut work: PlannedWork) -> Result<Work, String> {
     let prepared = execution::prepare(&work.benchmark, work.case_index, work.key.target)
         .await
         .map_err(|error| error.to_string())?;
-    work.key.provenance = prepared.identity.clone();
+    prepared.identity.clone_into(&mut work.key.provenance);
     Ok(Work {
         planned: work,
         prepared,

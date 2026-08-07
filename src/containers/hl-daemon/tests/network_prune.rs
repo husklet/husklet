@@ -1,3 +1,6 @@
+// The fixtures build wire payloads by concatenation; that reads better than a fold here.
+#![allow(clippy::format_collect)]
+
 //! Docker network-prune filtering over the raw daemon wire.
 
 use hl_container::{Config, Containers, NetworkSpec};

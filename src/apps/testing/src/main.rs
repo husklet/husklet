@@ -1,3 +1,16 @@
+// Fixtures and reporters hand their helpers the owned records they assert on, keep a receiver so
+// each harness family reads uniformly, and build report text by concatenation.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::unused_self,
+    clippy::format_collect,
+    clippy::format_push_string,
+    clippy::large_futures,
+    clippy::unnecessary_wraps,
+    clippy::type_complexity,
+    clippy::large_enum_variant,
+    clippy::field_reassign_with_default
+)]
 #![forbid(unsafe_code)]
 
 mod bench;

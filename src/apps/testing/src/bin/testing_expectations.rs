@@ -1,3 +1,5 @@
+// The expectation helpers take the owned records they classify.
+#![allow(clippy::needless_pass_by_value)]
 #![forbid(unsafe_code)]
 
 use clap::Parser;

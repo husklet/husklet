@@ -20,10 +20,10 @@ pub(crate) struct Matrix {
     #[arg(long)]
     c_runner: Option<PathBuf>,
     /// Auditable source-tree revision asserted by the build producer. Binary
-    /// identity is established independently by SHA-256 and ELF BuildID.
+    /// identity is established independently by SHA-256 and ELF `BuildID`.
     #[arg(long)]
     c_engine_tree: String,
-    /// Expected ELF BuildID, or `sha256:<hex>` when the producer emitted none.
+    /// Expected ELF `BuildID`, or `sha256:<hex>` when the producer emitted none.
     #[arg(long)]
     c_engine_build_id: String,
     #[arg(long)]
@@ -306,7 +306,7 @@ pub(super) fn elf_build_id(path: &std::path::Path) -> Result<String, String> {
     elf_build_id_bytes(&bytes)
 }
 
-/// The GNU BuildID when the producer emitted one, else the binary's content hash.
+/// The GNU `BuildID` when the producer emitted one, else the binary's content hash.
 pub(super) fn build_identity(path: &std::path::Path) -> Result<String, String> {
     match elf_build_id(path) {
         Ok(identity) => Ok(identity),

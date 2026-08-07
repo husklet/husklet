@@ -406,7 +406,7 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedul
     }
 }
 
-/// A selection with only inactive cases is a valid, fully recorded NOT_RUN sweep, not a failure.
+/// A selection with only inactive cases is a valid, fully recorded `NOT_RUN` sweep, not a failure.
 fn require_planned(planned: Schedule, selected: Option<&str>) -> Result<Schedule, Error> {
     if !planned.matched_case {
         let selected = selected.ok_or("case selection match state is inconsistent")?;
@@ -428,7 +428,6 @@ fn display_attempt(id: &str, attempt: Option<u16>) -> String {
 }
 
 pub fn oracle(options: OracleOptions) -> Result<(), Error> {
-    let _check_requested = options.check;
     let apps = apps(&options.runtime)?;
     validate_case_ids(&apps)?;
     if let Some(selected) = options.runtime.selection.case.as_deref()

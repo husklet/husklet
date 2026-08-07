@@ -1,3 +1,6 @@
+// The daemon serves its whole lifecycle from one future; its size is the design.
+#![allow(clippy::large_futures)]
+
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser};

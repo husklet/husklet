@@ -1,3 +1,6 @@
+// The fixtures hand each helper the owned records it asserts on.
+#![allow(clippy::needless_pass_by_value)]
+
 //! Docker API 1.43 disk-usage type projection over the raw HTTP boundary.
 
 use hl_container::{Config, Containers};

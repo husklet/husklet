@@ -1,3 +1,6 @@
+// The supervision fixtures hand each helper the owned records it asserts on.
+#![allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
+
 #[cfg(target_os = "linux")]
 use std::collections::BTreeMap;
 use std::fs;

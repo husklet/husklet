@@ -78,9 +78,9 @@ impl std::str::FromStr for Fixture {
 // hl-lint: visual-section
 fn run(
     isa: &str,
-    guest: &PathBuf,
+    guest: &std::path::Path,
     environment: &str,
-    report: &PathBuf,
+    report: &std::path::Path,
     fixture: Fixture,
     launch_arguments: &str,
     side_files: &str,
@@ -167,7 +167,7 @@ impl Waiter {
 fn rootfs_input(
     builder: hl_engine::runtime::Builder,
     isa: hl_engine::activation::GuestIsa,
-    guest: &PathBuf,
+    guest: &std::path::Path,
     category: &str,
 ) -> Result<hl_engine::runtime::Builder, ()> {
     use hl_engine::runtime::{Input, Rootfs};
@@ -209,7 +209,7 @@ fn rootfs_input(
         "scratch-rootfs" => {}
         "mapping-data-rootfs" => {
             rootfs = rootfs.with_input(Input::File {
-                source: guest.clone(),
+                source: guest.to_path_buf(),
                 relative: PathBuf::from("data"),
                 executable: false,
             });
@@ -241,7 +241,7 @@ fn rootfs_input(
 // hl-lint: visual-section
 fn fixture_input(
     builder: hl_engine::runtime::Builder,
-    guest: &PathBuf,
+    guest: &std::path::Path,
     fixture: Fixture,
     side_files: &str,
 ) -> Result<hl_engine::runtime::Builder, ()> {
