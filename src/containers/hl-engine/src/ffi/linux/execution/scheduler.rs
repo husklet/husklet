@@ -10,6 +10,8 @@ const SLICE_BUDGET: u64 = 4096;
 const NATIVE_SOLO_BUDGET: u64 = 65_536;
 const INLINE_SERVICE_LIMIT: u64 = 64;
 const QUANTUM_TURNS: u64 = 4096;
+/// Turns of the retry cycle without a dispatch before the scheduler reports a livelock.
+const STALLED_TURNS: u64 = 1 << 22;
 const NATIVE_SITE_LIMIT: usize = 65_536;
 const NATIVE_SOURCE_LIMIT: usize = 65_536;
 const NATIVE_BOUNDARY_CAPACITY: usize = 16;
@@ -616,6 +618,7 @@ impl GuestExecutor {
 
         let _lost = LostReport(threads);
         let mut turns = 0_u64;
+        let mut stalled = 0_u64;
         let host_faults = NativePool::selected(isa, plan)
             .then(|| NativePool::production_faults(host_faults))
             .flatten();
@@ -637,6 +640,17 @@ impl GuestExecutor {
                 std::thread::yield_now();
                 turns = 0;
             }
+            stalled += 1;
+            if stalled == STALLED_TURNS {
+                // Every turn since the last dispatch re-entered the retry cycle
+                // without charging a slice, so no guest budget is being consumed.
+                hl_log::hl_error!(
+                    hl_log::tag::EXEC,
+                    "scheduler retry cycle made no progress turns={stalled} processes={} lost={}",
+                    threads.active_processes().len(),
+                    threads.lost_completions(),
+                );
+            }
             match Self::complete(isa, plan, threads, waiters)? {
                 CompletionTurn::Idle => {}
                 CompletionTurn::Continue => continue,
@@ -648,6 +662,7 @@ impl GuestExecutor {
                     CompletionTurn::Idle | CompletionTurn::Continue => continue,
                 }
             };
+            stalled = 0;
             let cpu_account = run.cpu_account.clone();
             let mut charged_at = Self::thread_cpu();
             let advanced = Self::advance(isa, plan, threads, waiters, run, &mut native, &mut charged_at);
