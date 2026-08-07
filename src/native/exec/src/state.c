@@ -73,7 +73,60 @@ void hl_native_state_untranslatable_x86(const uint8_t *bytes, size_t length, int
     census_record(state_census_x86, key, head);
 }
 
-__attribute__((destructor)) static void state_census_dump(void) {
+#define TALLY 64
+
+/* Keyed by the string literal's address, so a tally costs one compare-exchange on first use and
+ * an atomic increment thereafter. */
+typedef struct {
+    const char *_Atomic name;
+    _Atomic uint64_t count;
+} tally_slot;
+
+static tally_slot state_tally[TALLY];
+
+void hl_native_tally(const char *name) {
+    uint32_t index;
+
+    if (name == NULL) return;
+    for (index = 0; index < TALLY; index++) {
+        const char *expected = NULL;
+        const char *held = atomic_load(&state_tally[index].name);
+        if (held == NULL &&
+            !atomic_compare_exchange_strong(&state_tally[index].name, &expected, name)) {
+            held = expected;
+        }
+        if (held != NULL && held != name) continue;
+        atomic_fetch_add(&state_tally[index].count, 1);
+        return;
+    }
+}
+
+int hl_native_tally_report(uint32_t index, const char **name, uint64_t *count) {
+    const char *held;
+
+    if (index >= TALLY) return 0;
+    held = atomic_load(&state_tally[index].name);
+    if (held == NULL) return 0;
+    if (name != NULL) *name = held;
+    if (count != NULL) *count = atomic_load(&state_tally[index].count);
+    return 1;
+}
+
+static void state_tally_dump(void) {
+    uint32_t index;
+
+    if (getenv("HL_NATIVE_TALLY") == NULL) return;
+    for (index = 0; index < TALLY; index++) {
+        const char *name = NULL;
+        uint64_t count = 0;
+        if (!hl_native_tally_report(index, &name, &count)) continue;
+        fprintf(stderr, "TALLY %s=%llu\n", name, (unsigned long long)count);
+    }
+}
+
+/* At exit rather than inline, because fd 2 is redirected while the guest runs. */
+__attribute__((destructor)) static void state_dump(void) {
+    state_tally_dump();
     if (getenv("HL_NATIVE_CENSUS") == NULL) return;
     for (uint32_t index = 0; index < CENSUS; index++) {
         uint64_t key = 0, head = 0, body = 0;

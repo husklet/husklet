@@ -21,4 +21,10 @@ void hl_native_state_untranslatable_x86(const uint8_t *bytes, size_t length, int
 int hl_native_state_untranslatable_x86_report(uint32_t index, uint64_t *bytes, uint64_t *head,
                                               uint64_t *body);
 
+/* The supported way to get an ad-hoc native counter out of a run: fd 2 is redirected while the
+ * guest executes and a fixed report path fails under confinement, so tally against a string
+ * literal and the totals are printed to stderr at process exit when HL_NATIVE_TALLY is set. */
+void hl_native_tally(const char *name);
+int hl_native_tally_report(uint32_t index, const char **name, uint64_t *count);
+
 #endif

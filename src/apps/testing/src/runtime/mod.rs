@@ -6,7 +6,7 @@ mod execution;
 mod fingerprint;
 pub(crate) mod image;
 mod ledger;
-mod load;
+pub(crate) mod load;
 pub(crate) mod profile;
 pub(crate) mod scheduler;
 
@@ -67,12 +67,16 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let mut completed = drained?;
     published?;
     completed.sort_by(|left, right| left.key.cmp(&right.key));
+    let contended = contended(&prior, &completed);
     let (passed, failed) = summarize(&prior, completed);
     println!(
         "runtime: {passed} passed; {} failed; profile={}",
         failed.len(),
         profile::PROFILE
     );
+    if contended > 0 {
+        println!("runtime: SUSPECT {contended} case(s) ran under a saturated host; their elapsed_ms is not comparable");
+    }
     if failed.is_empty() {
         Ok(())
     } else {
@@ -222,6 +226,16 @@ fn outcome(result: &Result<Vec<execution::CaseResult>, String>) -> (&'static str
         Err(error) => (ledger::FAIL, error.clone()),
     };
     (status, diagnostic.bounded_to(diagnostic::DIAGNOSTIC_LIMIT))
+}
+
+/// Counts rows whose recorded `host_load` makes their timing untrustworthy.
+fn contended(prior: &std::collections::BTreeMap<WorkKey, ledger::Row>, completed: &[Completion]) -> usize {
+    prior
+        .values()
+        .map(|row| row.host_load.as_str())
+        .chain(completed.iter().map(|result| result.host_load.as_str()))
+        .filter(|sample| load::saturated(sample))
+        .count()
 }
 
 fn summarize(
