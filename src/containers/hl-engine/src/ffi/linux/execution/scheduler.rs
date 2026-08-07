@@ -1402,6 +1402,12 @@ impl GuestExecutor {
                     continuation.map(|_| &mut poll as &mut dyn FnMut(u64, u64) -> bool),
                 )
             else {
+                hl_log::hl_error!(
+                    hl_log::tag::EXEC,
+                    "native run refused isa=aarch64 pc={:#x} invariant={}",
+                    original.pc,
+                    crate::native::state_invariant(),
+                );
                 *cpu = original;
                 return StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal {
                     code: 100 + u64::from(executor.last_lease_failure()),
@@ -1429,11 +1435,12 @@ impl GuestExecutor {
                 crate::native::NativeExit::Fatal => {
                     hl_log::hl_error!(
                         hl_log::tag::EXEC,
-                        "native execution died isa=aarch64 pc={pc:#x} instruction={:#x} code={} remaining={} executed={}",
+                        "native execution died isa=aarch64 pc={pc:#x} instruction={:#x} code={} remaining={} executed={} invariant={}",
                         result.instruction,
                         result.code,
                         result.remaining,
                         result.executed,
+                        crate::native::state_invariant(),
                     );
                     StepOutcome::Fault(hl_execution::ExecutionFault::NativeFatal { code: result.code })
                 }

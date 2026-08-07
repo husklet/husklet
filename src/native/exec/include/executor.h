@@ -461,6 +461,9 @@ hl_native_status hl_native_create(const hl_native_config *, hl_native_executor *
 hl_native_status hl_native_before_fork(hl_native_executor *);
 hl_native_status hl_native_after_fork(hl_native_executor *, uint32_t preserve);
 hl_native_status hl_native_diagnose(const hl_native_executor *, hl_native_diagnostics *);
+/* Names the invariant behind the calling thread's most recent HL_NATIVE_STATE;
+ * a static string, valid for the process lifetime. */
+const char *hl_native_state_invariant(void);
 hl_native_status hl_native_changed(hl_native_executor *, const hl_native_change *, size_t);
 hl_native_status hl_native_resolve_fault(const hl_native_executor *, hl_native_fault *);
 hl_native_status hl_native_fault_scope_enter(hl_native_executor *, hl_native_cpu *,

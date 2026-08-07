@@ -1,4 +1,5 @@
 #include "arena.h"
+#include "state.h"
 
 #include <limits.h>
 #include <string.h>
@@ -62,7 +63,7 @@ hl_native_status hl_native_arena_create(hl_native_arena *arena, const hl_native_
 
 hl_native_status hl_native_arena_begin(hl_native_arena *arena) {
     hl_native_status status;
-    if (arena == NULL || arena->memory.reserve == NULL || arena->writing) return HL_NATIVE_STATE;
+    if (arena == NULL || arena->memory.reserve == NULL || arena->writing) return HL_STATE("arena begin while writing");
     status = arena->memory.write_begin(arena->memory.context);
     if (status != HL_NATIVE_OK) return status;
     arena->writing = 1;
@@ -108,7 +109,7 @@ hl_native_status hl_native_arena_publish(hl_native_arena *arena, const hl_native
 
 hl_native_status hl_native_arena_end(hl_native_arena *arena) {
     hl_native_status status;
-    if (arena == NULL || arena->memory.reserve == NULL || !arena->writing) return HL_NATIVE_STATE;
+    if (arena == NULL || arena->memory.reserve == NULL || !arena->writing) return HL_STATE("arena end while not writing");
     status = arena->memory.write_end(arena->memory.context);
     if (status != HL_NATIVE_OK) return status;
     arena->writing = 0;
@@ -118,7 +119,7 @@ hl_native_status hl_native_arena_end(hl_native_arena *arena) {
 
 hl_native_status hl_native_arena_repair(hl_native_arena *arena, uint32_t preserve) {
     hl_native_status status;
-    if (arena == NULL || arena->memory.reserve == NULL || arena->writing || preserve > 1) return HL_NATIVE_STATE;
+    if (arena == NULL || arena->memory.reserve == NULL || arena->writing || preserve > 1) return HL_STATE("arena repair while writing");
     status = arena->memory.repair(arena->memory.context, &arena->mapping, preserve);
     if (status != HL_NATIVE_OK) return status;
     if (!mapping_valid(&arena->mapping, arena->capacity, arena->alignment)) return HL_NATIVE_PLATFORM;
@@ -128,7 +129,7 @@ hl_native_status hl_native_arena_repair(hl_native_arena *arena, uint32_t preserv
 
 hl_native_status hl_native_arena_rotate(hl_native_arena *arena) {
     hl_native_status status;
-    if (arena == NULL || arena->memory.reserve == NULL || !arena->writing) return HL_NATIVE_STATE;
+    if (arena == NULL || arena->memory.reserve == NULL || !arena->writing) return HL_STATE("arena rotate while not writing");
     status = arena->memory.write_end(arena->memory.context);
     if (status != HL_NATIVE_OK) return status;
     arena->writing = 0;

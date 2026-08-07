@@ -1,5 +1,6 @@
 #include "block.h"
 
+#include "../../state.h"
 #include "add.h"
 #include "arithmetic.h"
 #include "bitwise.h"
@@ -103,7 +104,7 @@ static hl_native_status block_cache(hl_native_executor *executor, hl_native_look
         *state = HL_A64_BLOCK_HIT;
         return HL_NATIVE_OK;
     }
-    if (lookup == HL_NATIVE_EPOCH) return HL_NATIVE_STATE;
+    if (lookup == HL_NATIVE_EPOCH) return HL_STATE("block lookup epoch mismatch");
     if (!hl_a64_block_build(source, pc, buffer, capacity, &block)) {
         *state = block.state;
         return HL_NATIVE_ARGUMENT;
@@ -118,7 +119,7 @@ static hl_native_status block_cache(hl_native_executor *executor, hl_native_look
     lookup = context == NULL ? hl_native_translation_lookup(executor, &key, code)
                              : hl_native_translation_lookup_inner(executor, context, &key, code);
     return lookup == HL_NATIVE_HIT
-        ? HL_NATIVE_OK : HL_NATIVE_STATE;
+        ? HL_NATIVE_OK : HL_STATE("published block missed lookup");
 }
 
 hl_native_status hl_a64_block_cache_inner(hl_native_executor *executor, hl_native_lookup_context *context,

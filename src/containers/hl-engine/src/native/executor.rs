@@ -61,6 +61,7 @@ unsafe extern "C" {
     fn hl_native_interrupt_destroy(token: *mut InterruptHandle);
     fn hl_native_changed(executor: *mut Handle, changes: *const Change, count: usize) -> u32;
     fn hl_native_diagnose(executor: *const Handle, output: *mut Diagnostics) -> u32;
+    fn hl_native_state_invariant() -> *const std::ffi::c_char;
     #[cfg(test)]
     fn hl_native_fault_scope_contains(scope: *const FaultScope, host_pc: u64) -> i32;
     #[cfg(test)]
@@ -2540,8 +2541,9 @@ impl Executor {
         if status != 0 {
             if self.diagnostics_enabled {
                 eprintln!(
-                    "hl-native-error: isa=aarch64 status={status} pc={:#x}",
-                    native.0.program
+                    "hl-native-error: isa=aarch64 status={status} pc={:#x} invariant={}",
+                    native.0.program,
+                    state_invariant()
                 );
             }
             return Err(());
@@ -2961,6 +2963,14 @@ impl Drop for Executor {
         debug_assert_eq!(status, 0, "unique executor drop had an active native lease");
         debug_assert!(self.memory.writable.is_null());
     }
+}
+
+/// Names the invariant behind this thread's most recent `HL_NATIVE_STATE`.
+pub(crate) fn state_invariant() -> &'static str {
+    // SAFETY: the callee returns a static NUL-terminated C string for this thread.
+    unsafe { std::ffi::CStr::from_ptr(hl_native_state_invariant()) }
+        .to_str()
+        .unwrap_or("unclassified")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

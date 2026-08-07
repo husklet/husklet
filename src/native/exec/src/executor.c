@@ -11,6 +11,7 @@
 #include "arch/aarch64/source.h"
 #include "arch/aarch64/trace.h"
 #include "arch/x86_64/run.h"
+#include "state.h"
 
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -30,7 +31,7 @@ _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "executor admission requires lock-fr
 static hl_native_status run_lifecycle_enter(hl_native_executor *executor) {
     uint64_t current = atomic_load_explicit(&executor->fork_runs, memory_order_acquire);
     for (;;) {
-        if ((current & FORK_RUNS_CLOSED) != 0) return HL_NATIVE_STATE;
+        if ((current & FORK_RUNS_CLOSED) != 0) return HL_STATE("fork run admission closed");
         if ((current & FORK_RUNS_COUNT_MASK) == FORK_RUNS_COUNT_MASK) return HL_NATIVE_CAPACITY;
         if (atomic_compare_exchange_weak_explicit(&executor->fork_runs, &current, current + 1,
                                                   memory_order_acquire, memory_order_relaxed))
@@ -151,7 +152,7 @@ hl_native_status hl_native_direct_register(hl_native_executor *executor,
         return status;
     }
     if (executor->direct_authority != NULL) {
-        status = HL_NATIVE_STATE;
+        status = HL_STATE("direct authority already held");
     } else {
         token->owner = executor;
         token->generation = direct_generation(executor);
@@ -309,14 +310,16 @@ void hl_native_ibtc_fill_shared(hl_native_executor *executor, uint64_t target, v
 }
 
 #if defined(__aarch64__)
-static hl_native_status ibtc_fill(hl_native_executor *executor, hl_native_aarch64_cpu *cpu,
-                                  uint64_t target, const hl_native_code *code) {
+hl_native_status hl_native_ibtc_fill(hl_native_executor *executor, hl_native_aarch64_cpu *cpu,
+                                     uint64_t target, const hl_native_code *code) {
     uintptr_t site = (uintptr_t)cpu->indirect_site;
     uintptr_t rx = (uintptr_t)executor->arena.executable;
-    /* A reset re-reserves the arena, so a site recorded before it addresses the
-     * old mapping. That is a dead site, not a broken invariant. */
+    uint64_t content = executor->arena.mapping.content;
     if (site == 0) return HL_NATIVE_OK;
-    if ((site & 15u) != 0 || site < rx || site > rx + executor->arena.mapping.content - 16) {
+    if ((site & 15u) != 0) return HL_STATE("ibtc site alignment");
+    /* A rollover rotates the arena to a fresh reservation, so a site recorded
+     * by the previous one is stale rather than corrupt: drop it and dispatch. */
+    if (site < rx || content < 16 || (uint64_t)(site - rx) > content - 16) {
         cpu->indirect_site = 0;
         return HL_NATIVE_OK;
     }
@@ -373,7 +376,7 @@ hl_native_status hl_native_executor_gate_enter(hl_native_executor *executor) {
     if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
                                                  ADMISSION(MUTATION_ACTIVE, 0),
                                                  memory_order_seq_cst, memory_order_relaxed))
-        return HL_NATIVE_STATE;
+        return HL_STATE("mutation gate not open");
     return HL_NATIVE_OK;
 }
 
@@ -400,7 +403,7 @@ hl_native_status hl_native_execution_enter(hl_native_executor *executor, hl_nati
     if (executor == NULL || execution == NULL || execution->owner != NULL) return HL_NATIVE_ARGUMENT;
     uint64_t current = atomic_load_explicit(&executor->admission, memory_order_acquire);
     for (;;) {
-        if (ADMISSION_STATE(current) != MUTATION_OPEN) return HL_NATIVE_STATE;
+        if (ADMISSION_STATE(current) != MUTATION_OPEN) return HL_STATE("execution admission not open");
         if (ADMISSION_COUNT(current) == UINT32_MAX) return HL_NATIVE_CAPACITY;
         uint64_t desired = ADMISSION(MUTATION_OPEN, ADMISSION_COUNT(current) + 1);
         if (atomic_compare_exchange_weak_explicit(&executor->admission, &current, desired,
@@ -438,7 +441,7 @@ hl_native_status hl_native_execution_leave(hl_native_execution *execution) {
     uint64_t current = atomic_load_explicit(&executor->admission, memory_order_relaxed);
     for (;;) {
         if (ADMISSION_STATE(current) != MUTATION_OPEN || ADMISSION_COUNT(current) == 0)
-            return HL_NATIVE_STATE;
+            return HL_STATE("execution leave without admission");
         uint64_t desired = ADMISSION(MUTATION_OPEN, ADMISSION_COUNT(current) - 1);
         if (atomic_compare_exchange_weak_explicit(&executor->admission, &current, desired,
                                                   memory_order_release, memory_order_relaxed))
@@ -608,17 +611,17 @@ hl_native_status hl_native_before_fork(hl_native_executor *executor) {
     if (!atomic_compare_exchange_strong_explicit(&executor->fork_runs, &runs_expected,
                                                  FORK_RUNS_CLOSED,
                                                  memory_order_seq_cst, memory_order_relaxed))
-        return HL_NATIVE_STATE;
+        return HL_STATE("fork close: runs outstanding");
     if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
                                                  ADMISSION(MUTATION_FORK, 0),
                                                  memory_order_seq_cst, memory_order_relaxed)) {
         atomic_store_explicit(&executor->fork_runs, 0, memory_order_release);
-        return HL_NATIVE_STATE;
+        return HL_STATE("fork close: mutation active");
     }
     if (!hl_native_cache_available(executor->cache)) {
         atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
         atomic_store_explicit(&executor->fork_runs, 0, memory_order_release);
-        return HL_NATIVE_STATE;
+        return HL_STATE("fork close: cache unavailable");
     }
     return HL_NATIVE_OK;
 }
@@ -630,7 +633,7 @@ hl_native_status hl_native_after_fork(hl_native_executor *executor, uint32_t pre
     if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
                                                  ADMISSION(MUTATION_ACTIVE, 0),
                                                  memory_order_acquire, memory_order_relaxed))
-        return HL_NATIVE_STATE;
+        return HL_STATE("fork reopen: not in fork state");
     status = hl_native_arena_repair(&executor->arena, preserve);
     if (status != HL_NATIVE_OK) {
         /* Repair may have replaced or invalidated the inherited executable
@@ -807,7 +810,7 @@ hl_native_status hl_native_changed(hl_native_executor *executor, const hl_native
                                                                executor->memory_mode,
                                                                executor->authority_generation))
                 ? hl_native_cache_relocations_invalidate(executor->cache, change->first, change->last)
-                : HL_NATIVE_STATE;
+                : HL_STATE("change outside cache address identity");
             if (status == HL_NATIVE_OK)
                 status = hl_native_cache_invalidate(executor->cache, change->first, change->last, NULL);
         }
@@ -898,7 +901,7 @@ hl_native_status hl_native_synchronize_direct(hl_native_executor *executor, uint
     hl_native_status status = hl_native_executor_gate_enter(executor);
     if (status != HL_NATIVE_OK) return status;
     if (!hl_native_direct_request_valid(executor, token, generation, identity, projection)) {
-        status = HL_NATIVE_STATE;
+        status = HL_STATE("direct synchronize request invalid");
     } else if (!hl_native_cache_epoch_matches(executor->cache, mapping_epoch, instruction_epoch, 1, identity)) {
         status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch, 1, identity);
         if (status == HL_NATIVE_OK) ibtc_clear(executor);
@@ -916,7 +919,7 @@ hl_native_status hl_native_executor_rollover(hl_native_executor *executor, uint6
     hl_native_status status;
     if (executor == NULL || atomic_load_explicit(&executor->admission, memory_order_acquire) !=
                                 ADMISSION(MUTATION_ACTIVE, 0))
-        return HL_NATIVE_STATE;
+        return HL_STATE("rollover without mutation admission");
     status = hl_native_cache_reset_identity(executor->cache, mapping_epoch, instruction_epoch,
                                             executor->memory_mode,
                                             executor->authority_generation);
@@ -1156,7 +1159,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                     executor, direct_token, authority_generation, authority_identity, projection,
                     &direct_authority)) {
                 (void)hl_native_execution_leave(&execution);
-                return HL_NATIVE_STATE;
+                return HL_STATE("direct authority snapshot refused");
             }
         }
         if (cpu->interrupt != 0)
@@ -1292,7 +1295,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
         if (cpu->indirect_site != 0) {
             status = hl_native_execution_leave(&execution);
             if (status != HL_NATIVE_OK) return status;
-            status = ibtc_fill(executor, cpu, instruction, &code);
+            status = hl_native_ibtc_fill(executor, cpu, instruction, &code);
             if (status != HL_NATIVE_OK) return status;
             status = a64_execution_enter(executor, &execution, cpu);
             if (status != HL_NATIVE_OK) return status;
@@ -1317,7 +1320,7 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
             cpu->active_authority = 0;
             active_view_clear(cpu);
             status = hl_native_execution_leave(&execution);
-            return status == HL_NATIVE_OK ? HL_NATIVE_STATE : status;
+            return status == HL_NATIVE_OK ? HL_STATE("fault scope publish refused") : status;
         }
         cpu->diagnostic_guard_fast = cpu->diagnostic_guard_full = cpu->diagnostic_guard_fallback = 0;
         cpu->diagnostic_dirty_reserved = cpu->diagnostic_dirty_overflow = cpu->diagnostic_dirty_committed = 0;
@@ -1558,7 +1561,7 @@ static hl_native_status run_inner(hl_native_executor *executor, hl_native_cpu *c
         if (!hl_native_direct_request_valid(executor, token, request->authority_generation,
                                             identity, request->projection)) {
             (void)hl_native_execution_leave(&execution);
-            return HL_NATIVE_STATE;
+            return HL_STATE("run direct request invalid");
         }
     }
     if (*interrupt != 0)
@@ -1613,10 +1616,10 @@ hl_native_status hl_native_destroy(hl_native_executor *executor) {
     if (!atomic_compare_exchange_strong_explicit(&executor->admission, &expected,
                                                  ADMISSION(MUTATION_ACTIVE, 0),
                                                  memory_order_acq_rel, memory_order_relaxed))
-        return HL_NATIVE_STATE;
+        return HL_STATE("direct adopt: mutation gate busy");
     if (executor->direct_authority != NULL) {
         atomic_store_explicit(&executor->admission, ADMISSION(MUTATION_OPEN, 0), memory_order_release);
-        return HL_NATIVE_STATE;
+        return HL_STATE("direct adopt: authority already held");
     }
     hl_native_cache_destroy(executor->cache);
     hl_native_ibtc_storage_destroy(executor->ibtc);

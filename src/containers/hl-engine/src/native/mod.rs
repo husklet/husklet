@@ -43,6 +43,7 @@ pub use event::{
 };
 #[cfg(target_os = "linux")]
 pub(crate) use executor::NativeFaultOwner;
+pub(crate) use executor::state_invariant;
 #[allow(unused_imports)]
 pub(crate) use executor::{
     BorrowedSource as NativeSource, Executor as NativeExecutor, Exit as NativeExit, HostFaultOwner, HostFaultView,
