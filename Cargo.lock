@@ -2830,6 +2830,7 @@ dependencies = [
  "hl-checkpoint",
  "hl-container",
  "hl-descriptor",
+ "hl-design",
  "hl-engine",
  "hl-images",
  "hl-log",

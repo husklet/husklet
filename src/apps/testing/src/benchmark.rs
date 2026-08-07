@@ -146,6 +146,7 @@ pub(crate) struct List {
     rust_engine: Option<PathBuf>,
 }
 
+#[hl_design::adapter]
 fn parse_duration(value: &str) -> Result<Duration, String> {
     let seconds = value.parse::<u64>().map_err(|_| "invalid timeout".to_owned())?;
     if seconds == 0 {
@@ -155,6 +156,7 @@ fn parse_duration(value: &str) -> Result<Duration, String> {
     }
 }
 
+#[hl_design::adapter]
 fn parse_assignment(value: &str) -> Result<(String, String), String> {
     let (name, value) = value.split_once('=').ok_or_else(|| "expected KEY=VALUE".to_owned())?;
     if name.is_empty() {

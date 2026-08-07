@@ -14,6 +14,7 @@ workspace = true
 clap.workspace = true
 fs2.workspace = true
 hl-container = { path = "../../containers/hl-container" }
+hl-design = { path = "../../packages/hl-design" }
 hl-images = { path = "../../containers/hl-images" }
 hl-log = { path = "../../packages/hl-log" }
 hl-process = { path = "../../packages/hl-process" }

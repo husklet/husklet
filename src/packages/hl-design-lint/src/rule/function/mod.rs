@@ -187,6 +187,10 @@ fn framework_adapter(function: &ItemFn) -> bool {
     }) {
         return false;
     }
+    extractor_argument(function) || value_parser_shape(function)
+}
+
+fn extractor_argument(function: &ItemFn) -> bool {
     function.sig.inputs.iter().any(|argument| {
         let FnArg::Typed(argument) = argument else {
             return false;
@@ -208,6 +212,24 @@ fn framework_adapter(function: &ItemFn) -> bool {
                 )
         })
     })
+}
+
+/// clap owns the value-parser signature: one `&str` in, a `Result` out.
+fn value_parser_shape(function: &ItemFn) -> bool {
+    let [FnArg::Typed(argument)] = function.sig.inputs.iter().collect::<Vec<_>>()[..] else {
+        return false;
+    };
+    let Type::Reference(reference) = argument.ty.as_ref() else {
+        return false;
+    };
+    if !matches!(reference.elem.as_ref(), Type::Path(inner) if inner.path.is_ident("str")) {
+        return false;
+    }
+    let syn::ReturnType::Type(_, ty) = &function.sig.output else {
+        return false;
+    };
+    matches!(ty.as_ref(), Type::Path(ty)
+        if ty.path.segments.last().is_some_and(|segment| segment.ident == "Result"))
 }
 
 #[derive(Clone)]

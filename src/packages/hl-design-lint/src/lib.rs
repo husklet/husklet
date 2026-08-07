@@ -280,6 +280,8 @@ extern "C" fn ffi(value: usize) { let _ = value; }
 #[hl_design::adapter] async fn handler(State(state): State<AppState>) { let _ = state; }
 async fn unreviewed_handler(State(state): State<AppState>) { let _ = state; }
 fn detached(state: AppState) { let _ = state; }
+#[hl_design::adapter] fn parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
+fn unmarked_parses(value: &str) -> Result<usize, String> { Ok(value.len()) }
 #[cfg(unix)] fn gated(value: usize) { let _ = value; }
 #[cfg(windows)] fn gated(value: usize) { let _ = value; }
 #[cfg(test)] fn test_only(value: usize) { let _ = value; }
@@ -299,6 +301,7 @@ fn detached(state: AppState) { let _ = state; }
                 "two",
                 "unreviewed_handler",
                 "detached",
+                "unmarked_parses",
                 "gated",
                 "package",
                 "domain",

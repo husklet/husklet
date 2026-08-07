@@ -362,6 +362,7 @@ fn allowed_edge(source: &str, target: &str) -> bool {
             | ("testing", "hl-checkpoint")
             | ("testing", "hl-container")
             | ("testing", "hl-descriptor")
+            | ("testing", "hl-design")
             | ("testing", "hl-engine")
             | ("testing", "hl-images")
             | ("testing", "hl-log")

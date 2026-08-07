@@ -155,6 +155,7 @@ mod tests {
 pub(crate) mod parse {
     use std::path::{Component, PathBuf};
 
+    #[hl_design::adapter]
     pub(crate) fn jobs(value: &str) -> Result<usize, String> {
         let jobs = value
             .parse::<usize>()
@@ -165,6 +166,7 @@ pub(crate) mod parse {
             .ok_or_else(|| "jobs must be between 1 and 256".to_owned())
     }
 
+    #[hl_design::adapter]
     pub(crate) fn results(value: &str) -> Result<PathBuf, String> {
         let path = PathBuf::from(value);
         if value.is_empty() || path.is_absolute() || path.components().any(|part| matches!(part, Component::ParentDir))
