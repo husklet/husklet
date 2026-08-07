@@ -58,7 +58,10 @@ impl Rule for Use {
                             != Some(definition.name.as_str())
                     })
                     .collect::<Vec<_>>();
-                (external.len() == 1).then(|| definition.finding(self.id(), external[0]))
+                // A sole attribute-borne use cannot take the remedy this rule asks for: no body
+                // inlines into `value_parser =` or into a serde path string.
+                let [usage] = external[..] else { return None };
+                (!usage.attribute).then(|| definition.finding(self.id(), usage))
             })
             .collect())
     }
