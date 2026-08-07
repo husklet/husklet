@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const CAPTURE_LIMIT: u64 = 1024 * 1024;
-/// Engine diagnostics are per-case and forwarded, not compared, so they need far more room than stdout.
-const DIAGNOSTIC_CAPTURE_LIMIT: u64 = 64 * 1024 * 1024;
+/// Engine diagnostics are forwarded rather than compared, but every concurrent worker holds one in
+/// memory, so the bound is only loose enough for the loudest observed case.
+const DIAGNOSTIC_CAPTURE_LIMIT: u64 = 8 * 1024 * 1024;
 const RESULT_LIMIT: u64 = 1024 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(30);
 
