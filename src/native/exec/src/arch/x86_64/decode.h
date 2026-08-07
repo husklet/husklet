@@ -30,6 +30,8 @@ enum operation {
     OP_SET,
     OP_STORE,
     OP_XCHG,
+    /* Register-to-register xchg, which x86 does not lock. */
+    OP_EXCHANGE,
     OP_XADD,
     OP_CMPXCHG,
     OP_CONTROL,
@@ -102,6 +104,10 @@ enum vector_operation {
     VECTOR_MERGE_FROM_INTEGER,
     VECTOR_AES_ENCRYPT,
     VECTOR_AES_ENCRYPT_LAST,
+    /* pshufb: byte permute where a selector with bit 7 set produces zero. */
+    VECTOR_SHUFFLE_BYTE,
+    /* psrlw/psrld/psrlq, psraw/psrad and psllw/pslld/psllq by an immediate. */
+    VECTOR_SHIFT_IMMEDIATE,
 };
 
 enum vector_immediate_form {

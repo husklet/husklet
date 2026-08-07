@@ -3116,3 +3116,140 @@ fn x86_scalar_staging_preserves_vector_state_at_each_boundary() {
         .collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
+
+/// `xchg` in its `90+r` accumulator form is not locked, and its 32-bit encoding zero-extends
+/// while its 16-bit encoding must leave the upper 48 bits of both registers alone.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_accumulator_exchange_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[0] = 0x0123_4567_89ab_cdef;
+    initial.registers[2] = 0xfedc_ba98_7654_3210;
+    initial.registers[7] = 0x1111_2222_3333_4444;
+    initial.registers[8] = 0x8888_9999_aaaa_bbbb;
+    initial.registers[9] = 0xcccc_dddd_eeee_ffff;
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x48, 0x92],       // xchg %rax,%rdx
+        vec![0x92],             // xchg %eax,%edx
+        vec![0x66, 0x92],       // xchg %ax,%dx
+        vec![0x48, 0x90],       // xchg %rax,%rax (nop)
+        vec![0x49, 0x90],       // xchg %rax,%r8
+        vec![0x41, 0x90],       // xchg %eax,%r8d
+        vec![0x66, 0x41, 0x91], // xchg %ax,%r9w
+        vec![0x97],             // xchg %eax,%edi
+        vec![0x48, 0x97],       // xchg %rax,%rdi
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let operand: Vec<u8> = (0..64_u32).map(|index| (index ^ 0x2d) as u8).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// `pshufb` zeroes a lane whenever the control byte has bit 7 set and otherwise indexes
+/// with only the low four bits, so the control values must span both rules.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_shuffle_byte_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.vectors[0] = 0x0f0e_0d0c_0b0a_0908_0706_0504_0302_0100;
+    // Controls: in-range, bit-7 set, and high bits that must be ignored.
+    initial.vectors[1] = 0x8f70_ff31_0080_7f10_9c1f_e205_4a33_0f00;
+    initial.vectors[2] = 0xaabb_ccdd_eeff_0011_2233_4455_6677_8899;
+    initial.vectors[3] = 0x0000_0000_0000_0000_ffff_ffff_ffff_ffff;
+    let operand: [u8; 16] = [
+        0x00, 0x11, 0x82, 0x03, 0x14, 0x85, 0x06, 0x17, 0x88, 0x09, 0x1a, 0x8b, 0x0c, 0x1d, 0x8e, 0x0f,
+    ];
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x66, 0x0f, 0x38, 0x00, 0xc1], // pshufb %xmm1,%xmm0
+        vec![0x66, 0x0f, 0x38, 0x00, 0xd3], // pshufb %xmm3,%xmm2
+        vec![0x66, 0x0f, 0x38, 0x00, 0x06], // pshufb (%rsi),%xmm0
+        vec![0x66, 0x0f, 0x38, 0x00, 0x16], // pshufb (%rsi),%xmm2
+        vec![0x66, 0x0f, 0x38, 0x00, 0xc0], // pshufb %xmm0,%xmm0
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// Packed shifts by an immediate zero the destination once the count reaches the element
+/// width, except for the arithmetic right shift, which saturates at a full sign replication.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_packed_shift_immediate_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.vectors[0] = 0x8000_7fff_0001_ffff_1234_abcd_5a5a_a5a5;
+    initial.vectors[1] = 0xffff_0000_8001_7ffe_dead_beef_0bad_c0de;
+    initial.vectors[2] = 0x8000_0000_7fff_ffff_0000_0001_ffff_ffff;
+    initial.vectors[3] = 0x8000_0000_0000_0000_ffff_ffff_ffff_ffff;
+    initial.vectors[4] = 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210;
+    initial.vectors[10] = 0xaa55_aa55_aa55_aa55_1234_5678_9abc_def0;
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x66, 0x0f, 0x71, 0xd0, 0x00],       // psrlw $0,%xmm0
+        vec![0x66, 0x0f, 0x71, 0xd0, 0x04],       // psrlw $4,%xmm0
+        vec![0x66, 0x0f, 0x71, 0xd0, 0x10],       // psrlw $16,%xmm0
+        vec![0x66, 0x0f, 0x71, 0xf1, 0x03],       // psllw $3,%xmm1
+        vec![0x66, 0x0f, 0x71, 0xf1, 0x10],       // psllw $16,%xmm1
+        vec![0x66, 0x0f, 0x71, 0xe2, 0x05],       // psraw $5,%xmm2
+        vec![0x66, 0x0f, 0x71, 0xe2, 0xff],       // psraw $255,%xmm2
+        vec![0x66, 0x0f, 0x72, 0xd3, 0x08],       // psrld $8,%xmm3
+        vec![0x66, 0x0f, 0x72, 0xf3, 0x1f],       // pslld $31,%xmm3
+        vec![0x66, 0x0f, 0x72, 0xe4, 0x20],       // psrad $32,%xmm4
+        vec![0x66, 0x0f, 0x72, 0xf4, 0x20],       // pslld $32,%xmm4
+        vec![0x66, 0x0f, 0x73, 0xd4, 0x20],       // psrlq $32,%xmm4
+        vec![0x66, 0x0f, 0x73, 0xf4, 0x3f],       // psllq $63,%xmm4
+        vec![0x66, 0x0f, 0x73, 0xd4, 0x40],       // psrlq $64,%xmm4
+        vec![0x66, 0x41, 0x0f, 0x71, 0xd2, 0x08], // psrlw $8,%xmm10
+        vec![0x66, 0x41, 0x0f, 0x72, 0xf2, 0x01], // pslld $1,%xmm10
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let operand: Vec<u8> = (0..64_u32).map(|index| (index ^ 0x71) as u8).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
+
+/// `pinsrw` selects its lane modulo eight and replaces only that lane, taking the low
+/// sixteen bits of a general register or a sixteen-bit load.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_insert_word_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[1] = 0xdead_beef_1234_5678;
+    initial.registers[6] = 0x7000;
+    initial.vectors[0] = 0x0f0e_0d0c_0b0a_0908_0706_0504_0302_0100;
+    initial.vectors[5] = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffff;
+    let operand: [u8; 16] = [
+        0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18, 0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f, 0x90,
+    ];
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x66, 0x0f, 0xc4, 0xc1, 0x00],       // pinsrw $0,%ecx,%xmm0
+        vec![0x66, 0x0f, 0xc4, 0xc1, 0x07],       // pinsrw $7,%ecx,%xmm0
+        vec![0x66, 0x0f, 0xc4, 0xc1, 0x09],       // pinsrw $9,%ecx,%xmm0
+        vec![0x66, 0x0f, 0xc4, 0x06, 0x03],       // pinsrw $3,(%rsi),%xmm0
+        vec![0x66, 0x0f, 0xc4, 0x6e, 0x08, 0x05], // pinsrw $5,8(%rsi),%xmm5
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
