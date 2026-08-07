@@ -179,6 +179,9 @@ impl Lease {
 
 /// Private file-lock boundary consumed through an owned safe lease.
 mod ffi {
+    // The advisory-lock calls in this boundary are `unsafe` libc entry points.
+    #![allow(unsafe_code)]
+
     use std::os::fd::AsRawFd;
 
     pub(super) struct FileLock(std::fs::File);

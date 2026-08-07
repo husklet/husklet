@@ -89,6 +89,9 @@ impl Peer {
 
 /// Private Unix process-control boundary consumed through safe owned values.
 mod ffi {
+    // The signalling and peer-credential calls in this boundary are `unsafe` libc entry points.
+    #![allow(unsafe_code)]
+
     use std::io;
     use std::os::fd::AsRawFd;
 

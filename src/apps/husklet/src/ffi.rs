@@ -1,5 +1,8 @@
 //! Private operating-system boundary for the Husklet application.
 
+// The termios and advisory-lock calls in this boundary are `unsafe` libc entry points.
+#![allow(unsafe_code)]
+
 use std::os::fd::{AsRawFd, RawFd};
 
 /// RAII raw mode for a terminal descriptor; restores the saved attributes on drop.

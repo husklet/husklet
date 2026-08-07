@@ -32,7 +32,8 @@ test: design-lint
 
 # The single headless gate: the architecture lint, clippy and every test, run in the dev shell that supplies
 # Clippy, pkg-config and the Alpine fixture a bare host toolchain lacks. Never pass --all-features — it
-# enables husklet's `gui` feature, whose GTK4 stack exists only in the macOS shell.
+# enables husklet's `gui` feature, whose GTK4 stack exists only in the macOS shell. husklet's `runtime`
+# feature is off by default, so it gets its own step or nothing here would ever compile it.
 # Every step runs even after one fails, so a single invocation reports the whole state of the tree.
 gate:
 	$(NIX_DEV) bash -uc '\
@@ -42,12 +43,16 @@ gate:
 	  cargo build -p engine -p testing --bins --locked --offline || status=1; \
 	  export HL_TEST_ENGINE_APP_BIN_DIR="$(CURDIR)/target/debug"; \
 	  cargo clippy --workspace --all-targets --locked --offline -- -D warnings || status=1; \
+	  cargo clippy -p husklet --all-targets --features runtime --locked --offline -- -D warnings || status=1; \
 	  cargo test --workspace --all-targets --locked --offline --no-fail-fast || status=1; \
 	  cargo test --workspace --doc --locked --offline || status=1; \
 	  exit $$status'
 
+# husklet's `runtime` feature is off by default and `gui` needs the macOS GTK stack, so the workspace
+# sweep alone never compiles the container-runtime surface.
 check:
 	cargo check --workspace --all-targets --locked
+	cargo check -p husklet --all-targets --features runtime --locked
 
 test-ci:
 	$(NIX) flake check -L --option cores 0 --max-jobs auto
