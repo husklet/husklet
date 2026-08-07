@@ -513,14 +513,18 @@ hl_native_status hl_native_cache_reset_identity(hl_native_cache *cache, uint64_t
     if (!hl_native_cache_available(cache)) return HL_NATIVE_STATE;
     atomic_store_explicit(&cache->published_generation, 0, memory_order_release);
     atomic_fetch_add_explicit(&cache->provenance_epoch, 1, memory_order_acq_rel);
-    for (uint32_t index = 0; index < cache->provenance_capacity; index++)
-        provenance_clear(&cache->provenance[index]);
+    // Entries past provenance_next were never published in this generation, so only the
+    // written prefix needs clearing; a generation wrap recycles stale tags and needs all.
+    uint32_t written = cache->provenance_next < cache->provenance_capacity ? cache->provenance_next
+                                                                          : cache->provenance_capacity;
     hl_native_cache_certificates_clear(cache);
     cache->generation++;
     if (cache->generation == 0) {
         memset(cache->entries, 0, cache->capacity * sizeof(*cache->entries));
         cache->generation = 1;
+        written = cache->provenance_capacity;
     }
+    for (uint32_t index = 0; index < written; index++) provenance_clear(&cache->provenance[index]);
     atomic_store_explicit(&cache->mapping_epoch, mapping_epoch, memory_order_release);
     atomic_store_explicit(&cache->instruction_epoch, instruction_epoch, memory_order_release);
     atomic_store_explicit(&cache->memory_mode, memory_mode, memory_order_release);
