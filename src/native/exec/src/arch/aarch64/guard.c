@@ -31,6 +31,18 @@
 #define OFFSET_DIRTY_LAST ((int)offsetof(hl_native_aarch64_cpu, dirty_last))
 #define OFFSET_DIRTY_COUNT ((int)offsetof(hl_native_aarch64_cpu, dirty_count))
 #define OFFSET_DIRTY_RECORDS ((int)offsetof(hl_native_aarch64_cpu, dirty_records))
+#define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
+
+/* x30 carries the remaining budget across the whole native run.  The view scans
+ * and the archive subroutine borrow it, so they publish it first and recover it
+ * at every point where the guard rejoins guest code or leaves to the runtime. */
+static void budget_publish(hl_a64_assembler *assembler) {
+    hl_a64_str(assembler, 30, CPU, OFFSET_BUDGET);
+}
+
+static void budget_recover(hl_a64_assembler *assembler) {
+    hl_a64_ldr(assembler, 30, CPU, OFFSET_BUDGET);
+}
 
 /* Diagnostic translations keep their counters in the execution-local CPU
  * record. x17 is stolen state and every call site has already preserved NZCV. */
@@ -170,6 +182,7 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
     hl_a64_emit32(assembler, 0);
 
     uint8_t *overflow_target = assembler->cursor;
+    budget_recover(assembler);
     diagnostic_increment(assembler, (int)offsetof(hl_native_aarch64_cpu, diagnostic_dirty_overflow));
     hl_a64_ldr(assembler, 16, CPU, OFFSET_FAULT_ADDRESS);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
@@ -194,7 +207,7 @@ static void archive_dirty_body(hl_a64_assembler *assembler, uint64_t pc) {
 }
 
 /* Both archive sites of one guarded store share its pc, so the body is emitted
- * once and reached by bl; x30 is stolen and dead at every store guard. */
+ * once and reached by bl, which overwrites the budget the caller published. */
 static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc, uint8_t **archive) {
     if (*archive == NULL) {
         uint32_t *over = (uint32_t *)assembler->cursor;
@@ -204,10 +217,12 @@ static void archive_dirty(hl_a64_assembler *assembler, uint64_t pc, uint8_t **ar
         if (!hl_a64_assembler_ok(assembler)) return;
         branch(assembler, over, assembler->cursor);
     }
+    budget_publish(assembler);
     uint32_t *call = (uint32_t *)assembler->cursor;
     hl_a64_emit32(assembler, 0);
     if (!hl_a64_assembler_ok(assembler)) return;
     link(assembler, call, *archive);
+    budget_recover(assembler);
 }
 
 void hl_a64_guard_write_begin(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc,
@@ -428,6 +443,7 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     uint8_t *resume;
     unsigned active_count = 0;
 
+    budget_publish(assembler);
     hl_a64_addi(assembler, 9, 16, (unsigned)bytes);
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp x9,x16: end wrapped */
     active[active_count++] = (uint32_t *)assembler->cursor;
@@ -463,6 +479,7 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     hl_a64_emit32(assembler, 0);
 
     resume = assembler->cursor;
+    budget_recover(assembler);
     hl_a64_ldr(assembler, 17, CPU, OFFSET_FLAGS);
     hl_a64_emit32(assembler, 0xD51B4200u | 17u);
     hl_a64_ldr(assembler, 9, CPU, 9 * 8);
@@ -470,6 +487,7 @@ static void read_cache(hl_a64_assembler *assembler, uint64_t bytes, uint32_t **h
     hl_a64_emit32(assembler, 0);
 
     uint8_t *active_target = assembler->cursor;
+    budget_recover(assembler);
     if (!hl_a64_assembler_ok(assembler)) return;
     condition(assembler, active[0], active_target, 3u);
     condition(assembler, exhausted, active_target, 3u);
@@ -497,6 +515,7 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     uint8_t *loop;
     uint8_t *following;
 
+    budget_publish(assembler);
     hl_a64_addi(assembler, 9, 16, (unsigned)bytes);
     hl_a64_emit32(assembler, 0xEB10013Fu); /* cmp end,address: wrapped */
     inactive[0] = (uint32_t *)assembler->cursor;
@@ -529,6 +548,7 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     hl_a64_emit32(assembler, 0);
 
     uint8_t *selected_target = assembler->cursor;
+    budget_recover(assembler);
     /* The countdown consumed the slot number the unrolled scan used to
      * materialise, so recover it as read_count - remaining - 1. */
     hl_a64_ldr(assembler, 18, CPU, OFFSET_READ_VALID_COUNT);
@@ -568,6 +588,7 @@ static void write_cache(hl_a64_assembler *assembler, uint64_t bytes, uint64_t pc
     hl_a64_emit32(assembler, 0);
 
     uint8_t *miss = assembler->cursor;
+    budget_recover(assembler);
     if (!hl_a64_assembler_ok(assembler)) return;
     branch(assembler, chosen, selected_target);
     branch(assembler, retry, resume);

@@ -7,6 +7,7 @@
 #define CPU 28
 #define OFFSET_SITE ((int)offsetof(hl_native_aarch64_cpu, indirect_site))
 #define OFFSET_IBTC_BASE ((int)offsetof(hl_native_aarch64_cpu, ibtc_base))
+#define OFFSET_BUDGET ((int)offsetof(hl_native_aarch64_cpu, budget))
 
 static void patch_cbnz(uint32_t *branch, const uint8_t *target) {
     uint32_t distance = (uint32_t)((target - (const uint8_t *)branch) / 4);
@@ -68,9 +69,10 @@ int hl_a64_indirect_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc
         uint32_t *site_hit = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, UINT32_C(0xd503201f)); /* patched b body; nop falls to shared */
 
-        /* x30 is stolen but never a live host value, so the shared probe uses it
-         * as a third scratch instead of spilling and reloading guest x9. */
+        /* x30 carries the budget, so the shared probe publishes it and borrows
+         * x30 as a third scratch rather than spilling and reloading guest x9. */
         uint8_t *shared = assembler->cursor;
+        hl_a64_str(assembler, 30, CPU, OFFSET_BUDGET);
         hl_a64_emit32(assembler, UINT32_C(0xd342463e)); /* ubfx x30,x17,#2,#16 */
         hl_a64_ldr(assembler, 16, CPU, OFFSET_IBTC_BASE);
         hl_a64_addlsl4(assembler, 30, 16, 30);
@@ -80,9 +82,11 @@ int hl_a64_indirect_body(hl_a64_assembler *assembler, uint32_t word, uint64_t pc
         hl_a64_emit32(assembler, UINT32_C(0xb500001e)); /* cbnz x30,miss */
         uint32_t *shared_empty = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, UINT32_C(0xb4000010)); /* cbz x16,miss */
+        hl_a64_ldr(assembler, 30, CPU, OFFSET_BUDGET);
         hl_a64_br(assembler, 16);
 
         uint8_t *miss = assembler->cursor;
+        hl_a64_ldr(assembler, 30, CPU, OFFSET_BUDGET);
         uint32_t *miss_site = (uint32_t *)assembler->cursor;
         hl_a64_emit32(assembler, UINT32_C(0x10000010)); /* adr x16,site */
         hl_a64_str(assembler, 16, CPU, OFFSET_SITE);
