@@ -944,10 +944,18 @@ impl ViewHints {
         }
     }
 
+    /// One slot per address holding the union of the accesses seen there. Keying on
+    /// `(address, protection)` let a read and a write of the same address take two of
+    /// the three slots and publish two views whose permissions each reject the other
+    /// access, so every alternation missed the guard.
     fn observe(&mut self, address: u64, required: Protection) {
-        self.entries
-            .retain(|existing| existing.0 != address || existing.1 != required);
-        self.entries.insert(0, (address, required));
+        let widened = self
+            .entries
+            .iter()
+            .find(|existing| existing.0 == address)
+            .map_or(required, |existing| existing.1.union(required));
+        self.entries.retain(|existing| existing.0 != address);
+        self.entries.insert(0, (address, widened));
         self.entries.truncate(Self::LIMIT);
     }
 }
@@ -2299,7 +2307,15 @@ impl Executor {
         let mut live_hints = Vec::new();
         let mut warm_write = None;
         for (address, required) in hints {
-            let Ok(view) = lease.project_bounded(GuestAddress::new(address), 1, required, OPERAND_SPAN) else {
+            // A hint records one address but projects its whole region, so replaying the
+            // narrow observed access publishes a region-wide view that rejects the
+            // opposite access. Widen as `resolve_operand` does, narrowing only when the
+            // region genuinely lacks the permission.
+            let widened = required.union(Protection::READ).union(Protection::WRITE);
+            let Ok(view) = lease
+                .project_bounded(GuestAddress::new(address), 1, widened, OPERAND_SPAN)
+                .or_else(|_| lease.project_bounded(GuestAddress::new(address), 1, required, OPERAND_SPAN))
+            else {
                 continue;
             };
             let candidate = ProjectionView {
@@ -2315,8 +2331,10 @@ impl Executor {
                 existing.guest_first < candidate.guest_last && candidate.guest_first < existing.guest_last
             }) {
                 let candidate_range = (candidate.guest_first, candidate.guest_last);
+                let projected = view.protection;
                 views.push(candidate);
-                if required.contains(Protection::WRITE) && warm_write.is_none() {
+                if required.contains(Protection::WRITE) && projected.contains(Protection::WRITE) && warm_write.is_none()
+                {
                     warm_write = Some(candidate_range);
                 }
                 live_hints.push((address, required));
@@ -2698,7 +2716,15 @@ impl Executor {
         let mut views = vec![primary];
         const OPERAND_SPAN: u64 = u64::MAX;
         for (address, required) in hints {
-            let Ok(view) = lease.project_bounded(hl_isa::GuestAddress::new(address), 1, required, OPERAND_SPAN) else {
+            // A hint records one address but projects its whole region, so replaying the
+            // narrow observed access publishes a region-wide view that rejects the
+            // opposite access. Widen as `resolve_operand` does, narrowing only when the
+            // region genuinely lacks the permission.
+            let widened = required.union(Protection::READ).union(Protection::WRITE);
+            let Ok(view) = lease
+                .project_bounded(hl_isa::GuestAddress::new(address), 1, widened, OPERAND_SPAN)
+                .or_else(|_| lease.project_bounded(hl_isa::GuestAddress::new(address), 1, required, OPERAND_SPAN))
+            else {
                 continue;
             };
             let candidate = ProjectionView {
