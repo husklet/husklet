@@ -2,10 +2,7 @@ use hl_ipc::{SharedMemoryError as CatalogError, SharedMemoryId};
 use hl_isa::GuestAddress;
 use hl_linux::{Errno, GuestMemory, LinuxResult, SysvAbi};
 
-use crate::{
-    MappingError,
-    ipc::syscalls::{ErrorProjection, RuntimeIpcSyscalls},
-};
+use crate::{MappingError, ipc::error_projection::ErrorProjection, ipc::syscalls::RuntimeIpcSyscalls};
 
 impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
     pub(in crate::ipc) fn shmat(&self, arguments: [u64; 6]) -> LinuxResult {

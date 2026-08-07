@@ -7,7 +7,8 @@ use hl_linux::{
     SemaphoreStatus, SharedMemoryInfo, SharedMemoryStatus, ShmInfo, StagedSysvCopyout, SysvAbi,
 };
 
-use super::syscalls::{ErrorProjection, RuntimeIpcSyscalls};
+use super::error_projection::ErrorProjection;
+use super::syscalls::RuntimeIpcSyscalls;
 
 impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
     pub(super) fn shared_stat(

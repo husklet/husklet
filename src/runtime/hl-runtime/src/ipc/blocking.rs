@@ -5,7 +5,8 @@ use hl_ipc::{
 use hl_linux::{Errno, GuestMarshaller, GuestMemory, LinuxResult, MessageReceivePlan, MessageSendPlan, SysvAbi};
 use hl_time::{Deadline, Duration};
 
-use super::syscalls::{ErrorProjection, RuntimeIpcSyscalls};
+use super::error_projection::ErrorProjection;
+use super::syscalls::RuntimeIpcSyscalls;
 
 impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
     pub(super) fn msgrcv(&self, arguments: [u64; 6]) -> LinuxResult {

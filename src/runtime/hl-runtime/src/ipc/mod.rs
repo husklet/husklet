@@ -3,6 +3,7 @@
 mod blocking;
 mod control;
 mod dispatch;
+mod error_projection;
 mod exec;
 mod exit;
 mod lifecycle;

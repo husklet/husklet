@@ -8,7 +8,8 @@ use hl_linux::{
 };
 
 use super::control::ControlProjection;
-use super::syscalls::{ErrorProjection, RuntimeIpcSyscalls};
+use super::error_projection::ErrorProjection;
+use super::syscalls::RuntimeIpcSyscalls;
 
 impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
     pub(super) fn shmctl(&self, arguments: [u64; 6]) -> LinuxResult {
