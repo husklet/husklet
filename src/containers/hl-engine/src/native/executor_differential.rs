@@ -2307,3 +2307,29 @@ fn x86_address_folding_matches_interpreter_at_each_boundary() {
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
+/// `bt`/`bts`/`btr`/`btc` with a register bit index against memory, where the index is not
+/// masked at all but sign-extended and divided by eight to pick the containing byte.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_bit_register_index_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7040;
+    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    for index in [0_i64, 1, 7, 8, 15, 16, 63, 64, 65, 100, 511, -1, -8, -9, -64, -512] {
+        for opcode in [0xa3_u8, 0xab, 0xb3, 0xbb] {
+            let mut load = vec![0x48, 0xb8];
+            load.extend_from_slice(&(index as u64).to_le_bytes());
+            let program: Vec<Vec<u8>> = vec![
+                load,
+                vec![0x48, 0x0f, opcode, 0x06],
+                vec![0x0f, opcode, 0x06],
+                vec![0x66, 0x0f, opcode, 0x06],
+            ];
+            let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+            assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+        }
+    }
+}

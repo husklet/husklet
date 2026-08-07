@@ -162,7 +162,7 @@ impl BitExecutor {
     fn index(cpu: &CpuState, operand: ScalarOperand, width: ScalarWidth) -> i64 {
         match operand {
             ScalarOperand::Register(register) => match width {
-                ScalarWidth::Word => i64::from(cpu.read_register(register, width) as u16),
+                ScalarWidth::Word => i64::from(cpu.read_register(register, width) as u16 as i16),
                 ScalarWidth::Dword => cpu.read_register(register, width) as i32 as i64,
                 ScalarWidth::Qword => cpu.read_register(register, width) as i64,
                 ScalarWidth::Byte => unreachable!(),
