@@ -1,6 +1,9 @@
 use std::rc::Rc;
 
-use syn::{ImplItemFn, ItemFn, spanned::Spanned, visit::Visit};
+use syn::{
+    Attribute, Expr, ImplItemFn, ItemFn, Lit, Meta, Token, parse::Parser, punctuated::Punctuated, spanned::Spanned,
+    visit::Visit,
+};
 
 use crate::{Location, source::Source};
 
@@ -38,6 +41,49 @@ impl<'a> References<'a> {
             source: self.source.excerpt(span),
         })
     }
+
+    fn push(&mut self, name: String, span: proc_macro2::Span) {
+        self.values.push(Reference {
+            name,
+            location: self.source.location(span),
+            context: self.context.clone(),
+        });
+    }
+
+    /// Walks `key = value` pairs of an attribute; a bare path is a macro flag, not a use.
+    fn meta(&mut self, meta: &Meta) {
+        match meta {
+            Meta::Path(_) => {}
+            Meta::List(list) => {
+                if let Ok(nested) = Punctuated::<Meta, Token![,]>::parse_terminated.parse2(list.tokens.clone()) {
+                    for meta in &nested {
+                        self.meta(meta);
+                    }
+                }
+            }
+            Meta::NameValue(pair) => self.value(pair),
+        }
+    }
+
+    /// A string value is only a path under serde's path-valued keys; elsewhere it is prose.
+    fn value(&mut self, pair: &syn::MetaNameValue) {
+        if let Expr::Lit(literal) = &pair.value
+            && let Lit::Str(text) = &literal.lit
+        {
+            if pair.path.segments.last().is_some_and(|segment| {
+                matches!(
+                    segment.ident.to_string().as_str(),
+                    "with" | "serialize_with" | "deserialize_with" | "default" | "skip_serializing_if" | "getter"
+                )
+            }) && let Ok(path) = text.parse::<syn::Path>()
+                && let Some(segment) = path.segments.last()
+            {
+                self.push(segment.ident.to_string(), text.span());
+            }
+            return;
+        }
+        syn::visit::visit_expr(self, &pair.value);
+    }
 }
 
 impl<'ast> Visit<'ast> for References<'_> {
@@ -61,12 +107,13 @@ impl<'ast> Visit<'ast> for References<'_> {
         if expression.qself.is_none()
             && let Some(segment) = expression.path.segments.last()
         {
-            self.values.push(Reference {
-                name: segment.ident.to_string(),
-                location: self.source.location(expression.span()),
-                context: self.context.clone(),
-            });
+            let name = segment.ident.to_string();
+            self.push(name, expression.span());
         }
         syn::visit::visit_expr_path(self, expression);
+    }
+
+    fn visit_attribute(&mut self, attribute: &'ast Attribute) {
+        self.meta(&attribute.meta);
     }
 }

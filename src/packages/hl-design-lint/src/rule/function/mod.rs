@@ -305,3 +305,7 @@ fn path_name(path: &syn::Path) -> String {
         .collect::<Vec<_>>()
         .join("::")
 }
+
+#[cfg(test)]
+#[path = "test.rs"]
+mod tests;

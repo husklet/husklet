@@ -143,3 +143,7 @@ fn visual(function: &ItemFn, source: &str) -> bool {
         .take_while(|line| line.trim_start().starts_with("//") || line.trim().is_empty())
         .any(|line| line.contains("hl-lint: visual-section"))
 }
+
+#[cfg(test)]
+#[path = "test.rs"]
+mod tests;
