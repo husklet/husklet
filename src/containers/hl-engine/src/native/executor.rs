@@ -1888,10 +1888,9 @@ impl Executor {
             let Some(access) = word.scalar_access() else {
                 continue;
             };
-            if access == Protection::WRITE {
-                return Some(access);
-            }
-            protection = Some(access);
+            // Authority narrower than the window refuses the other direction's
+            // accesses outright, so admit their union rather than the last one.
+            protection = Some(protection.map_or(access, |seen: Protection| seen.union(access)));
         }
         protection
     }
@@ -3033,8 +3032,8 @@ mod test {
     #[test]
     fn direct_scalar_trace_sees_a_write_past_a_branch_or_a_gap() {
         let executor = Executor::create().expect("executor");
-        // The lock fast path: the store the run reaches after the branch is the
-        // access that decides the authority.
+        // The lock fast path: the authority must admit the load and the store
+        // the run reaches after the branch, not just the later one.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0xb940_0001_u32.to_le_bytes()); // ldr w1, [x0]
         bytes.extend_from_slice(&0x3500_0041_u32.to_le_bytes()); // cbnz w1, .+8
@@ -3047,7 +3046,7 @@ mod test {
                     bytes: &bytes,
                 }]
             ),
-            Some(Protection::WRITE)
+            Some(Protection::READ.union(Protection::WRITE))
         );
         // A hole in the source spans hides no access behind it either.
         assert_eq!(
@@ -3064,7 +3063,7 @@ mod test {
                     },
                 ]
             ),
-            Some(Protection::WRITE)
+            Some(Protection::READ.union(Protection::WRITE))
         );
         // A vector access the run reaches after the branch still declines, since
         // direct authority has no operand it can certify for it.
