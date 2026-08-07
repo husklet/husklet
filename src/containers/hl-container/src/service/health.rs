@@ -1,7 +1,7 @@
 use super::Service;
 use crate::{ContainerId, Healthcheck};
 use std::sync::Arc;
-use std::time::Instant;
+use tokio::time::Instant;
 
 /// One generation-bound health-check owner.
 pub(super) struct Monitor {

@@ -512,7 +512,7 @@ async fn next_exit_on_an_exited_container_waits_for_a_later_generation() {
     assert_eq!(waiting.await.unwrap().unwrap(), Some(ExitStatus::Code(5)));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn shutdown_stops_every_active_container_and_preserves_inactive_records() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_secs(1);
@@ -539,7 +539,7 @@ async fn shutdown_stops_every_active_container_and_preserves_inactive_records() 
     assert_eq!(*runtime.signals.lock().unwrap(), [Signal::Terminate, Signal::Kill]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn force_removal_reaps_attached_executions_before_returning() {
     let mut runtime = FakeRuntime::new(ExitStatus::Code(0));
     runtime.delay = Duration::from_millis(80);

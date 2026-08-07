@@ -57,7 +57,7 @@ async fn rename_is_validated_unique_and_durable() {
     assert_eq!(network.endpoints.get(&explicit.container).unwrap().name, "fixed-dns");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn updates_persist_and_active_resources_require_restart() {
     let temporary = tempfile::tempdir().unwrap();
     let config = Config::new(temporary.path());
