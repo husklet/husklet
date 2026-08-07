@@ -57,7 +57,11 @@ impl ProviderEndpoint {
 
 impl ProviderTransport for ProviderEndpoint {
     fn read(&self, output: &mut [u8]) -> Result<usize, TransportError> {
-        let mut state = self.endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .endpoint
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.bytes.is_empty() {
             return if state.closed {
                 Ok(0)
@@ -80,7 +84,11 @@ impl ProviderTransport for ProviderEndpoint {
         self.host
             .record("transport", "write", self.token, input.len(), count)
             .map_err(Self::transport_error)?;
-        let mut state = self.endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .endpoint
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.closed {
             return Err(TransportError::Closed);
         }
@@ -90,7 +98,11 @@ impl ProviderTransport for ProviderEndpoint {
     }
 
     fn wait_readable(&self) -> Result<(), TransportError> {
-        let state = self.endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .endpoint
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(
             self.endpoint
                 .changed
@@ -231,7 +243,11 @@ impl SocketHostIo for SocketAdapter {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
         {
-            endpoint.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed = true;
+            endpoint
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .closed = true;
             endpoint.changed.notify_all();
         }
     }

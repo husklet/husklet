@@ -202,7 +202,6 @@ pub struct DriverConfig {
     pub options: BTreeMap<String, String>,
 }
 
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct ContainerCreation {
@@ -323,13 +322,18 @@ mod stop_timeout_tests {
             serde_json::json!({"Dns": [42]}),
             serde_json::json!({"PortBindings": []}),
         ] {
-            assert!(serde_json::from_value::<HostConfig>(value.clone()).is_err(), "accepted {value}");
+            assert!(
+                serde_json::from_value::<HostConfig>(value.clone()).is_err(),
+                "accepted {value}"
+            );
         }
-        assert!(serde_json::from_value::<CreateContainer>(serde_json::json!({
-            "Image": "alpine",
-            "Labels": []
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<CreateContainer>(serde_json::json!({
+                "Image": "alpine",
+                "Labels": []
+            }))
+            .is_err()
+        );
         assert!(serde_json::from_str::<HostConfig>(r#"{"Binds":null,"Binds":[]}"#).is_err());
     }
 }

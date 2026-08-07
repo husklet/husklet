@@ -14,7 +14,10 @@ pub(super) fn copy(source: &File, target: &File) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     names.truncate(usize::try_from(count).expect("xattr list count fits usize"));
-    for bytes in names.split_inclusive(|byte| *byte == 0).filter(|bytes| bytes.last() == Some(&0)) {
+    for bytes in names
+        .split_inclusive(|byte| *byte == 0)
+        .filter(|bytes| bytes.last() == Some(&0))
+    {
         let name = CStr::from_bytes_with_nul(bytes).map_err(|_| io::Error::from_raw_os_error(libc::EIO))?;
         let size = get(source, name, std::ptr::null_mut(), 0);
         if size < 0 {
@@ -60,15 +63,7 @@ fn get(file: &File, name: &CStr, output: *mut libc::c_void, size: usize) -> isiz
 #[cfg(target_os = "linux")]
 fn set(file: &File, name: &CStr, value: &[u8]) -> i32 {
     // SAFETY: file and name live and value is readable for its length.
-    unsafe {
-        libc::fsetxattr(
-            file.as_raw_fd(),
-            name.as_ptr(),
-            value.as_ptr().cast(),
-            value.len(),
-            0,
-        )
-    }
+    unsafe { libc::fsetxattr(file.as_raw_fd(), name.as_ptr(), value.as_ptr().cast(), value.len(), 0) }
 }
 
 #[cfg(target_os = "macos")]

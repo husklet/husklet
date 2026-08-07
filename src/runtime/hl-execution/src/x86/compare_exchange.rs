@@ -64,9 +64,9 @@ impl CompareExchange {
                 && memory
                     .commit_write_batch(reservation, &[replacement.low, replacement.high])
                     .is_err()
-                {
-                    return Self::wide_fault(instruction, address, total, AccessKind::Write);
-                }
+            {
+                return Self::wide_fault(instruction, address, total, AccessKind::Write);
+            }
             value
         };
         let equal = observed == expected;

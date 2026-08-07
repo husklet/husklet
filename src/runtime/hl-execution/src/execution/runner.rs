@@ -316,7 +316,9 @@ impl ExecutionMachine {
             ExecutionCpuSnapshot::Aarch64(cpu) => self.step_aarch64(cpu, memory),
             ExecutionCpuSnapshot::X86_64(cpu) => {
                 let instruction = cpu.rip;
-                let decoded = if let Some(decoded) = retained { decoded } else {
+                let decoded = if let Some(decoded) = retained {
+                    decoded
+                } else {
                     let mut bytes = [0_u8; X86_MAXIMUM_INSTRUCTION];
                     let length = match memory.fetch(instruction, &mut bytes) {
                         Ok(length) if length > 0 && length <= bytes.len() => length,
@@ -539,7 +541,10 @@ impl ExecutionMachine {
             }
             return Some(StepOutcome::Yield);
         };
-        let mut cache = self.x86_blocks.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = self
+            .x86_blocks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.synchronize(epoch);
         let mut remaining = budget;
         while remaining > 0 {

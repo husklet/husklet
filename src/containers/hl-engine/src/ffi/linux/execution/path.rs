@@ -51,13 +51,13 @@ mod namespace;
 mod native;
 #[path = "path/open.rs"]
 mod open;
-#[path = "path/overlay_lease.rs"]
-mod overlay_lease;
-#[path = "path/overlay_entries.rs"]
-mod overlay_entries;
 #[cfg(test)]
 #[path = "path/overlay_bench.rs"]
 mod overlay_bench;
+#[path = "path/overlay_entries.rs"]
+mod overlay_entries;
+#[path = "path/overlay_lease.rs"]
+mod overlay_lease;
 #[path = "path/overlay_project.rs"]
 #[cfg(test)]
 mod overlay_project;
@@ -296,7 +296,10 @@ impl NativePath {
         let path = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(host));
         let resolved = path.canonicalize().map_err(HostError::map)?;
         let guest = self.guest_path(&resolved)?;
-        *self.executable.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = guest.as_str().as_bytes().to_vec();
+        *self
+            .executable
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = guest.as_str().as_bytes().to_vec();
         Ok(())
     }
 
@@ -304,7 +307,10 @@ impl NativePath {
         if !guest.starts_with(b"/") || guest.contains(&0) || guest.len() > 4096 {
             return Err(RuntimePathError::Invalid);
         }
-        *self.executable.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = guest.to_vec();
+        *self
+            .executable
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = guest.to_vec();
         Ok(())
     }
 

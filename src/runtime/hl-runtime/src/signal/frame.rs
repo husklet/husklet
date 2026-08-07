@@ -63,12 +63,18 @@ impl<M: hl_linux::GuestMemory> RuntimeProcessSyscalls<M> {
             return LinuxResult::Error(Errno::EAGAIN);
         };
         let info = forced.info();
-        let Ok(action) = self.tasks.action(self.process, info.signal) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Ok(action) = self.tasks.action(self.process, info.signal) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
         if !matches!(action.disposition, SignalDisposition::Handler(_)) {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let Ok(thread) = self.tasks.deliver_thread_state(self.thread) else { return LinuxResult::Error(Errno::ESRCH) };
-        let Ok(machine) = port.snapshot(self.thread) else { return LinuxResult::Error(Errno::EIO) };
+        let Ok(thread) = self.tasks.deliver_thread_state(self.thread) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
+        let Ok(machine) = port.snapshot(self.thread) else {
+            return LinuxResult::Error(Errno::EIO);
+        };
         if Self::architecture(&machine) != self.architecture {
             return LinuxResult::Error(Errno::EINVAL);
         }
@@ -92,7 +98,7 @@ impl<M: hl_linux::GuestMemory> RuntimeProcessSyscalls<M> {
             Err(error) => return LinuxResult::Error(Self::frame_errno(error)),
         };
         let Ok(mut publication) = port.prepare_install(self.thread, &image) else {
-            return LinuxResult::Error(Errno::EFAULT)
+            return LinuxResult::Error(Errno::EFAULT);
         };
         if publication.publish().is_err() {
             return LinuxResult::Error(Errno::EIO);
@@ -118,18 +124,22 @@ impl<M: hl_linux::GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(port) = self.signal_frames.as_deref() else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let Ok(current) = port.snapshot(self.thread) else { return LinuxResult::Error(Errno::EIO) };
+        let Ok(current) = port.snapshot(self.thread) else {
+            return LinuxResult::Error(Errno::EIO);
+        };
         let (address, length) = match &current {
             SignalMachine::Aarch64(machine) => (machine.stack_pointer, AARCH64_SIGNAL_FRAME_SIZE),
             SignalMachine::X86_64(machine) => (machine.stack_pointer, X86_SIGNAL_FRAME_SIZE - 8),
         };
-        let Ok(bytes) = port.read_frame(self.thread, address, length) else { return LinuxResult::Error(Errno::EFAULT) };
+        let Ok(bytes) = port.read_frame(self.thread, address, length) else {
+            return LinuxResult::Error(Errno::EFAULT);
+        };
         let restore = match SignalFrameCodec::restore(self.architecture, address, &bytes) {
             Ok(restore) => restore,
             Err(error) => return LinuxResult::Error(Self::frame_errno(error)),
         };
         let Ok(mut publication) = port.prepare_restore(self.thread, &restore.machine) else {
-            return LinuxResult::Error(Errno::EFAULT)
+            return LinuxResult::Error(Errno::EFAULT);
         };
         if publication.publish().is_err() {
             return LinuxResult::Error(Errno::EIO);

@@ -10,18 +10,27 @@ pub(crate) struct WaitGate {
 
 impl WaitGate {
     pub(crate) fn generation(&self) -> u64 {
-        *self.generation.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        *self
+            .generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn notify_waiters(&self) {
-        let mut value = self.generation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut value = self
+            .generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *value = value.wrapping_add(1);
         drop(value);
         self.wake.notify_all();
     }
 
     pub(crate) fn wait(&self, observed: u64) {
-        let mut value = self.generation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut value = self
+            .generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while *value == observed {
             value = self.wake.wait(value).unwrap_or_else(std::sync::PoisonError::into_inner);
         }

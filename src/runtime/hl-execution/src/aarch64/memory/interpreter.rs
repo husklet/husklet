@@ -137,7 +137,7 @@ impl Aarch64MemoryInterpreter {
         let instruction = cpu.pc;
         let resolved = Self::resolve(cpu, coordinates, address);
         let Ok(value) = memory.read(resolved.address, width.bytes()) else {
-            return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes())
+            return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes());
         };
         let mut staged = cpu.clone();
         Self::write_load(&mut staged, destination, width, extension, value);
@@ -159,7 +159,7 @@ impl Aarch64MemoryInterpreter {
         let resolved = Self::resolve(cpu, coordinates, address);
         let value = cpu.register(source);
         let Ok(reservation) = memory.reserve_write(resolved.address, width.bytes()) else {
-            return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes())
+            return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes());
         };
         if memory.commit_write(reservation, value).is_err() {
             return Self::fault(instruction, resolved.address, AccessKind::Write, width.bytes());
@@ -184,10 +184,10 @@ impl Aarch64MemoryInterpreter {
         let resolved = Self::resolve(cpu, coordinates, address);
         let second_address = resolved.address.wrapping_add(u64::from(width.bytes()));
         let Ok(first) = memory.read(resolved.address, width.bytes()) else {
-            return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes())
+            return Self::fault(instruction, resolved.address, AccessKind::Read, width.bytes());
         };
         let Ok(second) = memory.read(second_address, width.bytes()) else {
-            return Self::fault(instruction, second_address, AccessKind::Read, width.bytes())
+            return Self::fault(instruction, second_address, AccessKind::Read, width.bytes());
         };
         let mut staged = cpu.clone();
         let extension = if sign_extend {

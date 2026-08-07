@@ -53,4 +53,3 @@ impl NetworkConfiguration {
             && domain.split('.').all(|label| !label.is_empty() && label.len() <= 63)
     }
 }
-

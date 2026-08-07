@@ -262,11 +262,7 @@ impl Run {
         }
         // The engine reads these only from --engine-option, so accepting them as
         // guest environment would apply nothing while looking like it did.
-        if let Some((name, _)) = self
-            .environment
-            .iter()
-            .find(|(name, _)| name.starts_with("HL_NATIVE_"))
-        {
+        if let Some((name, _)) = self.environment.iter().find(|(name, _)| name.starts_with("HL_NATIVE_")) {
             return Err(format!("{name} is honoured only as --engine-option, not --env"));
         }
         Ok(self)
@@ -287,7 +283,11 @@ impl Run {
     }
 
     fn diagnostics_mode(&self) -> &'static str {
-        if self.native_diagnostics_requested() { "on" } else { "off" }
+        if self.native_diagnostics_requested() {
+            "on"
+        } else {
+            "off"
+        }
     }
 
     fn native_requested(&self) -> bool {
@@ -501,8 +501,10 @@ fn host_affinity() -> String {
 
 #[cfg(target_os = "linux")]
 fn host_snapshot() -> String {
-    let load = std::fs::read_to_string("/proc/loadavg")
-        .ok().map_or_else(|| "unknown".into(), |value| value.split_whitespace().take(3).collect::<Vec<_>>().join("/"));
+    let load = std::fs::read_to_string("/proc/loadavg").ok().map_or_else(
+        || "unknown".into(),
+        |value| value.split_whitespace().take(3).collect::<Vec<_>>().join("/"),
+    );
     let memory = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let field = |name: &str| {
         memory

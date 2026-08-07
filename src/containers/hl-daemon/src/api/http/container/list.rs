@@ -73,12 +73,13 @@ impl NetworkPlan {
             .unwrap_or_default();
         if matches!(mode, "" | "default" | "bridge")
             && let Some(endpoint) = endpoints.remove("default")
-                && endpoints.insert(DEFAULT_NETWORK.into(), endpoint).is_some() {
-                    return Err(ApiError::new(
-                        StatusCode::BAD_REQUEST,
-                        "default and bridge endpoints select the same network",
-                    ));
-                }
+            && endpoints.insert(DEFAULT_NETWORK.into(), endpoint).is_some()
+        {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "default and bridge endpoints select the same network",
+            ));
+        }
         if mode == "host" {
             if host.is_some_and(|host| !host.links.is_empty()) {
                 return Err(ApiError::new(

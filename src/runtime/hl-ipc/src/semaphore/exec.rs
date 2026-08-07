@@ -14,7 +14,11 @@ pub struct PreparedSemaphoreExec {
 
 impl PreparedSemaphoreExec {
     pub fn commit(self) -> Result<(), SemaphoreError> {
-        let state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .namespace
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = state
             .undo
             .iter()

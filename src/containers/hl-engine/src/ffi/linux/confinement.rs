@@ -66,14 +66,7 @@ impl Seccomp {
         }
         // SAFETY: no_new_privs is active and program points to validated local
         // storage copied synchronously by the kernel.
-        if unsafe {
-            libc::prctl(
-                libc::PR_SET_SECCOMP,
-                libc::SECCOMP_MODE_FILTER,
-                &raw const program,
-            )
-        } != 0
-        {
+        if unsafe { libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &raw const program) } != 0 {
             return Err(());
         }
         Ok(())

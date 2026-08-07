@@ -20,13 +20,7 @@ impl Bf16 {
         }
     }
 
-    pub(crate) fn execute(
-        cpu: &mut Aarch64CpuState,
-        source: u8,
-        destination: u8,
-        vector: bool,
-        high: bool,
-    ) {
+    pub(crate) fn execute(cpu: &mut Aarch64CpuState, source: u8, destination: u8, vector: bool, high: bool) {
         let lanes = if vector { 4 } else { 1 };
         let mut value = if high {
             cpu.vector(destination) & u128::from(u64::MAX)

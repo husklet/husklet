@@ -32,17 +32,18 @@ impl<'a> InstructionParser<'a> {
             if line.is_empty() && raw.trim_start().starts_with('#') {
                 let comment = raw.trim_start().trim_start_matches('#').trim();
                 if !self.started
-                    && let Some(value) = comment.strip_prefix("escape=") {
-                        let mut characters = value.chars();
-                        self.escape = match (characters.next(), characters.next()) {
-                            (Some(value @ ('\\' | '`')), None) => value,
-                            _ => {
-                                return Err(Error::MalformedOci(
-                                    "Dockerfile escape directive must be ` or backslash".into(),
-                                ));
-                            }
-                        };
-                    }
+                    && let Some(value) = comment.strip_prefix("escape=")
+                {
+                    let mut characters = value.chars();
+                    self.escape = match (characters.next(), characters.next()) {
+                        (Some(value @ ('\\' | '`')), None) => value,
+                        _ => {
+                            return Err(Error::MalformedOci(
+                                "Dockerfile escape directive must be ` or backslash".into(),
+                            ));
+                        }
+                    };
+                }
                 continue;
             }
             self.started = true;

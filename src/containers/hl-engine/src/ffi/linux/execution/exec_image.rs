@@ -471,7 +471,10 @@ impl Transaction {
         self.retire.rollback();
         self.threads.rollback();
         if let Some(previous) = self.previous_auxiliary.take() {
-            *self.auxiliary_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = previous;
+            *self
+                .auxiliary_slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = previous;
         }
         self.loader.rollback();
         self.descriptors.rollback();

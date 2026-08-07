@@ -11,7 +11,11 @@ impl SharedBackingPin {
 
     pub fn retain(&self) -> Result<Self, SharedError> {
         {
-            let mut state = self.object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .object
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let pins = state.pins.checked_add(1).ok_or(SharedError::ResourceLimit)?;
             let writable = if self.writable {
                 state.writable_pins.checked_add(1).ok_or(SharedError::ResourceLimit)?
@@ -55,7 +59,11 @@ impl SharedBackingPin {
         if !self.writable {
             return Err(SharedError::Sealed);
         }
-        let state = self.object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .object
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.seals.contains(SharedSeal::WRITE) {
             return Err(SharedError::Sealed);
         }
@@ -67,7 +75,11 @@ impl SharedBackingPin {
         if !self.writable {
             return Err(SharedError::Sealed);
         }
-        let state = self.object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .object
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.seals.contains(SharedSeal::WRITE) {
             return Err(SharedError::Sealed);
         }
@@ -92,7 +104,11 @@ impl SharedBackingPin {
         apply: &mut dyn FnMut() -> Result<(), E>,
     ) -> Result<Result<bool, E>, SharedError> {
         let _admission = self.activity.admit();
-        let _state = self.object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _state = self
+            .object
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         offset.checked_add(4).ok_or(SharedError::Range)?;
         let mut bytes = [0_u8; 4];
         self.object.backing.read(offset, &mut bytes)?;
@@ -106,7 +122,11 @@ impl SharedBackingPin {
 impl Drop for SharedBackingPin {
     fn drop(&mut self) {
         let finalize = {
-            let mut state = self.object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .object
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if self.writable {
                 state.writable_pins -= 1;
             }
@@ -131,7 +151,11 @@ impl Drop for SharedBackingPin {
         {
             return;
         }
-        let state = self.object.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .object
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.removed || state.pins != 0 {
             return;
         }

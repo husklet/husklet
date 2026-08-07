@@ -244,7 +244,10 @@ where
             std::collections::btree_map::Entry::Occupied(mut entry) => entry.get_mut().1.extend(tags),
         }
     }
-    let unique = grouped.values().map(|(target, _, _)| target.clone()).collect::<Vec<_>>();
+    let unique = grouped
+        .values()
+        .map(|(target, _, _)| target.clone())
+        .collect::<Vec<_>>();
     let usage = include_shared_size.then(|| usage(&unique)).transpose()?;
     grouped
         .into_iter()

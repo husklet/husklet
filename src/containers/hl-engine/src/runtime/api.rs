@@ -200,7 +200,7 @@ impl Builder {
             streams: crate::composition::StandardStreams::default(),
         };
         let Ok(backend) = EngineBackend::construct(self.isa, plan, services, &factory, workspace.clone()) else {
-            return workspace.fail(EngineError::LaunchFailed)
+            return workspace.fail(EngineError::LaunchFailed);
         };
         Ok(Engine {
             backend,
@@ -288,11 +288,7 @@ impl Engine {
         Self::construct(isa, plan, services)
     }
 
-    fn construct(
-        isa: GuestIsa,
-        plan: RuntimePlan,
-        services: RuntimeServices,
-    ) -> Result<Self, EngineError> {
+    fn construct(isa: GuestIsa, plan: RuntimePlan, services: RuntimeServices) -> Result<Self, EngineError> {
         let terminal = services.streams.terminal();
         let workspace = OwnedWorkspace::create()?;
         let factory = RustRuntimeFactory::new(

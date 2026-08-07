@@ -87,14 +87,25 @@ impl Workload {
 
 /// Surfaces the guest cannot reach today, reported so coverage gaps stay visible.
 pub(crate) const GAPS: [(&str, &str); 2] = [
-    ("process", "no fork/exec/wait phase exists in tests/bench/combined/main.c"),
-    ("thread", "no clone/futex contention phase exists in tests/bench/combined/main.c"),
+    (
+        "process",
+        "no fork/exec/wait phase exists in tests/bench/combined/main.c",
+    ),
+    (
+        "thread",
+        "no clone/futex contention phase exists in tests/bench/combined/main.c",
+    ),
 ];
 
 pub(crate) fn report() {
     println!("workload\tsurface\tguest_arguments");
     for workload in Workload::all() {
-        println!("{}\t{}\t{}", workload.name(), workload.surface(), workload.guest(1).join(" "));
+        println!(
+            "{}\t{}\t{}",
+            workload.name(),
+            workload.surface(),
+            workload.guest(1).join(" ")
+        );
     }
     for (surface, detail) in GAPS {
         println!("-\t{surface}\tGAP: {detail}");

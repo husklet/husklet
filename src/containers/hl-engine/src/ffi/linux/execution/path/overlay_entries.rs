@@ -66,12 +66,7 @@ fn merge_candidate(
     push(output, name, candidate.kind)
 }
 
-fn push_named(
-    seen: &mut BTreeSet<Vec<u8>>,
-    output: &mut Vec<MergedEntry>,
-    name: &[u8],
-    kind: u8,
-) -> io::Result<()> {
+fn push_named(seen: &mut BTreeSet<Vec<u8>>, output: &mut Vec<MergedEntry>, name: &[u8], kind: u8) -> io::Result<()> {
     seen.insert(name.to_vec());
     push(output, name, kind)
 }
@@ -113,7 +108,11 @@ mod tests {
     fn higher_entries_and_whiteouts_decide_lower_names() {
         let layers = [
             LayerDirectory {
-                entries: vec![entry(b"upper", libc::DT_REG), whiteout(b"hidden"), entry(b"same", libc::DT_LNK)],
+                entries: vec![
+                    entry(b"upper", libc::DT_REG),
+                    whiteout(b"hidden"),
+                    entry(b"same", libc::DT_LNK),
+                ],
                 opaque: false,
             },
             LayerDirectory {

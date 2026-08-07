@@ -156,7 +156,11 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             "lseek" => self.seek(descriptor, arguments[1], arguments[2] as u32),
             "close" => {
                 let closed = self.descriptors.close(descriptor);
-                hl_log::hl_debug!(hl_log::tag::FS, "close descriptor={descriptor} closed={}", closed.is_ok());
+                hl_log::hl_debug!(
+                    hl_log::tag::FS,
+                    "close descriptor={descriptor} closed={}",
+                    closed.is_ok()
+                );
                 match closed {
                     Ok(()) => LinuxResult::Value(0),
                     Err(error) => LinuxResult::Error(FileErrno::descriptor(error)),
@@ -326,7 +330,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             };
         }
         if !reading {
-            let Ok(maximum) = usize::try_from(plan.total_length) else { return LinuxResult::Error(Errno::EINVAL) };
+            let Ok(maximum) = usize::try_from(plan.total_length) else {
+                return LinuxResult::Error(Errno::EINVAL);
+            };
             let allowed = match self.limit_write(lease, offset, maximum) {
                 Ok(value) => value as u64,
                 Err(error) => return error,
@@ -447,7 +453,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         context: hl_descriptor::OperationContext<'_>,
         atomic: bool,
     ) -> LinuxResult {
-        let Ok(maximum) = usize::try_from(plan.total_length) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(maximum) = usize::try_from(plan.total_length) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         match lease.probe_write(maximum) {
             Ok(Some(count)) => return LinuxResult::Value(count as u64),
             Ok(None) => {}
@@ -488,7 +496,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         };
         let abi = FilesystemAbi::new(&self.memory, self.architecture);
         let Ok(staged) = abi.stage_stat(output, &metadata, StatOutputKind::Stat) else {
-            return LinuxResult::Error(Errno::EFAULT)
+            return LinuxResult::Error(Errno::EFAULT);
         };
         match staged.commit(&GuestMarshaller::new(&self.memory, self.architecture)) {
             Ok(_) => LinuxResult::Value(0),
@@ -536,10 +544,12 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             .count();
         let abi = FilesystemAbi::new(&self.memory, self.architecture);
         let Ok(staged) = abi.stage_getdents(output, capacity, &records[..emitted]) else {
-            return LinuxResult::Error(Errno::EFAULT)
+            return LinuxResult::Error(Errno::EFAULT);
         };
         let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
-        let Ok(written) = staged.commit(&marshaller) else { return LinuxResult::Error(Errno::EFAULT) };
+        let Ok(written) = staged.commit(&marshaller) else {
+            return LinuxResult::Error(Errno::EFAULT);
+        };
         if let Err(error) = lease.commit_directory(batch.token, emitted) {
             return LinuxResult::Error(FileErrno::object(error));
         }
@@ -668,7 +678,7 @@ impl<M: GuestMemory> FilesystemSyscalls for RuntimeFilesystemSyscalls<M> {
             }
             "flock" => {
                 let Ok(operation) = FilesystemAbi::<M>::flock_operation(arguments[1] as u32) else {
-                    return LinuxResult::Error(Errno::EINVAL)
+                    return LinuxResult::Error(Errno::EINVAL);
                 };
                 let lease = match self.descriptors.pin(arguments[0] as i32) {
                     Ok(lease) => lease,

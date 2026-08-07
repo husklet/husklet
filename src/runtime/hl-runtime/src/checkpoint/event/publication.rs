@@ -18,7 +18,7 @@ const OBJECT_BYTES: usize = 9;
 
 pub trait ResourceRestore: Send + Sync {
     fn timerfd(&self, snapshot: TimerFdSnapshot, clock: EventResourceKey)
-        -> Result<Arc<TimerFd>, EventCheckpointError>;
+    -> Result<Arc<TimerFd>, EventCheckpointError>;
 
     fn signalfd(
         &self,
@@ -574,15 +574,17 @@ mod tests {
         bindings.register_descriptor(key, reference).unwrap();
         assert_eq!(bindings.descriptor(key), Ok(reference));
         bindings.register_descriptor(key, reference).unwrap();
-        assert!(bindings
-            .register_descriptor(
-                key,
-                DescriptorReference {
-                    number: 4,
-                    generation: 8,
-                }
-            )
-            .is_err());
+        assert!(
+            bindings
+                .register_descriptor(
+                    key,
+                    DescriptorReference {
+                        number: 4,
+                        generation: 8,
+                    }
+                )
+                .is_err()
+        );
         assert!(bindings.descriptor(EventResourceKey::new(10).unwrap()).is_err());
     }
 

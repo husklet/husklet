@@ -55,7 +55,11 @@ pub struct CommittedMemoryFork {
 
 impl CommittedMemoryFork {
     pub fn rollback(self) -> Result<(), SharedMemoryError> {
-        let mut state = self.namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .namespace
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *state != self.published {
             return Err(SharedMemoryError::InvalidArgument);
         }
@@ -123,7 +127,10 @@ impl PreparedMemoryFork<'_> {
         namespace: &SharedMemoryNamespace,
         plan: &ForkPlan,
     ) -> Result<(Vec<InheritedAttachment>, NamespaceState, NamespaceState), SharedMemoryError> {
-        let mut state = namespace.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = namespace
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.next_attachment != plan.expected_next
             || state
                 .attachments

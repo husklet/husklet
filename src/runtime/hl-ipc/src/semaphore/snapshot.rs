@@ -1,4 +1,6 @@
-use super::{SemaphoreNamespace, SemaphoreSnapshot, SemaphoreSetSnapshot, SemaphoreLimits, SemaphoreError, Slot, State, Set};
+use super::{
+    SemaphoreError, SemaphoreLimits, SemaphoreNamespace, SemaphoreSetSnapshot, SemaphoreSnapshot, Set, Slot, State,
+};
 
 impl SemaphoreNamespace {
     pub fn snapshot(&self) -> SemaphoreSnapshot {

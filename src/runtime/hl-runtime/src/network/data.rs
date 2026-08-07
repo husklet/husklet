@@ -28,7 +28,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if flags & !(MSG_DONTWAIT | MSG_NOSIGNAL | MSG_OOB) != 0 {
             return LinuxResult::Error(Errno::ENOSYS);
         }
-        let Ok(length) = usize::try_from(length) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(length) = usize::try_from(length) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         let mut input = Vec::new();
         if input.try_reserve_exact(length).is_err() {
             return LinuxResult::Error(Errno::ENOMEM);
@@ -111,7 +113,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if flags & !(MSG_DONTWAIT | MSG_NOSIGNAL) != 0 {
             return LinuxResult::Error(Errno::ENOSYS);
         }
-        let Ok(length) = usize::try_from(length) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(length) = usize::try_from(length) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         let mut input = Vec::new();
         if input.try_reserve_exact(length).is_err() {
             return LinuxResult::Error(Errno::ENOMEM);
@@ -188,7 +192,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if flags & !(MSG_DONTWAIT | MSG_PEEK | MSG_TRUNC | MSG_WAITALL | MSG_OOB) != 0 {
             return LinuxResult::Error(Errno::ENOSYS);
         }
-        let Ok(length) = usize::try_from(length) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(length) = usize::try_from(length) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
         match marshaller.probe(pointer, length, GuestAccess::Write) {
             Ok(available) if available == length => {}

@@ -50,10 +50,7 @@ impl Sample {
 }
 
 fn host(root: &Path) -> Host {
-    Host::new(
-        Arc::new(File::open(root).unwrap()),
-        Arc::new(MountPaths::default()),
-    )
+    Host::new(Arc::new(File::open(root).unwrap()), Arc::new(MountPaths::default()))
 }
 
 fn layered(upper: &Path, lower: &Path) -> Host {
@@ -79,9 +76,10 @@ fn resolve_once(host: &Host, mounts: &MountNamespace, path: &GuestPathBytes, exp
     match result {
         Ok(resolved) => {
             let lease = resolved.duplicate_parent().unwrap();
-            let name = resolved
-                .final_name()
-                .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
+            let name = resolved.final_name().map_or_else(
+                || c".".to_owned(),
+                |name| std::ffi::CString::new(name.as_bytes()).unwrap(),
+            );
             let path = Host::path(&lease, &name);
             assert_eq!(path.is_ok(), expected);
             black_box((lease.selected().as_raw_fd(), path.is_ok()));
@@ -125,7 +123,10 @@ fn report(name: &str, sample: Sample, baseline: Sample) {
 #[test]
 #[ignore = "release-only overlay performance evidence"]
 fn overlay_resolution_microbench() {
-    assert!(!cfg!(debug_assertions), "overlay performance evidence requires --release");
+    assert!(
+        !cfg!(debug_assertions),
+        "overlay performance evidence requires --release"
+    );
     let fixture = Fixture::new();
     let ordinary = fixture.directory("ordinary");
     let upper = fixture.directory("upper");
@@ -147,8 +148,16 @@ fn overlay_resolution_microbench() {
     let ordinary_hit = measure(&ordinary_host, b"/hit", true);
     let ordinary_deep = measure(&ordinary_host, b"/a/b/c/d/e/f/g/h/i/j/k/l/leaf", true);
     report("ordinary_upper_control", ordinary_hit, ordinary_hit);
-    report("upper_hit", measure(&layered(&upper, &lower), b"/hit", true), ordinary_hit);
-    report("lower_hit", measure(&layered(&upper, &lower), b"/lower", true), ordinary_hit);
+    report(
+        "upper_hit",
+        measure(&layered(&upper, &lower), b"/hit", true),
+        ordinary_hit,
+    );
+    report(
+        "lower_hit",
+        measure(&layered(&upper, &lower), b"/lower", true),
+        ordinary_hit,
+    );
     report(
         "whiteout_miss",
         measure(&layered(&upper, &lower), b"/hidden", false),

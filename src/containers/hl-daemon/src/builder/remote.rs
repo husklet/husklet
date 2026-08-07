@@ -69,9 +69,10 @@ impl RemoteSources {
                     output.flush().await?;
                     let digest: [u8; 32] = digest.finalize().into();
                     if let Some(expected) = checksum.as_deref().and_then(|value| value.strip_prefix("sha256:"))
-                        && !hl_images::Digest::from(digest).encoded().eq_ignore_ascii_case(expected) {
-                            return Err(BuildError::Copy(format!("remote ADD checksum mismatch for {url}")));
-                        }
+                        && !hl_images::Digest::from(digest).encoded().eq_ignore_ascii_case(expected)
+                    {
+                        return Err(BuildError::Copy(format!("remote ADD checksum mismatch for {url}")));
+                    }
                     files.insert(url.to_owned(), RemoteFile { root, name, digest });
                 }
             }

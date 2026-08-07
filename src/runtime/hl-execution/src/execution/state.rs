@@ -136,7 +136,11 @@ impl ExecutionMachine {
         if !self.frozen.load(Ordering::Acquire) {
             return Err(ExecutionStateError::NotFrozen);
         }
-        Ok(self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone())
+        Ok(self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone())
     }
 
     pub fn replace(&self, replacement: ExecutionSnapshot) -> Result<ExecutionSnapshot, ExecutionStateError> {
@@ -145,7 +149,10 @@ impl ExecutionMachine {
             return Err(ExecutionStateError::NotFrozen);
         }
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.blocks.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        self.blocks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         if state.architecture() != replacement.architecture() {
             return Err(ExecutionStateError::Architecture);
         }

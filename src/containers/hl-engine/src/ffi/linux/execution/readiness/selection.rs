@@ -62,7 +62,9 @@ impl EventPort {
                 continue;
             }
             let descriptor = descriptor as i32;
-            let Ok(snapshot) = self.descriptors.snapshot(descriptor) else { return LinuxResult::Error(Errno::EBADF) };
+            let Ok(snapshot) = self.descriptors.snapshot(descriptor) else {
+                return LinuxResult::Error(Errno::EBADF);
+            };
             entries.push(PollEntry {
                 descriptor: self.descriptors.slot(descriptor).map_or(-1, |slot| slot.native),
                 events,

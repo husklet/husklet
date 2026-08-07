@@ -186,7 +186,7 @@ impl DescriptorObjectCheckpoint for FileObjectCatalog {
 #[cfg(test)]
 mod test {
     use super::*;
-    use hl_descriptor::{OpenFileDescription, StatusFlags, DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM};
+    use hl_descriptor::{DESCRIPTION_CHECKPOINT_BYTES_MAXIMUM, OpenFileDescription, StatusFlags};
 
     #[derive(Debug)]
     struct File(u8);

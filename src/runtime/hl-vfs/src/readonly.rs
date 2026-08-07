@@ -82,7 +82,10 @@ impl ReadOnlyPaths {
     /// Returns the number of distinct configured roots.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.paths.read().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+        self.paths
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     /// Returns whether no read-only roots are configured.

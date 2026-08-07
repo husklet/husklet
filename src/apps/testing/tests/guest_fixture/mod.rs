@@ -43,8 +43,14 @@ pub fn compile(source: &Path, isa: &str, destination: &Path, flags: &[&str]) {
 
 /// Builds one of this directory's projection guests.
 pub fn projection(name: &str, isa: &str, destination: &Path) {
-    let flags = if name == "projected_directory.c" { HOSTED } else { FREESTANDING };
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/guest_fixture").join(name);
+    let flags = if name == "projected_directory.c" {
+        HOSTED
+    } else {
+        FREESTANDING
+    };
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/guest_fixture")
+        .join(name);
     compile(&source, isa, destination, flags);
 }
 

@@ -18,9 +18,8 @@ pub use rule::{
     DuplicateEntity, EmptyDirectory, EnvironmentAccess, FileLength, FileName, FiniteStateString, FolderNoun,
     FreeFunction, GodObject, GuiToolkitLeakage, IgnoredResult, IntegrationCandidate, ManualDispatch, MaximumNesting,
     ModelDuplication, ModulePrefix, PathModules, PlatformCommand, PrefixDirectory, ReceiverRepetition, Registry,
-    RepositoryEscape, Rule,
-    SingleFileDirectory, SingleUse, StructNaming, SuffixRole, SymbolName, TestDependency, TestDirectory, TestName,
-    UnsafeBoundary,
+    RepositoryEscape, Rule, SingleFileDirectory, SingleUse, StructNaming, SuffixRole, SymbolName, TestDependency,
+    TestDirectory, TestName, UnsafeBoundary,
 };
 pub use source::{Source, Workspace};
 

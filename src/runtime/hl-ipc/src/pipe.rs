@@ -138,7 +138,12 @@ impl Pipe {
     }
 
     pub fn snapshot(&self) -> Result<PipeSnapshot, PipeCreateError> {
-        let state = self.reader.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .reader
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.waiters != 0 || state.open_waiters != 0 || state.sleepers != 0 {
             return Err(PipeCreateError::Busy);
         }
@@ -159,7 +164,12 @@ impl Pipe {
         snapshot.validate()?;
         let pipe = Self::with_capacity_mode(snapshot.capacity, false, snapshot.packet_mode)?;
         {
-            let mut state = pipe.reader.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = pipe
+                .reader
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.bytes = snapshot.bytes.iter().copied().collect();
             state.head_fragment = snapshot.head_fragment;
             state.packets = snapshot.packets.iter().copied().collect();
@@ -262,7 +272,11 @@ impl PipeEndpoint {
         let capacity = requested
             .checked_next_power_of_two()
             .ok_or(ObjectError::PermissionDenied)?;
-        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if capacity < state.bytes.len() {
             return Err(ObjectError::Busy);
         }
@@ -275,7 +289,11 @@ impl PipeEndpoint {
 
     pub(super) fn set_nonblocking(&self, enabled: bool) {
         self.nonblocking.store(enabled, Ordering::Release);
-        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match self.direction {
             EndpointDirection::Read => state.read_nonblocking = enabled,
             EndpointDirection::Write => state.write_nonblocking = enabled,
@@ -284,7 +302,11 @@ impl PipeEndpoint {
     }
 
     pub(super) fn endpoint_readiness(&self, interests: Readiness) -> Readiness {
-        let state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let ready = match self.direction {
             EndpointDirection::Read => {
                 let mut ready = 0;
@@ -313,7 +335,11 @@ impl PipeEndpoint {
         if self.retired.swap(true, Ordering::AcqRel) {
             return;
         }
-        let state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.pipe.notify_sleepers(&state);
         drop(state);
         self.endpoint_registry().notify();
@@ -324,7 +350,11 @@ impl PipeEndpoint {
         if self.closed.swap(true, Ordering::AcqRel) {
             return;
         }
-        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match self.direction {
             EndpointDirection::Read => state.readers -= 1,
             EndpointDirection::Write => state.writers -= 1,

@@ -222,9 +222,7 @@ pub(super) fn prepare(
         } => Mutation::Rename(
             pin_entry(host, base(0)?, from, false)?,
             pin_entry(host, base(1)?, to, !*exchange)?,
-            if *exchange {
-                2
-            } else { u32::from(*no_replace) },
+            if *exchange { 2 } else { u32::from(*no_replace) },
         ),
         hl_linux::FsMutationPlan::Link { from, to, follow } => {
             let source_base = base(0)?;
@@ -617,8 +615,8 @@ mod epoch_tests {
     fn publication() -> (ParentLease, Arc<AtomicU64>) {
         let epoch = Arc::new(AtomicU64::new(11));
         let directory = File::open(std::env::temp_dir()).unwrap();
-        let parent = ParentLease::upper(GuestPathBytes::new(b"/").unwrap(), directory.into())
-            .with_epoch(Arc::clone(&epoch));
+        let parent =
+            ParentLease::upper(GuestPathBytes::new(b"/").unwrap(), directory.into()).with_epoch(Arc::clone(&epoch));
         (parent, epoch)
     }
 

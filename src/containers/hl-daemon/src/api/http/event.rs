@@ -97,10 +97,12 @@ impl std::str::FromStr for Time {
             return Ok(Self::Absolute(seconds));
         }
         if let Some((seconds, fraction)) = value.split_once('.')
-            && !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit())
-                && let Ok(seconds) = seconds.parse::<i64>() {
-                    return Ok(Self::Absolute(seconds));
-                }
+            && !fraction.is_empty()
+            && fraction.bytes().all(|byte| byte.is_ascii_digit())
+            && let Ok(seconds) = seconds.parse::<i64>()
+        {
+            return Ok(Self::Absolute(seconds));
+        }
         if let Ok(timestamp) = chrono::DateTime::parse_from_rfc3339(value) {
             return Ok(Self::Absolute(timestamp.timestamp()));
         }

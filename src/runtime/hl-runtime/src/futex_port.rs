@@ -447,7 +447,11 @@ impl<H: MemoryAccessHost + 'static> RuntimeFutexPort for SafeRuntimeFutex<H> {
         hl_log::hl_debug!(
             hl_log::tag::SYNC,
             "futex thread={} operation={:?} address={:#x} value={} result={:#x}",
-            thread.number(), plan.operation, plan.address, plan.value, result.encode(),
+            thread.number(),
+            plan.operation,
+            plan.address,
+            plan.value,
+            result.encode(),
         );
         result
     }

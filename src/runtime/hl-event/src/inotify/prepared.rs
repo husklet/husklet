@@ -42,7 +42,11 @@ impl Inotify {
     ) -> Result<PreparedInotifyRead, InotifyError> {
         let _subscription = cancellation
             .map(|cancellation| cancellation.subscribe(Arc::new(ReadNotification(Arc::downgrade(&self.inner)))));
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             Self::ensure_active(&state)?;
             if !state.queue.is_empty() {
@@ -84,7 +88,11 @@ impl Inotify {
     }
 
     pub fn commit_read(&self, prepared: &PreparedInotifyRead) -> Result<(), InotifyError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::ensure_active(&state)?;
         if !state
             .queue

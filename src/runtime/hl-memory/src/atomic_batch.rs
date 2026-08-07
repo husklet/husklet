@@ -56,9 +56,10 @@ enum SharedReservation {
 impl<H: AtomicBatchHost> Drop for SharedAtomicBatch<H> {
     fn drop(&mut self) {
         if !self.committed
-            && let SharedReservation::Host(reservation) = &self.reservation {
-                self.coordinator.host.rollback_u32_batch(*reservation);
-            }
+            && let SharedReservation::Host(reservation) = &self.reservation
+        {
+            self.coordinator.host.rollback_u32_batch(*reservation);
+        }
     }
 }
 
@@ -100,7 +101,10 @@ impl<H: AtomicBatchHost> MappingCoordinator<H> {
         if !Arc::ptr_eq(self, &prepared.coordinator) {
             return Err(MemoryError::InvariantViolation);
         }
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.ledger.generation() != prepared.generation {
             return Err(MemoryError::InvariantViolation);
         }
@@ -146,7 +150,10 @@ impl<H: AtomicBatchHost> MappingCoordinator<H> {
         if writes.len() > ATOMIC_U32_WRITE_BATCH_MAXIMUM {
             return Err(MemoryError::InvariantViolation);
         }
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut addresses = BTreeSet::new();
         for write in writes {
             if write.address.get() % 4 != 0 || !addresses.insert(write.address) {
@@ -197,7 +204,10 @@ impl<H: AtomicBatchHost> MappingCoordinator<H> {
         if !std::ptr::eq(self, prepared.coordinator) {
             return Err(MemoryError::InvariantViolation);
         }
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.ledger.generation() != prepared.generation {
             return Err(MemoryError::InvariantViolation);
         }

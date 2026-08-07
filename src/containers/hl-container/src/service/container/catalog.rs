@@ -10,7 +10,12 @@ impl Service {
         if let Some(name) = &spec.name {
             self.ensure_name_available(name, None).await?;
         }
-        let container = Container::new(ContainerId::new(), spec, ContainerState::Created, self.next_created_ms());
+        let container = Container::new(
+            ContainerId::new(),
+            spec,
+            ContainerState::Created,
+            self.next_created_ms(),
+        );
         self.containers.insert(&container).await?;
         let mut exits = self.exits.lock().await;
         exits.remove(container.id.as_str());
@@ -103,11 +108,11 @@ impl Service {
                     .networks
                     .rename_generated_endpoint(&container.id, container.spec.name.as_deref().expect("assigned"), old)
                     .await
-                {
-                    return Err(Error::Corrupt(format!(
-                        "rename failed ({error}); network-name rollback also failed ({rollback})"
-                    )));
-                }
+            {
+                return Err(Error::Corrupt(format!(
+                    "rename failed ({error}); network-name rollback also failed ({rollback})"
+                )));
+            }
             return Err(error);
         }
         Ok(container)

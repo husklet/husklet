@@ -691,7 +691,9 @@ mod tests {
                     |_| Err(io::Error::other("parent fsync")),
                 ),
             };
-            let Err(cause) = cause else { panic!("injected traversal boundary must fail") };
+            let Err(cause) = cause else {
+                panic!("injected traversal boundary must fail")
+            };
             let error = Publication::with_ancestors(publication.created_ancestors, cause);
             assert_flat_ancestors(error, expected_count, unsupported);
             assert_eq!(current.is_dir(), current_exists, "{failure:?}");

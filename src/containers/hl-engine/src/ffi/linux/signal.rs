@@ -52,13 +52,7 @@ impl SignalSyscalls for LinuxHost {
         let mut info = SignalFdInfo::zeroed();
         // SAFETY: info is aligned, initialized, and uniquely writable for its
         // exact 128-byte ABI size. No pointer is retained and libc cannot unwind.
-        let count = unsafe {
-            abi::read(
-                descriptor,
-                (&raw mut info).cast(),
-                core::mem::size_of::<SignalFdInfo>(),
-            )
-        };
+        let count = unsafe { abi::read(descriptor, (&raw mut info).cast(), core::mem::size_of::<SignalFdInfo>()) };
         if count < 0 {
             return Err(ErrnoMapper::current());
         }

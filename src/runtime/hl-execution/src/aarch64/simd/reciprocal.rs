@@ -53,13 +53,7 @@ impl Reciprocal {
         })
     }
 
-    pub(crate) fn unsigned(
-        cpu: &mut Aarch64CpuState,
-        reciprocal_sqrt: bool,
-        source: u8,
-        destination: u8,
-        wide: bool,
-    ) {
+    pub(crate) fn unsigned(cpu: &mut Aarch64CpuState, reciprocal_sqrt: bool, source: u8, destination: u8, wide: bool) {
         let mut value = 0_u128;
         let lanes = if wide { 4 } else { 2 };
         for lane in 0..lanes {
@@ -95,12 +89,7 @@ impl Reciprocal {
         })
     }
 
-    pub(crate) fn exponent(
-        cpu: &mut Aarch64CpuState,
-        format: FpFormat,
-        source: u8,
-        destination: u8,
-    ) {
+    pub(crate) fn exponent(cpu: &mut Aarch64CpuState, format: FpFormat, source: u8, destination: u8) {
         let (value, flags) = Self::exponent_lane(cpu.vector_lane(source, format.bits(), 0), format, cpu.fpcr as u32);
         cpu.fpsr |= u64::from(flags);
         cpu.set_vector(destination, u128::from(value));

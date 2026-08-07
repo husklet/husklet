@@ -42,7 +42,9 @@ impl Projector {
         let Some(selected) = selected else {
             return Ok(None);
         };
-        let suffix = host.strip_prefix(&selected.host).map_err(|_| ProjectionError::Outside)?;
+        let suffix = host
+            .strip_prefix(&selected.host)
+            .map_err(|_| ProjectionError::Outside)?;
         let mut guest = selected.guest.as_str().as_bytes().to_vec();
         if guest != b"/" {
             while guest.last() == Some(&b'/') {
@@ -99,11 +101,19 @@ mod tests {
         ]);
 
         assert_eq!(
-            projector.guest(PathBuf::from("/layers/lower/scratch/run/a").as_path()).unwrap().unwrap().as_bytes(),
+            projector
+                .guest(PathBuf::from("/layers/lower/scratch/run/a").as_path())
+                .unwrap()
+                .unwrap()
+                .as_bytes(),
             b"/tmp/run/a",
         );
         assert_eq!(
-            projector.guest(PathBuf::from("/layers/lower/usr/bin").as_path()).unwrap().unwrap().as_bytes(),
+            projector
+                .guest(PathBuf::from("/layers/lower/usr/bin").as_path())
+                .unwrap()
+                .unwrap()
+                .as_bytes(),
             b"/usr/bin",
         );
     }
@@ -115,9 +125,18 @@ mod tests {
             projection("/images/root/data", b"/secret", false),
         ]);
 
-        assert!(projector.guest(PathBuf::from("/images/rooted/etc").as_path()).unwrap().is_none());
+        assert!(
+            projector
+                .guest(PathBuf::from("/images/rooted/etc").as_path())
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
-            projector.guest(PathBuf::from("/images/root/data/item").as_path()).unwrap().unwrap().as_bytes(),
+            projector
+                .guest(PathBuf::from("/images/root/data/item").as_path())
+                .unwrap()
+                .unwrap()
+                .as_bytes(),
             b"/data/item",
         );
     }

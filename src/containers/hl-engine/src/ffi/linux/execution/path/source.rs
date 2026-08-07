@@ -234,9 +234,10 @@ impl OrdinaryContext {
                 .next()
                 .filter(|value| !value.is_empty())
                 .ok_or(RuntimePathError::Invalid)?;
-            let (host, read_only) = host
-                .strip_prefix("rw:")
-                .map_or_else(|| (host.strip_prefix("ro:").unwrap_or(host), true), |host| (host, false));
+            let (host, read_only) = host.strip_prefix("rw:").map_or_else(
+                || (host.strip_prefix("ro:").unwrap_or(host), true),
+                |host| (host, false),
+            );
             let host = PathBuf::from(host).canonicalize().map_err(HostError::map)?;
             if !host.is_file() {
                 return Err(RuntimePathError::Invalid);
@@ -279,7 +280,10 @@ impl OrdinaryContext {
                 leaf,
             });
         }
-        *self.name_binds.write().unwrap_or_else(std::sync::PoisonError::into_inner) = parsed;
+        *self
+            .name_binds
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = parsed;
         Ok(())
     }
 
@@ -299,7 +303,10 @@ impl OrdinaryContext {
             .rfind('/')
             .map(|slash| if slash == 0 { "/" } else { &guest.as_str()[..slash] })
             .ok_or(RuntimePathError::Invalid)?;
-        let rules = self.name_binds.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let rules = self
+            .name_binds
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(rule) = rules.iter().find(|rule| rule.exact.contains(&guest)) {
             return Ok(Some(NameBinding {
                 guest,
@@ -343,9 +350,8 @@ impl OrdinaryContext {
             nofollow_final: true,
             no_symlinks: false,
             allow_missing_final: false,
-        })
-        else {
-            return Ok(false)
+        }) else {
+            return Ok(false);
         };
         let Some(name) = resolved.final_name() else {
             return Ok(false);
@@ -470,7 +476,9 @@ impl Source {
     }
 
     pub(super) fn layered(upper: &[u8], lowers: &[Vec<u8>]) -> Result<Self, RuntimePathError> {
-        OrdinaryContext::layered(upper, lowers).map(Arc::new).map(Self::Ordinary)
+        OrdinaryContext::layered(upper, lowers)
+            .map(Arc::new)
+            .map(Self::Ordinary)
     }
 
     pub(super) fn native(&self) -> Result<&OrdinaryContext, RuntimePathError> {

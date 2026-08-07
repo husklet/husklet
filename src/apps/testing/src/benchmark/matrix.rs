@@ -154,11 +154,7 @@ impl Matrix {
     {
         std::fs::create_dir_all(&self.output).map_err(|error| format!("matrix output directory: {error}"))?;
         let engine_sha = file_identity(&self.c_engine)?;
-        let runner_sha = self
-            .c_runner
-            .as_ref()
-            .map(|path| file_identity(path))
-            .transpose()?;
+        let runner_sha = self.c_runner.as_ref().map(|path| file_identity(path)).transpose()?;
         std::fs::write(
             self.output.join("c-engine-provenance.tsv"),
             format!(
@@ -323,7 +319,9 @@ fn verified_build_identity(path: &std::path::Path, expected: &str) -> Result<Str
     if expected.eq_ignore_ascii_case(&actual) {
         Ok(actual)
     } else {
-        Err(format!("retained C identity mismatch: expected {expected}, binary has {actual}"))
+        Err(format!(
+            "retained C identity mismatch: expected {expected}, binary has {actual}"
+        ))
     }
 }
 
@@ -339,37 +337,67 @@ fn elf_build_id_bytes(bytes: &[u8]) -> Result<String, String> {
         bytes.get(offset..end).ok_or_else(|| "truncated retained C ELF".into())
     };
     let u32_at = |offset: usize| -> Result<u32, String> {
-        Ok(u32::from_le_bytes(field(offset, 4)?.try_into().map_err(|_| "truncated retained C ELF")?))
+        Ok(u32::from_le_bytes(
+            field(offset, 4)?.try_into().map_err(|_| "truncated retained C ELF")?,
+        ))
     };
     let u64_at = |offset: usize| -> Result<u64, String> {
-        Ok(u64::from_le_bytes(field(offset, 8)?.try_into().map_err(|_| "truncated retained C ELF")?))
+        Ok(u64::from_le_bytes(
+            field(offset, 8)?.try_into().map_err(|_| "truncated retained C ELF")?,
+        ))
     };
     let section_offset = usize::try_from(u64_at(40)?).map_err(|_| "retained C ELF section offset overflow")?;
-    let section_size = usize::from(u16::from_le_bytes(field(58, 2)?.try_into().map_err(|_| "truncated retained C ELF")?));
-    let section_count = usize::from(u16::from_le_bytes(field(60, 2)?.try_into().map_err(|_| "truncated retained C ELF")?));
+    let section_size = usize::from(u16::from_le_bytes(
+        field(58, 2)?.try_into().map_err(|_| "truncated retained C ELF")?,
+    ));
+    let section_count = usize::from(u16::from_le_bytes(
+        field(60, 2)?.try_into().map_err(|_| "truncated retained C ELF")?,
+    ));
     if section_size < 64 || section_count == 0 {
         return Err("retained C ELF has unsupported extended or undersized section headers".into());
     }
-    let table_size = section_count.checked_mul(section_size).ok_or("retained C ELF section overflow")?;
+    let table_size = section_count
+        .checked_mul(section_size)
+        .ok_or("retained C ELF section overflow")?;
     field(section_offset, table_size)?;
     for index in 0..section_count {
-        let header = section_offset.checked_add(index.checked_mul(section_size).ok_or("retained C ELF section overflow")?).ok_or("retained C ELF section overflow")?;
-        if u32_at(header.checked_add(4).ok_or("retained C ELF section overflow")?)? != 7 { continue; }
-        let start = usize::try_from(u64_at(header.checked_add(24).ok_or("retained C ELF section overflow")?)?).map_err(|_| "retained C ELF note offset overflow")?;
-        let size = usize::try_from(u64_at(header.checked_add(32).ok_or("retained C ELF section overflow")?)?).map_err(|_| "retained C ELF note size overflow")?;
+        let header = section_offset
+            .checked_add(
+                index
+                    .checked_mul(section_size)
+                    .ok_or("retained C ELF section overflow")?,
+            )
+            .ok_or("retained C ELF section overflow")?;
+        if u32_at(header.checked_add(4).ok_or("retained C ELF section overflow")?)? != 7 {
+            continue;
+        }
+        let start = usize::try_from(u64_at(
+            header.checked_add(24).ok_or("retained C ELF section overflow")?,
+        )?)
+        .map_err(|_| "retained C ELF note offset overflow")?;
+        let size = usize::try_from(u64_at(
+            header.checked_add(32).ok_or("retained C ELF section overflow")?,
+        )?)
+        .map_err(|_| "retained C ELF note size overflow")?;
         let end = start.checked_add(size).ok_or("retained C ELF note overflow")?;
         field(start, size)?;
         let mut cursor = start;
-        while cursor.checked_add(12).is_some_and(|note_header_end| note_header_end <= end) {
+        while cursor
+            .checked_add(12)
+            .is_some_and(|note_header_end| note_header_end <= end)
+        {
             let namesz = usize::try_from(u32_at(cursor)?).map_err(|_| "retained C ELF note overflow")?;
-            let descsz = usize::try_from(u32_at(cursor.checked_add(4).ok_or("retained C ELF note overflow")?)?).map_err(|_| "retained C ELF note overflow")?;
+            let descsz = usize::try_from(u32_at(cursor.checked_add(4).ok_or("retained C ELF note overflow")?)?)
+                .map_err(|_| "retained C ELF note overflow")?;
             let kind = u32_at(cursor.checked_add(8).ok_or("retained C ELF note overflow")?)?;
             let name = cursor.checked_add(12).ok_or("retained C ELF note overflow")?;
             let padded_name = namesz.checked_add(3).ok_or("retained C ELF note overflow")? & !3;
             let padded_desc = descsz.checked_add(3).ok_or("retained C ELF note overflow")? & !3;
             let desc = name.checked_add(padded_name).ok_or("retained C ELF note overflow")?;
             let next = desc.checked_add(padded_desc).ok_or("retained C ELF note overflow")?;
-            if next > end { return Err("truncated retained C ELF note".into()); }
+            if next > end {
+                return Err("truncated retained C ELF note".into());
+            }
             let name_end = name.checked_add(namesz).ok_or("retained C ELF note overflow")?;
             if kind == 3 && bytes.get(name..name_end) == Some(b"GNU\0") {
                 return Ok(field(desc, descsz)?.iter().map(|byte| format!("{byte:02x}")).collect());

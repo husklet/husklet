@@ -542,10 +542,7 @@ fn connective(word: &str) -> bool {
 }
 
 fn semantic_words(value: &str) -> Vec<String> {
-    words(value)
-        .into_iter()
-        .filter(|word| !connective(word))
-        .collect()
+    words(value).into_iter().filter(|word| !connective(word)).collect()
 }
 
 fn words(value: &str) -> Vec<String> {

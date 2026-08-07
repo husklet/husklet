@@ -254,9 +254,9 @@ impl PlanState {
         if header.alignment > 1
             && (!header.alignment.is_power_of_two()
                 || header.virtual_address % header.alignment != header.offset % header.alignment)
-            {
-                return Err(InspectError::InvalidSegmentAlignment);
-            }
+        {
+            return Err(InspectError::InvalidSegmentAlignment);
+        }
         Ok(())
     }
 

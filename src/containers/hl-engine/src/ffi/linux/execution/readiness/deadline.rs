@@ -38,7 +38,11 @@ pub(in crate::ffi::linux::execution) struct Queue {
 
 impl std::fmt::Debug for Queue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         formatter
             .debug_struct("Queue")
             .field("registrations", &state.tokens.len())
@@ -100,7 +104,11 @@ impl Queue {
 
     fn insert(&self, deadline: u64, callback: Option<Arc<dyn Fn() + Send + Sync>>) -> Result<u64, hl_time::ClockError> {
         self.start_worker()?;
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.stopped || state.tokens.len() == DEADLINE_LIMIT {
             return Err(hl_time::ClockError::Failed);
         }
@@ -131,7 +139,11 @@ impl Queue {
     }
 
     pub(in crate::ffi::linux::execution) fn cancel(&self, token: u64) {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(deadline) = state.tokens.remove(&token) {
             state.deadlines.remove(&(deadline, token));
             state.callbacks.remove(&token);
@@ -151,7 +163,11 @@ impl Queue {
         let token = self.schedule(deadline).map_err(|_| ())?;
         let observer: Arc<dyn hl_sync::InterruptionWake> = Arc::new(InterruptionWake(Arc::clone(&self.inner)));
         let _observation = interruption.map(|value| value.observe(observer.clone()));
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while !state.stopped
             && !interruption.is_some_and(hl_sync::Interruption::is_pending)
             && u64::try_from(self.inner.origin.elapsed().as_nanos()).unwrap_or(u64::MAX) < deadline
@@ -183,7 +199,10 @@ impl Queue {
                 return;
             }
             let Some((deadline, token)) = state.deadlines.first().copied() else {
-                state = inner.scheduled.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+                state = inner
+                    .scheduled
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 continue;
             };
             let now = u64::try_from(inner.origin.elapsed().as_nanos()).unwrap_or(u64::MAX);
@@ -217,12 +236,21 @@ impl Queue {
 impl Drop for Queue {
     fn drop(&mut self) {
         {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.stopped = true;
             self.inner.changed.notify_all();
             self.inner.scheduled.notify_all();
         }
-        if let Some(worker) = self.worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+        if let Some(worker) = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
             let _ = worker.join();
         }
         // SAFETY: the worker has joined and self surrenders its owned descriptor once.

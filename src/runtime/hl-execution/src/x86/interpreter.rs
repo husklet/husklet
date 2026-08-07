@@ -185,15 +185,17 @@ impl ScalarInterpreter {
         };
         match staged {
             Staged::Cpu => Ok(()),
-            Staged::Write(reservation, value, address, length) => {
-                memory.commit_write(reservation, value).map_err(|()| fault(address, length))
-            }
+            Staged::Write(reservation, value, address, length) => memory
+                .commit_write(reservation, value)
+                .map_err(|()| fault(address, length)),
             Staged::Batch(reservation, values, address, length) => memory
                 .commit_write_batch(reservation, &values[..usize::from(length / 8)])
                 .map_err(|()| fault(address, length)),
             Staged::Sparse(reservations, values, count, address, length) => {
                 for (reservation, value) in reservations.into_iter().flatten().zip(values).take(usize::from(count)) {
-                    memory.commit_write(reservation, value).map_err(|()| fault(address, length))?;
+                    memory
+                        .commit_write(reservation, value)
+                        .map_err(|()| fault(address, length))?;
                 }
                 Ok(())
             }

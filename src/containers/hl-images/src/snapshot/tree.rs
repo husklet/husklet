@@ -318,10 +318,7 @@ mod tests {
 
         Tree::from(root.path()).writable().unwrap();
 
-        assert_ne!(
-            fs::metadata(nested).unwrap().permissions().mode() & 0o200,
-            0
-        );
+        assert_ne!(fs::metadata(nested).unwrap().permissions().mode() & 0o200, 0);
     }
 
     #[test]

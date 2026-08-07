@@ -91,7 +91,10 @@ impl CheckpointActivity {
     }
 
     pub(crate) fn frozen(&self) -> bool {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).frozen
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .frozen
     }
 }
 
@@ -131,7 +134,11 @@ impl ActivityAdmission {
 
 impl Drop for ActivityAdmission {
     fn drop(&mut self) {
-        let mut state = self.activity.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .activity
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.admitted = state.admitted.saturating_sub(1);
         // A freezer publishes `frozen` while holding this same mutex before it
         // can wait for the final admission. With no freeze in progress there

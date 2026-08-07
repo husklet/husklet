@@ -16917,9 +16917,7 @@ fn packed_compare_reference(left: u128, right: u128, lane: usize, greater: bool)
             (2, false) => a == b,
             (2, true) => i16::from_le_bytes([a[0], a[1]]) > i16::from_le_bytes([b[0], b[1]]),
             (4, false) => a == b,
-            (4, true) => {
-                i32::from_le_bytes([a[0], a[1], a[2], a[3]]) > i32::from_le_bytes([b[0], b[1], b[2], b[3]])
-            }
+            (4, true) => i32::from_le_bytes([a[0], a[1], a[2], a[3]]) > i32::from_le_bytes([b[0], b[1], b[2], b[3]]),
             (8, false) => a == b,
             (8, true) => {
                 i64::from_le_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]])
@@ -16969,7 +16967,13 @@ fn vex_integer_compare_family() {
                 "decode {opcode:#x} prefix {prefix:#x}"
             );
 
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.vectors[0] = u128::MAX;
             cpu.vector_upper[0] = u128::MAX;
             cpu.vectors[1] = low_left;
@@ -16996,7 +17000,13 @@ fn vex_integer_compare_family() {
             );
         }
 
-        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7100, ..Default::default() }, ..Default::default() };
+        let mut cpu = CpuState {
+            scalar: ScalarState {
+                rip: 0x7100,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         cpu.registers[3] = 0x1000;
         cpu.vectors[1] = low_left;
         cpu.vector_upper[1] = high_left;
@@ -17034,7 +17044,13 @@ fn vex_qword_compare_family() {
     };
     for (opcode, greater) in [(0x29_u8, false), (0x37, true)] {
         let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, 0x71, opcode, 0xc2], 0x7200).unwrap();
-        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7200, ..Default::default() }, ..Default::default() };
+        let mut cpu = CpuState {
+            scalar: ScalarState {
+                rip: 0x7200,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         cpu.vectors[1] = left;
         cpu.vectors[2] = right;
         assert_eq!(
@@ -17063,7 +17079,13 @@ fn vex_non_temporal_store_family() {
                 "decode {opcode:#x} prefix {prefix:#x}"
             );
 
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7300, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7300,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.registers[3] = 0x1000;
             cpu.vectors[0] = 0x0f1e_2d3c_4b5a_6978_8796_a5b4_c3d2_e1f0;
             cpu.vector_upper[0] = 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00;
@@ -17130,7 +17152,10 @@ fn vex_word_shuffle_family() {
     ] {
         for immediate in [0x00_u8, 0x1b, 0xe4, 0xff, 0x93] {
             let mut legacy_cpu = CpuState {
-                scalar: ScalarState { rip: 0x7000, ..Default::default() },
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             legacy_cpu.vectors[1] = low;
@@ -17140,7 +17165,13 @@ fn vex_word_shuffle_family() {
                 ExecutionExit::Continue
             );
 
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.vectors[1] = low;
             cpu.vector_upper[1] = high;
             cpu.vector_upper[0] = u128::MAX;
@@ -17152,7 +17183,10 @@ fn vex_word_shuffle_family() {
             assert_eq!(cpu.vectors[0], legacy_cpu.vectors[0], "low {prefix:#x} {immediate:#x}");
 
             let mut upper_cpu = CpuState {
-                scalar: ScalarState { rip: 0x7000, ..Default::default() },
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             upper_cpu.vectors[1] = high;
@@ -17198,7 +17232,10 @@ fn vex_scalar_ordered_compare_family() {
                     legacy_bytes.extend(legacy);
                     legacy_bytes.extend_from_slice(&[0x0f, opcode, 0xc1]);
                     let mut legacy_cpu = CpuState {
-                        scalar: ScalarState { rip: 0x7000, ..Default::default() },
+                        scalar: ScalarState {
+                            rip: 0x7000,
+                            ..Default::default()
+                        },
                         mxcsr: 0x1f80,
                         ..Default::default()
                     };
@@ -17211,7 +17248,10 @@ fn vex_scalar_ordered_compare_family() {
                     );
 
                     let mut cpu = CpuState {
-                        scalar: ScalarState { rip: 0x7000, ..Default::default() },
+                        scalar: ScalarState {
+                            rip: 0x7000,
+                            ..Default::default()
+                        },
                         mxcsr: 0x1f80,
                         ..Default::default()
                     };
@@ -17250,7 +17290,13 @@ fn vex_align_family() {
         commits: 0,
     };
     let legacy = |count: u8, high: usize, memory: &mut ModelMemory| {
-        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+        let mut cpu = CpuState {
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         cpu.vectors[0] = first[high];
         cpu.vectors[1] = second[high];
         let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x3a, 0x0f, 0xc1, count], cpu.rip).unwrap();
@@ -17262,13 +17308,18 @@ fn vex_align_family() {
     };
     for count in [0_u8, 1, 7, 8, 15, 16, 17, 31, 32, 33, 255] {
         for (prefix, wide) in [(0x71_u8, false), (0x75, true)] {
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.vectors[1] = first[0];
             cpu.vector_upper[1] = first[1];
             cpu.vectors[2] = second[0];
             cpu.vector_upper[2] = second[1];
-            let decoded =
-                X86ScalarDecoder::decode(&[0xc4, 0xe3, prefix, 0x0f, 0xc2, count], cpu.rip).unwrap();
+            let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe3, prefix, 0x0f, 0xc2, count], cpu.rip).unwrap();
             assert_eq!(
                 ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
                 ExecutionExit::Continue
@@ -17295,7 +17346,9 @@ fn vex_widen_family() {
         fail_write: false,
         commits: 0,
     };
-    for opcode in [0x20_u8, 0x21, 0x22, 0x23, 0x24, 0x25, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35] {
+    for opcode in [
+        0x20_u8, 0x21, 0x22, 0x23, 0x24, 0x25, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35,
+    ] {
         let (from, to) = match opcode & 0x0f {
             0 => (1_u32, 2_u32),
             1 => (1, 4),
@@ -17305,7 +17358,13 @@ fn vex_widen_family() {
             _ => (4, 8),
         };
         let legacy = |value: u128, memory: &mut ModelMemory| {
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.vectors[1] = value;
             let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x38, opcode, 0xc1], cpu.rip).unwrap();
             assert_eq!(
@@ -17315,7 +17374,13 @@ fn vex_widen_family() {
             cpu.vectors[0]
         };
         for (prefix, wide) in [(0x79_u8, false), (0x7d, true)] {
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.vectors[1] = source;
             let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, prefix, opcode, 0xc1], cpu.rip).unwrap();
             assert_eq!(
@@ -17335,7 +17400,13 @@ fn vex_widen_family() {
         }
 
         // The memory operand is only as wide as the source elements, not the destination.
-        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+        let mut cpu = CpuState {
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         cpu.registers[3] = 0x1000;
         let bytes = (32 * from / to) as usize;
         let mut narrow = ModelMemory {
@@ -17368,7 +17439,10 @@ fn vex_lane_extract_family() {
     ] {
         for lane in 0..16 / bytes {
             let mut legacy_cpu = CpuState {
-                scalar: ScalarState { rip: 0x7000, ..Default::default() },
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             legacy_cpu.vectors[0] = value;
@@ -17389,10 +17463,15 @@ fn vex_lane_extract_family() {
                 ExecutionExit::Continue
             );
 
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.vectors[0] = value;
-            let decoded =
-                X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0xc1, lane], cpu.rip).unwrap();
+            let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0xc1, lane], cpu.rip).unwrap();
             assert_eq!(
                 ScalarInterpreter::execute(&mut cpu, &mut memory, decoded),
                 ExecutionExit::Continue
@@ -17410,11 +17489,16 @@ fn vex_lane_extract_family() {
                 fail_write: false,
                 commits: 0,
             };
-            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+            let mut cpu = CpuState {
+                scalar: ScalarState {
+                    rip: 0x7000,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
             cpu.registers[3] = 0x1000;
             cpu.vectors[0] = value;
-            let decoded =
-                X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0x03, lane], cpu.rip).unwrap();
+            let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0x03, lane], cpu.rip).unwrap();
             assert_eq!(
                 ScalarInterpreter::execute(&mut cpu, &mut store, decoded),
                 ExecutionExit::Continue
@@ -17429,7 +17513,10 @@ fn vex_lane_extract_family() {
 
     for lane in 0..8_u8 {
         let mut legacy_cpu = CpuState {
-            scalar: ScalarState { rip: 0x7000, ..Default::default() },
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         legacy_cpu.vectors[1] = value;
@@ -17446,7 +17533,13 @@ fn vex_lane_extract_family() {
             ExecutionExit::Continue
         );
 
-        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
+        let mut cpu = CpuState {
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         cpu.vectors[1] = value;
         let decoded = X86ScalarDecoder::decode(&[0xc5, 0xf9, 0xc5, 0xc1, lane], cpu.rip).unwrap();
         assert_eq!(
@@ -17464,5 +17557,8 @@ fn scalar_state_is_a_small_fraction_of_cpu_state() {
     let scalar = size_of::<ScalarState>();
     let full = size_of::<CpuState>();
     assert!(scalar <= 160, "scalar staging scratch grew to {scalar} bytes");
-    assert!(scalar * 4 < full, "scalar half {scalar} is no longer small next to {full}");
+    assert!(
+        scalar * 4 < full,
+        "scalar half {scalar} is no longer small next to {full}"
+    );
 }

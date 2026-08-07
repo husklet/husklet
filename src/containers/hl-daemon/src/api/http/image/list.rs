@@ -72,35 +72,43 @@ impl ImageSelection {
     }
 
     fn temporal_anchors(&self, images: &[ImageSummary], name: &str) -> ApiResult<Vec<i64>> {
-        self.values.get(name).into_iter().flatten().map(|value| {
-            let mut matches = images.iter().filter(|image| {
-                super::matches_docker_image_id(value, &image.id)
-                    || image.repo_tags.iter().any(|tag| tag == value)
-                    || value.parse::<hl_images::Reference>().is_ok_and(|reference| {
-                        image.repo_tags.iter().any(|tag| tag == &reference.to_string())
-                    })
-            });
-            let selected = matches.next().ok_or_else(|| {
-                ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {value}"))
-            })?;
-            if matches.next().is_some() {
-                return Err(ApiError::new(
-                    StatusCode::CONFLICT,
-                    format!("image ID prefix is ambiguous: {value}"),
-                ));
-            }
-            Ok(selected.created)
-        }).collect()
+        self.values
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|value| {
+                let mut matches = images.iter().filter(|image| {
+                    super::matches_docker_image_id(value, &image.id)
+                        || image.repo_tags.iter().any(|tag| tag == value)
+                        || value
+                            .parse::<hl_images::Reference>()
+                            .is_ok_and(|reference| image.repo_tags.iter().any(|tag| tag == &reference.to_string()))
+                });
+                let selected = matches
+                    .next()
+                    .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, format!("No such image: {value}")))?;
+                if matches.next().is_some() {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        format!("image ID prefix is ambiguous: {value}"),
+                    ));
+                }
+                Ok(selected.created)
+            })
+            .collect()
     }
 
     pub(super) fn select(self, images: Vec<ImageSummary>) -> ApiResult<Vec<ImageSummary>> {
         let before = self.temporal_anchors(&images, "before")?;
         let since = self.temporal_anchors(&images, "since")?;
-        Ok(images.into_iter().filter(|image| {
-            self.matches(image)
-                && (before.is_empty() || before.iter().any(|anchor| image.created < *anchor))
-                && (since.is_empty() || since.iter().any(|anchor| image.created > *anchor))
-        }).collect())
+        Ok(images
+            .into_iter()
+            .filter(|image| {
+                self.matches(image)
+                    && (before.is_empty() || before.iter().any(|anchor| image.created < *anchor))
+                    && (since.is_empty() || since.iter().any(|anchor| image.created > *anchor))
+            })
+            .collect())
     }
 
     pub(super) fn wildcard(pattern: &str, value: &str) -> bool {
@@ -141,7 +149,9 @@ pub(in super::super) async fn list(
     let (selection, shared_size) = query.selection()?;
     // This store has no unnamed intermediate-image records, and summaries always carry digest
     // identities, so both Docker flags are already satisfied by the same projection.
-    Ok(Json(selection.select(state.image_summaries_with_shared_size(shared_size).await?)?))
+    Ok(Json(
+        selection.select(state.image_summaries_with_shared_size(shared_size).await?)?,
+    ))
 }
 
 #[derive(Default, Deserialize)]

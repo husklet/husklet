@@ -30,8 +30,7 @@ impl Schema for Runtime {
     type Row = Row;
 
     const KIND: &'static str = "runtime";
-    const HEADER: &'static str =
-        "id\ttarget\tprofile\tstatus\telapsed_ms\thost_load\tdiagnostic\n";
+    const HEADER: &'static str = "id\ttarget\tprofile\tstatus\telapsed_ms\thost_load\tdiagnostic\n";
     const ROW_LIMIT: usize = 16 * 1024;
     const FIELDS: usize = 7;
 

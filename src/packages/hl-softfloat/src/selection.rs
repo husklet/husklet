@@ -68,12 +68,13 @@ impl Environment {
             return self.nan_result(format, &[operand], flags);
         }
         if (matches!(operand.class, Class::Infinity | Class::Zero) || operand.exponent >= 0)
-            && operand.exponent >= i32::from(format.fraction_bits()) {
-                return Result {
-                    value: self.pack_exact(format, operand),
-                    flags,
-                };
-            }
+            && operand.exponent >= i32::from(format.fraction_bits())
+        {
+            return Result {
+                value: self.pack_exact(format, operand),
+                flags,
+            };
+        }
         let shift = i32::from(format.fraction_bits()) - operand.exponent;
         if shift <= 0 {
             return Result {

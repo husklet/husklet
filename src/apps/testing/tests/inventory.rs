@@ -335,7 +335,10 @@ fn work(
         if stop.load(Ordering::Acquire) {
             break;
         }
-        let case = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop_front();
+        let case = queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front();
         let Some(case) = case else { break };
         let panic_case = case.clone();
         let mut result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -354,7 +357,10 @@ fn work(
             result.diagnostic = format!("ledger={error}");
             result.mismatch = "engine:harness-ledger".into();
         }
-        results.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(result);
+        results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(result);
         let count = completed.fetch_add(1, Ordering::Relaxed) + 1;
         progress(count, total);
     }
@@ -967,7 +973,10 @@ fn stamped_input(path: &Path, required: bool) -> io::Result<Vec<u8>> {
 
 const DEFAULT_JOBS: usize = 1;
 fn corpus_path(root: Option<&str>) -> PathBuf {
-    root.map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy"), PathBuf::from)
+    root.map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/runtime/legacy"),
+        PathBuf::from,
+    )
 }
 
 fn corpus() -> PathBuf {

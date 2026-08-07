@@ -284,9 +284,10 @@ impl Definition {
             return Err(format!("{id} terminal action closes input more than once").into());
         }
         if let Some(close) = steps.iter().position(|step| matches!(step, Step::Close))
-            && steps[close + 1..].iter().any(|step| matches!(step, Step::Write(_))) {
-                return Err(format!("{id} terminal action writes after closing input").into());
-            }
+            && steps[close + 1..].iter().any(|step| matches!(step, Step::Write(_)))
+        {
+            return Err(format!("{id} terminal action writes after closing input").into());
+        }
         Ok(Action {
             argv: self.argv,
             rows: self.rows,

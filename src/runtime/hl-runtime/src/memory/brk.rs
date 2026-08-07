@@ -132,13 +132,15 @@ impl<H: MappingHost> BrkRegion<H> {
                     0,
                 ));
             }
-            let Ok(added) = AddressRange::nonempty(old, requested.get() - old.get()) else { return old.get() };
+            let Ok(added) = AddressRange::nonempty(old, requested.get() - old.get()) else {
+                return old.get();
+            };
             let overlap = Self::charged_overlap(&self.memory.ledger().regions(), added);
             batch.push(MappingOperation::Charge(added));
             before.saturating_add(added.length().saturating_sub(overlap))
         } else if requested < old {
             let Ok(removed) = AddressRange::nonempty(requested, old_end.get() - requested.get()) else {
-                return old.get()
+                return old.get();
             };
             let overlap = Self::charged_overlap(&self.memory.ledger().regions(), removed);
             if new_end < old_end {

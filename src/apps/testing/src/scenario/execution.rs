@@ -588,10 +588,7 @@ fn diagnostic(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Capture,
-        CaseResult, PhaseTiming, classify, combine, diagnostic, execute_phases, verify,
-    };
+    use super::{Capture, CaseResult, PhaseTiming, classify, combine, diagnostic, execute_phases, verify};
     use crate::{
         scenario::definition::{Class, ScenarioAction, ScenarioCase},
         suite::{Execution, Target},

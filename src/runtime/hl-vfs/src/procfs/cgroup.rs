@@ -97,9 +97,7 @@ impl View {
             Leaf::Events => b"populated 1\nfrozen 0\n".to_vec(),
             Leaf::Stat => b"nr_descendants 0\nnr_dying_descendants 0\n".to_vec(),
             Leaf::Maximum => b"max\n".to_vec(),
-            Leaf::CpuMax => self
-                .cpu_limit
-                .map_or_else(|| b"max 100000\n".to_vec(), Self::quota),
+            Leaf::CpuMax => self.cpu_limit.map_or_else(|| b"max 100000\n".to_vec(), Self::quota),
             Leaf::CpuStat => concat!(
                 "usage_usec 0\nuser_usec 0\nsystem_usec 0\nnr_periods 0\n",
                 "nr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0\n",

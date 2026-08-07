@@ -80,7 +80,9 @@ impl Proxy {
     fn publish(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.published = true;
-            if state.closed && let Some(object) = state.object.take() {
+            if state.closed
+                && let Some(object) = state.object.take()
+            {
                 object.close();
             }
         }
@@ -149,7 +151,9 @@ impl OpenFileDescription for Proxy {
                 return;
             }
             state.closed = true;
-            if state.published && let Some(object) = state.object.take() {
+            if state.published
+                && let Some(object) = state.object.take()
+            {
                 object.close();
             }
         }
@@ -592,15 +596,17 @@ mod tests {
         let identity = table.pin(number).unwrap().description_identity();
         assert!(crate::FileObjectCheckpoint::owns_identity(bindings.as_ref(), identity, object.as_ref()).unwrap());
         assert!(!crate::FileObjectCheckpoint::owns_identity(bindings.as_ref(), identity, &CollidingFile).unwrap());
-        assert!(!crate::FileObjectCheckpoint::owns_identity(
-            bindings.as_ref(),
-            DescriptionIdentity {
-                generation: identity.generation + 1,
-                ..identity
-            },
-            object.as_ref(),
-        )
-        .unwrap());
+        assert!(
+            !crate::FileObjectCheckpoint::owns_identity(
+                bindings.as_ref(),
+                DescriptionIdentity {
+                    generation: identity.generation + 1,
+                    ..identity
+                },
+                object.as_ref(),
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -637,12 +643,16 @@ mod tests {
         assert_eq!(u64::from_le_bytes(first_bytes[17..25].try_into().unwrap()), 1);
         assert_eq!(u64::from_le_bytes(second_bytes[9..17].try_into().unwrap()), 13);
         assert_eq!(u64::from_le_bytes(second_bytes[17..25].try_into().unwrap()), 4);
-        assert!(bindings
-            .snapshot_into_identity(first_identity, second.as_ref(), &mut first_bytes)
-            .is_err());
-        assert!(bindings
-            .snapshot_into_identity(first_identity, &CollidingFile, &mut first_bytes)
-            .is_err());
+        assert!(
+            bindings
+                .snapshot_into_identity(first_identity, second.as_ref(), &mut first_bytes)
+                .is_err()
+        );
+        assert!(
+            bindings
+                .snapshot_into_identity(first_identity, &CollidingFile, &mut first_bytes)
+                .is_err()
+        );
     }
 
     #[test]
@@ -655,9 +665,11 @@ mod tests {
             Err(DescriptorCheckpointError::Object),
         );
         drop(prepared);
-        assert!(bindings
-            .snapshot_into_identity(identity, object.as_ref(), &mut [0; PAYLOAD_BYTES])
-            .is_ok());
+        assert!(
+            bindings
+                .snapshot_into_identity(identity, object.as_ref(), &mut [0; PAYLOAD_BYTES])
+                .is_ok()
+        );
     }
 
     #[test]

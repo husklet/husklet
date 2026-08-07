@@ -146,12 +146,7 @@ fn zero_device_backing(
     shared: bool,
 ) -> Option<hl_memory::Backing> {
     let device = hl_runtime::DeviceId::from_linux_encoded(metadata.special_device);
-    if metadata.kind != 2
-        || !matches!(
-            device,
-            hl_runtime::DeviceId { major: 1, minor: 5 | 7 }
-        )
-    {
+    if metadata.kind != 2 || !matches!(device, hl_runtime::DeviceId { major: 1, minor: 5 | 7 }) {
         return None;
     }
     // Linux gives each /dev/zero-style mmap fresh zero storage. MAP_SHARED

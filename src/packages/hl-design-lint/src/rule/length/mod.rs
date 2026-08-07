@@ -44,7 +44,8 @@ impl Rule for FileLength {
             let span = source
                 .syntax
                 .items
-                .first().map_or_else(Span::call_site, syn::Item::span);
+                .first()
+                .map_or_else(Span::call_site, syn::Item::span);
             let subject = source
                 .path
                 .file_name()

@@ -262,13 +262,14 @@ impl<'ast> Visit<'ast> for Visitor<'_> {
         let owner = item.self_ty.to_token_stream().to_string();
         for member in &item.items {
             if let ImplItem::Fn(method) = member
-                && matches!(method.vis, Visibility::Public(_)) {
-                    self.inspect(
-                        format!("{owner}::{}", method.sig.ident),
-                        method.sig.span(),
-                        signature_types(&method.sig),
-                    );
-                }
+                && matches!(method.vis, Visibility::Public(_))
+            {
+                self.inspect(
+                    format!("{owner}::{}", method.sig.ident),
+                    method.sig.span(),
+                    signature_types(&method.sig),
+                );
+            }
         }
     }
 }

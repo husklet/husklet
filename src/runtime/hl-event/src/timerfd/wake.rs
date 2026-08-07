@@ -35,7 +35,11 @@ impl TimerFd {
     }
 
     pub fn notify_clock_changed(&self) {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state
             .cancel_generation
             .is_some_and(|generation| generation != self.inner.source.realtime_generation())

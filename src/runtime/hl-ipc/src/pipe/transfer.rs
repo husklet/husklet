@@ -68,10 +68,18 @@ impl PipeTransfer {
 
     fn complete(source: &PipeEndpoint, target: &PipeEndpoint, count: usize) -> usize {
         if count != 0 {
-            let source_state = source.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let source_state = source
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             source.pipe.notify_sleepers(&source_state);
             drop(source_state);
-            let target_state = target.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let target_state = target
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             target.pipe.notify_sleepers(&target_state);
             drop(target_state);
             source.notify_readiness();
@@ -110,12 +118,28 @@ impl PipeTransfer {
         let source_key = Arc::as_ptr(&source.pipe) as usize;
         let target_key = Arc::as_ptr(&target.pipe) as usize;
         if source_key < target_key {
-            let mut source_state = source.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut target_state = target.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut source_state = source
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut target_state = target
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::locked(&mut source_state, &mut target_state, maximum, mode)
         } else {
-            let mut target_state = target.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut source_state = source.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut target_state = target
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut source_state = source
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::locked(&mut source_state, &mut target_state, maximum, mode)
         }
     }

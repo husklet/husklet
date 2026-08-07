@@ -16,12 +16,18 @@ impl RawMode {
         unsafe {
             let mut attributes: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(descriptor, &mut attributes) != 0 {
-                return Self { descriptor, saved: None };
+                return Self {
+                    descriptor,
+                    saved: None,
+                };
             }
             let saved = attributes;
             libc::cfmakeraw(&mut attributes);
             libc::tcsetattr(descriptor, libc::TCSANOW, &attributes);
-            Self { descriptor, saved: Some(saved) }
+            Self {
+                descriptor,
+                saved: Some(saved),
+            }
         }
     }
 }

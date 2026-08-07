@@ -269,7 +269,7 @@ impl Ledger {
             .range(..end)
             .filter_map(|(start, mapping)| {
                 let Some(mapping_end) = start.checked_add(mapping.length) else {
-                    return Some(Err(MemoryError::InvalidRange))
+                    return Some(Err(MemoryError::InvalidRange));
                 };
                 if mapping_end <= offset {
                     return None;
@@ -277,7 +277,7 @@ impl Ledger {
                 let intersection_start = (*start).max(offset);
                 let intersection_end = mapping_end.min(end);
                 let Some(backing_offset) = mapping.backing_offset.checked_add(intersection_start - start) else {
-                    return Some(Err(MemoryError::InvalidRange))
+                    return Some(Err(MemoryError::InvalidRange));
                 };
                 Some(Ok((
                     intersection_start,

@@ -52,7 +52,6 @@ pub enum ReadError {
     Retired,
 }
 
-
 #[derive(Debug)]
 struct State {
     settings: Settings,
@@ -259,7 +258,10 @@ impl Pair {
                     if cancellation.is_some_and(OperationCancellation::interrupted) {
                         return Err(ReadError::Interrupted);
                     }
-                    state = self.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state = self
+                        .changed
+                        .wait(state)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                 }
                 _ => return result,
             }
@@ -475,7 +477,6 @@ impl Pair {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
-
 
 #[cfg(test)]
 mod test {

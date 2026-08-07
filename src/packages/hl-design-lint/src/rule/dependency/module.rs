@@ -136,17 +136,18 @@ impl<'ast> Visit<'ast> for RoleVisitor<'_> {
             && let Some(target) = segments
                 .next()
                 .and_then(|segment| Role::parse(&segment.ident.to_string()))
-            {
-                self.record(target, path.span());
-            }
+        {
+            self.record(target, path.span());
+        }
         syn::visit::visit_path(self, path);
     }
 
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         if let UseTree::Path(root) = &item.tree
-            && root.ident == "crate" {
-                collect_use_roles(&root.tree, &mut |target| self.record(target, item.span()));
-            }
+            && root.ident == "crate"
+        {
+            collect_use_roles(&root.tree, &mut |target| self.record(target, item.span()));
+        }
         syn::visit::visit_item_use(self, item);
     }
 }

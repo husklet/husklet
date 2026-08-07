@@ -32,14 +32,20 @@ fn findings(relative: &str, source: &str) -> Vec<crate::Finding> {
 
 #[test]
 fn rejects_path_leaving_the_repository() {
-    let values = findings("src/native/executor.rs", "const ORACLE: &str = \"../../../../../../engine/number.c\";\n");
+    let values = findings(
+        "src/native/executor.rs",
+        "const ORACLE: &str = \"../../../../../../engine/number.c\";\n",
+    );
     assert_eq!(values.len(), 1);
     assert!(values[0].message.contains("outside the repository root"));
 }
 
 #[test]
 fn rejects_include_of_another_directory() {
-    let values = findings("src/native/executor.rs", "include!(\"../../../../native/cpu/rust/layout.rs\");\n");
+    let values = findings(
+        "src/native/executor.rs",
+        "include!(\"../../../../native/cpu/rust/layout.rs\");\n",
+    );
     assert_eq!(values.len(), 1);
     assert!(values[0].message.contains("owned by another directory"));
 }

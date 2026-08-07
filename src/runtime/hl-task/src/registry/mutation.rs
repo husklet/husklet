@@ -140,9 +140,10 @@ impl TaskRegistry {
     ) -> Result<(), TaskError> {
         Self::process(state, process)?;
         if let Some(thread) = thread
-            && Self::thread(state, thread)?.process != process {
-                return Err(TaskError::WrongProcess);
-            }
+            && Self::thread(state, thread)?.process != process
+        {
+            return Err(TaskError::WrongProcess);
+        }
         Ok(())
     }
 

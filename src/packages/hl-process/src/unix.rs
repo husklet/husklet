@@ -157,7 +157,13 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     let configured = (|| {
         // SAFETY: `actions` is initialized and uniquely owned, and the NUL-terminated path outlives the call.
         check_spawn(unsafe {
-            libc::posix_spawn_file_actions_addopen(&raw mut actions, libc::STDIN_FILENO, null.as_ptr(), libc::O_RDONLY, 0)
+            libc::posix_spawn_file_actions_addopen(
+                &raw mut actions,
+                libc::STDIN_FILENO,
+                null.as_ptr(),
+                libc::O_RDONLY,
+                0,
+            )
         })?;
         for (source, target) in [
             (stdout.1.as_raw_fd(), libc::STDOUT_FILENO),
@@ -202,7 +208,9 @@ fn spawn_exact(command: &OwnedCommand) -> std::io::Result<Spawned> {
     let configured = (|| {
         // SAFETY: initialized attributes are uniquely owned; both setters copy
         // scalar values and retain no pointers. No concurrent access exists.
-        check_spawn(unsafe { libc::posix_spawnattr_setflags(&raw mut attributes, libc::POSIX_SPAWN_SETPGROUP as i16) })?;
+        check_spawn(unsafe {
+            libc::posix_spawnattr_setflags(&raw mut attributes, libc::POSIX_SPAWN_SETPGROUP as i16)
+        })?;
         // SAFETY: as above; group zero requests a new group led by the child.
         check_spawn(unsafe { libc::posix_spawnattr_setpgroup(&raw mut attributes, 0) })
     })();

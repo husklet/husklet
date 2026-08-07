@@ -480,7 +480,12 @@ mod test {
     fn multi_bit_shifts_preserve_undefined_overflow() {
         type Shift = fn(IntegerWidth, u64, u8) -> Arithmetic;
         let original = FlagState::from_bits(Flag::Carry.mask() | Flag::Overflow.mask());
-        for width in [IntegerWidth::Byte, IntegerWidth::Word, IntegerWidth::Dword, IntegerWidth::Qword] {
+        for width in [
+            IntegerWidth::Byte,
+            IntegerWidth::Word,
+            IntegerWidth::Dword,
+            IntegerWidth::Qword,
+        ] {
             for operation in [
                 Arithmetic::shift_left,
                 Arithmetic::shift_right,
@@ -499,7 +504,12 @@ mod test {
     #[test]
     fn one_bit_shifts_define_overflow() {
         type Shift = fn(IntegerWidth, u64, u8) -> Arithmetic;
-        for width in [IntegerWidth::Byte, IntegerWidth::Word, IntegerWidth::Dword, IntegerWidth::Qword] {
+        for width in [
+            IntegerWidth::Byte,
+            IntegerWidth::Word,
+            IntegerWidth::Dword,
+            IntegerWidth::Qword,
+        ] {
             for operation in [
                 Arithmetic::shift_left,
                 Arithmetic::shift_right,

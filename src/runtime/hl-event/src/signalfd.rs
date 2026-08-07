@@ -294,7 +294,11 @@ impl SignalFd {
     }
 
     pub fn set_mask(&self, mask: SignalMask) -> Result<(), SignalFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return Err(SignalFdError::Retired);
         }
@@ -327,7 +331,11 @@ impl SignalFd {
 
     #[must_use]
     pub fn readiness(&self, interests: Readiness) -> Readiness {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let ready = if state.retired {
             Readiness::ERROR
         } else if self.inner.queue.has_pending(state.mask) {
@@ -339,7 +347,11 @@ impl SignalFd {
     }
 
     pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), SignalFdError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             return Err(SignalFdError::Retired);
         }
@@ -350,7 +362,11 @@ impl SignalFd {
 
     #[must_use]
     pub fn snapshot(&self) -> SignalFdSnapshot {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         SignalFdSnapshot {
             mask: state.mask,
             nonblocking: state.nonblocking,
@@ -372,7 +388,11 @@ impl SignalFd {
             if let Some(info) = self.inner.queue.dequeue(mask)? {
                 return Ok(info);
             }
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return Err(SignalFdError::Retired);
             }
@@ -394,7 +414,11 @@ impl SignalFd {
     }
 
     fn current_mask(&self) -> Result<SignalMask, SignalFdError> {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.retired {
             Err(SignalFdError::Retired)
         } else {
@@ -409,7 +433,11 @@ impl SignalFd {
 
     fn retire_inner(&self) {
         let subscription = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }

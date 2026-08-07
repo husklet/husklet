@@ -378,7 +378,10 @@ impl WatchSource for Source {
         observer: Arc<dyn WatchSourceObserver>,
     ) -> Result<Box<dyn WatchSourceSubscription>, WatchSourceError> {
         let active = Arc::new(AtomicBool::new(true));
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).observer = Some((observer, Arc::clone(&active)));
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observer = Some((observer, Arc::clone(&active)));
         Ok(Box::new(Subscription(active)))
     }
 

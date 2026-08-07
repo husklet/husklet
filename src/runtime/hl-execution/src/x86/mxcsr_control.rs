@@ -51,7 +51,7 @@ impl MxcsrControl {
             return ExecutionExit::Continue;
         }
         let Ok(reservation) = memory.reserve_write(address, 4) else {
-            return Self::fault(instruction, address, access)
+            return Self::fault(instruction, address, access);
         };
         if memory.commit_write(reservation, u64::from(cpu.mxcsr)).is_err() {
             return Self::fault(instruction, address, access);

@@ -8,7 +8,11 @@ impl<H: Host> Coordinator<H> {
     ) -> R {
         self.activity.freeze();
         self.request_mapping_change();
-        drop(self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        drop(
+            self.transaction
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         struct Thaw<'a>(&'a crate::CheckpointActivity);
         impl Drop for Thaw<'_> {
             fn drop(&mut self) {
@@ -63,7 +67,11 @@ impl<H: Host> Coordinator<H> {
     pub fn freeze_checkpoint(&self) {
         self.activity.freeze();
         self.request_mapping_change();
-        drop(self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        drop(
+            self.transaction
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
 
     pub fn thaw_checkpoint(&self) {

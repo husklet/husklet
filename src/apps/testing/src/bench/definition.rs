@@ -132,7 +132,8 @@ pub struct BenchmarkCase {
 
 impl Benchmark {
     pub fn source_path(&self) -> PathBuf {
-        self.directory.join(&self.build.as_ref().expect("compiled benchmark has a build").source)
+        self.directory
+            .join(&self.build.as_ref().expect("compiled benchmark has a build").source)
     }
 
     pub fn compiler_name(&self, target: Target) -> &str {
@@ -147,7 +148,11 @@ impl Benchmark {
         let document: Document = serde_yaml::from_str(&fs::read_to_string(definition)?)?;
         let rootfs_executable = document.workload.map(|workload| workload.rootfs.executable);
         if document.build.is_some() == rootfs_executable.is_some() {
-            return Err(format!("{} must define exactly one of build or workload.rootfs", definition.display()).into());
+            return Err(format!(
+                "{} must define exactly one of build or workload.rootfs",
+                definition.display()
+            )
+            .into());
         }
         if let Some(build) = &document.build {
             build.source.safe_relative()?;
@@ -155,13 +160,20 @@ impl Benchmark {
                 return Err(format!("{} has a missing benchmark source", definition.display()).into());
             }
         }
-        if rootfs_executable.as_deref().is_some_and(|value| !value.starts_with('/') || value == "/") {
+        if rootfs_executable
+            .as_deref()
+            .is_some_and(|value| !value.starts_with('/') || value == "/")
+        {
             return Err(format!("{} has an invalid rootfs executable", definition.display()).into());
         }
         let phase_count = document.phases.len();
         let phases = document.phases.into_iter().collect::<BTreeSet<_>>();
         if phases.is_empty() || phases.len() != phase_count {
-            return Err(format!("{} has an empty or duplicate lifecycle phase list", definition.display()).into());
+            return Err(format!(
+                "{} has an empty or duplicate lifecycle phase list",
+                definition.display()
+            )
+            .into());
         }
         if document.image.trim().is_empty() || document.cases.is_empty() {
             return Err(format!("{} has an invalid image, source, or case list", definition.display()).into());
@@ -281,7 +293,14 @@ mod tests {
         .unwrap();
         let benchmark = Benchmark::load(directory.path(), &directory.path().join("test.yaml")).unwrap();
         assert_eq!(benchmark.rootfs_executable.as_deref(), Some("/bin/true"));
-        assert_eq!(benchmark.phases, vec![LifecyclePhase::Create, LifecyclePhase::Start, LifecyclePhase::WaitAndDrain]);
+        assert_eq!(
+            benchmark.phases,
+            vec![
+                LifecyclePhase::Create,
+                LifecyclePhase::Start,
+                LifecyclePhase::WaitAndDrain
+            ]
+        );
     }
 
     #[test]

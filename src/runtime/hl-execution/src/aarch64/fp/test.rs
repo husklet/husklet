@@ -1324,10 +1324,9 @@ fn simd_saturating_narrow() {
 }
 
 fn single_lanes(lanes: [f32; 4]) -> u128 {
-    lanes
-        .iter()
-        .enumerate()
-        .fold(0, |packed, (lane, value)| packed | u128::from(value.to_bits()) << (32 * lane))
+    lanes.iter().enumerate().fold(0, |packed, (lane, value)| {
+        packed | u128::from(value.to_bits()) << (32 * lane)
+    })
 }
 
 #[test]

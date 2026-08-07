@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex};
 use hl_descriptor::{DescriptionIdentity, OpenFileDescription};
 use hl_runtime::{GuestPath, OpenIntent, PreparedPathOpen, RuntimePathError};
 
-use super::{FileTransferRegistry, HostError, NativeFile, directory, filesystem, lease, overlay_lease::ParentLease, pin};
+use super::{
+    FileTransferRegistry, HostError, NativeFile, directory, filesystem, lease, overlay_lease::ParentLease, pin,
+};
 
 pub(super) struct PendingOpen {
     object: Arc<NativeFile>,
@@ -137,7 +139,11 @@ impl PendingOpen {
             }
             Err(_) => return Err(RuntimePathError::Io),
         };
-        *self.file.shm_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
+        *self
+            .file
+            .shm_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lease);
         Ok(())
     }
 }
@@ -158,10 +164,10 @@ impl PreparedPathOpen for PendingOpen {
     fn commit(&mut self) -> Result<(), RuntimePathError> {
         let bits = self.intent.bits();
         let temporary = bits & OpenIntent::TEMPORARY != 0;
-        let named_mutation = bits & (OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE | OpenIntent::APPEND)
-            != 0
-            && bits & OpenIntent::PATH_ONLY == 0
-            && !temporary;
+        let named_mutation =
+            bits & (OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE | OpenIntent::APPEND) != 0
+                && bits & OpenIntent::PATH_ONLY == 0
+                && !temporary;
         if named_mutation {
             super::overlay_publish::prepare_write(&mut self.parent, &self.name).map_err(HostError::map)?;
             self.path = pin::Host::mutation_path(&self.parent, &self.name)?;
@@ -209,7 +215,11 @@ impl PreparedPathOpen for PendingOpen {
         if bits & OpenIntent::WRITE != 0 && bits & OpenIntent::PATH_ONLY == 0 {
             let identity = (metadata.dev(), metadata.ino());
             let writes = Arc::clone(&self.file.writes);
-            *self.file.write_lease.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            *self
+                .file
+                .write_lease
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
                 Some(lease::WriteLease::acquire(identity, writes));
         }
         if bits & OpenIntent::TEMPORARY != 0 && bits & OpenIntent::PATH_ONLY == 0 {
@@ -255,7 +265,11 @@ impl PreparedPathOpen for PendingOpen {
             if guest.as_str() == "/dev/pts" {
                 directory = directory.with_terminals(Arc::clone(&self.terminals));
             }
-            *self.file.directory.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(directory);
+            *self
+                .file
+                .directory
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(directory);
         }
         *self.file.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(opened);
         if created

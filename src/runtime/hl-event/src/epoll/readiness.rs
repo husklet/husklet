@@ -66,7 +66,11 @@ impl Epoll {
 
     pub(crate) fn prune_retired(&self) {
         let removed = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::take_retired(&mut state)
         };
         for watch in removed {
@@ -115,7 +119,11 @@ impl Epoll {
 
     pub(crate) fn retire_description(&self) {
         let watches = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return;
             }

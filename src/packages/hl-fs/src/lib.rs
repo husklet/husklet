@@ -72,10 +72,7 @@ pub enum CreateError {
     /// The platform, filesystem, or procfs view cannot support held-inode publication.
     Unsupported,
     /// Ancestor directories were created before a later publication failure.
-    AncestorsCreated {
-        count: usize,
-        cause: Box<CreateError>,
-    },
+    AncestorsCreated { count: usize, cause: Box<CreateError> },
     /// The publication call failed and the held inode was not observed at the target name.
     Ambiguous(io::Error),
     /// Publication failed before the target name was created.
@@ -91,7 +88,10 @@ impl std::fmt::Display for CreateError {
             }
             Self::Unsupported => formatter.write_str("handle-relative no-replace publication is unsupported"),
             Self::AncestorsCreated { count, cause } => {
-                write!(formatter, "publication failed after creating {count} ancestor directories: {cause}")
+                write!(
+                    formatter,
+                    "publication failed after creating {count} ancestor directories: {cause}"
+                )
             }
             Self::Ambiguous(error) => write!(formatter, "publication outcome is ambiguous: {error}"),
             Self::Io(error) => error.fmt(formatter),

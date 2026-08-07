@@ -58,7 +58,9 @@ impl DescriptorPort {
                 Err(EntropyError::WouldBlock) => return Self::partial_or(done, Errno::EAGAIN),
                 Err(EntropyError::Failed) => return Self::partial_or(done, Errno::EIO),
             };
-            let Some(destination) = address.checked_add(done) else { return Self::partial_or(done, Errno::EFAULT) };
+            let Some(destination) = address.checked_add(done) else {
+                return Self::partial_or(done, Errno::EFAULT);
+            };
             let copied = match self.memory.writable_prefix(destination, count as u64) {
                 Ok(available) => available.min(count),
                 Err(_) => 0,

@@ -16,9 +16,10 @@ pub(crate) async fn alive(pid: u32) -> Result<bool, std::io::Error> {
 pub(crate) async fn read_pid(path: &Path) -> Result<u32, Box<dyn std::error::Error>> {
     for _ in 0..300 {
         if let Ok(text) = tokio::fs::read_to_string(path).await
-            && let Ok(pid) = text.trim().parse() {
-                return Ok(pid);
-            }
+            && let Ok(pid) = text.trim().parse()
+        {
+            return Ok(pid);
+        }
         sleep(Duration::from_millis(10)).await;
     }
     Err(format!("{} was not published", path.display()).into())

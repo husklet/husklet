@@ -143,13 +143,7 @@ impl Aarch64FpExecutor {
     }
 
     /// Returns the FPSR bits to raise and the resulting NZCV, so vector lanes need no CPU state.
-    pub(crate) fn compare_flags(
-        fpcr: u64,
-        format: FpFormat,
-        left: u64,
-        right: u64,
-        signaling: bool,
-    ) -> (u64, Nzcv) {
+    pub(crate) fn compare_flags(fpcr: u64, format: FpFormat, left: u64, right: u64, signaling: bool) -> (u64, Nzcv) {
         let mut fpsr = 0_u64;
         let left_class = Self::classify(left, format);
         let right_class = Self::classify(right, format);

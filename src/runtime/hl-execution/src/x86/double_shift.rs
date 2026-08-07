@@ -50,7 +50,7 @@ impl DoubleShift {
                     };
                 }
                 let Ok(value) = memory.read(address, bytes) else {
-                    return Self::fault(instruction, address, AccessKind::Read, bytes)
+                    return Self::fault(instruction, address, AccessKind::Read, bytes);
                 };
                 (value, Some(address))
             }
@@ -73,7 +73,7 @@ impl DoubleShift {
             (ScalarOperand::Memory(_), Some(address)) => {
                 let bytes = Self::bytes(width);
                 let Ok(reservation) = memory.reserve_write(address, bytes) else {
-                    return Self::fault(instruction, address, AccessKind::Write, bytes)
+                    return Self::fault(instruction, address, AccessKind::Write, bytes);
                 };
                 if memory.commit_write(reservation, arithmetic.result).is_err() {
                     return Self::fault(instruction, address, AccessKind::Write, bytes);

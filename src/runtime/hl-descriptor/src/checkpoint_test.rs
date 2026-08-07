@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::{
-    DescriptorCheckpointError, DescriptorFlags, DescriptorObjectCheckpoint, DescriptorTable, DescriptorTableImage,
-    ObjectError, ObjectKind, OpenDescriptionImage, OpenFileDescription, OperationActor, OperationCancellation,
-    OperationContext, StatusFlags, DESCRIPTOR_CHECKPOINT_VERSION,
+    DESCRIPTOR_CHECKPOINT_VERSION, DescriptorCheckpointError, DescriptorFlags, DescriptorObjectCheckpoint,
+    DescriptorTable, DescriptorTableImage, ObjectError, ObjectKind, OpenDescriptionImage, OpenFileDescription,
+    OperationActor, OperationCancellation, OperationContext, StatusFlags,
 };
 
 #[derive(Debug)]

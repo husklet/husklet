@@ -35,9 +35,11 @@ impl ExtendedMemory {
             let mut registers = [ExtendedReal::from_bits(0); 8];
             for (index, value) in registers.iter_mut().enumerate() {
                 let field = address + 28 + (index as u64) * 10;
-                let Ok(low) = memory.read(field, 8) else { return Self::fault(instruction, field, access, 108) };
+                let Ok(low) = memory.read(field, 8) else {
+                    return Self::fault(instruction, field, access, 108);
+                };
                 let Ok(high) = memory.read(field + 8, 2) else {
-                    return Self::fault(instruction, field + 8, access, 108)
+                    return Self::fault(instruction, field + 8, access, 108);
                 };
                 *value = ExtendedReal::from_bits(u128::from(low) | u128::from(high) << 64);
             }
@@ -216,7 +218,7 @@ impl ExtendedMemory {
             };
         }
         let Ok(reservation) = memory.reserve_write(address, 2) else {
-            return Self::fault(instruction, address, AccessKind::Write, 2)
+            return Self::fault(instruction, address, AccessKind::Write, 2);
         };
         if memory.commit_write(reservation, u64::from(cpu.x87_status)).is_err() {
             return Self::fault(instruction, address, AccessKind::Write, 2);

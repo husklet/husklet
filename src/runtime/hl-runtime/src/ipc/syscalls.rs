@@ -110,7 +110,9 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
         };
-        let Ok(size) = usize::try_from(plan.size) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(size) = usize::try_from(plan.size) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         let result = self.catalog.with_shared_memory(|namespace| {
             namespace.shmget(ShmGetRequest {
                 key: IpcKey(plan.key),
@@ -185,7 +187,9 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
 
     fn semget(&self, arguments: [u64; 6]) -> LinuxResult {
         let plan = SysvAbi::<M>::semget(arguments[0], arguments[1], arguments[2] as u32);
-        let Ok(count) = usize::try_from(plan.semaphores) else { return LinuxResult::Error(Errno::EINVAL) };
+        let Ok(count) = usize::try_from(plan.semaphores) else {
+            return LinuxResult::Error(Errno::EINVAL);
+        };
         let (actor, pid, now) = match self.context() {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error),
@@ -429,8 +433,15 @@ impl<M: GuestMemory> IpcSyscalls for RuntimeIpcSyscalls<M> {
             "mq_getsetattr" => self.mq_getsetattr(arguments),
             _ => LinuxResult::Error(Errno::ENOSYS),
         };
-        hl_log::hl_debug!(hl_log::tag::IPC, "{} key={:#x} argument={:#x} flags={:#x} result={:#x}",
-            operation.name, arguments[0], arguments[1], arguments[2], result.encode());
+        hl_log::hl_debug!(
+            hl_log::tag::IPC,
+            "{} key={:#x} argument={:#x} flags={:#x} result={:#x}",
+            operation.name,
+            arguments[0],
+            arguments[1],
+            arguments[2],
+            result.encode()
+        );
         result
     }
 }

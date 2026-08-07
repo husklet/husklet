@@ -26,11 +26,7 @@ pub(crate) fn preflight_image(name: &str, target: Target) -> Result<bool, Error>
 pub async fn run(options: Options) -> Result<(), Error> {
     options.engine_profile.require()?;
     let runner = profile::identity()?;
-    println!(
-        "runtime: engine profile={} runner={}",
-        profile::PROFILE,
-        &runner[..16]
-    );
+    println!("runtime: engine profile={} runner={}", profile::PROFILE, &runner[..16]);
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
     let planned = require_planned(plan(apps, &options), options.case.as_deref())?;
@@ -298,7 +294,10 @@ fn summarize_results(
             execution::CaseResult::Failed(id, attempt, error) => {
                 let display = display_attempt(&id, attempt);
                 println!("FAIL {display} {} host_load={host_load}: {error}", key.target.name());
-                failed.push(format!("{display} {} host_load={host_load}: {error}", key.target.name()));
+                failed.push(format!(
+                    "{display} {} host_load={host_load}: {error}",
+                    key.target.name()
+                ));
             }
         }
     }

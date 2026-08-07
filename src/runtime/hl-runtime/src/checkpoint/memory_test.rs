@@ -246,8 +246,7 @@ fn benchmark_fixture(regions: usize, bytes_per_region: u64) -> (MemoryParticipan
         coordinator,
         shared,
     ))));
-    let participant =
-        MemoryCheckpointParticipant::new(memory, Arc::new(BenchmarkHost), Arc::new(PortableMemoryCodec));
+    let participant = MemoryCheckpointParticipant::new(memory, Arc::new(BenchmarkHost), Arc::new(PortableMemoryCodec));
     participant.freeze().unwrap();
     let bytes = participant.snapshot().unwrap();
     participant.thaw().unwrap();
@@ -257,9 +256,7 @@ fn benchmark_fixture(regions: usize, bytes_per_region: u64) -> (MemoryParticipan
 #[test]
 #[ignore = "performance diagnostic"]
 fn validated_stage_benchmark() {
-    for (shape, regions, bytes_per_region, rounds) in
-        [("sparse", 256, 4096, 16), ("dense", 1, 1024 * 1024, 16)]
-    {
+    for (shape, regions, bytes_per_region, rounds) in [("sparse", 256, 4096, 16), ("dense", 1, 1024 * 1024, 16)] {
         let (participant, image) = benchmark_fixture(regions, bytes_per_region);
         let section = image.section(SectionKind::new(3).unwrap()).unwrap();
         let started = Instant::now();

@@ -332,15 +332,14 @@ fn concurrent_bind_reserves_one_owner() {
             let observed = observed.clone();
             thread::spawn(move || {
                 barrier.wait();
-                let prepared = catalog
-                    .prepare_host_bind(
-                        snapshot,
-                        crate::PortCheckpoint {
-                            family: AddressFamily::Inet4,
-                            port: 9100,
-                            owner,
-                        },
-                    );
+                let prepared = catalog.prepare_host_bind(
+                    snapshot,
+                    crate::PortCheckpoint {
+                        family: AddressFamily::Inet4,
+                        port: 9100,
+                        owner,
+                    },
+                );
                 observed.wait();
                 prepared.is_ok()
             })

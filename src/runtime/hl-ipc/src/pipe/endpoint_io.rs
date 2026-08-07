@@ -1,8 +1,8 @@
 //! The endpoint read and write path, including the waits it blocks on.
 use crate::pipe::{EndpointDirection, PIPE_BUF, PipeCancellationWake, PipeEndpoint, PipeState};
-use std::sync::Arc;
 use hl_descriptor::{ObjectError, OperationCancellation};
 use std::io::{IoSlice, IoSliceMut};
+use std::sync::Arc;
 use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
 impl PipeEndpoint {
@@ -107,7 +107,11 @@ impl PipeEndpoint {
         &self,
         cancellation: Option<&dyn OperationCancellation>,
     ) -> Result<MutexGuard<'_, PipeState>, ObjectError> {
-        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut _subscription = None;
         let mut subscribed = cancellation.is_none();
         loop {
@@ -131,7 +135,11 @@ impl PipeEndpoint {
                     }))
                 });
                 subscribed = true;
-                state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                state = self
+                    .pipe
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 continue;
             }
             state = self.wait(state);
@@ -162,7 +170,11 @@ impl PipeEndpoint {
         let mut written = 0;
         while written < input.len() {
             let required = {
-                let state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let state = self
+                    .pipe
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if state.packet_mode {
                     PIPE_BUF.min(input.len() - written)
                 } else {
@@ -199,7 +211,11 @@ impl PipeEndpoint {
         required: usize,
         cancellation: Option<&dyn OperationCancellation>,
     ) -> Result<MutexGuard<'_, PipeState>, ObjectError> {
-        let mut state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut _subscription = None;
         let mut subscribed = cancellation.is_none();
         loop {
@@ -226,7 +242,11 @@ impl PipeEndpoint {
                     }))
                 });
                 subscribed = true;
-                state = self.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                state = self
+                    .pipe
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 continue;
             }
             state = self.wait(state);
@@ -240,9 +260,12 @@ impl PipeEndpoint {
         if let Some(sender) = &state.sleeper_registration {
             let _ = sender.send(());
         }
-        let mut state = self.pipe.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .pipe
+            .changed
+            .wait(state)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.sleepers -= 1;
         state
     }
-
 }

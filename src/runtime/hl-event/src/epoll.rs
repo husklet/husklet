@@ -183,7 +183,11 @@ impl Epoll {
             .enumerate()
             .map(|(index, watch)| (watch.token, index))
             .collect();
-        *epoll.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = EpollState {
+        *epoll
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = EpollState {
             watches,
             token_index,
             ready,
@@ -196,7 +200,11 @@ impl Epoll {
 
     #[must_use]
     pub fn snapshot(&self) -> EpollSnapshot {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         EpollSnapshot {
             watch_limit: self.inner.watch_limit,
             next_token: state.next_token,
@@ -244,7 +252,11 @@ impl Epoll {
             return Readiness::default();
         }
         let watches = {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.retired {
                 return Readiness::from_bits(Readiness::ERROR);
             }
@@ -264,5 +276,4 @@ impl Epoll {
             Readiness::default()
         }
     }
-
 }

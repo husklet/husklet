@@ -59,22 +59,23 @@ impl Containers {
         };
         let images = self.images()?;
         if let (crate::Rootfs::Image(rootfs), Some(parent_name)) = (&container.spec.rootfs, &container.spec.image)
-            && let Ok(overlay) = images.roots().open_overlay(rootfs) {
-                let parent = images
-                    .resolve(parent_name)?
-                    .ok_or_else(|| crate::Error::Corrupt(format!("parent image {parent_name} is missing")))?;
-                let metadata = images.details(&parent, &platform)?.committed(
-                    runtime,
-                    commit.author,
-                    commit.comment,
-                    &commit.changes,
-                )?;
-                let mut layer = Vec::new();
-                overlay.archive_upper(&mut layer)?;
-                return images
-                    .commit_child(&parent, std::io::Cursor::new(layer), &name, &metadata)
-                    .map_err(Into::into);
-            }
+            && let Ok(overlay) = images.roots().open_overlay(rootfs)
+        {
+            let parent = images
+                .resolve(parent_name)?
+                .ok_or_else(|| crate::Error::Corrupt(format!("parent image {parent_name} is missing")))?;
+            let metadata = images.details(&parent, &platform)?.committed(
+                runtime,
+                commit.author,
+                commit.comment,
+                &commit.changes,
+            )?;
+            let mut layer = Vec::new();
+            overlay.archive_upper(&mut layer)?;
+            return images
+                .commit_child(&parent, std::io::Cursor::new(layer), &name, &metadata)
+                .map_err(Into::into);
+        }
         let mut layer = Vec::new();
         self.filesystem(reference).await?.archive("/", &mut layer)?;
         let metadata = hl_images::Metadata::standalone(platform, runtime.clone()).committed(

@@ -212,18 +212,12 @@ impl Images {
         // by the former unpack/GC race, but no filesystem entries.  A non-empty
         // OCI diff chain cannot use that as a cache hit.  Remove the unusable
         // publication while holding the shared operation lock and reconstruct it.
-        if !pinned
-            && !chain.is_empty()
-            && self.snapshots.contains(&snapshot)
-            && self.snapshots.is_empty(&snapshot)?
-        {
+        if !pinned && !chain.is_empty() && self.snapshots.contains(&snapshot) && self.snapshots.is_empty(&snapshot)? {
             self.snapshots.remove(&snapshot)?;
         }
 
         if !self.snapshots.contains(&snapshot) {
-            let cached = chain
-                .iter()
-                .rposition(|(_, id)| self.snapshots.contains(id));
+            let cached = chain.iter().rposition(|(_, id)| self.snapshots.contains(id));
             let first = cached.map_or(0, |index| index + 1);
             let cached_records = cached
                 .map(|index| self.snapshots.layer_records(&chain[index].1))
@@ -251,7 +245,9 @@ impl Images {
                         actual: applied.diff_id.to_string(),
                     });
                 }
-                let parent_chain_id = records.last().map(|record: &crate::snapshot::LayerRecord| record.chain_id.clone());
+                let parent_chain_id = records
+                    .last()
+                    .map(|record: &crate::snapshot::LayerRecord| record.chain_id.clone());
                 records.push(crate::snapshot::LayerRecord::new(
                     expected.clone(),
                     parent_chain_id,

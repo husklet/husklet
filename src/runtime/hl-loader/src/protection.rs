@@ -92,7 +92,8 @@ impl ImageProtectionPlan {
         if host_page_size < GUEST_PAGE_SIZE || !host_page_size.is_power_of_two() {
             return Err(ProtectionPlanError::InvalidHostPageSize);
         }
-        let page_count = image.image_span() / host_page_size + u64::from(!image.image_span().is_multiple_of(host_page_size));
+        let page_count =
+            image.image_span() / host_page_size + u64::from(!image.image_span().is_multiple_of(host_page_size));
         let count = usize::try_from(page_count).map_err(|_| ProtectionPlanError::AddressOverflow)?;
         let mut pages = vec![0_u8; count];
         for segment in image.segments() {

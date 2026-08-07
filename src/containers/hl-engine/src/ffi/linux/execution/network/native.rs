@@ -136,7 +136,11 @@ impl Native {
 
     pub(super) fn insert(&self, descriptor: i32) -> Result<u64, RuntimeNetworkError> {
         let kind = Self::descriptor_type(descriptor).ok();
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if sockets.len() >= SOCKET_LIMIT {
             // SAFETY: descriptor is newly owned here and no other owner can close it.
             unsafe {
@@ -221,7 +225,11 @@ impl Native {
     }
 
     fn arm_read(&self, token: u64) {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let changed = sockets.get_mut(&token).is_some_and(Entry::arm_read);
         drop(sockets);
         if changed {
@@ -311,7 +319,11 @@ impl Native {
 
     fn address_of(&self, token: u64, peer: bool) -> Result<SocketAddress, RuntimeNetworkError> {
         {
-            let sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let projected = sockets.get(&token).and_then(|entry| {
                 if peer {
                     entry.guest_peer.clone()
@@ -415,7 +427,10 @@ impl Native {
     }
 
     fn switch_name(path: &[u8]) -> Result<&[u8], RuntimeNetworkError> {
-        let separator = path.iter().rposition(|byte| *byte == b'/').ok_or(RuntimeNetworkError::Invalid)?;
+        let separator = path
+            .iter()
+            .rposition(|byte| *byte == b'/')
+            .ok_or(RuntimeNetworkError::Invalid)?;
         let name = &path[separator + 1..];
         if name.is_empty() {
             return Err(RuntimeNetworkError::Invalid);
@@ -432,7 +447,11 @@ impl Native {
 
     fn socket_type(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
         let descriptor = {
-            let sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let sockets = self
+                .shared
+                .sockets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let entry = sockets.get(&token).ok_or(RuntimeNetworkError::Invalid)?;
             if let Some(kind) = entry.kind {
                 return Ok(kind);
@@ -440,7 +459,11 @@ impl Native {
             entry.descriptor
         };
         let kind = Self::descriptor_type(descriptor)?;
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         entry.kind = Some(kind);
         Ok(kind)
@@ -467,7 +490,11 @@ impl Native {
     }
 
     fn switch_socket(&self, token: u64, expected: i32) -> Result<i32, RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if entry.switched {
             return Ok(entry.descriptor);
@@ -493,7 +520,11 @@ impl Native {
     }
 
     fn restore_inet_socket(&self, token: u64, expected: i32) -> Result<(), RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if !entry.switched {
             return Err(RuntimeNetworkError::Invalid);
@@ -519,7 +550,11 @@ impl Native {
         family: i32,
         switched: bool,
     ) -> Result<(), RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         if !entry.switched {
             return Err(RuntimeNetworkError::Invalid);
@@ -572,14 +607,15 @@ impl Native {
         }
         for ((level, option), value) in &entry.options {
             if (!switch_transport || Self::switch_option(*level, *option))
-                && let Err(error) = super::socket_option::set(replacement, *level, *option, value.clone()) {
-                    if switch_transport {
-                        continue;
-                    }
-                    // SAFETY: replacement is still solely owned here.
-                    unsafe { libc::close(replacement) };
-                    return Err(error);
+                && let Err(error) = super::socket_option::set(replacement, *level, *option, value.clone())
+            {
+                if switch_transport {
+                    continue;
                 }
+                // SAFETY: replacement is still solely owned here.
+                unsafe { libc::close(replacement) };
+                return Err(error);
+            }
         }
         // SAFETY: dup2 atomically replaces the table descriptor. replacement
         // remains solely owned here and is closed on both outcomes.
@@ -602,7 +638,11 @@ impl Native {
         option: i32,
         value: hl_linux::GuestSocketOption,
     ) -> Result<(), RuntimeNetworkError> {
-        let mut sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = sockets.get_mut(&token).ok_or(RuntimeNetworkError::Invalid)?;
         super::socket_option::set(entry.descriptor, level, option, value.clone())?;
         if (level, option) == (1, 27) {
@@ -614,7 +654,11 @@ impl Native {
     }
 
     fn duplicate_descriptor(&self, token: u64) -> Result<i32, RuntimeNetworkError> {
-        let sockets = self.shared.sockets.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sockets = self
+            .shared
+            .sockets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let descriptor = sockets.get(&token).ok_or(RuntimeNetworkError::Invalid)?.descriptor;
         // SAFETY: descriptor remains live under the table lock and dup returns independent ownership.
         let duplicate = unsafe { libc::dup(descriptor) };

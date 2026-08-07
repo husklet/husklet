@@ -52,8 +52,7 @@ impl AnonymousName {
         for _ in 0..64 {
             let name = Self::candidate();
             // SAFETY: `directory` stays open across the call and `name` is NUL-terminated.
-            let descriptor =
-                unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags, mode as libc::mode_t) };
+            let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags, mode as libc::mode_t) };
             if descriptor >= 0 {
                 // SAFETY: successful openat returned one descriptor not owned elsewhere.
                 let file = unsafe { File::from_raw_fd(descriptor) };
@@ -253,7 +252,11 @@ impl Host {
 
     fn cached_directory(&self, guest: &GuestPathBytes, epoch: u64) -> Option<Vec<LayerPin>> {
         let borrowed = {
-            let mut cache = self.pins.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut cache = self
+                .pins
+                .paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if cache.epoch != epoch {
                 cache.entries.clear();
                 cache.epoch = epoch;
@@ -268,7 +271,11 @@ impl Host {
         if self.epoch.load(Ordering::Acquire) != epoch {
             return;
         }
-        let mut cache = self.pins.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = self
+            .pins
+            .paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if cache.epoch != epoch {
             cache.entries.clear();
             cache.epoch = epoch;
@@ -369,11 +376,8 @@ impl Host {
         mode: u32,
     ) -> Result<File, RuntimePathError> {
         let flags = Self::open_flags(intent)?;
-        let mutation = OpenIntent::WRITE
-            | OpenIntent::CREATE
-            | OpenIntent::TRUNCATE
-            | OpenIntent::APPEND
-            | OpenIntent::TEMPORARY;
+        let mutation =
+            OpenIntent::WRITE | OpenIntent::CREATE | OpenIntent::TRUNCATE | OpenIntent::APPEND | OpenIntent::TEMPORARY;
         let parent = if intent.bits() & mutation != 0 {
             parent.mutation()?
         } else {
@@ -430,7 +434,9 @@ impl Host {
             let root = parent.upper_root().ok_or(RuntimePathError::NotFound)?;
             let root = Self::descriptor_path(root.as_raw_fd()).map_err(super::HostError::map)?;
             let guest = parent.guest().ok_or(RuntimePathError::Invalid)?;
-            root.join(OsStr::from_bytes(guest.as_bytes().strip_prefix(b"/").unwrap_or(guest.as_bytes())))
+            root.join(OsStr::from_bytes(
+                guest.as_bytes().strip_prefix(b"/").unwrap_or(guest.as_bytes()),
+            ))
         };
         Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
     }
@@ -484,14 +490,7 @@ impl Host {
         let marker = CString::new(marker).map_err(|_| RuntimePathError::Invalid)?;
         let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
         // SAFETY: parent and marker remain live and status is writable.
-        let result = unsafe {
-            libc::fstatat(
-                parent,
-                marker.as_ptr(),
-                status.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
+        let result = unsafe { libc::fstatat(parent, marker.as_ptr(), status.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
         if result == 0 {
             return Ok(true);
         }
@@ -886,9 +885,10 @@ mod overlay_tests {
             allow_missing_final: false,
         })?;
         let parent = resolved.duplicate_parent().map_err(hl_runtime::ResolveError::Host)?;
-        let name = resolved
-            .final_name()
-            .map_or_else(|| c".".to_owned(), |name| std::ffi::CString::new(name.as_bytes()).unwrap());
+        let name = resolved.final_name().map_or_else(
+            || c".".to_owned(),
+            |name| std::ffi::CString::new(name.as_bytes()).unwrap(),
+        );
         Host::path(&parent, &name).map_err(|_| hl_runtime::ResolveError::Host(hl_runtime::ResolveHostError::Io))
     }
 
@@ -969,7 +969,11 @@ mod overlay_tests {
             let path = GuestPathBytes::new(format!("/cached/{index}").as_bytes()).unwrap();
             host.cache_directory(&path, &[], current);
         }
-        let cache = host.pins.paths.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache = host
+            .pins
+            .paths
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(cache.entries.len() <= 4_096);
         drop(cache);
         std::fs::remove_dir_all(upper).unwrap();
@@ -984,13 +988,15 @@ mod overlay_tests {
         let first = layered_host(&upper, &lower);
         assert_eq!(resolve(&first, b"/a/b").unwrap(), lower.join("a/b"));
         let second = layered_host(&upper, &lower);
-        assert!(second
-            .pins
-            .paths
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entries
-            .is_empty());
+        assert!(
+            second
+                .pins
+                .paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entries
+                .is_empty()
+        );
         std::fs::remove_dir_all(upper).unwrap();
         std::fs::remove_dir_all(lower).unwrap();
     }

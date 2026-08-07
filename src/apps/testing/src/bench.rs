@@ -8,12 +8,7 @@ use crate::{
 };
 use clap::Args;
 use definition::Benchmark;
-use std::{
-    collections::BTreeSet,
-    future::Future,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, future::Future, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 
 const EVIDENCE_LIMIT: usize = 64 * 1024;

@@ -23,7 +23,7 @@ impl Interpreter {
             for slot in 0..elements {
                 let current = resolved.address.wrapping_add(slot as u64 * u64::from(element_bytes));
                 let Ok(value) = memory.read(current, element_bytes) else {
-                    return Self::fault(instruction, current, AccessKind::Read, element_bytes)
+                    return Self::fault(instruction, current, AccessKind::Read, element_bytes);
                 };
                 let register = slot % usize::from(count);
                 let lane = slot / usize::from(count);

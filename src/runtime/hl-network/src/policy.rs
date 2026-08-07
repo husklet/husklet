@@ -305,10 +305,7 @@ mod tests {
         assert_eq!(policy.route(&v4([127, 0, 0, 1])), RouteDisposition::Host);
         assert_eq!(policy.route(&v4([0; 4])), RouteDisposition::Host);
         assert_eq!(policy.route(&v4([8, 8, 8, 8])), RouteDisposition::NetworkUnreachable);
-        assert_eq!(
-            policy.route(&v4([172, 17, 0, 2])),
-            RouteDisposition::NetworkUnreachable
-        );
+        assert_eq!(policy.route(&v4([172, 17, 0, 2])), RouteDisposition::NetworkUnreachable);
 
         let v6 = |address| crate::SocketAddress::Inet6 {
             address,

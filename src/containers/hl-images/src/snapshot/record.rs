@@ -9,11 +9,19 @@ pub(super) struct DraftOwner {
 
 impl DraftOwner {
     pub(super) fn active(key: super::Id) -> Self {
-        Self { version: 1, key, target: None }
+        Self {
+            version: 1,
+            key,
+            target: None,
+        }
     }
 
     pub(super) fn publishing(key: super::Id, target: super::Id) -> Self {
-        Self { version: 1, key, target: Some(target) }
+        Self {
+            version: 1,
+            key,
+            target: Some(target),
+        }
     }
 
     pub(super) fn validate(self, key: &super::Id) -> Result<Option<super::Id>> {
@@ -44,7 +52,9 @@ impl LayerRecord {
             |parent| Digest::sha256(format!("{parent} {diff_id}").as_bytes()),
         );
         if chain_id != expected {
-            return Err(Error::InvalidMetadata("layer record ChainID does not match its parent and DiffID".into()));
+            return Err(Error::InvalidMetadata(
+                "layer record ChainID does not match its parent and DiffID".into(),
+            ));
         }
         Ok(Self {
             diff_id,
@@ -97,7 +107,9 @@ impl Publication {
                 version: Self::VERSION,
                 layers,
             } => Self::layer_chain(layers),
-            _ => Err(Error::InvalidMetadata("unsupported snapshot publication version".into())),
+            _ => Err(Error::InvalidMetadata(
+                "unsupported snapshot publication version".into(),
+            )),
         }
     }
 

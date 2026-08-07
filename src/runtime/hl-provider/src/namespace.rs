@@ -428,7 +428,10 @@ impl HandleNamespace {
     }
 
     fn release_all(self) {
-        let state = self.state.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .state
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut slots = state.slots;
         Self::release_slots(&mut slots);
     }

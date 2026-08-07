@@ -330,7 +330,8 @@ impl OpenFileDescription for File {
             nonblocking,
             cancellation,
             || {
-                let value = offset.unwrap_or_else(|| *self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+                let value =
+                    offset.unwrap_or_else(|| *self.cursor.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
                 *prepared_start.lock().map_err(|_| ObjectError::Io)? = Some(value);
                 let count = self.read_from(value, &mut bytes)?;
                 bytes.truncate(count);

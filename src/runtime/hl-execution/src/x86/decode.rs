@@ -290,7 +290,9 @@ impl X86Decoder {
         if map == 1 {
             return if op & 0xf0 == 0x80 {
                 4
-            } else { u8::from(matches!(op, 0xba | 0xa4 | 0xac | 0x70..=0x73 | 0xc2 | 0xc4..=0xc6)) };
+            } else {
+                u8::from(matches!(op, 0xba | 0xa4 | 0xac | 0x70..=0x73 | 0xc2 | 0xc4..=0xc6))
+            };
         }
         if op == 0xc2 {
             return 2;

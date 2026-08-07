@@ -37,9 +37,10 @@ impl Rule for IntegrationCandidate {
             for item in &source.syntax.items {
                 let Item::Mod(module) = item else { continue };
                 if requires_test(&module.attrs)
-                    && let Some((_, items)) = &module.content {
-                        inspect_module(self.id(), source, module, items, &api, &mut findings);
-                    }
+                    && let Some((_, items)) = &module.content
+                {
+                    inspect_module(self.id(), source, module, items, &api, &mut findings);
+                }
             }
         }
         Ok(findings)
@@ -148,8 +149,7 @@ fn inspect_unit(
     }
 
     let subject = source.path.file_name().and_then(|name| name.to_str()).unwrap_or("test");
-    let span = items
-        .first().map_or_else(proc_macro2::Span::call_site, Item::span);
+    let span = items.first().map_or_else(proc_macro2::Span::call_site, Item::span);
     let mut finding = Finding::warning(rule, subject, source.location(span));
     finding.message =
         "source unit tests use only the ordinary public crate API and are integration-test candidates".into();

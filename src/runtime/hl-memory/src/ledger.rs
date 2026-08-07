@@ -1,10 +1,9 @@
 use crate::mapping::plan::{Operation, PlannedOperation};
 use crate::model::{Backing, MapRequest, MappingRange, MemoryError, Protection, Region, Resolution};
-use hl_isa::{AddressRange, GuestAddress};
-use std::sync::atomic::{AtomicU64, Ordering};
 use crate::region_set::RegionSet;
+use hl_isa::{AddressRange, GuestAddress};
 use std::sync::RwLock;
-
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct LedgerState {

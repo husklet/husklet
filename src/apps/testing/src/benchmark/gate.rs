@@ -218,7 +218,10 @@ pub(crate) const fn lowering(isa: Isa) -> &'static str {
 pub(crate) fn missing(guest: &Path, rust_engine: &Path, c_engine: &Path, runner: &Path, arch: &str) -> Vec<String> {
     let mut missing = Vec::new();
     if !guest.is_file() {
-        missing.push(format!("guest {} is missing: make bench-guest BENCH_ARCH={arch}", guest.display()));
+        missing.push(format!(
+            "guest {} is missing: make bench-guest BENCH_ARCH={arch}",
+            guest.display()
+        ));
     }
     if !rust_engine.is_file() {
         missing.push(format!(
@@ -241,7 +244,8 @@ pub(crate) fn missing(guest: &Path, rust_engine: &Path, c_engine: &Path, runner:
 /// Resolves the retained engine and its exec wrapper from a build root.
 pub(crate) fn wiring(root: &Path, isa: Isa) -> (PathBuf, PathBuf) {
     (
-        root.join("linux-production").join(format!("hl-engine-linux-{}", isa.name())),
+        root.join("linux-production")
+            .join(format!("hl-engine-linux-{}", isa.name())),
         root.join("bin").join("hl-engine-runner"),
     )
 }
@@ -389,7 +393,10 @@ impl Gate {
                 self.workload.name().to_owned(),
                 phase.clone(),
             ));
-            let against = recorded.map_or_else(|| "-".to_owned(), |value| format!("{:.3}", ratio(engine.median, *value)));
+            let against = recorded.map_or_else(
+                || "-".to_owned(),
+                |value| format!("{:.3}", ratio(engine.median, *value)),
+            );
             println!(
                 "{}\t{phase}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{}\t{spread:.3}\t{against}",
                 self.workload.name(),
@@ -399,7 +406,10 @@ impl Gate {
                 engine.minimum,
                 engine.maximum,
                 ratio(engine.median, c.median),
-                native.map_or_else(|| "-".to_owned(), |value| format!("{:.3}", ratio(engine.median, value.median))),
+                native.map_or_else(
+                    || "-".to_owned(),
+                    |value| format!("{:.3}", ratio(engine.median, value.median))
+                ),
             );
             if let Some(value) = recorded {
                 let allowance = 1.0 + self.tolerance.max(spread);
@@ -418,8 +428,7 @@ impl Gate {
         }
         if self.update {
             let text = baseline.render(provenance, self.isa.public(), self.workload.name(), &rust);
-            std::fs::write(&self.baseline, text)
-                .map_err(|error| format!("write baseline: {error}"))?;
+            std::fs::write(&self.baseline, text).map_err(|error| format!("write baseline: {error}"))?;
             println!("baseline\t{}\trecorded", self.baseline.display());
             return Ok(());
         }
@@ -445,7 +454,9 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
     for path in paths {
         let text = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
         let mut lines = text.lines();
-        let header = lines.next().ok_or_else(|| format!("empty row file: {}", path.display()))?;
+        let header = lines
+            .next()
+            .ok_or_else(|| format!("empty row file: {}", path.display()))?;
         let columns = header.split(',').collect::<Vec<_>>();
         let index = |name: &str| {
             columns
@@ -457,10 +468,18 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
         let (guest, engine) = (index("guest_sha256")?, index("engine_sha256")?);
         for line in lines {
             let fields = line.split(',').collect::<Vec<_>>();
-            let field = |position: usize| fields.get(position).copied().ok_or_else(|| "short benchmark row".to_owned());
+            let field = |position: usize| {
+                fields
+                    .get(position)
+                    .copied()
+                    .ok_or_else(|| "short benchmark row".to_owned())
+            };
             let value = field(us)?.parse().map_err(|_| "invalid benchmark time".to_owned())?;
             let identity = format!("{}/{}", field(guest)?, field(engine)?);
-            match builds.entry(field(provider)?.to_owned()).or_insert_with(|| identity.clone()) {
+            match builds
+                .entry(field(provider)?.to_owned())
+                .or_insert_with(|| identity.clone())
+            {
                 recorded if *recorded == identity => {}
                 recorded => {
                     return Err(format!(
@@ -493,7 +512,10 @@ mod tests {
     #[test]
     fn statistics_report_median_and_spread() {
         let statistics = Statistics::of(&[100, 104, 102]).unwrap();
-        assert_eq!((statistics.median, statistics.minimum, statistics.maximum), (102, 100, 104));
+        assert_eq!(
+            (statistics.median, statistics.minimum, statistics.maximum),
+            (102, 100, 104)
+        );
         assert!((statistics.spread() - 4.0 / 102.0).abs() < 1e-9);
         assert!(Statistics::of(&[]).is_none());
         let outlier = Statistics::of(&[100, 101, 102, 103, 104, 105, 900]).unwrap();
@@ -537,10 +559,7 @@ mod tests {
     #[test]
     fn baseline_round_trips_engine_pin_and_samples() {
         let mut samples = std::collections::BTreeMap::new();
-        samples.insert(
-            "compute".to_owned(),
-            Statistics::of(&[41, 42, 43]).unwrap(),
-        );
+        samples.insert("compute".to_owned(), Statistics::of(&[41, 42, 43]).unwrap());
         let key = |arch: &str| (arch.to_owned(), "compute".to_owned(), "compute".to_owned());
         let text = Baseline::default().render(&provenance(), "arm64", "compute", &samples);
         let parsed = Baseline::parse(&text).unwrap();

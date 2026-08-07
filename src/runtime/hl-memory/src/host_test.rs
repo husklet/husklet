@@ -413,7 +413,12 @@ fn publication_remains_exact() {
         .unwrap();
     let before = {
         let state = coordinator.host.state.lock().unwrap();
-        (state.calls, state.live.clone(), state.transcript.clone(), state.writes.clone())
+        (
+            state.calls,
+            state.live.clone(),
+            state.transcript.clone(),
+            state.writes.clone(),
+        )
     };
     assert_eq!(
         lease.write_publication(GuestAddress::new(0x1000)),
@@ -421,7 +426,12 @@ fn publication_remains_exact() {
     );
     let after = {
         let state = coordinator.host.state.lock().unwrap();
-        (state.calls, state.live.clone(), state.transcript.clone(), state.writes.clone())
+        (
+            state.calls,
+            state.live.clone(),
+            state.transcript.clone(),
+            state.writes.clone(),
+        )
     };
     assert_eq!(after, before);
 }
@@ -1519,7 +1529,11 @@ fn every_host_failure() {
         assert_eq!(coordinator.apply(&batch()), Err(MemoryError::InvariantViolation));
         assert_eq!(coordinator.ledger().generation(), 0);
         assert!(coordinator.ledger().regions().is_empty());
-        let state = coordinator.host.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = coordinator
+            .host
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(state.live.is_empty());
         let rollbacks: Vec<_> = state
             .transcript
@@ -1540,7 +1554,11 @@ fn successful_batch_has() {
     assert_eq!(coordinator.apply(&batch()), Ok(vec![GuestAddress::new(0x1000)]));
     assert_eq!(coordinator.ledger().generation(), 1);
     assert!(coordinator.ledger().regions().is_empty());
-    let state = coordinator.host.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let state = coordinator
+        .host
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(state.transcript, ["map", "protect", "unmap", "commit"]);
     assert!(state.live.is_empty());
 }

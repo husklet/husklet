@@ -246,11 +246,7 @@ mod tests { struct LauncherFixture; }
     let findings = ModulePrefix.check(&workspace).unwrap();
 
     assert_eq!(findings.len(), 4);
-    assert!(
-        !findings
-            .iter()
-            .any(|finding| finding.subject == "LauncherFixture")
-    );
+    assert!(!findings.iter().any(|finding| finding.subject == "LauncherFixture"));
     fs::remove_dir_all(root).unwrap();
 }
 

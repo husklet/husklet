@@ -285,9 +285,10 @@ impl Service {
             result?.ok_or_else(|| Error::NotFound(reference.into()))
         } else {
             if let Err(error) = self.stop_signal(reference, Signal::Kill).await
-                && !matches!(&error, Error::InvalidState { .. }) {
-                    return Err(error);
-                }
+                && !matches!(&error, Error::InvalidState { .. })
+            {
+                return Err(error);
+            }
             self.wait(reference, WaitCondition::NotRunning)
                 .await?
                 .ok_or_else(|| Error::NotFound(reference.into()))

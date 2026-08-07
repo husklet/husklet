@@ -9,7 +9,6 @@ use tokio::time::Instant;
 
 pub(crate) use worker::Options as WorkerOptions;
 
-
 #[derive(Clone, Deserialize, Serialize)]
 pub enum CaseResult {
     Passed(String, Option<u16>),
@@ -251,4 +250,3 @@ impl CaseExecution<'_> {
         }
     }
 }
-

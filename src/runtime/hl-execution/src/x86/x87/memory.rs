@@ -67,9 +67,11 @@ impl ExtendedMemory {
         instruction: u64,
         next: u64,
     ) -> ExecutionExit {
-        let Ok(low) = memory.read(address, 8) else { return Self::fault(instruction, address, AccessKind::Read, 10) };
+        let Ok(low) = memory.read(address, 8) else {
+            return Self::fault(instruction, address, AccessKind::Read, 10);
+        };
         let Ok(high) = memory.read(address + 8, 2) else {
-            return Self::fault(instruction, address + 8, AccessKind::Read, 10)
+            return Self::fault(instruction, address + 8, AccessKind::Read, 10);
         };
         let source = ExtendedReal::from_bits(u128::from(low) | u128::from(high) << 64);
         let mut staged = cpu.clone();
@@ -157,7 +159,7 @@ impl ExtendedMemory {
             FloatWidth::Double => 8,
         };
         let Ok(bits) = memory.read(address, bytes) else {
-            return Self::fault(instruction, address, AccessKind::Read, bytes)
+            return Self::fault(instruction, address, AccessKind::Read, bytes);
         };
         let (mut value, mut class) = Conversion::expand(bits, format);
         let mut staged = cpu.clone();
@@ -205,7 +207,7 @@ impl ExtendedMemory {
             FloatWidth::Double => 8,
         };
         let Ok(reservation) = memory.reserve_write(address, bytes) else {
-            return Self::fault(instruction, address, AccessKind::Write, bytes)
+            return Self::fault(instruction, address, AccessKind::Write, bytes);
         };
         let mut staged = cpu.clone();
         let converted = if empty {

@@ -103,15 +103,10 @@ mod tests {
     fn io_names_the_path_it_failed_on() {
         use super::At as _;
 
-        let error = std::result::Result::<(), _>::Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no such file",
-        ))
-        .at("/store/snapshots/committed/chain-abc")
-        .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "/store/snapshots/committed/chain-abc: no such file"
-        );
+        let error =
+            std::result::Result::<(), _>::Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))
+                .at("/store/snapshots/committed/chain-abc")
+                .unwrap_err();
+        assert_eq!(error.to_string(), "/store/snapshots/committed/chain-abc: no such file");
     }
 }

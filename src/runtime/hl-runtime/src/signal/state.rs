@@ -42,7 +42,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(error.errno()),
         };
-        let Ok(old) = self.tasks.action(self.process, signal) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Ok(old) = self.tasks.action(self.process, signal) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
         if arguments[2] != 0 {
             let copyout = match abi.stage_action(arguments[2], old) {
                 Ok(value) => value,
@@ -101,7 +103,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if let Err(error) = abi.pending(destination, size) {
             return LinuxResult::Error(error.errno());
         }
-        let Ok(pending) = self.tasks.pending_signal_mask(self.thread) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Ok(pending) = self.tasks.pending_signal_mask(self.thread) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
         let marshaller = hl_linux::GuestMarshaller::new(&self.memory, self.architecture);
         match abi
             .stage_mask(destination, pending)

@@ -101,7 +101,11 @@ impl NamedFifo {
     /// counts while holding the shared-state lock is important: a concurrent
     /// blocking writer or reader must observe the duplex opener atomically.
     pub fn open_readwrite(&self, nonblocking: bool) -> (Arc<PipeEndpoint>, Arc<PipeEndpoint>) {
-        let mut state = self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.readers += 1;
         state.writers += 1;
         state.read_nonblocking = nonblocking;
@@ -123,7 +127,11 @@ impl NamedFifo {
     }
 
     fn open(&self, direction: EndpointDirection, nonblocking: bool) -> Result<NamedFifoOpen, NamedFifoOpenError> {
-        let mut state = self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if direction == EndpointDirection::Write && nonblocking && state.readers == 0 {
             return Err(NamedFifoOpenError::NoReader);
         }
@@ -167,7 +175,11 @@ impl NamedFifo {
     }
 
     pub fn snapshot(&self) -> Result<crate::NamedFifoSnapshot, PipeCreateError> {
-        let state = self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.waiters != 0 || state.open_waiters != 0 || state.sleepers != 0 {
             return Err(PipeCreateError::Busy);
         }
@@ -190,7 +202,11 @@ impl NamedFifo {
 
     #[must_use]
     pub fn status(&self) -> NamedFifoStatus {
-        let state = self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         NamedFifoStatus {
             identity: self.identity,
             linked: self.linked.load(Ordering::Acquire),
@@ -246,7 +262,11 @@ impl NamedFifoWait {
     #[must_use]
     pub fn ready(&self) -> bool {
         let endpoint = self.endpoint.as_ref().expect("completed FIFO wait");
-        let state = endpoint.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = endpoint
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match endpoint.direction {
             EndpointDirection::Read => state.writers != 0,
             EndpointDirection::Write => state.readers != 0,
@@ -258,7 +278,11 @@ impl NamedFifoWait {
             return Err(self);
         }
         let endpoint = self.endpoint.take().expect("completed FIFO wait");
-        let mut state = endpoint.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = endpoint
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.open_waiters -= 1;
         drop(state);
         Ok(endpoint)
@@ -268,7 +292,11 @@ impl NamedFifoWait {
     pub fn wait(mut self) -> Arc<PipeEndpoint> {
         loop {
             let endpoint = self.endpoint.as_ref().expect("completed FIFO wait");
-            let mut state = endpoint.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = endpoint
+                .pipe
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let ready = match endpoint.direction {
                 EndpointDirection::Read => state.writers != 0,
                 EndpointDirection::Write => state.readers != 0,
@@ -295,7 +323,11 @@ impl Drop for NamedFifoWait {
         let Some(endpoint) = self.endpoint.take() else {
             return;
         };
-        let mut state = endpoint.pipe.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = endpoint
+            .pipe
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.open_waiters -= 1;
         drop(state);
         endpoint.close_endpoint();

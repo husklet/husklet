@@ -29,7 +29,8 @@ impl Comparison {
                 operation != FpComparison::Equal,
             );
             cpu.fpsr |= flags;
-            value |= (u128::from(lane_mask) * u128::from(Self::matches(operation, nzcv))) << (u32::from(lane) * u32::from(format.bits()));
+            value |= (u128::from(lane_mask) * u128::from(Self::matches(operation, nzcv)))
+                << (u32::from(lane) * u32::from(format.bits()));
         }
         cpu.set_vector(destination, value);
     }

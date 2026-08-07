@@ -247,10 +247,13 @@ impl IpcCatalog {
 
     pub fn remove_pipe(&self, id: IpcPipeId) -> Result<(), IpcCatalogError> {
         let _admission = self.activity.admit();
-        Self::pipe_slot(&mut self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner), id)?
-            .object
-            .take()
-            .ok_or(IpcCatalogError::Stale)?;
+        Self::pipe_slot(
+            &mut self.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+            id,
+        )?
+        .object
+        .take()
+        .ok_or(IpcCatalogError::Stale)?;
         Ok(())
     }
 
@@ -449,7 +452,11 @@ impl PreparedPipe {
     /// Publishes the already-reserved slot without another fallible step.
     #[must_use]
     pub fn publish(mut self) -> IpcPipeId {
-        let mut slots = self.catalog.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slots = self
+            .catalog
+            .pipes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = &mut slots[self.id.slot as usize];
         debug_assert!(slot.reserved && slot.generation == self.id.generation);
         slot.object = self.object.take();
@@ -464,7 +471,11 @@ impl Drop for PreparedPipe {
         if self.published {
             return;
         }
-        let mut slots = self.catalog.pipes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut slots = self
+            .catalog
+            .pipes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(slot) = slots.get_mut(self.id.slot as usize) else {
             return;
         };

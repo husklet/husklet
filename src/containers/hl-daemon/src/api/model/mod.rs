@@ -26,9 +26,9 @@ pub use create::{
     BindOptions, BindReadOnly, ContainerCreation, CreateContainer, DockerMount, DriverConfig, EndpointsConfig,
     HostConfig, NetworkingConfig, VolumeOptions,
 };
-pub use exec::{Attachment, Console, ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart};
 #[cfg(feature = "runtime")]
 pub(crate) use exec::console_size;
+pub use exec::{Attachment, Console, ExecConfig, ExecCreated, ExecInspect, ExecOpen, ExecProcess, ExecStart};
 pub use filesystem::{Change, ChangeKind, PathStat};
 pub use image::{
     BuildPrune, CommitOptions, Distribution, ImageCommit, ImageConfig, ImageDelete, ImageHistory, ImageLoad,

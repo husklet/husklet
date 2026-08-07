@@ -495,7 +495,8 @@ impl Workspace {
     }
 
     fn cargo_configs(&self) -> Vec<PathBuf> {
-        let mut paths = self.root
+        let mut paths = self
+            .root
             .ancestors()
             .flat_map(|directory| [directory.join(".cargo/config"), directory.join(".cargo/config.toml")])
             .collect::<Vec<_>>();
@@ -621,9 +622,11 @@ mod tests {
 
     fn tree_key(root: &Path) -> String {
         let mut digest = crate::record::FramedIdentity::new(b"nested-tree-test").unwrap();
-        Workspace { root: root.to_path_buf() }
-            .hash_tree(&mut digest, &root.join("src"))
-            .unwrap();
+        Workspace {
+            root: root.to_path_buf(),
+        }
+        .hash_tree(&mut digest, &root.join("src"))
+        .unwrap();
         digest.finish()
     }
 
@@ -692,26 +695,46 @@ expect: { exit: 42, stdout: hello.txt }
             serde_yaml::from_str("package: hl-engine\ntarget: aarch64-unknown-linux-musl\nbinary: hl-engine\n")
                 .unwrap();
         let environment = vec![("RUSTFLAGS".into(), "-Ctarget-cpu=generic".into())];
-        let initial = Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &environment).unwrap();
+        let initial = Workspace {
+            root: root.path().to_path_buf(),
+        }
+        .build_key_with_environment(&build, "cargo", &environment)
+        .unwrap();
         assert_eq!(
             initial,
-            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &environment).unwrap()
+            Workspace {
+                root: root.path().to_path_buf()
+            }
+            .build_key_with_environment(&build, "cargo", &environment)
+            .unwrap()
         );
         fs::write(root.path().join("src/lib.rs"), "pub fn second() {}\n").unwrap();
         assert_ne!(
             initial,
-            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &environment).unwrap()
+            Workspace {
+                root: root.path().to_path_buf()
+            }
+            .build_key_with_environment(&build, "cargo", &environment)
+            .unwrap()
         );
         let changed: Build =
             serde_yaml::from_str("package: hl-engine\ntarget: x86_64-unknown-linux-musl\nbinary: hl-engine\n").unwrap();
         assert_ne!(
             initial,
-            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&changed, "cargo", &environment).unwrap()
+            Workspace {
+                root: root.path().to_path_buf()
+            }
+            .build_key_with_environment(&changed, "cargo", &environment)
+            .unwrap()
         );
         let changed_environment = vec![("RUSTFLAGS".into(), "-Ctarget-cpu=native".into())];
         assert_ne!(
             initial,
-            Workspace { root: root.path().to_path_buf() }.build_key_with_environment(&build, "cargo", &changed_environment).unwrap()
+            Workspace {
+                root: root.path().to_path_buf()
+            }
+            .build_key_with_environment(&build, "cargo", &changed_environment)
+            .unwrap()
         );
     }
 

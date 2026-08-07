@@ -330,16 +330,17 @@ impl Decoder {
                 merge: Some(source),
             }),
             (1, 0x70, 1) if source == 0 => Self::binary(decoded, source, length, VexOperation::ShuffleDword),
-            (1, 0x70, 2 | 3) if source == 0 => Self::binary(
-                decoded,
-                source,
-                length,
-                VexOperation::ShuffleWord { high: pp == 2 },
-            ),
+            (1, 0x70, 2 | 3) if source == 0 => {
+                Self::binary(decoded, source, length, VexOperation::ShuffleWord { high: pp == 2 })
+            }
             (1, 0x2e | 0x2f, 0 | 1) if source == 0 => Ok(ScalarInstruction::VectorScalarCompare {
                 left: decoded.register.ok_or(ScalarIrError::Invalid)?,
                 right: Self::source(decoded)?,
-                format: if pp == 1 { FloatWidth::Double } else { FloatWidth::Single },
+                format: if pp == 1 {
+                    FloatWidth::Double
+                } else {
+                    FloatWidth::Single
+                },
                 signaling_only: decoded.opcode == 0x2e,
             }),
             (1, 0xc6, 0) => Self::binary(decoded, source, length, VexOperation::ShuffleSingle),

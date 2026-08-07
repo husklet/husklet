@@ -119,16 +119,13 @@ impl Publication {
     ///
     /// # Errors
     /// Returns the failure to encode the name or target, or the link creation failure.
-    pub fn reserve_link(
-        &mut self,
-        anchor: &Arc<Anchor>,
-        name: &[u8],
-        path: Vec<u8>,
-        target: &[u8],
-    ) -> io::Result<()> {
+    pub fn reserve_link(&mut self, anchor: &Arc<Anchor>, name: &[u8], path: Vec<u8>, target: &[u8]) -> io::Result<()> {
         let target = Anchor::name(target)?;
         let reservation = self.stage(anchor, name, path)?;
-        let staged = reservation.staged.as_ref().expect("a staged reservation has a quarantine name");
+        let staged = reservation
+            .staged
+            .as_ref()
+            .expect("a staged reservation has a quarantine name");
         rustix::fs::symlinkat(&target, &anchor.0, staged)?;
         self.reservations.push(reservation);
         Ok(())
@@ -225,7 +222,11 @@ mod tests {
         let path = directory.join(name);
         std::fs::write(&path, b"node").unwrap();
         publication
-            .adopt(anchor, name.as_bytes(), path.to_string_lossy().into_owned().into_bytes())
+            .adopt(
+                anchor,
+                name.as_bytes(),
+                path.to_string_lossy().into_owned().into_bytes(),
+            )
             .unwrap();
     }
 

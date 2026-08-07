@@ -909,11 +909,9 @@ impl Procfs {
             model::Node::Cmdline => self.source.cmdline(process_identity()?)?.len() as u64,
             model::Node::Environ => self.source.environment(process_identity()?)?.len() as u64,
             model::Node::OomScore | model::Node::OomAdj => 2,
-            model::Node::OomScoreAdj => format!(
-                "{}\n",
-                self.source.oom_score_adj(process_identity()?, thread_identity)?
-            )
-            .len() as u64,
+            model::Node::OomScoreAdj => {
+                format!("{}\n", self.source.oom_score_adj(process_identity()?, thread_identity)?).len() as u64
+            }
             model::Node::Root => {
                 self.source.root(process_identity()?)?;
                 0

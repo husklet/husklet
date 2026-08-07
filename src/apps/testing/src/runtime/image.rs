@@ -97,7 +97,10 @@ async fn resolve(name: &str, platform: &Platform) -> Result<(Images, Image), Err
     let root = cache_root(platform)?;
     let images = Images::open(&root).map_err(|error| format!("open image cache {}: {error}", root.display()))?;
     let reference: Reference = name.parse()?;
-    let image = match images.resolve(&reference).map_err(|error| format!("resolve {name}: {error}"))? {
+    let image = match images
+        .resolve(&reference)
+        .map_err(|error| format!("resolve {name}: {error}"))?
+    {
         Some(image) if images.details(&image, platform).is_ok() => image,
         _ if offline() => {
             return Err(format!(
@@ -198,7 +201,9 @@ mod tests {
 
     #[test]
     fn only_shared_store_races_are_retried() {
-        assert!(contended("fork rootfs from sha256:a: No such file or directory (os error 2)"));
+        assert!(contended(
+            "fork rootfs from sha256:a: No such file or directory (os error 2)"
+        ));
         assert!(contended("File exists (os error 17)"));
         assert!(!contended("layer DiffID mismatch"));
     }

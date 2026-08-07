@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use hl_container::NetworkDriver;
 use serde::Deserialize;
 
@@ -13,9 +13,7 @@ use prune::Filters as PruneFilters;
 use wire::Fields;
 
 use super::{ApiError, ApiResult, DockerState};
-use crate::api::{
-    Network, NetworkConnect, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune,
-};
+use crate::api::{Network, NetworkConnect, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune};
 
 fn endpoint_error(error: hl_container::Error) -> ApiError {
     match error {
@@ -37,12 +35,7 @@ pub(super) async fn list(
     Query(query): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Network>>> {
     let filters = ListFilters::parse(query.filters.as_deref())?;
-    let networks = state
-        .containers
-        .networks()
-        .list()
-        .await
-        .map_err(ApiError::container)?;
+    let networks = state.containers.networks().list().await.map_err(ApiError::container)?;
     Ok(Json(
         networks
             .into_iter()

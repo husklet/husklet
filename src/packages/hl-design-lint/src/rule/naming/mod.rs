@@ -155,11 +155,7 @@ fn has_noun(language: &dyn Language, name: &str) -> bool {
 fn identifier_words(name: &str) -> Vec<String> {
     snake_case(name)
         .split('_')
-        .map(|word| {
-            word.chars()
-                .filter(char::is_ascii_alphabetic)
-                .collect::<String>()
-        })
+        .map(|word| word.chars().filter(char::is_ascii_alphabetic).collect::<String>())
         .filter(|word| !word.is_empty())
         .collect()
 }

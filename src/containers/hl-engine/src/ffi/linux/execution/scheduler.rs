@@ -247,8 +247,9 @@ impl NativePool {
     fn observe(&mut self, key: NativeSite) -> u8 {
         let (process, lease, ledger, _, _) = key;
         if !self.observations.contains_key(&key) && self.observations.len() >= NATIVE_SITE_LIMIT {
-            self.observations
-                .retain(|(owner, held, ledgered, _, _), _| *owner != process || (*held == lease && *ledgered == ledger));
+            self.observations.retain(|(owner, held, ledgered, _, _), _| {
+                *owner != process || (*held == lease && *ledgered == ledger)
+            });
             if self.observations.len() >= NATIVE_SITE_LIMIT {
                 self.observations.clear();
             }
@@ -683,9 +684,10 @@ impl GuestExecutor {
     fn charge_elapsed(account: Option<&hl_task::CpuAccount>, charged_at: &mut Option<u64>) {
         let Some(finished) = Self::thread_cpu() else { return };
         if let Some(started) = charged_at.replace(finished)
-            && let Some(account) = account {
-                account.charge(finished.saturating_sub(started));
-            }
+            && let Some(account) = account
+        {
+            account.charge(finished.saturating_sub(started));
+        }
     }
 
     fn advance(

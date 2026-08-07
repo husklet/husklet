@@ -103,7 +103,10 @@ impl LockCoordinator {
                 self.changed.notify_all();
                 return Ok(());
             }
-            state = self.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
@@ -155,7 +158,10 @@ impl LockCoordinator {
                 return Ok(());
             }
             Self::update_waiter_blockers(&mut state, ticket, blockers);
-            state = self.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 

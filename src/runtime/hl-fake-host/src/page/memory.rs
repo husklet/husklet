@@ -132,7 +132,10 @@ impl GuestPageStore {
     }
 
     fn generation(&self) -> u64 {
-        let mut generation = self.next_generation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut generation = self
+            .next_generation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *generation = generation.saturating_add(1);
         *generation
     }

@@ -95,7 +95,7 @@ impl Executor {
         }
         if load {
             let Ok(value) = memory.load_ordered(address, width.bytes(), order) else {
-                return Self::fault(instruction, address, AccessKind::Read, width.bytes())
+                return Self::fault(instruction, address, AccessKind::Read, width.bytes());
             };
             let mut staged = cpu.clone();
             Self::write_width(&mut staged, transfer, width, value);
@@ -127,7 +127,7 @@ impl Executor {
         }
         let expected_bytes = width.bytes() * if registers.1.is_some() { 2 } else { 1 };
         let Ok(loaded) = memory.load_exclusive(address, width.bytes(), registers.1.is_some(), order) else {
-            return Self::fault(instruction, address, AccessKind::Read, expected_bytes)
+            return Self::fault(instruction, address, AccessKind::Read, expected_bytes);
         };
         if loaded.reservation.address() != address
             || loaded.reservation.bytes() != expected_bytes
@@ -188,7 +188,7 @@ impl Executor {
         let result = memory.store_exclusive(reservation, replacement, order);
         cpu.exclusive = None;
         let Ok(success) = result else {
-            return Self::fault(instruction, address, AccessKind::Write, reservation.bytes())
+            return Self::fault(instruction, address, AccessKind::Write, reservation.bytes());
         };
         let mut staged = cpu.clone();
         staged.set_narrow_register(status, u32::from(!success));
@@ -221,8 +221,10 @@ impl Executor {
             low: cpu.register(replacement),
             high: if pair { cpu.register(replacement + 1) } else { 0 },
         };
-        let Ok(observed) = memory.compare_exchange(address, width.bytes(), pair, expected_value, replacement_value, order) else {
-            return Self::fault(instruction, address, AccessKind::Write, total)
+        let Ok(observed) =
+            memory.compare_exchange(address, width.bytes(), pair, expected_value, replacement_value, order)
+        else {
+            return Self::fault(instruction, address, AccessKind::Write, total);
         };
         let mut staged = cpu.clone();
         Self::write_width(&mut staged, expected, width, observed.low);
@@ -249,7 +251,7 @@ impl Executor {
             return Self::alignment(instruction, address, AccessKind::Write);
         }
         let Ok(old) = memory.fetch_update(address, width.bytes(), operation, cpu.register(registers.0), order) else {
-            return Self::fault(instruction, address, AccessKind::Write, width.bytes())
+            return Self::fault(instruction, address, AccessKind::Write, width.bytes());
         };
         let mut staged = cpu.clone();
         Self::write_width(&mut staged, registers.1, width, old);

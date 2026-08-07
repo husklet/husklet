@@ -10,19 +10,16 @@ mod restart;
 
 use super::{NetworkConfig, ProcessConfig, Running, Runtime};
 use crate::console::Io;
-use crate::storage::{
-    Containers as ContainerStorage, Execs as ExecStorage, Logs as LogStorage, Storage,
-};
+use crate::storage::{Containers as ContainerStorage, Execs as ExecStorage, Logs as LogStorage, Storage};
 use crate::{
-    model::now_ms, Check, Container, ContainerId, ContainerSpec, ContainerState, Error, Exec,
-    ExecId, ExecSpec, ExecState, ExitStatus, Healthcheck, JournalId, Probe, Result, Rootfs, Signal,
-    WaitCondition,
+    Check, Container, ContainerId, ContainerSpec, ContainerState, Error, Exec, ExecId, ExecSpec, ExecState, ExitStatus,
+    Healthcheck, JournalId, Probe, Result, Rootfs, Signal, WaitCondition, model::now_ms,
 };
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::Duration,
 };

@@ -290,7 +290,11 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
             let remaining = state.waiters.len().saturating_sub(usize::from(at_front));
             let replacement = (self.number)(caller)
                 | (observed & FUTEX_OWNER_DIED)
-                | if remaining > 0 { FUTEX_WAITERS } else { Default::default() };
+                | if remaining > 0 {
+                    FUTEX_WAITERS
+                } else {
+                    Default::default()
+                };
             let current = self
                 .memory
                 .compare_exchange(key, observed, replacement)

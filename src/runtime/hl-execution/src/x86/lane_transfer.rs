@@ -126,7 +126,7 @@ impl LaneTransfer {
             ScalarOperand::Memory(effective) => {
                 let address = effective.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
                 let Ok(reservation) = memory.reserve_write(address, bytes) else {
-                    return Self::fault(instruction, address, AccessKind::Write, bytes)
+                    return Self::fault(instruction, address, AccessKind::Write, bytes);
                 };
                 if memory.commit_write(reservation, value).is_err() {
                     return Self::fault(instruction, address, AccessKind::Write, bytes);

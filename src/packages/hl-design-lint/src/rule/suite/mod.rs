@@ -195,9 +195,10 @@ fn inspect_dependencies(rule: &'static str, source: &Source, declarations: &Decl
     for item in &source.syntax.items {
         let Item::Mod(module) = item else { continue };
         if requires_test(&module.attrs)
-            && let Some((_, items)) = &module.content {
-                inspect_items(rule, source, items, &siblings, findings);
-            }
+            && let Some((_, items)) = &module.content
+        {
+            inspect_items(rule, source, items, &siblings, findings);
+        }
     }
 }
 

@@ -34,20 +34,22 @@ impl Rule for CatchAllModule {
 
         for source in workspace.sources() {
             if let Some(name) = file_module_name(source)
-                && forbidden(&name) && file_modules.insert(source.path.clone()) {
-                    findings.push(finding(
-                        self.id(),
-                        source,
-                        name,
-                        Location {
-                            path: source.path.clone(),
-                            line: 1,
-                            column: 1,
-                            source: String::new(),
-                        },
-                        "source file or module directory",
-                    ));
-                }
+                && forbidden(&name)
+                && file_modules.insert(source.path.clone())
+            {
+                findings.push(finding(
+                    self.id(),
+                    source,
+                    name,
+                    Location {
+                        path: source.path.clone(),
+                        line: 1,
+                        column: 1,
+                        source: String::new(),
+                    },
+                    "source file or module directory",
+                ));
+            }
 
             let mut visitor = ModuleVisitor {
                 rule: self.id(),

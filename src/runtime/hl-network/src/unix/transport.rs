@@ -64,12 +64,11 @@ impl EndpointState {
         Some(count)
     }
     fn enqueue(&mut self, input: &[u8], stream: bool) {
-        if stream
-            && let Some(buffer) = self.incoming.back_mut() {
-                buffer.extend_from_slice(input);
-                self.bytes += input.len();
-                return;
-            }
+        if stream && let Some(buffer) = self.incoming.back_mut() {
+            buffer.extend_from_slice(input);
+            self.bytes += input.len();
+            return;
+        }
         self.incoming.push_back(input.to_vec());
         self.bytes += input.len();
     }
@@ -312,7 +311,11 @@ impl SocketHostIo for UnixSocketHost {
     }
 
     fn cancel(&self, token: usize) {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).endpoints[token].canceled = true;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .endpoints[token]
+            .canceled = true;
         self.message_wait[token].notify_all();
         self.notify();
     }

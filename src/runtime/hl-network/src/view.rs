@@ -33,7 +33,6 @@ pub struct UnixSocketView {
 }
 
 impl NetworkCatalog {
-
     /// Captures every live `AF_UNIX` endpoint from a single catalog state.
     #[must_use]
     pub fn namespace_view(&self) -> NetworkNamespaceView {
@@ -87,5 +86,4 @@ impl NetworkCatalog {
             path,
         }
     }
-
 }

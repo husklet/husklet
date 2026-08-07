@@ -280,8 +280,10 @@ impl Pool {
             }
             match lane.jobs.try_send(Job::Dispatch(run)) {
                 Ok(()) => return Ok(()),
-                Err(mpsc::TrySendError::Full(Job::Dispatch(returned)) |
-mpsc::TrySendError::Disconnected(Job::Dispatch(returned))) => {
+                Err(
+                    mpsc::TrySendError::Full(Job::Dispatch(returned))
+                    | mpsc::TrySendError::Disconnected(Job::Dispatch(returned)),
+                ) => {
                     lane.busy.store(false, Ordering::Release);
                     run = returned;
                 }

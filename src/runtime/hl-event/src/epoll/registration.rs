@@ -16,7 +16,11 @@ impl Epoll {
         let target = target.into_durable();
         let key = EpollWatchKey::from_lease(&target);
         {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             if state.watches.iter().any(|watch| watch.key == key) {
                 return Err(EpollError::AlreadyExists);
@@ -26,7 +30,11 @@ impl Epoll {
             }
         }
         let token = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let token = state.next_token;
             state.next_token = state.next_token.wrapping_add(1).max(1);
             token
@@ -36,7 +44,11 @@ impl Epoll {
             token,
         });
         let subscription = target.subscribe_readiness(observer)?;
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate_active(&state)?;
         if state.watches.iter().any(|watch| watch.key == key) {
             drop(state);
@@ -74,7 +86,11 @@ impl Epoll {
             return Err(EpollError::InvalidArgument);
         }
         let key = EpollWatchKey::from_lease(target);
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate_active(&state)?;
         let index = state
             .watches
@@ -104,7 +120,11 @@ impl Epoll {
     pub fn delete(&self, target: &OperationLease) -> Result<(), EpollError> {
         let key = EpollWatchKey::from_lease(target);
         let removed = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             let index = state
                 .watches

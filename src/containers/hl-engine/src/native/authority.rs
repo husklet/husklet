@@ -99,11 +99,9 @@ pub enum ProjectionError {
 #[cfg(unix)]
 impl AuthorityWorker {
     pub fn inherit(descriptor: i32, health: i32) -> Result<Self, EngineError> {
-        let mut stream =
-            crate::ffi::linux::InheritedStream::adopt(descriptor).step("session_adopt")?;
+        let mut stream = crate::ffi::linux::InheritedStream::adopt(descriptor).step("session_adopt")?;
         let secret = Secret::receive(&mut stream).step("secret_recv")?;
-        let session =
-            connect(&mut stream, secret, Limits::new(4096, 8).unwrap()).step("session_connect")?;
+        let session = connect(&mut stream, secret, Limits::new(4096, 8).unwrap()).step("session_connect")?;
         let health = crate::ffi::linux::InheritedStream::adopt(health).step("health_adopt")?;
         Ok(Self {
             stream,
@@ -120,10 +118,7 @@ impl AuthorityWorker {
         self.session
             .send(&mut self.stream, FrameKind::Ready, &[])
             .step("ready_send")?;
-        let reply = self
-            .session
-            .receive(&mut self.stream)
-            .step("ready_recv")?;
+        let reply = self.session.receive(&mut self.stream).step("ready_recv")?;
         if reply.kind != FrameKind::Ready || !reply.payload.is_empty() {
             return Err(EngineError::denied("ready_reply"));
         }
@@ -134,10 +129,7 @@ impl AuthorityWorker {
         self.session
             .send(&mut self.stream, FrameKind::Ping, payload)
             .step("ping_send")?;
-        let reply = self
-            .session
-            .receive(&mut self.stream)
-            .step("ping_recv")?;
+        let reply = self.session.receive(&mut self.stream).step("ping_recv")?;
         (reply.kind == FrameKind::Ping)
             .then_some(reply.payload)
             .step("ping_reply")
@@ -185,10 +177,7 @@ impl AuthorityWorker {
     }
 
     pub fn health(&self) -> Result<AuthorityHealth, EngineError> {
-        self.health
-            .try_clone()
-            .map(AuthorityHealth)
-            .step("health_clone")
+        self.health.try_clone().map(AuthorityHealth).step("health_clone")
     }
 }
 
@@ -204,9 +193,7 @@ impl AuthorityHealth {
     }
 
     pub fn stop(&self) -> Result<(), EngineError> {
-        self.0
-            .shutdown(std::net::Shutdown::Both)
-            .step("health_shutdown")
+        self.0.shutdown(std::net::Shutdown::Both).step("health_shutdown")
     }
 }
 
@@ -328,10 +315,7 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
 
     pub fn worker(&self, channel: AuthorityChannel) -> Result<AuthorityWorker, EngineError> {
         let state = self.state.lock().map_err(|_| EngineError::Synchronization)?;
-        let pending = state
-            .pending
-            .get(&channel.descriptor().raw())
-            .step("pending_lookup")?;
+        let pending = state.pending.get(&channel.descriptor().raw()).step("pending_lookup")?;
         let stream = &pending.0;
         let health = pending.1.try_clone().step("health_stream_clone")?;
         let transfer = pending.2.try_clone().step("transfer_clone")?;
@@ -379,9 +363,7 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
         match process {
             Supervised::Exited(exit) => Ok(exit),
             Supervised::Running(handle) => {
-                handle
-                    .signal(ProcessSignal::Kill)
-                    .step("terminate_signal")?;
+                handle.signal(ProcessSignal::Kill).step("terminate_signal")?;
                 handle.wait_blocking().step("terminate_wait")
             }
         }
@@ -400,10 +382,7 @@ impl<S: ProcessSyscalls> ProcessAuthority<S> {
             Supervised::Exited(exit) => Ok(Some(exit)),
             Supervised::Running(handle) => {
                 let _ = handle.signal(ProcessSignal::Kill);
-                handle
-                    .wait_blocking()
-                    .map(Some)
-                    .step("cleanup_wait")
+                handle.wait_blocking().map(Some).step("cleanup_wait")
             }
         }
     }
@@ -423,9 +402,7 @@ impl<S: ProcessSyscalls + 'static> AuthorityAccess for ProcessAuthority<S> {
         let (health_worker, health_authority) = UnixStream::pair().step("health_pair")?;
         let (transfer_worker, transfer_authority) = UnixDatagram::pair().step("transfer_pair")?;
         let (worker_secret, authority_secret) = Secret::pair().step("secret_pipe")?;
-        worker_secret
-            .send(&mut authority)
-            .step("worker_secret_send")?;
+        worker_secret.send(&mut authority).step("worker_secret_send")?;
         authority_secret
             .send(&mut bootstrap_parent)
             .step("authority_secret_send")?;

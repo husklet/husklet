@@ -48,4 +48,3 @@ impl RouteTable {
         address[full] & mask == route.destination[full] & mask
     }
 }
-

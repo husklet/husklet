@@ -164,7 +164,10 @@ impl DatagramSocket {
     }
 
     pub fn close(&self) {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closed = true;
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed = true;
         self.readable.notify_all();
         self.writable.notify_all();
     }

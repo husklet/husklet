@@ -2,13 +2,12 @@
 
 #![forbid(unsafe_code)]
 
-
 mod ancillary;
 mod blocking;
 mod catalog;
-mod configuration;
 mod checkpoint;
 mod checkpoint_activity;
+mod configuration;
 mod egress;
 mod listener;
 mod platform;
@@ -20,25 +19,24 @@ mod socket_namespace;
 mod socket_ofd;
 mod unix;
 mod view;
-pub use configuration::NetworkConfiguration;
-pub use port_registry::PortRegistry;
-pub use routing::{Route, RouteTable};
-pub use socket_namespace::{SocketHost, SocketNamespace, SocketOperation};
 pub use ancillary::{
     ControlCodec, ControlEncoding, ControlError, ControlMessage, ControlWord, QueueMessageSnapshot,
     QueueRightsSnapshot, QueueSnapshot, ReceiveControl, SenderCredentials, UnixMessageQueue,
 };
 pub use catalog::{NetworkCatalog, NetworkCatalogError};
-pub use port_binding::PreparedBind;
-pub use view::{InternetSocketView, NetworkNamespaceView, UnixSocketView};
 pub use checkpoint::{
     AcceptedSocketCheckpoint, AuthoritySocketKey, AuthoritySocketLease, NETWORK_CHECKPOINT_SOCKET_MAXIMUM,
     NETWORK_CHECKPOINT_VERSION, NetworkCatalogRestore, NetworkCheckpointError, NetworkCheckpointImage,
     NetworkCheckpointRebind, NetworkResourceKey, NetworkSocketResource, NetworkSocketState, PortCheckpoint,
 };
+pub use configuration::NetworkConfiguration;
 pub use egress::{BIND_ROUTE_ALIAS_MAXIMUM, BindRoute, EgressInterface, EgressRoute};
 pub use listener::{AcceptError, AcceptedToken};
 pub use policy::{InterfaceConfiguration, NamespaceInterface, NetworkPolicy, NetworkPolicyError, RouteDisposition};
+pub use port_binding::PreparedBind;
+pub use port_registry::PortRegistry;
+pub use routing::{Route, RouteTable};
+pub use socket_namespace::{SocketHost, SocketNamespace, SocketOperation};
 pub use socket_ofd::{
     AcceptedDescription, SocketConnectError, SocketConnectStatus, SocketDescription, SocketHostError, SocketHostIo,
     SocketHostReadiness,
@@ -58,6 +56,7 @@ pub use unix::namespace::{
 pub use unix::pair::UnixSocketPair;
 pub use unix::snapshot::{UnixEndpointSnapshot, UnixPairSnapshot};
 pub use unix::transport::{UnixSocketEndpoint, UnixSocketHost, UnixTransportError};
+pub use view::{InternetSocketView, NetworkNamespaceView, UnixSocketView};
 
 pub(crate) const SOCKET_MAXIMUM: usize = 4096;
 

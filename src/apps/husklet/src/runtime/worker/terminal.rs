@@ -248,7 +248,6 @@ impl<'a> TerminalSession<'a> {
         }
         Ok(())
     }
-
 }
 
 /// Query the controlling terminal's size (cols, rows).

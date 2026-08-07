@@ -39,7 +39,10 @@ impl Reactor {
             }
             let Some(shared) = source.upgrade() else { return };
             Self::disarm(&shared, &tokens, &polls);
-            let observers = shared.observers.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let observers = shared
+                .observers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let ready = tokens
                 .drain(..)
                 .zip(polls.iter().skip(1))

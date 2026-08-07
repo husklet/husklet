@@ -28,7 +28,14 @@ async fn create_console_size_is_durable_and_checked() {
         .unwrap();
     let expected = Some(hl_container::Size::new(37, 119).unwrap());
     assert_eq!(
-        containers.inspect(&created.id).await.unwrap().spec.process.console.terminal,
+        containers
+            .inspect(&created.id)
+            .await
+            .unwrap()
+            .spec
+            .process
+            .console
+            .terminal,
         expected
     );
     for invalid in [
@@ -48,7 +55,14 @@ async fn create_console_size_is_durable_and_checked() {
 
     let reopened = TestDaemon::start(containers.clone(), &socket).await;
     assert_eq!(
-        containers.inspect(&created.id).await.unwrap().spec.process.console.terminal,
+        containers
+            .inspect(&created.id)
+            .await
+            .unwrap()
+            .spec
+            .process
+            .console
+            .terminal,
         expected
     );
     reopened.stop().await;

@@ -49,22 +49,37 @@ async fn system_contract_is_platform_derived_and_unsupported_routes_are_explicit
     .await;
     assert!(head.to_ascii_lowercase().contains("api-version: 1.43"));
     assert!(head.to_ascii_lowercase().contains("content-length: 0"));
-    assert!(head.to_ascii_lowercase().contains("content-type: text/plain; charset=utf-8"));
-    assert!(head.to_ascii_lowercase().contains("cache-control: no-cache, no-store, must-revalidate"));
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("content-type: text/plain; charset=utf-8")
+    );
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("cache-control: no-cache, no-store, must-revalidate")
+    );
     assert!(head.to_ascii_lowercase().contains("pragma: no-cache"));
     assert!(head.ends_with("\r\n\r\n"));
     assert!(!head.ends_with("OK"));
 
     for (method, status) in [("GET", "200"), ("HEAD", "200"), ("POST", "405")] {
-        let request = format!("{method} /v1.43/_ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        let request = format!(
+            "{method} /v1.43/_ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+        );
         let response = raw_http(&socket, request.as_bytes()).await;
-        assert!(response.starts_with(&format!("HTTP/1.1 {status}")), "{method}: {response}");
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {status}")),
+            "{method}: {response}"
+        );
         if method == "GET" {
             assert!(response.to_ascii_lowercase().contains("content-length: 2"));
             assert!(response.ends_with("\r\n\r\nOK"));
         } else if method == "HEAD" {
             assert!(response.to_ascii_lowercase().contains("content-length: 0"));
-            assert!(response.to_ascii_lowercase().contains("content-type: text/plain; charset=utf-8"));
+            assert!(
+                response
+                    .to_ascii_lowercase()
+                    .contains("content-type: text/plain; charset=utf-8")
+            );
             assert!(response.ends_with("\r\n\r\n"));
         }
     }

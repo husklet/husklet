@@ -27,10 +27,8 @@ pub(in super::super) async fn create(
     Json(mut request): Json<CreateContainer>,
 ) -> ApiResult<(StatusCode, Json<ContainerCreation>)> {
     request.validate_unsupported()?;
-    let console_size = crate::api::model::console_size(
-        request.host_config.as_ref().and_then(|host| host.console_size),
-    )
-    .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
+    let console_size = crate::api::model::console_size(request.host_config.as_ref().and_then(|host| host.console_size))
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error))?;
     if console_size.is_some() && !request.console.tty {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,

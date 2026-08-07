@@ -265,13 +265,21 @@ fn aarch64_compare_against_zero_matches_interpreter_at_each_boundary() {
             fault: None,
         })
         .expect("interpreter");
-        assert_eq!(machine.run_slice(1, count, &mut memory), StepOutcome::Yield, "boundary {count}");
+        assert_eq!(
+            machine.run_slice(1, count, &mut memory),
+            StepOutcome::Yield,
+            "boundary {count}"
+        );
         machine.freeze().expect("interpreter freeze");
         let ExecutionCpuSnapshot::Aarch64(interpreted) = machine.snapshot().expect("snapshot").cpu else {
             unreachable!()
         };
         assert_eq!(native, interpreted, "first state divergence after instruction {count}");
-        assert_eq!(storage.as_slice(), memory.data[0].data.as_slice(), "memory divergence after instruction {count}");
+        assert_eq!(
+            storage.as_slice(),
+            memory.data[0].data.as_slice(),
+            "memory divergence after instruction {count}"
+        );
     }
 }
 
@@ -2717,7 +2725,10 @@ fn x86_vex_register_operand_kinds_match_interpreter_at_each_boundary() {
 #[cfg(target_arch = "aarch64")]
 fn compare_state() -> X86CpuState {
     let mut initial = X86CpuState {
-        scalar: ScalarState { rip: 0x402720, ..Default::default() },
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -2743,7 +2754,10 @@ fn compare_operand() -> Vec<u8> {
 #[test]
 fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
     let mut initial = X86CpuState {
-        scalar: ScalarState { rip: 0x402720, ..Default::default() },
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[0] = 0x1122_3344_5566_7788;
@@ -2768,7 +2782,10 @@ fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
 #[cfg(target_arch = "aarch64")]
 fn sweep_state() -> X86CpuState {
     let mut initial = X86CpuState {
-        scalar: ScalarState { rip: 0x402720, ..Default::default() },
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[0] = 0x1122_3344_5566_7788;
@@ -2789,7 +2806,9 @@ fn sweep_state() -> X86CpuState {
 
 #[cfg(target_arch = "aarch64")]
 fn sweep_operand() -> Vec<u8> {
-    (0..512_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect()
+    (0..512_u32)
+        .map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8)
+        .collect()
 }
 
 /// Read-modify-write ALU against memory, in both operand directions and at every
@@ -2803,17 +2822,17 @@ fn x86_alu_memory_forms_match_interpreter_at_each_boundary() {
     for kind in 0..8_u8 {
         let base = kind << 3;
         let program: Vec<Vec<u8>> = vec![
-            vec![base, 0x1e],                    // op %bl,(%rsi)
-            vec![base | 1, 0x1e],                // op %ebx,(%rsi)
-            vec![0x48, base | 1, 0x1e],          // op %rbx,(%rsi)
-            vec![base | 2, 0x1e],                // op (%rsi),%bl
-            vec![base | 3, 0x1e],                // op (%rsi),%ebx
-            vec![0x48, base | 3, 0x1e],          // op (%rsi),%rbx
-            vec![0x80, base | 0x06, 0x5a],       // opb $0x5a,(%rsi)
-            vec![0x83, base | 0x06, 0xf9],       // opl $-7,(%rsi)
+            vec![base, 0x1e],                                      // op %bl,(%rsi)
+            vec![base | 1, 0x1e],                                  // op %ebx,(%rsi)
+            vec![0x48, base | 1, 0x1e],                            // op %rbx,(%rsi)
+            vec![base | 2, 0x1e],                                  // op (%rsi),%bl
+            vec![base | 3, 0x1e],                                  // op (%rsi),%ebx
+            vec![0x48, base | 3, 0x1e],                            // op (%rsi),%rbx
+            vec![0x80, base | 0x06, 0x5a],                         // opb $0x5a,(%rsi)
+            vec![0x83, base | 0x06, 0xf9],                         // opl $-7,(%rsi)
             vec![0x48, 0x81, base | 0x06, 0x21, 0x43, 0x65, 0x07], // opq $imm32,(%rsi)
-            vec![base, 0xd8],                    // op %bl,%al
-            vec![0x48, base | 1, 0xd8],          // op %rbx,%rax
+            vec![base, 0xd8],                                      // op %bl,%al
+            vec![0x48, base | 1, 0xd8],                            // op %rbx,%rax
         ];
         let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
         assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
@@ -2877,16 +2896,16 @@ fn x86_string_forms_match_interpreter_at_each_boundary() {
     let initial = sweep_state();
     let operand = sweep_operand();
     let program: Vec<Vec<u8>> = vec![
-        vec![0xa4],             // movsb
-        vec![0x66, 0xa5],       // movsw
-        vec![0xa5],             // movsl
-        vec![0x48, 0xa5],       // movsq
-        vec![0xaa],             // stosb
-        vec![0xab],             // stosl
-        vec![0x48, 0xab],       // stosq
-        vec![0xac],             // lodsb
-        vec![0xad],             // lodsl
-        vec![0x48, 0xad],       // lodsq
+        vec![0xa4],       // movsb
+        vec![0x66, 0xa5], // movsw
+        vec![0xa5],       // movsl
+        vec![0x48, 0xa5], // movsq
+        vec![0xaa],       // stosb
+        vec![0xab],       // stosl
+        vec![0x48, 0xab], // stosq
+        vec![0xac],       // lodsb
+        vec![0xad],       // lodsl
+        vec![0x48, 0xad], // lodsq
     ];
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
@@ -2965,12 +2984,12 @@ fn x86_multiply_divide_forms_match_interpreter_at_each_boundary() {
     initial.registers[3] = 0x0000_0000_0000_0025;
     let operand = sweep_operand();
     let program: Vec<Vec<u8>> = vec![
-        vec![0xf6, 0xe3],                         // mul %bl
-        vec![0xf7, 0xe3],                         // mul %ebx
-        vec![0x48, 0xf7, 0xe3],                   // mul %rbx
-        vec![0xf6, 0x26],                         // mulb (%rsi)
-        vec![0xf7, 0x26],                         // mull (%rsi)
-        vec![0x48, 0xf7, 0x26],                   // mulq (%rsi)
+        vec![0xf6, 0xe3],       // mul %bl
+        vec![0xf7, 0xe3],       // mul %ebx
+        vec![0x48, 0xf7, 0xe3], // mul %rbx
+        vec![0xf6, 0x26],       // mulb (%rsi)
+        vec![0xf7, 0x26],       // mull (%rsi)
+        vec![0x48, 0xf7, 0x26], // mulq (%rsi)
     ];
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
@@ -3007,12 +3026,17 @@ fn x86_sse_memory_forms_match_interpreter_at_each_boundary() {
 #[test]
 fn x86_load_string_merges_into_the_accumulator_at_each_boundary() {
     let mut initial = X86CpuState {
-        scalar: ScalarState { rip: 0x402720, ..Default::default() },
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[0] = 0x1122_3344_5566_7788;
     initial.registers[6] = 0x7040;
-    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    let operand: Vec<u8> = (0..256_u32)
+        .map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8)
+        .collect();
     let program: Vec<Vec<u8>> = vec![
         vec![0xac],       // lodsb
         vec![0x66, 0xad], // lodsw
@@ -3046,19 +3070,21 @@ fn x86_scalar_staging_preserves_vector_state_at_each_boundary() {
     initial.registers[3] = 0x1111_2222_3333_4444;
     initial.registers[6] = 0x7040;
     let program: Vec<Vec<u8>> = vec![
-        vec![0x48, 0x89, 0xc3],             // mov  %rax,%rbx
-        vec![0x48, 0x01, 0xd8],             // add  %rbx,%rax
-        vec![0x48, 0x8d, 0x04, 0x18],       // lea  (%rax,%rbx,1),%rax
-        vec![0x66, 0x0f, 0xd4, 0xc1],       // paddq %xmm1,%xmm0
-        vec![0x48, 0x29, 0xd8],             // sub  %rbx,%rax
-        vec![0x48, 0x0f, 0xc8],             // bswap %rax
-        vec![0x48, 0x0f, 0xaf, 0xc3],       // imul %rbx,%rax
-        vec![0x0f, 0x28, 0xd1],             // movaps %xmm1,%xmm2
-        vec![0x48, 0x21, 0xd8],             // and  %rbx,%rax
-        vec![0x48, 0x0f, 0xb6, 0xc3],       // movzbq %bl,%rax
-        vec![0x48, 0x31, 0xdb],             // xor  %rbx,%rbx
+        vec![0x48, 0x89, 0xc3],       // mov  %rax,%rbx
+        vec![0x48, 0x01, 0xd8],       // add  %rbx,%rax
+        vec![0x48, 0x8d, 0x04, 0x18], // lea  (%rax,%rbx,1),%rax
+        vec![0x66, 0x0f, 0xd4, 0xc1], // paddq %xmm1,%xmm0
+        vec![0x48, 0x29, 0xd8],       // sub  %rbx,%rax
+        vec![0x48, 0x0f, 0xc8],       // bswap %rax
+        vec![0x48, 0x0f, 0xaf, 0xc3], // imul %rbx,%rax
+        vec![0x0f, 0x28, 0xd1],       // movaps %xmm1,%xmm2
+        vec![0x48, 0x21, 0xd8],       // and  %rbx,%rax
+        vec![0x48, 0x0f, 0xb6, 0xc3], // movzbq %bl,%rax
+        vec![0x48, 0x31, 0xdb],       // xor  %rbx,%rbx
     ];
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
-    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(11) ^ 0x3c) as u8).collect();
+    let operand: Vec<u8> = (0..256_u32)
+        .map(|index| (index.wrapping_mul(11) ^ 0x3c) as u8)
+        .collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }

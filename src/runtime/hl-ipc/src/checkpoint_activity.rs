@@ -21,7 +21,11 @@ impl CheckpointActivity {
     pub(crate) fn admit(&self) -> Admission {
         let mut state = self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         while state.frozen {
-            state = self.0.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = self
+                .0
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         state.admitted += 1;
         Admission(self.0.clone())
@@ -31,17 +35,29 @@ impl CheckpointActivity {
         let mut state = self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.frozen = true;
         while state.admitted != 0 {
-            state = self.0.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);
+            state = self
+                .0
+                .changed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
     pub(crate) fn thaw(&self) {
-        self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).frozen = false;
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .frozen = false;
         self.0.changed.notify_all();
     }
 
     pub(crate) fn frozen(&self) -> bool {
-        self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).frozen
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .frozen
     }
 }
 

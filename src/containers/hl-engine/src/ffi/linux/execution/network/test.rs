@@ -1,8 +1,8 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::{Arc, Barrier};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use hl_descriptor::ReadinessObserver;
@@ -695,7 +695,10 @@ fn wildcard_alias_collision_preserves_foreign_path_and_resets_the_socket() {
     assert_eq!(std::fs::read(&alias_path).unwrap(), b"foreign");
     assert_eq!(
         host.local_address(socket.token),
-        Ok(SocketAddress::Inet4 { address: [0; 4], port: 0 })
+        Ok(SocketAddress::Inet4 {
+            address: [0; 4],
+            port: 0
+        })
     );
     assert!(
         host.bind(

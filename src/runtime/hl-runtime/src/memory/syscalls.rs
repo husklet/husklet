@@ -274,14 +274,14 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
                 continue;
             }
             let Some(source_address) = source[source_index].base.checked_add(source_offset) else {
-                return Self::copy_result(total)
+                return Self::copy_result(total);
             };
             let read = match self.memory.read(source_address, &mut buffer[..amount]) {
                 Ok(value) if value != 0 => value,
                 _ => return Self::copy_result(total),
             };
             let Some(destination_address) = destination[destination_index].base.checked_add(destination_offset) else {
-                return Self::copy_result(total)
+                return Self::copy_result(total);
             };
             let written = match self.memory.write(destination_address, &buffer[..read]) {
                 Ok(value) if value != 0 => value,
@@ -718,7 +718,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         if reserved && plan.requested_new_length > plan.requested_old_length {
             let start = GuestAddress::new(old.start().get() + plan.requested_old_length);
             let Ok(added) = AddressRange::nonempty(start, plan.requested_new_length - plan.requested_old_length) else {
-                return LinuxResult::Error(Errno::ENOMEM)
+                return LinuxResult::Error(Errno::ENOMEM);
             };
             batch.push(hl_memory::MappingOperation::Charge(added));
         }

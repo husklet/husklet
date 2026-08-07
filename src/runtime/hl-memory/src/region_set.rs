@@ -7,7 +7,12 @@ pub(crate) struct RegionSet {
 }
 
 impl RegionSet {
-    pub(crate) fn map(&mut self, request: MapRequest, charge: u64, reserved: bool) -> Result<GuestAddress, MemoryError> {
+    pub(crate) fn map(
+        &mut self,
+        request: MapRequest,
+        charge: u64,
+        reserved: bool,
+    ) -> Result<GuestAddress, MemoryError> {
         request.validate()?;
         let start = request.choose(&self.regions)?;
         let range = MappingRange::create(start, request.length)?;

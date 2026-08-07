@@ -141,7 +141,9 @@ impl Strings<'_> {
     }
 
     fn record(&mut self, expression: &Expr, literal: &Expr, kind: EvidenceKind) {
-        let Some((value, span)) = string_literal(literal) else { return };
+        let Some((value, span)) = string_literal(literal) else {
+            return;
+        };
         let Some(concept) = self.concept(expression) else {
             return;
         };
@@ -317,9 +319,10 @@ impl<'ast> Visit<'ast> for Strings<'_> {
 
     fn visit_expr_method_call(&mut self, item: &'ast ExprMethodCall) {
         if item.args.len() == 1
-            && let Some(argument) = item.args.first() {
-                self.record_target(&item.method.to_string(), argument);
-            }
+            && let Some(argument) = item.args.first()
+        {
+            self.record_target(&item.method.to_string(), argument);
+        }
         syn::visit::visit_expr_method_call(self, item);
     }
 }

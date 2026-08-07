@@ -38,7 +38,10 @@ impl SharedBacking for MemoryBacking {
     }
 
     fn resize(&self, size: usize) -> Result<(), SharedError> {
-        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).resize(size, 0);
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .resize(size, 0);
         Ok(())
     }
 

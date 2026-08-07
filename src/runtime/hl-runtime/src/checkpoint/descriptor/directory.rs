@@ -12,7 +12,7 @@ pub struct DirectoryObjectCatalog {
 
 pub trait DirectoryObjectCheckpoint: DescriptorObjectCheckpoint {
     fn payload_size(&self, identity: u64, object: &dyn OpenFileDescription)
-        -> Result<usize, DescriptorCheckpointError>;
+    -> Result<usize, DescriptorCheckpointError>;
 
     fn owns(&self, identity: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError>;
 }
@@ -194,10 +194,12 @@ mod test {
             ambiguous.snapshot(7, &Directory),
             Err(DescriptorCheckpointError::Object)
         );
-        assert!(DirectoryObjectCatalog::rejecting()
-            .bind(1, Arc::new(Codec { owner: 7 }))
-            .rebind(&image(99_u32.to_le_bytes().to_vec()))
-            .is_err());
+        assert!(
+            DirectoryObjectCatalog::rejecting()
+                .bind(1, Arc::new(Codec { owner: 7 }))
+                .rebind(&image(99_u32.to_le_bytes().to_vec()))
+                .is_err()
+        );
     }
 
     #[test]

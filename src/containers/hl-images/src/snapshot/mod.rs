@@ -15,10 +15,10 @@ mod archive;
 mod tree;
 use tree::Tree;
 mod record;
-pub(crate) use record::LayerRecord;
-use record::{DraftOwner, Publication};
 use crate::storage::{Native, Persistence as _};
 use fs2::FileExt as _;
+pub(crate) use record::LayerRecord;
+use record::{DraftOwner, Publication};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Id(String);
@@ -197,10 +197,7 @@ impl Snapshots {
         self.publication(id)?;
         let path = self.root.join("committed").join(id.as_str());
         if !path.is_dir() {
-            return Err(Error::InvalidMetadata(format!(
-                "unknown snapshot {}",
-                id.as_str()
-            )));
+            return Err(Error::InvalidMetadata(format!("unknown snapshot {}", id.as_str())));
         }
         Ok(View {
             id: id.clone(),
@@ -333,7 +330,9 @@ impl Snapshots {
             return Err(Error::InvalidMetadata("snapshot publication exceeds 128 KiB".into()));
         }
         let publication = serde_json::from_slice::<Publication>(&bytes)
-            .map_err(|error| Error::InvalidMetadata(format!("malformed snapshot publication {}: {error}", path.display())))?
+            .map_err(|error| {
+                Error::InvalidMetadata(format!("malformed snapshot publication {}: {error}", path.display()))
+            })?
             .validate()?;
         publication.validate_key(id)?;
         Ok(publication)
@@ -609,8 +608,13 @@ mod publication_tests {
                 |parent| Digest::sha256(format!("{parent} {diff_id}").as_bytes()),
             );
             records.push(
-                LayerRecord::new(diff_id, parent.clone(), chain_id.clone(), DiffSize::new(index as u64 + 1))
-                    .unwrap(),
+                LayerRecord::new(
+                    diff_id,
+                    parent.clone(),
+                    chain_id.clone(),
+                    DiffSize::new(index as u64 + 1),
+                )
+                .unwrap(),
             );
             parent = Some(chain_id);
         }
@@ -653,7 +657,7 @@ mod publication_tests {
         snapshots
             .prepare(Id::new("draft-malformed").unwrap(), None)
             .unwrap()
-            .commit_layer(key.clone(), layers, )
+            .commit_layer(key.clone(), layers)
             .unwrap();
         std::fs::write(snapshots.publication_path(&key), b"not-json").unwrap();
 

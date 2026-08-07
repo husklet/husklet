@@ -57,7 +57,6 @@ impl ExitStatus {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CpuUsage {
     pub self_nanoseconds: u64,
@@ -98,7 +97,6 @@ impl CpuUsage {
         self.self_nanoseconds.saturating_add(self.children_nanoseconds)
     }
 }
-
 
 #[derive(Debug)]
 #[must_use = "a clone plan must be committed or rolled back"]
@@ -176,7 +174,6 @@ impl SignalPendingEvent {
         sink.pending_changed(self.thread, self.pending)
     }
 }
-
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskError {

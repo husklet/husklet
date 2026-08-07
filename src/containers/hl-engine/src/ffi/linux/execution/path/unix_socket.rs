@@ -121,8 +121,13 @@ impl PreparedUnixSocketPathUnlink for Unlink {
 
 impl UnixSocketPathPort for UnixSocketPaths {
     fn prepare_bind(&self, pathname: &GuestPathBytes) -> Result<Box<dyn PreparedUnixSocketPathBind>, hl_linux::Errno> {
-        let entry = self.entry(pathname, true).map_err(hl_runtime::RuntimePathError::errno)?;
-        let identity = self.host.access_identity().map_err(hl_runtime::RuntimePathError::errno)?;
+        let entry = self
+            .entry(pathname, true)
+            .map_err(hl_runtime::RuntimePathError::errno)?;
+        let identity = self
+            .host
+            .access_identity()
+            .map_err(hl_runtime::RuntimePathError::errno)?;
         let metadata = super::attribute::Descriptor::new(entry.parent.as_raw_fd())
             .metadata()
             .map_err(hl_runtime::RuntimePathError::errno)?;

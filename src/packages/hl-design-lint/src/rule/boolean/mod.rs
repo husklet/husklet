@@ -236,22 +236,23 @@ impl Visit<'_> for Collector<'_> {
 
     fn visit_expr_struct(&mut self, item: &ExprStruct) {
         if !self.test_scope
-            && let Some(name) = item.path.segments.last().map(|segment| segment.ident.to_string()) {
-                let values = item
-                    .fields
-                    .iter()
-                    .filter_map(|field| {
-                        let Member::Named(name) = &field.member else {
-                            return None;
-                        };
-                        literal_bool(&field.expr).map(|value| (name.to_string(), value))
-                    })
-                    .collect();
-                self.literals.entry(self.key(&name)).or_default().push(Construction {
-                    values,
-                    location: self.source.location(item.span()),
-                });
-            }
+            && let Some(name) = item.path.segments.last().map(|segment| segment.ident.to_string())
+        {
+            let values = item
+                .fields
+                .iter()
+                .filter_map(|field| {
+                    let Member::Named(name) = &field.member else {
+                        return None;
+                    };
+                    literal_bool(&field.expr).map(|value| (name.to_string(), value))
+                })
+                .collect();
+            self.literals.entry(self.key(&name)).or_default().push(Construction {
+                values,
+                location: self.source.location(item.span()),
+            });
+        }
         syn::visit::visit_expr_struct(self, item);
     }
 
@@ -322,10 +323,11 @@ impl Visit<'_> for Assignments {
     fn visit_expr_assign(&mut self, item: &ExprAssign) {
         if let Expr::Field(field) = item.left.as_ref()
             && matches!(field.base.as_ref(), Expr::Path(path) if path.path.is_ident("self"))
-                && let Member::Named(name) = &field.member
-                    && let Some(value) = literal_bool(&item.right) {
-                        self.values.insert(name.to_string(), value);
-                    }
+            && let Member::Named(name) = &field.member
+            && let Some(value) = literal_bool(&item.right)
+        {
+            self.values.insert(name.to_string(), value);
+        }
         syn::visit::visit_expr_assign(self, item);
     }
 }
@@ -338,10 +340,11 @@ struct Exclusions {
 impl Visit<'_> for Exclusions {
     fn visit_expr_binary(&mut self, item: &ExprBinary) {
         if matches!(item.op, BinOp::And(_))
-            && let (Some(left), Some(right)) = (self_field(&item.left), self_field(&item.right)) {
-                let pair = if left < right { (left, right) } else { (right, left) };
-                self.pairs.insert(pair);
-            }
+            && let (Some(left), Some(right)) = (self_field(&item.left), self_field(&item.right))
+        {
+            let pair = if left < right { (left, right) } else { (right, left) };
+            self.pairs.insert(pair);
+        }
         syn::visit::visit_expr_binary(self, item);
     }
 }

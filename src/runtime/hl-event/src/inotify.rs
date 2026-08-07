@@ -182,10 +182,18 @@ impl Inotify {
         if path.is_empty() || !mask.valid_watch() {
             return Err(InotifyError::InvalidArgument);
         }
-        let _mutation = self.inner.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _mutation = self
+            .inner
+            .mutation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let binding = self.inner.source.resolve(WatchRequest { path, mask })?;
         let existing = {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::ensure_active(&state)?;
             state.slots.iter().position(|slot| {
                 slot.watch
@@ -200,9 +208,17 @@ impl Inotify {
     }
 
     pub fn remove_watch(&self, watch_descriptor: i32) -> Result<(), InotifyError> {
-        let _mutation = self.inner.mutation.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _mutation = self
+            .inner
+            .mutation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (index, token) = {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::ensure_active(&state)?;
             let index = Self::watch_index(watch_descriptor, state.slots.len())?;
             let watch = state.slots[index].watch.as_ref().ok_or(InotifyError::InvalidArgument)?;
@@ -213,7 +229,11 @@ impl Inotify {
             Err(error) => return Err(error.into()),
         }
         let notify = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.slots[index]
                 .watch
                 .as_ref()
@@ -248,7 +268,11 @@ impl Inotify {
     }
 
     pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), InotifyError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::ensure_active(&state)?;
         state.nonblocking = nonblocking;
         self.inner.changed.notify_all();
@@ -257,7 +281,11 @@ impl Inotify {
 
     #[must_use]
     pub fn readiness(&self, interests: Readiness) -> Readiness {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let ready = if state.retired {
             Readiness::ERROR
         } else if !state.queue.is_empty() {
@@ -269,7 +297,11 @@ impl Inotify {
     }
 
     pub fn next_rename_cookie(&self) -> Result<u32, InotifyError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::ensure_active(&state)?;
         let cookie = state.next_cookie;
         state.next_cookie = state.next_cookie.wrapping_add(1).max(1);
@@ -278,7 +310,11 @@ impl Inotify {
 
     #[must_use]
     pub fn snapshot(&self) -> InotifySnapshot {
-        let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         InotifySnapshot {
             limits: self.inner.limits,
             nonblocking: state.nonblocking,
@@ -322,7 +358,11 @@ impl Inotify {
 
     fn modify_existing(&self, index: usize, requested: InotifyMask) -> Result<i32, InotifyError> {
         let (token, previous, descriptor) = {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let watch = state.slots[index].watch.as_ref().ok_or(InotifyError::InvalidArgument)?;
             if requested.contains(InotifyMask::MASK_CREATE) {
                 return Err(InotifyError::AlreadyExists);
@@ -339,7 +379,11 @@ impl Inotify {
             requested.source_bits()
         };
         self.inner.source.modify(token, next)?;
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let watch = state.slots[index]
             .watch
             .as_mut()
@@ -351,7 +395,11 @@ impl Inotify {
 
     fn install_new(&self, binding: WatchBinding, requested: InotifyMask) -> Result<i32, InotifyError> {
         let (index, generation, token) = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::ensure_active(&state)?;
             let index = match state.slots.iter().position(|slot| slot.watch.is_none()) {
                 Some(index) => index,
@@ -372,7 +420,11 @@ impl Inotify {
         };
         let mask = requested.source_bits();
         self.inner.source.add(binding, token, mask)?;
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::ensure_active(&state)?;
         if state.slots[index].generation != generation || state.slots[index].watch.is_some() {
             drop(state);

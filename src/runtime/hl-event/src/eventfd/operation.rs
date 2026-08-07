@@ -32,7 +32,11 @@ impl EventFd {
         let _subscription = cancellation
             .map(|cancellation| cancellation.subscribe(Arc::new(Notification(Arc::downgrade(&self.inner)))));
         let (value, notifications) = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             while state.counter == 0 {
                 if state.retired {
                     return Err(EventFdError::Retired);
@@ -82,7 +86,11 @@ impl EventFd {
         let _subscription = cancellation
             .map(|cancellation| cancellation.subscribe(Arc::new(Notification(Arc::downgrade(&self.inner)))));
         let notifications = {
-            let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             while value > COUNTER_MAX - state.counter {
                 if state.retired {
                     return Err(EventFdError::Retired);

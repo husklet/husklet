@@ -367,7 +367,10 @@ impl EpollRegistry {
     }
 
     fn lock(&self) -> MutexGuard<'_, RegistryState> {
-        self.core.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.core
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn active_snapshots(state: &RegistryState) -> Vec<WatchSnapshot> {
@@ -421,7 +424,11 @@ pub struct CallbackLease {
 
 impl CallbackLease {
     pub fn ready(&self, readiness: u32) {
-        let mut state = self.core.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .core
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Ok(watch) = EpollRegistry::watch_mut(&mut state, self.token) {
             watch.ready |= readiness & watch.config.interests;
         }
@@ -433,7 +440,11 @@ impl Drop for CallbackLease {
         if !self.active {
             return;
         }
-        let mut state = self.core.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .core
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Ok(watch) = EpollRegistry::watch_mut(&mut state, self.token) {
             watch.callbacks -= 1;
             if watch.callbacks == 0 {

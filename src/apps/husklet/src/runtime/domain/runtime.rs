@@ -8,7 +8,7 @@ use hl_ws::Arch;
 use crate::config::WorkspaceConfig;
 use crate::paths;
 
-use super::{CONTAINER, Configuration, SIGNATURE};
+use super::{Configuration, CONTAINER, SIGNATURE};
 
 /// Composes the container capabilities that back one workspace execution domain.
 pub(super) struct Runtime;

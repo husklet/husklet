@@ -129,7 +129,10 @@ impl<H: MemoryAccessHost> Coordinator<H> {
         incarnation: u64,
     ) -> Result<ProjectionLease<'_, H>, MemoryError> {
         let admission = self.activity.admit_memory()?;
-        let transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mapping_requests = self.mapping_requests.load(Ordering::Acquire);
         let range = AddressRange::nonempty(address, length).map_err(|_| MemoryError::AddressOverflow)?;
         let resolution = self
@@ -648,12 +651,7 @@ mod publication_test {
             shared: false,
         };
         assert_eq!(
-            WritePublication::classify_candidate(
-                backing,
-                Protection::WRITE.union(Protection::EXECUTE),
-                true,
-                false,
-            ),
+            WritePublication::classify_candidate(backing, Protection::WRITE.union(Protection::EXECUTE), true, false,),
             WritePublication::Exact
         );
         assert_eq!(

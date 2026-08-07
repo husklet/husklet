@@ -86,7 +86,10 @@ impl Source {
     }
 
     pub(crate) fn mask(&self, token: u64) -> InotifyMask {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).masks[&token]
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .masks[&token]
     }
 
     pub(crate) fn removes(&self) -> Vec<u64> {
@@ -144,7 +147,10 @@ impl WatchSource for Source {
         observer: Arc<dyn WatchSourceObserver>,
     ) -> Result<Box<dyn WatchSourceSubscription>, WatchSourceError> {
         let active = Arc::new(AtomicBool::new(true));
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).observer = Some((observer, active.clone()));
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observer = Some((observer, active.clone()));
         Ok(Box::new(Subscription { active }))
     }
 }

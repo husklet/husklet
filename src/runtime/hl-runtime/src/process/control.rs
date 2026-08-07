@@ -85,7 +85,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             .map(|thread| thread.id)
             .collect::<Vec<_>>();
         let Ok(published) = runtime.exit_once(self.process, &threads, status) else {
-            return LinuxResult::Error(Errno::EINVAL)
+            return LinuxResult::Error(Errno::EINVAL);
         };
         if published {
             if let Some(alarms) = &self.alarms {
@@ -237,13 +237,13 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
 
     fn change_limit_for(&self, process: ProcessId, resource: Resource, replacement: Limit) -> LinuxResult {
         let Some(snapshot) = self
-        .tasks
-        .snapshot()
-        .processes
-        .into_iter()
-        .find(|snapshot| snapshot.id == process)
+            .tasks
+            .snapshot()
+            .processes
+            .into_iter()
+            .find(|snapshot| snapshot.id == process)
         else {
-            return LinuxResult::Error(Errno::ESRCH)
+            return LinuxResult::Error(Errno::ESRCH);
         };
         let current = snapshot
             .limits
@@ -449,7 +449,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     pub(crate) fn getpgid(&self, pid: i32) -> LinuxResult {
-        let Some(process) = self.resolve_process(pid) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Some(process) = self.resolve_process(pid) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
         match self.tasks.process_group_id(process) {
             Ok(group) => LinuxResult::Value(group.number() as u64),
             Err(_) => LinuxResult::Error(Errno::ESRCH),
@@ -457,7 +459,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     }
 
     pub(crate) fn getsid(&self, pid: i32) -> LinuxResult {
-        let Some(process) = self.resolve_process(pid) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Some(process) = self.resolve_process(pid) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
         match self.tasks.session_id(process) {
             Ok(session) => LinuxResult::Value(session.number() as u64),
             Err(_) => LinuxResult::Error(Errno::ESRCH),
@@ -468,7 +472,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         if pgid < 0 {
             return LinuxResult::Error(Errno::EINVAL);
         }
-        let Some(target) = self.resolve_process(pid) else { return LinuxResult::Error(Errno::ESRCH) };
+        let Some(target) = self.resolve_process(pid) else {
+            return LinuxResult::Error(Errno::ESRCH);
+        };
         let destination = if pgid == 0 || pgid as u32 == target.number() {
             self.resolve_group(target.number())
         } else {

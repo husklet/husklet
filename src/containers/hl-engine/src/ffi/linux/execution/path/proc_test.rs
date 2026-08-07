@@ -120,11 +120,7 @@ fn followed_magic_link_open_survives_task_reap() {
         .host
         .prepare_open(
             &base,
-            &Fixture::plan(
-                b"/proc/self/cwd",
-                OpenIntent::READ | OpenIntent::DIRECTORY,
-                false,
-            ),
+            &Fixture::plan(b"/proc/self/cwd", OpenIntent::READ | OpenIntent::DIRECTORY, false),
         )
         .unwrap();
     let object = opened.object();

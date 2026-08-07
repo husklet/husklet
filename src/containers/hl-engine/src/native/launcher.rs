@@ -325,10 +325,11 @@ impl<S: ProcessSyscalls> Launcher for ProcessLauncher<S> {
             }
         };
         if let (Some(access), Some(channel)) = (&self.authority, authority_channel)
-            && let Err(error) = access.commit(channel) {
-                let _ = process.signal(ProcessSignal::Kill);
-                return Err(error);
-            }
+            && let Err(error) = access.commit(channel)
+        {
+            let _ = process.signal(ProcessSignal::Kill);
+            return Err(error);
+        }
         let identifier = u64::from(process.id().get());
         self.children
             .lock()

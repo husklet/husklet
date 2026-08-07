@@ -37,8 +37,8 @@ pub use object_contract::{
     OperationContext, PipeTransferEndpoint, PreparedAtomicRead, PreparedSpliceRead, Readiness,
 };
 pub use ofd_values::{DirectoryBatch, DirectoryBatchToken, OfdDirectoryEntry, OfdMetadata, OfdTimestamp};
-pub use signal_delivery::{SignalDelivery, SignalOwner, SignalSource};
 pub use readiness::{DescriptionIdentity, ReadinessObserver, ReadinessRegistry, ReadinessSubscription};
+pub use signal_delivery::{SignalDelivery, SignalOwner, SignalSource};
 pub use table::{DescriptorTable, FIRST_DESCRIPTOR, Reservation};
 pub use table_snapshot::{SnapshotBudget, SnapshotError};
 pub use transfer::{DescriptionInstallTransaction, DescriptionRef, PreparedDescriptorInstall, PreparedInstallBatch};

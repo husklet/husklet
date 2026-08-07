@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use hl_checkpoint::{CheckpointImage, Section};
 use hl_descriptor::{
-    DescriptorCheckpointError, DescriptorEntryImage, DescriptorFlags, DescriptorGenerationImage,
-    DescriptorObjectCheckpoint, DescriptorTable as HostDescriptorTable, DescriptorTableImage, ObjectKind,
-    OpenDescriptionImage, StatusFlags, DESCRIPTOR_CHECKPOINT_VERSION,
+    DESCRIPTOR_CHECKPOINT_VERSION, DescriptorCheckpointError, DescriptorEntryImage, DescriptorFlags,
+    DescriptorGenerationImage, DescriptorObjectCheckpoint, DescriptorTable as HostDescriptorTable,
+    DescriptorTableImage, ObjectKind, OpenDescriptionImage, StatusFlags,
 };
 
 use crate::{

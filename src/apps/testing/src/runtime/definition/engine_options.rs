@@ -52,8 +52,7 @@ impl EngineOptions {
                 guest.push(entry.clone());
                 continue;
             };
-            let value =
-                String::from_utf8(entry.value().to_vec()).map_err(|_| format!("{name} value is not UTF-8"))?;
+            let value = String::from_utf8(entry.value().to_vec()).map_err(|_| format!("{name} value is not UTF-8"))?;
             options.absorb(&name, &value)?;
         }
         Ok((guest, options))

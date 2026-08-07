@@ -57,7 +57,10 @@ impl<H: SocketHostIo> ListenerQueue<H> {
     }
 
     pub fn set_backlog(&self, backlog: usize) {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).backlog = backlog.max(1);
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .backlog = backlog.max(1);
     }
 
     pub fn publish(&self, accepted: AcceptedToken<H::Token>) -> Result<(), AcceptError> {

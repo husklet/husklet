@@ -104,7 +104,10 @@ fn socket_teardown_child() {
     let count = if mode.ends_with("isolation") { 2 } else { 1 };
     let mut engines = Vec::new();
     for _ in 0..count {
-        let engine = Builder::new(isa, &guest).with_argument("blocking-read").build().unwrap();
+        let engine = Builder::new(isa, &guest)
+            .with_argument("blocking-read")
+            .build()
+            .unwrap();
         engine.start().unwrap();
         engines.push(engine);
     }

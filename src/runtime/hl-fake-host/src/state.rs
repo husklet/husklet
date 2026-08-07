@@ -217,6 +217,9 @@ impl FakeHost {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
-        self.shared.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }

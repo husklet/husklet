@@ -56,12 +56,7 @@ impl ExtendedMemory {
             if decoded.opcode == 0xdb && group == 4 {
                 return Ok(ScalarInstruction::X87Unary { operation: 9, source });
             }
-            if decoded.opcode == 0xd9
-                && matches!(
-                    (group, source),
-                    (2, 0) | (4, 0 | 1 | 5) | (6 | 7, 0..=7)
-                )
-            {
+            if decoded.opcode == 0xd9 && matches!((group, source), (2, 0) | (4, 0 | 1 | 5) | (6 | 7, 0..=7)) {
                 return Ok(ScalarInstruction::X87Unary {
                     operation: group,
                     source,

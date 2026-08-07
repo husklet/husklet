@@ -477,7 +477,8 @@ impl Memory {
             let (coordinate, mapping_end) = state.mappings.reservation(address)?;
             let epochs = if coordinate.shared() {
                 self.shared
-                    .as_ref().map_or_else(|| Arc::clone(&self.reservations), |store| store.reservation_epochs())
+                    .as_ref()
+                    .map_or_else(|| Arc::clone(&self.reservations), |store| store.reservation_epochs())
             } else {
                 Arc::clone(&self.reservations)
             };

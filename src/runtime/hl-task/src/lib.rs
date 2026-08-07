@@ -23,22 +23,19 @@ mod trace;
 pub(crate) use registry::Activity as RegistryActivity;
 
 pub use affinity::{CpuAffinity, CpuTopology};
-pub use fork_model::{
-    FORK_WIRE_VERSION, ForkCloneFlags, ForkEntityId, ForkModelError, ForkRequest, ForkWireSnapshot,
-    MAX_FORK_PARTICIPANTS,
-};
-pub use identity::{ProcessGroupId, ProcessId, SessionId, ThreadId};
 pub use child_wait::{
     ChildClass, ChildClassSelector, ChildEvent, ChildEventKind, ChildSelector, ChildWaitOptions, ChildWaitResult,
     PreparedChildWait, PreparedWaitSelection, WaitEvent, WaitSelector,
 };
 pub use credentials::{CapabilitySets, ProcessCredentials, SetIdAuthority};
+pub use fork_model::{
+    FORK_WIRE_VERSION, ForkCloneFlags, ForkEntityId, ForkModelError, ForkRequest, ForkWireSnapshot,
+    MAX_FORK_PARTICIPANTS,
+};
+pub use identity::{ProcessGroupId, ProcessId, SessionId, ThreadId};
 pub use model::{
     CancellationEvent, CloneThreadPlan, CpuAccount, CpuUsage, ExitStatus, ForkProcessPlan, ProcessLifecycle,
     RegistryConfig, SignalPendingEvent, TaskError, ThreadLifecycle,
-};
-pub use snapshot::{
-    ProcessGroupSnapshot, ProcessObservation, ProcessSnapshot, RegistrySnapshot, SessionSnapshot, ThreadSnapshot,
 };
 pub use namespace::{
     IdMap, IdRange, MAX_ID_RANGES, MapError, NamespaceId, NamespaceKind, NamespaceSet, SetgroupsState,
@@ -60,6 +57,9 @@ pub use signal::{
     AlternateStack, DeliveryAction, PendingTarget, PreparedForcedDelivery, PreparedSignalWait, SIGNAL_FRAME_MAXIMUM,
     SignalAction, SignalDisposition, SignalExecPlan, SignalForkPlan, SignalFrameScope, SignalInfo, SignalMask,
     SignalNumber, SignalProcessSnapshot, SignalQueueError, SignalThreadSnapshot, SignalThreadTarget,
+};
+pub use snapshot::{
+    ProcessGroupSnapshot, ProcessObservation, ProcessSnapshot, RegistrySnapshot, SessionSnapshot, ThreadSnapshot,
 };
 pub use trace::{
     TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission, TraceResume, TraceSnapshot, TraceStop, TraceWait,

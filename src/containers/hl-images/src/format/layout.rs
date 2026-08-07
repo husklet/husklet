@@ -9,8 +9,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{
     Descriptor, Digest, Error, Image, Reference, Result,
     content::{FsStore, Store},
-    error::At as _,
     copy_graph,
+    error::At as _,
     remote::{BlobStream, Source},
     transfer::{CopyReport, Target},
 };
@@ -66,8 +66,11 @@ impl Layout {
             content: content.clone(),
         };
         let report = copy_graph(&source, self, &image.name, image.target.clone()).await?;
-        let mut index: serde_json::Value =
-            serde_json::from_slice(&tokio::fs::read(self.root.join("index.json")).await.at(self.root.join("index.json"))?)?;
+        let mut index: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(self.root.join("index.json"))
+                .await
+                .at(self.root.join("index.json"))?,
+        )?;
         let manifests = index
             .get_mut("manifests")
             .and_then(serde_json::Value::as_array_mut)
@@ -125,7 +128,12 @@ impl Layout {
             file.sync_all().await.at(&temporary)?;
             drop(file);
             tokio::fs::rename(&temporary, path).await.at(path)?;
-            tokio::fs::File::open(parent).await.at(parent)?.sync_all().await.at(parent)?;
+            tokio::fs::File::open(parent)
+                .await
+                .at(parent)?
+                .sync_all()
+                .await
+                .at(parent)?;
             Ok(())
         }
         .await;

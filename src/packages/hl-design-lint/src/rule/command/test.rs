@@ -55,9 +55,11 @@ fn commands() {
     );
     assert_eq!(values.len(), 5);
     assert!(values.iter().all(crate::Finding::is_violation));
-    assert!(values
-        .iter()
-        .all(|finding| finding.message.contains("outside an application")));
+    assert!(
+        values
+            .iter()
+            .all(|finding| finding.message.contains("outside an application"))
+    );
 }
 
 #[test]

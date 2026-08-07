@@ -62,7 +62,8 @@ impl FpArithmeticPort for Aarch64SoftFloat {
                     && request.left & source_fraction != 0
                 {
                     let destination_sign = 1_u64 << (destination.bits() - 1);
-                    value = value & !destination_sign | (u64::from(request.left >> (request.format.bits() - 1) != 0) * destination_sign);
+                    value = value & !destination_sign
+                        | (u64::from(request.left >> (request.format.bits() - 1) != 0) * destination_sign);
                 }
                 let destination_mantissa = destination.bits()
                     - match destination {

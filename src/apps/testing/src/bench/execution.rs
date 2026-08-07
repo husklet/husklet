@@ -78,7 +78,10 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     };
     setup.insert("provenance_build".into(), elapsed_us(started));
     let started = Instant::now();
-    let artifact_identity = artifact.as_deref().map(crate::record::FramedIdentity::of_file).transpose()?;
+    let artifact_identity = artifact
+        .as_deref()
+        .map(crate::record::FramedIdentity::of_file)
+        .transpose()?;
     setup.insert("provenance_artifact_identity".into(), elapsed_us(started));
     let compiler = benchmark
         .rootfs_executable
@@ -108,7 +111,14 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     let runner_identity = crate::record::FramedIdentity::of_file(&runner)?;
     let definition = fs::read(benchmark.directory.join("test.yaml"))?;
     let source = artifact.as_ref().map_or_else(
-        || Ok(benchmark.rootfs_executable.as_deref().unwrap_or_default().as_bytes().to_vec()),
+        || {
+            Ok(benchmark
+                .rootfs_executable
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes()
+                .to_vec())
+        },
         |_| fs::read(benchmark.source_path()),
     )?;
     let golden = fs::read(&case.stdout_contains)?;
@@ -181,10 +191,11 @@ async fn execute(
         return Err("benchmark image identity changed after resume admission".into());
     }
     if let (Some(artifact), Some(identity)) = (&prepared.artifact, &prepared.artifact_identity)
-        && crate::record::FramedIdentity::of_file(artifact)? != *identity {
-            image.release()?;
-            return Err("benchmark artifact identity changed after resume admission".into());
-        }
+        && crate::record::FramedIdentity::of_file(artifact)? != *identity
+    {
+        image.release()?;
+        return Err("benchmark artifact identity changed after resume admission".into());
+    }
     let image_us = elapsed_us(image_started);
     let outcome = execute_with_image(
         Arc::clone(&benchmark),

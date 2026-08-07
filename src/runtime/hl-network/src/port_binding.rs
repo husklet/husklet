@@ -8,7 +8,10 @@ use std::sync::atomic::Ordering;
 #[derive(Clone)]
 pub(crate) enum PortEntry {
     Published(PortCheckpoint),
-    Prepared { checkpoint: PortCheckpoint, generation: u64 },
+    Prepared {
+        checkpoint: PortCheckpoint,
+        generation: u64,
+    },
 }
 
 impl PortEntry {
@@ -48,7 +51,6 @@ impl Drop for PreparedBind<'_> {
     }
 }
 impl NetworkCatalog {
-
     pub fn claim_port(&self, checkpoint: PortCheckpoint) -> Result<(), NetworkCatalogError> {
         let _admission = self.activity.admit();
         let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -68,8 +70,7 @@ impl NetworkCatalog {
         if ports.iter().any(|port| {
             let port = port.checkpoint();
             port.family == checkpoint.family && port.port == checkpoint.port
-        })
-        {
+        }) {
             return Err(NetworkCatalogError::Invalid);
         }
         ports.push(PortEntry::Published(checkpoint));
@@ -91,7 +92,10 @@ impl NetworkCatalog {
         }
         let mut slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let slot = Self::slot_mut(&mut slots, port.owner)?;
-        let Some(previous) = slot.socket.as_ref().filter(|socket| matches!(socket.as_ref(), CatalogSocket::Host { .. }))
+        let Some(previous) = slot
+            .socket
+            .as_ref()
+            .filter(|socket| matches!(socket.as_ref(), CatalogSocket::Host { .. }))
         else {
             return Err(NetworkCatalogError::Invalid);
         };
@@ -103,8 +107,7 @@ impl NetworkCatalog {
         if ports.iter().any(|reserved| {
             let reserved = reserved.checkpoint();
             reserved.family == port.family && reserved.port == port.port
-        })
-        {
+        }) {
             return Err(NetworkCatalogError::Invalid);
         }
         let generation = self.port_generation.fetch_add(1, Ordering::Relaxed);
@@ -138,7 +141,13 @@ impl NetworkCatalog {
         if !Arc::ptr_eq(current, &prepared.previous) {
             return Err(NetworkCatalogError::Stale);
         }
-        let CatalogSocket::Host { resource, binding, accepted, .. } = current.as_ref() else {
+        let CatalogSocket::Host {
+            resource,
+            binding,
+            accepted,
+            ..
+        } = current.as_ref()
+        else {
             return Err(NetworkCatalogError::Stale);
         };
         let replacement = Arc::new(CatalogSocket::Host {
@@ -148,11 +157,13 @@ impl NetworkCatalog {
             accepted: accepted.clone(),
         });
         let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(entry) = ports.iter_mut().find(|entry| matches!(
-            entry,
-            PortEntry::Prepared { checkpoint, generation }
-                if checkpoint == &prepared.port && *generation == prepared.generation
-        )) else {
+        let Some(entry) = ports.iter_mut().find(|entry| {
+            matches!(
+                entry,
+                PortEntry::Prepared { checkpoint, generation }
+                    if checkpoint == &prepared.port && *generation == prepared.generation
+            )
+        }) else {
             return Err(NetworkCatalogError::Stale);
         };
         *entry = PortEntry::Published(prepared.port.clone());
@@ -168,11 +179,13 @@ impl NetworkCatalog {
         }
         let slots = self.slots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut ports = self.ports.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(index) = ports.iter().position(|entry| matches!(
-            entry,
-            PortEntry::Prepared { checkpoint, generation }
-                if checkpoint == &prepared.port && *generation == prepared.generation
-        )) else {
+        let Some(index) = ports.iter().position(|entry| {
+            matches!(
+                entry,
+                PortEntry::Prepared { checkpoint, generation }
+                    if checkpoint == &prepared.port && *generation == prepared.generation
+            )
+        }) else {
             return Err(NetworkCatalogError::Stale);
         };
         ports.remove(index);
@@ -193,5 +206,4 @@ impl NetworkCatalog {
             ) if *port == checkpoint.port && checkpoint.port != 0
         )
     }
-
 }

@@ -26,7 +26,9 @@ impl Process {
                 }
                 let mut command = if let Some(runner) = &run.c_runner {
                     if !Process::is_c_exec_wrapper(runner)? {
-                        return Err("--c-runner does not advertise the required ENGINE GUEST [args...] contract".into());
+                        return Err(
+                            "--c-runner does not advertise the required ENGINE GUEST [args...] contract".into(),
+                        );
                     }
                     let mut command = Command::new(runner);
                     command.arg(engine);
@@ -73,9 +75,7 @@ impl Process {
     fn is_c_exec_wrapper(path: &Path) -> Result<bool, String> {
         const SIGNATURE: &[u8] = b"ENGINE GUEST [args...]";
         let bytes = std::fs::read(path).map_err(|error| format!("read C engine capability: {error}"))?;
-        Ok(bytes
-            .windows(SIGNATURE.len())
-            .any(|window| window == SIGNATURE))
+        Ok(bytes.windows(SIGNATURE.len()).any(|window| window == SIGNATURE))
     }
 
     pub(in crate::benchmark) fn available(&self, name: &str) -> bool {

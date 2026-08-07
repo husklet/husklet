@@ -1,4 +1,7 @@
-use super::{NetworkCatalog, SocketId, SocketSnapshot, Arc, UnixSocketPair, NetworkCatalogError, CatalogSocket, Slot, NETWORK_CHECKPOINT_SOCKET_MAXIMUM};
+use super::{
+    Arc, CatalogSocket, NETWORK_CHECKPOINT_SOCKET_MAXIMUM, NetworkCatalog, NetworkCatalogError, Slot, SocketId,
+    SocketSnapshot, UnixSocketPair,
+};
 
 impl NetworkCatalog {
     pub fn connect_unix_pair(

@@ -45,7 +45,10 @@ pub(super) fn bound(text: String, limit: usize) -> String {
 
 fn at(got: &[u8], expected: &[u8], offset: usize) -> String {
     match (got.get(offset), expected.get(offset)) {
-        (Some(left), Some(right)) => format!("got {left:#04x} {:?}, expected {right:#04x} {:?}", *left as char, *right as char),
+        (Some(left), Some(right)) => format!(
+            "got {left:#04x} {:?}, expected {right:#04x} {:?}",
+            *left as char, *right as char
+        ),
         (Some(left), None) => format!("got {left:#04x} {:?}, expected end of output", *left as char),
         (None, Some(right)) => format!("output ended, expected {right:#04x} {:?}", *right as char),
         (None, None) => "streams are identical".to_owned(),

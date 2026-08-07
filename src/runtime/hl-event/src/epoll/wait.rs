@@ -42,7 +42,11 @@ impl Epoll {
         }
         self.prune_retired();
         let snapshots = {
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             state
                 .ready
@@ -98,7 +102,11 @@ impl Epoll {
     /// `Ok(false)` means a selected registration was modified or deleted and
     /// no selection was consumed.
     pub fn commit(&self, batch: EpollBatch) -> Result<bool, EpollError> {
-        let mut state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::validate_active(&state)?;
         for selection in &batch.selections {
             let Some(watch) = state
@@ -196,7 +204,11 @@ impl Epoll {
                 return Err(EpollError::Interrupted);
             }
             let epoch = {
-                let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let state = self
+                    .inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 Self::validate_active(&state)?;
                 state.epoch
             };
@@ -204,7 +216,11 @@ impl Epoll {
             if !batch.events.is_empty() || timeout == Some(Duration::ZERO) {
                 return Ok(batch);
             }
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             if state.epoch != epoch {
                 continue;
@@ -226,7 +242,11 @@ impl Epoll {
     ) -> Result<EpollBatch, EpollError> {
         loop {
             let epoch = {
-                let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                let state = self
+                    .inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 Self::validate_active(&state)?;
                 state.epoch
             };
@@ -234,7 +254,11 @@ impl Epoll {
             if !batch.events.is_empty() || timeout == Some(Duration::ZERO) {
                 return Ok(batch);
             }
-            let state = self.inner.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             Self::validate_active(&state)?;
             if state.epoch != epoch {
                 continue;

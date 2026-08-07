@@ -404,7 +404,12 @@ impl<H: SocketHostIo> OpenFileDescription for SocketDescription<H> {
     }
 
     fn close(&self) {
-        if let Some(token) = self.token.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+        if let Some(token) = self
+            .token
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
             self.host.detach_readiness(token);
             self.host.close(token);
         }

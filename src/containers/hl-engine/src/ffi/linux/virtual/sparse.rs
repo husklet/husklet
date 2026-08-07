@@ -126,13 +126,21 @@ pub(super) struct Prepared {
 
 impl SparseMappings {
     pub(super) fn is_empty(&self) -> bool {
-        self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty()
+        self.views
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
     }
 
     pub(super) fn prepare_same(&self, prior: Option<&Prepared>) -> Prepared {
         Prepared {
             views: prior.map_or_else(
-                || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+                || {
+                    self.views
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone()
+                },
                 |prepared| prepared.views.clone(),
             ),
         }
@@ -145,7 +153,12 @@ impl SparseMappings {
         file: Option<(&File, u64)>,
     ) -> Result<Prepared, MemoryError> {
         let mut views = prior.map_or_else(
-            || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+            || {
+                self.views
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            },
             |prepared| prepared.views.clone(),
         );
         Self::remove(&mut views, guest, length)?;
@@ -171,7 +184,12 @@ impl SparseMappings {
         length: u64,
     ) -> Result<Prepared, MemoryError> {
         let mut views = prior.map_or_else(
-            || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+            || {
+                self.views
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            },
             |prepared| prepared.views.clone(),
         );
         Self::remove(&mut views, guest, length)?;
@@ -188,7 +206,12 @@ impl SparseMappings {
         file: Option<(&File, u64)>,
     ) -> Result<Prepared, MemoryError> {
         let mut views = prior.map_or_else(
-            || self.views.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
+            || {
+                self.views
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            },
             |prepared| prepared.views.clone(),
         );
         let source_view = Self::find_in(&views, source.start().get(), source.length())?;

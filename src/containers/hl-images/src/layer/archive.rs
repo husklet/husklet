@@ -6,9 +6,9 @@ use std::{
 
 use super::Path;
 use crate::{
-    snapshot::{Names, Ownership, Ownerships},
     Error, Result,
     error::At as _,
+    snapshot::{Names, Ownership, Ownerships},
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -263,9 +263,10 @@ impl Path {
         match entry.header().entry_type() {
             tar::EntryType::Directory => {
                 if let Ok(metadata) = fs::symlink_metadata(destination)
-                    && (!metadata.is_dir() || metadata.file_type().is_symlink()) {
-                        path.remove(destination)?;
-                    }
+                    && (!metadata.is_dir() || metadata.file_type().is_symlink())
+                {
+                    path.remove(destination)?;
+                }
                 fs::create_dir_all(destination).map_err(|source| path.io("create directory", source))?;
                 backlog
                     .directories

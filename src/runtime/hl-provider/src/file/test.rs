@@ -224,7 +224,10 @@ fn descriptor_dup_and() {
     let second = harness.open(FileAccess::Read);
     drop(second);
     harness.finish();
-    assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closes, 2);
+    assert_eq!(
+        state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).closes,
+        2
+    );
 }
 
 #[derive(Default)]

@@ -37,7 +37,10 @@ fn image_id_prefix_requires_one_config_identity() {
     assert_eq!(unique_image_id(ids, "sha256:0123456789ab"), Err(()));
     assert_eq!(unique_image_id(ids, "sha256:111111111111"), Ok(None));
     assert_eq!(unique_image_id(ids, "sha256:"), Err(()));
-    assert_eq!(unique_image_id([ids[0], ids[0]], "sha256:0123456789abcdef"), Ok(Some(ids[0])));
+    assert_eq!(
+        unique_image_id([ids[0], ids[0]], "sha256:0123456789abcdef"),
+        Ok(Some(ids[0]))
+    );
 }
 
 #[test]
@@ -267,8 +270,20 @@ fn summaries_project_tagged_and_dangling_graphs_without_inventing_names() {
     assert_eq!(summaries.iter().filter(|summary| label.matches(summary)).count(), 1);
     let current_reference = filtered(r#"{"reference":{"*example:tagged":false}}"#);
     let current_label = filtered(r#"{"label":{"kind=dangling":true}}"#);
-    assert_eq!(summaries.iter().filter(|summary| current_reference.matches(summary)).count(), 1);
-    assert_eq!(summaries.iter().filter(|summary| current_label.matches(summary)).count(), 1);
+    assert_eq!(
+        summaries
+            .iter()
+            .filter(|summary| current_reference.matches(summary))
+            .count(),
+        1
+    );
+    assert_eq!(
+        summaries
+            .iter()
+            .filter(|summary| current_label.matches(summary))
+            .count(),
+        1
+    );
 
     for all in [Some("false".into()), Some("true".into())] {
         let query = ListQuery {

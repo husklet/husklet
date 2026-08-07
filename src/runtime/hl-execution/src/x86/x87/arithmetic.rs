@@ -27,7 +27,9 @@ impl ExtendedMemory {
             };
         }
         if load {
-            let Ok(bits) = memory.read(address, bytes) else { return Self::fault(instruction, address, access, bytes) };
+            let Ok(bits) = memory.read(address, bytes) else {
+                return Self::fault(instruction, address, access, bytes);
+            };
             let signed = match bytes {
                 2 => i64::from(bits as i16),
                 4 => i64::from(bits as i32),
@@ -48,7 +50,7 @@ impl ExtendedMemory {
             return ExecutionExit::Continue;
         }
         let Ok(reservation) = memory.reserve_write(address, bytes) else {
-            return Self::fault(instruction, address, access, bytes)
+            return Self::fault(instruction, address, access, bytes);
         };
         let top = usize::from((cpu.x87_status >> 11) & 7);
         let mut staged = cpu.clone();
@@ -119,7 +121,7 @@ impl ExtendedMemory {
             let address = effective.resolve(&cpu.registers, next, cpu.fs_base, cpu.gs_base);
             let bytes = if format == FloatWidth::Single { 4 } else { 8 };
             let Ok(bits) = memory.read(address, bytes as u8) else {
-                return Self::fault(instruction, address, AccessKind::Read, bytes as u8)
+                return Self::fault(instruction, address, AccessKind::Read, bytes as u8);
             };
             Conversion::expand(bits, format)
         } else {
@@ -195,7 +197,7 @@ impl ExtendedMemory {
                 };
             }
             let Ok(bits) = memory.read(address, bytes as u8) else {
-                return Self::fault(instruction, address, AccessKind::Read, bytes as u8)
+                return Self::fault(instruction, address, AccessKind::Read, bytes as u8);
             };
             if integer_bytes != 0 {
                 let signed = if integer_bytes == 2 {

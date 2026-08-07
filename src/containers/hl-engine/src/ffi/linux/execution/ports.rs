@@ -336,8 +336,10 @@ impl DescriptorPort {
         if self.memory.read(address, &mut bytes).is_err() {
             return LinuxResult::Error(Errno::EFAULT);
         }
-        lease
-            .write(&bytes).map_or_else(|error| LinuxResult::Error(Set::object_errno(error)), |written| LinuxResult::Value(written as u64))
+        lease.write(&bytes).map_or_else(
+            |error| LinuxResult::Error(Set::object_errno(error)),
+            |written| LinuxResult::Value(written as u64),
+        )
     }
 
     fn seek(&self, descriptor: i32, offset: u64, whence: u32) -> LinuxResult {
@@ -356,7 +358,8 @@ impl DescriptorPort {
             _ => return LinuxResult::Error(Errno::EINVAL),
         };
         lease
-            .seek(position).map_or_else(|error| LinuxResult::Error(Set::object_errno(error)), LinuxResult::Value)
+            .seek(position)
+            .map_or_else(|error| LinuxResult::Error(Set::object_errno(error)), LinuxResult::Value)
     }
 
     fn writev(&self, descriptor: u64, address: u64, count: u64) -> LinuxResult {
@@ -402,8 +405,10 @@ impl DescriptorPort {
             vectors.push(bytes);
         }
         let bytes = vectors.into_iter().flatten().collect::<Vec<_>>();
-        lease
-            .write(&bytes).map_or_else(|error| LinuxResult::Error(Set::object_errno(error)), |written| LinuxResult::Value(written as u64))
+        lease.write(&bytes).map_or_else(
+            |error| LinuxResult::Error(Set::object_errno(error)),
+            |written| LinuxResult::Value(written as u64),
+        )
     }
 
     fn length(length: u64) -> Result<usize, ()> {

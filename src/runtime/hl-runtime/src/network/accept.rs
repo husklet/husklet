@@ -69,7 +69,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 }
             }
             let Ok(id) = self.current_catalog().accept_pending_unix(listener.id) else {
-                return LinuxResult::Error(Errno::EIO)
+                return LinuxResult::Error(Errno::EIO);
             };
             let Some(object) = listener.take_pending(id) else {
                 return LinuxResult::Error(Errno::EIO);
@@ -98,10 +98,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let nonblocking = listener_snapshot.nonblocking;
         // Only a listener bind left virtual lacks a host socket to accept on; a
         // loopback listener is real and must consult the host.
-        let virtual_listener = !listener_snapshot
-            .local
-            .as_ref()
-            .is_some_and(Self::local_projection);
+        let virtual_listener = !listener_snapshot.local.as_ref().is_some_and(Self::local_projection);
         if !self.host_projection
             && virtual_listener
             && nonblocking
@@ -112,7 +109,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let queue = Arc::new(hl_sync::WaitQueue::new());
         let observer: Arc<dyn ReadinessObserver> = Arc::new(AcceptWake(queue.clone()));
         let Ok(_subscription) = description.subscribe_readiness(observer) else {
-            return LinuxResult::Error(Errno::EIO)
+            return LinuxResult::Error(Errno::EIO);
         };
         let accepted = loop {
             let observed = queue.observation();

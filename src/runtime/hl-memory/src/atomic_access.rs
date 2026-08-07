@@ -12,7 +12,10 @@ const RESERVATION_GRANULE: u64 = 64;
 impl<H: MemoryAccessHost> MappingCoordinator<H> {
     pub fn load_ordered(&self, address: GuestAddress, bytes: u8, _order: AtomicOrder) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(self.read_atomic(address, bytes, false)?.low)
     }
 
@@ -24,7 +27,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         _order: AtomicOrder,
     ) -> Result<(), MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.write_atomic(address, bytes, false, AtomicValue { low: value, high: 0 })
     }
 
@@ -35,7 +41,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         apply: &mut dyn FnMut() -> Result<(), E>,
     ) -> Result<Result<Option<usize>, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.ledger.generation() != mapping_generation {
             return Err(MemoryError::NoAddressSpace);
         }
@@ -55,7 +64,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         apply: &mut dyn FnMut() -> Result<(), E>,
     ) -> Result<Result<bool, E>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let resolution = self
             .ledger
             .resolve(address, Protection::READ)
@@ -82,7 +94,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         _order: AtomicOrder,
     ) -> Result<(AtomicValue, ExclusiveReservation), MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let value = self.read_atomic(address, element_bytes, pair)?;
         let write_epoch = self.exclusive_epoch(address)?;
         Ok((
@@ -104,7 +119,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         _order: AtomicOrder,
     ) -> Result<bool, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let address = GuestAddress::new(reservation.address);
         self.validate_atomic(address, reservation.element_bytes, reservation.pair, Protection::WRITE)?;
         let current = self.exclusive_epoch(address)?;
@@ -125,7 +143,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         _order: AtomicOrder,
     ) -> Result<AtomicValue, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let observed = self.read_atomic(address, element_bytes, pair)?;
         if observed == Self::masked_value(expected, element_bytes, pair) {
             self.write_atomic(address, element_bytes, pair, replacement)?;
@@ -142,7 +163,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         _order: AtomicOrder,
     ) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let observed = self.read_atomic(address, bytes, false)?.low;
         let replacement = Self::updated(observed, operand, bytes, operation)?;
         self.write_atomic(
@@ -246,8 +270,10 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
         let coordinate =
             ReservationCoordinate::from_mapping(resolution.region.backing(), resolution.backing_offset, address.get())?;
         let epochs = if coordinate.shared() {
-            self.shared
-                .as_ref().map_or_else(|| std::sync::Arc::clone(&self.host.reservations), |store| store.reservation_epochs())
+            self.shared.as_ref().map_or_else(
+                || std::sync::Arc::clone(&self.host.reservations),
+                |store| store.reservation_epochs(),
+            )
         } else {
             std::sync::Arc::clone(&self.host.reservations)
         };

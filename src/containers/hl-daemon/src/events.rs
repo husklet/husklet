@@ -355,8 +355,7 @@ mod tests {
         let id = "00000000000040008000000000000001";
         let mut container = hl_container::Container::new(
             id.parse().unwrap(),
-            hl_container::ContainerSpec::from_directory(".", hl_container::Process::new("/bin/true"))
-                .name("workload"),
+            hl_container::ContainerSpec::from_directory(".", hl_container::Process::new("/bin/true")).name("workload"),
             hl_container::ContainerState::Created,
             1,
         );

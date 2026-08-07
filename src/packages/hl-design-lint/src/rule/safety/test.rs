@@ -135,11 +135,16 @@ fn permits_allowed_unsafe_code() {
 ";
     for source in [
         format!("#![allow(unsafe_code)]\nunsafe fn entry() {{}}\nfn call() {{{block}}}\n"),
-        format!("#[allow(unsafe_code)]\nmod adapter {{\n    unsafe fn entry() {{}}\n    fn call() {{{block}    }}\n}}\n"),
+        format!(
+            "#[allow(unsafe_code)]\nmod adapter {{\n    unsafe fn entry() {{}}\n    fn call() {{{block}    }}\n}}\n"
+        ),
         format!("#[allow(unsafe_code)]\nfn call() {{{block}}}\n"),
         format!("#[allow(clippy::undocumented_unsafe_blocks, unsafe_code)]\nfn call() {{{block}}}\n"),
     ] {
-        assert!(ordinary(&source).is_empty(), "allowed scope must be a boundary: {source}");
+        assert!(
+            ordinary(&source).is_empty(),
+            "allowed scope must be a boundary: {source}"
+        );
     }
 }
 

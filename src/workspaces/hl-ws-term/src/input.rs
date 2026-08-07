@@ -134,7 +134,9 @@ pub fn encode_key(key: Key, mods: Mods, cursor: CursorKeys) -> Vec<u8> {
                     'a'..='z' | 'A'..='Z' | '[' | '\\' | ']' | '^' | '_' => Some(c as u8 & 0x1f),
                     _ => None,
                 };
-                if let Some(b) = control { vec![b] } else {
+                if let Some(b) = control {
+                    vec![b]
+                } else {
                     let mut buf = [0u8; 4];
                     c.encode_utf8(&mut buf).as_bytes().to_vec()
                 }

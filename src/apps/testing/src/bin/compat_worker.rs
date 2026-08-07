@@ -258,34 +258,28 @@ fn fixture_input(
         return Ok(builder);
     }
     match fixture {
-        Fixture::SideFile => {
-            Ok(builder.with_input(hl_engine::runtime::Input::File {
-                source: guest
-                    .parent()
-                    .and_then(|path| path.parent())
-                    .and_then(|path| path.parent())
-                    .and_then(|path| path.parent())
-                    .and_then(|path| path.parent())
-                    .ok_or(())?
-                    .join(side_files),
-                relative: PathBuf::from("tmp/hl_pclib_blob.bin"),
-                executable: false,
-            }))
-        }
-        Fixture::Directory => {
-            Ok(builder.with_input(hl_engine::runtime::Input::Directory {
-                source: None,
-                relative: PathBuf::from("volume"),
-            }))
-        }
-        Fixture::Symlink => {
-            Ok(builder
-                .with_input(hl_engine::runtime::Input::Symlink {
-                    relative: PathBuf::from("entry"),
-                    target: PathBuf::from("guest"),
-                })
-                .with_entry("entry"))
-        }
+        Fixture::SideFile => Ok(builder.with_input(hl_engine::runtime::Input::File {
+            source: guest
+                .parent()
+                .and_then(|path| path.parent())
+                .and_then(|path| path.parent())
+                .and_then(|path| path.parent())
+                .and_then(|path| path.parent())
+                .ok_or(())?
+                .join(side_files),
+            relative: PathBuf::from("tmp/hl_pclib_blob.bin"),
+            executable: false,
+        })),
+        Fixture::Directory => Ok(builder.with_input(hl_engine::runtime::Input::Directory {
+            source: None,
+            relative: PathBuf::from("volume"),
+        })),
+        Fixture::Symlink => Ok(builder
+            .with_input(hl_engine::runtime::Input::Symlink {
+                relative: PathBuf::from("entry"),
+                target: PathBuf::from("guest"),
+            })
+            .with_entry("entry")),
         Fixture::Executable
         | Fixture::Network
         | Fixture::Process

@@ -34,9 +34,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             object.clone(),
             status,
             DescriptorFlags::from_bits(DescriptorFlags::CLOSE_ON_EXEC),
-        )
-        else {
-            return LinuxResult::Error(Errno::EMFILE)
+        ) else {
+            return LinuxResult::Error(Errno::EMFILE);
         };
         if handles.register(install.description_identity(), object).is_err() {
             return LinuxResult::Error(Errno::ENFILE);
@@ -51,8 +50,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let (Some(descriptors), Some(handles)) = (&self.descriptors, &self.handles) else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let Ok(lease) = descriptors.pin(arguments[0] as i32) else { return LinuxResult::Error(Errno::EBADF) };
-        let Ok(target) = handles.target(lease.description_identity()) else { return LinuxResult::Error(Errno::EBADF) };
+        let Ok(lease) = descriptors.pin(arguments[0] as i32) else {
+            return LinuxResult::Error(Errno::EBADF);
+        };
+        let Ok(target) = handles.target(lease.description_identity()) else {
+            return LinuxResult::Error(Errno::EBADF);
+        };
         let snapshot = self.tasks.snapshot();
         let Some(sender) = snapshot.processes.iter().find(|process| process.id == self.process) else {
             return LinuxResult::Error(Errno::ESRCH);
@@ -99,8 +102,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let (Some(descriptors), Some(handles)) = (&self.descriptors, &self.handles) else {
             return LinuxResult::Error(Errno::ENOSYS);
         };
-        let Ok(pidfd) = descriptors.pin(arguments[0] as i32) else { return LinuxResult::Error(Errno::EBADF) };
-        let Ok(target) = handles.target(pidfd.description_identity()) else { return LinuxResult::Error(Errno::EBADF) };
+        let Ok(pidfd) = descriptors.pin(arguments[0] as i32) else {
+            return LinuxResult::Error(Errno::EBADF);
+        };
+        let Ok(target) = handles.target(pidfd.description_identity()) else {
+            return LinuxResult::Error(Errno::EBADF);
+        };
         let snapshot = self.tasks.snapshot();
         let Some(caller) = snapshot.processes.iter().find(|process| process.id == self.process) else {
             return LinuxResult::Error(Errno::ESRCH);

@@ -82,7 +82,9 @@ pub(super) fn prepare_write(lease: &mut ParentLease, name: &CStr) -> io::Result<
         return Ok(false);
     }
     for lower in lease.lower_parents() {
-        let Some(source) = open_regular(lower, name)? else { continue };
+        let Some(source) = open_regular(lower, name)? else {
+            continue;
+        };
         CopyUp::stage(lease, name, &source)?.commit()?;
         return Ok(true);
     }
@@ -97,7 +99,11 @@ fn materialize_guest_parent(lease: &ParentLease) -> io::Result<OwnedFd> {
     let guest = lease
         .guest()
         .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
-    for component in guest.as_bytes().split(|byte| *byte == b'/').filter(|component| !component.is_empty()) {
+    for component in guest
+        .as_bytes()
+        .split(|byte| *byte == b'/')
+        .filter(|component| !component.is_empty())
+    {
         let name = CString::new(component).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
         if materialize_parent_created(&current, &name, 0o755)? {
             // Publish each ancestor immediately: opening the new directory or
@@ -241,14 +247,7 @@ fn copy_content(source: &File, target: &File) -> io::Result<()> {
     loop {
         // SAFETY: buffer is writable, both descriptors remain owned, and pread
         // does not alter the source open-file-description offset.
-        let count = unsafe {
-            libc::pread(
-                source.as_raw_fd(),
-                buffer.as_mut_ptr().cast(),
-                buffer.len(),
-                offset,
-            )
-        };
+        let count = unsafe { libc::pread(source.as_raw_fd(), buffer.as_mut_ptr().cast(), buffer.len(), offset) };
         if count < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -440,7 +439,13 @@ mod tests {
         let root = Root::new();
         let lower_path = root.0.join("lower/item");
         let upper_path = root.0.join("upper/item");
-        let mut source = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(&lower_path).unwrap();
+        let mut source = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&lower_path)
+            .unwrap();
         source.write_all(b"lower-content").unwrap();
         fs::set_permissions(&lower_path, fs::Permissions::from_mode(0o6751)).unwrap();
         let lease = ParentLease::lower(

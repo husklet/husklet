@@ -3,9 +3,9 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv};
 #[cfg(test)]
 use hl_execution::ScalarState;
+use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv};
 use hl_isa::{AddressRange, GuestAddress};
 use hl_memory::{DirectAuthorityLease, ExecutableToken, MemoryAccessHost, MemoryError, ProjectionLease, Protection};
 
@@ -3341,17 +3341,26 @@ mod test {
         assert_eq!(aarch64.0.certificate_token, 0);
         assert_eq!(x86.0.certificate_cache_identity, 0);
         assert_eq!(x86.0.certificate_token, 0);
-        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, certificate_cache_identity), 2312);
+        assert_eq!(
+            std::mem::offset_of!(schema::Aarch64Cpu, certificate_cache_identity),
+            2312
+        );
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, certificate_token), 2320);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, code_arena_lower), 2352);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, code_arena_upper), 2360);
-        assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, entry_certificate_identity), 2368);
+        assert_eq!(
+            std::mem::offset_of!(schema::Aarch64Cpu, entry_certificate_identity),
+            2368
+        );
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, fault_completed), 2376);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, ibtc_base), 2384);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, execution_identity), 2392);
         assert_eq!(std::mem::offset_of!(schema::Aarch64Cpu, read_valid_count), 2400);
         assert_eq!(std::mem::size_of::<schema::Aarch64Cpu>(), 2408);
-        assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity), 1928);
+        assert_eq!(
+            std::mem::offset_of!(schema::X86_64Cpu, certificate_cache_identity),
+            1928
+        );
         assert_eq!(std::mem::offset_of!(schema::X86_64Cpu, certificate_token), 1936);
         assert_eq!(std::mem::size_of::<schema::X86_64Cpu>(), 1944);
         assert_eq!(std::mem::size_of::<RunCertificate>(), 112);

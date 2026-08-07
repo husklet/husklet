@@ -294,17 +294,23 @@ impl List {
                 .collect();
             temporal.insert(key.into(), ordering);
         }
-        let ids = self.filters.get("id").filter(|values| !values.is_empty()).map(|values| {
-            values
-                .iter()
-                .filter(|value| !value.is_empty())
-                .filter_map(|value| {
-                    let mut matches = containers.iter().filter(|container| container.id.as_str().starts_with(value));
-                    let first = matches.next()?;
-                    matches.next().is_none().then(|| first.id.clone())
-                })
-                .collect()
-        });
+        let ids = self
+            .filters
+            .get("id")
+            .filter(|values| !values.is_empty())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter(|value| !value.is_empty())
+                    .filter_map(|value| {
+                        let mut matches = containers
+                            .iter()
+                            .filter(|container| container.id.as_str().starts_with(value));
+                        let first = matches.next()?;
+                        matches.next().is_none().then(|| first.id.clone())
+                    })
+                    .collect()
+            });
         PreparedList {
             selection: self,
             temporal,
@@ -595,7 +601,10 @@ mod tests {
             r#"{"label":["role=build"],"status":["exited"]}"#,
         ] {
             let selected = List::parse(true, Some(filters)).unwrap();
-            assert!(matches(selected, &container, std::slice::from_ref(&container)), "{filters}");
+            assert!(
+                matches(selected, &container, std::slice::from_ref(&container)),
+                "{filters}"
+            );
         }
         for filters in [
             r#"{"label":["role=build","missing"]}"#,
@@ -603,7 +612,10 @@ mod tests {
             r#"{"label":["role=build"],"status":["running"]}"#,
         ] {
             let selected = List::parse(true, Some(filters)).unwrap();
-            assert!(!matches(selected, &container, std::slice::from_ref(&container)), "{filters}");
+            assert!(
+                !matches(selected, &container, std::slice::from_ref(&container)),
+                "{filters}"
+            );
         }
     }
 
@@ -616,11 +628,14 @@ mod tests {
         let containers = [first.clone(), second.clone()];
         for value in [first.id.as_str(), "67ea8", "67ea0"] {
             let selected = List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap();
-            assert!(matches(selected, &first, &containers) || matches(
-                List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap(),
-                &second,
-                &containers
-            ));
+            assert!(
+                matches(selected, &first, &containers)
+                    || matches(
+                        List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap(),
+                        &second,
+                        &containers
+                    )
+            );
         }
         for value in ["", "67ea", "67EA8", "not-an-id"] {
             let selected = List::parse(true, Some(&format!(r#"{{"id":["{value}"]}}"#))).unwrap();
@@ -650,11 +665,8 @@ mod tests {
             let selected = List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).unwrap();
             assert!(!matches(selected, &exposed, std::slice::from_ref(&exposed)));
         }
-        let alternatives = List::parse(
-            true,
-            Some(r#"{"expose":{"81":false,"443":true},"status":["exited"]}"#),
-        )
-        .unwrap();
+        let alternatives =
+            List::parse(true, Some(r#"{"expose":{"81":false,"443":true},"status":["exited"]}"#)).unwrap();
         assert!(matches(alternatives, &exposed, std::slice::from_ref(&exposed)));
         for value in ["", "0", "65536", "90-80", "80-", "-80", "80/icmp", "80/tcp/extra"] {
             assert!(List::parse(true, Some(&format!(r#"{{"expose":["{value}"]}}"#))).is_err());

@@ -241,7 +241,10 @@ impl<H: Host> Coordinator<H> {
     ) -> Result<GuestAddress, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut transition = self.transition();
         let result = self
             .ledger
@@ -261,7 +264,10 @@ impl<H: Host> Coordinator<H> {
     pub fn unmap(&self, range: AddressRange) -> Result<(), MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut transition = self.transition();
         let result = self.ledger.unmap_transaction(range, |regions| {
             let pins = self.prepare_pins(regions)?;
@@ -279,7 +285,10 @@ impl<H: Host> Coordinator<H> {
     pub fn protect(&self, range: AddressRange, protection: Protection) -> Result<(), MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut transition = self.transition();
         let result = self.ledger.protect_transaction(range, protection, |regions| {
             let pins = self.prepare_pins(regions)?;
@@ -297,7 +306,10 @@ impl<H: Host> Coordinator<H> {
     pub fn apply(&self, batch: &Batch) -> Result<Vec<GuestAddress>, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut transition = self.transition();
         let result = self.ledger.batch_transaction(&batch.operations, |plan, regions| {
             let pins = self.prepare_pins(regions)?;
@@ -579,7 +591,10 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     pub fn commit_write_spans(&self, mut prepared: WriteSpanTransaction<H>, input: &[u8]) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if input.len() != prepared.length
             || prepared.transactions.is_empty()
             || prepared
@@ -638,7 +653,10 @@ impl<H: MemoryAccessHost> Coordinator<H> {
     pub fn commit_write(&self, mut prepared: WriteTransaction<H>, input: &[u8]) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         self.request_mapping_change();
-        let _transaction = self.transaction.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _transaction = self
+            .transaction
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if input.len() as u64 != prepared.range.length()
             || self.ledger.generation() != prepared.generation
             || prepared

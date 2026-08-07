@@ -242,7 +242,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         number: i32,
         transfer: &dyn crate::DescriptorTransfer<H::Attachment>,
     ) -> Result<H::Attachment, Errno> {
-        let Ok(reference) = self.descriptors.export_description(number) else { return Err(Errno::EBADF) };
+        let Ok(reference) = self.descriptors.export_description(number) else {
+            return Err(Errno::EBADF);
+        };
         match transfer.export(&reference) {
             Ok(attachment) => Ok(attachment),
             Err(error) => Err(SocketErrno::runtime(error)),
@@ -284,7 +286,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         abi: &NetworkAbi<'_, M>,
     ) -> LinuxResult {
         let Ok(length) = usize::try_from(imported.vectors.total_length) else {
-            return LinuxResult::Error(Errno::EINVAL)
+            return LinuxResult::Error(Errno::EINVAL);
         };
         let nonblocking = flags & MSG_DONTWAIT != 0
             || socket

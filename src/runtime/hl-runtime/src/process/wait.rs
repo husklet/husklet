@@ -26,7 +26,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 return result;
             }
             let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, wait_options) else {
-                return LinuxResult::Error(Errno::ECHILD)
+                return LinuxResult::Error(Errno::ECHILD);
             };
             if let Some(result) = self.finish_prepared_wait(prepared, pid, status, usage) {
                 return result;
@@ -109,7 +109,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Ok(value) => Self::wait_usage(value),
             Err(_) => return LinuxResult::Error(Errno::ECHILD),
         };
-        let Ok(reaped) = selection.commit() else { return LinuxResult::Error(Errno::ECHILD) };
+        let Ok(reaped) = selection.commit() else {
+            return LinuxResult::Error(Errno::ECHILD);
+        };
         self.release_reaped(reaped.child);
         let marshaller = GuestMarshaller::new(&self.memory, self.architecture);
         if usage_pointer != 0 {
@@ -183,7 +185,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         let options = Self::wait_options(plan.options, plan.keep_waitable);
         loop {
             let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, options) else {
-                return LinuxResult::Error(Errno::ECHILD)
+                return LinuxResult::Error(Errno::ECHILD);
             };
             match prepared {
                 PreparedChildWait::Selection(selection) => {
@@ -236,7 +238,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             value: status,
             ..SignalInfo::bare(signal)
         };
-        let Ok(reaped) = selection.commit() else { return LinuxResult::Error(Errno::ECHILD) };
+        let Ok(reaped) = selection.commit() else {
+            return LinuxResult::Error(Errno::ECHILD);
+        };
         self.release_reaped(reaped.child);
         let staged_info = match SignalAbi::new(&self.memory, self.architecture).stage_info(information, info) {
             Ok(value) => value,

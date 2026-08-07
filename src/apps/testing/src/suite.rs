@@ -106,12 +106,18 @@ mod tests {
 
         assert!(Path::new("cases/a.txt").safe_relative().is_ok());
         for unsafe_path in ["", "/absolute", "../escape", "a/\0/b"] {
-            assert!(Path::new(unsafe_path).safe_relative().is_err(), "accepted {unsafe_path:?}");
+            assert!(
+                Path::new(unsafe_path).safe_relative().is_err(),
+                "accepted {unsafe_path:?}"
+            );
         }
         assert!(Path::new(&"x".repeat(4097)).safe_relative().is_err());
         assert!(Path::new("/guest/bin").safe_absolute().is_ok());
         for unsafe_path in ["relative", "/guest/../escape", "/guest/\0"] {
-            assert!(Path::new(unsafe_path).safe_absolute().is_err(), "accepted {unsafe_path:?}");
+            assert!(
+                Path::new(unsafe_path).safe_absolute().is_err(),
+                "accepted {unsafe_path:?}"
+            );
         }
     }
 
@@ -161,9 +167,7 @@ pub(crate) mod parse {
 
     pub(crate) fn results(value: &str) -> Result<PathBuf, String> {
         let path = PathBuf::from(value);
-        if value.is_empty()
-            || path.is_absolute()
-            || path.components().any(|part| matches!(part, Component::ParentDir))
+        if value.is_empty() || path.is_absolute() || path.components().any(|part| matches!(part, Component::ParentDir))
         {
             Err("results must be a safe relative path".to_owned())
         } else {

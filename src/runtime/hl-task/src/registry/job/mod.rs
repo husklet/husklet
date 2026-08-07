@@ -168,9 +168,10 @@ impl TaskRegistry {
         process_state.execed = true;
         drop(state);
         if let Err(error) = self.trace_stop(process, crate::TraceStop::Exec)
-            && error != crate::TraceError::InvalidLink {
-                return Err(TaskError::InvalidLifecycle);
-            }
+            && error != crate::TraceError::InvalidLink
+        {
+            return Err(TaskError::InvalidLifecycle);
+        }
         Ok(())
     }
 

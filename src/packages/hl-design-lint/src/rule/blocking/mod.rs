@@ -13,7 +13,10 @@ use crate::{
 };
 
 mod support;
-use support::{LockKind, fs_function, fs_options_constructor, command_constructor, expression_path, lock_constructor, lock_acquisition, contains_await, drops, references, collect_use, test_attributes, boundary_call, lock_type};
+use support::{
+    LockKind, boundary_call, collect_use, command_constructor, contains_await, drops, expression_path, fs_function,
+    fs_options_constructor, lock_acquisition, lock_constructor, lock_type, references, test_attributes,
+};
 
 /// Rejects proven executor-blocking work and synchronous guards across suspension points.
 pub struct AsyncBlocking;

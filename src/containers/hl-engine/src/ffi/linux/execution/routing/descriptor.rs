@@ -10,7 +10,10 @@ impl ProcessContext {
         &self,
         thread: hl_task::ThreadId,
     ) -> Arc<hl_runtime::RuntimeDescriptorTable> {
-        let mut files = self.thread_files.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut files = self
+            .thread_files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         files.retain(|_, private| private.table.strong_count() != 0);
         files
             .get(&thread)

@@ -847,9 +847,7 @@ impl ScalarInterpreter {
                     VexOperation::Broadcast128 => 16,
                     VexOperation::DuplicateDouble if !wide => 8,
                     VexOperation::Insert128 => 16,
-                    VexOperation::Widen { from, to, .. } => {
-                        (if wide { 32 } else { 16 }) * from / to
-                    }
+                    VexOperation::Widen { from, to, .. } => (if wide { 32 } else { 16 }) * from / to,
                     _ => {
                         if wide {
                             32
@@ -1271,7 +1269,12 @@ impl ScalarInterpreter {
             let mut output = [0_u128; 2];
             let base = if high { 4 } else { 0 };
             for half in 0..if wide { 2 } else { 1 } {
-                output[half] = right[half] & if high { u128::from(u64::MAX) } else { u128::from(u64::MAX) << 64 };
+                output[half] = right[half]
+                    & if high {
+                        u128::from(u64::MAX)
+                    } else {
+                        u128::from(u64::MAX) << 64
+                    };
                 for lane in 0..4 {
                     let selected = usize::from((immediate >> (lane * 2)) & 3) + base;
                     let word = (right[half] >> (selected * 16)) & u128::from(u16::MAX);
@@ -1709,8 +1712,11 @@ impl ScalarInterpreter {
             let mut result = [0_u128; 2];
             for lane in 0..(if wide { 256 } else { 128 } / to) as usize {
                 let bit = lane as u32 * from;
-                let raw = (if bit >= 128 { right[1] >> (bit - 128) } else { right[0] >> bit })
-                    & ((1_u128 << from) - 1);
+                let raw = (if bit >= 128 {
+                    right[1] >> (bit - 128)
+                } else {
+                    right[0] >> bit
+                }) & ((1_u128 << from) - 1);
                 let value = if signed && raw >> (from - 1) != 0 {
                     raw | !((1_u128 << from) - 1)
                 } else {

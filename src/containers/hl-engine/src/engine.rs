@@ -383,10 +383,10 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
         if matches!(
             phase,
             EnginePhase::Running | EnginePhase::Starting | EnginePhase::Created
-        )
-            && let Err(error) = self.terminate(StopRequest::Force) {
-                failure = Some(error);
-            }
+        ) && let Err(error) = self.terminate(StopRequest::Force)
+        {
+            failure = Some(error);
+        }
         let exit = if matches!(self.phase()?, EnginePhase::Running | EnginePhase::Stopping) {
             match self.wait() {
                 Ok(exit) => Some(exit),
@@ -405,9 +405,10 @@ impl<L: Launcher, W: Workspace> Engine<L, W> {
             lifecycle.workspace.take()
         };
         if let Some(workspace) = workspace
-            && self.shared.workspaces.cleanup(workspace).is_err() {
-                failure.get_or_insert(EngineError::WorkspaceFailed);
-            }
+            && self.shared.workspaces.cleanup(workspace).is_err()
+        {
+            failure.get_or_insert(EngineError::WorkspaceFailed);
+        }
         if let Some(error) = failure {
             return Err(error);
         }

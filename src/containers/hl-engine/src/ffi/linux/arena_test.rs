@@ -293,7 +293,7 @@ fn shared_mapping_coherent() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(&observed, b"backing");
 
     let write = host
@@ -320,7 +320,7 @@ fn outside_stage_atomic() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn logical_unmap_then() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(observed, [0; 16]);
 }
 
@@ -394,7 +394,7 @@ fn loader_commit_publishes() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(observed, [1, 2, 3, 4]);
 }
 
@@ -431,7 +431,7 @@ fn loader_protects_independent() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(observed, [1]);
     assert!(
         host.read(
@@ -535,7 +535,7 @@ fn file_replacement() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(observed, [0x5a]);
     fs::remove_file(path).unwrap();
 }
@@ -565,7 +565,7 @@ fn failed_batch_compensates() {
         &mut byte,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
 }
 
 #[test]
@@ -638,6 +638,6 @@ fn atomic_later_mismatch() {
         &mut observed,
         Protection::READ,
     )
-        .unwrap();
+    .unwrap();
     assert_eq!(observed, [0; 4]);
 }

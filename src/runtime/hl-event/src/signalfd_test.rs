@@ -38,7 +38,11 @@ impl std::fmt::Debug for TestQueue {
             .debug_struct("TestQueue")
             .field(
                 "pending",
-                &self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len(),
+                &self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len(),
             )
             .finish_non_exhaustive()
     }
@@ -75,7 +79,10 @@ impl TestQueue {
     }
 
     fn len(&self) -> usize {
-        self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     fn active_subscriptions(&self) -> usize {

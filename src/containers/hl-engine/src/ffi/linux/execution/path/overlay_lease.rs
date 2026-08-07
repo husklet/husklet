@@ -132,8 +132,8 @@ mod tests {
     use std::fs::{self, File};
     use std::os::fd::AsRawFd;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use hl_runtime::GuestPathBytes;
 

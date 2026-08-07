@@ -243,13 +243,7 @@ impl Aarch64FpExecutor {
                 };
                 if holds {
                     let right = Self::comparison_operand(cpu, right, format);
-                    Self::compare(
-                        cpu,
-                        format,
-                        cpu.vector_lane(left, format.bits(), 0),
-                        right,
-                        signaling,
-                    );
+                    Self::compare(cpu, format, cpu.vector_lane(left, format.bits(), 0), right, signaling);
                 } else {
                     cpu.nzcv = Nzcv::from_bits(u32::from(alternative_nzcv) << 28);
                 }
@@ -359,13 +353,7 @@ impl Aarch64FpExecutor {
                 destination,
                 wide,
             } => {
-                crate::aarch64_simd_reciprocal::Reciprocal::unsigned(
-                    cpu,
-                    reciprocal_sqrt,
-                    source,
-                    destination,
-                    wide,
-                );
+                crate::aarch64_simd_reciprocal::Reciprocal::unsigned(cpu, reciprocal_sqrt, source, destination, wide);
             }
             Aarch64Instruction::SimdFpStep {
                 format,
@@ -391,29 +379,14 @@ impl Aarch64FpExecutor {
                 destination,
                 high,
                 scalar,
-            } => crate::aarch64_simd_narrow::NarrowOdd::execute(
-                cpu,
-                port,
-                source,
-                destination,
-                high,
-                scalar,
-            ),
+            } => crate::aarch64_simd_narrow::NarrowOdd::execute(cpu, port, source, destination, high, scalar),
             Aarch64Instruction::SimdFpConvert {
                 format,
                 source,
                 destination,
                 high,
                 widen,
-            } => crate::aarch64_simd_convert::Convert::execute(
-                cpu,
-                port,
-                format,
-                source,
-                destination,
-                high,
-                widen,
-            ),
+            } => crate::aarch64_simd_convert::Convert::execute(cpu, port, format, source, destination, high, widen),
             Aarch64Instruction::SimdFpInteger {
                 format,
                 lanes,
@@ -497,17 +470,7 @@ impl Aarch64FpExecutor {
                 destination,
                 scalar: _,
             } => {
-                Self::fused(
-                    cpu,
-                    port,
-                    format,
-                    lanes,
-                    subtract,
-                    left,
-                    right,
-                    index,
-                    destination,
-                );
+                Self::fused(cpu, port, format, lanes, subtract, left, right, index, destination);
             }
             Aarch64Instruction::SimdFpProduct {
                 format,
@@ -519,17 +482,7 @@ impl Aarch64FpExecutor {
                 destination,
                 scalar: _,
             } => {
-                Self::product(
-                    cpu,
-                    port,
-                    format,
-                    lanes,
-                    extended,
-                    left,
-                    right,
-                    index,
-                    destination,
-                );
+                Self::product(cpu, port, format, lanes, extended, left, right, index, destination);
             }
             Aarch64Instruction::SimdFpReduce {
                 operation,

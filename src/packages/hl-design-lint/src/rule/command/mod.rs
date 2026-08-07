@@ -250,15 +250,16 @@ impl<'ast> Visit<'ast> for Commands<'_> {
                         .first()
                         .and_then(string_literal)
                         .filter(|program| shell_program(program))
-                    {
-                        self.staged
-                            .insert(binding.ident.to_string(), Staged { shell, armed: false });
-                    }
+                {
+                    self.staged
+                        .insert(binding.ident.to_string(), Staged { shell, armed: false });
+                }
             } else if let Expr::Path(alias) = initializer.expr.as_ref()
                 && let Some(original) = alias.path.get_ident().map(ToString::to_string)
-                    && let Some(command) = self.staged.get(&original).cloned() {
-                        self.staged.insert(binding.ident.to_string(), command);
-                    }
+                && let Some(command) = self.staged.get(&original).cloned()
+            {
+                self.staged.insert(binding.ident.to_string(), command);
+            }
         }
         syn::visit::visit_local(self, local);
     }

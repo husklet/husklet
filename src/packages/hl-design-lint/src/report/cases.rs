@@ -57,7 +57,8 @@ impl<Output> Cases<Output> {
         fs::create_dir_all(&queue).map_err(|error| LintError::io("create", &queue, error))?;
         let timestamp = timestamp();
         let domain = domain(&finding.location.path);
-        let package = package(&finding.location.path).map_or_else(|| "unknown_package".to_owned(), |name| snake_case(&name));
+        let package =
+            package(&finding.location.path).map_or_else(|| "unknown_package".to_owned(), |name| snake_case(&name));
         let output = queue.join(format!(
             "{}_{}_{}_{}.md",
             timestamp,

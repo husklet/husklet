@@ -84,7 +84,8 @@ impl Description {
                 signals: Arc::clone(&self.signals),
             }),
         );
-        *self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((identity, Arc::downgrade(bindings)));
+        *self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((identity, Arc::downgrade(bindings)));
     }
 
     fn error(error: ReadError) -> ObjectError {
@@ -101,9 +102,10 @@ impl Description {
         }
         self.pair.close_endpoint(self.endpoint);
         if self.endpoint == Endpoint::Master
-            && let Some(catalog) = self.catalog.upgrade() {
-                let _ = catalog.retire(self.pair.id());
-            }
+            && let Some(catalog) = self.catalog.upgrade()
+        {
+            let _ = catalog.retire(self.pair.id());
+        }
     }
 
     fn write_actor(&self, input: &[u8], actor: Option<OperationActor>) -> Result<usize, ObjectError> {
@@ -218,10 +220,15 @@ impl OpenFileDescription for Description {
     }
 
     fn close(&self) {
-        if let Some((identity, bindings)) = self.binding.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
-            && let Some(bindings) = bindings.upgrade() {
-                bindings.remove(identity);
-            }
+        if let Some((identity, bindings)) = self
+            .binding
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            && let Some(bindings) = bindings.upgrade()
+        {
+            bindings.remove(identity);
+        }
         self.close_endpoint();
     }
 }

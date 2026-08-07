@@ -90,7 +90,12 @@ impl WorkspaceRoot {
             let lowers = plan
                 .options
                 .get("HL_LOWER")
-                .map(|records| records.lines().map(|lower| lower.as_bytes().to_vec()).collect::<Vec<_>>())
+                .map(|records| {
+                    records
+                        .lines()
+                        .map(|lower| lower.as_bytes().to_vec())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
             super::super::path::NativePath::layered(&upper, &lowers, Arc::clone(&watches))
         } else {

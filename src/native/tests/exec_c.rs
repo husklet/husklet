@@ -11,8 +11,10 @@ const ARCH: &str = env!("HL_NATIVE_TEST_ARCH");
 const ALLOCATION: &str = env!("HL_NATIVE_TEST_ALLOCATION");
 
 /// Programs whose own driver script supplies an environment this harness deliberately does not build.
-const SKIPPED: &[(&str, &str)] =
-    &[("memory_lifecycle", "requires the malloc-interposing archive built by memory_lifecycle.sh")];
+const SKIPPED: &[(&str, &str)] = &[(
+    "memory_lifecycle",
+    "requires the malloc-interposing archive built by memory_lifecycle.sh",
+)];
 
 /// Programs that fail at HEAD for reasons that predate this harness. Removing an entry is the fix;
 /// a listed program that starts passing fails the run so the list cannot rot. The allowlist excuses
@@ -62,7 +64,11 @@ fn assemble(scratch: &Path) -> Vec<PathBuf> {
                 .arg(&object)
                 .output()
                 .expect("run assembler");
-            assert!(output.status.success(), "assemble {name}: {}", String::from_utf8_lossy(&output.stderr));
+            assert!(
+                output.status.success(),
+                "assemble {name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             object
         })
         .collect()
@@ -103,7 +109,9 @@ fn discover() -> Vec<PathBuf> {
         .map(|entry| entry.expect("read C test entry").path())
         .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("c"))
         .filter(|path| {
-            std::fs::read_to_string(path).expect("read C test source").contains("int main(void)")
+            std::fs::read_to_string(path)
+                .expect("read C test source")
+                .contains("int main(void)")
         })
         .collect::<Vec<_>>();
     sources.sort();
@@ -137,7 +145,10 @@ fn exec_c_programs_pass() {
                 })
             })
             .collect::<Vec<_>>();
-        handles.into_iter().map(|handle| handle.join().expect("join C test")).collect::<Vec<_>>()
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join C test"))
+            .collect::<Vec<_>>()
     });
     results.sort_by(|left, right| left.0.cmp(&right.0));
 
@@ -153,9 +164,7 @@ fn exec_c_programs_pass() {
             Outcome::Failed(report) if known.is_some() => {
                 eprintln!("known failure {name} ({}): {report}", known.expect("known entry").1)
             }
-            Outcome::Failed(report) | Outcome::Broken(report) => {
-                failures.push(format!("{name}: {report}"))
-            }
+            Outcome::Failed(report) | Outcome::Broken(report) => failures.push(format!("{name}: {report}")),
         }
     }
     eprintln!("hl-native C tests: {passed} passed, {} total", results.len());
@@ -163,8 +172,17 @@ fn exec_c_programs_pass() {
         unexpected_passes.is_empty(),
         "remove from KNOWN_FAILING, these now pass: {unexpected_passes:?}"
     );
-    assert!(failures.is_empty(), "{} C test(s) failed:\n{}", failures.len(), failures.join("\n\n"));
+    assert!(
+        failures.is_empty(),
+        "{} C test(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
     // A run where nothing actually executed is not a green gate, however few programs the host arch
     // can build.
-    assert!(passed != 0, "no C test ran: {} discovered, all skipped or allowlisted", results.len());
+    assert!(
+        passed != 0,
+        "no C test ran: {} discovered, all skipped or allowlisted",
+        results.len()
+    );
 }

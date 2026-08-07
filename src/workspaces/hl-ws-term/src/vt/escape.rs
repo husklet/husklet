@@ -1,4 +1,4 @@
-use super::{Vt, State, Pen, Cell};
+use super::{Cell, Pen, State, Vt};
 
 impl Vt {
     pub(super) fn enter_esc(&mut self) {

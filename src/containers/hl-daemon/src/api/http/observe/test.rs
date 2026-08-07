@@ -238,7 +238,9 @@ async fn status_order() {
         Query(custom_top("user,args")),
     )
     .await;
-    let Err(missing) = missing else { panic!("missing container must fail") };
+    let Err(missing) = missing else {
+        panic!("missing container must fail")
+    };
     assert_eq!(missing.status, StatusCode::NOT_FOUND);
 
     let stopped = top(
@@ -247,7 +249,9 @@ async fn status_order() {
         Query(custom_top("user,args")),
     )
     .await;
-    let Err(stopped) = stopped else { panic!("stopped container must fail") };
+    let Err(stopped) = stopped else {
+        panic!("stopped container must fail")
+    };
     assert_eq!(stopped.status, StatusCode::CONFLICT);
 }
 
@@ -271,7 +275,9 @@ fn active_pid_contract() {
         finished_at_ms: 2,
         ready_at_ms: 3,
     };
-    let Err(error) = Top::for_container(&restarting, &without_pid) else { panic!("restarting container must fail") };
+    let Err(error) = Top::for_container(&restarting, &without_pid) else {
+        panic!("restarting container must fail")
+    };
     assert_eq!(error.status, StatusCode::CONFLICT);
 }
 

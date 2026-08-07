@@ -178,7 +178,8 @@ impl Runtime {
         };
         let Ok(context) = self
             .process
-            .fork_child(source, process, Arc::clone(&space), ipc.child()?) else {
+            .fork_child(source, process, Arc::clone(&space), ipc.child()?)
+        else {
             let _ = tasks.rollback_fork_process(plan);
             return Err(Errno::ENOMEM);
         };

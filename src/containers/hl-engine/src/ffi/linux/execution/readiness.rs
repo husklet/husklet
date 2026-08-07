@@ -172,24 +172,15 @@ impl Cancellation {
         // SAFETY: value is readable for eight bytes, the descriptor remains
         // owned by self, the call retains nothing, and cannot unwind.
         let _ = unsafe {
-            super::super::abi::write(
-                self.descriptor,
-                (&raw const value).cast(),
-                core::mem::size_of::<u64>(),
-            )
+            super::super::abi::write(self.descriptor, (&raw const value).cast(), core::mem::size_of::<u64>())
         };
     }
 
     pub(super) fn drain(&self) -> bool {
         let mut value = 0_u64;
         // SAFETY: value is writable for eight bytes and the descriptor remains owned.
-        let _ = unsafe {
-            super::super::abi::read(
-                self.descriptor,
-                (&raw mut value).cast(),
-                core::mem::size_of::<u64>(),
-            )
-        };
+        let _ =
+            unsafe { super::super::abi::read(self.descriptor, (&raw mut value).cast(), core::mem::size_of::<u64>()) };
         self.interruption.take_pending()
     }
 
@@ -239,13 +230,8 @@ impl Wake {
     fn drain(&self) {
         let mut value = 0_u64;
         // SAFETY: value is writable for eight bytes and the descriptor remains owned.
-        let _ = unsafe {
-            super::super::abi::read(
-                self.descriptor,
-                (&raw mut value).cast(),
-                core::mem::size_of::<u64>(),
-            )
-        };
+        let _ =
+            unsafe { super::super::abi::read(self.descriptor, (&raw mut value).cast(), core::mem::size_of::<u64>()) };
     }
 }
 
@@ -254,11 +240,7 @@ impl hl_descriptor::ReadinessObserver for Wake {
         let value = 1_u64;
         // SAFETY: value is readable for eight bytes and the descriptor remains owned.
         let _ = unsafe {
-            super::super::abi::write(
-                self.descriptor,
-                (&raw const value).cast(),
-                core::mem::size_of::<u64>(),
-            )
+            super::super::abi::write(self.descriptor, (&raw const value).cast(), core::mem::size_of::<u64>())
         };
     }
 }

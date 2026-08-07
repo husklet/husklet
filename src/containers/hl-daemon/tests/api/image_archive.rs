@@ -53,9 +53,15 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "/v1.43/distribution/scenario%2Ffixture%3Atest/json",
         "/v1.43/distribution/docker.io/scenario/fixture:test/json",
     ] {
-        let response = raw_http(&socket, format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes())
-            .await?;
-        require(response.starts_with("HTTP/1.1 200"), "distribution reference was not resolved")?;
+        let response = raw_http(
+            &socket,
+            format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await?;
+        require(
+            response.starts_with("HTTP/1.1 200"),
+            "distribution reference was not resolved",
+        )?;
     }
     let id_prefix = listed[0].id.strip_prefix("sha256:").unwrap_or(&listed[0].id)[..12].to_owned();
     for identity in [&listed[0].id, &id_prefix] {
@@ -65,7 +71,10 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
             format!("GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").as_bytes(),
         )
         .await?;
-        require(response.starts_with("HTTP/1.1 200"), "distribution image ID was not resolved")?;
+        require(
+            response.starts_with("HTTP/1.1 200"),
+            "distribution image ID was not resolved",
+        )?;
     }
     for (method, target) in [
         ("POST", "/v1.43/distribution/docker.io/scenario/fixture:test/json"),
@@ -78,7 +87,10 @@ pub(crate) async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .as_bytes(),
         )
         .await?;
-        require(response.starts_with("HTTP/1.1 404"), "distribution route isolation changed")?;
+        require(
+            response.starts_with("HTTP/1.1 404"),
+            "distribution route isolation changed",
+        )?;
     }
     let inspected = client
         .images()

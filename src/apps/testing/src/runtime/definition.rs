@@ -1,5 +1,5 @@
-use crate::suite::SafePath as _;
 use super::{scheduler, workspace};
+use crate::suite::SafePath as _;
 mod engine_options;
 mod environment;
 mod host;
@@ -134,8 +134,8 @@ impl App {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
                 let golden = validate_golden(directory, &case.expect.stdout)?;
-                let (environment, engine_options) = EngineOptions::split(&case.environment)
-                    .map_err(|error| format!("{}: {error}", case.id))?;
+                let (environment, engine_options) =
+                    EngineOptions::split(&case.environment).map_err(|error| format!("{}: {error}", case.id))?;
                 Ok(RuntimeCase {
                     id: case.id,
                     arguments: case.run,
@@ -410,7 +410,12 @@ mod tests {
             assert!(text.starts_with("GUEST-"), "{text:?}");
         }
         drop((first, second));
-        let _ = fs::remove_dir_all(super::workspace().unwrap().join("target/testing/runtime").join(&app.name));
+        let _ = fs::remove_dir_all(
+            super::workspace()
+                .unwrap()
+                .join("target/testing/runtime")
+                .join(&app.name),
+        );
     }
 
     #[test]
@@ -456,7 +461,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            app.cases[0].inputs.iter().map(super::input::ManifestPath::name).collect::<Vec<_>>(),
+            app.cases[0]
+                .inputs
+                .iter()
+                .map(super::input::ManifestPath::name)
+                .collect::<Vec<_>>(),
             vec!["include/a.h", "z.ld"]
         );
     }

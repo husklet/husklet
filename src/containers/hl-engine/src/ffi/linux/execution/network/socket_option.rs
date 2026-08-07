@@ -115,15 +115,7 @@ pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocke
         let mut linger = unsafe { zeroed::<libc::linger>() };
         let mut length = size_of::<libc::linger>() as libc::socklen_t;
         // SAFETY: linger and length are writable for getsockopt.
-        let result = unsafe {
-            libc::getsockopt(
-                descriptor,
-                level,
-                option,
-                (&raw mut linger).cast(),
-                &raw mut length,
-            )
-        };
+        let result = unsafe { libc::getsockopt(descriptor, level, option, (&raw mut linger).cast(), &raw mut length) };
         return if result == 0 {
             Ok(GuestSocketOption::Linger {
                 enabled: linger.l_onoff,
@@ -138,15 +130,7 @@ pub(super) fn get(descriptor: i32, level: i32, option: i32) -> Result<GuestSocke
         let mut timeout = unsafe { zeroed::<libc::timeval>() };
         let mut length = size_of::<libc::timeval>() as libc::socklen_t;
         // SAFETY: timeout and length are writable for getsockopt.
-        let result = unsafe {
-            libc::getsockopt(
-                descriptor,
-                level,
-                option,
-                (&raw mut timeout).cast(),
-                &raw mut length,
-            )
-        };
+        let result = unsafe { libc::getsockopt(descriptor, level, option, (&raw mut timeout).cast(), &raw mut length) };
         return if result == 0 {
             Ok(GuestSocketOption::Timeval {
                 seconds: timeout.tv_sec,
