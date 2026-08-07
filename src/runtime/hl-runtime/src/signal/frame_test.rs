@@ -66,10 +66,10 @@ impl PreparedFramePublication for Publication {
 
 impl Drop for Publication {
     fn drop(&mut self) {
-        if !self.committed {
-            if let Some(previous) = self.previous.take() {
-                *self.state.lock().unwrap() = previous;
-            }
+        if !self.committed
+            && let Some(previous) = self.previous.take()
+        {
+            *self.state.lock().unwrap() = previous;
         }
     }
 }

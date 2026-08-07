@@ -56,10 +56,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
         };
-        if let GuestSocketOption::Timeval { seconds, microseconds } = value {
-            if seconds < 0 || !(0..1_000_000).contains(&microseconds) {
-                return LinuxResult::Error(Errno::EINVAL);
-            }
+        if let GuestSocketOption::Timeval { seconds, microseconds } = value
+            && (seconds < 0 || !(0..1_000_000).contains(&microseconds))
+        {
+            return LinuxResult::Error(Errno::EINVAL);
         }
         if matches!(value, GuestSocketOption::Bytes(_)) {
             return LinuxResult::Error(Errno::ENOPROTOOPT);
@@ -83,10 +83,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if let (RuntimeSocketKind::Unix { pair, endpoint }, Some(enabled)) = (&socket.kind, passcred) {
             pair.endpoints[*endpoint].set_passcred(enabled);
         }
-        if let Some(enabled) = passcred {
-            if let Some((pair, endpoint)) = socket.standalone_connection() {
-                pair.endpoints[endpoint].set_passcred(enabled);
-            }
+        if let Some(enabled) = passcred
+            && let Some((pair, endpoint)) = socket.standalone_connection()
+        {
+            pair.endpoints[endpoint].set_passcred(enabled);
         }
         socket.set_option(level, option, value);
         LinuxResult::Value(0)
@@ -219,11 +219,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .state;
                     let mut bytes = vec![0; 512];
-                    bytes[0] = if matches!(state, SocketState::Connected { .. }) {
-                        1
-                    } else {
-                        7
-                    };
+                    bytes[0] = if matches!(state, SocketState::Connected) { 1 } else { 7 };
                     GuestSocketOption::Bytes(bytes)
                 }
                 Err(error) => return LinuxResult::Error(error),

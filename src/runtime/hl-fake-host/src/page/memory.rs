@@ -236,6 +236,8 @@ impl GuestMemory for GuestPageStore {
 impl InstructionFetch for GuestPageStore {
     fn fetch(&self, address: u64, destination: &mut [u8]) -> Result<(), FetchError> {
         let pages = self.pages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // `index` also drives the guest address arithmetic below, not just the slice.
+        #[allow(clippy::needless_range_loop)]
         for index in 0..destination.len() {
             let current = address.checked_add(index as u64).ok_or(FetchError)?;
             let base = current / PAGE_SIZE * PAGE_SIZE;

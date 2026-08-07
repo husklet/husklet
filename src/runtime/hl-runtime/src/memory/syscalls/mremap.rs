@@ -162,9 +162,11 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             batch.push(hl_memory::MappingOperation::Charge(added));
         }
         let before = AnonymousMemoryLease::total(&self.coordinator.ledger().regions()).unwrap_or(u64::MAX);
-        let added = reserved
-            .then_some(plan.requested_new_length.saturating_sub(plan.requested_old_length))
-            .unwrap_or(0);
+        let added = if reserved {
+            plan.requested_new_length.saturating_sub(plan.requested_old_length)
+        } else {
+            0
+        };
         self.accounted(before.saturating_add(added), || {
             self.coordinator.apply(&batch).map(|_| old.start())
         })

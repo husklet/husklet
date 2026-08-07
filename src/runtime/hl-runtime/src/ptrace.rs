@@ -390,10 +390,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     fn decode_registers(&self, bytes: &[u8]) -> Result<StoppedRegisterImage, TraceError> {
         let registers = match self.architecture {
             hl_linux::GuestArchitecture::X86_64 => hl_execution::StoppedRegisters::X86(
-                hl_execution::X86Prstatus::decode(&bytes).map_err(|_| TraceError::InvalidSnapshot)?,
+                hl_execution::X86Prstatus::decode(bytes).map_err(|_| TraceError::InvalidSnapshot)?,
             ),
             hl_linux::GuestArchitecture::Aarch64 => hl_execution::StoppedRegisters::Aarch64(
-                hl_execution::Aarch64Prstatus::decode(&bytes).map_err(|_| TraceError::InvalidSnapshot)?,
+                hl_execution::Aarch64Prstatus::decode(bytes).map_err(|_| TraceError::InvalidSnapshot)?,
             ),
         };
         Ok(StoppedRegisterImage::new(registers))

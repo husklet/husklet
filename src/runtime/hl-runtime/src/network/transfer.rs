@@ -32,11 +32,11 @@ impl ImportedTransfer {
         }
     }
 
-    pub fn prepare<'table>(
+    pub fn prepare(
         self,
-        descriptors: &'table DescriptorTable,
+        descriptors: &DescriptorTable,
         close_on_exec: bool,
-    ) -> Result<PreparedTransfer<'table>, RuntimeNetworkError> {
+    ) -> Result<PreparedTransfer<'_>, RuntimeNetworkError> {
         let flags = DescriptorFlags::from_bits(if close_on_exec {
             DescriptorFlags::CLOSE_ON_EXEC
         } else {
@@ -161,10 +161,10 @@ impl PreparedTransfer<'_> {
 
 impl Drop for PreparedTransfer<'_> {
     fn drop(&mut self) {
-        if self.bound {
-            if let Some(publication) = self.publication.take() {
-                publication.rollback();
-            }
+        if self.bound
+            && let Some(publication) = self.publication.take()
+        {
+            publication.rollback();
         }
     }
 }

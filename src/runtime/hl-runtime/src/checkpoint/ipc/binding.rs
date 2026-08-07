@@ -490,10 +490,10 @@ impl OpenFileDescription for PendingObject {
             },
         );
         drop(state);
-        if let Some((catalog, pipe)) = self.catalog.get() {
-            if let Some(catalog) = catalog.upgrade() {
-                let _ = catalog.retire_pipe(*pipe);
-            }
+        if let Some((catalog, pipe)) = self.catalog.get()
+            && let Some(catalog) = catalog.upgrade()
+        {
+            let _ = catalog.retire_pipe(*pipe);
         }
     }
 }

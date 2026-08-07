@@ -167,8 +167,7 @@ impl RouteSocket {
     fn one_link(&self, request: &[u8], sequence: u32) -> Vec<u8> {
         let index = request
             .get(20..24)
-            .map(|bytes| i32::from_ne_bytes(bytes.try_into().unwrap()))
-            .unwrap_or(0);
+            .map_or(0, |bytes| i32::from_ne_bytes(bytes.try_into().unwrap()));
         let mut name = None;
         let mut offset = 32;
         while offset + 4 <= request.len() {

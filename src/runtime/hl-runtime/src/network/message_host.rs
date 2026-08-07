@@ -139,10 +139,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Ok(value) => value,
             Err(error) => return LinuxResult::Error(SocketErrno::marshal(error)),
         };
-        if let Some(address) = &address {
-            if let Err(error) = self.route(address) {
-                return LinuxResult::Error(error);
-            }
+        if let Some(address) = &address
+            && let Err(error) = self.route(address)
+        {
+            return LinuxResult::Error(error);
         }
         let route = address.map(|address| self.connect_route(address));
         let record = socket

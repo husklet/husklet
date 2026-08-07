@@ -244,7 +244,7 @@ impl<H: CheckpointHost> NetworkCatalogRestore for RestoreTransaction<H> {
         let (generation, previous) = self
             .sockets
             .checkpoint_replace(self.registry_generation, replacement)
-            .map_err(|_| NetworkCheckpointError::InvalidImage)?;
+            .map_err(|()| NetworkCheckpointError::InvalidImage)?;
         self.previous_registry = Some(previous);
         self.previous_unix = Some(self.sockets.replace_unix(self.unix.clone()));
         self.committed_registry = Some(generation);

@@ -220,12 +220,11 @@ impl Participant {
         };
         let snapshot = snapshot.ok_or(())?;
         control.freeze_checkpoint().map_err(|_| ())?;
-        match control.stage_checkpoint(&snapshot) {
-            Ok(transaction) => Ok(Some(transaction)),
-            Err(_) => {
-                control.thaw_checkpoint();
-                Err(())
-            }
+        if let Ok(transaction) = control.stage_checkpoint(&snapshot) {
+            Ok(Some(transaction))
+        } else {
+            control.thaw_checkpoint();
+            Err(())
         }
     }
 
@@ -255,11 +254,11 @@ impl CheckpointParticipant for Participant {
         }
         let registry = self.registry.current();
         registry.freeze_checkpoint();
-        if let Some(seccomp) = &self.seccomp {
-            if seccomp.freeze_checkpoint().is_err() {
-                registry.thaw_checkpoint();
-                return Err(());
-            }
+        if let Some(seccomp) = &self.seccomp
+            && seccomp.freeze_checkpoint().is_err()
+        {
+            registry.thaw_checkpoint();
+            return Err(());
         }
         *self.frozen.lock().map_err(|_| ())? = Some(registry);
         Ok(())

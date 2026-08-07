@@ -398,7 +398,7 @@ fn registered_pipe_adapter(
     architecture: GuestArchitecture,
 ) -> (RuntimeFilesystemSyscalls<Memory>, OperationLease, i32) {
     let table = Arc::new(DescriptorTable::new(2).unwrap());
-    let assembly = crate::RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = crate::RuntimeAssembly::new(crate::HostCapacityPlan::default()).unwrap();
     let shared = Arc::new(hl_memory::SharedObjectStore::new(hl_memory::SharedLimits::default()).unwrap());
     assembly.install_ipc(shared).unwrap();
     let runtime = RuntimeFilesystemSyscalls::new(
@@ -1254,7 +1254,7 @@ fn closed_directory_cursor() {
 fn pipe2_exact_copyout() {
     for architecture in [GuestArchitecture::Aarch64, GuestArchitecture::X86_64] {
         let descriptors = Arc::new(DescriptorTable::new(8).unwrap());
-        let assembly = crate::RuntimeAssembly::new(Default::default()).unwrap();
+        let assembly = crate::RuntimeAssembly::new(crate::HostCapacityPlan::default()).unwrap();
         let shared = Arc::new(hl_memory::SharedObjectStore::new(hl_memory::SharedLimits::default()).unwrap());
         assembly.install_ipc(shared).unwrap();
         let registry = assembly.ipc_pipes().unwrap();
@@ -1372,7 +1372,7 @@ fn fragmented_pipe_capacity_stays_on_waiter_lane() {
 #[test]
 fn pipe2_leaks_fd() {
     let descriptors = Arc::new(DescriptorTable::new(2).unwrap());
-    let assembly = crate::RuntimeAssembly::new(Default::default()).unwrap();
+    let assembly = crate::RuntimeAssembly::new(crate::HostCapacityPlan::default()).unwrap();
     let shared = Arc::new(hl_memory::SharedObjectStore::new(hl_memory::SharedLimits::default()).unwrap());
     assembly.install_ipc(shared).unwrap();
     let adapter = RuntimeFilesystemSyscalls::new(

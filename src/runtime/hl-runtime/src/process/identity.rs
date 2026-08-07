@@ -10,7 +10,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
 
     pub(crate) fn getppid(&self) -> LinuxResult {
         match self.snapshot() {
-            Ok(snapshot) => LinuxResult::Value(snapshot.parent.map_or(0, |parent| parent.number()) as u64),
+            Ok(snapshot) => LinuxResult::Value(snapshot.parent.map_or(0, hl_task::ProcessId::number) as u64),
             Err(error) => LinuxResult::Error(error),
         }
     }

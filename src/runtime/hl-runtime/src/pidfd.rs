@@ -82,12 +82,11 @@ impl ProcessHandleRegistry {
 
     pub fn target(&self, identity: DescriptionIdentity) -> Result<ProcessId, ProcessHandleError> {
         let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match objects.get(&identity).and_then(Weak::upgrade) {
-            Some(object) => Ok(object.target),
-            None => {
-                objects.remove(&identity);
-                Err(ProcessHandleError::Missing)
-            }
+        if let Some(object) = objects.get(&identity).and_then(Weak::upgrade) {
+            Ok(object.target)
+        } else {
+            objects.remove(&identity);
+            Err(ProcessHandleError::Missing)
         }
     }
 
@@ -188,10 +187,10 @@ impl OpenFileDescription for ProcessHandle {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((registry, identity)) = binding {
-            if let Some(registry) = registry.upgrade() {
-                registry.retire(identity);
-            }
+        if let Some((registry, identity)) = binding
+            && let Some(registry) = registry.upgrade()
+        {
+            registry.retire(identity);
         }
     }
 }
@@ -203,10 +202,10 @@ impl Drop for ProcessHandle {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((registry, identity)) = binding {
-            if let Some(registry) = registry.upgrade() {
-                registry.retire(identity);
-            }
+        if let Some((registry, identity)) = binding
+            && let Some(registry) = registry.upgrade()
+        {
+            registry.retire(identity);
         }
     }
 }

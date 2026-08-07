@@ -115,7 +115,7 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
 
     pub(super) fn shared_info(&self, abi: &SysvAbi<'_, M>, usage: bool, output: u64) -> LinuxResult {
         let limits = self.catalog.shared_limits();
-        let snapshot = self.catalog.with_shared_memory(|namespace| namespace.snapshot());
+        let snapshot = self.catalog.with_shared_memory(hl_ipc::SharedMemoryNamespace::snapshot);
         let highest = ControlProjection::highest_shared(&snapshot.segments);
         let staged = if usage {
             let bytes = snapshot.segments.iter().map(|value| value.size as u64).sum::<u64>();
@@ -145,6 +145,8 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
         ControlProjection::commit_info(self, staged, highest)
     }
 
+    // The closure is required: the method's owning module is not publicly re-exported.
+    #[allow(clippy::redundant_closure_for_method_calls)]
     pub(super) fn message_info(&self, abi: &SysvAbi<'_, M>, usage: bool, output: u64) -> LinuxResult {
         let limits = self.catalog.message_limits();
         let snapshot = self.catalog.with_messages(|namespace| namespace.snapshot());
@@ -190,7 +192,7 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
 
     pub(super) fn semaphore_info(&self, abi: &SysvAbi<'_, M>, usage: bool, output: u64) -> LinuxResult {
         let limits = self.catalog.semaphore_limits();
-        let snapshot = self.catalog.with_semaphores(|namespace| namespace.snapshot());
+        let snapshot = self.catalog.with_semaphores(hl_ipc::SemaphoreNamespace::snapshot);
         let highest = snapshot
             .sets
             .iter()

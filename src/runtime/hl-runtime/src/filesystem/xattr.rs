@@ -89,11 +89,13 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         match target {
             FilesystemTarget::Descriptor(descriptor) => {
                 let lease = self.descriptors.pin(*descriptor).map_err(FileErrno::descriptor)?;
-                host.descriptor_node(lease).map_err(|error| error.errno())
+                host.descriptor_node(lease)
+                    .map_err(super::super::path_host::RuntimePathError::errno)
             }
             FilesystemTarget::Path(operand) => {
                 let base = self.path_base(host, operand)?;
-                host.resolve(&base, operand).map_err(|error| error.errno())
+                host.resolve(&base, operand)
+                    .map_err(super::super::path_host::RuntimePathError::errno)
             }
         }
     }

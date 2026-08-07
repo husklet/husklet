@@ -67,10 +67,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 return LinuxResult::Error(error);
             }
         }
-        if let Some(staged) = staged {
-            if let Err(error) = staged.commit(&GuestMarshaller::new(&self.memory, self.architecture)) {
-                return LinuxResult::Error(error.errno());
-            }
+        if let Some(staged) = staged
+            && let Err(error) = staged.commit(&GuestMarshaller::new(&self.memory, self.architecture))
+        {
+            return LinuxResult::Error(error.errno());
         }
         LinuxResult::Value(0)
     }

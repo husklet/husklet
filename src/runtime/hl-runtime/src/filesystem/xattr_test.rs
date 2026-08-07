@@ -1,3 +1,5 @@
+#![allow(clippy::new_ret_no_self)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

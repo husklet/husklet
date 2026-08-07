@@ -198,9 +198,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         }
         let staged = abi
             .stage_timespec(destination, remaining)
-            .map_err(|error| error.errno())?;
+            .map_err(hl_linux::FutexMarshalError::errno)?;
         let marshaller = hl_linux::GuestMarshaller::new(&self.memory, self.architecture);
-        staged.commit(&marshaller).map_err(|error| error.errno())
+        staged.commit(&marshaller).map_err(hl_linux::FutexMarshalError::errno)
     }
 
     pub(crate) fn gettimeofday(&self, time: u64, timezone: u64) -> LinuxResult {
@@ -398,11 +398,11 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         bytes[48..56].copy_from_slice(&2_i64.to_le_bytes());
         bytes[56..64].copy_from_slice(&1_i64.to_le_bytes());
         bytes[64..72].copy_from_slice(&32_768_000_i64.to_le_bytes());
-        if let Some(provider) = &self.clock {
-            if let Ok(now) = provider.realtime_now() {
-                bytes[72..80].copy_from_slice(&(now.seconds() as i64).to_le_bytes());
-                bytes[80..88].copy_from_slice(&i64::from(now.subsecond_nanoseconds() / 1_000).to_le_bytes());
-            }
+        if let Some(provider) = &self.clock
+            && let Ok(now) = provider.realtime_now()
+        {
+            bytes[72..80].copy_from_slice(&(now.seconds() as i64).to_le_bytes());
+            bytes[80..88].copy_from_slice(&i64::from(now.subsecond_nanoseconds() / 1_000).to_le_bytes());
         }
         bytes[88..96].copy_from_slice(&10_000_i64.to_le_bytes());
 

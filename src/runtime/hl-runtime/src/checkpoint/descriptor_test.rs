@@ -85,7 +85,9 @@ impl DirectoryObjectCheckpoint for Directories {
     }
 
     fn owns(&self, _: u64, object: &dyn OpenFileDescription) -> Result<bool, DescriptorCheckpointError> {
-        Ok(object.domain_extension().is_some_and(|value| value.is::<Directory>()))
+        Ok(object
+            .domain_extension()
+            .is_some_and(<dyn std::any::Any>::is::<Directory>))
     }
 }
 

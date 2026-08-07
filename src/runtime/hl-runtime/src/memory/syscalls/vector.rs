@@ -49,6 +49,8 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         let mut source_offset = 0_u64;
         let mut destination_offset = 0_u64;
         let mut total = 0_u64;
+        // A 64 KiB staging buffer matches the kernel's own vectored-copy chunk.
+        #[allow(clippy::large_stack_arrays)]
         let mut buffer = [0_u8; 64 * 1024];
         while source_index < source.len() && destination_index < destination.len() {
             let source_left = source[source_index].length - source_offset;

@@ -48,7 +48,7 @@ impl<M: hl_linux::GuestMemory> RuntimeProcessSyscalls<M> {
         let Some(port) = self.signal_frames.as_deref() else {
             return Ok(());
         };
-        let machine = port.snapshot(self.thread).map_err(|_| Errno::EIO)?;
+        let machine = port.snapshot(self.thread).map_err(|()| Errno::EIO)?;
         self.tasks
             .unwind_signal_frames(self.thread, Self::stack_pointer(&machine))
             .map(|_| ())

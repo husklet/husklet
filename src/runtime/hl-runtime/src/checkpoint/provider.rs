@@ -127,12 +127,11 @@ impl ProviderCheckpointParticipant {
             remote.rollback();
             return Err(());
         };
-        let replacement = match HandleNamespace::restore_checkpoint(&image.namespace, &remotes) {
-            Ok(namespace) => Arc::new(namespace),
-            Err(_) => {
-                remote.rollback();
-                return Err(());
-            }
+        let replacement = if let Ok(namespace) = HandleNamespace::restore_checkpoint(&image.namespace, &remotes) {
+            Arc::new(namespace)
+        } else {
+            remote.rollback();
+            return Err(());
         };
         replacement.freeze_checkpoint();
         let reservation = self.next.fetch_add(1, Ordering::Relaxed);

@@ -1,3 +1,6 @@
+// The wire modules mirror the whole task-registry vocabulary they serialize.
+#![allow(clippy::wildcard_imports)]
+
 use super::*;
 
 pub(super) struct IdentityWire;

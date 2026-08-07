@@ -21,6 +21,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Err(error) => return LinuxResult::Error(error),
         };
         let wait_options = Self::wait_options(plan.options, false);
+        // Every arm returns; the loop shape is kept so a retry can be added without reflow.
+        #[allow(clippy::never_loop)]
         loop {
             if let Some(result) = self.trace_wait4(pid, status) {
                 return result;
@@ -159,10 +161,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             .processes
             .iter()
             .any(|process| process.id == child);
-        if !retained {
-            if let Some(reap) = &self.reap {
-                reap.remove(child);
-            }
+        if !retained && let Some(reap) = &self.reap {
+            reap.remove(child);
         }
     }
 
@@ -183,6 +183,8 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Err(error) => return LinuxResult::Error(error),
         };
         let options = Self::wait_options(plan.options, plan.keep_waitable);
+        // Every arm returns; the loop shape is kept so a retry can be added without reflow.
+        #[allow(clippy::never_loop)]
         loop {
             let Ok(prepared) = self.tasks.prepare_wait_child(self.process, selector, options) else {
                 return LinuxResult::Error(Errno::ECHILD);

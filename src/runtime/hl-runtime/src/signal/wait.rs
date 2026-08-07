@@ -138,10 +138,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                 Err(_) => break LinuxResult::Error(Errno::EIO),
             }
         };
-        if let Some(mask) = old_mask {
-            if self.tasks.replace_signal_mask(self.thread, mask).is_err() {
-                return LinuxResult::Error(Errno::ESRCH);
-            }
+        if let Some(mask) = old_mask
+            && self.tasks.replace_signal_mask(self.thread, mask).is_err()
+        {
+            return LinuxResult::Error(Errno::ESRCH);
         }
         result
     }

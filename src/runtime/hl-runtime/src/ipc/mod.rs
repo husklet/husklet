@@ -1,4 +1,4 @@
-//! SysV IPC syscall composition and cross-domain lifecycle transactions.
+//! `SysV` IPC syscall composition and cross-domain lifecycle transactions.
 
 mod blocking;
 mod control;

@@ -195,8 +195,7 @@ impl PtracePort for Catalog {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .links
             .get(&event.link)
-            .map(|link| link.options)
-            .unwrap_or_else(|| PtraceOptions::from_bits(0));
+            .map_or_else(|| PtraceOptions::from_bits(0), |link| link.options);
         match event.stop {
             TraceStop::Group(signal) | TraceStop::Signal(signal) => (signal << 8) | 0x7f,
             TraceStop::SyscallEntry | TraceStop::SyscallExit => {

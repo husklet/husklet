@@ -102,7 +102,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         let removed = replaced.map_or(0, |range| {
             Self::charged_overlap(&self.coordinator.ledger().regions(), range)
         });
-        let new_charge = charge.then_some(plan.requested_length).unwrap_or(0);
+        let new_charge = if charge { plan.requested_length } else { 0 };
         let target = before.saturating_sub(removed).saturating_add(new_charge);
         let operation = || {
             if charge {

@@ -91,13 +91,13 @@ impl<M: GuestMemory> Runtime<M> {
                 return Err(Self::runnable_error(error));
             }
         };
-        if let Some(address) = plan.clear_tid {
-            if self.tasks.stage_clear_tid(&task, address).is_err() {
-                drop(runnable);
-                self.contexts.rollback(thread);
-                let _ = self.tasks.rollback_clone_thread(task);
-                return Err(Error::Failed);
-            }
+        if let Some(address) = plan.clear_tid
+            && self.tasks.stage_clear_tid(&task, address).is_err()
+        {
+            drop(runnable);
+            self.contexts.rollback(thread);
+            let _ = self.tasks.rollback_clone_thread(task);
+            return Err(Error::Failed);
         }
         if self.write_tid(thread, &copyouts).is_err() {
             self.restore(&copyouts);

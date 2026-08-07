@@ -92,7 +92,7 @@ impl TaskResourceCatalog {
     fn valid_process(reference: &ProcessCheckpointReference) -> bool {
         let mut keys = reference.shared_resources.clone();
         if let Some(descriptors) = reference.descriptor_table {
-            keys.push(descriptors)
+            keys.push(descriptors);
         }
         Self::distinct(&keys)
     }

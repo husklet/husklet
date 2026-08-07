@@ -32,7 +32,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let lease = self.descriptors.pin(descriptor).map_err(FileErrno::descriptor)?;
         host.descriptor_node(lease)
             .and_then(|node| node.filesystem())
-            .map_err(|error| error.errno())
+            .map_err(super::super::path_host::RuntimePathError::errno)
     }
 
     fn path_stats(
@@ -46,6 +46,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             FilesystemTarget::Descriptor(_) => return Err(Errno::EINVAL),
         };
         let base = self.path_base(host, &operand)?;
-        host.filesystem(&base, &operand).map_err(|error| error.errno())
+        host.filesystem(&base, &operand)
+            .map_err(super::super::path_host::RuntimePathError::errno)
     }
 }

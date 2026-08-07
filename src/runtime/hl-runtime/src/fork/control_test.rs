@@ -175,7 +175,7 @@ impl Fixture {
                 && state
                     .artifact
                     .as_ref()
-                    .map_or(true, |artifact| artifact.upgrade().is_none())
+                    .is_none_or(|artifact| artifact.upgrade().is_none())
         }));
     }
 }

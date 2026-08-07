@@ -196,7 +196,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         };
         prepared
             .commit()
-            .map_or_else(|error| LinuxResult::Error(error.errno()), |_| LinuxResult::Value(0))
+            .map_or_else(|error| LinuxResult::Error(error.errno()), |()| LinuxResult::Value(0))
     }
 
     fn descriptor_chown(&self, host: &dyn RuntimePathHost, arguments: [u64; 6]) -> LinuxResult {
@@ -216,7 +216,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             };
         prepared
             .commit()
-            .map_or_else(|error| LinuxResult::Error(error.errno()), |_| LinuxResult::Value(0))
+            .map_or_else(|error| LinuxResult::Error(error.errno()), |()| LinuxResult::Value(0))
     }
 
     fn mutation_bases(
@@ -246,19 +246,24 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         operand: &hl_linux::PathOperand,
     ) -> Result<DirectoryBaseLease, Errno> {
         if operand.path.is_absolute() {
-            return host.root_base().map_err(|error| error.errno());
+            return host
+                .root_base()
+                .map_err(super::super::path_host::RuntimePathError::errno);
         }
         if operand.directory.raw() == (-100_i64) as u64 {
             let snapshot = self.working.snapshot();
             if snapshot.deleted {
                 return Err(Errno::ENOENT);
             }
-            return host.working_base(snapshot.path).map_err(|error| error.errno());
+            return host
+                .working_base(snapshot.path)
+                .map_err(super::super::path_host::RuntimePathError::errno);
         }
         let lease = self
             .descriptors
             .pin(operand.directory.raw() as i32)
             .map_err(FileErrno::descriptor)?;
-        host.descriptor_base(lease).map_err(|error| error.errno())
+        host.descriptor_base(lease)
+            .map_err(super::super::path_host::RuntimePathError::errno)
     }
 }

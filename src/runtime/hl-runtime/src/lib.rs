@@ -1,6 +1,29 @@
 //! Engine runtime state and cross-domain integration.
 
 #![forbid(unsafe_code)]
+// Syscall handlers take their request and plan structs by value because the handler consumes
+// them, and their builders return Self on cold setup paths where must_use adds no signal.
+#![allow(
+    clippy::needless_pass_by_value,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use
+)]
+// Handlers keep their receiver so a syscall family reads uniformly, and the plan/route tuples
+// are the shapes the ABI defines rather than types worth naming.
+#![allow(clippy::unused_self, clippy::type_complexity)]
+// Checkpoint wire types mirror the on-disk record they serialize: their Debug impls print the
+// identifying fields only, their converters keep a Result for uniformity with fallible siblings,
+// and `len` counts retained resources rather than a container.
+#![allow(
+    clippy::missing_fields_in_debug,
+    clippy::unnecessary_wraps,
+    clippy::len_without_is_empty,
+    clippy::struct_field_names,
+    clippy::needless_for_each,
+    clippy::comparison_chain,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::verbose_bit_mask
+)]
 
 mod aio;
 

@@ -91,12 +91,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             return self.send_unix_datagram(socket, input, None);
         }
         let result = if nonblocking {
-            socket.write_with(&input, true)
+            socket.write_with(input, true)
         } else if let Some(wait) = &self.wait {
             let cancellation = SocketCancellation::new(wait.interruption());
-            socket.write_blocking(&input, &cancellation)
+            socket.write_blocking(input, &cancellation)
         } else {
-            socket.write_with(&input, false)
+            socket.write_with(input, false)
         };
         result.map_err(FileErrno::object)
     }
@@ -204,10 +204,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             Ok(_) => return LinuxResult::Error(Errno::EFAULT),
             Err(error) => return LinuxResult::Error(error.errno()),
         }
-        if address_pointer != 0 {
-            if let Err(error) = marshaller.socklen(length_pointer, SOCKADDR_COPYOUT_CAPACITY_MAXIMUM) {
-                return LinuxResult::Error(error.errno());
-            }
+        if address_pointer != 0
+            && let Err(error) = marshaller.socklen(length_pointer, SOCKADDR_COPYOUT_CAPACITY_MAXIMUM)
+        {
+            return LinuxResult::Error(error.errno());
         }
         let socket = match self.lookup(descriptor) {
             Ok(value) => value,
@@ -278,10 +278,10 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         if copied.fault.is_some() {
             return LinuxResult::Error(Errno::EFAULT);
         }
-        if let Some(staged) = staged_address {
-            if let Err(error) = staged.commit(&marshaller) {
-                return LinuxResult::Error(SocketErrno::marshal(error));
-            }
+        if let Some(staged) = staged_address
+            && let Err(error) = staged.commit(&marshaller)
+        {
+            return LinuxResult::Error(SocketErrno::marshal(error));
         }
         let record_oriented = socket
             .snapshot
@@ -422,7 +422,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         let maximum = match snapshot.family {
             hl_network::AddressFamily::Inet4 => Some(IPV4_DATAGRAM_MAXIMUM),
             hl_network::AddressFamily::Inet6 => Some(IPV6_DATAGRAM_MAXIMUM),
-            _ => None,
+            hl_network::AddressFamily::Unix => None,
         };
         if maximum.is_some_and(|maximum| length > maximum) {
             return Err(Errno::EMSGSIZE);

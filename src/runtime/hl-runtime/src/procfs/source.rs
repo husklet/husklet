@@ -366,7 +366,9 @@ impl ProcfsSource for TaskProcfs {
     fn descriptor_numbers(&self, process: ProcfsProcessIdentity) -> Result<Vec<i32>, ProcfsError> {
         let id = self.process_id(process)?;
         let table = self.descriptor_table(id)?;
+        #[allow(clippy::items_after_statements)]
         const MAXIMUM_DESCRIPTORS: usize = 65_536;
+        #[allow(clippy::items_after_statements)]
         const MAXIMUM_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
         let mut numbers = table
             .bounded_active_snapshots(hl_descriptor::SnapshotBudget {

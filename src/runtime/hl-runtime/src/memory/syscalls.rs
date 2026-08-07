@@ -131,7 +131,7 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             anonymous_charge: None,
             next_anonymous: AtomicU64::new(1),
             minimum_address: MMAP_MINIMUM_ADDRESS,
-            address_limit: u64::MAX & !4095,
+            address_limit: !4095,
             process: None,
         }
     }

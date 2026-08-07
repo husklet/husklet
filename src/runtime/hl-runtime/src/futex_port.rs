@@ -48,26 +48,24 @@ impl<H: MemoryAccessHost> FutexAccessMemory<H> {
         let mut keys = self.keys.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let key = match identity {
             private @ FutexIdentity::Private { address, .. } => {
-                let owner = match keys.shared.get(&private).copied() {
-                    Some(owner) => owner,
-                    None => {
-                        keys.next_shared = keys.next_shared.wrapping_add(1).max(1);
-                        let owner = keys.next_shared;
-                        keys.shared.insert(private, owner);
-                        owner
-                    }
+                let owner = if let Some(owner) = keys.shared.get(&private).copied() {
+                    owner
+                } else {
+                    keys.next_shared = keys.next_shared.wrapping_add(1).max(1);
+                    let owner = keys.next_shared;
+                    keys.shared.insert(private, owner);
+                    owner
                 };
                 FutexKey::private(owner, address)?
             }
             shared => {
-                let backing = match keys.shared.get(&shared).copied() {
-                    Some(backing) => backing,
-                    None => {
-                        keys.next_shared = keys.next_shared.wrapping_add(1).max(1);
-                        let backing = keys.next_shared;
-                        keys.shared.insert(shared, backing);
-                        backing
-                    }
+                let backing = if let Some(backing) = keys.shared.get(&shared).copied() {
+                    backing
+                } else {
+                    keys.next_shared = keys.next_shared.wrapping_add(1).max(1);
+                    let backing = keys.next_shared;
+                    keys.shared.insert(shared, backing);
+                    backing
                 };
                 FutexKey::shared(backing, Self::offset(shared))?
             }

@@ -385,9 +385,8 @@ fn execution_weakening_transfer() {
     assert_eq!(participant.staged_count(), 0);
     let capability = parent
         .transfer(handle)
-        .map_err(|error| {
+        .inspect_err(|&error| {
             assert_ne!(error, NamespaceError::SharedTransfer);
-            error
         })
         .unwrap();
     assert_eq!(capability.close().remote(), remote);

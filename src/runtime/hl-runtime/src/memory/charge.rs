@@ -84,7 +84,7 @@ impl AnonymousMemoryLease {
     pub fn total(regions: &[Region]) -> Result<u64, MemoryError> {
         regions.iter().try_fold(0_u64, |total, region| {
             total
-                .checked_add(region.charge().map_or(0, |range| range.length()))
+                .checked_add(region.charge().map_or(0, hl_isa::AddressRange::length))
                 .ok_or(MemoryError::ResourceLimit)
         })
     }

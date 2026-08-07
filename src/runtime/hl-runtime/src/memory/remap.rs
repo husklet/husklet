@@ -32,8 +32,8 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             Placement::FixedNoReplace(_) | Placement::Anywhere { .. } => 0,
         };
         let reserved = source.region.reserved();
-        let new_charge = reserved.then_some(requested_new_length).unwrap_or(0);
-        let removed = destination_charge.saturating_add((!keep_old).then_some(source_charge).unwrap_or(0));
+        let new_charge = if reserved { requested_new_length } else { 0 };
+        let removed = destination_charge.saturating_add(if keep_old { 0 } else { source_charge });
         let target = before.saturating_sub(removed).saturating_add(new_charge);
         self.accounted(target, || {
             if reserved {

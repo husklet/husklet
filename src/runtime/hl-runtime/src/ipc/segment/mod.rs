@@ -1,4 +1,4 @@
-//! SysV shared-memory segments, mappings, and transactional lifecycle.
+//! `SysV` shared-memory segments, mappings, and transactional lifecycle.
 
 mod binding;
 mod lifecycle;

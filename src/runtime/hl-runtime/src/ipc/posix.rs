@@ -360,9 +360,10 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
                 },
             })
         };
-        let result = self.with_mq(arguments[0], |description| match event {
-            Some(event) => description.register(event).map_err(Self::mq_error),
-            None => {
+        let result = self.with_mq(arguments[0], |description| {
+            if let Some(event) = event {
+                description.register(event).map_err(Self::mq_error)
+            } else {
                 description.unregister(self.process.number());
                 Ok(())
             }

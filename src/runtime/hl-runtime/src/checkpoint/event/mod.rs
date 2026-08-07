@@ -114,12 +114,11 @@ impl Participant {
 
     fn stage_image(&self, previous: &CatalogLease, image: &EventCheckpointImage) -> Result<u64, ()> {
         let mut external = self.rebind.stage(image).map_err(|_| ())?;
-        let replacement = match HostEventCatalog::restore_checkpoint(image, external.as_mut()) {
-            Ok(catalog) => Arc::new(catalog),
-            Err(_) => {
-                external.rollback();
-                return Err(());
-            }
+        let replacement = if let Ok(catalog) = HostEventCatalog::restore_checkpoint(image, external.as_mut()) {
+            Arc::new(catalog)
+        } else {
+            external.rollback();
+            return Err(());
         };
         replacement.freeze_checkpoint();
         let reservation = self.next.fetch_add(1, Ordering::Relaxed);

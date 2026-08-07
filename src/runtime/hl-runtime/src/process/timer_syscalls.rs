@@ -111,10 +111,10 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             replacement.interval = interval_ns;
             replacement.reported = 0;
         }
-        if let Some(staged) = staged {
-            if let Err(error) = staged.commit(&GuestMarshaller::new(&self.memory, self.architecture)) {
-                return LinuxResult::Error(error.errno());
-            }
+        if let Some(staged) = staged
+            && let Err(error) = staged.commit(&GuestMarshaller::new(&self.memory, self.architecture))
+        {
+            return LinuxResult::Error(error.errno());
         }
         match timers.replace_scheduled(id, current, replacement) {
             Ok(true) => {}
@@ -221,7 +221,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             _ => provider
                 .monotonic_now()
                 .map_err(|_| Errno::EIO)
-                .map(|value| value.nanoseconds())
+                .map(hl_time::MonotonicInstant::nanoseconds)
                 .map(Some)?,
         };
         value.ok_or(Errno::EOVERFLOW)

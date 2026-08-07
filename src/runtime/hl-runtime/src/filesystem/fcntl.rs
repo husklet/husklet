@@ -406,7 +406,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 cancellation: Arc::clone(&cancellation),
             }))
         });
-        if observation.is_some_and(|value| value.interrupted()) {
+        if observation.is_some_and(hl_descriptor::OperationCancellation::interrupted) {
             locks.interrupt(&cancellation);
         }
         let result = locks.set_range(file, owner, kind, range, command == 7 || command == 38, &cancellation);

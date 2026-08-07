@@ -266,7 +266,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         let Some(port) = &self.file_size_limit else {
             return Ok(count);
         };
-        let limit = port.soft_limit().map_err(|_| LinuxResult::Error(Errno::EIO))?;
+        let limit = port.soft_limit().map_err(|()| LinuxResult::Error(Errno::EIO))?;
         if limit == u64::MAX || count == 0 {
             return Ok(count);
         }

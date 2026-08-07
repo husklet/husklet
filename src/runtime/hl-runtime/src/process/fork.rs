@@ -21,7 +21,7 @@ pub struct RuntimeForkResult {
 
 /// Composition-root fork capability.
 ///
-/// Implementations own the complete RuntimeForkCoordinator transaction,
+/// Implementations own the complete `RuntimeForkCoordinator` transaction,
 /// including task, descriptor, memory, provider and execution participants.
 pub trait RuntimeForkPort: Send + Sync {
     fn fork(&self, parent: ProcessId, thread: ThreadId, plan: ClonePlan)

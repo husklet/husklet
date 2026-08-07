@@ -1,3 +1,5 @@
+#![allow(clippy::vec_init_then_push)]
+
 use std::sync::Arc;
 
 use hl_ipc::{AttachPlan, SharedMemoryId};

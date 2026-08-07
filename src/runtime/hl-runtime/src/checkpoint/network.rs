@@ -193,12 +193,11 @@ impl CheckpointParticipant for NetworkCheckpointParticipant {
             let image = self.codec.decode(section.bytes())?;
             image.validate().map_err(|_| ())?;
             let mut external = self.rebind.stage_bound(digest, &image).map_err(|_| ())?;
-            let replacement = match HostNetworkCatalog::restore_checkpoint(&image, external.as_mut()) {
-                Ok(catalog) => Arc::new(catalog),
-                Err(_) => {
-                    external.rollback();
-                    return Err(());
-                }
+            let replacement = if let Ok(catalog) = HostNetworkCatalog::restore_checkpoint(&image, external.as_mut()) {
+                Arc::new(catalog)
+            } else {
+                external.rollback();
+                return Err(());
             };
             if external.bind_catalog(replacement.clone()).is_err() {
                 external.rollback();

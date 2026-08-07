@@ -241,7 +241,7 @@ impl RegionWire {
             backing: BackingWire::from_value(value.backing()),
             offset: value.backing_offset(),
             charge_start: value.charge().map_or(0, |range| range.start().get()),
-            charge_length: value.charge().map_or(0, |range| range.length()),
+            charge_length: value.charge().map_or(0, hl_isa::AddressRange::length),
             reserved: value.reserved(),
         }
     }

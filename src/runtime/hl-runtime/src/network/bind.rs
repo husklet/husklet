@@ -75,14 +75,14 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
     }
 
     fn bind_result(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
-        if let Ok(socket) = self.lookup(descriptor) {
-            if socket.netlink_socket().is_some() {
-                return if length >= 12 {
-                    LinuxResult::Value(0)
-                } else {
-                    LinuxResult::Error(Errno::EINVAL)
-                };
-            }
+        if let Ok(socket) = self.lookup(descriptor)
+            && socket.netlink_socket().is_some()
+        {
+            return if length >= 12 {
+                LinuxResult::Value(0)
+            } else {
+                LinuxResult::Error(Errno::EINVAL)
+            };
         }
         let mut address = match NetworkAbi::new(&self.memory, self.architecture)
             .decode_sockaddr(pointer, length)
@@ -144,18 +144,15 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             snapshot.local = Some(local);
             snapshot.state = SocketState::Bound;
-            return match self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
-                Ok(()) => {
-                    if let Some(prepared) = prepared_path.take() {
-                        prepared.commit();
-                    }
-                    LinuxResult::Value(0)
+            return if let Ok(()) = self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
+                if let Some(prepared) = prepared_path.take() {
+                    prepared.commit();
                 }
-                Err(_) => {
-                    socket.rollback_unix_bind();
-                    Self::rollback_prepared_bind(&mut prepared_path);
-                    LinuxResult::Error(Errno::EIO)
-                }
+                LinuxResult::Value(0)
+            } else {
+                socket.rollback_unix_bind();
+                Self::rollback_prepared_bind(&mut prepared_path);
+                LinuxResult::Error(Errno::EIO)
             };
         }
         let RuntimeSocketKind::Host { token, .. } = &socket.kind else {

@@ -276,7 +276,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
 
     pub(crate) fn sched_getaffinity(&self, pid: i32, size: usize, address: u64) -> LinuxResult {
         let width = self.tasks.topology().online().div_ceil(64) * 8;
-        if size % 8 != 0 || size < width {
+        if !size.is_multiple_of(8) || size < width {
             return LinuxResult::Error(Errno::EINVAL);
         }
         let Ok(target) = self.tasks.affinity_target(self.thread, pid) else {

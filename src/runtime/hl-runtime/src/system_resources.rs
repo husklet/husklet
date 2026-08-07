@@ -1,5 +1,5 @@
 /// Container-visible resource values shared by syscalls and virtual files.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub struct ResourceSnapshot {
     pub uptime_seconds: u64,
     /// Successful process creations since this runtime instance started.
@@ -16,19 +16,6 @@ pub struct ResourceSnapshot {
 pub struct SystemView {
     pub boot: [u8; 16],
     pub resources: ResourceSnapshot,
-}
-
-impl Default for ResourceSnapshot {
-    fn default() -> Self {
-        Self {
-            uptime_seconds: 0,
-            process_creations: 0,
-            loads: [0; 3],
-            total_memory: 0,
-            free_memory: 0,
-            cpu_limit: None,
-        }
-    }
 }
 
 impl ResourceSnapshot {

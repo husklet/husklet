@@ -91,11 +91,11 @@ impl<H: AtomicBatchHost> ExitHandler<H> {
         writes: &mut Vec<AtomicU32Write>,
     ) {
         let head = registration.head;
-        let Ok(offset) = self.read_u64(head.checked_add(8).unwrap_or(u64::MAX)) else {
+        let Ok(offset) = self.read_u64(head.saturating_add(8)) else {
             return;
         };
         let offset = offset as i64;
-        let pending = self.read_u64(head.checked_add(16).unwrap_or(u64::MAX)).unwrap_or(0);
+        let pending = self.read_u64(head.saturating_add(16)).unwrap_or(0);
         let mut node = self.read_u64(head).unwrap_or(head);
         for _ in 0..LIST_LIMIT {
             if node == head {
@@ -205,7 +205,7 @@ impl<H: AtomicBatchHost> PreparedExitParticipant for PreparedExit<H> {
             .map_err(|_| ExitRuntimeError::Failed)?;
         self.published = true;
         for address in &self.addresses {
-            self.wake.wake(*address).map_err(|_| ExitRuntimeError::Failed)?;
+            self.wake.wake(*address).map_err(|()| ExitRuntimeError::Failed)?;
         }
         Ok(())
     }

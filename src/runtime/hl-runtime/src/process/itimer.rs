@@ -268,10 +268,9 @@ impl AlarmRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&process)
+            && let Some(publication) = timers.publication
         {
-            if let Some(publication) = timers.publication {
-                publication.publish(None, None);
-            }
+            publication.publish(None, None);
         }
     }
 

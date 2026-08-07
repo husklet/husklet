@@ -116,7 +116,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 .descriptors
                 .pin(operand.directory.raw() as i32)
                 .map_err(FileErrno::descriptor)?;
-            return host.descriptor_node(lease).map_err(|error| error.errno());
+            return host
+                .descriptor_node(lease)
+                .map_err(super::super::path_host::RuntimePathError::errno);
         }
         let base = self.path_base(host, operand)?;
         if !operand.nofollow
@@ -127,9 +129,12 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 hl_descriptor::DescriptorError::BadDescriptor => Errno::ENOENT,
                 other => FileErrno::descriptor(other),
             })?;
-            return host.descriptor_node(lease).map_err(|error| error.errno());
+            return host
+                .descriptor_node(lease)
+                .map_err(super::super::path_host::RuntimePathError::errno);
         }
-        host.resolve(&base, operand).map_err(|error| error.errno())
+        host.resolve(&base, operand)
+            .map_err(super::super::path_host::RuntimePathError::errno)
     }
 
     pub(super) fn path_base(
@@ -140,11 +145,12 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
         if operand.path.is_absolute() {
             let root = self.fs_context.root();
             return if root.as_str() == "/" {
-                host.root_base().map_err(|error| error.errno())
+                host.root_base()
+                    .map_err(super::super::path_host::RuntimePathError::errno)
             } else {
                 host.working_base(root)
                     .map(|base| DirectoryBaseLease::confined_root(base.path().clone()))
-                    .map_err(|error| error.errno())
+                    .map_err(super::super::path_host::RuntimePathError::errno)
             };
         }
         if operand.directory.raw() == (-100_i64) as u64 {
@@ -155,20 +161,21 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
             let rooted = self
                 .fs_context
                 .rooted(&snapshot.path)
-                .map_err(|_| Errno::ENAMETOOLONG)?;
+                .map_err(|()| Errno::ENAMETOOLONG)?;
             return host
                 .working_base(rooted)
                 .map(|base| match self.fs_context.root().as_str() {
                     "/" => base,
                     _ => DirectoryBaseLease::confined_root(base.path().clone()),
                 })
-                .map_err(|error| error.errno());
+                .map_err(super::super::path_host::RuntimePathError::errno);
         }
         let lease = self
             .descriptors
             .pin(operand.directory.raw() as i32)
             .map_err(FileErrno::descriptor)?;
-        host.descriptor_base(lease).map_err(|error| error.errno())
+        host.descriptor_base(lease)
+            .map_err(super::super::path_host::RuntimePathError::errno)
     }
 
     pub(super) fn path_stat(&self, arguments: [u64; 6], statx: bool) -> LinuxResult {

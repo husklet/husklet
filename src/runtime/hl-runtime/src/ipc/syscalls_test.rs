@@ -369,14 +369,20 @@ fn shm_lock_unlock_public_matrix() {
         else {
             panic!("shared-memory creation failed");
         };
-        let before = fixture.runtime.0.with_shared_memory(|namespace| namespace.snapshot());
+        let before = fixture
+            .runtime
+            .0
+            .with_shared_memory(hl_ipc::SharedMemoryNamespace::snapshot);
         for (command, ignored_buffer) in [(11, u64::MAX), (12, 1)] {
             assert_eq!(
                 fixture.call(architecture, "shmctl", [identifier, command, ignored_buffer, 0, 0, 0]),
                 LinuxResult::Value(0)
             );
             assert_eq!(
-                fixture.runtime.0.with_shared_memory(|namespace| namespace.snapshot()),
+                fixture
+                    .runtime
+                    .0
+                    .with_shared_memory(hl_ipc::SharedMemoryNamespace::snapshot),
                 before
             );
         }

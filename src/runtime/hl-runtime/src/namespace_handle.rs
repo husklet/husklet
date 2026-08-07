@@ -58,10 +58,10 @@ impl Drop for NamespaceHandle {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((registry, identity)) = binding {
-            if let Some(registry) = registry.upgrade() {
-                registry.retire(identity);
-            }
+        if let Some((registry, identity)) = binding
+            && let Some(registry) = registry.upgrade()
+        {
+            registry.retire(identity);
         }
     }
 }
@@ -116,12 +116,11 @@ impl NamespaceHandleRegistry {
 
     pub fn identifier(&self, identity: DescriptionIdentity) -> Result<NamespaceId, NamespaceHandleError> {
         let mut objects = self.objects.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match objects.get(&identity).and_then(Weak::upgrade) {
-            Some(object) => Ok(object.identifier),
-            None => {
-                objects.remove(&identity);
-                Err(NamespaceHandleError::NotNamespace)
-            }
+        if let Some(object) = objects.get(&identity).and_then(Weak::upgrade) {
+            Ok(object.identifier)
+        } else {
+            objects.remove(&identity);
+            Err(NamespaceHandleError::NotNamespace)
         }
     }
 

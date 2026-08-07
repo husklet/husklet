@@ -104,10 +104,10 @@ impl<M: GuestMemory> RuntimeSyscalls<M> {
         else {
             return LinuxResult::Error(Errno::ESRCH);
         };
-        if credentials.no_new_privileges {
-            if let Err(error) = self.control.lock_privileges(self.thread) {
-                return LinuxResult::Error(Self::errno(error));
-            }
+        if credentials.no_new_privileges
+            && let Err(error) = self.control.lock_privileges(self.thread)
+        {
+            return LinuxResult::Error(Self::errno(error));
         }
         let administrator = self.administrator || credentials.has_capability(1_u64 << 21);
         let threads = self
@@ -180,10 +180,10 @@ impl<M: GuestMemory> RuntimeSyscalls<M> {
         bytes[..2].copy_from_slice(&80_u16.to_le_bytes());
         bytes[2..4].copy_from_slice(&24_u16.to_le_bytes());
         bytes[4..].copy_from_slice(&64_u16.to_le_bytes());
-        if self.memory.write(address, &bytes) != Ok(bytes.len()) {
-            LinuxResult::Error(Errno::EFAULT)
-        } else {
+        if self.memory.write(address, &bytes) == Ok(bytes.len()) {
             LinuxResult::Value(0)
+        } else {
+            LinuxResult::Error(Errno::EFAULT)
         }
     }
 }
@@ -191,11 +191,10 @@ impl<M: GuestMemory> RuntimeSyscalls<M> {
 impl<M: GuestMemory> SeccompSyscalls for RuntimeSyscalls<M> {
     fn handle(&mut self, _: SyscallOperation, arguments: [u64; 6]) -> LinuxResult {
         match arguments[0] {
-            0 if arguments[1] == 0 && arguments[2] == 0 => self
-                .control
-                .enable_strict(self.thread)
-                .map(|()| LinuxResult::Value(0))
-                .unwrap_or_else(|error| LinuxResult::Error(Self::errno(error))),
+            0 if arguments[1] == 0 && arguments[2] == 0 => self.control.enable_strict(self.thread).map_or_else(
+                |error| LinuxResult::Error(Self::errno(error)),
+                |()| LinuxResult::Value(0),
+            ),
             0 => LinuxResult::Error(Errno::EINVAL),
             1 => self.filter(arguments[1], arguments[2]),
             2 => self.action(arguments[1], arguments[2]),
@@ -227,10 +226,10 @@ impl<M: GuestMemory + Send + Sync> super::PrctlPort for RuntimeSyscalls<M> {
     }
 
     fn strict(&self) -> LinuxResult {
-        self.control
-            .enable_strict(self.thread)
-            .map(|()| LinuxResult::Value(0))
-            .unwrap_or_else(|error| LinuxResult::Error(Self::errno(error)))
+        self.control.enable_strict(self.thread).map_or_else(
+            |error| LinuxResult::Error(Self::errno(error)),
+            |()| LinuxResult::Value(0),
+        )
     }
 
     fn filter(&self, address: u64) -> LinuxResult {
@@ -239,9 +238,7 @@ impl<M: GuestMemory + Send + Sync> super::PrctlPort for RuntimeSyscalls<M> {
 
     fn retire(&self, threads: &[ThreadId]) {
         for thread in threads {
-            if self.control.unregister(*thread).is_err() {
-                continue;
-            }
+            let _ = self.control.unregister(*thread);
         }
     }
 }

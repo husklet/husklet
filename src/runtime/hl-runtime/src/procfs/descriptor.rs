@@ -117,7 +117,7 @@ impl OpenFileDescription for DescriptorDirectory {
     }
 
     fn read_directory(&self, maximum: usize) -> Result<DirectoryBatch, ObjectError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if maximum == 0 {
             let position = match &*state {
                 DirectoryState::Pending => 0,
@@ -148,7 +148,7 @@ impl OpenFileDescription for DescriptorDirectory {
     }
 
     fn commit_directory(&self, token: DirectoryBatchToken, count: usize) -> Result<(), ObjectError> {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match &mut *state {
             DirectoryState::Pending if token.generation == 1 && token.cookie == 0 && count == 0 => Ok(()),
             DirectoryState::Ready { entries, position }

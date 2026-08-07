@@ -99,7 +99,7 @@ impl ExecQueue {
 ///
 /// Implementations validate and load through hl-loader, stage the new CPU/TLS
 /// image, and atomically coordinate CLOEXEC, signal reset, seccomp
-/// preservation and TaskRegistry exec state. Any failure must roll back every
+/// preservation and `TaskRegistry` exec state. Any failure must roll back every
 /// staged domain and leave the old image runnable.
 pub trait RuntimeExecPort: Send + Sync {
     fn validate(&self, _process: ProcessId, _thread: ThreadId, _plan: &ExecPlan) -> Result<(), RuntimeExecError> {

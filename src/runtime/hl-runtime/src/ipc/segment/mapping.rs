@@ -50,7 +50,7 @@ impl<H: MappingHost> MemoryMappings<H> {
             (Some(address), false) => Placement::FixedNoReplace(address),
             (None, _) => Placement::Anywhere {
                 minimum: GuestAddress::new(4096),
-                maximum: GuestAddress::new(u64::MAX & !4095),
+                maximum: GuestAddress::new(!4095),
                 hint: None,
             },
         };

@@ -442,6 +442,8 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
 
 impl<M: GuestMemory> EventSyscalls for RuntimeEventSyscalls<M> {
     fn handle(&mut self, operation: SyscallOperation, arguments: [u64; 6]) -> LinuxResult {
+        // The tuple pins the ABI borrow for the whole dispatch below.
+        #[allow(clippy::no_effect_underscore_binding)]
         let _abi_owner = (&self.memory, self.architecture);
         match operation.name {
             "eventfd" => self.eventfd(arguments[0] as u32, 0),

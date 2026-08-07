@@ -34,30 +34,6 @@ impl LoaderDiagnostics for DiagnosticChannel {
     }
 }
 
-#[cfg(test)]
-mod diagnostic_channel_test {
-    use super::*;
-    use hl_loader::LoaderPhase;
-
-    #[test]
-    fn preserves_bounded_loss() {
-        let (channel, receiver) = hl_log::Channel::bounded(1).unwrap();
-        let diagnostics = DiagnosticChannel(channel);
-        let first = LoaderDiagnostic {
-            phase: LoaderPhase::MainRead,
-            elapsed_us: 1,
-        };
-        diagnostics.try_publish(first);
-        diagnostics.try_publish(LoaderDiagnostic {
-            phase: LoaderPhase::Commit,
-            elapsed_us: 2,
-        });
-
-        assert_eq!(receiver.try_receive(), Ok(first));
-        assert_eq!(receiver.lost(), 1);
-    }
-}
-
 pub trait SourceFactory: Send + Sync {
     type Source: ImageSource;
 
@@ -250,7 +226,7 @@ where
             process.number(),
             loaded.main().address(),
             loaded.main().size(),
-            loaded.interpreter().map_or(0, |mapping| mapping.address()),
+            loaded.interpreter().map_or(0, hl_loader::LoadedMapping::address),
             loaded.initial_stack().stack_pointer(),
             loaded.usable_stack().address(),
         );
@@ -305,5 +281,29 @@ where
     ) -> Result<Box<dyn PreparedExecParticipant>, RuntimeExecError> {
         self.prepare_current(process, plan)
             .map(|prepared| Box::new(prepared) as Box<dyn PreparedExecParticipant>)
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_channel_test {
+    use super::*;
+    use hl_loader::LoaderPhase;
+
+    #[test]
+    fn preserves_bounded_loss() {
+        let (channel, receiver) = hl_log::Channel::bounded(1).unwrap();
+        let diagnostics = DiagnosticChannel(channel);
+        let first = LoaderDiagnostic {
+            phase: LoaderPhase::MainRead,
+            elapsed_us: 1,
+        };
+        diagnostics.try_publish(first);
+        diagnostics.try_publish(LoaderDiagnostic {
+            phase: LoaderPhase::Commit,
+            elapsed_us: 2,
+        });
+
+        assert_eq!(receiver.try_receive(), Ok(first));
+        assert_eq!(receiver.lost(), 1);
     }
 }

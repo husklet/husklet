@@ -242,7 +242,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     flags: (if control.truncated { MSG_CTRUNC } else { 0 })
                         | (if count < payload.len() { MSG_TRUNC } else { 0 }),
                 };
-                let staged = abi.prepare_receive(&imported, &result).map_err(|error| {
+                let staged = abi.prepare_receive(imported, &result).map_err(|error| {
                     failure.set(Some(SocketErrno::marshal(error)));
                     ControlError::Fault
                 })?;

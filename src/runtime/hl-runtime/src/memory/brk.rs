@@ -75,7 +75,6 @@ impl<H: MappingHost> BrkRegion<H> {
         })
     }
 
-    #[must_use]
     pub fn with_account(mut self, account: Arc<dyn AnonymousMemoryAccount>) -> Result<Self, hl_memory::MemoryError> {
         self.lease = Some(Arc::new(AnonymousMemoryLease::restore(
             account,

@@ -111,7 +111,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 &marshaller,
             ) {
                 BatchReceiveEntry::Committed => completed += 1,
-                BatchReceiveEntry::Retry => continue,
+                BatchReceiveEntry::Retry => {}
                 BatchReceiveEntry::Failed(result) => {
                     self.copy_remaining_timeout(timeout, deadline, &marshaller);
                     return result;

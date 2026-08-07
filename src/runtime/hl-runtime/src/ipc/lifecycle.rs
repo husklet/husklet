@@ -4,7 +4,7 @@ use hl_ipc::IpcCatalog;
 
 use crate::{MappingError, MemoryLifecycle, MemoryPort};
 
-/// SysV process-lifecycle capability installed inside fork/exec/exit transactions.
+/// `SysV` process-lifecycle capability installed inside fork/exec/exit transactions.
 pub struct RuntimeIpcLifecycle {
     catalog: Arc<IpcCatalog>,
     shared: MemoryLifecycle,

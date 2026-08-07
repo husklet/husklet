@@ -148,9 +148,7 @@ impl SafeRuntimeExec {
 impl PreparedRuntimeExec {
     pub fn commit(mut self) -> Result<(), RuntimeExecError> {
         for index in &self.publish_order {
-            if let Err(error) = self.prepared[*index].publish() {
-                return Err(error);
-            }
+            self.prepared[*index].publish()?;
         }
         for participant in &mut self.prepared {
             participant.finish();

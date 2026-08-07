@@ -222,14 +222,14 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
             let image = self.codec.decode(section.bytes())?;
             image.validate().map_err(|_| ())?;
             let mut staged = self.host.stage(&image).map_err(|_| ())?;
-            let coordinator =
-                match MappingCoordinator::restore(staged.mapping, staged.shared.clone(), image.ledger.clone()) {
-                    Ok(coordinator) => Arc::new(coordinator),
-                    Err(_) => {
-                        staged.restore.rollback();
-                        return Err(());
-                    }
-                };
+            let coordinator = if let Ok(coordinator) =
+                MappingCoordinator::restore(staged.mapping, staged.shared.clone(), image.ledger.clone())
+            {
+                Arc::new(coordinator)
+            } else {
+                staged.restore.rollback();
+                return Err(());
+            };
             let replacement = Arc::new(Memory::new(coordinator, staged.shared));
             let mut host = staged.restore;
             if host.bind(Arc::clone(&replacement.coordinator)).is_err() {
@@ -237,13 +237,14 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
                 return Err(());
             }
             let mut resources = match &self.resources {
-                Some(resources) => match resources.stage(Arc::clone(&replacement.shared)) {
-                    Ok(transaction) => Some(transaction),
-                    Err(()) => {
+                Some(resources) => {
+                    if let Ok(transaction) = resources.stage(Arc::clone(&replacement.shared)) {
+                        Some(transaction)
+                    } else {
                         host.rollback();
                         return Err(());
                     }
-                },
+                }
                 None => None,
             };
             replacement.freeze_checkpoint();
@@ -291,11 +292,11 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
         let mut staged = self.staged.lock().map_err(|_| ())?;
         let state = staged.get_mut(&reservation).ok_or(())?;
         state.host.commit().map_err(|_| ())?;
-        if let Some(resources) = &mut state.resources {
-            if resources.commit().is_err() {
-                state.host.rollback();
-                return Err(());
-            }
+        if let Some(resources) = &mut state.resources
+            && resources.commit().is_err()
+        {
+            state.host.rollback();
+            return Err(());
         }
         let previous = self.memory.replace(state.replacement.clone());
         if !Arc::ptr_eq(&previous, &state.previous) {
@@ -355,10 +356,10 @@ impl<H: MappingHost + 'static> CheckpointParticipant for MemoryCheckpointPartici
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&reservation);
-        if let Some(mut state) = state {
-            if let Some(resources) = &mut state.resources {
-                resources.finish();
-            }
+        if let Some(mut state) = state
+            && let Some(resources) = &mut state.resources
+        {
+            resources.finish();
         }
     }
 }

@@ -78,7 +78,7 @@ impl PreparedEpollExec {
     pub(crate) fn finish(&mut self) {
         self.graph = None;
         for epoll in self.epolls.values() {
-            epoll.finish_retirement()
+            epoll.finish_retirement();
         }
         self.epolls.clear();
         self.published = false;

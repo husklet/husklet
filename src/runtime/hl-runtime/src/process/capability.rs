@@ -154,10 +154,9 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         }
         let mut values = [0_u64; 3];
         for word in 0..words {
-            for field in 0..3 {
+            for (field, value) in values.iter_mut().enumerate() {
                 let offset = (word * 3 + field) * 4;
-                values[field] |=
-                    u64::from(u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())) << (word * 32);
+                *value |= u64::from(u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())) << (word * 32);
             }
         }
         Ok(CapabilitySets {

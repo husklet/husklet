@@ -28,7 +28,7 @@ pub struct ForkBinding {
     pub backing: hl_memory::SharedBackingRef,
 }
 
-/// Process-local mapping capability consumed by the SysV syscall composition.
+/// Process-local mapping capability consumed by the `SysV` syscall composition.
 ///
 /// A successful `map` owns a pending mapping until `bind` associates the
 /// domain attachment token. `unmap` publishes no tracking change when the

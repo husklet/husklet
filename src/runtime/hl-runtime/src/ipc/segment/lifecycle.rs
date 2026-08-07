@@ -76,7 +76,7 @@ impl CommittedFork<'_> {
 
 impl<'a> PreparedFork<'a> {
     pub fn commit(self) -> Result<(), MappingError> {
-        self.commit_reversible().map(|committed| committed.finish())
+        self.commit_reversible().map(CommittedFork::finish)
     }
 
     pub fn commit_reversible(self) -> Result<CommittedFork<'a>, MappingError> {

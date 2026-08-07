@@ -378,12 +378,12 @@ impl Control {
     }
 
     pub fn rollback_checkpoint(&self, transaction: &mut RestoreTransaction) {
-        if transaction.committed {
-            if let Some(previous) = transaction.previous.take() {
-                let mut state = self.lock();
-                state.policies = previous;
-                Self::advance(&mut state);
-            }
+        if transaction.committed
+            && let Some(previous) = transaction.previous.take()
+        {
+            let mut state = self.lock();
+            state.policies = previous;
+            Self::advance(&mut state);
         }
         transaction.committed = false;
     }

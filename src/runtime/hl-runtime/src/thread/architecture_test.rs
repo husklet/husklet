@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use std::sync::Mutex;
 
 use hl_execution::{Aarch64CpuState, CpuState, ExecutionCpuSnapshot};

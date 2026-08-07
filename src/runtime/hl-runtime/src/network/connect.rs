@@ -175,12 +175,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                     .snapshot
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                snapshot.peer = listener
+                listener
                     .snapshot
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .local
-                    .clone();
+                    .clone_into(&mut snapshot.peer);
                 snapshot.state = SocketState::Connected;
                 return match self.current_catalog().replace_snapshot(socket.id, snapshot.clone()) {
                     Ok(()) => LinuxResult::Value(0),
@@ -215,8 +215,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             }
             let client_local = current.local.clone().or(Some(SocketAddress::Unix(Vec::new())));
             let mut client_snapshot = current.clone();
-            client_snapshot.local = client_local.clone();
-            client_snapshot.peer = listener_snapshot.local.clone();
+            client_local.clone_into(&mut client_snapshot.local);
+            listener_snapshot.local.clone_into(&mut client_snapshot.peer);
             client_snapshot.state = SocketState::Connected;
             let mut accepted_snapshot = Self::snapshot(
                 current.family,

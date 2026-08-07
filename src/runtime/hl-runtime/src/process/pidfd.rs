@@ -121,6 +121,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
         ) {
             return LinuxResult::Error(Errno::ESRCH);
         }
+        #[allow(clippy::items_after_statements)]
         const SYS_PTRACE: u64 = 1_u64 << 19;
         let privileged = caller.credentials.capabilities.permitted & SYS_PTRACE != 0;
         let same_identity = [

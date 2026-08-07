@@ -288,10 +288,10 @@ impl RuntimeMemfd {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((registry, identity, epoch)) = binding {
-            if let Some(registry) = registry.upgrade() {
-                registry.retire(identity, epoch);
-            }
+        if let Some((registry, identity, epoch)) = binding
+            && let Some(registry) = registry.upgrade()
+        {
+            registry.retire(identity, epoch);
         }
         if self.owns_backing.swap(false, Ordering::AcqRel) {
             let _ = self.store.remove(self.id);

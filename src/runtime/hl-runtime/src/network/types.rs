@@ -27,7 +27,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             peer,
             connect_error: None,
             nonblocking: status.bits() & StatusFlags::NONBLOCKING != 0,
-            shutdown: Default::default(),
+            shutdown: hl_network::ShutdownState::default(),
         }
     }
 

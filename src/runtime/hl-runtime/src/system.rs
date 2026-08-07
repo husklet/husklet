@@ -234,7 +234,6 @@ impl SystemAuthority {
         })
     }
 
-    #[must_use]
     pub fn random_identity(&self) -> Result<[u8; 16], SystemLaunchError> {
         let (boot, serial) = {
             let mut state = self.state();
@@ -324,8 +323,7 @@ impl SystemObservationHandle {
         let route = state
             .routes
             .get(&self.route)
-            .map(|entry| entry.state)
-            .unwrap_or(ObservationRoute::Retired);
+            .map_or(ObservationRoute::Retired, |entry| entry.state);
         match route {
             ObservationRoute::Pending(token) => SystemAuthority::observe_launch_free(&mut state, token, bytes),
             ObservationRoute::Live => {
@@ -415,13 +413,12 @@ impl SystemLaunchUpdate {
         if let Some(uptime) = reservation.external_uptime {
             resources.uptime_seconds = resources.uptime_seconds.max(uptime);
         }
-        if let Some((external_order, external_free)) = reservation.external_free {
-            if reservation
+        if let Some((external_order, external_free)) = reservation.external_free
+            && reservation
                 .construction_free
                 .is_none_or(|(construction_order, _)| external_order > construction_order)
-            {
-                resources.free_memory = external_free;
-            }
+        {
+            resources.free_memory = external_free;
         }
         state.boot = reservation.boot;
         state.resources = resources;

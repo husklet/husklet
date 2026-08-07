@@ -153,7 +153,7 @@ where
         let source = self.parent(parent, thread)?;
         let task = Arc::new(
             TaskForkParticipant::reserve_deferred(Arc::clone(&self.tasks), thread)
-                .map_err(|_| RuntimeForkError::Again)?,
+                .map_err(|()| RuntimeForkError::Again)?,
         );
         let (child_process, _) = task.reserved_child().ok_or(RuntimeForkError::Failed)?;
         let resource_reservation = self
@@ -216,7 +216,7 @@ where
         let ready = resource_reservation
             .stage(child)
             .map_err(|_| RuntimeForkError::Failed)?;
-        let (process, thread) = task.publish_deferred().map_err(|_| RuntimeForkError::Failed)?;
+        let (process, thread) = task.publish_deferred().map_err(|()| RuntimeForkError::Failed)?;
         ready.publish();
         Ok(RuntimeForkResult { process, thread })
     }

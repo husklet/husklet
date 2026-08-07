@@ -140,7 +140,7 @@ impl TimerRegistry {
             if let Some(token) = timer.token {
                 delivery.alarms.cancel_callback(token);
             }
-            self.remove_pending(id as usize, timer, delivery);
+            self.remove_pending(id, timer, delivery);
         }
         removed.is_some()
     }
@@ -273,23 +273,23 @@ impl TimerRegistry {
             // Keep the timer slot locked through queue publication. Delete
             // takes this lock before removing a tagged pending instance, so
             // an expiry cannot publish after timer_delete has completed.
-            if event.notification != 1 {
-                if let Ok(signal) = SignalNumber::new(event.signal as u8) {
-                    let target = registry.target(event, delivery);
-                    delivery.alarms.deliver_timer_signal(
-                        target,
-                        SignalInfo {
-                            signal,
-                            code: -2,
-                            error: 0,
-                            sender_process: 0,
-                            sender_user: 0,
-                            value: event.value,
-                            address: 0,
-                            source_tag: (id + 1) as u32,
-                        },
-                    );
-                }
+            if event.notification != 1
+                && let Ok(signal) = SignalNumber::new(event.signal as u8)
+            {
+                let target = registry.target(event, delivery);
+                delivery.alarms.deliver_timer_signal(
+                    target,
+                    SignalInfo {
+                        signal,
+                        code: -2,
+                        error: 0,
+                        sender_process: 0,
+                        sender_user: 0,
+                        value: event.value,
+                        address: 0,
+                        source_tag: (id + 1) as u32,
+                    },
+                );
             }
             next
         };

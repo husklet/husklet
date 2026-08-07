@@ -77,7 +77,7 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
     pub(super) fn failed_read_probe(lease: &hl_descriptor::OperationLease) -> LinuxResult {
         match lease.probe_read(1) {
             Ok(Some(0)) => LinuxResult::Value(0),
-            Ok(Some(_)) | Ok(None) => LinuxResult::Error(Errno::EFAULT),
+            Ok(Some(_) | None) => LinuxResult::Error(Errno::EFAULT),
             Err(error) => LinuxResult::Error(FileErrno::object(error)),
         }
     }

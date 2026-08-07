@@ -148,10 +148,10 @@ impl<M: GuestMemory> RuntimeEventSyscalls<M> {
             .transpose()
             .map_err(|_| crate::ControlError::Epoll(hl_event::EpollError::Interrupted))?;
         let result = control.peek_wait_interruptible(table, descriptor, maximum, timeout, wait.cancellation.as_ref());
-        if let Some(previous) = previous {
-            if wait.tasks.replace_signal_mask(wait.thread, previous).is_err() {
-                return Err(crate::ControlError::Epoll(hl_event::EpollError::Interrupted));
-            }
+        if let Some(previous) = previous
+            && wait.tasks.replace_signal_mask(wait.thread, previous).is_err()
+        {
+            return Err(crate::ControlError::Epoll(hl_event::EpollError::Interrupted));
         }
         result
     }

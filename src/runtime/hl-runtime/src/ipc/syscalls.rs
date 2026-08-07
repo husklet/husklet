@@ -16,7 +16,7 @@ use hl_time::Clock;
 use super::error_projection::ErrorProjection;
 use crate::{BlockingWait, MemoryPort};
 
-/// Composes Linux SysV ABI marshalling with the guest-independent IPC domains.
+/// Composes Linux `SysV` ABI marshalling with the guest-independent IPC domains.
 pub struct RuntimeIpcSyscalls<M: GuestMemory> {
     pub(super) catalog: Arc<IpcCatalog>,
     pub(super) tasks: Arc<TaskRegistry>,
