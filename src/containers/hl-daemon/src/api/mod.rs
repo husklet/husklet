@@ -2,6 +2,7 @@
 
 use serde::Deserialize as _;
 
+#[hl_design::classify(domain = "serde")]
 fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,

@@ -141,6 +141,7 @@ impl ListFilters {
     }
 }
 
+#[hl_design::classify(domain = "docker")]
 fn take(values: &mut BTreeMap<String, Values>, name: &str) -> Vec<String> {
     values
         .remove(name)
@@ -150,14 +151,17 @@ fn take(values: &mut BTreeMap<String, Values>, name: &str) -> Vec<String> {
         .collect()
 }
 
+#[hl_design::classify(domain = "docker")]
 fn matches_exact(expected: &[String], actual: &str) -> bool {
     expected.is_empty() || expected.iter().any(|value| value == actual)
 }
 
+#[hl_design::classify(domain = "docker")]
 fn matches_patterns(expected: &[Pattern], actual: &str) -> bool {
     expected.is_empty() || expected.iter().any(|value| value.matches(actual))
 }
 
+#[hl_design::classify(domain = "docker")]
 fn matches_label(labels: &BTreeMap<String, String>, value: &str) -> bool {
     value.split_once('=').map_or_else(
         || labels.contains_key(value),

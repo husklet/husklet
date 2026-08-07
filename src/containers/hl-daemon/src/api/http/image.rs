@@ -185,6 +185,7 @@ impl DockerState {
     }
 }
 
+#[hl_design::classify(domain = "docker")]
 fn docker_id_prefix(value: &str) -> Option<String> {
     let encoded = value.strip_prefix("sha256:").unwrap_or(value);
     (12..=64)
@@ -194,10 +195,12 @@ fn docker_id_prefix(value: &str) -> Option<String> {
         .map(|encoded| format!("sha256:{}", encoded.to_ascii_lowercase()))
 }
 
+#[hl_design::classify(domain = "docker")]
 fn matches_docker_image_id(value: &str, image_id: &str) -> bool {
     docker_id_prefix(value).is_some_and(|prefix| image_id.starts_with(&prefix))
 }
 
+#[hl_design::classify(domain = "docker")]
 fn unique_image_id<'a>(identities: impl IntoIterator<Item = &'a str>, prefix: &str) -> Result<Option<&'a str>, ()> {
     let mut matches = identities.into_iter().filter(|id| id.starts_with(prefix));
     let selected = matches.next();

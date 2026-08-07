@@ -7,7 +7,9 @@ use crate::{AnonymousMemoryAccount, BrkSnapshot, MemfdRegistry, RuntimeFilesyste
 use hl_descriptor::{DescriptorFlags, ObjectKind, OpenFileDescription, StatusFlags};
 use hl_isa::{AddressRange, GuestAddress};
 use hl_linux::{DescriptorIoSyscalls, GuestAccess, GuestFault, SyscallFamily};
-use hl_memory::{FileIdentity, MemoryError, Protection, SharedLimits, SharedObjectStore, SharedSeal};
+use hl_memory::{
+    Backing, FileIdentity, MapRequest, MemoryError, Protection, SharedLimits, SharedObjectStore, SharedSeal,
+};
 
 #[derive(Debug)]
 struct MmapAccount {

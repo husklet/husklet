@@ -1,5 +1,6 @@
 use serde::Deserialize as _;
 
+#[hl_design::classify(domain = "serde")]
 pub(super) fn flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -8,6 +9,7 @@ where
     parse_flag(&value).ok_or_else(|| serde::de::Error::custom(format_args!("invalid boolean {value:?}")))
 }
 
+#[hl_design::classify(domain = "serde")]
 pub(super) fn optional_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -20,6 +22,7 @@ where
     }
 }
 
+#[hl_design::classify(domain = "docker")]
 pub(super) fn parse_flag(value: &str) -> Option<bool> {
     match value {
         "1" => Some(true),

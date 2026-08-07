@@ -8,12 +8,13 @@ use hl_loader::{
     Protection, ReservedMapping, ThreadLocalStorage, TransactionalAddressSpace,
 };
 use hl_runtime::{
-    ExecLoadContext, ExecutionImageBuilder, PreparedDescriptorExec, PreparedExec, PreparedExecParticipant,
-    PreparedLoaderExec, RuntimeExecError, RuntimeExecParticipant, RuntimeExecPort, SpaceFactory,
+    ExecLoadContext, ExecutionImageBuilder, PreparedExec, RuntimeExecError, RuntimeExecParticipant, RuntimeExecPort,
+    SpaceFactory,
 };
 use hl_task::{ProcessId, ThreadId};
 
 use super::super::{AddressSpaceAdapter, Reservation};
+use super::exec_transaction::Transaction;
 use super::source::Sources;
 use super::space::AddressSpace;
 
@@ -427,99 +428,6 @@ impl RuntimeExecPort for Coordinator {
         plan: hl_linux::ExecPlan,
     ) -> Result<Box<dyn PreparedExec>, RuntimeExecError> {
         Ok(Box::new(self.stage(process, thread, &plan)?))
-    }
-}
-
-struct Transaction {
-    descriptors: PreparedDescriptorExec,
-    loader: PreparedLoaderExec<ImageSpace, InitialTlsPlan, ExecutionSnapshot>,
-    threads: super::threads::PreparedImage,
-    retire: super::exec_retire::RetireImage,
-    tasks: Box<dyn PreparedExecParticipant>,
-    ipc: Box<dyn PreparedExecParticipant>,
-    active: Arc<Mutex<bool>>,
-    complete: bool,
-    process: Arc<super::routing::ProcessContext>,
-    process_slot: Arc<Mutex<std::sync::Weak<super::routing::ProcessContext>>>,
-    identity: Arc<Mutex<Vec<u8>>>,
-    executable: Vec<u8>,
-    auxiliary_slot: Arc<Mutex<Vec<u8>>>,
-    auxiliary: Vec<u8>,
-    previous_auxiliary: Option<Vec<u8>>,
-    vfork: Option<Arc<hl_runtime::VforkParentToken>>,
-}
-
-impl Transaction {
-    fn publish(&mut self) -> Result<(), RuntimeExecError> {
-        self.ipc.publish()?;
-        self.descriptors.publish()?;
-        self.loader.publish()?;
-        let mut auxiliary = self.auxiliary_slot.lock().map_err(|_| RuntimeExecError::Failed)?;
-        self.previous_auxiliary = Some(std::mem::replace(&mut *auxiliary, self.auxiliary.clone()));
-        drop(auxiliary);
-        self.threads.publish().map_err(|_| RuntimeExecError::Failed)?;
-        self.retire.publish()?;
-        self.tasks.publish()?;
-        self.process.publish_procfs();
-        *self.process_slot.lock().map_err(|_| RuntimeExecError::Failed)? = Arc::downgrade(&self.process);
-        *self.identity.lock().map_err(|_| RuntimeExecError::Failed)? = self.executable.clone();
-        Ok(())
-    }
-
-    fn rollback(&mut self) {
-        self.tasks.rollback();
-        self.retire.rollback();
-        self.threads.rollback();
-        if let Some(previous) = self.previous_auxiliary.take() {
-            *self
-                .auxiliary_slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = previous;
-        }
-        self.loader.rollback();
-        self.descriptors.rollback();
-        self.ipc.rollback();
-    }
-
-    fn finish(&mut self) {
-        self.retire.finish();
-        self.ipc.finish();
-        self.descriptors.finish();
-        self.loader.finish();
-        self.threads.finish();
-        self.tasks.finish();
-        self.previous_auxiliary = None;
-    }
-
-    fn release(&self) {
-        *self.active.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = false;
-    }
-}
-
-impl PreparedExec for Transaction {
-    fn commit(mut self: Box<Self>) -> Result<(), RuntimeExecError> {
-        if let Err(error) = self.publish() {
-            self.rollback();
-            self.complete = true;
-            self.release();
-            return Err(error);
-        }
-        if let Some(token) = &self.vfork {
-            let _ = token.release(self.process.process());
-        }
-        self.finish();
-        self.complete = true;
-        self.release();
-        Ok(())
-    }
-}
-
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        if !self.complete {
-            self.rollback();
-            self.release();
-        }
     }
 }
 

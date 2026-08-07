@@ -76,6 +76,7 @@ enum Values {
     Legacy(Vec<String>),
 }
 
+#[hl_design::classify(domain = "docker")]
 fn enabled(values: Option<&Values>) -> Vec<String> {
     match values {
         None => Vec::new(),
@@ -84,6 +85,7 @@ fn enabled(values: Option<&Values>) -> Vec<String> {
     }
 }
 
+#[hl_design::classify(domain = "docker")]
 fn matches_label(labels: &BTreeMap<String, String>, value: &str) -> bool {
     value.split_once('=').map_or_else(
         || labels.contains_key(value),

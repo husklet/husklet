@@ -208,6 +208,7 @@ mod ffi {
         }
     }
 
+    #[hl_design::classify(domain = "lock")]
     fn contention(error: &std::io::Error) -> bool {
         let code = error.raw_os_error();
         code == Some(libc::EWOULDBLOCK) || code == Some(libc::EAGAIN)

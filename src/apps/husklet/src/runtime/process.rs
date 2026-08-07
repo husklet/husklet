@@ -118,6 +118,7 @@ mod ffi {
         }
     }
 
+    #[hl_design::classify(domain = "unix")]
     pub(super) fn signal(process: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
         // SAFETY: the kernel supplied this positive peer PID for a connected Unix socket. `kill`
         // receives values only, retains no Rust storage, invokes no callback, and cannot unwind.
@@ -133,6 +134,7 @@ mod ffi {
     }
 
     #[cfg(target_os = "macos")]
+    #[hl_design::classify(domain = "unix")]
     pub(super) fn process(connection: &std::os::unix::net::UnixStream) -> io::Result<libc::pid_t> {
         let mut process: libc::pid_t = 0;
         let mut length = std::mem::size_of_val(&process) as libc::socklen_t;
