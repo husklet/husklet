@@ -45,10 +45,10 @@ pub async fn run(options: Options) -> Result<(), Error> {
     Report::finish(&rows)
 }
 
-async fn execute_work(work: Work) -> Completed {
+async fn execute_work(work: Work) -> Completion {
     let started = std::time::Instant::now();
     let result = execution::run(work.benchmark, work.case_index, work.target, work.prepared).await;
-    Completed {
+    Completion {
         key: work.key,
         elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         result,
@@ -103,7 +103,7 @@ struct Work {
     benchmark: Arc<Benchmark>,
     case_index: usize,
     target: Target,
-    prepared: execution::Prepared,
+    prepared: execution::Preparation,
 }
 
 async fn prepare_work(work: PlannedWork) -> Result<Work, String> {
@@ -123,13 +123,13 @@ async fn prepare_work(work: PlannedWork) -> Result<Work, String> {
     })
 }
 
-struct Completed {
+struct Completion {
     key: WorkKey,
     elapsed_ms: u64,
     result: execution::Result,
 }
 
-impl Completed {
+impl Completion {
     fn row(self) -> ledger::Row {
         let (status, output) = format_result(self.result);
         ledger::Row {
@@ -223,7 +223,7 @@ fn excerpt(value: &str, limit: usize) -> String {
     format!("{} ... [{} bytes omitted]", &value[..end], value.len() - end)
 }
 
-fn format_passed(mut passed: execution::Passed) -> String {
+fn format_passed(mut passed: execution::Success) -> String {
     let statistics = Statistics::from_samples(&mut passed.samples);
     let mut lines = vec![format!(
         "PASS bench/{} {} provenance={} cold_ms={} min_ms={} median_ms={} p90_ms={} p99_ms={} max_ms={} samples={} warmups={} image={:?} execution={:?}",
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn benchmark_evidence_separates_row_setup_from_execution() {
-        let output = format_passed(super::execution::Passed {
+        let output = format_passed(super::execution::Success {
             id: "startup/tiny".into(),
             cold: 12,
             samples: vec![4],

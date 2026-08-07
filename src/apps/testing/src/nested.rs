@@ -33,7 +33,7 @@ struct Chain {
     timeout_seconds: u64,
     #[serde(default = "default_capture_limit")]
     capture_limit_bytes: usize,
-    expect: Expect,
+    expect: Expectation,
 }
 
 #[derive(Deserialize)]
@@ -119,7 +119,7 @@ impl EngineOptions {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Expect {
+struct Expectation {
     exit: i32,
     stdout: PathBuf,
 }

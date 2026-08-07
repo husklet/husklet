@@ -147,12 +147,12 @@ fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error>
     Ok(planned.remove(0))
 }
 
-async fn execute(work: Work) -> Completed {
+async fn execute(work: Work) -> Completion {
     let started = std::time::Instant::now();
     let result = execution::run_case(Arc::clone(&work.app), work.case_index, work.target)
         .await
         .map_err(|error| error.to_string());
-    Completed {
+    Completion {
         key: work.key,
         elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         host_load: load::sample(),
@@ -161,9 +161,9 @@ async fn execute(work: Work) -> Completed {
 }
 
 async fn drain(
-    running: &mut pool::Pool<Work, Completed>,
+    running: &mut pool::Pool<Work, Completion>,
     ledger: &Arc<ledger::Ledger>,
-) -> Result<Vec<Completed>, Error> {
+) -> Result<Vec<Completion>, Error> {
     let mut completed = Vec::new();
     while let Some(result) = running.next(execute).await? {
         let row = result.row();
@@ -187,14 +187,14 @@ struct Work {
     target: Target,
 }
 
-struct Completed {
+struct Completion {
     key: WorkKey,
     elapsed_ms: u64,
     host_load: String,
     result: Result<Vec<execution::CaseResult>, String>,
 }
 
-impl Completed {
+impl Completion {
     fn row(&self) -> ledger::Row {
         let (status, diagnostic) = outcome(&self.result);
         ledger::Row {
@@ -225,7 +225,7 @@ fn outcome(result: &Result<Vec<execution::CaseResult>, String>) -> (&'static str
 
 fn summarize(
     prior: &std::collections::BTreeMap<WorkKey, ledger::Row>,
-    completed: Vec<Completed>,
+    completed: Vec<Completion>,
 ) -> (usize, Vec<String>) {
     let mut passed = 0;
     let mut failed = Vec::new();
@@ -250,7 +250,7 @@ fn summarize(
     (passed, failed)
 }
 
-fn summarize_completed(completed: Completed, passed: &mut usize, failed: &mut Vec<String>) {
+fn summarize_completed(completed: Completion, passed: &mut usize, failed: &mut Vec<String>) {
     match completed.result {
         Ok(results) => summarize_results(
             &completed.key,
@@ -303,17 +303,17 @@ fn summarize_results(
     }
 }
 
-struct Planned {
+struct Schedule {
     work: Vec<Work>,
     skipped: Vec<ledger::Row>,
     matched_case: bool,
 }
 
-fn plan(apps: Vec<App>, options: &Options) -> Planned {
+fn plan(apps: Vec<App>, options: &Options) -> Schedule {
     plan_for_host(apps, options, EngineHost::current())
 }
 
-fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned {
+fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedule {
     let mut work = Vec::new();
     let mut skipped = Vec::new();
     let mut matched_case = options.case.is_none();
@@ -362,7 +362,7 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned
         }
     }
     work.sort_by(|left, right| left.key.cmp(&right.key));
-    Planned {
+    Schedule {
         work,
         skipped,
         matched_case,
@@ -370,7 +370,7 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Planned
 }
 
 /// A selection with only inactive cases is a valid, fully recorded NOT_RUN sweep, not a failure.
-fn require_planned(planned: Planned, selected: Option<&str>) -> Result<Planned, Error> {
+fn require_planned(planned: Schedule, selected: Option<&str>) -> Result<Schedule, Error> {
     if !planned.matched_case {
         let selected = selected.ok_or("case selection match state is inconsistent")?;
         return Err(format!("no runtime case exactly matched --case {selected}").into());

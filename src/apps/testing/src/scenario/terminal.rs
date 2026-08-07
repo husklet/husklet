@@ -32,7 +32,7 @@ struct StepDefinition {
     write: Option<Text>,
     resize: Option<Resize>,
     close: Option<Empty>,
-    await_output: Option<Await>,
+    await_output: Option<OutputCondition>,
     reject_output: Option<Text>,
 }
 
@@ -51,7 +51,7 @@ struct Resize {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Await {
+struct OutputCondition {
     contains: String,
     timeout_ms: u64,
 }
@@ -323,7 +323,7 @@ impl StepDefinition {
                 })
             }
             (None, None, Some(Empty {}), None, None) => Ok(Step::Close),
-            (None, None, None, Some(Await { contains, timeout_ms }), None)
+            (None, None, None, Some(OutputCondition { contains, timeout_ms }), None)
                 if bounded(&contains, false) && (1..=MAX_WAIT_MS).contains(&timeout_ms) =>
             {
                 Ok(Step::AwaitOutput {

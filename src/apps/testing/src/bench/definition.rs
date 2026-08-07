@@ -88,12 +88,12 @@ struct Case {
     samples: u32,
     #[serde(default = "timeout")]
     timeout: u64,
-    expect: Expect,
+    expect: Expectation,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Expect {
+struct Expectation {
     #[serde(default)]
     exit: i32,
     stdout_contains: PathBuf,

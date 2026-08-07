@@ -66,7 +66,7 @@ pub(super) async fn run(scenarios: Vec<Scenario>, options: &Options, report: &Pa
 }
 
 fn spawn(
-    running: &mut JoinSet<Result<Vec<Completed>, String>>,
+    running: &mut JoinSet<Result<Vec<Completion>, String>>,
     work: Work,
     semaphore: Arc<Semaphore>,
     resources: Arc<ResourcePool>,
@@ -98,7 +98,7 @@ fn spawn(
                     .keys
                     .into_iter()
                     .filter(|key| !prior.contains(key))
-                    .map(|key| Completed {
+                    .map(|key| Completion {
                         key,
                         elapsed_ms: 0,
                         result: execution::CaseResult::Failed("scenario warmup did not pass".to_owned()),
@@ -111,7 +111,7 @@ fn spawn(
         let mut stopped = false;
         for key in work.keys.into_iter().filter(|key| !prior.contains(key)) {
             if stopped {
-                completed.push(Completed {
+                completed.push(Completion {
                     key,
                     elapsed_ms: 0,
                     result: execution::CaseResult::NotRun("not run after preceding sample failed".to_owned()),
@@ -131,7 +131,7 @@ fn spawn(
             )
             .await;
             stopped = !matches!(outcome.result, execution::CaseResult::Passed);
-            completed.push(Completed {
+            completed.push(Completion {
                 key,
                 elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 result: outcome.result,
@@ -248,9 +248,9 @@ async fn enter(semaphore: Arc<Semaphore>) -> Result<OwnedSemaphorePermit, String
 }
 
 async fn drain(
-    running: &mut JoinSet<Result<Vec<Completed>, String>>,
+    running: &mut JoinSet<Result<Vec<Completion>, String>>,
     ledger: &Arc<ledger::Ledger>,
-) -> Result<Vec<Completed>, Error> {
+) -> Result<Vec<Completion>, Error> {
     let mut completed = Vec::new();
     while let Some(result) = running.join_next().await {
         let results = result?.map_err(|error| -> Error { error.into() })?;
@@ -280,14 +280,14 @@ struct Work {
     warmups: u16,
 }
 
-struct Completed {
+struct Completion {
     key: WorkKey,
     elapsed_ms: u64,
     result: execution::CaseResult,
     timing: execution::PhaseTiming,
 }
 
-impl Completed {
+impl Completion {
     fn row(&self) -> ledger::Row {
         let (status, diagnostic) = self.result.evidence();
         ledger::Row {
@@ -424,7 +424,7 @@ async fn fingerprint(work: &[Work], warm_provider: bool) -> Result<String, Error
     .map_err(Into::into)
 }
 
-fn summarize(prior: &BTreeMap<WorkKey, ledger::Row>, completed: Vec<Completed>) -> Summary {
+fn summarize(prior: &BTreeMap<WorkKey, ledger::Row>, completed: Vec<Completion>) -> Summary {
     let mut summary = Summary {
         passed: 0,
         expected_failures: 0,

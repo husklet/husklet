@@ -16,11 +16,11 @@ use std::{
 };
 
 pub enum Result {
-    Passed(Passed),
-    Failed(Failed),
+    Passed(Success),
+    Failed(Failure),
 }
 
-pub struct Passed {
+pub struct Success {
     pub id: String,
     pub cold: u128,
     pub samples: Vec<u128>,
@@ -31,7 +31,7 @@ pub struct Passed {
     pub provenance: Provenance,
 }
 
-pub struct Failed {
+pub struct Failure {
     pub id: String,
     pub target: &'static str,
     pub reason: String,
@@ -45,7 +45,7 @@ pub struct Provenance {
     pub identity: String,
 }
 
-pub struct Prepared {
+pub struct Preparation {
     artifact: Option<std::path::PathBuf>,
     artifact_identity: Option<String>,
     image_identity: String,
@@ -67,7 +67,11 @@ const DIAGNOSTIC_OUTPUT: usize = 16 * 1024;
 const SETUP_ALLOWANCE: Duration = Duration::from_secs(120);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -> std::result::Result<Prepared, Error> {
+pub async fn prepare(
+    benchmark: &Benchmark,
+    case_index: usize,
+    target: Target,
+) -> std::result::Result<Preparation, Error> {
     let case = &benchmark.cases[case_index];
     let mut setup = BTreeMap::new();
     let started = Instant::now();
@@ -135,7 +139,7 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
         golden.as_slice(),
     ])?;
     setup.insert("provenance_hash".into(), elapsed_us(started));
-    Ok(Prepared {
+    Ok(Preparation {
         artifact,
         artifact_identity,
         image_identity,
@@ -144,11 +148,11 @@ pub async fn prepare(benchmark: &Benchmark, case_index: usize, target: Target) -
     })
 }
 
-pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target, prepared: Prepared) -> Result {
+pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target, prepared: Preparation) -> Result {
     let case = &benchmark.cases[case_index];
     let identity = prepared.identity.clone();
     match execute(Arc::clone(&benchmark), case_index, target, prepared).await {
-        Ok(measurement) => Result::Passed(Passed {
+        Ok(measurement) => Result::Passed(Success {
             id: format!("{}/{}", benchmark.name, case.id),
             cold: measurement.cold,
             samples: measurement.samples,
@@ -164,7 +168,7 @@ pub async fn run(benchmark: Arc<Benchmark>, case_index: usize, target: Target, p
                 identity,
             },
         }),
-        Err(error) => Result::Failed(Failed {
+        Err(error) => Result::Failed(Failure {
             id: format!("{}/{}", benchmark.name, case.id),
             target: target.name(),
             reason: error.to_string(),
@@ -176,7 +180,7 @@ async fn execute(
     benchmark: Arc<Benchmark>,
     case_index: usize,
     target: Target,
-    prepared: Prepared,
+    prepared: Preparation,
 ) -> std::result::Result<Measurement, Error> {
     let case = &benchmark.cases[case_index];
     let deadline = tokio::time::Instant::now() + row_timeout(case)?;

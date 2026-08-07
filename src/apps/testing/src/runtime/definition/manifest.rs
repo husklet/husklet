@@ -78,7 +78,7 @@ pub(super) struct Case {
     pub(super) environment: Vec<EnvironmentEntry>,
     #[serde(default = "timeout")]
     pub(super) timeout: u64,
-    pub(super) expect: Expect,
+    pub(super) expect: Expectation,
 }
 
 #[derive(Deserialize)]
@@ -113,7 +113,7 @@ pub(crate) enum CompatClass {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Expect {
+pub(super) struct Expectation {
     pub(super) exit: i32,
     pub(super) stdout: PathBuf,
 }

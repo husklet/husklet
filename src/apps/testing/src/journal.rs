@@ -39,7 +39,7 @@ pub(crate) trait Schema {
     fn parse(fields: &[&str], keys: &BTreeSet<Self::Key>) -> Result<Option<Self::Row>, Error>;
 }
 
-pub(crate) struct Opened<S: Schema> {
+pub(crate) struct Resumption<S: Schema> {
     pub ledger: Ledger<S>,
     pub prior: BTreeMap<S::Key, S::Row>,
 }
@@ -56,7 +56,12 @@ pub(crate) struct Ledger<S: Schema> {
 }
 
 impl<S: Schema> Ledger<S> {
-    pub(crate) fn open(report: &Path, stamp: &str, keys: &BTreeSet<S::Key>, resume: bool) -> Result<Opened<S>, Error> {
+    pub(crate) fn open(
+        report: &Path,
+        stamp: &str,
+        keys: &BTreeSet<S::Key>,
+        resume: bool,
+    ) -> Result<Resumption<S>, Error> {
         let partial = report.with_extension("partial.tsv");
         if let Some(parent) = report.parent() {
             fs::create_dir_all(parent)?;
@@ -69,7 +74,7 @@ impl<S: Schema> Ledger<S> {
             BTreeMap::new()
         };
         let file = OpenOptions::new().append(true).open(&partial)?;
-        Ok(Opened {
+        Ok(Resumption {
             ledger: Self {
                 report: report.to_path_buf(),
                 partial,

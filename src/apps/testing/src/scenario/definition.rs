@@ -44,7 +44,7 @@ struct Case {
     warmups: u16,
     #[serde(default = "repetitions")]
     repetitions: u16,
-    expect: Expect,
+    expect: Expectation,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, ValueEnum)]
@@ -155,7 +155,7 @@ struct Readiness {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Expect {
+struct Expectation {
     #[serde(default)]
     exit: i32,
     #[serde(default)]
