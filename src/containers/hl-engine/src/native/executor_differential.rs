@@ -2458,13 +2458,10 @@ fn x86_vex_packed_compare_matches_interpreter_at_each_boundary() {
     assert_x86_sequence(0x402720, &pieces, &compare_state(), 0x7000, &compare_operand());
 }
 
-/// The `%rsi`-relative forms of the same compares. The native frontend lowers these too but
-/// leaves YMM bits 255:128 of the destination holding the low result instead of zeroing them,
-/// so this differential fails today against a correct interpreter; see the aarch64 VEX
-/// memory-operand completion path.
+/// The `%rsi`-relative forms of the same compares, whose VEX completion must also zero
+/// YMM bits 255:128 of the destination.
 #[cfg(target_arch = "aarch64")]
 #[test]
-#[ignore = "native VEX.128 memory-operand compares do not zero the upper lane"]
 fn x86_vex_packed_compare_memory_matches_interpreter_at_each_boundary() {
     let mut program: Vec<Vec<u8>> = Vec::new();
     for opcode in [0x74_u8, 0x75, 0x76, 0x64, 0x65, 0x66] {

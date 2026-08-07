@@ -923,9 +923,16 @@ static uint32_t vector_operation_words(const instruction *item) {
     }
 }
 
+/* The address decoder overwrites item->width with the GPR width, so the VEX lane
+ * count of a memory form only survives in vector_memory_width. */
+static uint32_t vex_vector_width(const instruction *item) {
+    return item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
+}
+
 uint32_t hl_x86_vector_words(const instruction *item) {
     uint32_t operation = vector_operation_words(item);
     if (item->vector_vex != 0u) {
+        uint32_t vex_width = vex_vector_width(item);
         uint32_t upper_operation = vector_operation_words(item);
         uint32_t two_source = item->vector_kind == VECTOR_SHUFFLE_FLOAT ||
                               item->vector_kind == VECTOR_SHUFFLE_DOUBLE ||
@@ -952,27 +959,15 @@ uint32_t hl_x86_vector_words(const instruction *item) {
                               item->vector_kind == VECTOR_HORIZONTAL_SATURATING;
         two_source = two_source || item->vector_kind == VECTOR_BLEND_IMMEDIATE ||
                      item->vector_kind == VECTOR_BLEND_VARIABLE;
-        if (item->width == 32u && item->vector_kind == VECTOR_BLEND_IMMEDIATE &&
+        if (vex_width == 32u && item->vector_kind == VECTOR_BLEND_IMMEDIATE &&
             item->condition == 0u) {
             instruction upper = *item;
             upper.vector_immediate = (uint8_t)(item->vector_immediate >> (16u / item->vector_lane));
             upper_operation = vector_operation_words(&upper);
         }
-        operation += item->width == 32u ? upper_operation + 2u +
+        operation += vex_width == 32u ? upper_operation + 2u +
                          (item->memory_operand == 0u ? 2u : 0u) + (two_source != 0u ? 2u : 0u) : 2u;
-        if (item->width == 32u && item->vector_kind == VECTOR_BLEND_VARIABLE) operation += 2u;
-    }
-    if (item->vector_memory_width == 32u && item->memory_operand != 0u &&
-        (item->vector_kind == VECTOR_PACK_SIGNED || item->vector_kind == VECTOR_PACK_UNSIGNED))
-        operation += 2u;
-    if (item->memory_operand != 0u &&
-        (item->vector_kind == VECTOR_HORIZONTAL_ADD ||
-         item->vector_kind == VECTOR_HORIZONTAL_SUBTRACT ||
-         item->vector_kind == VECTOR_HORIZONTAL_SATURATING)) {
-        if (item->vector_memory_width == 16u)
-            operation += item->vector_kind == VECTOR_HORIZONTAL_ADD ? 5u : 7u;
-        else if (item->vector_kind != VECTOR_HORIZONTAL_ADD)
-            operation += 2u;
+        if (vex_width == 32u && item->vector_kind == VECTOR_BLEND_VARIABLE) operation += 2u;
     }
     uint32_t width = item->vector_memory_width != 0u ? item->vector_memory_width : item->width;
     uint32_t aligned = item->vector_aligned == 0u ? 0u :
@@ -984,10 +979,10 @@ uint32_t hl_x86_vector_words(const instruction *item) {
            (item->live_chain != 0u ? 19u : 0u) +
            constant_words(item->pc) +
            (item->vector_kind != VECTOR_COPY && item->memory_write == 0u ? operation : 0u) + aligned +
-           (width == 32u ? (item->memory_write != 0u ? 3u : 4u) : 0u);
-    if (item->vector_memory_width == 16u &&
-        (item->vector_kind == VECTOR_UNPACK_LOW || item->vector_kind == VECTOR_UNPACK_HIGH))
-        words += 5u;
+           /* Only VECTOR_COPY reassembles the loaded upper half. */
+           (width != 32u ? 0u :
+            item->memory_write != 0u ? 3u :
+            item->vector_kind == VECTOR_COPY ? 4u : 1u);
     return words;
 }
 
@@ -1424,7 +1419,7 @@ static void emit_vex_completion(uint32_t *words, uint32_t *cursor, const instruc
                                 unsigned memory_upper) {
     instruction upper;
     if (item->vector_vex == 0u) return;
-    if (item->width == 16u) {
+    if (vex_vector_width(item) != 32u) {
         hl_x86_emit_vector_upper_zero(words, cursor, item->destination);
         return;
     }
