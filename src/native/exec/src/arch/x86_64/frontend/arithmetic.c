@@ -144,6 +144,10 @@ uint32_t hl_x86_alu_words(const instruction *item) {
                      (logical ? 2u : 1u) +
                      (item->nzcv_dead ? 0u : 18u + (item->preserve_carry ? 6u : 0u)) +
                      (item->pfaf_dead ? 0u : (logical ? 13u : 18u));
+    /* A logical op's CF and OF are cleared by the PF/AF tail, so eliding only that half still owes
+       them; the NZCV transfer leaves CF set for a logical result. */
+    if (logical && item->nzcv_dead == 0u && item->pfaf_dead != 0u)
+        words += 3u + constant_words(HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF);
     if (item->preserve_flags != 0u) words += 2u;
 
     if (item->alu_kind == 2u) words += 4u;
@@ -247,6 +251,12 @@ void hl_x86_emit_alu(uint32_t *words, uint32_t *cursor, const instruction *item)
             hl_x86_emit_nzcv_keep_carry(words, cursor);
         else
             hl_x86_emit_nzcv(words, cursor);
+    }
+    if (logical && item->nzcv_dead == 0u && item->pfaf_dead != 0u) {
+        words[(*cursor)++] = load_word(20, offsetof(hl_native_x86_64_cpu, flags));
+        emit_constant(words, cursor, 23, HL_X86_RFLAGS_CF | HL_X86_RFLAGS_OF);
+        words[(*cursor)++] = UINT32_C(0x8a200000) | 23u << 16 | 20u << 5 | 20u;
+        words[(*cursor)++] = store_word(20, offsetof(hl_native_x86_64_cpu, flags));
     }
     if (item->width == 1u || item->width == 2u) {
         unsigned shift = item->width == 1u ? 24u : 16u;
