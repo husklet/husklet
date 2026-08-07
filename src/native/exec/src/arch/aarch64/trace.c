@@ -566,6 +566,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
     uint64_t block_heads[16] = {pc};
     size_t block_head_count = 1;
     int planning_exclusive = 0;
+    uint32_t planned_conditionals = 0;
     size_t planned = 0;
     while (planned < count) {
         hl_a64_fetch_result one;
@@ -597,10 +598,17 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
         planned++;
         cursor = next;
         hl_a64_instruction_effect effect = hl_a64_trace_effect(word, planned_pcs[planned - 1]);
-        int conditional = (word & UINT32_C(0xff000010)) == UINT32_C(0x54000000) ||
+        /* AL/NV have no fall-through arm, so they are not stitchable. */
+        int conditional = ((word & UINT32_C(0xff000010)) == UINT32_C(0x54000000) &&
+                           (word & 15u) < 14) ||
             (word & UINT32_C(0x7e000000)) == UINT32_C(0x34000000) ||
             (word & UINT32_C(0x7e000000)) == UINT32_C(0x36000000);
-        if ((effect.terminal || (effect.control && !conditional)) && !followed) break;
+        if (conditional && !followed) {
+            if (planned_conditionals >= HL_A64_TRACE_MAX_CONDITIONALS) break;
+            planned_conditionals++;
+            continue;
+        }
+        if ((effect.terminal || effect.control) && !followed) break;
     }
     if (planned == 0) return 0;
     count = planned;
