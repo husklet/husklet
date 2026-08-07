@@ -253,13 +253,13 @@ fn timing_records_only_when_enabled() {
     hl_log::Profiling::global().enable(tag::WGPU); // WGPU timing on, GPU off
 
     {
-        let _s = hl_log::hl_span!(tag::WGPU, "readback");
-        std::hint::black_box(&_s);
+        let span = hl_log::hl_span!(tag::WGPU, "readback");
+        std::hint::black_box(&span);
     }
     {
         // Disabled tag: records nothing.
-        let _s = hl_log::hl_span!(tag::GPU, "compose");
-        std::hint::black_box(&_s);
+        let span = hl_log::hl_span!(tag::GPU, "compose");
+        std::hint::black_box(&span);
     }
 
     let snap = hl_log::Timings::global().snapshot();
@@ -282,12 +282,13 @@ static ACC: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn disabled_path_is_cheap() {
+    const N: u64 = 5_000_000;
     let _g = test_lock();
+
     let _sink = TestSink::install();
     reset_state();
     hl_log::Logging::global().set(tag::NONE); // everything off -> pure gate cost
 
-    const N: u64 = 5_000_000;
     let start = std::time::Instant::now();
     for i in 0..N {
         // Args reference `i` but are never evaluated (tag off). black_box defeats the
