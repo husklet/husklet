@@ -136,7 +136,9 @@ impl GuestExecutor {
         let active_faults = attachment.as_ref().and(host_faults);
         let mut native = NativePool::new(isa, plan, active_faults);
         loop {
-            native.retain_processes(&threads.active_processes());
+            if native.tracks_processes() {
+                native.retain_processes(&threads.active_processes());
+            }
             if let Some(exit) = Self::cancelled(plan, threads)? {
                 return Ok(exit);
             }

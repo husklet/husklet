@@ -15,6 +15,11 @@ impl GuestExecutor {
         native_budget: u64,
         continuation: Option<&threads::SchedulerContinuation>,
     ) -> Option<StepOutcome> {
+        // A disabled pool can never enter native code, and probing anyway grows the
+        // observation and source tables the scheduler has to sweep every turn.
+        if !pool.enabled {
+            return None;
+        }
         enum NativeCoordinates {
             Aarch64 { pc: u64, stack: u64 },
             X86_64,

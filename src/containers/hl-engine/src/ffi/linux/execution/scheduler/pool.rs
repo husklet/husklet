@@ -255,16 +255,45 @@ impl NativePool {
         Some(())
     }
 
+    /// True when some per-process table holds an entry, so the caller can skip both
+    /// the retain sweep and the live-process set it would need to build.
+    pub(super) fn tracks_processes(&self) -> bool {
+        !self.executors.is_empty()
+            || !self.sources.is_empty()
+            || !self.observations.is_empty()
+            || !self.suppressed.is_empty()
+            || !self.fallbacks.is_empty()
+            || !self.source_incarnations.is_empty()
+            || !self.instruction_epochs.is_empty()
+            || !self.boundary_sensitive.is_empty()
+    }
+
     pub(super) fn retain_processes(&mut self, live: &BTreeSet<hl_task::ProcessId>) {
-        self.executors.retain(|process, _| live.contains(process));
-        self.sources.retain(|(process, _, _, _), _| live.contains(process));
-        self.observations
-            .retain(|(process, _, _, _, _), _| live.contains(process));
-        self.suppressed.retain(|(process, _, _, _, _)| live.contains(process));
-        self.fallbacks.retain(|(process, _, _, _, _)| live.contains(process));
-        self.source_incarnations.retain(|process, _| live.contains(process));
-        self.instruction_epochs.retain(|process, _| live.contains(process));
-        self.boundary_sensitive.retain(|process| live.contains(process));
+        if !self.executors.is_empty() {
+            self.executors.retain(|process, _| live.contains(process));
+        }
+        if !self.sources.is_empty() {
+            self.sources.retain(|(process, _, _, _), _| live.contains(process));
+        }
+        if !self.observations.is_empty() {
+            self.observations
+                .retain(|(process, _, _, _, _), _| live.contains(process));
+        }
+        if !self.suppressed.is_empty() {
+            self.suppressed.retain(|(process, _, _, _, _)| live.contains(process));
+        }
+        if !self.fallbacks.is_empty() {
+            self.fallbacks.retain(|(process, _, _, _, _)| live.contains(process));
+        }
+        if !self.source_incarnations.is_empty() {
+            self.source_incarnations.retain(|process, _| live.contains(process));
+        }
+        if !self.instruction_epochs.is_empty() {
+            self.instruction_epochs.retain(|process, _| live.contains(process));
+        }
+        if !self.boundary_sensitive.is_empty() {
+            self.boundary_sensitive.retain(|process| live.contains(process));
+        }
     }
 
     pub(super) fn merge_observed_sources(
