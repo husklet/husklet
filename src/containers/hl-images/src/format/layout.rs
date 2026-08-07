@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{
     Descriptor, Digest, Error, Image, Reference, Result,
     content::{FsStore, Store},
+    error::At as _,
     copy_graph,
     remote::{BlobStream, Source},
     transfer::{CopyReport, Target},
@@ -30,11 +31,13 @@ impl Layout {
     /// Returns an error when layout metadata is invalid or cannot be persisted.
     pub async fn open(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_owned();
-        tokio::fs::create_dir_all(root.join("blobs/sha256")).await?;
+        tokio::fs::create_dir_all(root.join("blobs/sha256"))
+            .await
+            .at(root.join("blobs/sha256"))?;
         let layout = Self { root };
         let marker = layout.root.join("oci-layout");
         if marker.exists() {
-            let value: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&marker).await?)?;
+            let value: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&marker).await.at(&marker)?)?;
             if value.get("imageLayoutVersion").and_then(serde_json::Value::as_str) != Some(LAYOUT_VERSION) {
                 return Err(Error::MalformedOci("unsupported OCI layout version".into()));
             }
@@ -64,7 +67,7 @@ impl Layout {
         };
         let report = copy_graph(&source, self, &image.name, image.target.clone()).await?;
         let mut index: serde_json::Value =
-            serde_json::from_slice(&tokio::fs::read(self.root.join("index.json")).await?)?;
+            serde_json::from_slice(&tokio::fs::read(self.root.join("index.json")).await.at(self.root.join("index.json"))?)?;
         let manifests = index
             .get_mut("manifests")
             .and_then(serde_json::Value::as_array_mut)
@@ -91,7 +94,7 @@ impl Layout {
     }
 
     async fn stream(path: PathBuf) -> Result<BlobStream> {
-        let file = tokio::fs::File::open(path).await?;
+        let file = tokio::fs::File::open(&path).await.at(&path)?;
         Ok(Box::pin(stream::unfold(file, |mut file| async move {
             let mut buffer = vec![0_u8; 64 * 1024];
             match file.read(&mut buffer).await {
@@ -116,12 +119,13 @@ impl Layout {
                 .create_new(true)
                 .write(true)
                 .open(&temporary)
-                .await?;
-            file.write_all(bytes).await?;
-            file.sync_all().await?;
+                .await
+                .at(&temporary)?;
+            file.write_all(bytes).await.at(&temporary)?;
+            file.sync_all().await.at(&temporary)?;
             drop(file);
-            tokio::fs::rename(&temporary, path).await?;
-            tokio::fs::File::open(parent).await?.sync_all().await?;
+            tokio::fs::rename(&temporary, path).await.at(path)?;
+            tokio::fs::File::open(parent).await.at(parent)?.sync_all().await.at(parent)?;
             Ok(())
         }
         .await;
@@ -135,7 +139,9 @@ impl Layout {
 #[async_trait]
 impl Source for Layout {
     async fn resolve(&self, reference: &Reference) -> Result<Descriptor> {
-        let bytes = tokio::fs::read(self.root.join("index.json")).await?;
+        let bytes = tokio::fs::read(self.root.join("index.json"))
+            .await
+            .at(self.root.join("index.json"))?;
         if bytes.len() > 16 * 1024 * 1024 {
             return Err(Error::MalformedOci("layout index exceeds 16 MiB".into()));
         }
@@ -162,7 +168,7 @@ impl Source for Layout {
     async fn fetch(&self, _: &Reference, descriptor: &Descriptor) -> Result<BlobStream> {
         let digest: Digest = descriptor.digest().to_string().parse()?;
         let path = self.root.join("blobs/sha256").join(digest.encoded());
-        let metadata = tokio::fs::symlink_metadata(&path).await?;
+        let metadata = tokio::fs::symlink_metadata(&path).await.at(&path)?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(Error::InvalidMetadata(format!(
                 "layout blob {digest} is not a regular file"

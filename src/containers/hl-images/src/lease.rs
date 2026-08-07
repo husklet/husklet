@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use crate::{Error, Result, storage};
+use crate::{Error, Result, error::At as _, storage};
 use storage::Persistence as _;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -63,10 +63,10 @@ impl Leases {
     /// # Errors
     /// Returns an error when lease storage cannot be opened or decoded.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
-        std::fs::create_dir_all(root.as_ref())?;
+        std::fs::create_dir_all(root.as_ref()).at(root.as_ref())?;
         let path = root.as_ref().join("leases.json");
         let state = if path.exists() {
-            serde_json::from_reader(File::open(&path)?)?
+            serde_json::from_reader(File::open(&path).at(&path)?)?
         } else {
             BTreeMap::new()
         };
@@ -110,7 +110,7 @@ impl Leases {
         // Handles in other processes may have committed since this store opened.
         // Reload while holding the path-wide lock before applying the mutation.
         *state = if self.path.exists() {
-            serde_json::from_reader(File::open(&self.path)?)?
+            serde_json::from_reader(File::open(&self.path).at(&self.path)?)?
         } else {
             BTreeMap::new()
         };
@@ -126,7 +126,7 @@ impl Leases {
             .map_err(|_| Error::InvalidMetadata("lease writer lock poisoned".into()))?;
         let _process = storage::ExclusiveLock::acquire(&self.path.with_extension("lock"))?;
         let current = if self.path.exists() {
-            serde_json::from_reader(File::open(&self.path)?)?
+            serde_json::from_reader(File::open(&self.path).at(&self.path)?)?
         } else {
             BTreeMap::new()
         };

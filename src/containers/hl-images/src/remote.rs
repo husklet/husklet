@@ -5,7 +5,7 @@ use oci_client::{Client, secrets::RegistryAuth};
 use std::pin::Pin;
 use tokio::io::AsyncReadExt;
 
-use crate::{Descriptor, Digest, Error, Image, Reference, Result, content::FsStore};
+use crate::{Descriptor, Digest, Error, Image, Reference, Result, content::FsStore, error::At as _};
 
 pub(crate) const MANIFEST_MEDIA_TYPES: &[&str] = &[
     "application/vnd.oci.image.manifest.v1+json",
@@ -148,7 +148,7 @@ impl Registry {
     async fn stream(
         path: std::path::PathBuf,
     ) -> Result<impl futures_util::Stream<Item = oci_client::errors::Result<Bytes>>> {
-        let file = tokio::fs::File::open(path).await?;
+        let file = tokio::fs::File::open(&path).await.at(&path)?;
         Ok(stream::unfold(file, |mut file| async move {
             let mut buffer = vec![0_u8; 64 * 1024];
             match file.read(&mut buffer).await {
@@ -164,7 +164,7 @@ impl Registry {
 
     async fn verify(path: std::path::PathBuf, descriptor: &Descriptor) -> Result<()> {
         use sha2::Digest as _;
-        let mut file = tokio::fs::File::open(path).await?;
+        let mut file = tokio::fs::File::open(&path).await.at(&path)?;
         let mut hash = sha2::Sha256::new();
         let mut size = 0_u64;
         let mut buffer = vec![0_u8; 64 * 1024];

@@ -5,7 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::{Error, Result};
+use crate::{Error, Result, error::At as _};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Ownership {
@@ -201,7 +201,10 @@ impl Ownerships {
         let root = root.as_ref();
         let path = path.as_ref();
         if path.as_os_str().is_empty() {
-            let mut children = fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()?;
+            let mut children = fs::read_dir(root)
+                .at(root)?
+                .collect::<std::io::Result<Vec<_>>>()
+                .at(root)?;
             children.sort_by_key(std::fs::DirEntry::file_name);
             for child in children {
                 self.record_tree(root, Path::new(&child.file_name()), ownership)?;
@@ -252,19 +255,19 @@ impl Ownerships {
         let parent = path
             .parent()
             .ok_or_else(|| Error::InvalidMetadata("snapshot ownership sidecar has no parent".into()))?;
-        fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent).at(parent)?;
         let temporary = parent.join(format!(
             ".{}.{}.tmp",
             path.file_name().and_then(|name| name.to_str()).unwrap_or("ownership"),
             uuid::Uuid::new_v4().simple()
         ));
         let result = (|| -> Result<()> {
-            let mut file = File::create(&temporary)?;
+            let mut file = File::create(&temporary).at(&temporary)?;
             serde_json::to_writer(&mut file, &self.entries)?;
-            file.write_all(b"\n")?;
-            file.sync_all()?;
-            fs::rename(&temporary, path)?;
-            File::open(parent)?.sync_all()?;
+            file.write_all(b"\n").at(&temporary)?;
+            file.sync_all().at(&temporary)?;
+            fs::rename(&temporary, path).at(path)?;
+            File::open(parent).at(parent)?.sync_all().at(parent)?;
             Ok(())
         })();
         if result.is_err() {
@@ -275,11 +278,14 @@ impl Ownerships {
 
     fn record_tree(&mut self, root: &Path, relative: &Path, ownership: Ownership) -> Result<()> {
         self.record(relative, ownership)?;
-        let metadata = fs::symlink_metadata(root.join(relative))?;
+        let metadata = fs::symlink_metadata(root.join(relative)).at(root.join(relative))?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
             return Ok(());
         }
-        let mut children = fs::read_dir(root.join(relative))?.collect::<std::io::Result<Vec<_>>>()?;
+        let mut children = fs::read_dir(root.join(relative))
+            .at(root.join(relative))?
+            .collect::<std::io::Result<Vec<_>>>()
+            .at(root.join(relative))?;
         children.sort_by_key(std::fs::DirEntry::file_name);
         for child in children {
             self.record_tree(root, &relative.join(child.file_name()), ownership)?;

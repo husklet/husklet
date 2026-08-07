@@ -8,6 +8,7 @@ use super::Path;
 use crate::{
     snapshot::{Names, Ownership, Ownerships},
     Error, Result,
+    error::At as _,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -186,8 +187,8 @@ impl<R: Read> Layer<R> {
         mut ownerships: Option<&mut Ownerships>,
         mut names: Option<&mut Names>,
     ) -> Result<Report> {
-        fs::create_dir_all(root)?;
-        let root = root.canonicalize()?;
+        fs::create_dir_all(root).at(root)?;
+        let root = root.canonicalize().at(root)?;
         let mut archive = tar::Archive::new(&mut self.reader);
         let mut report = Report::default();
         let mut backlog = Backlog::default();
@@ -271,7 +272,8 @@ impl Path {
                     .push(path.clone(), destination.to_owned(), entry.header().mode()?);
             }
             tar::EntryType::Regular | tar::EntryType::GNUSparse => {
-                fs::create_dir_all(destination.parent().unwrap_or(root))?;
+                fs::create_dir_all(destination.parent().unwrap_or(root))
+                    .map_err(|source| path.io("create parent directory", source))?;
                 if fs::symlink_metadata(destination).is_ok() {
                     path.remove(destination)?;
                 }
@@ -294,7 +296,8 @@ impl Path {
                 } else {
                     target.into_owned()
                 };
-                fs::create_dir_all(destination.parent().unwrap_or(root))?;
+                fs::create_dir_all(destination.parent().unwrap_or(root))
+                    .map_err(|source| path.io("create parent directory", source))?;
                 if fs::symlink_metadata(destination).is_ok() {
                     path.remove(destination)?;
                 }
@@ -315,7 +318,8 @@ impl Path {
                 )?;
                 let physical_target = Path::new(&physical_target)?;
                 let _target_parents = physical_target.prepare(root)?;
-                fs::create_dir_all(destination.parent().unwrap_or(root))?;
+                fs::create_dir_all(destination.parent().unwrap_or(root))
+                    .map_err(|source| path.io("create parent directory", source))?;
                 if fs::symlink_metadata(destination).is_ok() {
                     path.remove(destination)?;
                 }

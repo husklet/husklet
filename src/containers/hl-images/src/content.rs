@@ -12,7 +12,7 @@ use uuid::Uuid;
 use bytes::Bytes;
 use flate2::read::GzDecoder;
 
-use crate::{Descriptor, DescriptorGraph, Digest, Error, Result, layer::Layer};
+use crate::{Descriptor, DescriptorGraph, Digest, Error, Result, error::At as _, layer::Layer};
 
 pub(crate) struct AppliedLayer {
     pub(crate) diff_id: Digest,
@@ -77,8 +77,8 @@ impl FsStore {
     /// Returns an error when the store directories cannot be created.
     pub fn open_with(root: impl AsRef<Path>, persistence: Arc<dyn crate::storage::Persistence>) -> Result<Self> {
         let root = root.as_ref().to_owned();
-        fs::create_dir_all(root.join("blobs/sha256"))?;
-        fs::create_dir_all(root.join("ingest"))?;
+        fs::create_dir_all(root.join("blobs/sha256")).at(root.join("blobs/sha256"))?;
+        fs::create_dir_all(root.join("ingest")).at(root.join("ingest"))?;
         Ok(Self { root, persistence })
     }
 
@@ -94,9 +94,10 @@ impl FsStore {
     /// Returns an error when the content directory is malformed or unreadable.
     pub fn digests(&self) -> Result<Vec<Digest>> {
         let mut digests = Vec::new();
-        for entry in fs::read_dir(self.root.join("blobs/sha256"))? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() {
+        let blobs = self.root.join("blobs/sha256");
+        for entry in fs::read_dir(&blobs).at(&blobs)? {
+            let entry = entry.at(&blobs)?;
+            if entry.file_type().at(entry.path())?.is_file() {
                 let name = entry
                     .file_name()
                     .into_string()
@@ -129,7 +130,7 @@ impl FsStore {
             return Err(Error::MalformedOci("manifest exceeds size limit".into()));
         }
         let digest: Digest = descriptor.digest().to_string().parse()?;
-        let bytes = tokio::fs::read(self.path(&digest)).await?;
+        let bytes = tokio::fs::read(self.path(&digest)).await.at(self.path(&digest))?;
         DescriptorGraph::verify(&bytes, descriptor)?;
         Ok(bytes.into())
     }
@@ -195,14 +196,17 @@ impl Store for FsStore {
         if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(Error::InvalidMetadata(format!("content {digest} is a symlink")));
         }
-        let file = File::open(path).map_err(|error| {
+        let file = File::open(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 Error::ContentNotFound(digest.to_string())
             } else {
-                error.into()
+                Error::Io {
+                    path: Some(path.clone()),
+                    source: error,
+                }
             }
         })?;
-        let actual = file.metadata()?.len();
+        let actual = file.metadata().at(&path)?.len();
         let expected = descriptor.size();
         if actual != expected {
             return Err(Error::SizeMismatch { expected, actual });
@@ -213,7 +217,7 @@ impl Store for FsStore {
     fn ingest(&self, reference: impl AsRef<str>) -> Result<Draft> {
         let name = Draft::name(reference.as_ref());
         let path = self.root.join("ingest").join(name);
-        let file = OpenOptions::new().create_new(true).write(true).open(&path)?;
+        let file = OpenOptions::new().create_new(true).write(true).open(&path).at(&path)?;
         Ok(Draft {
             store: self.clone(),
             path: Some(path),
@@ -306,18 +310,18 @@ impl Draft {
             .file
             .take()
             .ok_or_else(|| Error::InvalidMetadata("ingest is closed".into()))?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
         let source = self
             .path
             .take()
             .ok_or_else(|| Error::InvalidMetadata("ingest has no staged path".into()))?;
+        file.flush().at(&source)?;
+        file.sync_all().at(&source)?;
+        drop(file);
         let target = self.store.blob_path(&actual);
         if target.exists() {
-            fs::remove_file(source)?;
+            fs::remove_file(&source).at(&source)?;
         } else {
-            fs::rename(source, &target)?;
+            fs::rename(&source, &target).at(&target)?;
             let directory = target
                 .parent()
                 .ok_or_else(|| Error::InvalidMetadata("blob path has no parent".into()))?;
