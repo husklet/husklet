@@ -7,7 +7,7 @@ fn general_linux_workloads_default_to_sentry_routing() {
         Isolation {
             sandbox: Sandbox::SentryOnly,
             read_only_root: false,
-            network_isolated: true,
+            network_isolated: false,
         }
     );
 }

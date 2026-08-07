@@ -503,7 +503,11 @@ mod tests {
             .isolation(enabled)
             .network_mode(crate::NetworkMode::Host);
         assert!(spec.validate().is_ok());
-        assert!(spec.clone().isolation(crate::Isolation::default()).validate().is_err());
+        let isolated = crate::Isolation {
+            network_isolated: true,
+            ..crate::Isolation::default()
+        };
+        assert!(spec.clone().isolation(isolated).validate().is_err());
         assert!(
             spec.publish(crate::Publication::tcp(std::net::Ipv4Addr::LOCALHOST, 8080, 80).unwrap())
                 .validate()

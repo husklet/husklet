@@ -17,7 +17,13 @@ async fn none_and_bridge_networks_validate_isolation_before_launch() {
         ))
         .await
         .unwrap();
-    containers.create(spec("none-owner")).await.unwrap();
+    containers
+        .create(spec("none-owner").isolation(Isolation {
+            network_isolated: true,
+            ..Isolation::default()
+        }))
+        .await
+        .unwrap();
     containers
         .create(spec("bridge-owner").isolation(Isolation {
             network_isolated: false,

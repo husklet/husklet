@@ -38,8 +38,20 @@ impl Default for Isolation {
         Self {
             sandbox: Sandbox::SentryOnly,
             read_only_root: false,
-            network_isolated: true,
+            network_isolated: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Isolation is opt-in: a default container is bridged and owns an `eth0`,
+    /// matching Docker's default and the retained engine's `HL_NET_ISOLATE` gate.
+    #[test]
+    fn default_isolation_leaves_networking_enabled() {
+        assert!(!Isolation::default().network_isolated);
     }
 }
 

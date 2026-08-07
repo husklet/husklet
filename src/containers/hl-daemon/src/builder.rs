@@ -77,13 +77,11 @@ pub(crate) struct BuildRequest<'a> {
 
 impl BuildNetwork {
     fn container(&self, mut spec: ContainerSpec) -> ContainerSpec {
-        if *self != Self::None {
-            let isolation = spec.isolation;
-            spec = spec.isolation(hl_container::Isolation {
-                network_isolated: false,
-                ..isolation
-            });
-        }
+        let isolation = spec.isolation;
+        spec = spec.isolation(hl_container::Isolation {
+            network_isolated: *self == Self::None,
+            ..isolation
+        });
         if *self == Self::Host {
             spec = spec.network_mode(hl_container::NetworkMode::Host);
         }

@@ -323,6 +323,30 @@ mod tests {
         assert_eq!(policy.route(&v6(link_local)), RouteDisposition::NetworkUnreachable);
     }
 
+    /// A container launched with no network configuration presents lo plus the
+    /// synthetic eth0; isolation is the only thing that removes it.
+    #[test]
+    fn default_launch_presents_eth0() {
+        let interfaces = NetworkPolicy::from_launch(false, b"", b"", b"")
+            .unwrap()
+            .namespace_interfaces();
+        assert_eq!(interfaces.len(), 2);
+        assert_eq!(interfaces[1].name, b"eth0");
+        assert_eq!(interfaces[1].index, 2);
+        assert_eq!(interfaces[1].ipv4, [172, 17, 0, 2]);
+        assert_eq!(interfaces[1].mac, [0x02, 0x42, 0xac, 0x11, 0x00, 0x02]);
+        assert_eq!(
+            (interfaces[1].hardware_type, interfaces[1].mtu, interfaces[1].flags),
+            (1, 1500, 0x1043)
+        );
+
+        let isolated = NetworkPolicy::from_launch(true, b"", b"", b"")
+            .unwrap()
+            .namespace_interfaces();
+        assert_eq!(isolated.len(), 1);
+        assert_eq!(isolated[0].name, b"lo");
+    }
+
     #[test]
     fn connect_priority() {
         let policy = NetworkPolicy::from_launch(
