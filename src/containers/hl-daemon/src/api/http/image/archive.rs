@@ -89,11 +89,13 @@ pub(in super::super) async fn save(
     save_selected(state, selected).await
 }
 
+#[hl_design::classify(domain = "image")]
 pub(in super::super) async fn save_one(state: DockerState, name: String) -> ApiResult<Response> {
     let selected = vec![state.find_image(&name).await?];
     save_selected(state, selected).await
 }
 
+#[hl_design::classify(domain = "image")]
 async fn save_selected(state: DockerState, selected: Vec<hl_images::Image>) -> ApiResult<Response> {
     let images = state.containers.images().map_err(ApiError::container)?;
     let file = tokio::task::spawn_blocking(move || {

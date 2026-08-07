@@ -15,6 +15,7 @@ use wire::Fields;
 use super::{ApiError, ApiResult, DockerState};
 use crate::api::{Network, NetworkConnect, NetworkCreate, NetworkCreated, NetworkDisconnect, NetworkPrune};
 
+#[hl_design::classify(domain = "http")]
 fn endpoint_error(error: hl_container::Error) -> ApiError {
     match error {
         hl_container::Error::AlreadyConnected { .. } | hl_container::Error::NotConnected { .. } => {

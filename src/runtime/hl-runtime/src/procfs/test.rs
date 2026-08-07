@@ -1,5 +1,6 @@
 use super::*;
 use hl_descriptor::{OfdMetadata, OpenFileDescription};
+use hl_vfs::ProcfsSource;
 
 #[test]
 fn cpu_model_features() {

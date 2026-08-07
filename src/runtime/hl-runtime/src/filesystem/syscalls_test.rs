@@ -1,4 +1,5 @@
 use super::*;
+use crate::filesystem::{VectorDirection, VectorError, VectorPosition, VectorRequest};
 use hl_descriptor::{
     DescriptorFlags, DirectoryBatch, DirectoryBatchToken, OfdDirectoryEntry, OpenFileDescription, OperationContext,
     OperationLease, PreparedAtomicRead, StatusFlags,

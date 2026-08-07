@@ -1,0 +1,106 @@
+//! Host path rendering for overlay parent leases.
+
+use std::ffi::{CStr, CString, OsStr};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
+
+use hl_runtime::RuntimePathError;
+
+use super::super::overlay_lease::ParentLease;
+use super::Host;
+
+impl Host {
+    pub(in crate::ffi::linux::execution::path) fn path(
+        parent: &ParentLease,
+        name: &CString,
+    ) -> Result<PathBuf, RuntimePathError> {
+        let parent = Self::visible_parent(parent, name)?;
+        let directory = Self::descriptor_path(parent.as_raw_fd()).map_err(super::super::HostError::map)?;
+        Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
+    }
+
+    pub(in crate::ffi::linux::execution::path) fn mutation_path(
+        parent: &ParentLease,
+        name: &CString,
+    ) -> Result<PathBuf, RuntimePathError> {
+        let directory = if let Ok(parent) = parent.mutation() {
+            Self::descriptor_path(parent.as_raw_fd()).map_err(super::super::HostError::map)?
+        } else {
+            let root = parent.upper_root().ok_or(RuntimePathError::NotFound)?;
+            let root = Self::descriptor_path(root.as_raw_fd()).map_err(super::super::HostError::map)?;
+            let guest = parent.guest().ok_or(RuntimePathError::Invalid)?;
+            root.join(OsStr::from_bytes(
+                guest.as_bytes().strip_prefix(b"/").unwrap_or(guest.as_bytes()),
+            ))
+        };
+        Ok(directory.join(OsStr::from_bytes(name.as_bytes())))
+    }
+
+    pub(in crate::ffi::linux::execution::path) fn layer_paths(
+        parent: &ParentLease,
+        name: &CString,
+    ) -> Result<Vec<PathBuf>, RuntimePathError> {
+        let mut paths = Vec::new();
+        let selected = Self::descriptor_path(parent.selected().as_raw_fd()).map_err(super::super::HostError::map)?;
+        paths.push(selected.join(OsStr::from_bytes(name.as_bytes())));
+        for lower in parent.lower_parents() {
+            let directory = Self::descriptor_path(lower.as_raw_fd()).map_err(super::super::HostError::map)?;
+            let path = directory.join(OsStr::from_bytes(name.as_bytes()));
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        Ok(paths)
+    }
+
+    pub(super) fn visible_parent<'lease>(
+        parent: &'lease ParentLease,
+        name: &CStr,
+    ) -> Result<&'lease OwnedFd, RuntimePathError> {
+        let mut candidates = Vec::with_capacity(parent.lower_parents().len() + 1);
+        candidates.push(parent.selected());
+        candidates.extend(parent.lower_parents());
+        for candidate in candidates {
+            if Self::whiteout_at(candidate.as_raw_fd(), name)? {
+                return Err(RuntimePathError::NotFound);
+            }
+            let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+            // SAFETY: candidate and name remain live and status is writable.
+            let result = unsafe {
+                libc::fstatat(
+                    candidate.as_raw_fd(),
+                    name.as_ptr(),
+                    status.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == 0 {
+                return Ok(candidate);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ENOENT) {
+                return Err(super::super::HostError::map(error));
+            }
+        }
+        Err(RuntimePathError::NotFound)
+    }
+
+    pub(super) fn whiteout_at(parent: RawFd, name: &CStr) -> Result<bool, RuntimePathError> {
+        let mut marker = b".wh.".to_vec();
+        marker.extend_from_slice(name.to_bytes());
+        let marker = CString::new(marker).map_err(|_| RuntimePathError::Invalid)?;
+        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: parent and marker remain live and status is writable.
+        let result = unsafe { libc::fstatat(parent, marker.as_ptr(), status.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
+        if result == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(false)
+        } else {
+            Err(super::super::HostError::map(error))
+        }
+    }
+}

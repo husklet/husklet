@@ -31,6 +31,7 @@ mod event;
 pub(crate) mod execution;
 mod loader;
 mod mapping;
+mod mapping_access;
 #[cfg(test)]
 mod mapping_test;
 mod memory_control;
@@ -42,6 +43,8 @@ mod signal;
 mod socket;
 #[path = "linux/transfer.rs"]
 pub(crate) mod transfer;
+#[path = "linux/virtual/access.rs"]
+mod virtual_access;
 #[path = "linux/virtual/advice.rs"]
 mod virtual_advice;
 #[path = "linux/virtual/file.rs"]

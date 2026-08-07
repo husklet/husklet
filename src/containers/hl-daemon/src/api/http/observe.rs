@@ -273,6 +273,7 @@ impl Options {
     }
 }
 
+#[hl_design::classify(domain = "docker")]
 fn supports_one_shot(uri: &axum::http::Uri) -> bool {
     uri.path()
         .strip_prefix("/v1.")
@@ -281,6 +282,7 @@ fn supports_one_shot(uri: &axum::http::Uri) -> bool {
         .is_none_or(|minor| minor >= 41)
 }
 
+#[hl_design::classify(domain = "docker")]
 fn docker_bool(value: Option<&str>, default: bool) -> bool {
     value.map_or(default, |value| {
         !matches!(
@@ -377,6 +379,7 @@ async fn stats_frame(
     Some((Ok(bytes), next))
 }
 
+#[hl_design::classify(domain = "http")]
 fn stats_stream_response(body: Body) -> Response {
     Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")

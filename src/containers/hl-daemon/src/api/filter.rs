@@ -19,6 +19,7 @@ impl DockerFilterValues {
     }
 }
 
+#[hl_design::classify(domain = "docker")]
 pub(crate) fn docker_filter_values(raw: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
     const MAX_ENCODED_BYTES: usize = 64 * 1024;
     const MAX_FILTERS: usize = 64;

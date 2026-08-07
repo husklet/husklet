@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use hl_isa::{AddressRange, GuestAddress};
 use hl_memory::{
-    AtomicU32Write, AtomicWriteBatchHost, Backing, BackingChange, BackingChangeHost, ExitMappingHost, MapRequest,
-    MappingHost, MemoryAccessHost, MemoryError, PreparedHostExit, Protection, Region,
+    AtomicU32Write, Backing, BackingChange, BackingChangeHost, ExitMappingHost, MapRequest, MappingHost, MemoryError,
+    PreparedHostExit, Protection, Region,
 };
 
 use super::VirtualMemory;
@@ -13,10 +13,10 @@ use super::virtual_sparse::{BackingLease, Prepared as SparseCandidate, SparseMap
 
 #[derive(Debug)]
 pub struct MappingHostAdapter {
-    arena: Arc<VirtualMemory>,
-    sparse: Arc<SparseMappings>,
-    stages: Arc<Mutex<StageState>>,
-    writes: Mutex<WriteState>,
+    pub(super) arena: Arc<VirtualMemory>,
+    pub(super) sparse: Arc<SparseMappings>,
+    pub(super) stages: Arc<Mutex<StageState>>,
+    pub(super) writes: Mutex<WriteState>,
 }
 
 #[derive(Debug)]
@@ -26,14 +26,14 @@ struct StageReservation {
 }
 
 #[derive(Debug, Default)]
-struct StageState {
+pub(super) struct StageState {
     reservations: BTreeMap<u64, StageReservation>,
 }
 
 pub struct DirectProjection {
-    arena: Arc<VirtualMemory>,
-    token: u64,
-    address: u64,
+    pub(super) arena: Arc<VirtualMemory>,
+    pub(super) token: u64,
+    pub(super) address: u64,
 }
 
 pub enum Projection {
@@ -84,10 +84,10 @@ impl hl_runtime::BackingChangePort for BackingChanges {
 }
 
 #[derive(Debug, Default)]
-struct WriteState {
+pub(super) struct WriteState {
     next: u64,
-    plain: BTreeMap<u64, AddressRange>,
-    atomic: BTreeMap<u64, Vec<AtomicU32Write>>,
+    pub(super) plain: BTreeMap<u64, AddressRange>,
+    pub(super) atomic: BTreeMap<u64, Vec<AtomicU32Write>>,
 }
 
 impl MappingHostAdapter {
@@ -101,7 +101,7 @@ impl MappingHostAdapter {
         }
     }
 
-    fn token(state: &mut WriteState) -> u64 {
+    pub(super) fn token(state: &mut WriteState) -> u64 {
         state.next = state.next.wrapping_add(1).max(1);
         state.next
     }
@@ -111,13 +111,13 @@ impl MappingHostAdapter {
         self.arena.length()
     }
 
-    fn rollback_reservations(&self, reservations: &[u64]) {
+    pub(super) fn rollback_reservations(&self, reservations: &[u64]) {
         for token in reservations.iter().rev() {
             self.rollback(*token);
         }
     }
 
-    fn memory_error(error: super::virtual_memory::MemoryError) -> MemoryError {
+    pub(super) fn memory_error(error: super::virtual_memory::MemoryError) -> MemoryError {
         match error {
             super::virtual_memory::MemoryError::OutOfMemory => MemoryError::ResourceLimit,
             super::virtual_memory::MemoryError::InvalidRange
@@ -126,7 +126,7 @@ impl MappingHostAdapter {
         }
     }
 
-    fn check_range(&self, address: u64, length: u64) -> Result<(), MemoryError> {
+    pub(super) fn check_range(&self, address: u64, length: u64) -> Result<(), MemoryError> {
         self.arena
             .host_range(address, length)
             .map(|_| ())
@@ -407,164 +407,5 @@ impl BackingChangeHost for MappingHostAdapter {
             .map_err(Self::memory_error)?;
         stages.reservations.insert(arena, StageReservation { arena, sparse });
         Ok(arena)
-    }
-}
-
-impl MemoryAccessHost for MappingHostAdapter {
-    type Projection = Projection;
-
-    fn project(&self, range: AddressRange) -> Result<Self::Projection, MemoryError> {
-        if let Some(lease) = self.sparse.pin(range).map_err(Self::memory_error)? {
-            return Ok(Projection::Backing(lease));
-        }
-        if self.arena.bus_fault(range.start().get(), range.length()).is_some() {
-            return Err(MemoryError::NoAddressSpace);
-        }
-        let address = self
-            .arena
-            .storage_address(range.start().get(), range.length())
-            .ok_or(MemoryError::NoAddressSpace)?;
-        let token = self.arena.pin_direct(range).map_err(Self::memory_error)?;
-        Ok(Projection::Direct(DirectProjection {
-            arena: Arc::clone(&self.arena),
-            token,
-            address,
-        }))
-    }
-
-    fn project_aperture(&self) -> Result<Option<hl_memory::HostAperture<Self::Projection>>, MemoryError> {
-        // Serialize sparse publication with the direct pin. Once installed,
-        // the aperture-wide pin rejects every overlapping host transition.
-        let _stages = self.stages.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !self.sparse.is_empty() {
-            return Ok(None);
-        }
-        let length = self.arena.length() as u64;
-        let range = AddressRange::nonempty(GuestAddress::ZERO, length).map_err(|_| MemoryError::AddressOverflow)?;
-        let address = self
-            .arena
-            .storage_address(0, length)
-            .ok_or(MemoryError::NoAddressSpace)?;
-        let token = self.arena.pin_direct(range).map_err(Self::memory_error)?;
-        let projection = Projection::Direct(DirectProjection {
-            arena: Arc::clone(&self.arena),
-            token,
-            address,
-        });
-        hl_memory::HostAperture::new(range, projection).map(Some)
-    }
-
-    fn validate_file(
-        &self,
-        identity: hl_memory::FileIdentity,
-        offset: u64,
-        length: u64,
-        address: GuestAddress,
-    ) -> Result<(), MemoryError> {
-        self.arena
-            .validate_file(identity, offset, length, address.get())
-            .map_err(|_| MemoryError::NoAddressSpace)
-    }
-
-    fn file_prefix(
-        &self,
-        identity: hl_memory::FileIdentity,
-        offset: u64,
-        length: u64,
-        address: GuestAddress,
-    ) -> Result<u64, MemoryError> {
-        self.arena
-            .file_prefix(identity, offset, length, address.get())
-            .map_err(|_| MemoryError::NoAddressSpace)
-    }
-
-    fn read(&self, range: AddressRange, output: &mut [u8], access: Protection) -> Result<(), MemoryError> {
-        self.arena
-            .snapshot_read(range.start().get(), output, access)
-            .map_err(|_| MemoryError::NoAddressSpace)
-    }
-
-    fn prepare_write(&self, range: AddressRange) -> Result<u64, MemoryError> {
-        let mut state = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let token = Self::token(&mut state);
-        state.plain.insert(token, range);
-        Ok(token)
-    }
-
-    fn commit_write(&self, reservation: u64, input: &[u8]) -> Result<(), MemoryError> {
-        let range = self
-            .writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .plain
-            .remove(&reservation)
-            .ok_or(MemoryError::InvariantViolation)?;
-        if range.length() != input.len() as u64 {
-            return Err(MemoryError::InvariantViolation);
-        }
-        self.arena
-            .write_untracked(range.start().get(), input)
-            .map_err(|_| MemoryError::NoAddressSpace)
-    }
-
-    fn write_atomic(&self, range: AddressRange, input: &[u8]) -> Result<(), MemoryError> {
-        if range.length() != input.len() as u64 {
-            return Err(MemoryError::InvariantViolation);
-        }
-        self.arena
-            .write_untracked(range.start().get(), input)
-            .map_err(|_| MemoryError::NoAddressSpace)
-    }
-
-    fn commit_external_write(&self, reservation: u64, length: u64) -> Result<(), MemoryError> {
-        let range = self
-            .writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .plain
-            .remove(&reservation)
-            .ok_or(MemoryError::InvariantViolation)?;
-        if length > range.length() {
-            return Err(MemoryError::InvariantViolation);
-        }
-        Ok(())
-    }
-
-    fn rollback_write(&self, reservation: u64) {
-        self.writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .plain
-            .remove(&reservation);
-    }
-}
-
-impl AtomicWriteBatchHost for MappingHostAdapter {
-    fn prepare_u32_batch(&self, writes: &[AtomicU32Write]) -> Result<u64, MemoryError> {
-        let mut state = self.writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let token = Self::token(&mut state);
-        state.atomic.insert(token, writes.to_vec());
-        Ok(token)
-    }
-
-    fn commit_u32_batch(&self, reservation: u64) -> Result<(), MemoryError> {
-        let writes = self
-            .writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .atomic
-            .remove(&reservation)
-            .ok_or(MemoryError::InvariantViolation)?;
-        self.arena
-            .compare_write(&writes)
-            .map_err(|_| MemoryError::InvariantViolation)
-    }
-
-    fn rollback_u32_batch(&self, reservation: u64) {
-        self.writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .atomic
-            .remove(&reservation);
     }
 }

@@ -1,7 +1,10 @@
 //! Socket syscall integration, host ports, and cancellation-aware waiting.
 
 mod accept;
+mod bind;
+mod connect;
 mod data;
+mod endpoint;
 mod errno;
 mod import;
 mod ioctl;

@@ -3,6 +3,7 @@ use super::{CompatibilityFields, EnvVars};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "runtime")]
+#[hl_design::classify(domain = "docker")]
 pub(crate) fn console_size(value: Option<[u64; 2]>) -> Result<Option<hl_container::Size>, String> {
     let Some([height, width]) = value else {
         return Ok(None);

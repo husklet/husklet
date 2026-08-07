@@ -1,7 +1,7 @@
 use super::*;
 use hl_descriptor::{DescriptorFlags, StatusFlags};
 use hl_linux::{DescriptorIoSyscalls, NetworkSyscalls, SyscallOperation};
-use hl_network::SocketType;
+use hl_network::{SocketState, SocketType};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

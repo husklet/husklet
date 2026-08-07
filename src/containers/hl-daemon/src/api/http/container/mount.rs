@@ -1,5 +1,6 @@
 use super::*;
 
+#[hl_design::classify(domain = "mount")]
 pub(super) async fn points(containers: &hl_container::Containers, mounts: &[Mount]) -> ApiResult<Vec<MountPoint>> {
     let mut points = Vec::with_capacity(mounts.len());
     for mount in mounts {
@@ -46,6 +47,7 @@ pub(super) async fn points(containers: &hl_container::Containers, mounts: &[Moun
     Ok(points)
 }
 
+#[hl_design::classify(domain = "docker")]
 fn access_mode(access: hl_container::Access) -> String {
     match access {
         hl_container::Access::ReadOnly => "ro",
@@ -54,6 +56,7 @@ fn access_mode(access: hl_container::Access) -> String {
     .into()
 }
 
+#[hl_design::classify(domain = "docker")]
 fn bind_propagation(propagation: hl_container::BindPropagation) -> String {
     match propagation {
         hl_container::BindPropagation::Private => "private",
