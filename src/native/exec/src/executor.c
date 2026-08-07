@@ -915,6 +915,9 @@ hl_native_status hl_native_executor_rollover(hl_native_executor *executor, uint6
 #define HL_A64_RUN_VIEW_CACHE 1
 #endif
 #define HL_A64_RUN_VIEW_COUNT 4u
+/* A retry that completes no instruction refunds its whole charge, so an operand
+ * the guard never accepts would otherwise spin without consuming budget. */
+#define HL_A64_OPERAND_RETRY_LIMIT 8u
 
 typedef struct hl_a64_run_views {
     hl_a64_view entries[HL_A64_RUN_VIEW_COUNT];
@@ -1042,6 +1045,8 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
     hl_native_operand_resolve operand_resolver = NULL;
     void *operand_context = NULL;
     hl_a64_run_views operand_views = {0};
+    uint64_t operand_retry_pc = 0;
+    unsigned operand_retry_count = 0;
     hl_native_fault_publish fault_publish = NULL;
     hl_native_fault_unpublish fault_unpublish = NULL;
     void *fault_context = NULL;
@@ -1376,6 +1381,12 @@ static hl_native_status run_aarch64(hl_native_executor *executor, hl_native_cpu 
                 return run_fatal(&execution, output, 1);
             }
             completed = cpu->fault_completed;
+            if (completed != 0 || cpu->program != operand_retry_pc) {
+                operand_retry_pc = cpu->program;
+                operand_retry_count = 0;
+            }
+            if (++operand_retry_count > HL_A64_OPERAND_RETRY_LIMIT)
+                return run_exit(&execution, output, HL_NATIVE_EXIT_FALLBACK, cpu->program);
             if (completed > budget) return run_fatal(&execution, output, 1);
             uint64_t charged = executed_code.instruction_count;
             if (charged < completed || cpu->executed < charged)
