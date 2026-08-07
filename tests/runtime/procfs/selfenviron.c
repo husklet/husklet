@@ -5,6 +5,7 @@
 // is present, matching the getenv view. Derived from our own environ, oracle-neutral.
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -27,7 +28,16 @@ int main(void) {
         }
         i += el + 1;
     }
-    int ok = nul_term && entries > 0 && all_have_eq;
+    /* The buffer must agree with getenv for a variable in the initial environment. */
+    const char *want = getenv("HUSKLET_SELFENVIRON");
+    int matched = 0;
+    for (int i = 0; want && i < len; i += (int)strlen(b + i) + 1) {
+        const char *e = b + i, *eq = strchr(e, '=');
+        if (eq && (size_t)(eq - e) == strlen("HUSKLET_SELFENVIRON")
+            && !memcmp(e, "HUSKLET_SELFENVIRON", strlen("HUSKLET_SELFENVIRON")) && !strcmp(eq + 1, want))
+            matched = 1;
+    }
+    int ok = nul_term && entries > 0 && all_have_eq && matched;
     printf("selfenviron ok=%d\n", ok);
     return 0;
 }
