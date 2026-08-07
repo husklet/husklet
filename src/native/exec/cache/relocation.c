@@ -54,36 +54,65 @@ static uint32_t a64_branch(uint64_t source, uint64_t target) {
     return UINT32_C(0x14000000) | ((uint32_t)displacement & UINT32_C(0x03ffffff));
 }
 
+/* A stitched edge heads its cold span with `ldr x16 / add x16,#refund / str x16`
+ * on `budget`.  Admission folds that refund into its own subtract so the hot
+ * path performs one read-modify-write instead of two, and relocates the cold
+ * copy of the refund into the span tail for the arms that leave to the runtime. */
+static uint32_t a64_edge_refund(const uint32_t *cold, uint32_t *refund) {
+    const uint32_t load = UINT32_C(0xf9400000) |
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
+    const uint32_t store = UINT32_C(0xf9000000) |
+        ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
+    if (cold[0] != load || cold[2] != store ||
+        (cold[1] & UINT32_C(0xffc003ff)) != UINT32_C(0x91000210))
+        return 0;
+    *refund = (cold[1] >> 10) & UINT32_C(0xfff);
+    return 1;
+}
+
 /* Admission tests the budget by borrow on `sub` rather than by `cmp`, so a
  * taken edge never touches guest NZCV and needs no save/restore pair. */
 static int a64_edge_admission(uint32_t *hot, uint64_t source_offset,
                               const cache_entry *target) {
     const uint32_t count = target->instruction_count;
     const uint64_t branch_offset = source_offset + 10u * 4u;
+    uint32_t refund = 0;
+    uint32_t stitched = a64_edge_refund(hot, &refund);
+    uint32_t saved[3] = {hot[0], hot[1], hot[2]};
+    int64_t charge = (int64_t)count - (int64_t)refund;
+    uint32_t cold_word_index = stitched ? 11u : HL_NATIVE_RELOCATION_SPAN_WORDS;
     int64_t displacement = target->admitted_offset >= branch_offset
         ? (int64_t)((target->admitted_offset - branch_offset) / 4)
         : -(int64_t)((branch_offset - target->admitted_offset) / 4);
-    if (count == 0 || count > UINT32_C(0xfff) ||
+    if (count == 0 || count > UINT32_C(0xfff) || charge > (int64_t)UINT32_C(0xfff) ||
+        charge < -(int64_t)UINT32_C(0xfff) ||
         ((target->admitted_offset | branch_offset) & 3u) != 0 ||
         displacement < -(1 << 25) || displacement >= (1 << 25))
         return 0;
     hot[0] = UINT32_C(0xf9400000) |
         ((uint32_t)(offsetof(hl_native_aarch64_cpu, interrupt) / 8) << 10) | (28u << 5) | 16u;
-    hot[1] = a64_imm19(UINT32_C(0xb5000010), 15); /* cbnz x16,cold */
+    hot[1] = a64_imm19(UINT32_C(0xb5000010), (int64_t)cold_word_index - 1); /* cbnz x16,cold */
     hot[2] = UINT32_C(0xf9400000) |
         ((uint32_t)(offsetof(hl_native_aarch64_cpu, interrupt_token) / 8) << 10) | (28u << 5) | 16u;
     hot[3] = a64_imm19(UINT32_C(0xb4000010), 3); /* cbz x16,budget */
     hot[4] = UINT32_C(0xc8dffe10);              /* ldar x16,[x16] */
-    hot[5] = a64_imm19(UINT32_C(0xb5000010), 11); /* cbnz x16,cold */
+    hot[5] = a64_imm19(UINT32_C(0xb5000010), (int64_t)cold_word_index - 5); /* cbnz x16,cold */
     hot[6] = UINT32_C(0xf9400000) |
         ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 16u;
-    hot[7] = UINT32_C(0xd1000211) | (count << 10); /* sub x17,x16,#count */
-    hot[8] = a64_imm14(UINT32_C(0xb7f80011), 8); /* tbnz x17,#63,cold */
+    hot[7] = charge >= 0
+        ? UINT32_C(0xd1000211) | ((uint32_t)charge << 10)   /* sub x17,x16,#charge */
+        : UINT32_C(0x91000211) | ((uint32_t)(-charge) << 10); /* add x17,x16,#-charge */
+    hot[8] = a64_imm14(UINT32_C(0xb7f80011), (int64_t)cold_word_index - 8); /* tbnz x17,#63,cold */
     hot[9] = UINT32_C(0xf9000000) |
         ((uint32_t)(offsetof(hl_native_aarch64_cpu, budget) / 8) << 10) | (28u << 5) | 17u;
     hot[10] = a64_branch(branch_offset, target->admitted_offset);
     for (uint32_t index = 11; index < HL_NATIVE_RELOCATION_SPAN_WORDS; index++)
         hot[index] = UINT32_C(0xd503201f); /* padding the taken edge never reaches */
+    if (stitched) {
+        hot[11] = saved[0];
+        hot[12] = saved[1];
+        hot[13] = saved[2];
+    }
     return 1;
 }
 
