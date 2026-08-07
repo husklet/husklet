@@ -716,21 +716,30 @@ void hl_x86_emit_xadd(uint32_t *words, uint32_t *cursor, const instruction *item
             uint32_t size = item->width == 8u ? UINT32_C(0xc0000000) :
                             item->width == 4u ? UINT32_C(0x80000000) :
                             item->width == 2u ? UINT32_C(0x40000000) : 0u;
-            /* SUB adds the two's complement while flags stay the exact x86 subtraction. */
-            if (item->alu_kind == 5u) {
+            uint32_t opc = 0u;
+            unsigned kind = item->atomic_alu ? item->alu_kind : 0u;
+            /* SUB adds the two's complement and AND clears the inverted mask; x21 keeps the
+             * original operand so the flags below stay the exact x86 result. */
+            if (kind == 5u) {
                 words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xcb0003e0) : UINT32_C(0x4b0003e0)) |
                                      source << 16 | 22u;
                 source = 22u;
-            }
-            words[(*cursor)++] = UINT32_C(0x38e00000) | size | source << 16 | 17u << 5 | 19u;
+            } else if (kind == 4u) {
+                words[(*cursor)++] = (item->width == 8u ? UINT32_C(0xaa2003e0) : UINT32_C(0x2a2003e0)) |
+                                     source << 16 | 22u;
+                source = 22u;
+                opc = UINT32_C(0x1000); /* LDCLRAL */
+            } else if (kind == 1u) opc = UINT32_C(0x3000); /* LDSETAL */
+            else if (kind == 6u) opc = UINT32_C(0x2000);   /* LDEORAL */
+            words[(*cursor)++] = UINT32_C(0x38e00000) | size | opc | source << 16 | 17u << 5 | 19u;
         }
         add.destination = 19u; add.source = 21u; add.destination_high = 0u; add.source_high = 0u;
         add.memory_operand = 0u; add.memory_write = 0u; add.flags_only = 1u;
         add.has_immediate = 0u;
-        if (!item->has_immediate) add.alu_kind = 0u;
+        if (!item->atomic_alu) add.alu_kind = 0u;
         hl_x86_emit_alu(words, cursor, &add);
-        /* The locked immediate form has no pre-image destination register. */
-        if (!item->has_immediate) {
+        /* A locked ALU RMW has no pre-image destination register; XADD does. */
+        if (!item->atomic_alu) {
             if (item->width == 1u)
                 words[(*cursor)++] = (item->source_high ? UINT32_C(0xb3781c00) : UINT32_C(0xb3401c00)) |
                                      19u << 5 | item->source;

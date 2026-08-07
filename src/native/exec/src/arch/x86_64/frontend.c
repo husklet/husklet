@@ -9,6 +9,16 @@
 #include "word.h"
 #include "../../state.h"
 
+/* ADD, OR, AND, SUB and XOR are the ALU kinds with a single-instruction LSE form. */
+static int atomic_alu_kind(uint8_t kind) {
+    return kind == 0u || kind == 1u || kind == 4u || kind == 5u || kind == 6u;
+}
+
+/* Register-source ALU with a memory destination: opcode low nibble 0 or 1. */
+static int atomic_alu_register_opcode(uint8_t opcode) {
+    return opcode < 0x40u && (opcode & 7u) <= 1u && atomic_alu_kind((uint8_t)((opcode >> 3) & 7u));
+}
+
 /* The only register-only vector lowerings that can leave the block are the double and packed float
    arithmetic forms, which bail to the interpreter on an unordered result. */
 static int vector_may_exit(const instruction *item) {
@@ -189,8 +199,10 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
             !((opcode == 0x80u || opcode == 0x81u || opcode == 0x83u) &&
               (request->flags & HL_X86_A64_LSE) != 0u && cursor < request->guest_size &&
               (request->guest_bytes[cursor] >> 6) != 3u &&
-              (((request->guest_bytes[cursor] >> 3) & 7u) == 0u ||
-               ((request->guest_bytes[cursor] >> 3) & 7u) == 5u)) &&
+              atomic_alu_kind((uint8_t)((request->guest_bytes[cursor] >> 3) & 7u))) &&
+            !(atomic_alu_register_opcode(opcode) &&
+              (request->flags & HL_X86_A64_LSE) != 0u && cursor < request->guest_size &&
+              (request->guest_bytes[cursor] >> 6) != 3u) &&
             !(opcode == 0x0fu && cursor < request->guest_size &&
               (request->guest_bytes[cursor] == 0xb0u || request->guest_bytes[cursor] == 0xb1u ||
                request->guest_bytes[cursor] == 0xc0u || request->guest_bytes[cursor] == 0xc1u))) {
@@ -1507,6 +1519,11 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
                         item->source = (uint8_t)(raw_reg - 4u);
                         item->source_high = 8u;
                     }
+                    /* LOCK ALU r,m reuses the atomic pre-image RMW rather than load-modify-store. */
+                    if (semantic_prefix == 0xf0u) {
+                        item->operation = OP_XADD;
+                        item->atomic_alu = 1u;
+                    }
                 } else {
                     item->destination = reg;
                     if (byte != 0u && rex == 0u && raw_reg >= 4u) {
@@ -1563,8 +1580,8 @@ static void decode_block(const hl_x86_a64_request *request, decode *block) {
         } else if (hl_x86_immediate_opcode(opcode)) {
             if (!hl_x86_decode_immediate(request, block, item, opcode, rex, operand_16,
                                          address_32, start, &cursor)) break;
-            /* LOCK ADD/SUB imm,m reuses the atomic pre-image RMW rather than load-modify-store. */
-            if (semantic_prefix == 0xf0u) item->operation = OP_XADD;
+            /* LOCK ALU imm,m reuses the atomic pre-image RMW rather than load-modify-store. */
+            if (semantic_prefix == 0xf0u) { item->operation = OP_XADD; item->atomic_alu = 1u; }
         } else if (opcode == 0x8du) {
             if (!hl_x86_decode_address(request, block, item, rex, operand_16, address_32, start, &cursor)) break;
         } else if (opcode == 0x89u || opcode == 0x8bu || opcode == 0xc7u) {

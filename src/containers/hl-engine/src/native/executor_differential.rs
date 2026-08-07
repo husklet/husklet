@@ -2358,22 +2358,11 @@ fn x86_bit_test_immediate_matches_interpreter_at_each_boundary() {
     assert_x86_boundaries(0x402720, &bytes, &instruction_ends, &initial, 0x7000, &operand);
 }
 
-/// `lock add`/`lock sub` of an immediate to memory, at every width and both signs.
+/// Locked immediate ALU to memory, at every width and both signs, for each of the five
+/// kinds with a single-instruction LSE form (`add`, `or`, `and`, `sub`, `xor`).
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn x86_locked_immediate_arithmetic_matches_interpreter_at_each_boundary() {
-    let mut program: Vec<Vec<u8>> = Vec::new();
-    for extension in [0x06_u8, 0x2e] {
-        program.push(vec![0xf0, 0x80, extension, 0x7f]);
-        program.push(vec![0xf0, 0x66, 0x81, extension, 0x34, 0x12]);
-        program.push(vec![0xf0, 0x81, extension, 0x78, 0x56, 0x34, 0x12]);
-        program.push(vec![0xf0, 0x48, 0x81, extension, 0x78, 0x56, 0x34, 0x12]);
-        program.push(vec![0xf0, 0x83, extension, 0x01]);
-        program.push(vec![0xf0, 0x83, extension, 0xff]);
-        program.push(vec![0xf0, 0x48, 0x83, extension, 0x01]);
-        program.push(vec![0xf0, 0x48, 0x83, extension, 0xff]);
-    }
-    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let mut initial = X86CpuState {
         scalar: ScalarState {
             rip: 0x402720,
@@ -2383,7 +2372,136 @@ fn x86_locked_immediate_arithmetic_matches_interpreter_at_each_boundary() {
     };
     initial.registers[6] = 0x7000;
     let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
-    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+    /* One sequence per kind: a single block of all five overruns the emitted word budget. */
+    for extension in [0x06_u8, 0x0e, 0x26, 0x2e, 0x36] {
+        let program: Vec<Vec<u8>> = vec![
+            vec![0xf0, 0x80, extension, 0x7f],
+            vec![0xf0, 0x66, 0x81, extension, 0x34, 0x12],
+            vec![0xf0, 0x81, extension, 0x78, 0x56, 0x34, 0x12],
+            vec![0xf0, 0x48, 0x81, extension, 0x78, 0x56, 0x34, 0x12],
+            vec![0xf0, 0x83, extension, 0x01],
+            vec![0xf0, 0x83, extension, 0xff],
+            vec![0xf0, 0x48, 0x83, extension, 0x01],
+            vec![0xf0, 0x48, 0x83, extension, 0xff],
+        ];
+        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+    }
+}
+
+/// The five locked register-source ALU forms at every admitted width, including the
+/// high-byte sources that need a separate extraction before the atomic.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_locked_register_arithmetic_matches_interpreter_at_each_boundary() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    initial.registers[3] = 0x0f1e_2d3c_4b5a_6978;
+    initial.registers[14] = 0xfedc_ba98_7654_3210;
+    let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
+    for base in [0x00_u8, 0x08, 0x20, 0x28, 0x30] {
+        let program: Vec<Vec<u8>> = vec![
+            vec![0xf0, base, 0x1e],           // lock op %bl,(%rsi)
+            vec![0xf0, base, 0x3e],           // lock op %bh,(%rsi)
+            vec![0xf0, base + 1, 0x1e],       // lock op %ebx,(%rsi)
+            vec![0xf0, 0x48, base + 1, 0x1e], // lock op %rbx,(%rsi)
+            vec![0xf0, 0x4c, base + 1, 0x36], // lock op %r14,(%rsi)
+        ];
+        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+    }
+}
+
+/// Flag edge cases for each locked register-form ALU kind: the memory word is stored
+/// unlocked first, so every case pins an exact (memory, operand) pair. `and` in
+/// particular must clear the inverted mask while its flags stay on the original one.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_locked_register_arithmetic_flag_edges_match_interpreter() {
+    fn case(program: &mut Vec<Vec<u8>>, operation: u8, memory: u64, operand: u64) {
+        let mut seed = vec![0x48, 0xbb];
+        seed.extend_from_slice(&memory.to_le_bytes());
+        program.push(seed);
+        program.push(vec![0x48, 0x89, 0x1e]); // mov %rbx,(%rsi)
+        let mut load = vec![0x48, 0xbb];
+        load.extend_from_slice(&operand.to_le_bytes());
+        program.push(load);
+        program.push(vec![0xf0, 0x48, operation, 0x1e]); // lock op %rbx,(%rsi)
+    }
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[6] = 0x7000;
+    let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
+    let arithmetic: [(u64, u64); 6] = [
+        (u64::MAX, 1),              // zero result, carry out, half carry
+        (0x7fff_ffff_ffff_ffff, 1), // signed overflow, sign flip
+        (0x8000_0000_0000_0000, 0x8000_0000_0000_0000),
+        (u64::MAX, u64::MAX),
+        (0, 0),
+        (1, 2),
+    ];
+    let logical: [(u64, u64); 6] = [
+        (0x0000_0000_0000_ff00, 0x0000_0000_0000_00ff), // disjoint masks
+        (u64::MAX, 0x8000_0000_0000_0000),              // sign bit
+        (0, 0),
+        (u64::MAX, u64::MAX),
+        (0x0f0f_0f0f_0f0f_0f0f, 0xf0f0_f0f0_f0f0_f0f0),
+        (0xdead_beef_feed_face, 0x0123_4567_89ab_cdef),
+    ];
+    for (operation, pairs) in [
+        (0x01_u8, &arithmetic),
+        (0x29, &arithmetic),
+        (0x09, &logical),
+        (0x21, &logical),
+        (0x31, &logical),
+    ] {
+        let mut program: Vec<Vec<u8>> = Vec::new();
+        for &(memory, value) in pairs.iter() {
+            case(&mut program, operation, memory, value);
+        }
+        let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+        assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+    }
+}
+
+/// The RIP-relative locked register form that the census records at `0x167fd`
+/// (`f0 48 01 15`), which needs the displacement resolved against the following
+/// instruction rather than a base register.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_locked_register_arithmetic_rip_relative_matches_interpreter() {
+    let code_first = 0x402720_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    let mut offset = 0_u64;
+    for operation in [0x01_u8, 0x09, 0x21, 0x29, 0x31] {
+        let mut piece = vec![0xf0, 0x48, operation, 0x15];
+        let displacement = 0x7000_i64 - (code_first + offset + 8) as i64;
+        piece.extend_from_slice(&(displacement as i32).to_le_bytes());
+        offset += piece.len() as u64;
+        program.push(piece);
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: code_first,
+            ..Default::default()
+        },
+        ..X86CpuState::default()
+    };
+    initial.registers[2] = 0x0123_4567_89ab_cdef;
+    let operand: [u8; 8] = [0x00, 0xff, 0x80, 0x7f, 0x01, 0x00, 0x00, 0x80];
+    assert_x86_sequence(code_first, &pieces, &initial, 0x7000, &operand);
 }
 
 /// Immediate shift counts across the 0x1f/0x3f masking boundary at both widths.
