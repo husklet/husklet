@@ -180,7 +180,10 @@ fn section_count_size() {
     ));
 
     let mut sink = MemorySink::new();
-    assert!(matches!(writer.publish(&mut sink), Err(ImageError::ImageTooLarge { .. })));
+    assert!(matches!(
+        writer.publish(&mut sink),
+        Err(ImageError::ImageTooLarge { .. })
+    ));
     assert!(sink.committed().is_none());
 }
 

@@ -76,10 +76,16 @@ impl fmt::Display for DecodeError {
         match self {
             Self::Io { offset, error } => write!(formatter, "decoding failed at offset {offset}: {error}"),
             Self::Truncated { offset, requested } => {
-                write!(formatter, "encoded value of {requested} bytes at offset {offset} is truncated")
+                write!(
+                    formatter,
+                    "encoded value of {requested} bytes at offset {offset} is truncated"
+                )
             }
             Self::InvalidUtf8 { offset, length } => {
-                write!(formatter, "encoded string of {length} bytes at offset {offset} is not UTF-8")
+                write!(
+                    formatter,
+                    "encoded string of {length} bytes at offset {offset} is not UTF-8"
+                )
             }
             Self::LimitExceeded {
                 offset,
@@ -356,10 +362,7 @@ mod tests {
         let mut invalid = Decoder::new(Cursor::new([2, 0, 0, 0, 0xff, 0xff]), limits());
         assert!(matches!(
             invalid.read_string(),
-            Err(DecodeError::InvalidUtf8 {
-                offset: 4,
-                length: 2
-            })
+            Err(DecodeError::InvalidUtf8 { offset: 4, length: 2 })
         ));
     }
 }

@@ -11,11 +11,13 @@ mod io;
 use codec::{DecodeError, Decoder, EncodeError, Encoder};
 
 mod image;
+mod image_error;
 mod port;
 
 pub use image::{
-    CheckpointImage, CheckpointReader, CheckpointWriter, ImageError, ImageLimits, PreparedImage, Section, SectionKind,
+    CheckpointImage, CheckpointReader, CheckpointWriter, ImageLimits, PreparedImage, Section, SectionKind,
 };
+pub use image_error::{ChecksumRegion, ImageError};
 pub use port::{CheckpointSink, CheckpointSource, Fault, MemorySink, MemorySource, PortError};
 
 pub const MAGIC_HELLO: u32 = 0x484b_4348;
