@@ -1,4 +1,4 @@
-use super::support::{FaultPersistence, fixture, scratch_fixture};
+use super::support::{FaultPersistence, TearingPersistence, fixture, scratch_fixture};
 use hl_images::{Digest, Images, Platform, Reference, content::Store};
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -149,6 +149,36 @@ async fn forced_removal_publishes_all_alias_changes_or_none() {
     assert!(images.force_remove(&image).is_err());
     assert!(images.resolve(&image.name).unwrap().is_some());
     assert!(images.resolve(&alias).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn opening_the_store_never_observes_a_partially_published_catalog() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    let persistence = Arc::new(TearingPersistence::new());
+    let images = Images::open_with(&root, persistence.clone()).unwrap();
+    let (source, _) = fixture(None);
+    let image = images
+        .pull(
+            &source,
+            "example.test/torn:v1".parse().unwrap(),
+            &Platform::linux_arm64(),
+        )
+        .await
+        .unwrap();
+
+    let torn = persistence.tear_next();
+    let alias: Reference = "example.test/torn:stable".parse().unwrap();
+    let writer = std::thread::spawn(move || images.tag(&image, alias).unwrap());
+    torn.recv().unwrap();
+    let reopened = Images::open(&root).expect("open observed a partially published catalog");
+    writer.join().unwrap();
+    assert!(
+        reopened
+            .resolve(&"example.test/torn:v1".parse().unwrap())
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]

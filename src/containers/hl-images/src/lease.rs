@@ -65,13 +65,21 @@ impl Leases {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         std::fs::create_dir_all(root.as_ref()).at(root.as_ref())?;
         let path = root.as_ref().join("leases.json");
-        let state = if path.exists() {
-            serde_json::from_reader(File::open(&path).at(&path)?)?
-        } else {
-            BTreeMap::new()
+        let writers = storage::Writers::for_path(&path)?;
+        // Opening reads the same file commits replace, so it takes the same locks a commit does.
+        let state = {
+            let _writer = writers
+                .lock()
+                .map_err(|_| Error::InvalidMetadata("lease writer lock poisoned".into()))?;
+            let _process = storage::ExclusiveLock::acquire(&path.with_extension("lock"))?;
+            if path.exists() {
+                serde_json::from_reader(File::open(&path).at(&path)?)?
+            } else {
+                BTreeMap::new()
+            }
         };
         Ok(Self {
-            writers: storage::Writers::for_path(&path)?,
+            writers,
             path,
             state: Arc::new(RwLock::new(state)),
         })

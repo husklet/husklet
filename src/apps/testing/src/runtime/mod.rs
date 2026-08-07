@@ -1,3 +1,13 @@
+//! Runtime compatibility sweep.
+//!
+//! A corpus mark is only comparable to another mark taken the same way, so record one with:
+//! `cargo run --release -p testing --bin testing -- runtime --jobs 4 --results
+//! target/testing/runtime/mark.tsv --engine-profile release`, having built `hl-engine` release
+//! first. Low `--jobs` keeps the `host_load` column near the core count; a mark taken at a load
+//! above the core count is contended and its timeouts are not engine defects. Counts also differ
+//! by host: `!host-excluded` cases are `NOT_RUN` on the hosts they name and active everywhere
+//! else, so quote `pass`/`fail`/`NOT_RUN` beside the host and the `host_load` distribution.
+
 #[cfg(test)]
 mod case_tests;
 pub(crate) mod definition;

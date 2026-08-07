@@ -53,6 +53,46 @@ impl hl_images::storage::Persistence for FaultPersistence {
     }
 }
 
+/// Publishes `images.json` non-atomically once, so a reader that skips the metadata lock
+/// observes a truncated catalog.
+pub(super) struct TearingPersistence {
+    torn: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl TearingPersistence {
+    pub(super) fn new() -> Self {
+        Self {
+            torn: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Arms the next catalog replacement to publish a truncated file first.
+    pub(super) fn tear_next(&self) -> std::sync::mpsc::Receiver<()> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        *self.torn.lock().unwrap() = Some(sender);
+        receiver
+    }
+}
+
+impl hl_images::storage::Persistence for TearingPersistence {
+    fn replace(&self, path: &Path, bytes: &[u8]) -> hl_images::Result<()> {
+        let first = path
+            .ends_with("images.json")
+            .then(|| self.torn.lock().unwrap().take())
+            .flatten();
+        if let Some(sender) = first {
+            std::fs::write(path, &bytes[..bytes.len() / 2])?;
+            let _ = sender.send(());
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        hl_images::storage::Persistence::replace(&hl_images::storage::Native, path, bytes)
+    }
+
+    fn remove(&self, path: &Path) -> hl_images::Result<bool> {
+        hl_images::storage::Persistence::remove(&hl_images::storage::Native, path)
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct MemorySource {
     pub(super) root: Descriptor,
