@@ -150,6 +150,41 @@ mod tests {
     }
 }
 
+/// The case-selection and concurrency arguments the runtime and scenario sweeps share.
+/// Their durable result paths stay per-command, since each defaults to its own directory.
+#[derive(clap::Args)]
+pub(crate) struct Selection {
+    /// Run only the case whose complete ID exactly matches this value.
+    #[arg(long = "case", value_name = "FULL_ID")]
+    pub(crate) case: Option<String>,
+    /// Run only one guest ISA.
+    #[arg(long = "isa", visible_alias = "target", value_enum)]
+    pub(crate) target: Option<Target>,
+    /// Maximum number of concurrently executing cases.
+    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = parse::logical_jobs(), value_parser = parse::jobs)]
+    pub(crate) jobs: usize,
+    /// Resume exact completed case/target keys from the synchronized partial result.
+    #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
+    pub(crate) resume: bool,
+}
+
+impl Selection {
+    /// One named case on one ISA, run alone: what an in-process worker selects.
+    pub(crate) fn exact(case: String, target: Target) -> Self {
+        Self {
+            case: Some(case),
+            target: Some(target),
+            jobs: 1,
+            resume: false,
+        }
+    }
+
+    pub(crate) fn targets(&self) -> Vec<Target> {
+        self.target
+            .map_or_else(|| vec![Target::Arm64, Target::Amd64], |value| vec![value])
+    }
+}
+
 /// Command-line value parsers every harness shares. clap dictates the free
 /// `fn(&str) -> Result<T, String>` shape, so they live here once.
 pub(crate) mod parse {

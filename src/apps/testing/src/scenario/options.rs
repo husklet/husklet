@@ -1,5 +1,4 @@
 use super::definition::{Class, Scenario};
-use crate::suite::Target;
 use clap::Args;
 use std::path::PathBuf;
 
@@ -7,24 +6,14 @@ use std::path::PathBuf;
 pub(crate) struct Options {
     /// Run only the named scenario.
     pub(super) scenario: Option<String>,
-    /// Run only one full case ID within the selected scenario.
-    #[arg(long = "case")]
-    pub(super) case: Option<String>,
-    /// Run only one guest ISA.
-    #[arg(long = "isa", visible_alias = "target", value_enum)]
-    target: Option<Target>,
+    #[command(flatten)]
+    pub(super) selection: crate::suite::Selection,
     /// Run only quick or long cases.
     #[arg(long, value_enum)]
     pub(super) class: Option<Class>,
     /// Print selected case/target pairs without materializing images.
     #[arg(long)]
     pub(super) list: bool,
-    /// Maximum number of concurrently executing cases.
-    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = crate::suite::parse::logical_jobs(), value_parser = crate::suite::parse::jobs)]
-    pub(super) jobs: usize,
-    /// Resume completed case/target keys from the durable partial result.
-    #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
-    pub(super) resume: bool,
     /// Reuse provider services while retaining a fresh image view and container per case.
     #[arg(long, default_value_t = false)]
     pub(super) warm_provider: bool,
@@ -34,13 +23,8 @@ pub(crate) struct Options {
 }
 
 impl Options {
-    pub(super) fn targets(&self) -> Vec<Target> {
-        self.target
-            .map_or_else(|| vec![Target::Arm64, Target::Amd64], |value| vec![value])
-    }
-
     pub(super) fn select_cases(&self, mut scenarios: Vec<Scenario>) -> Result<Vec<Scenario>, String> {
-        let Some(selected) = &self.case else {
+        let Some(selected) = &self.selection.case else {
             return Ok(scenarios);
         };
         for scenario in &mut scenarios {
@@ -80,7 +64,7 @@ mod tests {
         assert!(cli.options.list);
         assert_eq!(cli.options.class, Some(super::Class::Quick));
         assert_eq!(cli.options.scenario.as_deref(), Some("languages"));
-        assert_eq!(cli.options.case.as_deref(), Some("languages/perl-sum-538"));
+        assert_eq!(cli.options.selection.case.as_deref(), Some("languages/perl-sum-538"));
         assert!(TestCli::try_parse_from(["scenarios", "--class", "smoke"]).is_err());
         let warm = TestCli::try_parse_from(["scenarios", "--warm-provider"]).unwrap();
         assert!(warm.options.warm_provider);

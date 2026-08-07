@@ -1,7 +1,7 @@
 use super::WorkKey;
 use super::diagnostic::BoundedDiagnostic as _;
 use crate::{
-    journal::{self, Require as _, Schema},
+    journal::{self, Attempt, Require as _, Schema},
     suite::{Error, Target},
 };
 use std::collections::BTreeSet;
@@ -15,9 +15,7 @@ pub(super) const NOT_RUN: &str = "NOT_RUN";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Row {
-    pub key: WorkKey,
-    pub status: &'static str,
-    pub elapsed_ms: u64,
+    pub attempt: Attempt<WorkKey>,
     /// Host load when the row was recorded, so a contended run is distinguishable from a real timeout.
     pub host_load: String,
     pub diagnostic: String,
@@ -36,20 +34,20 @@ impl Schema for Runtime {
     const FIELDS: usize = 7;
 
     fn key(row: &Row) -> &WorkKey {
-        &row.key
+        &row.attempt.key
     }
 
     /// Never fails on diagnostic shape: a truncated row is worth more than an aborted sweep.
     fn format(row: &Row) -> Result<String, Error> {
-        (!row.key.id.contains(['\t', '\n'])).require("runtime result contains an unsafe delimiter")?;
+        (!row.attempt.key.id.contains(['\t', '\n'])).require("runtime result contains an unsafe delimiter")?;
         let load = super::load::sanitize(&row.host_load);
         let prefix = format!(
             "{}\t{}\t{}\t{}\t{}\t{load}\t",
-            row.key.id,
-            row.key.target.name(),
+            row.attempt.key.id,
+            row.attempt.key.target.name(),
             super::profile::PROFILE,
-            row.status,
-            row.elapsed_ms
+            row.attempt.status,
+            row.attempt.elapsed_ms
         );
         let diagnostic = row.diagnostic.replace(['\t', '\n'], " ");
         let room = Self::ROW_LIMIT.saturating_sub(prefix.len() + 1);
@@ -71,9 +69,11 @@ impl Schema for Runtime {
             _ => return Err("invalid runtime resume status".into()),
         };
         Ok(Some(Row {
-            key,
-            status,
-            elapsed_ms: fields[4].parse()?,
+            attempt: Attempt {
+                key,
+                status,
+                elapsed_ms: fields[4].parse()?,
+            },
             host_load: fields[5].to_owned(),
             diagnostic: fields[6].to_owned(),
         }))
@@ -82,7 +82,7 @@ impl Schema for Runtime {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ledger, Row, WorkKey};
+    use super::{Attempt, Ledger, Row, WorkKey};
     use crate::suite::Target;
     use std::collections::BTreeSet;
     use std::io::Write;
@@ -103,9 +103,11 @@ mod tests {
         opened
             .ledger
             .record(Row {
-                key: key("runtime/b"),
-                status: "pass",
-                elapsed_ms: 2,
+                attempt: Attempt {
+                    key: key("runtime/b"),
+                    status: "pass",
+                    elapsed_ms: 2,
+                },
                 host_load: "0.20/8".to_owned(),
                 diagnostic: String::new(),
             })
@@ -116,9 +118,11 @@ mod tests {
         resumed
             .ledger
             .record(Row {
-                key: key("runtime/a"),
-                status: "pass",
-                elapsed_ms: 1,
+                attempt: Attempt {
+                    key: key("runtime/a"),
+                    status: "pass",
+                    elapsed_ms: 1,
+                },
                 host_load: "0.10/8".to_owned(),
                 diagnostic: String::new(),
             })
@@ -133,9 +137,11 @@ mod tests {
         use crate::journal::Schema as _;
 
         let row = Row {
-            key: key("runtime/loud"),
-            status: super::FAIL,
-            elapsed_ms: 1,
+            attempt: Attempt {
+                key: key("runtime/loud"),
+                status: super::FAIL,
+                elapsed_ms: 1,
+            },
             host_load: "9.00/8".to_owned(),
             diagnostic: "x\ty\n".repeat(1 << 16),
         };
@@ -155,16 +161,18 @@ mod tests {
         opened
             .ledger
             .record(Row {
-                key: key("runtime/a"),
-                status: super::NOT_RUN,
-                elapsed_ms: 0,
+                attempt: Attempt {
+                    key: key("runtime/a"),
+                    status: super::NOT_RUN,
+                    elapsed_ms: 0,
+                },
                 host_load: super::super::load::unmeasured(),
                 diagnostic: "BROKEN: retained".to_owned(),
             })
             .unwrap();
         drop(opened);
         let resumed = Ledger::open(&report, "stamp", &keys, true).unwrap();
-        assert_eq!(resumed.prior[&key("runtime/a")].status, super::NOT_RUN);
+        assert_eq!(resumed.prior[&key("runtime/a")].attempt.status, super::NOT_RUN);
         assert_eq!(resumed.ledger.planned(), &keys);
     }
 

@@ -65,8 +65,8 @@ cases:
 fn case_selection_parses_with_optional_app_and_isa() {
     let options = options(&["example", "--case", "runtime/exact", "--isa", "arm64"]);
     assert_eq!(options.app.as_deref(), Some("example"));
-    assert_eq!(options.case.as_deref(), Some("runtime/exact"));
-    assert_eq!(options.target, Some(Target::Arm64));
+    assert_eq!(options.selection.case.as_deref(), Some("runtime/exact"));
+    assert_eq!(options.selection.target, Some(Target::Arm64));
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn plan_matches_only_the_complete_case_id() {
     assert_eq!(planned.work[0].key.id, "runtime/exact");
 
     let substring = options(&["--case", "runtime/ex"]);
-    let error = require_planned(plan(vec![app()], &substring), substring.case.as_deref())
+    let error = require_planned(plan(vec![app()], &substring), substring.selection.case.as_deref())
         .err()
         .expect("substring case selection unexpectedly produced work");
     assert_eq!(error.to_string(), "no runtime case exactly matched --case runtime/ex");
@@ -87,11 +87,11 @@ fn plan_matches_only_the_complete_case_id() {
 #[test]
 fn an_inactive_only_selection_is_recorded_rather_than_rejected() {
     let options = options(&["--case", "runtime/inactive", "--isa", "arm64"]);
-    let planned = require_planned(plan(vec![app()], &options), options.case.as_deref()).unwrap();
+    let planned = require_planned(plan(vec![app()], &options), options.selection.case.as_deref()).unwrap();
     assert!(planned.work.is_empty());
     assert_eq!(planned.skipped.len(), 1);
-    assert_eq!(planned.skipped[0].key.id, "runtime/inactive");
-    assert_eq!(planned.skipped[0].status, super::ledger::NOT_RUN);
+    assert_eq!(planned.skipped[0].attempt.key.id, "runtime/inactive");
+    assert_eq!(planned.skipped[0].attempt.status, super::ledger::NOT_RUN);
     assert!(planned.skipped[0].diagnostic.contains("retained incompatibility"));
 }
 
@@ -107,10 +107,10 @@ fn host_exclusion_uses_the_injected_engine_host() {
 
     let excluded = plan_for_host(vec![app()], &options, EngineHost::Macos);
     assert!(excluded.matched_case);
-    let excluded = require_planned(excluded, options.case.as_deref()).unwrap();
+    let excluded = require_planned(excluded, options.selection.case.as_deref()).unwrap();
     assert!(excluded.work.is_empty());
     assert_eq!(excluded.skipped.len(), 1);
-    assert_eq!(excluded.skipped[0].key.id, "runtime/host-excluded");
+    assert_eq!(excluded.skipped[0].attempt.key.id, "runtime/host-excluded");
 }
 
 #[test]
@@ -159,7 +159,11 @@ fn repository_yaml_inventory_is_fully_discovered_and_planned() {
 
     let planned = plan(apps, &options);
     let scheduled = planned.work.into_iter().map(|work| work.key).collect::<BTreeSet<_>>();
-    let recorded = planned.skipped.into_iter().map(|row| row.key).collect::<BTreeSet<_>>();
+    let recorded = planned
+        .skipped
+        .into_iter()
+        .map(|row| row.attempt.key)
+        .collect::<BTreeSet<_>>();
     assert_eq!(scheduled, active);
     assert_eq!(recorded, inactive);
     assert_eq!(scheduled.union(&recorded).cloned().collect::<BTreeSet<_>>(), declared);

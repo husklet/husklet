@@ -147,7 +147,7 @@ impl ImageCache {
             .map_err(|error| format!("resolve {name}: {error}"))?
         {
             Some(image) if images.details(&image, &self.platform).is_ok() => image,
-            _ if offline() => {
+            _ if env::var_os("HL_SCENARIO_OFFLINE").is_some() => {
                 return Err(format!(
                     "image materialization unavailable offline: {name} is absent from the prefetched {} cache",
                     self.platform.architecture
@@ -220,10 +220,6 @@ impl FailureText for str {
         .iter()
         .any(|needle| error.contains(needle))
     }
-}
-
-fn offline() -> bool {
-    env::var_os("HL_SCENARIO_OFFLINE").is_some()
 }
 
 #[cfg(test)]

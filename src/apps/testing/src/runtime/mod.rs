@@ -7,7 +7,6 @@ mod fingerprint;
 pub(crate) mod image;
 mod ledger;
 mod load;
-mod pool;
 pub(crate) mod profile;
 pub(crate) mod scheduler;
 
@@ -30,7 +29,7 @@ pub async fn run(options: Options) -> Result<(), Error> {
     println!("runtime: engine profile={} runner={}", profile::PROFILE, &runner[..16]);
     let apps = apps(&options)?;
     validate_case_ids(&apps)?;
-    let planned = require_planned(plan(apps, &options), options.case.as_deref())?;
+    let planned = require_planned(plan(apps, &options), options.selection.case.as_deref())?;
     let mut work = planned.work;
     let skipped = planned.skipped;
     // The runner identity joins the stamp so a rebuilt engine cannot resume the previous one's rows.
@@ -42,10 +41,10 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let keys: std::collections::BTreeSet<WorkKey> = work
         .iter()
         .map(|item| item.key.clone())
-        .chain(skipped.iter().map(|row| row.key.clone()))
+        .chain(skipped.iter().map(|row| row.attempt.key.clone()))
         .collect();
     let report = workspace()?.join(&options.results);
-    let resume = options.resume;
+    let resume = options.selection.resume;
     let opened = tokio::task::spawn_blocking(move || {
         ledger::Ledger::open(&report, &stamp, &keys, resume).map_err(|error| error.to_string())
     })
@@ -53,10 +52,10 @@ pub async fn run(options: Options) -> Result<(), Error> {
     let ledger = Arc::new(opened.ledger);
     let mut prior = opened.prior;
     // A NOT_RUN row records an unattempted case, so resume must retry rather than accept it.
-    prior.retain(|_, row| row.status != ledger::NOT_RUN);
+    prior.retain(|_, row| row.attempt.status != ledger::NOT_RUN);
     record_all(&ledger, skipped).await?;
     work.retain(|item| !prior.contains_key(&item.key));
-    let mut running = pool::Pool::new(work, options.jobs);
+    let mut running = crate::pool::Pool::new(work, options.selection.jobs);
     let drained = drain(&mut running, &ledger).await;
     // The report is published even when the sweep aborts, so no case is silently absent.
     backfill(&ledger, drained.as_ref().err()).await;
@@ -104,9 +103,11 @@ fn unattempted(ledger: &ledger::Ledger, aborted: Option<&Error>) -> Result<Vec<l
         .planned()
         .difference(&recorded)
         .map(|key| ledger::Row {
-            key: key.clone(),
-            status: ledger::NOT_RUN,
-            elapsed_ms: 0,
+            attempt: crate::journal::Attempt {
+                key: key.clone(),
+                status: ledger::NOT_RUN,
+                elapsed_ms: 0,
+            },
             host_load: load::unmeasured(),
             diagnostic: reason.clone(),
         })
@@ -132,10 +133,7 @@ pub async fn worker(options: WorkerOptions) -> Result<(), Error> {
 fn worker_work(app: String, case: String, target: Target) -> Result<Work, Error> {
     let options = Options {
         app: Some(app),
-        case: Some(case.clone()),
-        target: Some(target),
-        jobs: 1,
-        resume: false,
+        selection: crate::suite::Selection::exact(case.clone(), target),
         results: PathBuf::from("target/testing/runtime/worker.tsv"),
         engine_profile: profile::Requested::Release,
     };
@@ -162,7 +160,7 @@ async fn execute(work: Work) -> Completion {
 }
 
 async fn drain(
-    running: &mut pool::Pool<Work, Completion>,
+    running: &mut crate::pool::Pool<Work, Completion>,
     ledger: &Arc<ledger::Ledger>,
 ) -> Result<Vec<Completion>, Error> {
     let mut completed = Vec::new();
@@ -199,9 +197,11 @@ impl Completion {
     fn row(&self) -> ledger::Row {
         let (status, diagnostic) = outcome(&self.result);
         ledger::Row {
-            key: self.key.clone(),
-            status,
-            elapsed_ms: self.elapsed_ms,
+            attempt: crate::journal::Attempt {
+                key: self.key.clone(),
+                status,
+                elapsed_ms: self.elapsed_ms,
+            },
             host_load: self.host_load.clone(),
             diagnostic,
         }
@@ -233,16 +233,21 @@ fn summarize(
     for row in prior.values() {
         println!(
             "RESUME {} {} {} elapsed_ms={} host_load={}",
-            row.status,
-            row.key.id,
-            row.key.target.name(),
-            row.elapsed_ms,
+            row.attempt.status,
+            row.attempt.key.id,
+            row.attempt.key.target.name(),
+            row.attempt.elapsed_ms,
             row.host_load
         );
-        if row.status == "pass" {
+        if row.attempt.status == "pass" {
             passed += 1;
         } else {
-            failed.push(format!("{} {}: {}", row.key.id, row.key.target.name(), row.diagnostic));
+            failed.push(format!(
+                "{} {}: {}",
+                row.attempt.key.id,
+                row.attempt.key.target.name(),
+                row.diagnostic
+            ));
         }
     }
     for result in completed {
@@ -317,20 +322,25 @@ fn plan(apps: Vec<App>, options: &Options) -> Schedule {
 fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedule {
     let mut work = Vec::new();
     let mut skipped = Vec::new();
-    let mut matched_case = options.case.is_none();
+    let mut matched_case = options.selection.case.is_none();
     for app in apps {
         let app = Arc::new(app);
-        if let Some(selected) = options.case.as_deref()
+        if let Some(selected) = options.selection.case.as_deref()
             && app.cases.iter().any(|case| case.id == selected)
         {
             matched_case = true;
         }
-        for target in options.targets() {
+        for target in options.selection.targets() {
             if !app.supports(target) {
                 continue;
             }
             for (case_index, case) in app.cases.iter().enumerate() {
-                if options.case.as_deref().is_some_and(|selected| case.id != selected) {
+                if options
+                    .selection
+                    .case
+                    .as_deref()
+                    .is_some_and(|selected| case.id != selected)
+                {
                     continue;
                 }
                 if !case.targets.contains(&target) {
@@ -339,12 +349,14 @@ fn plan_for_host(apps: Vec<App>, options: &Options, host: EngineHost) -> Schedul
                 if let Some((kind, reason, evidence)) = case.inactive(host) {
                     println!("{kind} {} {}: {reason} [{evidence}]", case.id, target.name());
                     skipped.push(ledger::Row {
-                        key: WorkKey {
-                            id: case.id.clone(),
-                            target,
+                        attempt: crate::journal::Attempt {
+                            key: WorkKey {
+                                id: case.id.clone(),
+                                target,
+                            },
+                            status: ledger::NOT_RUN,
+                            elapsed_ms: 0,
                         },
-                        status: ledger::NOT_RUN,
-                        elapsed_ms: 0,
                         host_load: load::unmeasured(),
                         diagnostic: format!("{kind}: {reason} [{evidence}]"),
                     });
@@ -393,22 +405,23 @@ fn display_attempt(id: &str, attempt: Option<u16>) -> String {
 
 pub fn oracle(options: OracleOptions) -> Result<(), Error> {
     let _check_requested = options.check;
-    let apps = apps(&options.selection)?;
+    let apps = apps(&options.runtime)?;
     validate_case_ids(&apps)?;
-    if let Some(selected) = options.selection.case.as_deref()
+    if let Some(selected) = options.runtime.selection.case.as_deref()
         && !apps.iter().any(|app| app.cases.iter().any(|case| case.id == selected))
     {
         return Err(format!("no runtime case exactly matched --case {selected}").into());
     }
     let mut eligible = false;
     for app in apps {
-        for target in options.selection.targets() {
+        for target in options.runtime.selection.targets() {
             if !app.supports(target) {
                 continue;
             }
             let mut cases = app.cases_for(target);
             if !cases.any(|case| {
                 options
+                    .runtime
                     .selection
                     .case
                     .as_deref()
@@ -417,7 +430,7 @@ pub fn oracle(options: OracleOptions) -> Result<(), Error> {
                 continue;
             }
             eligible = true;
-            app.oracle(target, options.update, options.selection.case.as_deref())?;
+            app.oracle(target, options.update, options.runtime.selection.case.as_deref())?;
         }
     }
     if eligible {
@@ -475,31 +488,14 @@ pub(super) fn workspace() -> Result<PathBuf, Error> {
 pub(crate) struct Options {
     /// Run only the named runtime application.
     app: Option<String>,
-    /// Run only the case whose complete ID exactly matches this value.
-    #[arg(long, value_name = "FULL_ID")]
-    case: Option<String>,
-    /// Run only one guest ISA.
-    #[arg(long = "isa", value_enum)]
-    target: Option<Target>,
-    /// Maximum number of concurrently executing cases.
-    #[arg(long, env = "HL_COMPAT_JOBS", default_value_t = crate::suite::parse::logical_jobs(), value_parser = crate::suite::parse::jobs)]
-    jobs: usize,
-    /// Resume exact completed case/target keys from the synchronized partial result.
-    #[arg(long, env = "HL_COMPAT_RESUME", default_value_t = false)]
-    resume: bool,
+    #[command(flatten)]
+    selection: crate::suite::Selection,
     /// Relative durable result path beneath the repository workspace.
     #[arg(long, default_value = "target/testing/runtime/results.tsv", value_parser = crate::suite::parse::results)]
     results: PathBuf,
     /// Engine build profile this sweep is measuring; must match how the runner was built.
     #[arg(long, value_enum, env = "HL_COMPAT_ENGINE_PROFILE", default_value_t = profile::Requested::Release)]
     engine_profile: profile::Requested,
-}
-
-impl Options {
-    fn targets(&self) -> Vec<Target> {
-        self.target
-            .map_or_else(|| vec![Target::Arm64, Target::Amd64], |value| vec![value])
-    }
 }
 
 #[derive(Args)]
@@ -511,12 +507,13 @@ pub(crate) struct OracleOptions {
     #[arg(long)]
     check: bool,
     #[command(flatten)]
-    selection: Options,
+    runtime: Options,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{WorkKey, display_attempt, ledger, unattempted};
+    use crate::journal::Attempt;
     use crate::suite::Target;
 
     #[test]
@@ -531,17 +528,19 @@ mod tests {
         opened
             .ledger
             .record(ledger::Row {
-                key: key("runtime/a"),
-                status: ledger::PASS,
-                elapsed_ms: 1,
+                attempt: Attempt {
+                    key: key("runtime/a"),
+                    status: ledger::PASS,
+                    elapsed_ms: 1,
+                },
                 host_load: "0.10/8".to_owned(),
                 diagnostic: String::new(),
             })
             .unwrap();
         let rows = unattempted(&opened.ledger, Some(&"row limit".into())).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].key.id, "runtime/b");
-        assert_eq!(rows[0].status, ledger::NOT_RUN);
+        assert_eq!(rows[0].attempt.key.id, "runtime/b");
+        assert_eq!(rows[0].attempt.status, ledger::NOT_RUN);
         assert!(rows[0].diagnostic.contains("row limit"), "{}", rows[0].diagnostic);
     }
 

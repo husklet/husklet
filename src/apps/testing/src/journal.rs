@@ -21,6 +21,15 @@ impl Require for bool {
     }
 }
 
+/// What every harness records about one unit of work: which work, how it ended, how long it took.
+/// Each harness row composes this and adds only the evidence peculiar to that harness.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Attempt<K> {
+    pub key: K,
+    pub status: &'static str,
+    pub elapsed_ms: u64,
+}
+
 /// How one harness names, writes and reads the rows of its result journal.
 pub(crate) trait Schema {
     type Key: Ord + Clone;

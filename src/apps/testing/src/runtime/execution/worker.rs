@@ -199,7 +199,13 @@ fn supervise(
     let stderr = read_capture(&capture.stderr, DIAGNOSTIC_CAPTURE_LIMIT)?;
     match outcome {
         ProcessOutcome::Exited(Some(0 | 1)) => {}
-        ProcessOutcome::Exited(code) => return Err(termination(code, &stdout, &stderr)),
+        ProcessOutcome::Exited(code) => {
+            return Err(format!(
+                "runtime worker exited with {code:?}; stderr={}; stdout={}",
+                stderr.preview(),
+                stdout.preview()
+            ));
+        }
         ProcessOutcome::Signaled(signal) => {
             return Err(format!(
                 "runtime worker terminated by signal {signal}; stderr={}; stdout={}",
@@ -272,14 +278,6 @@ fn write_result(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(bytes)?;
     file.sync_data()
-}
-
-fn termination(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
-    format!(
-        "runtime worker exited with {code:?}; stderr={}; stdout={}",
-        stderr.preview(),
-        stdout.preview()
-    )
 }
 
 #[cfg(test)]

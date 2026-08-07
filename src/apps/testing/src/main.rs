@@ -4,6 +4,7 @@ mod bench;
 mod benchmark;
 mod journal;
 mod nested;
+mod pool;
 mod record;
 mod runtime;
 mod scenario;

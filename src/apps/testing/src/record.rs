@@ -168,7 +168,7 @@ impl ArtifactRecord {
         if !self.artifact.is_file() || !self.receipt.is_file() {
             return Ok(false);
         }
-        let expected = receipt(&self.key, &fs::read(&self.artifact)?);
+        let expected = receipt_with_digest(&self.key, &FramedIdentity::of(&fs::read(&self.artifact)?));
         Ok(fs::read_to_string(&self.receipt)?.trim() == expected.trim())
     }
 
@@ -243,10 +243,6 @@ impl ArtifactRecord {
         }
         Ok(destination)
     }
-}
-
-fn receipt(key: &str, bytes: &[u8]) -> String {
-    receipt_with_digest(key, &FramedIdentity::of(bytes))
 }
 
 fn receipt_with_digest(key: &str, digest: &str) -> String {
