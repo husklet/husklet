@@ -82,14 +82,32 @@ impl MemoryLedger {
             .clone()
     }
 
-    pub(crate) fn executable_aliases(&self, backing: Backing) -> ExecutableAliasEvidence {
+    /// Sharing a backing identity is not aliasing: an image maps its text and its data
+    /// from one file at disjoint offsets, so only an overlapping byte interval aliases.
+    pub(crate) fn executable_aliases(&self, address: GuestAddress, backing: Backing) -> ExecutableAliasEvidence {
         let state = self.state.read().unwrap_or_else(std::sync::PoisonError::into_inner);
-        ExecutableAliasEvidence {
-            generation: state.generation,
-            present: state.mappings.regions.iter().any(|region| {
-                same_backing_identity(region.backing(), backing) && region.protection().contains(Protection::EXECUTE)
-            }),
-        }
+        let generation = state.generation;
+        let Some(source) = state
+            .mappings
+            .regions
+            .iter()
+            .find(|region| region.range().contains(address))
+            .map(backing_interval)
+        else {
+            return ExecutableAliasEvidence {
+                generation,
+                present: false,
+            };
+        };
+        let present = state.mappings.regions.iter().any(|region| {
+            same_backing_identity(region.backing(), backing)
+                && region.protection().contains(Protection::EXECUTE)
+                && match (source, backing_interval(region)) {
+                    (Some(source), Some(alias)) => alias.0 < source.1 && source.0 < alias.1,
+                    _ => true,
+                }
+        });
+        ExecutableAliasEvidence { generation, present }
     }
 
     pub(crate) fn replace(&self, expected: u64, regions: Vec<Region>) -> Result<u64, MemoryError> {
@@ -307,6 +325,15 @@ impl MemoryLedger {
         self.generation.store(live.generation, Ordering::Release);
         Ok(())
     }
+}
+
+/// The half-open byte interval a region occupies in its backing object.
+fn backing_interval(region: &Region) -> Option<(u64, u64)> {
+    let first = match region.backing() {
+        Backing::Shared(reference) => reference.offset.checked_add(region.backing_offset())?,
+        _ => region.backing_offset(),
+    };
+    Some((first, first.checked_add(region.range().length())?))
 }
 
 fn same_backing_identity(left: Backing, right: Backing) -> bool {

@@ -22,6 +22,24 @@ fn projection_permissions(authority: Protection, mapped: Protection) -> Protecti
     })
 }
 
+/// EXECUTE in a projection view marks bytes a store may modify code through, not an
+/// access grant, so a writable alias of an object mapped executable elsewhere carries it.
+fn alias_execute<H: MemoryAccessHost>(lease: &ProjectionLease<'_, H>, address: GuestAddress) -> Protection {
+    match lease.executable_aliases(address) {
+        Ok(evidence) if evidence.present => Protection::EXECUTE,
+        _ => Protection::NONE,
+    }
+}
+
+/// The permission word published for one native projection view.
+fn view_permissions<H: MemoryAccessHost>(
+    lease: &ProjectionLease<'_, H>,
+    mapped: Protection,
+    address: GuestAddress,
+) -> u32 {
+    u32::from(mapped.union(alias_execute(lease, address)).bits())
+}
+
 use hl_native::cpu as schema;
 
 #[repr(C)]
@@ -974,12 +992,13 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
     match projection {
         Ok(view) => {
             provider.observed.observe(address, required);
+            let permissions = view_permissions(provider.lease, view.protection, view.range.start());
             let projected = ProjectionView {
                 guest_first: view.range.start().get(),
                 guest_last: view.range.end().get(),
                 host_first: view.storage_address,
                 mapping_incarnation,
-                permissions: u32::from(view.protection.bits()),
+                permissions,
                 write_policy: WRITE_EXACT,
                 write_index: view.index,
             };
@@ -2658,7 +2677,11 @@ impl Executor {
             guest_last: range.end().get(),
             host_first: lease.storage_address(),
             mapping_incarnation: generation.incarnation,
-            permissions: u32::from(projection_permissions(lease.authority(), lease.protection()).bits()),
+            permissions: view_permissions(
+                &lease,
+                projection_permissions(lease.authority(), lease.protection()),
+                range.start(),
+            ),
             write_policy: WRITE_EXACT,
             write_index: 0,
         };
@@ -2683,7 +2706,7 @@ impl Executor {
                 guest_last: view.range.end().get(),
                 host_first: view.storage_address,
                 mapping_incarnation: generation.incarnation,
-                permissions: u32::from(view.protection.bits()),
+                permissions: view_permissions(&lease, view.protection, view.range.start()),
                 write_policy: WRITE_EXACT,
                 write_index: view.index,
             };
@@ -3023,6 +3046,58 @@ const _: () = {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// Two mappings of one shared object, as a guest gets from a memfd mapped RW and RX:
+    /// a store through the writable alias modifies code, so its view must carry EXECUTE.
+    #[test]
+    fn writable_alias_of_an_executable_object_projects_execute() {
+        use std::sync::Arc;
+
+        use hl_memory::{Backing, MapRequest, MappingCoordinator, Placement, SharedBackingRef};
+
+        use crate::ffi::linux::{MappingHostAdapter, shared_backed_arena};
+
+        let (shared, arena) = shared_backed_arena(0x4000);
+        let object = shared.create(7, 8192).unwrap();
+        let memory = MappingCoordinator::with_shared(MappingHostAdapter::new(Arc::new(arena)), shared);
+        let request = |address: u64, offset: u64, protection: Protection| MapRequest {
+            placement: Placement::Fixed(GuestAddress::new(address)),
+            length: 4096,
+            alignment: 4096,
+            protection,
+            backing: Backing::Shared(SharedBackingRef {
+                object,
+                offset,
+                length: 4096,
+                write_shared: true,
+            }),
+            backing_offset: 0,
+        };
+        let writable = Protection::READ.union(Protection::WRITE);
+        let executable = Protection::READ.union(Protection::EXECUTE);
+        memory.map(request(0x0000, 0, writable)).unwrap();
+
+        let published = |lease: &ProjectionLease<'_, _>| {
+            view_permissions(
+                lease,
+                projection_permissions(lease.authority(), lease.protection()),
+                GuestAddress::ZERO,
+            )
+        };
+        let project = || memory.project_contiguous(GuestAddress::ZERO, 16, writable, 1).unwrap();
+        assert_eq!(published(&project()), u32::from(writable.bits()));
+
+        // An image maps its text and its data from one object at disjoint offsets, which
+        // shares a backing identity without aliasing any byte.
+        memory.map(request(0x2000, 4096, executable)).unwrap();
+        assert_eq!(published(&project()), u32::from(writable.bits()));
+
+        memory.map(request(0x3000, 0, executable)).unwrap();
+        assert_eq!(
+            published(&project()),
+            u32::from(writable.union(Protection::EXECUTE).bits())
+        );
+    }
 
     #[test]
     fn projection_permissions_narrow_data_authority_but_retain_execute_identity() {

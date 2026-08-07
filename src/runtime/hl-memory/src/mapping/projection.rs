@@ -299,7 +299,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
                 .map(|projection| projection.backing)
                 .ok_or(MemoryError::NoAddressSpace)?
         };
-        let evidence = self.coordinator.ledger.executable_aliases(backing);
+        let evidence = self.coordinator.ledger.executable_aliases(address, backing);
         if evidence.generation != self.generation.mappings {
             return Err(MemoryError::InvariantViolation);
         }

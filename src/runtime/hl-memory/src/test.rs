@@ -23,52 +23,57 @@ fn executable_alias_evidence_tracks_identity_protection_and_generation() {
         identity: 41,
         shared: false,
     };
-    let mapping = |start, length, protection, backing| MapRequest {
+    let mapping = |start, length, protection, backing, backing_offset| MapRequest {
         placement: Placement::Fixed(address(start)),
         length,
         alignment: PAGE,
         protection,
         backing,
-        backing_offset: 0,
+        backing_offset,
     };
-    ledger
-        .map(mapping(
-            0x1000,
-            PAGE * 2,
-            Protection::READ.union(Protection::WRITE),
-            backing,
-        ))
-        .unwrap();
-    let clean = ledger.executable_aliases(backing);
+    let writable = Protection::READ.union(Protection::WRITE);
+    let data = address(0x1000);
+    ledger.map(mapping(0x1000, PAGE, writable, backing, 0)).unwrap();
+    let clean = ledger.executable_aliases(data, backing);
     assert!(!clean.present);
 
-    ledger.protect(range(0x2000, PAGE), Protection::EXECUTE).unwrap();
-    let split = ledger.executable_aliases(backing);
-    assert!(split.present && split.generation > clean.generation);
-    ledger.protect(range(0x2000, PAGE), Protection::READ).unwrap();
-    let restored = ledger.executable_aliases(backing);
-    assert!(!restored.present && restored.generation > split.generation);
+    // Sharing a backing identity at a disjoint offset is not aliasing: an image maps its
+    // text and its data from one object without either covering the other's bytes.
+    ledger
+        .map(mapping(0x3000, PAGE, Protection::EXECUTE, backing, PAGE))
+        .unwrap();
+    let disjoint = ledger.executable_aliases(data, backing);
+    assert!(!disjoint.present && disjoint.generation > clean.generation);
+
+    ledger
+        .map(mapping(0x5000, PAGE, Protection::EXECUTE, backing, 0))
+        .unwrap();
+    let overlapping = ledger.executable_aliases(data, backing);
+    assert!(overlapping.present && overlapping.generation > disjoint.generation);
+
+    ledger.protect(range(0x5000, PAGE), Protection::READ).unwrap();
+    let unprotected = ledger.executable_aliases(data, backing);
+    assert!(!unprotected.present && unprotected.generation > overlapping.generation);
+    ledger.protect(range(0x5000, PAGE), Protection::EXECUTE).unwrap();
+    assert!(ledger.executable_aliases(data, backing).present);
 
     let distinct = Backing::Anonymous {
         identity: 42,
         shared: false,
     };
-    ledger
-        .map(mapping(0x4000, PAGE, Protection::EXECUTE, distinct))
-        .unwrap();
-    assert!(!ledger.executable_aliases(backing).present);
-    assert!(ledger.executable_aliases(distinct).present);
+    ledger.map(mapping(0x7000, PAGE, writable, distinct, 0)).unwrap();
+    assert!(!ledger.executable_aliases(address(0x7000), distinct).present);
 
     let snapshot = ledger.snapshot();
     let restored_ledger = MemoryLedger::restore(snapshot.clone()).unwrap();
     assert_eq!(
-        restored_ledger.executable_aliases(backing).generation,
+        restored_ledger.executable_aliases(data, backing).generation,
         snapshot.generation
     );
-    assert!(restored_ledger.executable_aliases(distinct).present);
+    assert!(restored_ledger.executable_aliases(data, backing).present);
 
-    ledger.unmap(range(0x4000, PAGE)).unwrap();
-    assert!(!ledger.executable_aliases(distinct).present);
+    ledger.unmap(range(0x5000, PAGE)).unwrap();
+    assert!(!ledger.executable_aliases(data, backing).present);
 }
 
 fn request(start: u64, length: u64, offset: u64, protection: Protection) -> MapRequest {

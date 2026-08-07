@@ -67,6 +67,21 @@ pub use loader::{AddressSpaceAdapter, Reservation};
 pub use mapping::{BackingChanges, MappingHostAdapter};
 pub use virtual_memory::{Memory as VirtualMemory, MemoryError};
 
+/// Shared-backing plumbing is private to this module, so crate tests that need one object
+/// mapped through two guest ranges get the wired store and arena from here.
+#[cfg(test)]
+pub(crate) fn shared_backed_arena(bytes: usize) -> (Arc<hl_memory::SharedObjectStore>, VirtualMemory) {
+    let registry = Arc::new(shared_backing::Registry::default());
+    let factory = Arc::new(shared_backing::Factory::new(Arc::clone(&registry)));
+    let store =
+        Arc::new(hl_memory::SharedObjectStore::with_factory(hl_memory::SharedLimits::default(), factory).unwrap());
+    let arena = VirtualMemory::reserve(bytes)
+        .unwrap()
+        .with_shared_store(Arc::clone(&store))
+        .with_shared_backings(registry);
+    (store, arena)
+}
+
 #[derive(Default)]
 pub struct LinuxHost;
 
