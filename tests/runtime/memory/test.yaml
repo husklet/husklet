@@ -43,7 +43,7 @@ cases:
   - id: runtime/memory/fd-reclamation
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/fdrss.c, inputs: [source/memrss.h], output: fd-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -53,7 +53,7 @@ cases:
   - id: runtime/memory/fork-reclamation
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/forkrss.c, inputs: [source/memrss.h], output: fork-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -63,7 +63,7 @@ cases:
   - id: runtime/memory/allocator-reclamation
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/mallocfree.c, inputs: [source/memrss.h], output: allocator-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -73,7 +73,7 @@ cases:
   - id: runtime/memory/file-mapping-reclamation
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/mmapfilerss.c, inputs: [source/memrss.h], output: file-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -83,7 +83,7 @@ cases:
   - id: runtime/memory/anonymous-mapping-reclamation
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/mmapfree.c, inputs: [source/memrss.h], output: anonymous-mapping-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -93,7 +93,7 @@ cases:
   - id: runtime/memory/thread-reclamation
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its documented RSS debug line to stderr (memrss.h), which the runtime stdout/stderr contract rejects outright; the reclamation bound under test is met at head on both guest ISAs (grew=0KB)"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/threadrss.c, inputs: [source/memrss.h], output: thread-reclamation, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -111,7 +111,7 @@ cases:
   - id: runtime/memory/fixed-file-protection
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the case requires a writable regular file at /data (the retained mapping-data-rootfs capability) and the runtime corpus schema cannot provision one, so the guest exits 1 with no output before any mapping work on both guest ISAs"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/fixed_fileprotection.c, output: fixed-file-protection, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -121,7 +121,7 @@ cases:
   - id: runtime/memory/fixed-noreplace
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the case requires a writable regular file at /data (the retained mapping-data-rootfs capability) and the runtime corpus schema cannot provision one, so the guest exits 1 with no output before any mapping work on both guest ISAs"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/noreplace.c, output: fixed-noreplace, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -196,9 +196,7 @@ cases:
     expect: { exit: 0, stdout: golden/elf_rodatawrite.out }
   - id: runtime/memory/elf-rodata-fault
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/elf_rodatafault.c, output: elf-rodata-fault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/elf-rodata-fault }
@@ -255,7 +253,7 @@ cases:
   - id: runtime/memory/truncate-peer
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the case requires a writable regular file at /data (the retained mapping-data-rootfs capability) and the runtime corpus schema cannot provision one, so the guest exits 1 with no output before any mapping work on both guest ISAs"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/truncate_peer.c, output: truncate-peer, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -304,9 +302,7 @@ cases:
     expect: { exit: 0, stdout: golden/memfd_share.out }
   - id: runtime/memory/memfd-offset-alias
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/memfd_offsetalias.c, output: memfd-offset-alias, flags: ["-static","-O2","-std=gnu11"] }
     artifact: { destination: /opt/husklet/memory/memfd-offset-alias }
@@ -372,7 +368,7 @@ cases:
   - id: runtime/memory/memfd-exec-alias
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "AMD64 only: a write through the RW alias of a shared memfd is visible in the RX alias but does not retire the translated code, so scalar-exec, cross-page, and rep-exec observe the stale immediate; ARM64 passes at head"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/memfd_execalias.c, output: memfd-exec-alias, flags: ["-static","-O2","-std=gnu11"] }
@@ -381,9 +377,7 @@ cases:
     expect: { exit: 0, stdout: golden/memfd_execalias.out }
   - id: runtime/memory/memfd-exec-alias-race
     targets: [amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/memfd_execaliasrace.c, output: memfd-exec-alias-race, flags: ["-static","-O2","-std=gnu11","-pthread"] }
     artifact: { destination: /opt/husklet/memory/memfd-exec-alias-race }
@@ -498,7 +492,7 @@ cases:
   - id: runtime/memory/zz-iso-flag
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the retained fixture writes its A..Z isolation progress markers to fd 2 (zz_isoflag.c), which the runtime stdout/stderr contract rejects outright; all five isolation probes reach Z done and exit 0 at head on both guest ISAs"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/zz_isoflag.c, output: zz-iso-flag, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -537,9 +531,7 @@ cases:
     expect: { exit: 0, stdout: golden/zz_isobrk.out }
   - id: runtime/memory/dbt-ibtc-mega
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_ibtcmega.c, output: dbt-ibtc-mega, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-ibtc-mega }
@@ -606,9 +598,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_nestedloops.out }
   - id: runtime/memory/dbt-longjmp-reenter
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_longjmpreenter.c, output: dbt-longjmp-reenter, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-longjmp-reenter }
@@ -616,9 +606,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_longjmpreenter.out }
   - id: runtime/memory/dbt-codecache-churn
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_codecachechurn.c, output: dbt-codecache-churn, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-codecache-churn }
@@ -635,9 +623,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_codecachestraightline.out }
   - id: runtime/memory/dbt-soak-mix
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_soakmix.c, output: dbt-soak-mix, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-soak-mix }
@@ -653,9 +639,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_retpredict.out }
   - id: runtime/memory/dbt-sparse-fault
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_sparsefault.c, output: dbt-sparse-fault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-sparse-fault }
@@ -679,9 +663,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_smcbounce.out }
   - id: runtime/memory/dbt-smc-grow
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_smcgrow.c, inputs: [source/dbt.h], output: dbt-smc-grow, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-grow }
@@ -697,9 +679,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_smctrampoline.out }
   - id: runtime/memory/dbt-smc-minijit
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_smcminijit.c, inputs: [source/dbt.h], output: dbt-smc-minijit, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-smc-minijit }
@@ -739,9 +719,7 @@ cases:
     expect: { exit: 0, stdout: golden/dbt_concpatch.out }
   - id: runtime/memory/dbt-conc-mmap-exec
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/dbt_concmmapexec.c, inputs: [source/dbt.h], output: dbt-conc-mmap-exec, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/dbt-conc-mmap-exec }
@@ -815,9 +793,8 @@ cases:
     expect: { exit: 0, stdout: golden/anon_trackercapacity.out }
   - id: runtime/memory/anon-tracker-concurrent
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    timeout: 180
+    status: active
     compat: { class: compatibility }
     build: { source: source/anon_trackerconcurrent.c, output: anon-tracker-concurrent, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/anon-tracker-concurrent }
@@ -902,7 +879,7 @@ cases:
   - id: runtime/memory/guard-page-efault
     targets: [arm64, amd64]
     status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
+      reason: "the checked golden's ecwd=34 encodes the retained capture host's long working directory; the corpus container cwd is short, so getcwd into the guard page correctly reports EFAULT and this case needs an environment-independent golden"
       evidence: "tests/runtime/memory/ORACLE.md"
     compat: { class: compatibility }
     build: { source: source/guard_pageefault.c, output: guard-page-efault, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
@@ -911,9 +888,7 @@ cases:
     expect: { exit: 0, stdout: golden/guard_pageefault.out }
   - id: runtime/memory/syscall-logical-uaccess
     targets: [arm64, amd64]
-    status: !broken
-      reason: "AMD64 native engine verification failed reproducibly under bounded jobs=4 on 2026-08-03; see the exact result in the memory oracle audit"
-      evidence: "tests/runtime/memory/ORACLE.md"
+    status: active
     compat: { class: compatibility }
     build: { source: source/syscall_logicaluaccess.c, output: syscall-logical-uaccess, flags: ["-static","-O2","-std=gnu11","-Isource","-pthread"] }
     artifact: { destination: /opt/husklet/memory/syscall-logical-uaccess }

@@ -73,7 +73,64 @@ remain in `src/native/execution`.  The corpus therefore records several honest
 remaining integration gaps while keeping the reusable memory ledger free of
 descriptor, syscall, and product policy.
 
-## Native engine verification, 2026-08-03
+## Native engine verification, 2026-08-07 (supersedes 2026-08-03)
+
+The 25 cases typed broken on 2026-08-03 were re-measured at head with a release
+runner (`cargo build --release -p testing --bins`, `--engine-profile release`),
+one case per invocation at `--jobs 1` for AMD64 and ARM64, and then confirmed by
+a whole-suite AMD64 sweep at `--jobs 8`.  All three AMD64 measurements agree
+exactly.  The suite declares `execution: { native: true, diagnostics: true }`,
+so native summary and detail diagnostics were emitted; the corpus runner accepts
+no engine options, so no `HL_NATIVE_EXECUTION` on/off parity was measured.
+
+Thirteen of the 25 now pass and are typed active: `dbt-codecache-churn`,
+`dbt-conc-mmap-exec`, `dbt-ibtc-mega`, `dbt-longjmp-reenter`, `dbt-smc-grow`,
+`dbt-smc-minijit`, `dbt-soak-mix`, `dbt-sparse-fault`, `elf-rodata-fault`,
+`memfd-exec-alias-race`, `memfd-offset-alias`, `syscall-logical-uaccess`, and
+`anon-tracker-concurrent`.  The 2026-08-03 timeouts were instruction-charging
+inflation in `hl_x86_finish_chain`, which stored the chain total in `scratch[0]`
+so completed loop iterations were charged twice, together with the stale
+`indirect_site` that made `ibtc_fill` refuse whole runs after an arena rotation.
+`anon-tracker-concurrent` is correct but genuinely expensive: it needs about 55
+to 60 seconds on AMD64 (12 seconds on ARM64) against the 30-second default, so
+it now declares `timeout: 180` rather than being recorded as a failure.
+
+The 2026-08-03 ARM64 blocker is also gone.  A full ARM64 pass over the same
+cases completed with case-level results and no `stack smashing detected` abort.
+ARM64 additionally passes `memfd-exec-alias`, which AMD64 still fails.
+
+Twelve remain broken, and none of them fail for the recorded 2026-08-03 reason.
+They fall into four causes:
+
+- Seven are unpassable under the runner's stdout/stderr contract rather than
+  broken in the engine.  `allocator-reclamation`, `anonymous-mapping-reclamation`,
+  `fd-reclamation`, `file-mapping-reclamation`, `fork-reclamation`, and
+  `thread-reclamation` emit the retained `memrss.h` debug line on stderr, and all
+  six report `grew=0KB` well inside their thresholds, so the reclamation bound
+  under test holds.  `zz-iso-flag` writes its `A`..`Z` progress markers to fd 2,
+  reaches `Z done`, and exits 0.  The runner rejects any non-empty stderr.
+- Three need a writable regular file at `/data`, the retained
+  `mapping-data-rootfs` capability recorded in
+  `../engine/tests/compat/memory/manifest.tsv`.  The runtime corpus schema has no
+  field that provisions guest files, so `fixed-file-protection`, `fixed-noreplace`,
+  and `truncate-peer` exit 1 with empty stdout at their first `open("/data")`,
+  before reaching any mapping behaviour, on both guest ISAs.
+- `guard-page-efault` fails on a golden that is not environment independent.
+  Its `ecwd=34` (`ERANGE`) records the long working directory of the retained
+  native-Linux capture host.  The corpus container working directory is short, so
+  `getcwd(guard, 16)` legitimately reaches the buffer probe and reports `EFAULT`.
+  Narrowing the call to `getcwd(guard, 1)` makes the case pass unchanged, which
+  confirms the engine orders `ERANGE` before the buffer probe correctly; the
+  fixture and golden are what encode the capture environment.
+- `memfd-exec-alias` is the one genuine engine defect left, and it is AMD64 only.
+  Writes through the RW alias of a shared memfd become visible in the RX alias
+  (`scalar-visible=1`, `vector-visible=1`, `avx256-visible=1`) but do not retire
+  the translated code for that alias, so `scalar-exec=0`, `cross-page=0`, and
+  `rep-exec=0` keep returning the previous immediate.  Only the wider 32-byte
+  store, which reaches a further guest page, forces retirement, leaving
+  `avx256-exec=1`.  ARM64 passes the same fixture at head.
+
+## Native engine verification, 2026-08-03 (superseded)
 
 The typed runner was invoked for AMD64 with
 `HL_COMPAT_ENGINE_OPTIONS='HL_NATIVE_EXECUTION=1;HL_NATIVE_DIAGNOSTICS=1'`.
@@ -95,13 +152,14 @@ status 1 instead of 0: `dbt-smc-grow`, `dbt-smc-minijit`,
 `fork-reclamation`, and `thread-reclamation` produced their RSS measurement on
 stderr, which the declared contract rejects; `zz-iso-flag` likewise produced
 its diagnostic sequence on stderr. Finally, `guard-page-efault` returned
-`ecwd=14` where the checked golden requires `ecwd=34`. These 25 cases are typed
-broken on direct engine evidence. Their status is independent of the QEMU
+`ecwd=14` where the checked golden requires `ecwd=34`. These 25 cases were typed
+broken on that evidence; the 2026-08-07 section above replaces it and none of
+the 25 still carries this reason. Their status is independent of the QEMU
 oracle results recorded separately in `QEMU_EVIDENCE.md`.
 
 The corresponding ARM64 active-set run was started with the same typed native
 options and eight workers. It emitted native diagnostics, then aborted during
 early execution with `*** stack smashing detected ***` after guest fault entry
 at address `0x8ffc` (process exit 134). No ARM64 case-level pass summary was
-produced, so this run is recorded as an engine activation/teardown blocker and
-is not used to promote any case to active.
+produced, so this run was recorded as an engine activation/teardown blocker and
+was not used to promote any case to active. That blocker no longer reproduces.
