@@ -48,6 +48,7 @@
 #include "structure.h"
 #include "system.h"
 #include "stub.h"
+#include "../../state.h"
 #include "zero.h"
 
 #include <string.h>
@@ -889,12 +890,12 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
     size_t admitted = count;
     while (!trace_build(source, pc, admitted, buffer, capacity, &trace, executor->ibtc, authority,
                         expected_authority, NULL, executor->diagnostics)) {
-        if (admitted == 1) return HL_NATIVE_STATE;
+        if (admitted == 1) return HL_STATE("trace head untranslatable");
         admitted--;
     }
     key.source_first = trace.source_first;
     key.source_last = trace.source_last;
-    if (trace.provenance_count == 0) return HL_NATIVE_STATE;
+    if (trace.provenance_count == 0) return HL_STATE("trace produced no provenance");
     emission = (hl_native_emission){.bytes = buffer, .size = trace.code_size,
                                     .body_offset = trace.body_offset, .provenance = trace.provenance,
                                     .admitted_offset = trace.admitted_offset,
@@ -910,7 +911,7 @@ hl_native_status hl_a64_trace_cache_direct(hl_native_executor *executor, const h
     }
     hl_native_status status = hl_native_translation_publish(executor, &key, &emission);
     if (status != HL_NATIVE_OK) return status;
-    return hl_native_translation_lookup(executor, &key, code) == HL_NATIVE_HIT ? HL_NATIVE_OK : HL_NATIVE_STATE;
+    return hl_native_translation_lookup(executor, &key, code) == HL_NATIVE_HIT ? HL_NATIVE_OK : HL_STATE("published trace missed lookup");
 }
 
 hl_native_status hl_a64_trace_cache(hl_native_executor *executor, const hl_a64_source *source, uint64_t pc,

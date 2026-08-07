@@ -83,6 +83,10 @@ hl_native_status hl_native_synchronize_direct(hl_native_executor *, uint64_t, ui
                                               const hl_native_projection *);
 hl_native_status hl_native_executor_rollover(hl_native_executor *, uint64_t, uint64_t);
 void hl_native_ibtc_fill_shared(hl_native_executor *, uint64_t, void *);
+#if defined(__aarch64__)
+hl_native_status hl_native_ibtc_fill(hl_native_executor *, hl_native_aarch64_cpu *, uint64_t,
+                                     const hl_native_code *);
+#endif
 int hl_native_direct_request_valid(const hl_native_executor *, const hl_native_direct_token *,
                                    uint64_t, uint64_t, const hl_native_projection *);
 int hl_native_direct_request_snapshot(const hl_native_executor *, const hl_native_direct_token *,
