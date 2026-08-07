@@ -19,6 +19,8 @@ static LOGGING: Logging = Logging {
     level: AtomicU8::new(Level::Warn as u8),
 };
 
+// The gate sits on every log call site, including hot paths; inlining it is the point.
+#[allow(clippy::inline_always)]
 impl Logging {
     #[inline(always)]
     #[must_use]
@@ -65,6 +67,8 @@ static PROFILING: Profiling = Profiling {
     enabled: AtomicU64::new(0),
 };
 
+// Same reasoning as `Logging`: the gate sits on every profiling call site.
+#[allow(clippy::inline_always)]
 impl Profiling {
     #[inline(always)]
     #[must_use]

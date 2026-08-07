@@ -6,6 +6,12 @@ impl<H: Host> Coordinator<H> {
         &self,
         snapshot: impl FnOnce(&crate::FrozenSnapshotAuthority, crate::MemoryLedgerSnapshot) -> R,
     ) -> R {
+        struct Thaw<'a>(&'a crate::CheckpointActivity);
+        impl Drop for Thaw<'_> {
+            fn drop(&mut self) {
+                self.0.thaw();
+            }
+        }
         self.activity.freeze();
         self.request_mapping_change();
         drop(
@@ -13,12 +19,6 @@ impl<H: Host> Coordinator<H> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        struct Thaw<'a>(&'a crate::CheckpointActivity);
-        impl Drop for Thaw<'_> {
-            fn drop(&mut self) {
-                self.0.thaw();
-            }
-        }
         let _thaw = Thaw(&self.activity);
         let authority = crate::FrozenSnapshotAuthority { _private: () };
         snapshot(&authority, self.ledger.snapshot())

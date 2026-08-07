@@ -24,6 +24,8 @@ impl OpenFixture {
 
 struct PublicationFixture;
 
+// The fixtures take owned handles because each is moved into a spawned thread.
+#[allow(clippy::needless_pass_by_value)]
 impl PublicationFixture {
     fn read_only_reader(
         paths: Arc<ReadOnlyPaths>,

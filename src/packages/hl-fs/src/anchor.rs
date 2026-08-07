@@ -64,7 +64,7 @@ impl Reservation {
 }
 
 fn identity(status: &rustix::fs::Stat) -> (u64, u64) {
-    (status.st_dev as u64, status.st_ino as u64)
+    (status.st_dev, status.st_ino)
 }
 
 /// A set of names created under quarantine and moved into place as one transaction.
@@ -131,6 +131,8 @@ impl Publication {
         Ok(())
     }
 
+    // Keeps the receiver so staging reads as an operation on the transaction it belongs to.
+    #[allow(clippy::unused_self)]
     fn stage(&self, anchor: &Arc<Anchor>, name: &[u8], path: Vec<u8>) -> io::Result<Reservation> {
         let name = Anchor::name(name)?;
         let staged = Anchor::name(
@@ -186,13 +188,13 @@ impl Publication {
 
     fn withdraw(&mut self) {
         let reservations = std::mem::take(&mut self.reservations);
-        withdraw(reservations, |reservation| {
+        withdraw(&reservations, |reservation| {
             reservation.anchor.remove(reservation.occupied());
         });
     }
 }
 
-fn withdraw<T>(entries: Vec<T>, mut remove: impl FnMut(&T)) {
+fn withdraw<T>(entries: &[T], mut remove: impl FnMut(&T)) {
     for entry in entries.iter().rev() {
         remove(entry);
     }
@@ -345,7 +347,7 @@ mod tests {
     #[test]
     fn withdrawal_reverses_reservation_order() {
         let mut removed = Vec::new();
-        withdraw(vec!["primary", "alias-one", "alias-two"], |entry| removed.push(*entry));
+        withdraw(&["primary", "alias-one", "alias-two"], |entry| removed.push(*entry));
         assert_eq!(removed, vec!["alias-two", "alias-one", "primary"]);
     }
 }

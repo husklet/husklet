@@ -65,6 +65,8 @@ impl RegionSet {
         self.retain_right(region, removed, output)
     }
 
+    // Receiver kept so the retain/protect helpers read as operations on the set.
+    #[allow(clippy::unused_self)]
     fn retain_left(&self, region: Region, removed: AddressRange, output: &mut Vec<Region>) -> Result<(), MemoryError> {
         if region.range().start() < removed.start() {
             output.push(region.slice(region.range().start(), region.range().end().min(removed.start()))?);
@@ -72,6 +74,7 @@ impl RegionSet {
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
     fn retain_right(&self, region: Region, removed: AddressRange, output: &mut Vec<Region>) -> Result<(), MemoryError> {
         if region.range().end() > removed.end() {
             output.push(region.slice(region.range().start().max(removed.end()), region.range().end())?);
@@ -152,6 +155,7 @@ impl RegionSet {
         false
     }
 
+    #[allow(clippy::unused_self)]
     fn protect_region(
         &self,
         region: Region,

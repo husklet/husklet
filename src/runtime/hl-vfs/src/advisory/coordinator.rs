@@ -285,8 +285,10 @@ impl LockCoordinator {
         if snapshot.flocks.len() + snapshot.ranges.len() > LOCK_MAXIMUM {
             return Err(LockError::ResourceLimit);
         }
-        let mut replacement = LockState::default();
-        replacement.next_ticket = 1;
+        let mut replacement = LockState {
+            next_ticket: 1,
+            ..LockState::default()
+        };
         for record in &snapshot.flocks {
             if Self::flock_blocked(&replacement, record.file, record.owner, record.mode).is_some()
                 || Self::has_flock_owner(&replacement, record.file, record.owner)

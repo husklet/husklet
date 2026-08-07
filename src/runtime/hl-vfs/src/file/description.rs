@@ -304,6 +304,8 @@ impl<H: VfsFileHost> VfsFileDescription<H> {
         Ok(written)
     }
 
+    // Receiver and Result keep the seek helpers uniform with their fallible siblings.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn set_offset(&self, state: &mut State, offset: u64) -> Result<u64, ObjectError> {
         state.offset = offset;
         Ok(offset)

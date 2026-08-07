@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 /// Generation-qualified process identity resolved from a guest-visible PID.
 ///
 /// Numeric procfs paths are lookup keys only. Consumers that retain a target
@@ -511,11 +512,12 @@ impl CpuView {
             match &self.model {
                 CpuModel::Aarch64 { .. } => {
                     let features = self.model.capability_names();
-                    output.push_str(&format!(
+                    let _ = write!(
+                        output,
                         "processor\t: {cpu}\nBogoMIPS\t: 100.00\nFeatures\t: {features}\n\
                          CPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\n\
                          CPU part\t: 0x000\nCPU revision\t: 0\n\n"
-                    ));
+                    );
                 }
                 CpuModel::X86_64 {
                     vendor,
@@ -524,12 +526,15 @@ impl CpuView {
                     stepping,
                     name,
                     flags,
-                } => output.push_str(&format!(
-                    "processor\t: {cpu}\nvendor_id\t: {vendor}\ncpu family\t: {family}\nmodel\t\t: {model}\n\
+                } => {
+                    let _ = write!(
+                        output,
+                        "processor\t: {cpu}\nvendor_id\t: {vendor}\ncpu family\t: {family}\nmodel\t\t: {model}\n\
                      model name\t: {name}\nstepping\t: {stepping}\nfpu\t\t: yes\n\
                      fpu_exception\t: yes\nflags\t\t: {}\n\n",
-                    flags.join(" ")
-                )),
+                        flags.join(" ")
+                    );
+                }
             }
         }
         output.into_bytes()
@@ -552,18 +557,20 @@ impl CpuView {
         );
         for cpu in 0..self.online {
             let ticks = self.ticks.get(cpu).copied().unwrap_or_default();
-            output.push_str(&format!(
-                "cpu{cpu} {} {} {} {} 0 0 0 0 0 0\n",
+            let _ = writeln!(
+                output,
+                "cpu{cpu} {} {} {} {} 0 0 0 0 0 0",
                 ticks.user, ticks.nice, ticks.system, ticks.idle,
-            ));
+            );
         }
         let activity = system.uptime_seconds.saturating_mul(100).saturating_add(1);
-        output.push_str(&format!(
+        let _ = write!(
+            output,
             "intr {}\nctxt {}\nbtime 1\nprocesses {}\nprocs_running 1\nprocs_blocked 0\n",
             activity.saturating_mul(137),
             activity.saturating_mul(509),
             system.process_creations.saturating_add(256),
-        ));
+        );
         output.into_bytes()
     }
 
@@ -709,6 +716,7 @@ impl NetworkView {
         bytes
     }
 
+    #[allow(clippy::unused_self)]
     pub(super) fn entries(&self) -> impl Iterator<Item = (&'static [u8], u8)> {
         const NAMES: &[&[u8]] = &[
             b"arp",
@@ -774,7 +782,7 @@ impl NetworkView {
                 .map(u64::to_string)
                 .collect::<Vec<_>>()
                 .join(" ");
-            output.push_str(&format!("{name:>6}: {receive} {transmit}\n"));
+            let _ = writeln!(output, "{name:>6}: {receive} {transmit}");
         }
         output.into_bytes()
     }
@@ -792,10 +800,12 @@ impl NetworkView {
             };
             let network = host & mask;
             let gateway = network | 0x0100_0000;
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "{}\t00000000\t{gateway:08X}\t0003\t0\t0\t0\t00000000\t0\t0\t0\n{}\t{network:08X}\t00000000\t0001\t0\t0\t0\t{mask:08X}\t0\t0\t0\n",
-                String::from_utf8_lossy(&interface.name), String::from_utf8_lossy(&interface.name)
-            ));
+                String::from_utf8_lossy(&interface.name),
+                String::from_utf8_lossy(&interface.name)
+            );
         }
         output.into_bytes()
     }
@@ -803,11 +813,12 @@ impl NetworkView {
     fn igmp_bytes(&self) -> Vec<u8> {
         let mut output = String::from("Idx\tDevice    : Count Querier\tGroup    Users Timer\tReporter\n");
         for interface in &self.interfaces {
-            output.push_str(&format!(
+            let _ = write!(
+                output,
                 "{}\t{:<10}:     1      V3\n\t\t\t\t010000E0     1 0:00000000\t\t0\n",
                 interface.index,
                 String::from_utf8_lossy(&interface.name)
-            ));
+            );
         }
         output.into_bytes()
     }
@@ -832,6 +843,8 @@ impl NetworkView {
             .filter(|socket| socket.ipv6 == ipv6 && socket.udp == udp)
             .enumerate()
         {
+            // The map/collect reads as the encoding it is; folding a String obscures it.
+            #[allow(clippy::format_collect)]
             let encode = |bytes: &[u8]| {
                 bytes
                     .chunks_exact(4)
@@ -971,9 +984,9 @@ impl DescriptorView {
     pub(super) fn info(&self) -> Vec<u8> {
         let mut output = format!("pos:\t{}\nflags:\t0{:o}\n", self.offset, self.flags);
         if let Some(mount) = self.mount {
-            output.push_str(&format!("mnt_id:\t{mount}\n"));
+            let _ = writeln!(output, "mnt_id:\t{mount}");
         }
-        output.push_str(&format!("ino:\t{}\n", self.inode));
+        let _ = writeln!(output, "ino:\t{}", self.inode);
         output.into_bytes()
     }
 }
@@ -991,9 +1004,10 @@ impl ProcessView {
         let groups = self.groups.iter().map(u32::to_string).collect::<Vec<_>>().join(" ");
         let mut output = format!("Name:\t{name}\n");
         if let Some(umask) = self.umask {
-            output.push_str(&format!("Umask:\t{umask:04o}\n"));
+            let _ = writeln!(output, "Umask:\t{umask:04o}");
         }
-        output.push_str(&format!(
+        let _ = write!(
+            output,
             "State:\t{}\nTgid:\t{}\nNgid:\t0\nPid:\t{}\nPPid:\t{}\nTracerPid:\t0\n\
              Uid:\t{}\t{}\t{}\t{}\nGid:\t{}\t{}\t{}\t{}\nGroups:\t{}\nThreads:\t{}\n\
              SigPnd:\t{:016x}\nSigBlk:\t{:016x}\nSigIgn:\t{:016x}\nSigCgt:\t{:016x}\n\
@@ -1025,16 +1039,17 @@ impl ProcessView {
             u8::from(self.no_new_privileges),
             self.seccomp_mode,
             self.seccomp_filters,
-        ));
-        output.push_str(&format!(
+        );
+        let _ = write!(
+            output,
             "Cpus_allowed:\t{}\nCpus_allowed_list:\t{}\n",
             self.allowed_mask, self.allowed_list,
-        ));
+        );
         if let Some(memory) = self.memory {
             let page_kb = memory.page_bytes / 1024;
             let size = memory.total_pages.saturating_mul(page_kb);
             let resident = memory.resident_pages.saturating_mul(page_kb);
-            output.push_str(&format!("VmSize:\t{size} kB\nVmRSS:\t{resident} kB\n"));
+            let _ = writeln!(output, "VmSize:\t{size} kB\nVmRSS:\t{resident} kB");
         }
         output.into_bytes()
     }
@@ -1048,11 +1063,12 @@ impl ProcessView {
         limits.sort_by_key(|limit| limit.resource);
         for limit in limits {
             let (name, units) = limit.resource.label();
-            output.push_str(&format!(
-                "{name:<25} {:<20} {:<20} {units:<10}\n",
+            let _ = writeln!(
+                output,
+                "{name:<25} {:<20} {:<20} {units:<10}",
                 limit.soft_text(),
                 limit.hard_text(),
-            ));
+            );
         }
         output.into_bytes()
     }

@@ -88,7 +88,6 @@ impl<H: MemoryAccessHost> Coordinator<H> {
 
 impl<H: MemoryAccessHost> ApertureLease<'_, H> {
     /// Captures whether a mapping mutation has queued behind this aperture.
-    #[must_use]
     pub fn request_continuation(&self) -> crate::RequestContinuation {
         crate::RequestContinuation::new(&self.coordinator.mapping_requests, self.mapping_requests)
     }

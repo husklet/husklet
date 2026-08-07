@@ -6,6 +6,8 @@ use crate::{SharedError, SharedObjectId};
 ///
 /// Implementations may retain a native shared-file capability, but no native
 /// descriptor or host pointer crosses this boundary.
+// `len` is a byte length, not a container count; an `is_empty` companion would be meaningless.
+#[allow(clippy::len_without_is_empty)]
 pub trait SharedBacking: std::fmt::Debug + Send + Sync {
     fn len(&self) -> Result<usize, SharedError>;
     fn resize(&self, size: usize) -> Result<(), SharedError>;

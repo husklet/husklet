@@ -151,10 +151,13 @@ impl View {
     }
 
     fn members(members: &[u32]) -> Vec<u8> {
+        use std::fmt::Write as _;
         members
             .iter()
-            .map(|member| format!("{member}\n"))
-            .collect::<String>()
+            .fold(String::new(), |mut text, member| {
+                let _ = writeln!(text, "{member}");
+                text
+            })
             .into_bytes()
     }
 }

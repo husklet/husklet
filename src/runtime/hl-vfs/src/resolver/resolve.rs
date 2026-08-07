@@ -363,6 +363,7 @@ impl<'host, 'namespace, H: VfsHost> Walk<'host, 'namespace, H> {
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
     fn ensure_remaining_bound(&self, components: &VecDeque<Component>) -> Result<(), ResolveError> {
         if components.len() > RESOLUTION_COMPONENT_MAXIMUM {
             return Err(ResolveError::TooManyComponents);
@@ -429,6 +430,7 @@ impl<'host, 'namespace, H: VfsHost> Walk<'host, 'namespace, H> {
         GuestPathBytes::new(&path).map_err(ResolveError::Path)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn finish(&mut self, final_component: ResolvedComponent) -> Result<ResolvedParent<'host, H>, ResolveError> {
         let parent = self.pins.take_current();
         Ok(ResolvedParent {

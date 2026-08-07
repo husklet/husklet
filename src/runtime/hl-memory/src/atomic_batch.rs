@@ -171,6 +171,7 @@ impl<H: AtomicBatchHost> MappingCoordinator<H> {
         Ok(())
     }
 
+    #[allow(clippy::type_complexity)]
     fn shared_writes(
         &self,
         writes: &[AtomicU32Write],

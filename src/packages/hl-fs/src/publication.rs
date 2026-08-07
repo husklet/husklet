@@ -174,6 +174,8 @@ impl Publication {
     }
 
     fn create(self, bytes: &[u8]) -> Result<Creation, CreateError> {
+        // The closure is not redundant: the direct path fails `FnOnce` lifetime inference here.
+        #[allow(clippy::redundant_closure_for_method_calls)]
         self.create_with(bytes, |staged, target| staged.publish(target))
     }
 
@@ -212,6 +214,8 @@ impl Publication {
         }
     }
 
+    // Keeps the receiver so failure classification reads as an operation on the publication.
+    #[allow(clippy::unused_self)]
     fn failure(
         &self,
         error: io::Error,
@@ -362,12 +366,12 @@ impl<'a> StagingFile<'a> {
 /// the macOS adapter validates handles and translates `AT_SYMLINK_FOLLOW`; Windows host shims do not
 /// provide equivalent publication. Rust maps pinned parents to `Directory`, staged identity
 /// and lifetime to `StagingFile`, bounded traversal to `Publication`, and errno to `CreateError`.
-/// The retained case 37 materializes O_TMPFILE with capability-gated `AT_EMPTY_PATH` first, then copies
-/// into a named exclusive file when that fails. Rust instead requires filesystem O_TMPFILE support and
+/// The retained case 37 materializes `O_TMPFILE` with capability-gated `AT_EMPTY_PATH` first, then copies
+/// into a named exclusive file when that fails. Rust instead requires filesystem `O_TMPFILE` support and
 /// a live `/proc/self/fd` view, returning `Unsupported` before publication when either prerequisite is
 /// absent; it deliberately has no copy fallback. Rust additionally owns data/metadata synchronization.
 /// Linux `EINVAL` and `ENOSYS`, as well as the standard unsupported error kinds, classify this
-/// missing O_TMPFILE capability as `Unsupported` before any namespace publication.
+/// missing `O_TMPFILE` capability as `Unsupported` before any namespace publication.
 /// Its unnamed inode has no staging pathname to substitute or clean up. Remaining gap: non-Linux hosts
 /// have no equivalent no-replace handle publication. Concurrent namespace mutation can redirect a
 /// mkdir-`EEXIST` traversal onto another filesystem after earlier ancestors were created; rollback by

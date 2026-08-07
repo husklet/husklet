@@ -156,6 +156,8 @@ pub struct OpenPlan {
 
 impl OpenPlan {
     /// Builds the same namespace-only decision as `hl_open_plan_build`.
+    // Consumes the request so a plan cannot be built twice from one request.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn build(request: OpenRequest) -> Result<Self, OpenError> {
         if request.guest_path.as_bytes().is_empty() {
             return Err(OpenError::Path(PathError::Empty));

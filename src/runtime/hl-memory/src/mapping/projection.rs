@@ -22,12 +22,12 @@ pub struct ProjectionGeneration {
 /// lease. Mapping transitions cannot begin while the lease is alive.
 pub struct ProjectionLease<'a, H: MemoryAccessHost> {
     coordinator: &'a Coordinator<H>,
-    _admission: crate::checkpoint_activity::ActivityAdmission,
+    admission: crate::checkpoint_activity::ActivityAdmission,
     _transaction: MutexGuard<'a, ()>,
     mapping_requests: u64,
     range: AddressRange,
     storage_address: u64,
-    _projection: H::Projection,
+    projection: H::Projection,
     protection: Protection,
     authority: Protection,
     backing: Backing,
@@ -100,7 +100,7 @@ struct LiveProjection<P> {
     view: ProjectionView,
     backing: Backing,
     write_reservation: Option<u64>,
-    _projection: P,
+    projection: P,
 }
 
 impl<H: MemoryAccessHost> Coordinator<H> {
@@ -155,12 +155,12 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             .transpose()?;
         Ok(ProjectionLease {
             coordinator: self,
-            _admission: admission,
+            admission,
             _transaction: transaction,
             mapping_requests,
             range,
             storage_address,
-            _projection: projection,
+            projection,
             protection: resolution.region.protection(),
             authority: required,
             backing: resolution.region.backing(),
@@ -205,7 +205,7 @@ impl<H: MemoryAccessHost> ProjectionLease<'_, H> {
     /// Captures checkpoint-request validity for this admitted projection.
     /// Mapping and scheduler validity remain separate continuation gates.
     pub fn checkpoint_continuation(&self) -> crate::CheckpointContinuation {
-        self._admission.continuation()
+        self.admission.continuation()
     }
 
     /// Captures whether a mapping or externally published write has requested
@@ -371,7 +371,7 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
             view,
             backing: resolution.region.backing(),
             write_reservation,
-            _projection: projection,
+            projection,
         });
         Ok(view)
     }
@@ -586,12 +586,12 @@ impl<'a, H: MemoryAccessHost> ProjectionLease<'a, H> {
 
     fn view_shared_backing_is_coherent(&self, view: ProjectionView) -> bool {
         if view.range == self.range && view.storage_address == self.storage_address {
-            return self._projection.shared_backing_is_coherent();
+            return self.projection.shared_backing_is_coherent();
         }
         self.additional
             .iter()
             .find(|projection| projection.view == view)
-            .is_some_and(|projection| projection._projection.shared_backing_is_coherent())
+            .is_some_and(|projection| projection.projection.shared_backing_is_coherent())
     }
 
     fn validate_writable(&self, view: ProjectionView) -> Result<crate::Resolution, MemoryError> {

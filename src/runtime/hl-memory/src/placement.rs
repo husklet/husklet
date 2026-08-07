@@ -44,6 +44,8 @@ impl MapRequest {
         Ok(())
     }
 
+    // Keeps the receiver so every placement rule reads uniformly on the request.
+    #[allow(clippy::unused_self)]
     fn validate_anywhere(
         self,
         minimum: GuestAddress,

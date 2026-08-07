@@ -76,7 +76,7 @@ pub struct Coordinator<H> {
 #[derive(Debug)]
 pub(crate) struct PinnedRegion {
     region: Region,
-    _pin: SharedBackingPin,
+    pin: SharedBackingPin,
 }
 
 impl<H: Host> Coordinator<H> {
@@ -184,7 +184,7 @@ impl<H: Host> Coordinator<H> {
             shared: Some(shared),
             pins: Mutex::new(
                 pins.into_iter()
-                    .map(|(region, pin)| PinnedRegion { region, _pin: pin })
+                    .map(|(region, pin)| PinnedRegion { region, pin })
                     .collect(),
             ),
             transaction: Mutex::new(()),
@@ -376,7 +376,7 @@ impl<H: Host> Coordinator<H> {
             shared: self.shared.clone(),
             pins: Mutex::new(
                 pins.into_iter()
-                    .map(|(region, pin)| PinnedRegion { region, _pin: pin })
+                    .map(|(region, pin)| PinnedRegion { region, pin })
                     .collect(),
             ),
             transaction: Mutex::new(()),
@@ -486,7 +486,7 @@ impl<H: Host> Coordinator<H> {
             .position(|(candidate, _)| *candidate == region)
             .expect("every new shared region was pinned before host staging");
         let (region, pin) = new.swap_remove(index);
-        PinnedRegion { region, _pin: pin }
+        PinnedRegion { region, pin }
     }
 
     fn finish(&self, reservations: &[u64]) -> Result<(), MemoryError> {
@@ -511,7 +511,7 @@ impl<H: MemoryAccessHost> Coordinator<H> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .find(|entry| entry.region == region)
-            .map(|entry| entry._pin.retain())
+            .map(|entry| entry.pin.retain())
             .ok_or(MemoryError::InvariantViolation)?
             .map_err(MemoryError::from)
     }

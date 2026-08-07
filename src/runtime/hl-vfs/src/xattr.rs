@@ -162,6 +162,7 @@ impl<H: XattrHost> Xattrs<H> {
         self.publish(XattrMutation::Remove { name }, None)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn publish(
         &self,
         mutation: XattrMutation<'_>,

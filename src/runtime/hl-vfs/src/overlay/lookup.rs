@@ -84,6 +84,7 @@ impl<H: OverlayHost> Overlay<H> {
         self.lower_count as usize + 1
     }
 
+    #[allow(clippy::unused_self)]
     pub(crate) const fn layer(&self, position: usize) -> Layer {
         if position == 0 {
             Layer::Upper

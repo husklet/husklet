@@ -589,7 +589,7 @@ fn pointer_free_publish() {
     invalid.flocks.push(invalid.flocks[0]);
     let rejected = AdvisoryLockCoordinator::new();
     assert_eq!(rejected.restore(&invalid), Err(LockError::InvalidArgument));
-    assert_eq!(rejected.snapshot(), Default::default());
+    assert_eq!(rejected.snapshot(), super::LockSnapshot::default());
 }
 
 #[test]

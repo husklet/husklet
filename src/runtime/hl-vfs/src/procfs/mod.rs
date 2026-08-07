@@ -508,6 +508,7 @@ impl Procfs {
         }
     }
 
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn snapshot_file(
         &self,
         process: u32,

@@ -5,6 +5,8 @@ use crate::{Kind, Metadata};
 pub(super) struct MetadataAdapter;
 
 impl MetadataAdapter {
+    // Takes the metadata by value so callers hand over the snapshot they built.
+    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn descriptor(value: Metadata) -> OfdMetadata {
         OfdMetadata {
             device: value.identity.device,

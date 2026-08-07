@@ -17,7 +17,6 @@ pub struct ReservationCoordinate {
 }
 
 impl ReservationCoordinate {
-    #[must_use]
     pub fn from_mapping(backing: Backing, backing_offset: u64, guest_address: u64) -> Result<Self, MemoryError> {
         let absolute_offset = match backing {
             Backing::Shared(reference) => reference

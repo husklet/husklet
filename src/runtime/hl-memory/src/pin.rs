@@ -3,6 +3,8 @@ use std::sync::Arc;
 use super::SharedBackingPin;
 use crate::{SharedError, SharedObjectId, SharedSeal};
 
+// `len` is a byte length, not a container count.
+#[allow(clippy::len_without_is_empty)]
 impl SharedBackingPin {
     #[must_use]
     pub fn id(&self) -> SharedObjectId {
