@@ -126,14 +126,21 @@ impl<O: Copy + Eq + Send + Sync + 'static> PiFutexTable<O> {
             waiters: VecDeque::new(),
         });
         let observed = self.memory.load(key).map_err(Self::memory_error)?;
-        if observed & FUTEX_TID_MASK != (self.number)(caller) || state.owner.is_some_and(|owner| owner != caller) {
+        if observed & FUTEX_TID_MASK != (self.number)(caller) {
             return Err(PiFutexError::Permission);
         }
-        // The futex word is Linux's ownership authority. A racing userspace
-        // unlock can make a contending syscall observe zero and retire the
-        // cached owner while an already-dispatched UNLOCK_PI still names the
-        // same owner in the word. Reconstitute that transient cache entry so
-        // the syscall can perform the handoff instead of stranding waiters.
+        // An uncontended release and the next acquisition both complete in
+        // userspace, so a cached owner the word disagrees with is simply a
+        // handoff this table never saw. Retire it against the word, which is
+        // the ownership authority, rather than stranding every waiter. A cache
+        // entry the word still agrees with stays authoritative so a recycled
+        // thread number cannot unlock its predecessor's futex.
+        if state.owner.is_some_and(|owner| (self.number)(owner) != observed & FUTEX_TID_MASK) {
+            state.owner = None;
+        }
+        if state.owner.is_some_and(|owner| owner != caller) {
+            return Err(PiFutexError::Permission);
+        }
         state.owner = Some(caller);
         let replacement = if state.waiters.is_empty() { 0 } else { FUTEX_WAITERS };
         if self

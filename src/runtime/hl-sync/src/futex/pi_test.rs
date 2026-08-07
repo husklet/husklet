@@ -20,6 +20,7 @@ struct Owner {
 struct Memory {
     words: Mutex<BTreeMap<FutexKey, u32>>,
     release_on_waiters: AtomicBool,
+    handoff_on_waiters: std::sync::atomic::AtomicU32,
 }
 
 impl Memory {
@@ -33,6 +34,12 @@ impl Memory {
 
     fn race_user_unlock(&self) {
         self.release_on_waiters.store(true, Ordering::Release);
+    }
+
+    /// Models an uncontended release plus the next acquisition, both completed
+    /// in userspace while a waiter is publishing the waiters bit.
+    fn race_user_handoff(&self, number: u32) {
+        self.handoff_on_waiters.store(number, Ordering::Release);
     }
 }
 
@@ -75,11 +82,14 @@ impl FutexMemory for Memory {
     fn compare_exchange(&self, key: FutexKey, expected: u32, replacement: u32) -> Result<u32, FutexError> {
         let mut words = self.words.lock().unwrap();
         let word = words.get_mut(&key).ok_or(FutexError::Fault)?;
-        if replacement & FUTEX_WAITERS != 0
-            && expected & FUTEX_WAITERS == 0
-            && self.release_on_waiters.swap(false, Ordering::AcqRel)
-        {
-            *word = 0;
+        if replacement & FUTEX_WAITERS != 0 && expected & FUTEX_WAITERS == 0 {
+            if self.release_on_waiters.swap(false, Ordering::AcqRel) {
+                *word = 0;
+            }
+            let handoff = self.handoff_on_waiters.swap(0, Ordering::AcqRel);
+            if handoff != 0 {
+                *word = handoff;
+            }
         }
         let observed = *word;
         if observed == expected {
@@ -144,6 +154,33 @@ fn contention_hands_off() {
     assert_eq!(memory.word(key) & FUTEX_TID_MASK, second.number);
     assert_eq!(table.unlock(key, second), Ok(()));
     assert_eq!(memory.word(key), 0);
+}
+
+// An uncontended release and the next acquisition both complete in userspace,
+// so the cached owner names a thread that already handed ownership on. The
+// word still names the caller, and the handoff must run from it.
+#[test]
+fn stale_cached_owner_still_hands_off() {
+    let (table, memory, key) = fixture();
+    let first = Owner::new(10, 1);
+    let second = Owner::new(11, 1);
+    let third = Owner::new(12, 1);
+    assert_eq!(
+        table.lock(key, first, None, false, None, &Interruption::new(), &Clock),
+        Ok(PiFutexOutcome::Acquired),
+    );
+    memory.race_user_handoff(second.number);
+
+    let waiter_table = table.clone();
+    let waiter =
+        thread::spawn(move || waiter_table.lock(key, third, Some(first), false, None, &Interruption::new(), &Clock));
+    while memory.word(key) & FUTEX_WAITERS == 0 {
+        thread::yield_now();
+    }
+
+    assert_eq!(table.unlock(key, second), Ok(()));
+    assert_eq!(waiter.join().unwrap(), Ok(PiFutexOutcome::Acquired));
+    assert_eq!(memory.word(key) & FUTEX_TID_MASK, third.number);
 }
 
 #[test]
