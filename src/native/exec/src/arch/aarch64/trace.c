@@ -21,6 +21,7 @@
 #include "saturating_narrow.h"
 #include "multiply.h"
 #include "memory.h"
+#include "atomic.h"
 #include "ordered.h"
 #include "pair_arithmetic.h"
 #include "pcrel.h"
@@ -173,6 +174,7 @@ static int body_accepts(uint32_t word, uint64_t pc, hl_a64_memory *memory) {
         hl_a64_single_direct_body(&assembler, word, pc, NULL, &guard, &sites) ||
         hl_a64_zero_body(&assembler, word, pc, &guard, &sites) ||
         hl_a64_ordered_body(&assembler, word, pc, &guard, &sites) ||
+        hl_a64_atomic_body(&assembler, word, pc, &guard, &sites) ||
         hl_a64_simd_immediate_body(&assembler, word) ||
         hl_a64_single_body(&assembler, word, pc, &guard, &sites) ||
         hl_a64_pair_body(&assembler, word, pc, &guard, &sites) ||
@@ -219,8 +221,13 @@ hl_a64_instruction_effect hl_a64_trace_effect(uint32_t word, uint64_t pc) {
         if (memory.writeback) effect.gpr_definitions |= register_definition(memory.base);
         /* Exclusive/atomic encodings have additional result operands whose
          * roles vary by subfamily.  Preserve safety until those are split. */
-        if (memory.kind == HL_A64_MEMORY_EXCLUSIVE || memory.kind == HL_A64_MEMORY_ATOMIC)
-            effect.gpr_definitions = UINT32_MAX;
+        if (memory.kind == HL_A64_MEMORY_EXCLUSIVE || memory.kind == HL_A64_MEMORY_ATOMIC) {
+            uint32_t atomic_definitions;
+            if (!hl_a64_atomic_definitions(word, &atomic_definitions))
+                effect.gpr_definitions = UINT32_MAX;
+            else
+                effect.gpr_definitions = atomic_definitions;
+        }
         return effect;
     }
 
@@ -700,6 +707,7 @@ static int trace_build(const hl_a64_source *source, uint64_t pc, size_t count, v
                                        &guards[guard_count], &memory_sites) &&
             !hl_a64_zero_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
             !hl_a64_ordered_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
+            !hl_a64_atomic_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
             !hl_a64_simd_immediate_body(&assembler, planned_words[index]) &&
             !hl_a64_single_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&
             !hl_a64_pair_body(&assembler, planned_words[index], instruction, &guards[guard_count], &memory_sites) &&

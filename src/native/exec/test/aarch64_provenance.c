@@ -1,4 +1,5 @@
 #include "../cache/cache.h"
+#include "../src/arch/aarch64/atomic.h"
 #include "../src/arch/aarch64/memory.h"
 #include "../src/arch/aarch64/trace.h"
 
@@ -80,8 +81,29 @@ int main(void) {
     for (size_t index = 0; index < 13; ++index) bounded[index] = 0xd50b7421u;
     CHECK(!hl_a64_trace_build(&bounded_source, 0xac00, 13, code, capacity, &bounded_trace));
     CHECK(bounded_trace.provenance_count <= HL_NATIVE_PROVENANCE_MAX);
-    /* Exclusive, LSE and CASP are fallback-only until monitor state is ported. */
-    static const uint32_t pending[] = {0xc85f7c20u, 0xf8200022u, 0x48207c82u};
+    /* A lowered LSE word publishes exactly one write access for its own
+     * four-byte host opcode. */
+    if (hl_a64_atomic_host_supports()) {
+        static const uint32_t lse = 0xf8200022u; /* ldadd x0,x2,[x1] */
+        const hl_a64_source_span span = {0xb000, (const uint8_t *)&lse, 4, 11, 12};
+        const hl_a64_source source = {&span, 1, 11, 12};
+        hl_a64_trace_result trace;
+        uint32_t found = 0;
+        CHECK(hl_a64_trace_build(&source, 0xb000, 1, code, capacity, &trace));
+        CHECK(trace.provenance_count <= HL_NATIVE_PROVENANCE_MAX);
+        for (uint32_t index = 0; index < trace.provenance_count; ++index) {
+            const hl_native_provenance *record = &trace.provenance[index];
+            if (record->access == HL_NATIVE_ACCESS_UNKNOWN) continue;
+            CHECK(record->access == HL_NATIVE_ACCESS_WRITE && record->width == 8);
+            CHECK(record->code_size == sizeof(uint32_t) && record->guest == 0xb000);
+            CHECK(record->address.kind == HL_NATIVE_ADDRESS_BASE);
+            CHECK(record->address.base == 16 && record->address.displacement == 0);
+            ++found;
+        }
+        CHECK(found == 1);
+    }
+    /* Exclusive and CASP stay fallback-only until monitor state is ported. */
+    static const uint32_t pending[] = {0xc85f7c20u, 0x48207c82u};
     for (size_t index = 0; index < sizeof(pending) / sizeof(pending[0]); ++index) {
         const hl_a64_source_span span = {0xb000, (const uint8_t *)&pending[index], 4, 11, 12};
         const hl_a64_source source = {&span, 1, 11, 12};
