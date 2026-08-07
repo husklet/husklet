@@ -601,6 +601,18 @@ impl GuestExecutor {
             }
         }
 
+        /// Reports stranded live threads on every exit path, including error returns.
+        struct LostReport<'a>(&'a threads::ThreadSet);
+        impl Drop for LostReport<'_> {
+            fn drop(&mut self) {
+                let lost = self.0.lost_completions();
+                if lost != 0 {
+                    eprintln!("hl-sched: lost_completions={lost}");
+                }
+            }
+        }
+
+        let _lost = LostReport(threads);
         let mut turns = 0_u64;
         let host_faults = NativePool::selected(isa, plan)
             .then(|| NativePool::production_faults(host_faults))
@@ -783,7 +795,10 @@ impl GuestExecutor {
                         }
                         return Ok(None);
                     }
-                    Ok(_) => {}
+                    Ok(TraceBoundary::Kill) => {
+                        return Self::finish(plan, threads, run, ThreadTerminal::Thread(Self::signal(9)));
+                    }
+                    Ok(TraceBoundary::Continue | TraceBoundary::Dispatch | TraceBoundary::Signal(_)) => {}
                     Err(error) => return Self::apply_error(threads, run, error),
                 }
                 if run.interrupt.is_set() {
@@ -1174,8 +1189,24 @@ impl GuestExecutor {
     ) -> Result<CompletionTurn, EngineError> {
         match threads.resume_run(&completion.run) {
             Ok(()) => {}
-            Err(hl_runtime::RuntimeThreadError::Missing) => return Ok(CompletionTurn::Continue),
-            Err(error) => return Err(Self::thread_error(error)),
+            Err(threads::ResumeReject::Retired) => return Ok(CompletionTurn::Continue),
+            Err(threads::ResumeReject::Live(ownership)) => {
+                // Dropping this completion strands a live thread: nothing else
+                // will ever return it to the ready set.
+                hl_log::hl_error!(
+                    hl_log::tag::TASK,
+                    "completion dropped for live thread thread={:?} process={:?} generation={} ownership={:?} lost={}",
+                    completion.run.thread,
+                    completion.run.process,
+                    completion.run.generation,
+                    ownership,
+                    threads.lost_completions(),
+                );
+                return Ok(CompletionTurn::Continue);
+            }
+            Err(threads::ResumeReject::Invalid) => {
+                return Err(Self::thread_error(hl_runtime::RuntimeThreadError::Invalid));
+            }
         }
         let memory = completion.run.space.arena_memory();
         let terminal = Self::dispatch_outcome(isa, &memory, &completion.run.router, completion.outcome)?;

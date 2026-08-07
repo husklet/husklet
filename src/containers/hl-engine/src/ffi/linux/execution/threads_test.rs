@@ -6,7 +6,7 @@ use hl_runtime::{PreparedThread, RuntimeThreadError, RuntimeThreadPort};
 use hl_runtime::{RouterDependencies, RuntimeSyscallRouter, RuntimeSyscallTrap};
 use hl_task::{ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry};
 
-use super::threads::ThreadSet;
+use super::threads::{ResumeReject, RunOwnership, ThreadSet};
 
 struct TestMemory;
 struct TestPort;
@@ -634,7 +634,7 @@ fn stale_run_cannot_resume_replacement() {
     let replacement = threads.next().unwrap();
     assert_ne!(stale.generation, replacement.generation);
     threads.park_syscall(&replacement).unwrap();
-    assert_eq!(threads.resume_run(&stale), Err(RuntimeThreadError::Missing));
+    assert_eq!(threads.resume_run(&stale), Err(ResumeReject::Retired));
     assert_eq!(threads.resume_run(&replacement), Ok(()));
 }
 
@@ -760,13 +760,16 @@ fn run_ownership_transfers_once_and_rejects_stale_claims() {
     assert!(Arc::ptr_eq(&running.machine, &reclaimed.machine));
     threads.park_syscall(&reclaimed).unwrap();
     assert_eq!(threads.resume_run(&reclaimed), Ok(()));
-    assert_eq!(threads.resume_run(&reclaimed), Err(RuntimeThreadError::Missing));
+    assert_eq!(
+        threads.resume_run(&reclaimed),
+        Err(ResumeReject::Live(Some(RunOwnership::Running)))
+    );
     threads.release(&reclaimed).unwrap();
 
     let waiting = threads.claim(first, running.generation).unwrap();
     threads.park_syscall(&waiting).unwrap();
     threads.terminate(first).unwrap();
-    assert_eq!(threads.resume_run(&waiting), Err(RuntimeThreadError::Missing));
+    assert_eq!(threads.resume_run(&waiting), Err(ResumeReject::Retired));
 
     let running = threads.claim(second, threads.find(second).unwrap().generation).unwrap();
     threads.terminate(second).unwrap();
@@ -1020,6 +1023,64 @@ fn stop_install_before_control_event_releases_exact_gate() {
     threads.process_control(control_event(process, 2, hl_task::ProcessControlAction::Kill));
 
     assert_eq!(threads.next().unwrap().generation, run.generation);
+}
+
+/// Terminating a thread that is still executing must interrupt both blocking
+/// domains; cancellation alone never reaches translated code.
+#[test]
+fn terminate_interrupts_a_running_thread() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, thread) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let threads = ThreadSet::new(1).unwrap();
+    publish(&threads, process, thread, 0x1000, space());
+    let run = threads.claim(thread, threads.find(thread).unwrap().generation).unwrap();
+    assert!(!run.interrupt.is_set());
+
+    RuntimeThreadPort::terminate(&threads, thread).unwrap();
+
+    assert!(run.interrupt.is_set());
+    assert_eq!(run.cancellation.signal(), Some(9));
+}
+
+/// A refused completion is only harmless when its thread is gone; one refused
+/// for a still-registered generation strands a live thread and must be counted.
+#[test]
+fn lost_completion_separates_live_thread_from_reclaimed_one() {
+    let tasks = TaskRegistry::new(RegistryConfig::default()).unwrap();
+    let (process, first) = tasks
+        .create_init(
+            ProcessCredentials::new(0, 0, &[], 32).unwrap(),
+            ProcessLimits::default(),
+        )
+        .unwrap();
+    let second = tasks
+        .commit_clone_thread(tasks.begin_clone_thread(first).unwrap())
+        .unwrap();
+    let threads = ThreadSet::new(2).unwrap();
+    let shared = space();
+    publish(&threads, process, first, 0x1000, Arc::clone(&shared));
+    publish(&threads, process, second, 0x2000, shared);
+
+    let reclaimed = threads.claim(first, threads.find(first).unwrap().generation).unwrap();
+    threads.park_syscall(&reclaimed).unwrap();
+    threads.terminate(first).unwrap();
+    assert_eq!(threads.resume_run(&reclaimed), Err(ResumeReject::Retired));
+    assert_eq!(threads.lost_completions(), 0);
+
+    let live = threads.claim(second, threads.find(second).unwrap().generation).unwrap();
+    threads.park_syscall(&live).unwrap();
+    threads.abort_waiter(&live).unwrap();
+    assert_eq!(
+        threads.resume_run(&live),
+        Err(ResumeReject::Live(Some(RunOwnership::Running)))
+    );
+    assert_eq!(threads.lost_completions(), 1);
+    assert!(threads.find(second).is_some());
 }
 
 /// Releasing a stop gate must leave a syscall-owned peer parked: its waiter

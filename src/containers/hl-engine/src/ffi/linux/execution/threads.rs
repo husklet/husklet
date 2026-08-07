@@ -127,6 +127,19 @@ pub(super) struct ThreadSet {
     tasks: Option<Arc<hl_task::TaskRegistry>>,
     counter: Option<Arc<dyn hl_execution::ArchitecturalCounter>>,
     continuation: Arc<ContinuationEpoch>,
+    lost_completions: AtomicU64,
+}
+
+/// Why a waiter completion could not return its run to `Running`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ResumeReject {
+    /// No live record answers to this run: the thread was reclaimed, or a newer
+    /// process/generation owns the id. Discarding the completion is correct.
+    Retired,
+    /// The record still matches this run, so the completion belongs to a thread
+    /// that is alive and will never be rescheduled by it.
+    Live(Option<RunOwnership>),
+    Invalid,
 }
 
 pub(super) struct ThreadStage {
@@ -364,6 +377,7 @@ impl ThreadSet {
             tasks: None,
             counter: None,
             continuation: Arc::new(ContinuationEpoch::new()),
+            lost_completions: AtomicU64::new(0),
             state: Arc::new(Mutex::new(SetState {
                 machines: BTreeMap::new(),
                 ownership: BTreeMap::new(),
@@ -582,17 +596,30 @@ impl ThreadSet {
         Ok(())
     }
 
-    pub(super) fn resume_run(&self, run: &ThreadRun) -> Result<(), RuntimeThreadError> {
+    /// Count of completions this set refused for a thread that was still live —
+    /// each one is a runnable task the scheduler will never see again.
+    pub(super) fn lost_completions(&self) -> u64 {
+        self.lost_completions.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn resume_run(&self, run: &ThreadRun) -> Result<(), ResumeReject> {
         let _request = self.continuation_request();
-        let mut state = self.state.lock().map_err(|_| RuntimeThreadError::Invalid)?;
+        let mut state = self.state.lock().map_err(|_| ResumeReject::Invalid)?;
         let _request = self.continuation_request();
-        let current = state.machines.get(&run.thread).ok_or(RuntimeThreadError::Missing)?;
-        if current.process != run.process
-            || current.generation != run.generation
-            || state.ownership.get(&run.thread) != Some(&RunOwnership::Waiter)
-            || !state.parked.remove(&run.thread)
-        {
-            return Err(RuntimeThreadError::Missing);
+        let Some(current) = state.machines.get(&run.thread) else {
+            return Err(ResumeReject::Retired);
+        };
+        if current.process != run.process || current.generation != run.generation {
+            return Err(ResumeReject::Retired);
+        }
+        let ownership = state.ownership.get(&run.thread).copied();
+        if ownership == Some(RunOwnership::Retired) {
+            return Err(ResumeReject::Retired);
+        }
+        if ownership != Some(RunOwnership::Waiter) || !state.parked.remove(&run.thread) {
+            drop(state);
+            self.lost_completions.fetch_add(1, Ordering::Relaxed);
+            return Err(ResumeReject::Live(ownership));
         }
         state.ownership.insert(run.thread, RunOwnership::Running);
         let blocked = state.syscall_parked.remove(&run.thread);
@@ -600,7 +627,7 @@ impl ThreadSet {
         if blocked && let Some(tasks) = &self.tasks {
             tasks
                 .set_thread_blocked(run.thread, false)
-                .map_err(|_| RuntimeThreadError::Invalid)?;
+                .map_err(|_| ResumeReject::Invalid)?;
         }
         Ok(())
     }
@@ -1059,6 +1086,9 @@ impl RuntimeThreadPort for ThreadSet {
             // returned from execution. Defer reclamation to release().
             state.ownership.insert(thread, RunOwnership::Retired);
             if let Some(run) = state.machines.get(&thread) {
+                // Both blocking domains, as in `cancel_all`: releasing only the
+                // host syscall leaves a compute-bound guest running forever.
+                let _ = run.interrupt.set(true);
                 run.cancellation.request(9);
             }
             return Ok(());

@@ -19,6 +19,7 @@ hl-event = { path = "../../runtime/hl-event" }
 hl-isa = { path = "../../runtime/hl-isa" }
 hl-ipc = { path = "../../runtime/hl-ipc" }
 hl-loader = { path = "../../runtime/hl-loader" }
+hl-log = { path = "../../packages/hl-log" }
 hl-linux = { path = "../../runtime/hl-linux" }
 hl-memory = { path = "../../runtime/hl-memory" }
 hl-native = { path = "../../native" }
