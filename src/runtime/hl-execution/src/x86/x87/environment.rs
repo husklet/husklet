@@ -194,11 +194,8 @@ impl ExtendedMemory {
     }
 
     pub(crate) fn status(cpu: &mut CpuState, next: u64) -> ExecutionExit {
-        cpu.write_register(
-            crate::ScalarRegister::General(0),
-            crate::ScalarWidth::Word,
-            u64::from(cpu.x87_status),
-        );
+        let status = u64::from(cpu.x87_status);
+        cpu.write_register(crate::ScalarRegister::General(0), crate::ScalarWidth::Word, status);
         cpu.rip = next;
         ExecutionExit::Continue
     }

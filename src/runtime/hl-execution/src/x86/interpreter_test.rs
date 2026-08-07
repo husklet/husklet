@@ -19,7 +19,10 @@ fn vex_f16c_decode_and_roundtrip() {
     ));
 
     let mut cpu = CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = u128::from(1.5_f32.to_bits())
@@ -251,7 +254,10 @@ fn endbr64_is_noop() {
     assert_eq!(ir.instruction, ScalarInstruction::Nop);
 
     let mut cpu = CpuState {
-        rip: 0x401000,
+        scalar: ScalarState {
+            rip: 0x401000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut memory = ModelMemory {
@@ -278,7 +284,10 @@ fn retained_hints() {
         &[0x0f, 0x1f, 0x40, 0x00][..],
     ] {
         let mut cpu = CpuState {
-            rip: 0x800,
+            scalar: ScalarState {
+                rip: 0x800,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = u64::MAX;
@@ -313,8 +322,11 @@ fn byte_swap_registers() {
         commits: 0,
     };
     let mut dword = CpuState {
-        rip: 0x401757,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            rip: 0x401757,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     dword.registers[1] = 0xffff_ffff_89ab_cdef;
@@ -335,7 +347,10 @@ fn byte_swap_registers() {
     assert_eq!(dword.flags, dword_flags);
 
     let mut qword = CpuState {
-        rip: 0x500,
+        scalar: ScalarState {
+            rip: 0x500,
+            ..Default::default()
+        },
         ..Default::default()
     };
     qword.registers[6] = 0x0011_2233_4455_6677;
@@ -348,7 +363,10 @@ fn byte_swap_registers() {
     assert_eq!(qword.registers[6], 0x7766_5544_3322_1100);
 
     let mut extended = CpuState {
-        rip: 0x600,
+        scalar: ScalarState {
+            rip: 0x600,
+            ..Default::default()
+        },
         ..Default::default()
     };
     extended.registers[9] = 0x0123_4567_89ab_cdef;
@@ -387,7 +405,10 @@ fn byte_swap_prefixes() {
 fn setne_rex_byte() {
     let ir = X86ScalarDecoder::decode(&[0x40, 0x0f, 0x95, 0xc7], 0x401025).unwrap();
     let mut cpu = CpuState {
-        rip: 0x401025,
+        scalar: ScalarState {
+            rip: 0x401025,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[7] = 0x1122;
@@ -419,7 +440,10 @@ fn movsxd_extends_operands() {
         }
     );
     let mut cpu = CpuState {
-        rip: 0x404265,
+        scalar: ScalarState {
+            rip: 0x404265,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[6] = 0xfeed_face_8000_0001;
@@ -452,7 +476,10 @@ fn movzx_extends_operands() {
     assert_eq!(word.length, 7);
     assert_eq!(word.width, ScalarWidth::Dword);
     let mut cpu = CpuState {
-        rip: 0x41c029,
+        scalar: ScalarState {
+            rip: 0x41c029,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[5] = 0x1110;
@@ -512,7 +539,10 @@ fn movzx_extends_operands() {
 #[test]
 fn movzx_fault_atomic() {
     let mut cpu = CpuState {
-        rip: 0x700,
+        scalar: ScalarState {
+            rip: 0x700,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -542,7 +572,10 @@ fn movsx_byte_values() {
     let instruction = X86ScalarDecoder::decode(&[0x0f, 0xbe, 0xc3], 0x900).unwrap();
     for byte in 0_u64..=255 {
         let mut cpu = CpuState {
-            rip: 0x900,
+            scalar: ScalarState {
+                rip: 0x900,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = u64::MAX;
@@ -571,7 +604,10 @@ fn movsx_byte_registers() {
         (&[0x44, 0x0f, 0xbe, 0xc4][..], 0x83, 8, 0xffff_ff83),
     ] {
         let mut cpu = CpuState {
-            rip: 0xa00,
+            scalar: ScalarState {
+                rip: 0xa00,
+                ..Default::default()
+            },
             ..Default::default()
         };
         if bytes[0] == 0x41 {
@@ -600,7 +636,10 @@ fn movsx_byte_registers() {
     for raw in 4_u8..=7 {
         let byte = 0x80 + raw;
         let mut legacy = CpuState {
-            rip: 0xa80,
+            scalar: ScalarState {
+                rip: 0xa80,
+                ..Default::default()
+            },
             ..Default::default()
         };
         legacy.registers[usize::from(raw - 4)] = u64::from(byte) << 8;
@@ -621,7 +660,10 @@ fn movsx_byte_registers() {
         for (rex, source) in [(0x40_u8, raw), (0x41, raw + 8)] {
             let byte = byte + 8;
             let mut rex_cpu = CpuState {
-                rip: 0xa90,
+                scalar: ScalarState {
+                    rip: 0xa90,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             rex_cpu.registers[usize::from(source)] = u64::from(byte);
@@ -635,7 +677,10 @@ fn movsx_byte_registers() {
     }
 
     let mut cpu = CpuState {
-        rip: 0xb00,
+        scalar: ScalarState {
+            rip: 0xb00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x80_55;
@@ -657,7 +702,10 @@ fn movsx_byte_registers() {
 #[test]
 fn movsx_byte_memory() {
     let mut cpu = CpuState {
-        rip: 0xc00,
+        scalar: ScalarState {
+            rip: 0xc00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[11] = 0x1000;
@@ -711,8 +759,11 @@ fn movsx_word_forms() {
         (&[0x48, 0x0f, 0xbf, 0xc1][..], 0x8001, 0, 0xffff_ffff_ffff_8001),
     ] {
         let mut cpu = CpuState {
-            rip: 0xe80,
-            flags: FlagState::from_bits(u16::MAX),
+            scalar: ScalarState {
+                rip: 0xe80,
+                flags: FlagState::from_bits(u16::MAX),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = initial;
@@ -736,7 +787,10 @@ fn movsx_word_forms() {
     }
 
     let mut cpu = CpuState {
-        rip: 0xf00,
+        scalar: ScalarState {
+            rip: 0xf00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -763,8 +817,11 @@ fn movsx_word_forms() {
 fn xlat_address_and_fault() {
     let flags = FlagState::from_bits(u16::MAX);
     let mut cpu = CpuState {
-        rip: 0xf80,
-        flags,
+        scalar: ScalarState {
+            rip: 0xf80,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x1122_3344_5566_7782;
@@ -823,8 +880,11 @@ fn count_controlled_branches() {
         (0xe3, 1, false, false, 1),
     ] {
         let mut cpu = CpuState {
-            rip: 0x1000,
-            flags: FlagState::default().with(Flag::Zero, zero),
+            scalar: ScalarState {
+                rip: 0x1000,
+                flags: FlagState::default().with(Flag::Zero, zero),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = counter;
@@ -847,7 +907,10 @@ fn count_controlled_branches() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x1100,
+        scalar: ScalarState {
+            rip: 0x1100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 0x1_0000_0001;
@@ -885,8 +948,11 @@ fn rorx_forms_and_fault() {
         ),
     ] {
         let mut cpu = CpuState {
-            rip: 0x1200,
-            flags,
+            scalar: ScalarState {
+                rip: 0x1200,
+                flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = source;
@@ -907,7 +973,10 @@ fn rorx_forms_and_fault() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x1240,
+        scalar: ScalarState {
+            rip: 0x1240,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x2000;
@@ -939,10 +1008,13 @@ fn rorx_segments() {
             ([0xe3, 0x7b], 4, 0xffff_ffff_1234_5678, 0x7812_3456),
         ] {
             let mut cpu = CpuState {
-                rip: 0x1280,
-                fs_base: 0x3000,
-                gs_base: 0x4000,
-                flags,
+                scalar: ScalarState {
+                    rip: 0x1280,
+                    fs_base: 0x3000,
+                    gs_base: 0x4000,
+                    flags,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[3] = 0x20;
@@ -986,8 +1058,11 @@ fn bit_isolation_forms_and_fault() {
     ] {
         let original_flags = FlagState::from_bits(u16::MAX);
         let mut cpu = CpuState {
-            rip: 0x1280,
-            flags: original_flags,
+            scalar: ScalarState {
+                rip: 0x1280,
+                flags: original_flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = value;
@@ -1013,7 +1088,10 @@ fn bit_isolation_forms_and_fault() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x12c0,
+        scalar: ScalarState {
+            rip: 0x12c0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x3000;
@@ -1044,9 +1122,12 @@ fn bit_isolation_forms_and_fault() {
 fn bmi_segments() {
     for (segment, base) in [(0x64, 0x3000), (0x65, 0x4000)] {
         let mut cpu = CpuState {
-            rip: 0x12e0,
-            fs_base: 0x3000,
-            gs_base: 0x4000,
+            scalar: ScalarState {
+                rip: 0x12e0,
+                fs_base: 0x3000,
+                gs_base: 0x4000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x20;
@@ -1153,8 +1234,11 @@ fn bmi_segments() {
 fn andn_forms_and_fault() {
     let original_flags = FlagState::from_bits(u16::MAX);
     let mut cpu = CpuState {
-        rip: 0x1300,
-        flags: original_flags,
+        scalar: ScalarState {
+            rip: 0x1300,
+            flags: original_flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[9] = 0xff00_ff00_ff00_ff00;
@@ -1192,8 +1276,11 @@ fn andn_forms_and_fault() {
     assert!(cpu.flags.contains(Flag::Sign));
 
     let mut cpu = CpuState {
-        rip: 0x1340,
-        flags: original_flags,
+        scalar: ScalarState {
+            rip: 0x1340,
+            flags: original_flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x3400;
@@ -1227,8 +1314,11 @@ fn bzhi_forms_and_fault() {
         (false, 32, 0x89ab_cdef, true),
     ] {
         let mut cpu = CpuState {
-            rip: 0x1380,
-            flags: FlagState::from_bits(u16::MAX),
+            scalar: ScalarState {
+                rip: 0x1380,
+                flags: FlagState::from_bits(u16::MAX),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = 0x0123_4567_89ab_cdef;
@@ -1255,7 +1345,10 @@ fn bzhi_forms_and_fault() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x13c0,
+        scalar: ScalarState {
+            rip: 0x13c0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x3800;
@@ -1287,8 +1380,11 @@ fn variable_shifts_and_fault() {
     ] {
         let flags = FlagState::from_bits(u16::MAX);
         let mut cpu = CpuState {
-            rip: 0x1400,
-            flags,
+            scalar: ScalarState {
+                rip: 0x1400,
+                flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = value;
@@ -1310,8 +1406,11 @@ fn variable_shifts_and_fault() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x1420,
-        flags: FlagState::from_bits(0x845),
+        scalar: ScalarState {
+            rip: 0x1420,
+            flags: FlagState::from_bits(0x845),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 0x8000_0001;
@@ -1333,7 +1432,10 @@ fn variable_shifts_and_fault() {
     assert_eq!(cpu.flags, FlagState::from_bits(0x845));
 
     let mut cpu = CpuState {
-        rip: 0x1440,
+        scalar: ScalarState {
+            rip: 0x1440,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x4000;
@@ -1360,8 +1462,11 @@ fn variable_shifts_and_fault() {
 fn mulx_forms_aliases_and_fault() {
     let flags = FlagState::from_bits(u16::MAX);
     let mut cpu = CpuState {
-        rip: 0x1480,
-        flags,
+        scalar: ScalarState {
+            rip: 0x1480,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[2] = u64::MAX;
@@ -1392,7 +1497,10 @@ fn mulx_forms_aliases_and_fault() {
     assert_eq!(cpu.registers[1], 0xffff_fffe);
 
     let mut cpu = CpuState {
-        rip: 0x14c0,
+        scalar: ScalarState {
+            rip: 0x14c0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x4400;
@@ -1418,8 +1526,11 @@ fn pext_pdep_forms_and_fault() {
     let flags = FlagState::from_bits(u16::MAX);
     for (pp, source, mask, expected) in [(2_u8, 0x35_u64, 0x2a_u64, 4_u64), (3, 5, 0x2a, 0x22)] {
         let mut cpu = CpuState {
-            rip: 0x1500,
-            flags,
+            scalar: ScalarState {
+                rip: 0x1500,
+                flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[9] = source;
@@ -1440,7 +1551,10 @@ fn pext_pdep_forms_and_fault() {
         assert_eq!(cpu.flags, flags);
     }
     let mut cpu = CpuState {
-        rip: 0x1520,
+        scalar: ScalarState {
+            rip: 0x1520,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x4800;
@@ -1471,7 +1585,10 @@ fn cmov_conditions_execute() {
     };
     for condition in 0_u8..16 {
         let mut cpu = CpuState {
-            rip: 0x900,
+            scalar: ScalarState {
+                rip: 0x900,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = 0xffff_ffff_aaaa_aaaa;
@@ -1486,7 +1603,10 @@ fn cmov_conditions_execute() {
     }
 
     let mut cpu = CpuState {
-        rip: 0xa00,
+        scalar: ScalarState {
+            rip: 0xa00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[2] = 0xfeed_face_cafe_beef;
@@ -1513,7 +1633,10 @@ fn cmov_conditions_execute() {
 #[test]
 fn cmov_memory_faults() {
     let mut cpu = CpuState {
-        rip: 0xc00,
+        scalar: ScalarState {
+            rip: 0xc00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[13] = 0x1010;
@@ -1550,7 +1673,10 @@ fn leave_modes_execute() {
     };
     memory.bytes[..8].copy_from_slice(&0xfeed_face_cafe_beef_u64.to_le_bytes());
     let mut cpu = CpuState {
-        rip: 0xd00,
+        scalar: ScalarState {
+            rip: 0xd00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[4] = 0x2222;
@@ -1593,7 +1719,10 @@ fn leave_modes_execute() {
 #[test]
 fn leave_fault_state() {
     let mut cpu = CpuState {
-        rip: 0x1100,
+        scalar: ScalarState {
+            rip: 0x1100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[4] = 0x2222;
@@ -1633,7 +1762,10 @@ fn leave_rejects_prefixes() {
 #[test]
 fn cpuid_executes_policy() {
     let mut cpu = CpuState {
-        rip: 0x1200,
+        scalar: ScalarState {
+            rip: 0x1200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0;
@@ -1679,9 +1811,12 @@ fn cpuid_executes_policy() {
 #[test]
 fn timestamp_counter_reads() {
     let mut cpu = CpuState {
-        registers: [u64::MAX; 16],
-        flags: FlagState::from_bits(0x8d5),
-        rip: 0x1280,
+        scalar: ScalarState {
+            registers: [u64::MAX; 16],
+            flags: FlagState::from_bits(0x8d5),
+            rip: 0x1280,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let original_flags = cpu.flags;
@@ -1709,9 +1844,12 @@ fn timestamp_counter_reads() {
 #[test]
 fn timestamp_counter_auxiliary() {
     let mut cpu = CpuState {
-        registers: [u64::MAX; 16],
-        flags: FlagState::from_bits(0x8d5),
-        rip: 0x1400,
+        scalar: ScalarState {
+            registers: [u64::MAX; 16],
+            flags: FlagState::from_bits(0x8d5),
+            rip: 0x1400,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut memory = ModelMemory {
@@ -1755,7 +1893,10 @@ fn timestamp_counter_prefixes() {
 #[test]
 fn mmx_scalar_aliases() {
     let mut cpu = CpuState {
-        rip: 0x1800,
+        scalar: ScalarState {
+            rip: 0x1800,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 0x1122_3344_aabb_ccdd;
@@ -1796,7 +1937,10 @@ fn mmx_scalar_aliases() {
 #[test]
 fn mmx_transport_tags() {
     let mut cpu = CpuState {
-        rip: 0x1b00,
+        scalar: ScalarState {
+            rip: 0x1b00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.write_mmx(1, 0x8877_6655_4433_2211);
@@ -1835,8 +1979,11 @@ fn mmx_transport_tags() {
 #[test]
 fn mmx_fault_rollback() {
     let mut cpu = CpuState {
-        registers: [0x2000; 16],
-        rip: 0x1e00,
+        scalar: ScalarState {
+            registers: [0x2000; 16],
+            rip: 0x1e00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.write_mmx(0, 7);
@@ -1866,9 +2013,12 @@ fn mmx_float_conversion_family() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x1f00,
+        scalar: ScalarState {
+            rip: 0x1f00,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         mxcsr: 0x1f80,
-        flags: FlagState::from_bits(0x8d5),
         ..Default::default()
     };
     let flags = cpu.flags;
@@ -1965,7 +2115,10 @@ fn group_two_executes() {
         (7, ShiftOperation::ArithmeticRight),
     ] {
         let mut cpu = CpuState {
-            rip: 0x1400,
+            scalar: ScalarState {
+                rip: 0x1400,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[2] = 0x8000_0001;
@@ -1987,7 +2140,10 @@ fn group_two_executes() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x1500,
+        scalar: ScalarState {
+            rip: 0x1500,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[2] = 0x8000_0000;
@@ -2027,7 +2183,10 @@ fn group_two_executes() {
 #[test]
 fn group_two_faults() {
     let mut cpu = CpuState {
-        rip: 0x1900,
+        scalar: ScalarState {
+            rip: 0x1900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -2073,7 +2232,10 @@ fn group_three_executes() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x1b00,
+        scalar: ScalarState {
+            rip: 0x1b00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[12] = 0x1800;
@@ -2131,7 +2293,10 @@ fn group_three_faults() {
         Err(ScalarIrError::Invalid)
     );
     let mut cpu = CpuState {
-        rip: 0x2000,
+        scalar: ScalarState {
+            rip: 0x2000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x1234;
@@ -2374,7 +2539,10 @@ fn lock_updates() {
         let mut memory = LockedMemory::new(0x1000, 16);
         memory.replace(0x1001, 8, initial).unwrap();
         let mut cpu = CpuState {
-            rip: 0x200,
+            scalar: ScalarState {
+                rip: 0x200,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x1001;
@@ -2393,7 +2561,10 @@ fn lock_updates() {
     let mut memory = LockedMemory::new(0x1000, 80);
     memory.replace(0x103f, 8, 9).unwrap();
     let mut cpu = CpuState {
-        rip: 0x280,
+        scalar: ScalarState {
+            rip: 0x280,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x103f;
@@ -2414,7 +2585,10 @@ fn lock_contends() {
             let mut memory = memory.clone();
             std::thread::spawn(move || {
                 let mut cpu = CpuState {
-                    rip: 0x300,
+                    scalar: ScalarState {
+                        rip: 0x300,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 cpu.registers[3] = 0x1001;
@@ -2440,7 +2614,10 @@ fn lock_fault_order() {
     let mut memory = LockedMemory::new(0x1000, 16);
     memory.fail = true;
     let mut cpu = CpuState {
-        rip: 0x400,
+        scalar: ScalarState {
+            rip: 0x400,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -2532,8 +2709,11 @@ fn wide_cmpxchg_semantics() {
     };
     memory.bytes[..8].copy_from_slice(&0x1122_3344_5566_7788_u64.to_le_bytes());
     let mut cpu = CpuState {
-        rip: 0x200,
-        flags: FlagState::from_bits(0x895),
+        scalar: ScalarState {
+            rip: 0x200,
+            flags: FlagState::from_bits(0x895),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -2577,8 +2757,11 @@ fn wide_cmpxchg_semantics() {
     pair.replace(0x2000, 8, 7).unwrap();
     pair.replace(0x2008, 8, 9).unwrap();
     let mut wide = CpuState {
-        rip: 0x300,
-        flags: FlagState::from_bits(1 << Flag::Carry as u8),
+        scalar: ScalarState {
+            rip: 0x300,
+            flags: FlagState::from_bits(1 << Flag::Carry as u8),
+            ..Default::default()
+        },
         ..Default::default()
     };
     wide.registers[3] = 0x2000;
@@ -2670,8 +2853,11 @@ fn movbe_semantics() {
         let mut bytes = prefix.to_vec();
         bytes.extend_from_slice(&[0x0f, 0x38, 0xf0, 0x0e]);
         let mut cpu = CpuState {
-            rip: 0x200,
-            flags: FlagState::from_bits(0x8d5),
+            scalar: ScalarState {
+                rip: 0x200,
+                flags: FlagState::from_bits(0x8d5),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = u64::MAX;
@@ -2693,7 +2879,10 @@ fn movbe_semantics() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x300,
+        scalar: ScalarState {
+            rip: 0x300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 0x0102_0304_0506_0708;
@@ -2736,7 +2925,10 @@ fn cmpxchg_register_aliases() {
         commits: 0,
     };
     let mut success = CpuState {
-        rip: 0x100,
+        scalar: ScalarState {
+            rip: 0x100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     success.registers[0] = 7;
@@ -2750,7 +2942,10 @@ fn cmpxchg_register_aliases() {
     assert!(success.flags.contains(Flag::Zero));
 
     let mut failure = CpuState {
-        rip: 0x200,
+        scalar: ScalarState {
+            rip: 0x200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     failure.registers[0] = 3;
@@ -2766,7 +2961,10 @@ fn cmpxchg_register_aliases() {
     assert!(!failure.flags.contains(Flag::Zero));
 
     let mut byte = CpuState {
-        rip: 0x240,
+        scalar: ScalarState {
+            rip: 0x240,
+            ..Default::default()
+        },
         ..Default::default()
     };
     byte.registers[0] = 0xaaaa_aaaa_aaaa_aa11;
@@ -2811,7 +3009,10 @@ fn locked_cmpxchg_transaction() {
     };
     let instruction = X86ScalarDecoder::decode(&[0xf0, 0x0f, 0xb1, 0x0b], 0x400).unwrap();
     let mut cpu = CpuState {
-        rip: 0x400,
+        scalar: ScalarState {
+            rip: 0x400,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 5;
@@ -2875,7 +3076,10 @@ fn xchg_forms() {
         commits: 0,
     };
     let mut byte_cpu = CpuState {
-        rip: 0x480,
+        scalar: ScalarState {
+            rip: 0x480,
+            ..Default::default()
+        },
         ..Default::default()
     };
     byte_cpu.registers[3] = 0x1000;
@@ -2895,7 +3099,10 @@ fn xchg_forms() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x500,
+        scalar: ScalarState {
+            rip: 0x500,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 11;
@@ -2943,7 +3150,10 @@ fn accumulator_xchg_matrix() {
                 }
             );
             let mut cpu = CpuState {
-                rip: 0x100,
+                scalar: ScalarState {
+                    rip: 0x100,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[0] = 0xaaaa_bbbb_cccc_1111;
@@ -2971,8 +3181,11 @@ fn accumulator_xchg_matrix() {
 #[test]
 fn ah_flag_transfer() {
     let mut cpu = CpuState {
-        rip: 0x100,
-        flags: FlagState::from_bits((1 << Flag::Overflow as u8) | (1 << Flag::Carry as u8)),
+        scalar: ScalarState {
+            rip: 0x100,
+            flags: FlagState::from_bits((1 << Flag::Overflow as u8) | (1 << Flag::Carry as u8)),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x1122_3344_5566_8000;
@@ -3056,11 +3269,14 @@ fn stack_flag_transfer() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x100,
-        flags: FlagState::from_bits(0x895),
-        direction: true,
-        alignment_check: true,
-        id_flag: true,
+        scalar: ScalarState {
+            rip: 0x100,
+            flags: FlagState::from_bits(0x895),
+            direction: true,
+            alignment_check: true,
+            id_flag: true,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[4] = 0x1010;
@@ -3109,11 +3325,14 @@ fn stack_flag_faults() {
             commits: 0,
         };
         let mut cpu = CpuState {
-            rip: 0x200,
-            flags: FlagState::from_bits(0x8d5),
-            direction: true,
-            alignment_check: true,
-            id_flag: true,
+            scalar: ScalarState {
+                rip: 0x200,
+                flags: FlagState::from_bits(0x8d5),
+                direction: true,
+                alignment_check: true,
+                id_flag: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[4] = if opcode == 0x9c { 0x1008 } else { 0x1000 };
@@ -3147,10 +3366,13 @@ fn flag_control() {
         for carry in [false, true] {
             for direction in [false, true] {
                 let mut cpu = CpuState {
-                    rip: 0x100,
-                    flags: FlagState::from_bits(0x8d4).with(Flag::Carry, carry),
-                    direction,
-                    id_flag: true,
+                    scalar: ScalarState {
+                        rip: 0x100,
+                        flags: FlagState::from_bits(0x8d4).with(Flag::Carry, carry),
+                        direction,
+                        id_flag: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 cpu.registers[0] = u64::MAX;
@@ -3221,7 +3443,10 @@ fn accumulator_xchg_prefixes() {
     ));
     assert!(X86ScalarDecoder::decode(&[0xf0, 0x91], 0).is_err());
     let mut cpu = CpuState {
-        rip: 0x100,
+        scalar: ScalarState {
+            rip: 0x100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = u64::MAX;
@@ -3252,7 +3477,10 @@ fn xadd_flags() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0xc00,
+        scalar: ScalarState {
+            rip: 0xc00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 1;
@@ -3295,7 +3523,10 @@ fn locked_xadd_transaction() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0xe00,
+        scalar: ScalarState {
+            rip: 0xe00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 7;
@@ -3784,7 +4015,10 @@ fn movd_moves_scalars() {
     };
     memory.bytes[..4].copy_from_slice(&0x89ab_cdef_u32.to_le_bytes());
     let mut cpu = CpuState {
-        rip: 0x4000,
+        scalar: ScalarState {
+            rip: 0x4000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[5] = 0x106c;
@@ -3837,7 +4071,10 @@ fn movd_moves_scalars() {
 #[test]
 fn movd_fault_atomic() {
     let mut cpu = CpuState {
-        rip: 0x8000,
+        scalar: ScalarState {
+            rip: 0x8000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -3884,7 +4121,10 @@ fn unpack_orders_lanes() {
         (0x6d, 8, true),
     ] {
         let mut cpu = CpuState {
-            rip: 0x9000,
+            scalar: ScalarState {
+                rip: 0x9000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = left;
@@ -3914,7 +4154,10 @@ fn unpack_orders_lanes() {
     }
 
     let mut cpu = CpuState {
-        rip: 0xa000,
+        scalar: ScalarState {
+            rip: 0xa000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[9] = left;
@@ -3936,7 +4179,10 @@ fn unpack_orders_lanes() {
 #[test]
 fn unpack_memory_faults() {
     let mut cpu = CpuState {
-        rip: 0xb000,
+        scalar: ScalarState {
+            rip: 0xb000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -3970,7 +4216,10 @@ fn unpack_memory_faults() {
 #[test]
 fn movq_stores_vectors() {
     let mut cpu = CpuState {
-        rip: 0xd000,
+        scalar: ScalarState {
+            rip: 0xd000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = 0xaaaa_bbbb_cccc_dddd_0123_4567_89ab_cdef;
@@ -4049,7 +4298,10 @@ fn movq_stores_vectors() {
 #[test]
 fn movq_store_faults() {
     let mut cpu = CpuState {
-        rip: 0x11000,
+        scalar: ScalarState {
+            rip: 0x11000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -4075,7 +4327,10 @@ fn movq_store_faults() {
 #[test]
 fn pextrw_selects_vector_register_file() {
     let mut cpu = CpuState {
-        rip: 0x11_100,
+        scalar: ScalarState {
+            rip: 0x11_100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = 0x7766_5544_3322_1100_ffee_ddcc_bbaa_9988;
@@ -4119,7 +4374,10 @@ fn pextrw_selects_vector_register_file() {
 #[test]
 fn mmx_movemask_uses_eight_bytes() {
     let mut cpu = CpuState {
-        rip: 0x11_300,
+        scalar: ScalarState {
+            rip: 0x11_300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.write_mmx(1, 0x80_7f_ff_00_81_01_7e_fe);
@@ -4153,7 +4411,10 @@ fn mmx_movemask_uses_eight_bytes() {
 #[test]
 fn imul_truncates_results() {
     let mut cpu = CpuState {
-        rip: 0x12000,
+        scalar: ScalarState {
+            rip: 0x12000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = (-4_i64) as u64;
@@ -4213,7 +4474,10 @@ fn imul_truncates_results() {
 #[test]
 fn imul_fault_atomic() {
     let mut cpu = CpuState {
-        rip: 0x16000,
+        scalar: ScalarState {
+            rip: 0x16000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 7;
@@ -4239,7 +4503,10 @@ fn imul_fault_atomic() {
 #[test]
 fn movq_loads_vectors() {
     let mut cpu = CpuState {
-        rip: 0x20000,
+        scalar: ScalarState {
+            rip: 0x20000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = 0xaaaa_bbbb_cccc_dddd_0123_4567_89ab_cdef;
@@ -4282,7 +4549,10 @@ fn movq_loads_vectors() {
 #[test]
 fn movq_load_faults() {
     let mut cpu = CpuState {
-        rip: 0x22000,
+        scalar: ScalarState {
+            rip: 0x22000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -4314,7 +4584,10 @@ fn vector_bitwise_operates() {
         (0xef, left ^ right),
     ] {
         let mut cpu = CpuState {
-            rip: 0x23000,
+            scalar: ScalarState {
+                rip: 0x23000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = left;
@@ -4335,7 +4608,10 @@ fn vector_bitwise_operates() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x24000,
+        scalar: ScalarState {
+            rip: 0x24000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = left;
@@ -4358,7 +4634,10 @@ fn vector_bitwise_operates() {
 #[test]
 fn vector_bitwise_faults() {
     let mut cpu = CpuState {
-        rip: 0x25000,
+        scalar: ScalarState {
+            rip: 0x25000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -4406,7 +4685,10 @@ fn andpd_forms() {
             let rex = 0x40 | ((destination >> 3) << 2) | (source >> 3);
             let bytes = [0x66, rex, 0x0f, 0x54, 0xc0 | ((destination & 7) << 3) | (source & 7)];
             let mut cpu = CpuState {
-                rip: 0x4d000,
+                scalar: ScalarState {
+                    rip: 0x4d000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[usize::from(destination)] = left;
@@ -4426,7 +4708,10 @@ fn andpd_forms() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x4d100,
+        scalar: ScalarState {
+            rip: 0x4d100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = left;
@@ -4467,7 +4752,10 @@ fn andpd_forms() {
 #[test]
 fn andpd_faults() {
     let mut cpu = CpuState {
-        rip: 0x4d300,
+        scalar: ScalarState {
+            rip: 0x4d300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -4514,7 +4802,10 @@ fn float_bitwise_family() {
             (0x57, left ^ right),
         ] {
             let mut cpu = CpuState {
-                rip: 0x4d400,
+                scalar: ScalarState {
+                    rip: 0x4d400,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[8] = left;
@@ -4536,7 +4827,10 @@ fn float_bitwise_family() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x4d500,
+        scalar: ScalarState {
+            rip: 0x4d500,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = left;
@@ -4561,9 +4855,12 @@ fn float_bitwise_segments() {
                 (0x57, left ^ right),
             ] {
                 let mut cpu = CpuState {
-                    rip: 0x4d580,
-                    fs_base: 0x2000,
-                    gs_base: 0x3000,
+                    scalar: ScalarState {
+                        rip: 0x4d580,
+                        fs_base: 0x2000,
+                        gs_base: 0x3000,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 cpu.vectors[8] = left;
@@ -4606,7 +4903,10 @@ fn float_bitwise_segments() {
 fn aligned_moves_vectors() {
     let value = 0x0011_2233_4455_6677_8899_aabb_ccdd_eeff_u128;
     let mut cpu = CpuState {
-        rip: 0x26000,
+        scalar: ScalarState {
+            rip: 0x26000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = value;
@@ -4649,7 +4949,10 @@ fn aligned_moves_vectors() {
 #[test]
 fn aligned_move_faults() {
     let mut cpu = CpuState {
-        rip: 0x29000,
+        scalar: ScalarState {
+            rip: 0x29000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -4689,7 +4992,10 @@ fn aligned_move_faults() {
 fn integer_vector_transports() {
     let value = 0x1021_3243_5465_7687_98a9_bacb_dced_fe0f_u128;
     let mut cpu = CpuState {
-        rip: 0x2a000,
+        scalar: ScalarState {
+            rip: 0x2a000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[14] = 0x1000;
@@ -4749,7 +5055,10 @@ fn vector_byte_shifts() {
         (7, 255, 0),
     ] {
         let mut cpu = CpuState {
-            rip: 0x2e000,
+            scalar: ScalarState {
+                rip: 0x2e000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[9] = value;
@@ -4821,7 +5130,10 @@ fn packed_shift_counts() {
         for count in 0_u8..=255 {
             let expected = ShiftReference::apply(value, lane, count, extension);
             let mut cpu = CpuState {
-                rip: 0x2f000,
+                scalar: ScalarState {
+                    rip: 0x2f000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[9] = value;
@@ -4910,7 +5222,10 @@ fn saturating_pack_boundaries() {
         ),
     ] {
         let mut cpu = CpuState {
-            rip: 0x2f800,
+            scalar: ScalarState {
+                rip: 0x2f800,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = left;
@@ -4939,7 +5254,10 @@ fn saturating_pack_memory() {
     let left = PackFixture::words([-1, 0, 1, 2, 253, 254, 255, 256]);
     let right = PackFixture::words([-2, 3, 4, 5, 252, 300, i16::MIN, i16::MAX]);
     let mut cpu = CpuState {
-        rip: 0x2f900,
+        scalar: ScalarState {
+            rip: 0x2f900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[11] = 0x1000;
@@ -4975,7 +5293,10 @@ fn saturating_pack_memory() {
 #[test]
 fn saturating_pack_forms() {
     let mut cpu = CpuState {
-        rip: 0x2fb00,
+        scalar: ScalarState {
+            rip: 0x2fb00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = PackFixture::words([-1, 0, 1, 2, 3, 4, 255, 256]);
@@ -5022,7 +5343,10 @@ fn increment_byte_exhaustive() {
         let instruction = X86ScalarDecoder::decode(&[0xfe, modrm], 0x2fc00).unwrap();
         for value in 0_u64..=255 {
             let mut cpu = CpuState {
-                rip: 0x2fc00,
+                scalar: ScalarState {
+                    rip: 0x2fc00,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[0] = value;
@@ -5055,7 +5379,10 @@ fn increment_width_flags() {
         (&[0x48, 0xff, 0xc0][..], 0x7fff_ffff_ffff_ffff, 0x8000_0000_0000_0000),
     ] {
         let mut cpu = CpuState {
-            rip: 0x2fd00,
+            scalar: ScalarState {
+                rip: 0x2fd00,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = initial;
@@ -5080,7 +5407,10 @@ fn increment_width_flags() {
         assert!(!cpu.flags.contains(Flag::Zero));
     }
     let mut cpu = CpuState {
-        rip: 0x2fe00,
+        scalar: ScalarState {
+            rip: 0x2fe00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x8000_0000;
@@ -5111,7 +5441,10 @@ fn increment_byte_registers() {
         (&[0x41, 0xfe, 0xc4][..], 12, 0xff, 0),
     ] {
         let mut cpu = CpuState {
-            rip: 0x2ff00,
+            scalar: ScalarState {
+                rip: 0x2ff00,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[register] = initial;
@@ -5134,7 +5467,10 @@ fn increment_byte_registers() {
 #[test]
 fn increment_memory_contract() {
     let mut cpu = CpuState {
-        rip: 0x30000,
+        scalar: ScalarState {
+            rip: 0x30000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -5215,7 +5551,10 @@ fn double_shift_counts() {
             let mut bytes = prefix.to_vec();
             bytes.extend_from_slice(&[0x0f, DoubleShiftReference::opcode(right), 0xd0, count]);
             let mut cpu = CpuState {
-                rip: 0x30200,
+                scalar: ScalarState {
+                    rip: 0x30200,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[0] = 0x8123_4567_89ab_cdef;
@@ -5249,7 +5588,10 @@ fn double_shift_counts() {
 #[test]
 fn double_shift_cl() {
     let mut cpu = CpuState {
-        rip: 0x30300,
+        scalar: ScalarState {
+            rip: 0x30300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 1;
@@ -5277,7 +5619,10 @@ fn double_shift_cl() {
 fn double_shift_memory() {
     let initial = 0x8123_4567_89ab_cdef_u64;
     let mut cpu = CpuState {
-        rip: 0x30400,
+        scalar: ScalarState {
+            rip: 0x30400,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[11] = 0x1000;
@@ -5372,7 +5717,10 @@ fn double_shift_memory() {
 #[test]
 fn x87_control_roundtrip() {
     let mut cpu = CpuState {
-        rip: 0x30600,
+        scalar: ScalarState {
+            rip: 0x30600,
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert_eq!(cpu.x87_control, 0x037f);
@@ -5416,7 +5764,10 @@ fn x87_control_roundtrip() {
 #[test]
 fn x87_control_faults() {
     let mut cpu = CpuState {
-        rip: 0x30900,
+        scalar: ScalarState {
+            rip: 0x30900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x1001;
@@ -5520,7 +5871,10 @@ fn x87_extended_roundtrip() {
             commits: 0,
         };
         let mut cpu = CpuState {
-            rip: 0x410eac,
+            scalar: ScalarState {
+                rip: 0x410eac,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[5] = 0x1010;
@@ -5734,7 +6088,10 @@ fn x87_float_loads() {
             commits: 0,
         };
         let mut cpu = CpuState {
-            rip: 0x46000,
+            scalar: ScalarState {
+                rip: 0x46000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x1000;
@@ -5801,7 +6158,10 @@ fn float_store(
     format: FloatWidth,
 ) -> (CpuState, ModelMemory) {
     let mut cpu = CpuState {
-        rip: 0x47000,
+        scalar: ScalarState {
+            rip: 0x47000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -5829,7 +6189,10 @@ fn float_store(
 fn x87_float_contract() {
     let one = ExtendedReal::from_bits(0x3fff_8000_0000_0000_0000);
     let mut cpu = CpuState {
-        rip: 0x48000,
+        scalar: ScalarState {
+            rip: 0x48000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -5863,7 +6226,10 @@ fn x87_float_contract() {
 
     let halfway = ExtendedReal::from_bits(0x3fff_8000_0080_0000_0000);
     let mut blocked = CpuState {
-        rip: 0x48200,
+        scalar: ScalarState {
+            rip: 0x48200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     blocked.registers[3] = 0x1000;
@@ -5881,7 +6247,10 @@ fn x87_float_contract() {
     assert!(memory.bytes.iter().all(|byte| *byte == 0xaa));
 
     let mut faulted = CpuState {
-        rip: 0x48300,
+        scalar: ScalarState {
+            rip: 0x48300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     faulted.registers[3] = 0x1000;
@@ -5994,8 +6363,11 @@ fn x87_conditional_move_family() {
             _ => unreachable!(),
         };
         let mut cpu = CpuState {
-            rip: 0x48f00,
-            flags: FlagState::default().with(flag, true),
+            scalar: ScalarState {
+                rip: 0x48f00,
+                flags: FlagState::default().with(flag, true),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.x87_values[0] = ExtendedReal::from_bits(1);
@@ -6161,7 +6533,10 @@ fn x87_compare_nan() {
     assert_eq!(blocked.x87_status & 0x8081, 0x8081);
 
     let mut empty = CpuState {
-        rip: 0x4b000,
+        scalar: ScalarState {
+            rip: 0x4b000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pop = X86ScalarDecoder::decode(&[0xdf, 0xe9], empty.rip).unwrap();
@@ -6181,7 +6556,10 @@ fn compare_cpu(
     right_class: ExtendedClass,
 ) -> CpuState {
     let mut cpu = CpuState {
-        rip: 0x4a000,
+        scalar: ScalarState {
+            rip: 0x4a000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.x87_status = 5 << 11;
@@ -6246,8 +6624,11 @@ fn x87_environment_and_constants() {
 
     let values = std::array::from_fn(|index| ExtendedReal::from_bits(0x3fff_8000_0000_0000_0000 + index as u128));
     let mut cpu = CpuState {
-        rip: 0x51000,
-        registers: [0x1234_5678_9abc_def0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        scalar: ScalarState {
+            rip: 0x51000,
+            registers: [0x1234_5678_9abc_def0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ..Default::default()
+        },
         x87_control: 0,
         x87_status: 0xffff,
         x87_values: values,
@@ -6357,7 +6738,10 @@ fn x87_arithmetic_family() {
     let (one, normal) = crate::x86::real::Conversion::expand(1_f64.to_bits(), FloatWidth::Double);
     let (two, _) = crate::x86::real::Conversion::expand(2_f64.to_bits(), FloatWidth::Double);
     let mut cpu = CpuState {
-        rip: 0x54000,
+        scalar: ScalarState {
+            rip: 0x54000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.x87_status = 6 << 11;
@@ -6448,7 +6832,10 @@ fn x87_integer_family() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x56000,
+        scalar: ScalarState {
+            rip: 0x56000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = memory.base;
@@ -6499,7 +6886,10 @@ fn x87_stack_transfer() {
             let destination = top.wrapping_sub(1) & 7;
             let value = ExtendedReal::from_bits(0x4000_8000_0000_0000_0100 + source as u128);
             let mut cpu = CpuState {
-                rip: 0x4c000,
+                scalar: ScalarState {
+                    rip: 0x4c000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.x87_status = (top as u16) << 11;
@@ -6521,7 +6911,10 @@ fn x87_stack_transfer() {
     }
 
     let mut self_pop = CpuState {
-        rip: 0x4f000,
+        scalar: ScalarState {
+            rip: 0x4f000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     self_pop.x87_status = 3 << 11;
@@ -6541,7 +6934,10 @@ fn check_stack_transfer(top: usize, source: usize, memory: &mut ModelMemory) {
     let left = ExtendedReal::from_bits(0x3fff_8000_0000_0000_0011);
     let right = ExtendedReal::from_bits(0x4000_8000_0000_0000_0022);
     let mut cpu = CpuState {
-        rip: 0x4d000,
+        scalar: ScalarState {
+            rip: 0x4d000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.x87_status = (top as u16) << 11;
@@ -6583,7 +6979,10 @@ fn x87_stack_faults() {
         commits: 0,
     };
     let mut overflow = CpuState {
-        rip: 0x50000,
+        scalar: ScalarState {
+            rip: 0x50000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     overflow.x87_classes[7] = ExtendedClass::Normal;
@@ -6598,7 +6997,10 @@ fn x87_stack_faults() {
     assert_eq!((overflow.x87_status >> 11) & 7, 7);
 
     let mut underflow = CpuState {
-        rip: 0x51000,
+        scalar: ScalarState {
+            rip: 0x51000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let exchange = X86ScalarDecoder::decode(&[0xd9, 0xc9], underflow.rip).unwrap();
@@ -6611,7 +7013,10 @@ fn x87_stack_faults() {
     assert_eq!(underflow.x87_status & 0x241, 0x41);
 
     let mut blocked = CpuState {
-        rip: 0x52000,
+        scalar: ScalarState {
+            rip: 0x52000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     blocked.x87_control &= !1;
@@ -6629,7 +7034,10 @@ fn x87_stack_faults() {
     assert_eq!(blocked.x87_status & 0x82c1, 0x82c1);
 
     let mut empty_pop = CpuState {
-        rip: 0x53000,
+        scalar: ScalarState {
+            rip: 0x53000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let pop = X86ScalarDecoder::decode(&[0xdd, 0xd9], empty_pop.rip).unwrap();
@@ -6645,7 +7053,10 @@ fn x87_stack_faults() {
 #[test]
 fn x87_extended_faults() {
     let mut cpu = CpuState {
-        rip: 0x42000,
+        scalar: ScalarState {
+            rip: 0x42000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -6689,7 +7100,10 @@ fn x87_extended_faults() {
     assert_eq!(occupied.rip + 2, cpu.rip);
 
     let mut empty = CpuState {
-        rip: 0x43000,
+        scalar: ScalarState {
+            rip: 0x43000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     empty.registers[3] = 0x1000;
@@ -6706,7 +7120,10 @@ fn x87_extended_faults() {
     assert_eq!(empty.x87_status & 0x241, 0x41);
 
     let mut unmasked = CpuState {
-        rip: 0x44000,
+        scalar: ScalarState {
+            rip: 0x44000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     unmasked.registers[3] = 0x1000;
@@ -6727,7 +7144,10 @@ fn x87_extended_faults() {
     ] {
         memory.bytes[..10].copy_from_slice(&bits.to_le_bytes()[..10]);
         let mut cpu = CpuState {
-            rip: 0x45000,
+            scalar: ScalarState {
+                rip: 0x45000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x1000;
@@ -6751,7 +7171,10 @@ fn vector_integer_wraps() {
         (0xfb, 0xffff_ffff_ffff_fffe_ffff_00fe_7ffe_fffe_u128),
     ] {
         let mut cpu = CpuState {
-            rip: 0x2f000,
+            scalar: ScalarState {
+                rip: 0x2f000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = left;
@@ -6772,7 +7195,10 @@ fn vector_integer_wraps() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x30000,
+        scalar: ScalarState {
+            rip: 0x30000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = 0x00ff;
@@ -6802,7 +7228,10 @@ fn vector_integer_wraps() {
 #[test]
 fn unsigned_dword_multiply() {
     let mut cpu = CpuState {
-        rip: 0x2f100,
+        scalar: ScalarState {
+            rip: 0x2f100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = 0xffff_ffff_0000_0007_0000_0003_ffff_fffe;
@@ -6838,8 +7267,11 @@ fn word_multiply_family() {
     let left = 0x8000_8000_ffff_0002_8000_8000_ffff_0002_u128;
     let right = 0x8000_8000_0003_0004_8000_8000_0003_0004_u128;
     let mut cpu = CpuState {
-        rip: 0x2f280,
-        flags: FlagState::from_bits(u16::MAX),
+        scalar: ScalarState {
+            rip: 0x2f280,
+            flags: FlagState::from_bits(u16::MAX),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = left;
@@ -6906,7 +7338,10 @@ fn indirect_call_width() {
     let ir = X86ScalarDecoder::decode(&[0x41, 0xff, 0x57, 0x10], 0x30000).unwrap();
     assert_eq!(ir.width, ScalarWidth::Qword);
     let mut cpu = CpuState {
-        rip: 0x30000,
+        scalar: ScalarState {
+            rip: 0x30000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[4] = 0x1030;
@@ -6931,7 +7366,10 @@ fn indirect_call_width() {
 fn unaligned_vector_moves() {
     let value = 0x1234_5678_9abc_def0_0fed_cba9_8765_4321_u128;
     let mut cpu = CpuState {
-        rip: 0x31000,
+        scalar: ScalarState {
+            rip: 0x31000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -7016,8 +7454,11 @@ fn accumulator_extension() {
         );
         let flags = FlagState::from_bits(0x8d5);
         let mut cpu = CpuState {
-            rip: 0x34000,
-            flags,
+            scalar: ScalarState {
+                rip: 0x34000,
+                flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = initial;
@@ -7092,8 +7533,11 @@ fn accumulator_high_extension() {
         assert_eq!(ir.instruction, ScalarInstruction::AccumulatorHighExtend);
         let flags = FlagState::from_bits(0x8d5);
         let mut cpu = CpuState {
-            rip: 0x404ab6,
-            flags,
+            scalar: ScalarState {
+                rip: 0x404ab6,
+                flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = accumulator;
@@ -7131,7 +7575,10 @@ fn dword_shuffle() {
         (0x1b, 0x1111_1111_2222_2222_3333_3333_4444_4444),
     ] {
         let mut cpu = CpuState {
-            rip: 0x35000,
+            scalar: ScalarState {
+                rip: 0x35000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[9] = value;
@@ -7151,7 +7598,10 @@ fn dword_shuffle() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x36000,
+        scalar: ScalarState {
+            rip: 0x36000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = value;
@@ -7176,7 +7626,10 @@ fn word_shuffle_selectors() {
     for (prefix, base) in [(0xf2, 0_u32), (0xf3, 4_u32)] {
         for selectors in 0_u8..=u8::MAX {
             let mut cpu = CpuState {
-                rip: 0x700,
+                scalar: ScalarState {
+                    rip: 0x700,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[1] = basis;
@@ -7221,7 +7674,10 @@ fn word_shuffle_memory() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x800,
+        scalar: ScalarState {
+            rip: 0x800,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 0x1000;
@@ -7246,7 +7702,10 @@ fn word_shuffle_memory() {
 fn dword_shuffle_memory() {
     let value = 0x4444_4444_3333_3333_2222_2222_1111_1111_u128;
     let mut cpu = CpuState {
-        rip: 0x37000,
+        scalar: ScalarState {
+            rip: 0x37000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -7337,7 +7796,10 @@ fn packed_shuffle_values() {
     };
     for selectors in 0_u8..=u8::MAX {
         let mut cpu = CpuState {
-            rip: 0x55000,
+            scalar: ScalarState {
+                rip: 0x55000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = left;
@@ -7369,7 +7831,10 @@ fn packed_shuffle_values() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x57000,
+        scalar: ScalarState {
+            rip: 0x57000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = left;
@@ -7387,7 +7852,10 @@ fn packed_shuffle_memory() {
     let right = 0xdddd_dddd_cccc_cccc_bbbb_bbbb_aaaa_aaaa_u128;
     for offset in [0_u64, 1] {
         let mut cpu = CpuState {
-            rip: 0x58000,
+            scalar: ScalarState {
+                rip: 0x58000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[11] = 0x1000;
@@ -7430,7 +7898,10 @@ fn packed_equal_lanes() {
         (0x76, 0x0000_0000_0000_0000_0000_0000_0000_0000_u128),
     ] {
         let mut cpu = CpuState {
-            rip: 0x39000,
+            scalar: ScalarState {
+                rip: 0x39000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = left;
@@ -7451,7 +7922,10 @@ fn packed_equal_lanes() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x3a000,
+        scalar: ScalarState {
+            rip: 0x3a000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = left;
@@ -7475,7 +7949,10 @@ fn packed_equal_memory() {
     let left = 0xaaaa_bbbb_cccc_dddd_1111_2222_3333_4444_u128;
     let right = 0xaaaa_0000_cccc_0000_1111_0000_3333_0000_u128;
     let mut cpu = CpuState {
-        rip: 0x3b000,
+        scalar: ScalarState {
+            rip: 0x3b000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[11] = 0x1000;
@@ -7586,7 +8063,10 @@ fn packed_compare_values() {
         (&[0x66, 0x44, 0x0f, 0x38, 0x29, 0xc6], 8, VectorComparison::Equal),
     ] {
         let mut cpu = CpuState {
-            rip: 0x422f89,
+            scalar: ScalarState {
+                rip: 0x422f89,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = left;
@@ -7611,7 +8091,10 @@ fn packed_compare_values() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x422f89,
+        scalar: ScalarState {
+            rip: 0x422f89,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = left;
@@ -7643,7 +8126,10 @@ fn packed_compare_memory() {
         let left = 0x8000_0000_0000_0000_7fff_ffff_ffff_ffff_u128;
         let right = 0xffff_ffff_ffff_ffff_0000_0000_0000_0000_u128;
         let mut cpu = CpuState {
-            rip: 0x430000,
+            scalar: ScalarState {
+                rip: 0x430000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[11] = 0x1000;
@@ -7678,7 +8164,10 @@ fn packed_compare_memory() {
         let left = 0x8000_0000_0000_0000_7fff_ffff_ffff_ffff_u128;
         let right = 0xffff_ffff_ffff_ffff_0000_0000_0000_0000_u128;
         let mut cpu = CpuState {
-            rip: 0x450000,
+            scalar: ScalarState {
+                rip: 0x450000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[11] = 0x2000;
@@ -7723,7 +8212,10 @@ fn aes_legacy_register_and_fault() {
         0x89, 0xd8, 0x10, 0xe8, 0x85, 0x5a, 0xce, 0x68, 0x2d, 0x18, 0x43, 0xd8, 0xcb, 0x12, 0x8f, 0xe4,
     ]);
     let mut cpu = CpuState {
-        rip: 0x470000,
+        scalar: ScalarState {
+            rip: 0x470000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = state;
@@ -7798,7 +8290,10 @@ fn packed_compare_rejects() {
 #[test]
 fn packed_byte_mask() {
     let mut cpu = CpuState {
-        rip: 0x3d000,
+        scalar: ScalarState {
+            rip: 0x3d000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[9] = u128::from_le_bytes([
@@ -7898,7 +8393,10 @@ fn floating_mask_values() {
         ),
     ] {
         let mut cpu = CpuState {
-            rip: 0x40185f,
+            scalar: ScalarState {
+                rip: 0x40185f,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[8] = u64::MAX;
@@ -7942,7 +8440,10 @@ fn insert_word_lanes() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x900,
+        scalar: ScalarState {
+            rip: 0x900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = 0x1234;
@@ -7997,8 +8498,11 @@ fn bit_scan_basis() {
             assert_eq!(ir.width, width);
             let flags = FlagState::from_bits((1 << Flag::Carry as u8) | (1 << Flag::Sign as u8));
             let mut cpu = CpuState {
-                rip: 0x3f000,
-                flags,
+                scalar: ScalarState {
+                    rip: 0x3f000,
+                    flags,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[0] = u64::MAX;
@@ -8026,7 +8530,10 @@ fn bit_scan_basis() {
 fn immediate_bit_actions() {
     for (extension, expected) in [(4_u8, 3_u64), (5, 3), (6, 1), (7, 1)] {
         let mut cpu = CpuState {
-            rip: 0x1200,
+            scalar: ScalarState {
+                rip: 0x1200,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = 3;
@@ -8053,7 +8560,10 @@ fn immediate_bit_actions() {
         );
     }
     let mut cpu = CpuState {
-        rip: 0x1240,
+        scalar: ScalarState {
+            rip: 0x1240,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = (-12_i64) as u64;
@@ -8084,7 +8594,10 @@ fn register_bit_widths() {
         (&[0x48, 0x0f, 0xab, 0xc8][..], 63, 1_u64 << 63),
     ] {
         let mut cpu = CpuState {
-            rip: 0x1280,
+            scalar: ScalarState {
+                rip: 0x1280,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = index;
@@ -8115,7 +8628,10 @@ fn memory_bit_addressing() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x1300,
+        scalar: ScalarState {
+            rip: 0x1300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x1000;
@@ -8149,7 +8665,10 @@ fn memory_bit_addressing() {
 #[test]
 fn bit_scan_zero() {
     let mut cpu = CpuState {
-        rip: 0x40000,
+        scalar: ScalarState {
+            rip: 0x40000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[8] = 0;
@@ -8195,7 +8714,10 @@ fn bit_scan_zero() {
 #[test]
 fn bit_scan_memory() {
     let mut cpu = CpuState {
-        rip: 0x42000,
+        scalar: ScalarState {
+            rip: 0x42000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -8235,8 +8757,11 @@ fn leading_zero_count() {
         (&[0xf3, 0x48, 0x0f, 0xbd, 0xc1][..], 1 << 41, 22),
     ] {
         let mut cpu = CpuState {
-            rip: 0x43300,
-            flags: FlagState::from_bits(u16::MAX),
+            scalar: ScalarState {
+                rip: 0x43300,
+                flags: FlagState::from_bits(u16::MAX),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = source;
@@ -8260,7 +8785,10 @@ fn leading_zero_count() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x43380,
+        scalar: ScalarState {
+            rip: 0x43380,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut memory = ModelMemory {
@@ -8293,8 +8821,11 @@ fn population_count() {
         (&[0xf3, 0x48, 0x0f, 0xb8, 0xc1][..], u64::MAX, 64, 0),
     ] {
         let mut cpu = CpuState {
-            rip: 0x433c0,
-            flags: FlagState::from_bits(u16::MAX),
+            scalar: ScalarState {
+                rip: 0x433c0,
+                flags: FlagState::from_bits(u16::MAX),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[0] = high;
@@ -8342,8 +8873,11 @@ fn tzcnt_values() {
             assert_eq!(instruction.width, width);
             let flags = FlagState::from_bits(u16::MAX);
             let mut cpu = CpuState {
-                rip: 0x43400,
-                flags,
+                scalar: ScalarState {
+                    rip: 0x43400,
+                    flags,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[0] = u64::MAX;
@@ -8373,8 +8907,11 @@ fn tzcnt_values() {
         bytes.extend_from_slice(&[0x0f, 0xbc, 0xc1]);
         let instruction = X86ScalarDecoder::decode(&bytes, 0x43500).unwrap();
         let mut cpu = CpuState {
-            rip: 0x43500,
-            registers: [u64::MAX; 16],
+            scalar: ScalarState {
+                rip: 0x43500,
+                registers: [u64::MAX; 16],
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[1] = 0;
@@ -8398,7 +8935,10 @@ fn tzcnt_values() {
 #[test]
 fn tzcnt_forms() {
     let mut cpu = CpuState {
-        rip: 0x43600,
+        scalar: ScalarState {
+            rip: 0x43600,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[9] = 1 << 41;
@@ -8468,7 +9008,10 @@ fn high_half_moves() {
     let high = 0x99aa_bbcc_ddee_ff00_u64;
     let loaded = 0x0123_4567_89ab_cdef_u64;
     let mut cpu = CpuState {
-        rip: 0x44000,
+        scalar: ScalarState {
+            rip: 0x44000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -8501,7 +9044,10 @@ fn high_half_moves() {
 #[test]
 fn high_half_faults() {
     let mut cpu = CpuState {
-        rip: 0x46000,
+        scalar: ScalarState {
+            rip: 0x46000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -8536,7 +9082,10 @@ fn high_half_faults() {
 #[test]
 fn high_half_forms() {
     let mut cpu = CpuState {
-        rip: 0x46f00,
+        scalar: ScalarState {
+            rip: 0x46f00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = 0xaaaa_bbbb_cccc_dddd_1111_2222_3333_4444;
@@ -8566,7 +9115,10 @@ fn low_half_moves() {
     let high = 0x99aa_bbcc_ddee_ff00_u64;
     let loaded = 0x0123_4567_89ab_cdef_u64;
     let mut cpu = CpuState {
-        rip: 0x46800,
+        scalar: ScalarState {
+            rip: 0x46800,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[11] = 0x1000;
@@ -8607,7 +9159,10 @@ fn low_half_moves() {
 #[test]
 fn low_half_contract() {
     let mut cpu = CpuState {
-        rip: 0x46a00,
+        scalar: ScalarState {
+            rip: 0x46a00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -8650,8 +9205,11 @@ fn sse3_duplicate_moves() {
     let words = 1_u128 | (2_u128 << 32) | (3_u128 << 64) | (4_u128 << 96);
     let original_flags = FlagState::from_bits(0x8d5);
     let mut cpu = CpuState {
-        rip: 0x46b00,
-        flags: original_flags,
+        scalar: ScalarState {
+            rip: 0x46b00,
+            flags: original_flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -8726,7 +9284,10 @@ fn sse3_duplicate_moves() {
 #[test]
 fn sse3_duplicate_faults_transactionally() {
     let mut cpu = CpuState {
-        rip: 0x46c00,
+        scalar: ScalarState {
+            rip: 0x46c00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -8761,7 +9322,10 @@ fn vex_sse3_duplicate_widths() {
     let low = 1_u128 | (2_u128 << 32) | (3_u128 << 64) | (4_u128 << 96);
     let upper = 5_u128 | (6_u128 << 32) | (7_u128 << 64) | (8_u128 << 96);
     let mut cpu = CpuState {
-        rip: 0x46d00,
+        scalar: ScalarState {
+            rip: 0x46d00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = low;
@@ -8850,7 +9414,10 @@ fn scalar_double_moves() {
     let high = 0xfedc_ba98_7654_3210_u64;
     let loaded = 0x4009_21fb_5444_2d18_u64;
     let mut cpu = CpuState {
-        rip: 0x47000,
+        scalar: ScalarState {
+            rip: 0x47000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -8891,7 +9458,10 @@ fn scalar_double_moves() {
 #[test]
 fn scalar_double_contract() {
     let mut cpu = CpuState {
-        rip: 0x47200,
+        scalar: ScalarState {
+            rip: 0x47200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -8928,7 +9498,10 @@ fn scalar_double_contract() {
 fn scalar_single_moves() {
     let upper = 0x1122_3344_5566_7788_99aa_bbcc_u128 << 32;
     let mut cpu = CpuState {
-        rip: 0x47300,
+        scalar: ScalarState {
+            rip: 0x47300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -8988,7 +9561,10 @@ fn scalar_single_arithmetic() {
     for (opcode, left, right, expected) in cases {
         let upper = 0xfeed_face_cafe_beef_0123_4567_u128 << 32;
         let mut cpu = CpuState {
-            rip: 0x47600,
+            scalar: ScalarState {
+                rip: 0x47600,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = upper | u128::from(left.to_bits());
@@ -9064,7 +9640,10 @@ fn packed_float_arithmetic() {
         ),
     ] {
         let mut cpu = CpuState {
-            rip: 0x47680,
+            scalar: ScalarState {
+                rip: 0x47680,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = left;
@@ -9083,7 +9662,10 @@ fn packed_float_arithmetic() {
 #[test]
 fn packed_float_nan_and_fault() {
     let mut cpu = CpuState {
-        rip: 0x476c0,
+        scalar: ScalarState {
+            rip: 0x476c0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = u128::from(0x7fc0_1234_u32) | (u128::from(0.0_f32.to_bits()) << 32);
@@ -9154,7 +9736,10 @@ fn packed_float_unpack() {
     };
     for (bytes, expected) in forms {
         let mut cpu = CpuState {
-            rip: 0x47700,
+            scalar: ScalarState {
+                rip: 0x47700,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = left;
@@ -9171,7 +9756,10 @@ fn packed_float_unpack() {
 #[test]
 fn packed_float_unpack_fault() {
     let mut cpu = CpuState {
-        rip: 0x47740,
+        scalar: ScalarState {
+            rip: 0x47740,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -9197,7 +9785,10 @@ fn packed_float_unpack_fault() {
 #[test]
 fn byte_shuffle_control() {
     let mut cpu = CpuState {
-        rip: 0x47780,
+        scalar: ScalarState {
+            rip: 0x47780,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = u128::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
@@ -9235,7 +9826,10 @@ fn byte_shuffle_control() {
 #[test]
 fn byte_shuffle_memory_fault() {
     let mut cpu = CpuState {
-        rip: 0x47800,
+        scalar: ScalarState {
+            rip: 0x47800,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -9275,7 +9869,10 @@ fn single_nan_rounding() {
     };
     let add = X86ScalarDecoder::decode(&[0xf3, 0x0f, 0x58, 0xc1], 0x47700).unwrap();
     let mut cpu = CpuState {
-        rip: 0x47700,
+        scalar: ScalarState {
+            rip: 0x47700,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = u128::from(0x7fc0_1234_u32);
@@ -9340,7 +9937,10 @@ fn single_nan_rounding() {
 fn scalar_single_conversions() {
     let upper = 0xfeed_face_cafe_beef_dead_beef_u128 << 32;
     let mut cpu = CpuState {
-        rip: 0x47800,
+        scalar: ScalarState {
+            rip: 0x47800,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[1] = u64::from((-3_i32) as u32);
@@ -9400,8 +10000,11 @@ fn legacy_scalar_single_integer_conversion_contract() {
         (3, -16_777_217, -16_777_216.0),
     ] {
         let mut cpu = CpuState {
-            rip: 0x47840,
-            flags,
+            scalar: ScalarState {
+                rip: 0x47840,
+                flags,
+                ..Default::default()
+            },
             mxcsr: 0x1f80 | rounding << 13,
             ..Default::default()
         };
@@ -9424,8 +10027,11 @@ fn legacy_scalar_single_integer_conversion_contract() {
         (true, -9_223_372_036_854_775_808.0_f32, 0x8000_0000_0000_0000, false),
     ] {
         let mut cpu = CpuState {
-            rip: 0x47860,
-            flags,
+            scalar: ScalarState {
+                rip: 0x47860,
+                flags,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[8] = u64::MAX;
@@ -9448,8 +10054,11 @@ fn legacy_scalar_single_integer_conversion_contract() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x47880,
-        flags,
+        scalar: ScalarState {
+            rip: 0x47880,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -9487,7 +10096,10 @@ fn packed_width_conversions() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x47a40,
+        scalar: ScalarState {
+            rip: 0x47a40,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = singles([1.25_f32.to_bits(), (-3.5_f32).to_bits()]);
@@ -9517,7 +10129,10 @@ fn packed_width_conversions() {
 
     for (bytes, instruction) in [(7, vec![0x0f, 0x5a, 0x03]), (15, vec![0x66, 0x0f, 0x5a, 0x03])] {
         let mut cpu = CpuState {
-            rip: 0x47ac0,
+            scalar: ScalarState {
+                rip: 0x47ac0,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x5000;
@@ -9556,7 +10171,10 @@ fn packed_single_conversions() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x47b00,
+        scalar: ScalarState {
+            rip: 0x47b00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[9] = dwords([0, 1, (-1_i32) as u32, 16_777_217]);
@@ -9608,7 +10226,10 @@ fn packed_single_conversions() {
 #[test]
 fn packed_single_conversion_fault() {
     let mut cpu = CpuState {
-        rip: 0x47d00,
+        scalar: ScalarState {
+            rip: 0x47d00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -9646,7 +10267,10 @@ fn vex_packed_single_conversion_family() {
         f32::NAN.to_bits(),
     ]);
     let mut cpu = CpuState {
-        rip: 0x47d80,
+        scalar: ScalarState {
+            rip: 0x47d80,
+            ..Default::default()
+        },
         mxcsr: 0x1f80 | (2 << 13),
         ..Default::default()
     };
@@ -9717,7 +10341,10 @@ fn vex_float_width_conversion_family() {
     };
     let doubles = |values: [f64; 2]| u128::from(values[0].to_bits()) | (u128::from(values[1].to_bits()) << 64);
     let mut cpu = CpuState {
-        rip: 0x47dc0,
+        scalar: ScalarState {
+            rip: 0x47dc0,
+            ..Default::default()
+        },
         mxcsr: 0x1f80,
         ..Default::default()
     };
@@ -9830,9 +10457,12 @@ fn packed_single_segments() {
     ] {
         for (segment, base) in [(0x64, 0x5000), (0x65, 0x6000)] {
             let mut cpu = CpuState {
-                rip: 0x47e00,
-                fs_base: 0x5000,
-                gs_base: 0x6000,
+                scalar: ScalarState {
+                    rip: 0x47e00,
+                    fs_base: 0x5000,
+                    gs_base: 0x6000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[9] = source;
@@ -9885,7 +10515,10 @@ fn legacy_float_extrema_select_x86_operands() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x47e00,
+        scalar: ScalarState {
+            rip: 0x47e00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = dwords([3.0_f32.to_bits(), (-2.0_f32).to_bits(), 0.0_f32.to_bits(), 0x7fc0_1234]);
@@ -9939,7 +10572,10 @@ fn legacy_float_extrema_select_x86_operands() {
 #[test]
 fn legacy_float_extrema_preserve_scalar_lanes_and_faults() {
     let mut cpu = CpuState {
-        rip: 0x48000,
+        scalar: ScalarState {
+            rip: 0x48000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = u128::from(3.0_f32.to_bits()) | 0xfeed_face_cafe_beef_dead_beef_u128 << 32;
@@ -10016,9 +10652,12 @@ fn legacy_float_extrema_segments() {
         for (segment, base) in [(0x64, 0x7000), (0x65, 0x8000)] {
             for (opcode, expected) in [(0x5d, minimum), (0x5f, left)] {
                 let mut cpu = CpuState {
-                    rip: 0x48200,
-                    fs_base: 0x7000,
-                    gs_base: 0x8000,
+                    scalar: ScalarState {
+                        rip: 0x48200,
+                        fs_base: 0x7000,
+                        gs_base: 0x8000,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 };
                 cpu.vectors[8] = left;
@@ -10081,7 +10720,10 @@ fn sse3_pair_arithmetic_and_fault() {
         (0xd0, [-4.0, 8.0, -4.0, 12.0]),
     ] {
         let mut cpu = CpuState {
-            rip: 0x48140,
+            scalar: ScalarState {
+                rip: 0x48140,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = singles([1.0, 2.0, 3.0, 4.0]);
@@ -10095,7 +10737,10 @@ fn sse3_pair_arithmetic_and_fault() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x48180,
+        scalar: ScalarState {
+            rip: 0x48180,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = doubles([1.0, 2.0]);
@@ -10130,8 +10775,11 @@ fn sse3_pair_arithmetic_and_fault() {
 fn vector_variable_shifts_and_fault() {
     let flags = FlagState::from_bits(u16::MAX);
     let mut cpu = CpuState {
-        rip: 0x481e0,
-        flags,
+        scalar: ScalarState {
+            rip: 0x481e0,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[5] = (0..8).fold(0_u128, |packed, lane| {
@@ -10191,7 +10839,10 @@ fn legacy_float_compare_masks_and_predicate_aliases() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x48200,
+        scalar: ScalarState {
+            rip: 0x48200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = dwords([1.0_f32.to_bits(), 2.0_f32.to_bits(), 0x7fc0_1234, 4.0_f32.to_bits()]);
@@ -10227,7 +10878,10 @@ fn legacy_float_compare_masks_and_predicate_aliases() {
 #[test]
 fn legacy_float_compare_scalar_memory_fault_is_atomic() {
     let mut cpu = CpuState {
-        rip: 0x48400,
+        scalar: ScalarState {
+            rip: 0x48400,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10252,7 +10906,10 @@ fn legacy_float_compare_scalar_memory_fault_is_atomic() {
 #[test]
 fn mxcsr_control_roundtrip() {
     let mut cpu = CpuState {
-        rip: 0x48000,
+        scalar: ScalarState {
+            rip: 0x48000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     assert_eq!(cpu.mxcsr, 0x1f80);
@@ -10285,7 +10942,10 @@ fn mxcsr_control_roundtrip() {
 #[test]
 fn mxcsr_control_contract() {
     let mut cpu = CpuState {
-        rip: 0x48200,
+        scalar: ScalarState {
+            rip: 0x48200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -10333,7 +10993,10 @@ fn mxcsr_control_contract() {
 #[test]
 fn fxsave_image() {
     let mut cpu = CpuState {
-        rip: 0x49000,
+        scalar: ScalarState {
+            rip: 0x49000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10374,7 +11037,10 @@ fn fxsave_image() {
 #[test]
 fn fxsave_contract() {
     let mut cpu = CpuState {
-        rip: 0x49100,
+        scalar: ScalarState {
+            rip: 0x49100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1008;
@@ -10422,7 +11088,10 @@ fn fxsave_contract() {
 #[test]
 fn fxsave_mmx_alias() {
     let mut cpu = CpuState {
-        rip: 0x49180,
+        scalar: ScalarState {
+            rip: 0x49180,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10461,7 +11130,10 @@ fn fxrstor_image() {
         image[160 + index * 16..176 + index * 16].copy_from_slice(&vector.to_le_bytes());
     }
     let mut cpu = CpuState {
-        rip: 0x49200,
+        scalar: ScalarState {
+            rip: 0x49200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10490,7 +11162,10 @@ fn fxrstor_image() {
 #[test]
 fn fxrstor_contract() {
     let mut cpu = CpuState {
-        rip: 0x49300,
+        scalar: ScalarState {
+            rip: 0x49300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10544,7 +11219,10 @@ fn cvtsd2si_rounding_modes() {
     for (rounding, positive, negative) in [(0, 3, -3), (1, 2, -3), (2, 3, -2), (3, 2, -2)] {
         for (value, expected) in [(2.7_f64, positive), (-2.7_f64, negative)] {
             let mut cpu = CpuState {
-                rip: 0x4a000,
+                scalar: ScalarState {
+                    rip: 0x4a000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.mxcsr = 0x1f80 | rounding << 13;
@@ -10578,7 +11256,10 @@ fn cvtsd2si_rounding_modes() {
 fn vex_scalar_to_integer_rounding_modes() {
     for (rounding, expected) in [(0, 3_u64), (1, 2), (2, 3), (3, 2)] {
         let mut cpu = CpuState {
-            rip: 0x4a080,
+            scalar: ScalarState {
+                rip: 0x4a080,
+                ..Default::default()
+            },
             mxcsr: 0x1f80 | rounding << 13,
             ..Default::default()
         };
@@ -10618,7 +11299,10 @@ fn scalar_float_to_integer_denormal_raises_only_precision() {
         &[0xc5, 0xfb, 0x2d, 0xc1][..],
     ] {
         let mut cpu = CpuState {
-            rip: 0x4a0c0,
+            scalar: ScalarState {
+                rip: 0x4a0c0,
+                ..Default::default()
+            },
             mxcsr: 0x1f80,
             ..Default::default()
         };
@@ -10652,7 +11336,10 @@ fn cvtsd2si_boundaries() {
     ];
     for (value, wide, expected, invalid) in cases {
         let mut cpu = CpuState {
-            rip: 0x4a100,
+            scalar: ScalarState {
+                rip: 0x4a100,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[8] = u64::MAX;
@@ -10682,7 +11369,10 @@ fn cvtsd2si_boundaries() {
 #[test]
 fn cvtsd2si_memory_contract() {
     let mut cpu = CpuState {
-        rip: 0x4a200,
+        scalar: ScalarState {
+            rip: 0x4a200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10725,7 +11415,10 @@ fn addsd_rounding() {
     ] {
         let upper = 0x1122_3344_5566_7788_u64;
         let mut cpu = CpuState {
-            rip: 0x4b000,
+            scalar: ScalarState {
+                rip: 0x4b000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.mxcsr = 0x1f80 | rounding << 13;
@@ -10760,7 +11453,10 @@ fn addsd_environment() {
     };
     let add = X86ScalarDecoder::decode(&[0xf2, 0x0f, 0x58, 0xc1], 0x4b100).unwrap();
     let mut cpu = CpuState {
-        rip: 0x4b100,
+        scalar: ScalarState {
+            rip: 0x4b100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = 1;
@@ -10809,7 +11505,10 @@ fn addsd_environment() {
 fn addsd_memory() {
     let upper = 0xaabb_ccdd_eeff_0011_u64;
     let mut cpu = CpuState {
-        rip: 0x4b200,
+        scalar: ScalarState {
+            rip: 0x4b200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -10849,7 +11548,10 @@ fn subsd_rounding() {
     for (rounding, expected) in [(0, one), (1, next), (2, one), (3, one)] {
         let upper = 0x8877_6655_4433_2211_u64;
         let mut cpu = CpuState {
-            rip: 0x4b400,
+            scalar: ScalarState {
+                rip: 0x4b400,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.mxcsr = 0x1f80 | rounding << 13;
@@ -10876,7 +11578,10 @@ fn subsd_rounding() {
 #[test]
 fn subsd_forms() {
     let mut cpu = CpuState {
-        rip: 0x4b500,
+        scalar: ScalarState {
+            rip: 0x4b500,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = u128::from(5.0_f64.to_bits());
@@ -10932,7 +11637,10 @@ fn mulsd_rounding() {
     for (rounding, expected) in [(0, one), (1, one), (2, next), (3, one)] {
         let upper = 0x1234_5678_9abc_def0_u64;
         let mut cpu = CpuState {
-            rip: 0x4b800,
+            scalar: ScalarState {
+                rip: 0x4b800,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.mxcsr = 0x1f80 | rounding << 13;
@@ -10977,7 +11685,10 @@ fn mulsd_environment() {
         ),
     ] {
         let mut cpu = CpuState {
-            rip: 0x4b900,
+            scalar: ScalarState {
+                rip: 0x4b900,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = u128::from(left);
@@ -10996,7 +11707,10 @@ fn mulsd_environment() {
         (0x7ff0_0000_0000_0001, 1.0_f64.to_bits()),
     ] {
         let mut cpu = CpuState {
-            rip: 0x4b900,
+            scalar: ScalarState {
+                rip: 0x4b900,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = u128::from(left);
@@ -11010,7 +11724,10 @@ fn mulsd_environment() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x4b900,
+        scalar: ScalarState {
+            rip: 0x4b900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = u128::from(0x7ff8_0000_0000_1234_u64);
@@ -11022,7 +11739,10 @@ fn mulsd_environment() {
     assert_eq!(cpu.mxcsr & 1, 0);
 
     let mut cpu = CpuState {
-        rip: 0x4b900,
+        scalar: ScalarState {
+            rip: 0x4b900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = u128::from(1_u64);
@@ -11072,7 +11792,10 @@ fn mulsd_environment() {
 fn mulsd_forms() {
     let upper = 0xfedc_ba98_7654_3210_u64;
     let mut cpu = CpuState {
-        rip: 0x4ba00,
+        scalar: ScalarState {
+            rip: 0x4ba00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -11149,7 +11872,10 @@ fn ucomisd_flags() {
         (3.0, 2.0, false, false, false),
     ] {
         let mut cpu = CpuState {
-            rip: 0x4c000,
+            scalar: ScalarState {
+                rip: 0x4c000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = u128::from(left.to_bits());
@@ -11181,7 +11907,10 @@ fn ucomisd_flags() {
 fn ucomisd_nan() {
     for (nan, invalid) in [(0x7ff8_0000_0000_0001_u64, false), (0x7ff0_0000_0000_0001, true)] {
         let mut cpu = CpuState {
-            rip: 0x4c100,
+            scalar: ScalarState {
+                rip: 0x4c100,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = u128::from(nan);
@@ -11204,7 +11933,10 @@ fn ucomisd_nan() {
         assert_eq!(cpu.mxcsr & 1 != 0, invalid);
     }
     let mut cpu = CpuState {
-        rip: 0x4c100,
+        scalar: ScalarState {
+            rip: 0x4c100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = 1;
@@ -11228,7 +11960,10 @@ fn ucomisd_nan() {
 #[test]
 fn ucomisd_memory() {
     let mut cpu = CpuState {
-        rip: 0x4c200,
+        scalar: ScalarState {
+            rip: 0x4c200,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = u128::from(1.0_f64.to_bits());
@@ -11268,7 +12003,10 @@ fn ucomisd_memory() {
 fn comisd_nan() {
     for nan in [0x7ff8_0000_0000_0001_u64, 0x7ff0_0000_0000_0001] {
         let mut cpu = CpuState {
-            rip: 0x4c400,
+            scalar: ScalarState {
+                rip: 0x4c400,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = u128::from(nan);
@@ -11298,7 +12036,10 @@ fn comisd_nan() {
 #[test]
 fn comisd_forms() {
     let mut cpu = CpuState {
-        rip: 0x4c500,
+        scalar: ScalarState {
+            rip: 0x4c500,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[8] = u128::from(4.0_f64.to_bits());
@@ -11378,7 +12119,10 @@ fn packed_extrema() {
     let right_bytes = [255, 0, 128, 127, 2, 253, 192, 64, 20, 10, 40, 30, 5, 250, 100, 200];
     for (opcode, choose) in [(0xda, u8::min as fn(u8, u8) -> u8), (0xde, u8::max)] {
         let mut cpu = CpuState {
-            rip: 0x47000,
+            scalar: ScalarState {
+                rip: 0x47000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = u128::from_le_bytes(left_bytes);
@@ -11410,7 +12154,10 @@ fn packed_extrema() {
             .map(i16::to_le_bytes)
             .concat();
         let mut cpu = CpuState {
-            rip: 0x48000,
+            scalar: ScalarState {
+                rip: 0x48000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[0] = u128::from_le_bytes(left.try_into().unwrap());
@@ -11435,7 +12182,10 @@ fn packed_extrema() {
 fn packed_extrema_memory() {
     let source = [255, 1, 200, 3, 128, 5, 100, 7, 64, 9, 32, 11, 16, 13, 8, 15];
     let mut cpu = CpuState {
-        rip: 0x49000,
+        scalar: ScalarState {
+            rip: 0x49000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[11] = 0x1000;
@@ -11492,8 +12242,11 @@ fn reverse_scan_basis() {
             assert_eq!(ir.width, width);
             let flags = FlagState::from_bits((1 << Flag::Carry as u8) | (1 << Flag::Overflow as u8));
             let mut cpu = CpuState {
-                rip: 0x4b000,
-                flags,
+                scalar: ScalarState {
+                    rip: 0x4b000,
+                    flags,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.registers[0] = u64::MAX;
@@ -11520,7 +12273,10 @@ fn reverse_scan_basis() {
 #[test]
 fn reverse_scan_zero() {
     let mut cpu = CpuState {
-        rip: 0x4c000,
+        scalar: ScalarState {
+            rip: 0x4c000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[8] = 0;
@@ -11557,7 +12313,10 @@ fn reverse_scan_zero() {
 #[test]
 fn reverse_scan_memory() {
     let mut cpu = CpuState {
-        rip: 0x4e000,
+        scalar: ScalarState {
+            rip: 0x4e000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1001;
@@ -11643,8 +12402,11 @@ fn scalar_compare_formats() {
         bytes.extend_from_slice(&[0x45, 0x0f, 0x2e, 0xc1]);
         let instruction = X86ScalarDecoder::decode(&bytes, 0x51000).unwrap();
         let mut cpu = CpuState {
-            rip: 0x51000,
-            flags: FlagState::from_bits(u16::MAX),
+            scalar: ScalarState {
+                rip: 0x51000,
+                flags: FlagState::from_bits(u16::MAX),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[8] = u128::from(lesser) | (u128::MAX << 64);
@@ -11684,7 +12446,10 @@ fn compare_nan_fault() {
             bytes.extend_from_slice(&[0x0f, opcode, 0xc1]);
             let instruction = X86ScalarDecoder::decode(&bytes, 0x52000).unwrap();
             let mut cpu = CpuState {
-                rip: 0x52000,
+                scalar: ScalarState {
+                    rip: 0x52000,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[1] = u128::from(operand);
@@ -11709,7 +12474,10 @@ fn compare_nan_fault() {
         bytes.extend_from_slice(&[0x0f, 0x2e, 0xc1]);
         let instruction = X86ScalarDecoder::decode(&bytes, 0x53000).unwrap();
         let mut cpu = CpuState {
-            rip: 0x53000,
+            scalar: ScalarState {
+                rip: 0x53000,
+                ..Default::default()
+            },
             mxcsr: 1 << 6,
             ..Default::default()
         };
@@ -11731,7 +12499,10 @@ fn compare_nan_fault() {
 
     let instruction = X86ScalarDecoder::decode(&[0x0f, 0x2e, 0x03], 0x54000).unwrap();
     let mut cpu = CpuState {
-        rip: 0x54000,
+        scalar: ScalarState {
+            rip: 0x54000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -11767,7 +12538,10 @@ fn vex_scalar_merge_uses_vvvv_and_clears_upper() {
             }
         ));
         let mut cpu = CpuState {
-            rip: 0x6000,
+            scalar: ScalarState {
+                rip: 0x6000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[1] = 0x1111_1111_2222_2222_3333_3333_4444_4444;
@@ -11796,7 +12570,10 @@ fn vex_scalar_merge_uses_vvvv_and_clears_upper() {
 #[test]
 fn vex_transport_and_zero_instructions_observe_upper_rules() {
     let mut cpu = CpuState {
-        rip: 0x7000,
+        scalar: ScalarState {
+            rip: 0x7000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = 0x1234;
@@ -11878,7 +12655,10 @@ fn vex_packed_double_conversion_family() {
         );
     }
     let mut cpu = CpuState {
-        rip: 0x7ff6,
+        scalar: ScalarState {
+            rip: 0x7ff6,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = u128::from(1.9_f64.to_bits()) | (u128::from((-2.9_f64).to_bits()) << 64);
@@ -11952,7 +12732,10 @@ fn vex_aes_family() {
         }
     ));
     let mut cpu = CpuState {
-        rip: 0x7ff9,
+        scalar: ScalarState {
+            rip: 0x7ff9,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = 0xd6ab76fe_daa678f1_d2af72fa_d6aa74fd;
@@ -12045,7 +12828,10 @@ fn vex_masked_memory_family() {
         );
     }
     let mut cpu = CpuState {
-        rip: 0x7ffd,
+        scalar: ScalarState {
+            rip: 0x7ffd,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -12082,7 +12868,10 @@ fn vex_masked_memory_family() {
 #[test]
 fn legacy_streaming_load_and_masked_store() {
     let mut cpu = CpuState {
-        rip: 0x70_000,
+        scalar: ScalarState {
+            rip: 0x70_000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -12138,8 +12927,11 @@ fn vex_vector_test_family() {
         } if actual == lane));
     }
     let mut cpu = CpuState {
-        rip: 0x7ff8,
-        flags: FlagState::from_bits(u16::MAX),
+        scalar: ScalarState {
+            rip: 0x7ff8,
+            flags: FlagState::from_bits(u16::MAX),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vector_upper[0] = 1;
@@ -12187,7 +12979,10 @@ fn vex_horizontal_minimum_word_family() {
         }
     ));
     let mut cpu = CpuState {
-        rip: 0x7ffe,
+        scalar: ScalarState {
+            rip: 0x7ffe,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = [9_u16, 3, 7, 3, 8, 6, 5, 4]
@@ -12229,7 +13024,10 @@ fn vex_wide_memory_transport_is_transactional() {
         },
     };
     let mut cpu = CpuState {
-        rip: 0x8000,
+        scalar: ScalarState {
+            rip: 0x8000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -12284,7 +13082,10 @@ fn vex_wide_memory_transport_is_transactional() {
 #[test]
 fn vex_wide_arithmetic_and_lane_permute() {
     let mut cpu = CpuState {
-        rip: 0xa000,
+        scalar: ScalarState {
+            rip: 0xa000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let singles = |values: [f32; 4]| {
@@ -12340,7 +13141,10 @@ fn vex_integer_logical_family() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x7100,
+        scalar: ScalarState {
+            rip: 0x7100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = 0xff00_ff00_ff00_ff00_ff00_ff00_ff00_ff00;
@@ -12397,7 +13201,10 @@ fn vex_integer_broadcast_family() {
             } if actual == operation && actual_wide == wide));
 
             let mut cpu = CpuState {
-                rip: 0x7300,
+                scalar: ScalarState {
+                    rip: 0x7300,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[1] = u128::MAX;
@@ -12430,7 +13237,10 @@ fn vex_integer_broadcast_family() {
         let memory_bytes = [0xc4, 0xe2, 0x7d, opcode, 0x0b];
         let decoded = X86ScalarDecoder::decode(&memory_bytes, 0x7400).unwrap();
         let mut cpu = CpuState {
-            rip: 0x7400,
+            scalar: ScalarState {
+                rip: 0x7400,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x1000;
@@ -12471,7 +13281,10 @@ fn vex_128_bit_broadcast_family() {
         ));
         let value = 0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128;
         let mut cpu = CpuState {
-            rip: 0x7450,
+            scalar: ScalarState {
+                rip: 0x7450,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x1000;
@@ -12514,7 +13327,10 @@ fn vex_variable_packed_shift_family() {
     assert!(X86ScalarDecoder::decode(&[0xc4, 0xe2, 0x7c, 0x45, 0xca], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x7600,
+        scalar: ScalarState {
+            rip: 0x7600,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = 0x0000_0001_ffff_ffff_0000_0008_8000_0000;
@@ -12588,7 +13404,10 @@ fn vex_permute_two_128_lanes() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x7700,
+        scalar: ScalarState {
+            rip: 0x7700,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[0] = 0xaaaa;
@@ -12681,7 +13500,10 @@ fn vex_full_lane_permutation_family() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x7780,
+        scalar: ScalarState {
+            rip: 0x7780,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = u128::from(0x11_u64) | (u128::from(0x22_u64) << 64);
@@ -12738,7 +13560,10 @@ fn vex_full_lane_permutation_family() {
 #[test]
 fn vex_lane_local_permutation_family() {
     let mut cpu = CpuState {
-        rip: 0x8080,
+        scalar: ScalarState {
+            rip: 0x8080,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = 1 | (2 << 32) | (3 << 64) | (4 << 96);
@@ -12818,7 +13643,10 @@ fn vex_lane_local_permutation_family() {
 #[test]
 fn vex_insert_single_family() {
     let mut cpu = CpuState {
-        rip: 0x80c0,
+        scalar: ScalarState {
+            rip: 0x80c0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = 10 | (20 << 32) | (30 << 64) | (40 << 96);
@@ -12898,7 +13726,10 @@ fn vex_128_lane_transport_family() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x77b0,
+        scalar: ScalarState {
+            rip: 0x77b0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = 0x11;
@@ -13008,7 +13839,10 @@ fn vex_byte_shuffle_family() {
     for control in 0_u8..=u8::MAX {
         let controls = u128::from(control) * 0x0101_0101_0101_0101_0101_0101_0101_0101;
         let mut cpu = CpuState {
-            rip: 0x77c0,
+            scalar: ScalarState {
+                rip: 0x77c0,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[2] = data;
@@ -13038,7 +13872,10 @@ fn vex_byte_shuffle_family() {
     }
 
     let mut vex_cpu = CpuState {
-        rip: 0x77d0,
+        scalar: ScalarState {
+            rip: 0x77d0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     vex_cpu.vectors[2] = data;
@@ -13116,7 +13953,10 @@ fn vex_packed_unpack_family() {
     assert!(X86ScalarDecoder::decode(&[0xc5, 0xec, 0x6c, 0xcb], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x7800,
+        scalar: ScalarState {
+            rip: 0x7800,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = u128::from(0xaaaa_u64) | (u128::from(0xbbbb_u64) << 64);
@@ -13226,7 +14066,10 @@ fn vex_packed_multiply_family() {
     assert!(X86ScalarDecoder::decode(&[0xc4, 0xe2, 0xed, 0x40, 0xcb], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x7900,
+        scalar: ScalarState {
+            rip: 0x7900,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = u128::from(0xffff_8000_ffff_0002_u64) | (u128::from(0x8000_7fff_0003_ffff_u64) << 64);
@@ -13358,7 +14201,10 @@ fn vex_gather_partial_fault_and_retry() {
     };
     for fault_lane in 0..8 {
         let mut cpu = CpuState {
-            rip: 0x7b00,
+            scalar: ScalarState {
+                rip: 0x7b00,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.registers[3] = 0x1000;
@@ -13414,7 +14260,10 @@ fn vex_gather_fault_upper_and_address_projection() {
         ..Default::default()
     };
     let mut cpu = CpuState {
-        rip: 0x7c00,
+        scalar: ScalarState {
+            rip: 0x7c00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x2000;
@@ -13482,7 +14331,10 @@ fn vex_immediate_blend_family() {
     assert!(X86ScalarDecoder::decode(&[0xc4, 0xe3, 0xed, 0x0e, 0xcb, 1], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x7e00,
+        scalar: ScalarState {
+            rip: 0x7e00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = 0x1111_1111_1111_1111_1111_1111_1111_1111;
@@ -13558,7 +14410,10 @@ fn vex_packed_saturating_family() {
     let left = [-32768, -129, -128, -1, 0, 1, 127, 128];
     let right = [255, 256, 32767, -255, -2, 2, 126, 129];
     let mut cpu = CpuState {
-        rip: 0x7f00,
+        scalar: ScalarState {
+            rip: 0x7f00,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = words(left);
@@ -13645,7 +14500,10 @@ fn vex_movemask_family() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x7f80,
+        scalar: ScalarState {
+            rip: 0x7f80,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.flags = cpu.flags.with(Flag::Carry, true).with(Flag::Zero, true);
@@ -13730,7 +14588,10 @@ fn vex_round_family() {
         })
     };
     let mut cpu = CpuState {
-        rip: 0x7fb0,
+        scalar: ScalarState {
+            rip: 0x7fb0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[3] = singles([1.5, -1.5, 2.1, -2.1]);
@@ -13792,8 +14653,11 @@ fn vex_dot_product_family() {
     let doubles = |values: [f64; 2]| u128::from(values[0].to_bits()) | (u128::from(values[1].to_bits()) << 64);
     let flags = FlagState::from_bits(0x8d5);
     let mut cpu = CpuState {
-        rip: 0x7fd8,
-        flags,
+        scalar: ScalarState {
+            rip: 0x7fd8,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = singles([1.0, 2.0, 3.0, 4.0]);
@@ -13883,8 +14747,11 @@ fn vex_square_root_family() {
     let doubles = |values: [f64; 2]| u128::from(values[0].to_bits()) | (u128::from(values[1].to_bits()) << 64);
     let flags = FlagState::from_bits(0x8d5);
     let mut cpu = CpuState {
-        rip: 0x7ff0,
-        flags,
+        scalar: ScalarState {
+            rip: 0x7ff0,
+            flags,
+            ..Default::default()
+        },
         mxcsr: 0x1f80,
         ..Default::default()
     };
@@ -13985,8 +14852,11 @@ fn vex_reciprocal_family() {
     };
     let flags = FlagState::from_bits(0x8d5);
     let mut cpu = CpuState {
-        rip: 0x8040,
-        flags,
+        scalar: ScalarState {
+            rip: 0x8040,
+            flags,
+            ..Default::default()
+        },
         mxcsr: 0x1f80,
         ..Default::default()
     };
@@ -14078,7 +14948,10 @@ fn vex_qword_transport_family() {
     assert!(X86ScalarDecoder::decode(&[0xc5, 0xfd, 0xd6, 0xcb], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x7fe0,
+        scalar: ScalarState {
+            rip: 0x7fe0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = u128::MAX;
@@ -14159,7 +15032,10 @@ fn vex_qword_transport_family() {
     assert!(X86ScalarDecoder::decode(&[0xc5, 0xfc, 0x13, 0x0b], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x8010,
+        scalar: ScalarState {
+            rip: 0x8010,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = (u128::from(0xaaaa_u64) << 64) | 0xbbbb;
@@ -14244,7 +15120,10 @@ fn vex_packed_add_subtract_family() {
             } if actual == operation && actual_wide == wide));
         }
         let mut cpu = CpuState {
-            rip: 0x7fc0,
+            scalar: ScalarState {
+                rip: 0x7fc0,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.flags = cpu.flags.with(Flag::Carry, true).with(Flag::Overflow, true);
@@ -14277,7 +15156,10 @@ fn vex_packed_add_subtract_family() {
     }
 
     let mut cpu = CpuState {
-        rip: 0x7fe0,
+        scalar: ScalarState {
+            rip: 0x7fe0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -14346,7 +15228,10 @@ fn vex_saturating_arithmetic_family() {
             })
         };
         let mut cpu = CpuState {
-            rip: 0x7ff0,
+            scalar: ScalarState {
+                rip: 0x7ff0,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[2] = left;
@@ -14374,7 +15259,10 @@ fn vex_saturating_arithmetic_family() {
     assert!(X86ScalarDecoder::decode(&[0xc5, 0xec, 0xec, 0xcb], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x8010,
+        scalar: ScalarState {
+            rip: 0x8010,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -14443,7 +15331,10 @@ fn vex_packed_extrema_family() {
             })
         };
         let mut cpu = CpuState {
-            rip: 0x8020,
+            scalar: ScalarState {
+                rip: 0x8020,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[2] = left;
@@ -14472,7 +15363,10 @@ fn vex_packed_extrema_family() {
     assert!(X86ScalarDecoder::decode(&[0xc4, 0xe2, 0xed, 0x39, 0xcb], 0).is_ok());
 
     let mut cpu = CpuState {
-        rip: 0x8040,
+        scalar: ScalarState {
+            rip: 0x8040,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -14515,7 +15409,10 @@ fn vex_packed_average_family() {
             })
         };
         let mut cpu = CpuState {
-            rip: 0x8050,
+            scalar: ScalarState {
+                rip: 0x8050,
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[2] = left;
@@ -14541,7 +15438,10 @@ fn vex_packed_average_family() {
         assert_eq!(cpu.flags, flags);
 
         let mut legacy = CpuState {
-            rip: 0x8060,
+            scalar: ScalarState {
+                rip: 0x8060,
+                ..Default::default()
+            },
             ..Default::default()
         };
         legacy.vectors[1] = left;
@@ -14556,7 +15456,10 @@ fn vex_packed_average_family() {
     assert!(X86ScalarDecoder::decode(&[0xc4, 0xe1, 0x68, 0xe0, 0xcb], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x8070,
+        scalar: ScalarState {
+            rip: 0x8070,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[3] = 0x1000;
@@ -14598,7 +15501,10 @@ fn vex_packed_multiply_add_family() {
     let repeat_word = |word: u16| (0..8).fold(0_u128, |value, lane| value | (u128::from(word) << (lane * 16)));
     let repeat_dword = |dword: u32| (0..4).fold(0_u128, |value, lane| value | (u128::from(dword) << (lane * 32)));
     let mut cpu = CpuState {
-        rip: 0x8080,
+        scalar: ScalarState {
+            rip: 0x8080,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = repeat_word(0x8000);
@@ -14637,7 +15543,10 @@ fn vex_packed_multiply_add_family() {
     assert_eq!(cpu.vector_upper[1], repeat_word(0x8000));
 
     let mut legacy = CpuState {
-        rip: 0x80a0,
+        scalar: ScalarState {
+            rip: 0x80a0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     legacy.vectors[1] = repeat_word(0x8000);
@@ -14694,7 +15603,10 @@ fn vex_sum_absolute_differences_family() {
         value | (u128::from(15 - lane) << (u32::from(lane) * 8))
     });
     let mut cpu = CpuState {
-        rip: 0x80d0,
+        scalar: ScalarState {
+            rip: 0x80d0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = u128::MAX;
@@ -14720,7 +15632,10 @@ fn vex_sum_absolute_differences_family() {
     assert_eq!(cpu.flags, flags);
 
     let mut legacy = CpuState {
-        rip: 0x80e0,
+        scalar: ScalarState {
+            rip: 0x80e0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     legacy.vectors[1] = u128::MAX;
@@ -14774,7 +15689,10 @@ fn vex_immediate_shift_family() {
     assert!(X86ScalarDecoder::decode(&[0xc5, 0xf5, 0x72, 0x10, 1], 0).is_err());
 
     let mut cpu = CpuState {
-        rip: 0x9000,
+        scalar: ScalarState {
+            rip: 0x9000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = 0x8000_0000_7fff_ffff_0000_0001_ffff_ffff;
@@ -14841,8 +15759,11 @@ fn vex_scalar_count_packed_shift_family() {
     let source_low = 0x8000_7fff_ffff_0001_1234_5678_abcd_ef01_u128;
     let source_high = 0xffff_8000_7fff_0001_aaaa_5555_1357_2468_u128;
     let mut cpu = CpuState {
-        rip: 0xa100,
-        flags,
+        scalar: ScalarState {
+            rip: 0xa100,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = source_low;
@@ -14925,7 +15846,10 @@ fn vex_horizontal_float_lanes_and_faults() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x6000,
+        scalar: ScalarState {
+            rip: 0x6000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = singles([1.0, 2.0, 4.0, 8.0]);
@@ -15013,8 +15937,11 @@ fn selector_moves() {
         let ir = X86ScalarDecoder::decode(bytes, 0x4000).unwrap();
         assert_eq!(ir.width, width);
         let mut cpu = CpuState {
-            registers: [0x1122_3344_5566_7788; 16],
-            rip: 0x4000,
+            scalar: ScalarState {
+                registers: [0x1122_3344_5566_7788; 16],
+                rip: 0x4000,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let flags = cpu.flags;
@@ -15037,11 +15964,14 @@ fn selector_moves() {
 #[test]
 fn selector_memory_and_discard() {
     let mut cpu = CpuState {
-        registers: [0x1000; 16],
-        rip: 0x5000,
-        fs_base: 0x2000,
-        gs_base: 0x3000,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            registers: [0x1000; 16],
+            rip: 0x5000,
+            fs_base: 0x2000,
+            gs_base: 0x3000,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let before = cpu.clone();
@@ -15078,9 +16008,12 @@ fn selector_memory_and_discard() {
 #[test]
 fn selector_store_fault_rolls_back() {
     let mut cpu = CpuState {
-        registers: [0x1000; 16],
-        rip: 0x7000,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            registers: [0x1000; 16],
+            rip: 0x7000,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     let before = cpu.clone();
@@ -15115,11 +16048,14 @@ fn iretq_restores_frame() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        registers: [0xaaaa; 16],
-        rip: 0x7000,
-        direction: false,
-        alignment_check: false,
-        id_flag: false,
+        scalar: ScalarState {
+            registers: [0xaaaa; 16],
+            rip: 0x7000,
+            direction: false,
+            alignment_check: false,
+            id_flag: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[4] = 0x1000;
@@ -15150,9 +16086,12 @@ fn iretq_faults_roll_back() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        registers: [0xaaaa; 16],
-        rip: 0x7000,
-        flags: FlagState::from_bits(0x55),
+        scalar: ScalarState {
+            registers: [0xaaaa; 16],
+            rip: 0x7000,
+            flags: FlagState::from_bits(0x55),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[4] = 0x1000;
@@ -15207,8 +16146,11 @@ fn ptest_defines_only_zero_and_carry_results() {
     ];
     for (left, right, zero, carry) in cases {
         let mut cpu = CpuState {
-            rip: 0x7000,
-            flags: FlagState::from_bits(u16::MAX),
+            scalar: ScalarState {
+                rip: 0x7000,
+                flags: FlagState::from_bits(u16::MAX),
+                ..Default::default()
+            },
             ..Default::default()
         };
         cpu.vectors[1] = left;
@@ -15244,8 +16186,11 @@ fn ptest_memory_fault_preserves_all_architectural_state() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x7100,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            rip: 0x7100,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x2000;
@@ -15276,7 +16221,10 @@ fn legacy_sse41_round_family_covers_all_shapes() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x7200,
+        scalar: ScalarState {
+            rip: 0x7200,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -15346,7 +16294,10 @@ fn legacy_sse41_round_flags_faults_and_prefixes() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x7300,
+        scalar: ScalarState {
+            rip: 0x7300,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[1] = u128::MAX;
@@ -15388,8 +16339,11 @@ fn legacy_sse41_lane_transfer_register_memory_faults_and_prefixes() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x7400,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            rip: 0x7400,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[8] = 0x0123_4567_89ab_cdef;
@@ -15456,8 +16410,11 @@ fn legacy_sse42_crc32c_covers_widths_registers_and_zero_extension() {
     };
     let flags = FlagState::from_bits(0x8d5);
     let mut cpu = CpuState {
-        rip: 0x7500,
-        flags,
+        scalar: ScalarState {
+            rip: 0x7500,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -15519,8 +16476,11 @@ fn legacy_sse42_crc32c_memory_fault_is_atomic_and_prefix_is_mandatory() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x7600,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            rip: 0x7600,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x3000;
@@ -15569,8 +16529,11 @@ fn legacy_pclmul_selects_halves_extended_registers_and_aliases() {
     };
     let flags = FlagState::from_bits(0x8d5);
     let mut cpu = CpuState {
-        rip: 0x7700,
-        flags,
+        scalar: ScalarState {
+            rip: 0x7700,
+            flags,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let left = 0xfedc_ba98_7654_3210_0123_4567_89ab_cdef_u128;
@@ -15618,8 +16581,11 @@ fn legacy_pclmul_memory_fault_is_transactional_and_prefix_is_mandatory() {
         commits: 0,
     };
     let mut cpu = CpuState {
-        rip: 0x7800,
-        flags: FlagState::from_bits(0x8d5),
+        scalar: ScalarState {
+            rip: 0x7800,
+            flags: FlagState::from_bits(0x8d5),
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.registers[0] = 0x3000;
@@ -15671,7 +16637,10 @@ fn vex_horizontal_integer_family() {
             .fold(0_u128, |bits, (lane, value)| bits | (u128::from(value) << (lane * 16)))
     };
     let mut cpu = CpuState {
-        rip: 0x8100,
+        scalar: ScalarState {
+            rip: 0x8100,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = words([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -15736,7 +16705,10 @@ fn vex_packed_sign_family() {
     }
     let bytes = |values: [u8; 16]| u128::from_le_bytes(values);
     let mut cpu = CpuState {
-        rip: 0x8130,
+        scalar: ScalarState {
+            rip: 0x8130,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = bytes([1, 2, 0x80, 0xff, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
@@ -15801,7 +16773,10 @@ fn vex_packed_absolute_family() {
     }
     let bytes = |values: [u8; 16]| u128::from_le_bytes(values);
     let mut cpu = CpuState {
-        rip: 0x8160,
+        scalar: ScalarState {
+            rip: 0x8160,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[3] = bytes([0, 1, 0xff, 0x80, 0x7f, 0xfe, 6, 0xfa, 8, 9, 10, 11, 12, 13, 14, 15]);
@@ -15868,7 +16843,10 @@ fn vex_high_round_word_family() {
         })
     };
     let mut cpu = CpuState {
-        rip: 0x8190,
+        scalar: ScalarState {
+            rip: 0x8190,
+            ..Default::default()
+        },
         ..Default::default()
     };
     cpu.vectors[2] = words([0x4000, -0x4000, 0x7fff, i16::MIN, 1, -1, 12345, -23456]);
@@ -15908,7 +16886,10 @@ fn scalar_arithmetic_propagates_negative_quiet_nan_verbatim() {
         for (destination, source) in [(0x3ff0_0000_0000_0000_u64, nan), (nan, 0x3ff0_0000_0000_0000)] {
             let decoded = X86ScalarDecoder::decode(&[0xf2, 0x0f, opcode, 0xc1], 0x4b100).unwrap();
             let mut cpu = CpuState {
-                rip: 0x4b100,
+                scalar: ScalarState {
+                    rip: 0x4b100,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             cpu.vectors[0] = u128::from(destination);
@@ -15988,10 +16969,7 @@ fn vex_integer_compare_family() {
                 "decode {opcode:#x} prefix {prefix:#x}"
             );
 
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.vectors[0] = u128::MAX;
             cpu.vector_upper[0] = u128::MAX;
             cpu.vectors[1] = low_left;
@@ -16018,10 +16996,7 @@ fn vex_integer_compare_family() {
             );
         }
 
-        let mut cpu = CpuState {
-            rip: 0x7100,
-            ..Default::default()
-        };
+        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7100, ..Default::default() }, ..Default::default() };
         cpu.registers[3] = 0x1000;
         cpu.vectors[1] = low_left;
         cpu.vector_upper[1] = high_left;
@@ -16059,10 +17034,7 @@ fn vex_qword_compare_family() {
     };
     for (opcode, greater) in [(0x29_u8, false), (0x37, true)] {
         let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, 0x71, opcode, 0xc2], 0x7200).unwrap();
-        let mut cpu = CpuState {
-            rip: 0x7200,
-            ..Default::default()
-        };
+        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7200, ..Default::default() }, ..Default::default() };
         cpu.vectors[1] = left;
         cpu.vectors[2] = right;
         assert_eq!(
@@ -16091,10 +17063,7 @@ fn vex_non_temporal_store_family() {
                 "decode {opcode:#x} prefix {prefix:#x}"
             );
 
-            let mut cpu = CpuState {
-                rip: 0x7300,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7300, ..Default::default() }, ..Default::default() };
             cpu.registers[3] = 0x1000;
             cpu.vectors[0] = 0x0f1e_2d3c_4b5a_6978_8796_a5b4_c3d2_e1f0;
             cpu.vector_upper[0] = 0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00;
@@ -16161,7 +17130,7 @@ fn vex_word_shuffle_family() {
     ] {
         for immediate in [0x00_u8, 0x1b, 0xe4, 0xff, 0x93] {
             let mut legacy_cpu = CpuState {
-                rip: 0x7000,
+                scalar: ScalarState { rip: 0x7000, ..Default::default() },
                 ..Default::default()
             };
             legacy_cpu.vectors[1] = low;
@@ -16171,10 +17140,7 @@ fn vex_word_shuffle_family() {
                 ExecutionExit::Continue
             );
 
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.vectors[1] = low;
             cpu.vector_upper[1] = high;
             cpu.vector_upper[0] = u128::MAX;
@@ -16186,7 +17152,7 @@ fn vex_word_shuffle_family() {
             assert_eq!(cpu.vectors[0], legacy_cpu.vectors[0], "low {prefix:#x} {immediate:#x}");
 
             let mut upper_cpu = CpuState {
-                rip: 0x7000,
+                scalar: ScalarState { rip: 0x7000, ..Default::default() },
                 ..Default::default()
             };
             upper_cpu.vectors[1] = high;
@@ -16232,7 +17198,7 @@ fn vex_scalar_ordered_compare_family() {
                     legacy_bytes.extend(legacy);
                     legacy_bytes.extend_from_slice(&[0x0f, opcode, 0xc1]);
                     let mut legacy_cpu = CpuState {
-                        rip: 0x7000,
+                        scalar: ScalarState { rip: 0x7000, ..Default::default() },
                         mxcsr: 0x1f80,
                         ..Default::default()
                     };
@@ -16245,7 +17211,7 @@ fn vex_scalar_ordered_compare_family() {
                     );
 
                     let mut cpu = CpuState {
-                        rip: 0x7000,
+                        scalar: ScalarState { rip: 0x7000, ..Default::default() },
                         mxcsr: 0x1f80,
                         ..Default::default()
                     };
@@ -16284,10 +17250,7 @@ fn vex_align_family() {
         commits: 0,
     };
     let legacy = |count: u8, high: usize, memory: &mut ModelMemory| {
-        let mut cpu = CpuState {
-            rip: 0x7000,
-            ..Default::default()
-        };
+        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
         cpu.vectors[0] = first[high];
         cpu.vectors[1] = second[high];
         let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x3a, 0x0f, 0xc1, count], cpu.rip).unwrap();
@@ -16299,10 +17262,7 @@ fn vex_align_family() {
     };
     for count in [0_u8, 1, 7, 8, 15, 16, 17, 31, 32, 33, 255] {
         for (prefix, wide) in [(0x71_u8, false), (0x75, true)] {
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.vectors[1] = first[0];
             cpu.vector_upper[1] = first[1];
             cpu.vectors[2] = second[0];
@@ -16345,10 +17305,7 @@ fn vex_widen_family() {
             _ => (4, 8),
         };
         let legacy = |value: u128, memory: &mut ModelMemory| {
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.vectors[1] = value;
             let decoded = X86ScalarDecoder::decode(&[0x66, 0x0f, 0x38, opcode, 0xc1], cpu.rip).unwrap();
             assert_eq!(
@@ -16358,10 +17315,7 @@ fn vex_widen_family() {
             cpu.vectors[0]
         };
         for (prefix, wide) in [(0x79_u8, false), (0x7d, true)] {
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.vectors[1] = source;
             let decoded = X86ScalarDecoder::decode(&[0xc4, 0xe2, prefix, opcode, 0xc1], cpu.rip).unwrap();
             assert_eq!(
@@ -16381,10 +17335,7 @@ fn vex_widen_family() {
         }
 
         // The memory operand is only as wide as the source elements, not the destination.
-        let mut cpu = CpuState {
-            rip: 0x7000,
-            ..Default::default()
-        };
+        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
         cpu.registers[3] = 0x1000;
         let bytes = (32 * from / to) as usize;
         let mut narrow = ModelMemory {
@@ -16417,7 +17368,7 @@ fn vex_lane_extract_family() {
     ] {
         for lane in 0..16 / bytes {
             let mut legacy_cpu = CpuState {
-                rip: 0x7000,
+                scalar: ScalarState { rip: 0x7000, ..Default::default() },
                 ..Default::default()
             };
             legacy_cpu.vectors[0] = value;
@@ -16438,10 +17389,7 @@ fn vex_lane_extract_family() {
                 ExecutionExit::Continue
             );
 
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.vectors[0] = value;
             let decoded =
                 X86ScalarDecoder::decode(&[0xc4, 0xe3, vex_prefix, opcode, 0xc1, lane], cpu.rip).unwrap();
@@ -16462,10 +17410,7 @@ fn vex_lane_extract_family() {
                 fail_write: false,
                 commits: 0,
             };
-            let mut cpu = CpuState {
-                rip: 0x7000,
-                ..Default::default()
-            };
+            let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
             cpu.registers[3] = 0x1000;
             cpu.vectors[0] = value;
             let decoded =
@@ -16484,7 +17429,7 @@ fn vex_lane_extract_family() {
 
     for lane in 0..8_u8 {
         let mut legacy_cpu = CpuState {
-            rip: 0x7000,
+            scalar: ScalarState { rip: 0x7000, ..Default::default() },
             ..Default::default()
         };
         legacy_cpu.vectors[1] = value;
@@ -16501,10 +17446,7 @@ fn vex_lane_extract_family() {
             ExecutionExit::Continue
         );
 
-        let mut cpu = CpuState {
-            rip: 0x7000,
-            ..Default::default()
-        };
+        let mut cpu = CpuState { scalar: ScalarState { rip: 0x7000, ..Default::default() }, ..Default::default() };
         cpu.vectors[1] = value;
         let decoded = X86ScalarDecoder::decode(&[0xc5, 0xf9, 0xc5, 0xc1, lane], cpu.rip).unwrap();
         assert_eq!(

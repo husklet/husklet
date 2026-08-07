@@ -44,7 +44,7 @@ pub use scalar::vector::{
 };
 pub use scalar::{Decoder as X86ScalarDecoder, Error as ScalarIrError};
 pub use staged::Staged;
-pub use state::{CpuState, ExecutionExit, ExtendedClass, ExtendedReal};
+pub use state::{CpuState, ExecutionExit, ExtendedClass, ExtendedReal, ScalarState};
 pub use vector::{Decode as VectorDecode, Lane as VectorLane, Memory as VectorMemory, Transfer as VectorTransfer};
 
 #[cfg(test)]

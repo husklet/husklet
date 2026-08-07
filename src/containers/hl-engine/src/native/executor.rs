@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv};
+use hl_execution::{Aarch64CpuState, CpuState as X86CpuState, FlagState, Nzcv, ScalarState};
 use hl_isa::{AddressRange, GuestAddress};
 use hl_memory::{DirectAuthorityLease, ExecutableToken, MemoryAccessHost, MemoryError, ProjectionLease, Protection};
 
@@ -1262,9 +1262,10 @@ unsafe impl HostFaultOwner for NativeFaultOwner {
         if generation != 0
             // SAFETY: a nonzero thread-local generation proves a matching publish is
             // outstanding on this thread, so this retires that scope exactly once.
-            && unsafe { hl_native_fault_thread_unpublish(&raw const view.0, generation) } != 0 {
-                FAULT_GENERATION.with(|current| current.set(generation));
-            }
+            && unsafe { hl_native_fault_thread_unpublish(&raw const view.0, generation) } != 0
+        {
+            FAULT_GENERATION.with(|current| current.set(generation));
+        }
     }
 }
 
@@ -2005,10 +2006,10 @@ impl Executor {
             return;
         }
         let captured = Ok(BoundaryCapture {
-                cpu: cpu.clone(),
-                sources: Vec::new(),
-                views: Vec::new(),
-            });
+            cpu: cpu.clone(),
+            sources: Vec::new(),
+            views: Vec::new(),
+        });
         state.result = Some(captured);
         for source in sources {
             state.append_source(source.guest_first, source.bytes, token);
@@ -2322,7 +2323,8 @@ impl Executor {
                 None,
                 Some(interrupt),
                 Some(identity),
-                poll.as_mut().map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
+                poll.as_mut()
+                    .map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
             );
             lease = authority.into_lease()?.into_projection();
             result
@@ -2343,7 +2345,8 @@ impl Executor {
                 Some(((&raw mut operand).cast(), resolve_operand::<H>)),
                 Some(interrupt),
                 None,
-                poll.as_mut().map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
+                poll.as_mut()
+                    .map(|callback| &mut **callback as &mut dyn FnMut(u64, u64) -> bool),
             )
         };
         let (exit, instruction, _, code, remaining, executed, writes) = result?;
@@ -3439,16 +3442,19 @@ mod test {
     #[test]
     fn x86_conversion_round_trips_native_state() {
         let mut cpu = X86CpuState {
-            registers: std::array::from_fn(|index| index as u64 * 19),
+            scalar: ScalarState {
+                registers: std::array::from_fn(|index| index as u64 * 19),
+                flags: FlagState::from_bits(0x8d5),
+                rip: 0x401000,
+                fs_base: 0x7000,
+                gs_base: 0x8000,
+                direction: true,
+                alignment_check: true,
+                id_flag: true,
+                ..Default::default()
+            },
             vectors: std::array::from_fn(|index| (index as u128) << 80 | index as u128),
             vector_upper: std::array::from_fn(|index| (index as u128) << 96 | !(index as u128)),
-            flags: FlagState::from_bits(0x8d5),
-            rip: 0x401000,
-            fs_base: 0x7000,
-            gs_base: 0x8000,
-            direction: true,
-            alignment_check: true,
-            id_flag: true,
             mxcsr: 0xdfdf,
             ..X86CpuState::default()
         };
@@ -3504,7 +3510,10 @@ mod test {
             bytes: &bytes,
         }];
         let mut cpu = X86CpuState {
-            rip: 0x9000,
+            scalar: ScalarState {
+                rip: 0x9000,
+                ..Default::default()
+            },
             mxcsr: 0xdfc0,
             ..X86CpuState::default()
         };
@@ -3531,7 +3540,10 @@ mod test {
         }];
         let upper = 0xfeed_face_dead_beef_u128 << 64;
         let mut cpu = X86CpuState {
-            rip: 0xa000,
+            scalar: ScalarState {
+                rip: 0xa000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.vectors[0] = upper | u128::from(4_f64.to_bits());
@@ -3552,7 +3564,10 @@ mod test {
             bytes: &divide,
         }];
         let mut up = X86CpuState {
-            rip: 0xa100,
+            scalar: ScalarState {
+                rip: 0xa100,
+                ..Default::default()
+            },
             mxcsr: 0x5f80,
             ..X86CpuState::default()
         };
@@ -3580,7 +3595,10 @@ mod test {
             bytes: &bytes,
         }];
         let mut cpu = X86CpuState {
-            rip: 0xa200,
+            scalar: ScalarState {
+                rip: 0xa200,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.vectors[0] = u128::from(f64::NAN.to_bits());
@@ -3608,7 +3626,10 @@ mod test {
                 bytes,
             }];
             let mut cpu = X86CpuState {
-                rip: 0xa300,
+                scalar: ScalarState {
+                    rip: 0xa300,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             cpu.registers[0] = 0xdead_beef_cafe_babe;
@@ -3881,7 +3902,10 @@ mod test {
         let executor = Executor::create_diagnostics(true).expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut stopped = X86CpuState {
-            rip: 0x4000,
+            scalar: ScalarState {
+                rip: 0x4000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         let zero = executor
@@ -3898,7 +3922,10 @@ mod test {
         assert_eq!(stopped.rip, 0x4000);
 
         let mut first = X86CpuState {
-            rip: 0x4000,
+            scalar: ScalarState {
+                rip: 0x4000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         let (result, cold, _) = executor
@@ -3918,7 +3945,10 @@ mod test {
         );
         assert_eq!(first.registers[0], 2);
         let mut second = X86CpuState {
-            rip: 0x4000,
+            scalar: ScalarState {
+                rip: 0x4000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         let (_, warm, _) = executor
@@ -3957,7 +3987,10 @@ mod test {
                 bytes,
             }];
             let mut cpu = X86CpuState {
-                rip: 0x6000,
+                scalar: ScalarState {
+                    rip: 0x6000,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             cpu.registers[0] = low;
@@ -3996,7 +4029,10 @@ mod test {
             bytes: &signed,
         }];
         let mut cpu = X86CpuState {
-            rip: 0x7000,
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = (-1_000_i64) as u64;
@@ -4024,7 +4060,10 @@ mod test {
                 bytes,
             }];
             let mut cpu = X86CpuState {
-                rip: 0x7800,
+                scalar: ScalarState {
+                    rip: 0x7800,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             cpu.registers[0] = low;
@@ -4060,7 +4099,10 @@ mod test {
                 bytes: &bytes,
             }];
             let mut cpu = X86CpuState {
-                rip: 0x8000,
+                scalar: ScalarState {
+                    rip: 0x8000,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             cpu.registers[0] = low;
@@ -4086,9 +4128,12 @@ mod test {
         let executor = Executor::create().expect("native executor");
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut cpu = X86CpuState {
-            rip: 0x5000,
-            registers: std::array::from_fn(|index| 0x100 + index as u64),
-            flags: FlagState::from_bits(0x8d5),
+            scalar: ScalarState {
+                rip: 0x5000,
+                registers: std::array::from_fn(|index| 0x100 + index as u64),
+                flags: FlagState::from_bits(0x8d5),
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         let (outcome, statistics, _) = executor
@@ -4138,7 +4183,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 0x1122_3344_5566_7788;
@@ -4197,7 +4245,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 1;
@@ -4257,7 +4308,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 0x1122_3344_5566_7788;
@@ -4318,7 +4372,10 @@ mod test {
         };
         let executor = Executor::create().unwrap();
         let mut cpu = X86CpuState {
-            rip: 0x6000,
+            scalar: ScalarState {
+                rip: 0x6000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         let expected = cpu.clone();
@@ -4341,7 +4398,10 @@ mod test {
         }];
         let executor = Executor::create().unwrap();
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         for (index, vector) in cpu.vectors.iter_mut().enumerate() {
@@ -4372,7 +4432,10 @@ mod test {
         }];
         let executor = Executor::create().unwrap();
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.vectors[..8].copy_from_slice(&[
@@ -4426,7 +4489,10 @@ mod test {
         };
         let initial = 0x1111_2222_3333_4444_5555_6666_7777_8888_u128;
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[3] = 0x7000;
@@ -4460,7 +4526,10 @@ mod test {
             bytes: &baseline_bytes,
         }];
         let mut baseline = X86CpuState {
-            rip: 0x6000,
+            scalar: ScalarState {
+                rip: 0x6000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         let mut resolve = |_: u64, _: &mut [u8]| None;
@@ -4468,7 +4537,10 @@ mod test {
             .run_x86(&mut baseline, &baseline_source, 1, 1, 2, false, None, &mut resolve)
             .unwrap();
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         for (index, register) in cpu.registers.iter_mut().enumerate() {
@@ -4515,7 +4587,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 0x1122_3344_5566_7788;
@@ -4558,7 +4633,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 0xffff_ffff_ffff_ab80;
@@ -4587,7 +4665,10 @@ mod test {
         }];
         let executor = Executor::create().unwrap();
         let mut legacy = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         legacy.registers[0] = 0x1122_3344_5566_7788;
@@ -4606,7 +4687,10 @@ mod test {
             bytes: &count_bytes,
         }];
         let mut count = X86CpuState {
-            rip: 0x6000,
+            scalar: ScalarState {
+                rip: 0x6000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         count.registers[0] = 0xaaaa_bbbb_cccc_dddd;
@@ -4639,7 +4723,10 @@ mod test {
             active: 0,
         };
         let mut memory = X86CpuState {
-            rip: 0x7000,
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         memory.registers[3] = 0x8000;
@@ -4686,7 +4773,10 @@ mod test {
             bytes: &bytes,
         }];
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.flags = FlagState::from_bits(1 << 11);
@@ -4718,7 +4808,10 @@ mod test {
                 bytes: &code,
             }];
             let mut cpu = X86CpuState {
-                rip: 0x6000,
+                scalar: ScalarState {
+                    rip: 0x6000,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             cpu.registers[0] = 0x8877_6655_4433_2211;
@@ -4748,7 +4841,10 @@ mod test {
             bytes: &bytes,
         }];
         let mut cpu = X86CpuState {
-            rip: 0x7000,
+            scalar: ScalarState {
+                rip: 0x7000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[6] = 0x8008;
@@ -4765,7 +4861,10 @@ mod test {
             bytes: &bytes,
         }];
         let mut cpu = X86CpuState {
-            rip: 0x7100,
+            scalar: ScalarState {
+                rip: 0x7100,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[1] = 1 << 32;
@@ -4810,7 +4909,10 @@ mod test {
             bytes: &bytes,
         }];
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[1] = COUNT as u64;
@@ -4868,7 +4970,10 @@ mod test {
         let mut resolve = |_: u64, _: &mut [u8]| None;
         for budget in [1, 65_536] {
             let mut cpu = X86CpuState {
-                rip: 0x5000,
+                scalar: ScalarState {
+                    rip: 0x5000,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             let outcome = executor
@@ -4948,7 +5053,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 2;
@@ -4994,8 +5102,11 @@ mod test {
         };
         let mut resolve = |_: u64, _: &mut [u8]| None;
         let mut first = X86CpuState {
-            rip: 0x5000,
-            fs_base: 0x7000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                fs_base: 0x7000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         executor
@@ -5004,8 +5115,11 @@ mod test {
         assert_eq!(first.registers[0], 0x1122_3344_5566_7788);
 
         let mut second = X86CpuState {
-            rip: 0x5000,
-            fs_base: 0x7008,
+            scalar: ScalarState {
+                rip: 0x5000,
+                fs_base: 0x7008,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         executor
@@ -5057,7 +5171,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[4] = 0x7000;
@@ -5106,7 +5223,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x5000,
+            scalar: ScalarState {
+                rip: 0x5000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[4] = 0x7000;
@@ -5169,7 +5289,10 @@ mod test {
                 active: 0,
             };
             let mut cpu = X86CpuState {
-                rip: 0x6000,
+                scalar: ScalarState {
+                    rip: 0x6000,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             cpu.registers[4] = 0x7000;
@@ -5212,7 +5335,10 @@ mod test {
             active: 0,
         };
         let mut cpu = X86CpuState {
-            rip: 0x6000,
+            scalar: ScalarState {
+                rip: 0x6000,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         cpu.registers[0] = 0xdead_beef;
@@ -5253,8 +5379,11 @@ mod test {
                 active: 0,
             };
             let mut cpu = X86CpuState {
-                rip: entry,
-                registers,
+                scalar: ScalarState {
+                    rip: entry,
+                    registers,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             let outcome = executor
@@ -5358,8 +5487,11 @@ mod test {
             };
             let before = storage;
             let mut cpu = X86CpuState {
-                rip: entry,
-                registers,
+                scalar: ScalarState {
+                    rip: entry,
+                    registers,
+                    ..Default::default()
+                },
                 ..X86CpuState::default()
             };
             let outcome = executor
@@ -5378,9 +5510,7 @@ mod test {
         let words = [0xd503201f_u32; 32];
         // SAFETY: `words` outlives `bytes`, and size_of_val is its exact byte length, so
         // the range is in bounds; u32 is plain data and u8 has weaker alignment.
-        let bytes = unsafe {
-            std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words))
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), std::mem::size_of_val(&words)) };
         let span = SourceSpan {
             guest_first: 0x3000,
             bytes: bytes.as_ptr(),
@@ -5417,12 +5547,7 @@ mod test {
                 diagnostics.a64_branch_sample_source_last,
                 diagnostics.a64_branch_sample_form,
             ),
-            (
-                0x3080,
-                0x3000,
-                0x3080,
-                A64_BRANCH_FORM_COLD_RELOCATION,
-            ),
+            (0x3080, 0x3000, 0x3080, A64_BRANCH_FORM_COLD_RELOCATION,),
         );
     }
 
@@ -5977,7 +6102,18 @@ mod test {
             ..Aarch64CpuState::default()
         };
         let outcome = executor
-            .run_aarch64_inner(&mut cpu, &source, None, 1, u64::MAX / 2, None, None, Some(&token), None, None)
+            .run_aarch64_inner(
+                &mut cpu,
+                &source,
+                None,
+                1,
+                u64::MAX / 2,
+                None,
+                None,
+                Some(&token),
+                None,
+                None,
+            )
             .expect("interruptible run");
         setter.join().unwrap();
         assert!(token.is_set());

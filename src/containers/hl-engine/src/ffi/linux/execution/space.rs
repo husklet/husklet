@@ -324,7 +324,10 @@ impl AddressSpace {
     }
 
     pub(super) fn procfs_provenance(&self) -> ProcfsProvenance {
-        self.procfs.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.procfs
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub(super) fn lease(&self) -> SpaceLease {
@@ -476,7 +479,7 @@ mod tests {
     use hl_descriptor::{DescriptorFlags, DescriptorTable, ObjectError, OpenFileDescription, StatusFlags};
     use hl_execution::{
         Aarch64CpuState, CpuState, EXECUTION_SNAPSHOT_VERSION, ExecutionCpuSnapshot, ExecutionInstructionMemory,
-        ExecutionMachine, ExecutionSnapshot, GuestOperandMemory, StepOutcome,
+        ExecutionMachine, ExecutionSnapshot, GuestOperandMemory, ScalarState, StepOutcome,
     };
     use hl_isa::GuestAddress;
     use hl_linux::{DescriptorIoSyscalls, GuestMarshaller, LinuxResult, SyscallFamily, SyscallOperation};
@@ -846,7 +849,10 @@ mod tests {
                 ..Aarch64CpuState::default()
             }),
             hl_isa::GuestArchitecture::X86_64 => ExecutionCpuSnapshot::X86_64(CpuState {
-                rip: pc,
+                scalar: ScalarState {
+                    rip: pc,
+                    ..Default::default()
+                },
                 ..CpuState::default()
             }),
         };

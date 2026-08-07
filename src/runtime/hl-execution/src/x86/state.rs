@@ -73,14 +73,12 @@ impl ExtendedReal {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CpuState {
+/// The half of the architectural state that integer instructions can reach.
+/// Staging through this type is what makes a scalar path unable to disturb
+/// SIMD or x87 state.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScalarState {
     pub registers: [u64; 16],
-    /// Architectural XMM0..XMM15 state used by the safe execution backend.
-    pub vectors: [u128; 16],
-    /// Architectural YMM0..YMM15 bits 255:128. Legacy SSE preserves these
-    /// lanes, while 128-bit VEX destinations clear them.
-    pub vector_upper: [u128; 16],
     pub flags: FlagState,
     pub rip: u64,
     pub fs_base: u64,
@@ -91,6 +89,16 @@ pub struct CpuState {
     pub alignment_check: bool,
     /// Software RFLAGS.ID substrate used by userspace CPUID-availability probes.
     pub id_flag: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CpuState {
+    pub scalar: ScalarState,
+    /// Architectural XMM0..XMM15 state used by the safe execution backend.
+    pub vectors: [u128; 16],
+    /// Architectural YMM0..YMM15 bits 255:128. Legacy SSE preserves these
+    /// lanes, while 128-bit VEX destinations clear them.
+    pub vector_upper: [u128; 16],
     pub x87_control: u16,
     pub x87_status: u16,
     pub x87_values: [ExtendedReal; 8],
@@ -98,19 +106,25 @@ pub struct CpuState {
     pub mxcsr: u32,
 }
 
+impl core::ops::Deref for CpuState {
+    type Target = ScalarState;
+    fn deref(&self) -> &ScalarState {
+        &self.scalar
+    }
+}
+
+impl core::ops::DerefMut for CpuState {
+    fn deref_mut(&mut self) -> &mut ScalarState {
+        &mut self.scalar
+    }
+}
+
 impl Default for CpuState {
     fn default() -> Self {
         Self {
-            registers: [0; 16],
+            scalar: ScalarState::default(),
             vectors: [0; 16],
             vector_upper: [0; 16],
-            flags: FlagState::default(),
-            rip: 0,
-            fs_base: 0,
-            gs_base: 0,
-            direction: false,
-            alignment_check: false,
-            id_flag: false,
             x87_control: 0x037f,
             x87_status: 0,
             x87_values: [ExtendedReal::from_bits(0); 8],
@@ -134,7 +148,9 @@ impl CpuState {
     pub(crate) fn empty_mmx(&mut self) {
         self.x87_classes.fill(ExtendedClass::Empty);
     }
+}
 
+impl ScalarState {
     pub(crate) fn apply_bit_scan(
         &mut self,
         operation: BitScanOperation,

@@ -2,7 +2,7 @@ use crate::{
     Aarch64CpuState, AccessKind, AtomicOperation, AtomicValue, CpuState, EXECUTION_SNAPSHOT_VERSION, ExclusiveLoad,
     ExclusiveMemory, ExclusiveReservation, ExecutionCpuSnapshot, ExecutionFault, ExecutionInstructionMemory,
     ExecutionMachine, ExecutionSnapshot, FaultAccess, GuestOperandMemory, MappingGeneration, MemoryFault, MemoryOrder,
-    StepOutcome,
+    ScalarState, StepOutcome,
 };
 
 struct Memory {
@@ -290,7 +290,10 @@ fn x86_partial_instruction_state_survives_fault_snapshot_and_retry() {
     memory.put(0x1000, &[0xf3, 0xa4, 0x0f, 0x05]);
     memory.put(0x2000, &[0x11, 0x22, 0x33, 0x44]);
     let mut cpu = CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     };
     cpu.registers[1] = 4;
@@ -518,7 +521,10 @@ fn x86_slice_executes() {
         &[0x48, 0x83, 0xc0, 0x01, 0x48, 0x89, 0x03, 0x48, 0x8b, 0x0b, 0x0f, 0x05],
     );
     let mut cpu = CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     };
     cpu.registers[0] = 41;
@@ -539,7 +545,10 @@ fn x86_slice_boundaries() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0x90, 0xeb, 0xfd]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(
@@ -568,7 +577,10 @@ fn repeated_x86_interpreter_slices_stop_at_decoder_boundaries() {
     let mut memory = Memory::interpreted(0x2000);
     memory.put(FIRST as usize, CODE);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: FIRST,
+        scalar: ScalarState {
+            rip: FIRST,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     let mut starts = Vec::new();
@@ -599,7 +611,10 @@ fn x86_blocks_follow_instruction_epoch() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0x90, 0xeb, 0xfd]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(machine.run_slice(1, 32, &mut memory), StepOutcome::Yield);
@@ -626,7 +641,10 @@ fn failed_locked_cmpxchg_reschedules() {
     memory.put(0x1000, &[0xf0, 0x0f, 0xb1, 0x0b, 0x0f, 0x05]);
     memory.put(0x2000, &8_u32.to_le_bytes());
     let mut cpu = CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     };
     cpu.registers[0] = 2;
@@ -644,7 +662,10 @@ fn failed_locked_cmpxchg_reschedules() {
 
     memory.put(0x2000, &8_u32.to_le_bytes());
     let mut cpu = CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     };
     cpu.registers[0] = 8;
@@ -666,7 +687,10 @@ fn x86_fault_signals() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0xcc]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(
@@ -687,7 +711,10 @@ fn x86_fault_signals() {
 
     memory.put(0x1000, &[0x48, 0xf7, 0xf1]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(
@@ -760,7 +787,10 @@ fn illegal_signal_metadata() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0x0f, 0x0b]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(
@@ -796,7 +826,10 @@ fn timestamp_counter_reads() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0x0f, 0x31, 0x0f, 0x31]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
 
@@ -815,8 +848,11 @@ fn timestamp_counter_auxiliary() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0x0f, 0x01, 0xf9]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        registers: [u64::MAX; 16],
-        rip: 0x1000,
+        scalar: ScalarState {
+            registers: [u64::MAX; 16],
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
 
@@ -836,7 +872,10 @@ fn timestamp_counter_fork() {
     let mut memory = Memory::new(0x2000);
     memory.put(0x1000, &[0x0f, 0x31, 0x0f, 0x31]);
     let parent = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(parent.run_step(1, &mut memory), StepOutcome::Continue);
@@ -899,7 +938,10 @@ fn slice_yield_fetch() {
     let mut memory = Memory::new(0x1001);
     memory.put(0x1000, &[0x90]);
     let machine = Memory::machine(ExecutionCpuSnapshot::X86_64(CpuState {
-        rip: 0x1000,
+        scalar: ScalarState {
+            rip: 0x1000,
+            ..Default::default()
+        },
         ..CpuState::default()
     }));
     assert_eq!(machine.run_slice(1, 1, &mut memory), StepOutcome::Yield);

@@ -2,7 +2,7 @@ use super::{BoundaryCapture, Executor, Exit, Projection, ProjectionView, Source,
 use hl_execution::{
     Aarch64CpuState, AtomicOperation, AtomicValue, CpuState as X86CpuState, EXECUTION_SNAPSHOT_VERSION, ExclusiveLoad,
     ExclusiveMemory, ExclusiveReservation, ExecutionCpuSnapshot, ExecutionInstructionMemory, ExecutionMachine,
-    ExecutionSnapshot, GuestOperandMemory, MappingGeneration, MemoryOrder, StepOutcome,
+    ExecutionSnapshot, GuestOperandMemory, MappingGeneration, MemoryOrder, ScalarState, StepOutcome,
 };
 use hl_memory::Protection;
 use std::path::PathBuf;
@@ -21,7 +21,10 @@ fn x86_memory_movq_unpack_matches_interpreter() {
         bytes: &bytes,
     }];
     let mut initial = X86CpuState {
-        rip: 0x4000,
+        scalar: ScalarState {
+            rip: 0x4000,
+            ..Default::default()
+        },
         ..Default::default()
     };
     initial.registers[0] = 0x8877_6655_4433_2211;
@@ -146,13 +149,21 @@ fn aarch64_aes_rounds_and_vector_memory_match_interpreter_at_each_boundary() {
             fault: None,
         })
         .expect("interpreter");
-        assert_eq!(machine.run_slice(1, count, &mut memory), StepOutcome::Yield, "boundary {count}");
+        assert_eq!(
+            machine.run_slice(1, count, &mut memory),
+            StepOutcome::Yield,
+            "boundary {count}"
+        );
         machine.freeze().expect("interpreter freeze");
         let ExecutionCpuSnapshot::Aarch64(interpreted) = machine.snapshot().expect("snapshot").cpu else {
             unreachable!()
         };
         assert_eq!(native, interpreted, "first state divergence after instruction {count}");
-        assert_eq!(storage.as_slice(), memory.data[0].data.as_slice(), "memory divergence after instruction {count}");
+        assert_eq!(
+            storage.as_slice(),
+            memory.data[0].data.as_slice(),
+            "memory divergence after instruction {count}"
+        );
     }
 }
 
@@ -282,25 +293,28 @@ fn x86_strsearch_arithmetic_loop_matches_interpreter_at_each_boundary() {
     ];
     let instruction_ends = [3, 7, 11, 14, 17, 21, 24, 27, 31, 34, 37, 40, 43, 47, 51, 54, 57, 60];
     let initial = X86CpuState {
-        rip: 0x402720,
-        registers: [
-            0x1111,
-            0x0123_4567_89ab_cdef,
-            0x2222,
-            0,
-            0,
-            0,
-            0x7001,
-            0x4ec4_ec4e_c4ec_4ec5,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ],
+        scalar: ScalarState {
+            rip: 0x402720,
+            registers: [
+                0x1111,
+                0x0123_4567_89ab_cdef,
+                0x2222,
+                0,
+                0,
+                0,
+                0x7001,
+                0x4ec4_ec4e_c4ec_4ec5,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ],
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     for (index, &end) in instruction_ends.iter().enumerate() {
@@ -411,7 +425,10 @@ fn x86_sse_integer_min_max_matches_interpreter_at_each_boundary() {
     ];
     let instruction_ends = [4, 8, 12, 16, 20, 24, 28, 32];
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -459,7 +476,12 @@ fn x86_sse_integer_min_max_matches_interpreter_at_each_boundary() {
             )
             .unwrap()
             .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        assert_eq!(
+            outcome.exit,
+            Exit::Syscall,
+            "boundary {} outcome {outcome:?}",
+            index + 1
+        );
 
         let mut memory = ReplayMemory {
             sources: vec![ReplaySource {
@@ -480,7 +502,11 @@ fn x86_sse_integer_min_max_matches_interpreter_at_each_boundary() {
         })
         .unwrap();
         let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        assert!(
+            matches!(step, StepOutcome::Syscall { .. }),
+            "boundary {} step {step:?}",
+            index + 1
+        );
         machine.freeze().unwrap();
         let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
             unreachable!()
@@ -510,7 +536,10 @@ fn x86_sse_packed_float_dword_conversions_match_interpreter_at_each_boundary() {
     ];
     let instruction_ends = [3, 7, 11, 14, 18, 22];
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -559,7 +588,12 @@ fn x86_sse_packed_float_dword_conversions_match_interpreter_at_each_boundary() {
             )
             .unwrap()
             .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        assert_eq!(
+            outcome.exit,
+            Exit::Syscall,
+            "boundary {} outcome {outcome:?}",
+            index + 1
+        );
 
         let mut memory = ReplayMemory {
             sources: vec![ReplaySource {
@@ -580,7 +614,11 @@ fn x86_sse_packed_float_dword_conversions_match_interpreter_at_each_boundary() {
         })
         .unwrap();
         let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        assert!(
+            matches!(step, StepOutcome::Syscall { .. }),
+            "boundary {} step {step:?}",
+            index + 1
+        );
         machine.freeze().unwrap();
         let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
             unreachable!()
@@ -615,7 +653,10 @@ fn x86_sse_scalar_compare_flags_match_interpreter_at_each_boundary() {
     ];
     let instruction_ends = [3, 6, 9, 12, 15, 18, 21, 25, 29, 33];
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -669,7 +710,12 @@ fn x86_sse_scalar_compare_flags_match_interpreter_at_each_boundary() {
             )
             .unwrap()
             .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        assert_eq!(
+            outcome.exit,
+            Exit::Syscall,
+            "boundary {} outcome {outcome:?}",
+            index + 1
+        );
 
         let mut memory = ReplayMemory {
             sources: vec![ReplaySource {
@@ -690,7 +736,11 @@ fn x86_sse_scalar_compare_flags_match_interpreter_at_each_boundary() {
         })
         .unwrap();
         let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        assert!(
+            matches!(step, StepOutcome::Syscall { .. }),
+            "boundary {} step {step:?}",
+            index + 1
+        );
         machine.freeze().unwrap();
         let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
             unreachable!()
@@ -713,13 +763,13 @@ fn x86_sse_scalar_compare_flags_match_interpreter_at_each_boundary() {
 fn x86_sse_truncating_float_to_integer_matches_interpreter_at_each_boundary() {
     // xmm0 walks the interesting single-precision inputs, xmm1 the double ones.
     let cases: [(u128, u128); 7] = [
-        (0x3fc0_0000, 0x3ff8_0000_0000_0000),                     // 1.5
-        (0xbfc0_0000, 0xbff8_0000_0000_0000),                     // -1.5
-        (0x4f00_0000, 0x41e0_0000_0000_0000),                     // 2^31
-        (0xcf00_0000, 0xc1e0_0000_0000_0000),                     // -2^31
-        (0x5f00_0000, 0x43e0_0000_0000_0000),                     // 2^63
-        (0xdf00_0000, 0xc3e0_0000_0000_0000),                     // -2^63
-        (0x7fc0_0000, 0x7ff8_0000_0000_0000),                     // NaN
+        (0x3fc0_0000, 0x3ff8_0000_0000_0000), // 1.5
+        (0xbfc0_0000, 0xbff8_0000_0000_0000), // -1.5
+        (0x4f00_0000, 0x41e0_0000_0000_0000), // 2^31
+        (0xcf00_0000, 0xc1e0_0000_0000_0000), // -2^31
+        (0x5f00_0000, 0x43e0_0000_0000_0000), // 2^63
+        (0xdf00_0000, 0xc3e0_0000_0000_0000), // -2^63
+        (0x7fc0_0000, 0x7ff8_0000_0000_0000), // NaN
     ];
     let bytes = [
         0xf3, 0x0f, 0x2c, 0xd8, // cvttss2si %xmm0,%ebx
@@ -734,7 +784,10 @@ fn x86_sse_truncating_float_to_integer_matches_interpreter_at_each_boundary() {
     let instruction_ends = [4, 9, 13, 18, 23, 29, 33, 38];
     for (case, &(single, double)) in cases.iter().enumerate() {
         let mut initial = X86CpuState {
-            rip: 0x402720,
+            scalar: ScalarState {
+                rip: 0x402720,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         initial.registers[6] = 0x7000;
@@ -783,7 +836,12 @@ fn x86_sse_truncating_float_to_integer_matches_interpreter_at_each_boundary() {
                 )
                 .unwrap()
                 .0;
-            assert_eq!(outcome.exit, Exit::Syscall, "case {case} boundary {} outcome {outcome:?}", index + 1);
+            assert_eq!(
+                outcome.exit,
+                Exit::Syscall,
+                "case {case} boundary {} outcome {outcome:?}",
+                index + 1
+            );
 
             let mut memory = ReplayMemory {
                 sources: vec![ReplaySource {
@@ -804,7 +862,11 @@ fn x86_sse_truncating_float_to_integer_matches_interpreter_at_each_boundary() {
             })
             .unwrap();
             let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-            assert!(matches!(step, StepOutcome::Syscall { .. }), "case {case} boundary {} step {step:?}", index + 1);
+            assert!(
+                matches!(step, StepOutcome::Syscall { .. }),
+                "case {case} boundary {} step {step:?}",
+                index + 1
+            );
             machine.freeze().unwrap();
             let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
                 unreachable!()
@@ -838,7 +900,10 @@ fn x86_sse_scalar_moves_match_interpreter_at_each_boundary() {
     ];
     let instruction_ends = [4, 8, 12, 16, 20, 24, 28, 32];
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -891,7 +956,12 @@ fn x86_sse_scalar_moves_match_interpreter_at_each_boundary() {
             )
             .unwrap()
             .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        assert_eq!(
+            outcome.exit,
+            Exit::Syscall,
+            "boundary {} outcome {outcome:?}",
+            index + 1
+        );
         let written = storage;
 
         let mut memory = ReplayMemory {
@@ -913,7 +983,11 @@ fn x86_sse_scalar_moves_match_interpreter_at_each_boundary() {
         })
         .unwrap();
         let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        assert!(
+            matches!(step, StepOutcome::Syscall { .. }),
+            "boundary {} step {step:?}",
+            index + 1
+        );
         machine.freeze().unwrap();
         let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
             unreachable!()
@@ -964,7 +1038,10 @@ fn x86_sse_integer_to_scalar_float_matches_interpreter_at_each_boundary() {
     let instruction_ends = [4, 9, 13, 18, 22, 27, 31, 36];
     for (case, &value) in cases.iter().enumerate() {
         let mut initial = X86CpuState {
-            rip: 0x402720,
+            scalar: ScalarState {
+                rip: 0x402720,
+                ..Default::default()
+            },
             ..X86CpuState::default()
         };
         initial.registers[3] = value;
@@ -1013,7 +1090,12 @@ fn x86_sse_integer_to_scalar_float_matches_interpreter_at_each_boundary() {
                 )
                 .unwrap()
                 .0;
-            assert_eq!(outcome.exit, Exit::Syscall, "case {case} boundary {} outcome {outcome:?}", index + 1);
+            assert_eq!(
+                outcome.exit,
+                Exit::Syscall,
+                "case {case} boundary {} outcome {outcome:?}",
+                index + 1
+            );
 
             let mut memory = ReplayMemory {
                 sources: vec![ReplaySource {
@@ -1034,7 +1116,11 @@ fn x86_sse_integer_to_scalar_float_matches_interpreter_at_each_boundary() {
             })
             .unwrap();
             let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-            assert!(matches!(step, StepOutcome::Syscall { .. }), "case {case} boundary {} step {step:?}", index + 1);
+            assert!(
+                matches!(step, StepOutcome::Syscall { .. }),
+                "case {case} boundary {} step {step:?}",
+                index + 1
+            );
             machine.freeze().unwrap();
             let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
                 unreachable!()
@@ -1069,7 +1155,10 @@ fn x86_aes_encrypt_rounds_match_interpreter_at_each_boundary() {
     ];
     let instruction_ends = [5, 10, 15, 20, 25, 30, 36];
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -1120,7 +1209,12 @@ fn x86_aes_encrypt_rounds_match_interpreter_at_each_boundary() {
             )
             .unwrap()
             .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        assert_eq!(
+            outcome.exit,
+            Exit::Syscall,
+            "boundary {} outcome {outcome:?}",
+            index + 1
+        );
 
         let mut memory = ReplayMemory {
             sources: vec![ReplaySource {
@@ -1141,7 +1235,11 @@ fn x86_aes_encrypt_rounds_match_interpreter_at_each_boundary() {
         })
         .unwrap();
         let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        assert!(
+            matches!(step, StepOutcome::Syscall { .. }),
+            "boundary {} step {step:?}",
+            index + 1
+        );
         machine.freeze().unwrap();
         let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
             unreachable!()
@@ -2044,7 +2142,12 @@ fn assert_x86_boundaries(
             )
             .unwrap()
             .0;
-        assert_eq!(outcome.exit, Exit::Syscall, "boundary {} outcome {outcome:?}", index + 1);
+        assert_eq!(
+            outcome.exit,
+            Exit::Syscall,
+            "boundary {} outcome {outcome:?}",
+            index + 1
+        );
 
         let mut memory = ReplayMemory {
             sources: vec![ReplaySource {
@@ -2065,7 +2168,11 @@ fn assert_x86_boundaries(
         })
         .unwrap();
         let step = machine.run_slice(1, index as u64 + 3, &mut memory);
-        assert!(matches!(step, StepOutcome::Syscall { .. }), "boundary {} step {step:?}", index + 1);
+        assert!(
+            matches!(step, StepOutcome::Syscall { .. }),
+            "boundary {} step {step:?}",
+            index + 1
+        );
         machine.freeze().unwrap();
         let ExecutionCpuSnapshot::X86_64(interpreted) = machine.snapshot().unwrap().cpu else {
             unreachable!()
@@ -2123,7 +2230,10 @@ fn x86_bit_test_immediate_matches_interpreter_at_each_boundary() {
     let instruction_ends = [5, 10, 15, 20, 24, 28, 32, 36];
     let operand: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -2149,7 +2259,10 @@ fn x86_shift_immediate_count_matches_interpreter_at_each_boundary() {
     }
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
@@ -2177,7 +2290,10 @@ fn x86_shift_variable_count_matches_interpreter_at_each_boundary() {
     }
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
@@ -2203,7 +2319,9 @@ fn x86_rotate_through_carry_count_matches_interpreter_at_each_boundary() {
 fn assert_rotate_sweep(modrms: &[u8]) {
     let seed = 0x8877_6655_4433_2211_u64;
     let mut program: Vec<Vec<u8>> = Vec::new();
-    for count in [0x00_u8, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+    for count in [
+        0x00_u8, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff,
+    ] {
         for &modrm in modrms {
             /* `cmp $1,%ecx` on a zero borrows and so sets CF, `cmp $0,%ecx` clears it. */
             for carry in [0x00_u8, 0x01] {
@@ -2225,7 +2343,10 @@ fn assert_rotate_sweep(modrms: &[u8]) {
     }
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
@@ -2237,7 +2358,9 @@ fn assert_rotate_sweep(modrms: &[u8]) {
 fn x86_rotate_variable_count_matches_interpreter_at_each_boundary() {
     let seed = 0x8877_6655_4433_2211_u64;
     let mut program: Vec<Vec<u8>> = Vec::new();
-    for count in [0x00_u32, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+    for count in [
+        0x00_u32, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff,
+    ] {
         for modrm in [0xc0_u8, 0xc8, 0xd0, 0xd8] {
             for width in 0..4 {
                 let mut set_count = vec![0xb9];
@@ -2257,7 +2380,10 @@ fn x86_rotate_variable_count_matches_interpreter_at_each_boundary() {
     }
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
@@ -2293,7 +2419,10 @@ fn x86_double_shift_count_matches_interpreter_at_each_boundary() {
     }
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
@@ -2335,7 +2464,10 @@ fn x86_alu_immediate_extension_matches_interpreter_at_each_boundary() {
     }
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
@@ -2348,14 +2480,19 @@ fn x86_alu_immediate_extension_matches_interpreter_at_each_boundary() {
 #[test]
 fn x86_rotate_memory_count_matches_interpreter_at_each_boundary() {
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
     let operand: [u8; 8] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
     /* One block per count: the memory rotate loop is large enough that a longer block
-       exceeds the compiler's budget and falls back wholesale. */
-    for count in [0x00_u8, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff] {
+    exceeds the compiler's budget and falls back wholesale. */
+    for count in [
+        0x00_u8, 0x01, 0x07, 0x08, 0x09, 0x0f, 0x10, 0x11, 0x1f, 0x20, 0x21, 0x3f, 0x40, 0xff,
+    ] {
         for kind in 0..2_u8 {
             let modrm = 0x06 | kind << 3;
             let program: Vec<Vec<u8>> = (0..4)
@@ -2379,39 +2516,44 @@ fn x86_rotate_memory_count_matches_interpreter_at_each_boundary() {
 #[test]
 fn x86_address_folding_matches_interpreter_at_each_boundary() {
     let program: Vec<Vec<u8>> = vec![
-        vec![0x48, 0x8b, 0x03],                          // mov (%rbx),%rax
-        vec![0x48, 0x8b, 0x43, 0x08],                    // mov 0x8(%rbx),%rax
-        vec![0x48, 0x8b, 0x43, 0xf8],                    // mov -0x8(%rbx),%rax
-        vec![0x48, 0x8b, 0x83, 0x10, 0, 0, 0],           // mov 0x10(%rbx),%rax
-        vec![0x48, 0x8b, 0x83, 0xc0, 0xff, 0xff, 0xff],  // mov -0x40(%rbx),%rax
-        vec![0x48, 0x8b, 0x04, 0x23],                    // mov (%rbx),%rax via SIB, no index
-        vec![0x48, 0x8b, 0x04, 0x0b],                    // mov (%rbx,%rcx,1),%rax
-        vec![0x48, 0x8b, 0x04, 0x4b],                    // mov (%rbx,%rcx,2),%rax
-        vec![0x48, 0x8b, 0x04, 0x8b],                    // mov (%rbx,%rcx,4),%rax
-        vec![0x48, 0x8b, 0x04, 0xcb],                    // mov (%rbx,%rcx,8),%rax
-        vec![0x48, 0x8b, 0x44, 0x8b, 0x08],              // mov 0x8(%rbx,%rcx,4),%rax
-        vec![0x48, 0x8b, 0x44, 0xcb, 0xf8],              // mov -0x8(%rbx,%rcx,8),%rax
-        vec![0x48, 0x8b, 0x84, 0x0b, 0x10, 0, 0, 0],     // mov 0x10(%rbx,%rcx,1),%rax
-        vec![0x48, 0x8b, 0x04, 0x25, 0x00, 0x70, 0, 0],  // mov 0x7000,%rax
-        vec![0x8b, 0x43, 0x08],                          // mov 0x8(%rbx),%eax
-        vec![0x8a, 0x43, 0xf8],                          // mov -0x8(%rbx),%al
-        vec![0x66, 0x8b, 0x43, 0x04],                    // mov 0x4(%rbx),%ax
-        vec![0x48, 0x89, 0x43, 0x08],                    // mov %rax,0x8(%rbx)
-        vec![0x48, 0x89, 0x43, 0xf8],                    // mov %rax,-0x8(%rbx)
-        vec![0x48, 0x89, 0x44, 0x8b, 0x08],              // mov %rax,0x8(%rbx,%rcx,4)
-        vec![0x89, 0x43, 0x10],                          // mov %eax,0x10(%rbx)
-        vec![0x88, 0x43, 0x11],                          // mov %al,0x11(%rbx)
-        vec![0x66, 0x89, 0x43, 0x14],                    // mov %ax,0x14(%rbx)
-        vec![0x48, 0x8b, 0x03],                          // mov (%rbx),%rax
+        vec![0x48, 0x8b, 0x03],                         // mov (%rbx),%rax
+        vec![0x48, 0x8b, 0x43, 0x08],                   // mov 0x8(%rbx),%rax
+        vec![0x48, 0x8b, 0x43, 0xf8],                   // mov -0x8(%rbx),%rax
+        vec![0x48, 0x8b, 0x83, 0x10, 0, 0, 0],          // mov 0x10(%rbx),%rax
+        vec![0x48, 0x8b, 0x83, 0xc0, 0xff, 0xff, 0xff], // mov -0x40(%rbx),%rax
+        vec![0x48, 0x8b, 0x04, 0x23],                   // mov (%rbx),%rax via SIB, no index
+        vec![0x48, 0x8b, 0x04, 0x0b],                   // mov (%rbx,%rcx,1),%rax
+        vec![0x48, 0x8b, 0x04, 0x4b],                   // mov (%rbx,%rcx,2),%rax
+        vec![0x48, 0x8b, 0x04, 0x8b],                   // mov (%rbx,%rcx,4),%rax
+        vec![0x48, 0x8b, 0x04, 0xcb],                   // mov (%rbx,%rcx,8),%rax
+        vec![0x48, 0x8b, 0x44, 0x8b, 0x08],             // mov 0x8(%rbx,%rcx,4),%rax
+        vec![0x48, 0x8b, 0x44, 0xcb, 0xf8],             // mov -0x8(%rbx,%rcx,8),%rax
+        vec![0x48, 0x8b, 0x84, 0x0b, 0x10, 0, 0, 0],    // mov 0x10(%rbx,%rcx,1),%rax
+        vec![0x48, 0x8b, 0x04, 0x25, 0x00, 0x70, 0, 0], // mov 0x7000,%rax
+        vec![0x8b, 0x43, 0x08],                         // mov 0x8(%rbx),%eax
+        vec![0x8a, 0x43, 0xf8],                         // mov -0x8(%rbx),%al
+        vec![0x66, 0x8b, 0x43, 0x04],                   // mov 0x4(%rbx),%ax
+        vec![0x48, 0x89, 0x43, 0x08],                   // mov %rax,0x8(%rbx)
+        vec![0x48, 0x89, 0x43, 0xf8],                   // mov %rax,-0x8(%rbx)
+        vec![0x48, 0x89, 0x44, 0x8b, 0x08],             // mov %rax,0x8(%rbx,%rcx,4)
+        vec![0x89, 0x43, 0x10],                         // mov %eax,0x10(%rbx)
+        vec![0x88, 0x43, 0x11],                         // mov %al,0x11(%rbx)
+        vec![0x66, 0x89, 0x43, 0x14],                   // mov %ax,0x14(%rbx)
+        vec![0x48, 0x8b, 0x03],                         // mov (%rbx),%rax
     ];
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[3] = 0x7040;
     initial.registers[1] = 4;
-    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    let operand: Vec<u8> = (0..256_u32)
+        .map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8)
+        .collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
 
@@ -2421,11 +2563,16 @@ fn x86_address_folding_matches_interpreter_at_each_boundary() {
 #[test]
 fn x86_bit_register_index_matches_interpreter_at_each_boundary() {
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7040;
-    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8).collect();
+    let operand: Vec<u8> = (0..256_u32)
+        .map(|index| (index.wrapping_mul(37) ^ 0x5a) as u8)
+        .collect();
     for index in [0_i64, 1, 7, 8, 15, 16, 63, 64, 65, 100, 511, -1, -8, -9, -64, -512] {
         for opcode in [0xa3_u8, 0xab, 0xb3, 0xbb] {
             let mut load = vec![0x48, 0xb8];
@@ -2570,7 +2717,7 @@ fn x86_vex_register_operand_kinds_match_interpreter_at_each_boundary() {
 #[cfg(target_arch = "aarch64")]
 fn compare_state() -> X86CpuState {
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState { rip: 0x402720, ..Default::default() },
         ..X86CpuState::default()
     };
     initial.registers[6] = 0x7000;
@@ -2596,7 +2743,7 @@ fn compare_operand() -> Vec<u8> {
 #[test]
 fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState { rip: 0x402720, ..Default::default() },
         ..X86CpuState::default()
     };
     initial.registers[0] = 0x1122_3344_5566_7788;
@@ -2621,7 +2768,7 @@ fn x86_high_byte_store_matches_interpreter_at_each_boundary() {
 #[cfg(target_arch = "aarch64")]
 fn sweep_state() -> X86CpuState {
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState { rip: 0x402720, ..Default::default() },
         ..X86CpuState::default()
     };
     initial.registers[0] = 0x1122_3344_5566_7788;
@@ -2860,7 +3007,7 @@ fn x86_sse_memory_forms_match_interpreter_at_each_boundary() {
 #[test]
 fn x86_load_string_merges_into_the_accumulator_at_each_boundary() {
     let mut initial = X86CpuState {
-        rip: 0x402720,
+        scalar: ScalarState { rip: 0x402720, ..Default::default() },
         ..X86CpuState::default()
     };
     initial.registers[0] = 0x1122_3344_5566_7788;
