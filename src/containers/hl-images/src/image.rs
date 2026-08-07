@@ -243,8 +243,15 @@ impl FsImageStore {
     pub fn open_with(root: impl AsRef<Path>, persistence: Arc<dyn storage::Persistence>) -> Result<Self> {
         fs::create_dir_all(root.as_ref())?;
         let path = root.as_ref().join("images.json");
-        let state = Catalog::read(&path)?;
         let writers = storage::Writers::for_path(&path)?;
+        // Opening reads the same file commits replace, so it takes the same locks a commit does.
+        let state = {
+            let _writer = writers
+                .lock()
+                .map_err(|_| Error::InvalidMetadata("image writer lock poisoned".into()))?;
+            let _process = storage::ExclusiveLock::acquire(&path.with_extension("lock"))?;
+            Catalog::read(&path)?
+        };
         Ok(Self {
             path,
             state: Arc::new(RwLock::new(state)),
