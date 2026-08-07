@@ -38,10 +38,11 @@ pub(super) fn merge(layers: &[LayerDirectory], namespace: &[Candidate]) -> io::R
     push_named(&mut seen, &mut output, b".", libc::DT_DIR)?;
     push_named(&mut seen, &mut output, b"..", libc::DT_DIR)?;
     for layer in layers {
-        for candidate in &layer.entries {
-            if namespace_names.contains(candidate.name.as_bytes()) {
-                continue;
-            }
+        for candidate in layer
+            .entries
+            .iter()
+            .filter(|candidate| !namespace_names.contains(candidate.name.as_bytes()))
+        {
             merge_candidate(candidate, &mut seen, &mut output)?;
         }
         if layer.opaque {

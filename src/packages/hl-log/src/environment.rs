@@ -55,14 +55,7 @@ impl EnvironmentConfig {
             match name {
                 LOG_TAGS => config.logging = parse_tags(LOG_TAGS, value, &mut warnings),
                 PROFILE_TAGS => config.profiling = parse_tags(PROFILE_TAGS, value, &mut warnings),
-                LOG_LEVEL => match Level::from_name(value) {
-                    Some(level) => config.level = level,
-                    None => warnings.push(ConfigurationWarning {
-                        variable: LOG_LEVEL,
-                        value: value.to_owned(),
-                        names: vec![value.to_owned()],
-                    }),
-                },
+                LOG_LEVEL => config.level = parse_level(value, &mut warnings).unwrap_or(config.level),
                 _ => {}
             }
         }
@@ -82,6 +75,19 @@ impl EnvironmentConfig {
     pub fn apply(self) {
         self.config.apply();
     }
+}
+
+/// Resolves a level name, recording a warning and yielding `None` when it is not one.
+fn parse_level(value: &str, warnings: &mut Vec<ConfigurationWarning>) -> Option<Level> {
+    let level = Level::from_name(value);
+    if level.is_none() {
+        warnings.push(ConfigurationWarning {
+            variable: LOG_LEVEL,
+            value: value.to_owned(),
+            names: vec![value.to_owned()],
+        });
+    }
+    level
 }
 
 fn parse_tags(variable: &'static str, value: &str, warnings: &mut Vec<ConfigurationWarning>) -> crate::Tags {

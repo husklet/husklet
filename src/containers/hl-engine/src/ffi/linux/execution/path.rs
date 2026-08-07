@@ -413,6 +413,18 @@ impl NativePath {
             );
         Ok(())
     }
+
+    /// Routes through the projected overlay when one is configured.
+    fn resolve_projected(
+        &self,
+        base: &DirectoryBaseLease,
+        operand: &PathOperand,
+    ) -> Result<Box<dyn ResolvedPathLease>, RuntimePathError> {
+        if let Some(context) = self.source.projected_context() {
+            return projected::Node::resolve(context, base, operand, &self.projected);
+        }
+        self.resolve_node(base, operand)
+    }
 }
 
 impl RuntimePathHost for NativePath {
@@ -561,20 +573,14 @@ impl RuntimePathHost for NativePath {
                     allow_empty: false,
                     nofollow: false,
                 };
-                if let Some(context) = self.source.projected_context() {
-                    return projected::Node::resolve(context, base, &target, &self.projected);
-                }
-                return self.resolve_node(base, &target);
+                return self.resolve_projected(base, &target);
             }
             return Ok(Box::new(node));
         }
         if !base.confines_root() && operand.path.as_bytes() == b"/proc/self/exe" {
             return self.resolve_node(base, operand);
         }
-        if let Some(context) = self.source.projected_context() {
-            return projected::Node::resolve(context, base, operand, &self.projected);
-        }
-        self.resolve_node(base, operand)
+        self.resolve_projected(base, operand)
     }
 
     fn resolve_executable(

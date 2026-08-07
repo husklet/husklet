@@ -232,19 +232,19 @@ impl Images {
                 let path = active.path().to_owned();
                 let (ownerships, names) = active.metadata_mut();
                 let applied = match self.content.apply_layer(layer, &path, ownerships, names) {
-                    Ok(actual) => actual,
+                    Ok(actual) if actual.diff_id == *expected => actual,
+                    Ok(actual) => {
+                        let _ = active.abort();
+                        return Err(Error::DiffIdMismatch {
+                            expected: expected.to_string(),
+                            actual: actual.diff_id.to_string(),
+                        });
+                    }
                     Err(error) => {
                         let _ = active.abort();
                         return Err(error);
                     }
                 };
-                if applied.diff_id != *expected {
-                    let _ = active.abort();
-                    return Err(Error::DiffIdMismatch {
-                        expected: expected.to_string(),
-                        actual: applied.diff_id.to_string(),
-                    });
-                }
                 let parent_chain_id = records
                     .last()
                     .map(|record: &crate::snapshot::LayerRecord| record.chain_id.clone());

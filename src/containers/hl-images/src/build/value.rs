@@ -54,59 +54,62 @@ impl<'a> Changes<'a> {
                 .trim()
                 .split_once(char::is_whitespace)
                 .ok_or_else(|| Error::MalformedOci(format!("commit change {change:?} has no value")))?;
-            let value = value.trim();
-            let name = name.to_ascii_uppercase();
-            match name.as_str() {
-                "CMD" => metadata.runtime.command = value.parse::<Command>()?.into(),
-                "ENTRYPOINT" => metadata.runtime.entrypoint = value.parse::<Command>()?.into(),
-                "ENV" => metadata.runtime.environment.extend(Assignments::new(value).parse()?),
-                "LABEL" => metadata.labels.extend(Assignments::new(value).parse()?),
-                "WORKDIR" => {
-                    metadata.runtime.working_directory =
-                        WorkingDirectory::new(&metadata.runtime.working_directory).resolve(value)?;
-                }
-                "USER" => {
-                    if value.is_empty() {
-                        return Err(Error::MalformedOci("USER must not be empty".into()));
-                    }
-                    metadata.runtime.user = value.into();
-                }
-                "EXPOSE" => {
-                    metadata
-                        .exposed_ports
-                        .extend(Words::new(value).parse().into_iter().map(|port| {
-                            if port.contains('/') {
-                                port
-                            } else {
-                                format!("{port}/tcp")
-                            }
-                        }));
-                }
-                "VOLUME" => {
-                    let volumes = if value.starts_with('[') {
-                        serde_json::from_str(value)
-                            .map_err(|error| Error::MalformedOci(format!("invalid VOLUME: {error}")))?
-                    } else {
-                        Words::new(value).parse()
-                    };
-                    metadata.volumes.extend(volumes);
-                }
-                "ONBUILD" => {
-                    let nested = value.split_whitespace().next().unwrap_or_default().to_ascii_uppercase();
-                    if value.is_empty() || matches!(nested.as_str(), "FROM" | "ONBUILD") {
-                        return Err(Error::MalformedOci("invalid ONBUILD trigger".into()));
-                    }
-                    metadata.onbuild.push(value.into());
-                }
-                "STOPSIGNAL" if !value.is_empty() && !value.contains(char::is_whitespace) => {
-                    metadata.stop_signal = Some(value.into());
-                }
-                "STOPSIGNAL" => return Err(Error::MalformedOci("invalid STOPSIGNAL".into())),
-                _ => return Err(Error::MalformedOci(format!("unsupported commit change {name}"))),
-            }
+            Self::change(metadata, &name.to_ascii_uppercase(), value.trim())?;
             metadata.history.push(History::change(change));
         }
         metadata.runtime.validate()
+    }
+
+    fn change(metadata: &mut crate::Metadata, name: &str, value: &str) -> Result<()> {
+        match name {
+            "CMD" => metadata.runtime.command = value.parse::<Command>()?.into(),
+            "ENTRYPOINT" => metadata.runtime.entrypoint = value.parse::<Command>()?.into(),
+            "ENV" => metadata.runtime.environment.extend(Assignments::new(value).parse()?),
+            "LABEL" => metadata.labels.extend(Assignments::new(value).parse()?),
+            "WORKDIR" => {
+                metadata.runtime.working_directory =
+                    WorkingDirectory::new(&metadata.runtime.working_directory).resolve(value)?;
+            }
+            "USER" => {
+                if value.is_empty() {
+                    return Err(Error::MalformedOci("USER must not be empty".into()));
+                }
+                metadata.runtime.user = value.into();
+            }
+            "EXPOSE" => {
+                metadata
+                    .exposed_ports
+                    .extend(Words::new(value).parse().into_iter().map(|port| {
+                        if port.contains('/') {
+                            port
+                        } else {
+                            format!("{port}/tcp")
+                        }
+                    }));
+            }
+            "VOLUME" => {
+                let volumes = if value.starts_with('[') {
+                    serde_json::from_str(value)
+                        .map_err(|error| Error::MalformedOci(format!("invalid VOLUME: {error}")))?
+                } else {
+                    Words::new(value).parse()
+                };
+                metadata.volumes.extend(volumes);
+            }
+            "ONBUILD" => {
+                let nested = value.split_whitespace().next().unwrap_or_default().to_ascii_uppercase();
+                if value.is_empty() || matches!(nested.as_str(), "FROM" | "ONBUILD") {
+                    return Err(Error::MalformedOci("invalid ONBUILD trigger".into()));
+                }
+                metadata.onbuild.push(value.into());
+            }
+            "STOPSIGNAL" if !value.is_empty() && !value.contains(char::is_whitespace) => {
+                metadata.stop_signal = Some(value.into());
+            }
+            "STOPSIGNAL" => return Err(Error::MalformedOci("invalid STOPSIGNAL".into())),
+            _ => return Err(Error::MalformedOci(format!("unsupported commit change {name}"))),
+        }
+        Ok(())
     }
 }
 
@@ -272,34 +275,37 @@ impl<'a> Environment<'a> {
                 name.push(chars.next().expect("peeked character"));
             }
             if braced {
-                let mut operator = String::new();
-                if matches!(chars.peek(), Some(':' | '-' | '+')) {
-                    operator.push(chars.next().expect("peeked operator"));
-                    if operator == ":" && matches!(chars.peek(), Some('-' | '+')) {
-                        operator.push(chars.next().expect("peeked operator"));
-                    }
-                }
-                let mut alternate = String::new();
-                while chars.peek().is_some_and(|character| *character != '}') {
-                    alternate.push(chars.next().expect("peeked character"));
-                }
-                if chars.peek() != Some(&'}') {
-                    return Err(Error::MalformedOci("unterminated variable substitution".into()));
-                }
-                chars.next();
-                let value = self.values.get(&name).map(String::as_str);
-                let set = value.is_some();
-                let nonempty = value.is_some_and(|value| !value.is_empty());
-                let replacement = match (operator.as_str(), set, nonempty) {
-                    ("-", false, _) | (":-", _, false) | ("+", true, _) | (":+", _, true) => self.expand(&alternate)?,
-                    ("" | "-" | ":-", _, _) => value.unwrap_or_default().to_owned(),
-                    _ => String::new(),
-                };
-                output.push_str(&replacement);
+                output.push_str(&self.substitute(&mut chars, &name)?);
             } else {
                 output.push_str(self.values.get(&name).map_or("", String::as_str));
             }
         }
         Ok(output)
+    }
+
+    fn substitute(&self, chars: &mut std::iter::Peekable<std::str::Chars<'_>>, name: &str) -> Result<String> {
+        let mut operator = String::new();
+        if matches!(chars.peek(), Some(':' | '-' | '+')) {
+            operator.push(chars.next().expect("peeked operator"));
+            if operator == ":" && matches!(chars.peek(), Some('-' | '+')) {
+                operator.push(chars.next().expect("peeked operator"));
+            }
+        }
+        let mut alternate = String::new();
+        while chars.peek().is_some_and(|character| *character != '}') {
+            alternate.push(chars.next().expect("peeked character"));
+        }
+        if chars.peek() != Some(&'}') {
+            return Err(Error::MalformedOci("unterminated variable substitution".into()));
+        }
+        chars.next();
+        let value = self.values.get(name).map(String::as_str);
+        let set = value.is_some();
+        let nonempty = value.is_some_and(|value| !value.is_empty());
+        Ok(match (operator.as_str(), set, nonempty) {
+            ("-", false, _) | (":-", _, false) | ("+", true, _) | (":+", _, true) => self.expand(&alternate)?,
+            ("" | "-" | ":-", _, _) => value.unwrap_or_default().to_owned(),
+            _ => String::new(),
+        })
     }
 }

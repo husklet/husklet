@@ -189,6 +189,33 @@ impl Prune {
         }
     }
 
+    fn prune_dangling_matches(graph: &hl_images::Graph, values: &BTreeMap<String, Vec<String>>) -> bool {
+        let Some(filters) = values.get("dangling") else {
+            return true;
+        };
+        filters.iter().any(|value| {
+            Field::new("dangling", Some(value))
+                .boolean()
+                .is_ok_and(|expected| graph.names.is_empty() == expected)
+        })
+    }
+
+    fn prune_labels_match(graph: &hl_images::Graph, values: &BTreeMap<String, Vec<String>>) -> bool {
+        let included = values.get("label").is_none_or(|filters| {
+            graph
+                .labels
+                .as_ref()
+                .is_some_and(|labels| filters.iter().any(|value| ImageSelection::label(labels, value)))
+        });
+        included
+            && values.get("label!").is_none_or(|filters| {
+                graph
+                    .labels
+                    .as_ref()
+                    .is_some_and(|labels| filters.iter().all(|value| !ImageSelection::label(labels, value)))
+            })
+    }
+
     pub(in super::super) fn image(filters: Option<&str>) -> ApiResult<Self> {
         let mut values: BTreeMap<String, Vec<String>> = filters
             .filter(|value| !value.is_empty())
@@ -252,36 +279,17 @@ impl Prune {
                     .filter_map(|container| container.spec.image.as_ref().map(ToString::to_string))
                     .collect::<std::collections::BTreeSet<_>>();
                 let graphs = images.graphs().map_err(ApiError::image)?;
-                let selected =
-                    graphs
-                        .into_iter()
-                        .filter(|graph| !requires_metadata || graph.filterable())
-                        .filter(|graph| {
-                            !referenced.contains(&graph.target.digest().to_string())
-                                && graph.names.iter().all(|name| !referenced.contains(name))
-                        })
-                        .filter(|graph| until.is_none_or(|until| graph.created_at_ms.is_some_and(|v| v < until)))
-                        .filter(|graph| {
-                            values.get("dangling").is_none_or(|filters| {
-                                filters.iter().any(|value| {
-                                    Field::new("dangling", Some(value))
-                                        .boolean()
-                                        .is_ok_and(|expected| graph.names.is_empty() == expected)
-                                })
-                            })
-                        })
-                        .filter(|graph| {
-                            values.get("label").is_none_or(|filters| {
-                                graph.labels.as_ref().is_some_and(|labels| {
-                                    filters.iter().any(|value| ImageSelection::label(labels, value))
-                                })
-                            }) && values.get("label!").is_none_or(|filters| {
-                                graph.labels.as_ref().is_some_and(|labels| {
-                                    filters.iter().all(|value| !ImageSelection::label(labels, value))
-                                })
-                            })
-                        })
-                        .collect::<Vec<_>>();
+                let selected = graphs
+                    .into_iter()
+                    .filter(|graph| !requires_metadata || graph.filterable())
+                    .filter(|graph| {
+                        !referenced.contains(&graph.target.digest().to_string())
+                            && graph.names.iter().all(|name| !referenced.contains(name))
+                    })
+                    .filter(|graph| until.is_none_or(|until| graph.created_at_ms.is_some_and(|v| v < until)))
+                    .filter(|graph| Self::prune_dangling_matches(graph, &values))
+                    .filter(|graph| Self::prune_labels_match(graph, &values))
+                    .collect::<Vec<_>>();
                 let digests = selected.iter().map(|graph| graph.target.digest().to_string()).collect();
                 let scope = if values.get("dangling").is_some_and(|values| values == &["false"]) {
                     hl_images::GraphPruneScope::AllUnused

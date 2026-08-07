@@ -25,22 +25,23 @@ impl Images {
             }
         }
         for lease in self.leases.list()? {
-            for resource in lease.resources() {
-                if let Some(value) = resource.strip_prefix("content:") {
-                    marked.insert(value.parse()?);
-                }
+            for value in lease
+                .resources()
+                .filter_map(|resource| resource.strip_prefix("content:"))
+            {
+                marked.insert(value.parse()?);
             }
         }
         let mut report = GcReport::default();
         for digest in self.content.digests()? {
             if marked.contains(&digest) {
                 report.content_kept += 1;
-            } else {
-                let size = self.content.info(&digest)?.size;
-                if self.content.remove(&digest)? {
-                    report.content_removed += 1;
-                    report.content_bytes_removed = report.content_bytes_removed.saturating_add(size);
-                }
+                continue;
+            }
+            let size = self.content.info(&digest)?.size;
+            if self.content.remove(&digest)? {
+                report.content_removed += 1;
+                report.content_bytes_removed = report.content_bytes_removed.saturating_add(size);
             }
         }
         let snapshot_roots: HashSet<String> = self
@@ -130,10 +131,11 @@ impl Images {
             );
         }
         for lease in self.leases.list()? {
-            for resource in lease.resources() {
-                if let Some(value) = resource.strip_prefix("content:") {
-                    live.insert(value.to_owned());
-                }
+            for value in lease
+                .resources()
+                .filter_map(|resource| resource.strip_prefix("content:"))
+            {
+                live.insert(value.to_owned());
             }
         }
 

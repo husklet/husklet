@@ -99,10 +99,8 @@ impl DirectoryPicker {
     pub fn present(self, parent: Option<&gtk::Window>, on_selected: impl Fn(std::path::PathBuf) + 'static) {
         let dialog = gtk::FileDialog::builder().title(self.title).modal(true).build();
         dialog.select_folder(parent, gtk::gio::Cancellable::NONE, move |result| {
-            if let Ok(file) = result {
-                if let Some(path) = file.path() {
-                    on_selected(path);
-                }
+            if let Some(path) = result.ok().and_then(|file| file.path()) {
+                on_selected(path);
             }
         });
     }
@@ -172,28 +170,7 @@ impl ColorPicker {
             let label = label.clone();
             let swatch = swatch.clone();
             button.connect_clicked(move |button| {
-                if active.replace(true) {
-                    return;
-                }
-                let parent = button.root().and_downcast::<gtk::Window>();
-                let initial = *color.borrow();
-                let active = active.clone();
-                let color = color.clone();
-                let label = label.clone();
-                let swatch = swatch.clone();
-                dialog.choose_rgba(
-                    parent.as_ref(),
-                    Some(&initial),
-                    gtk::gio::Cancellable::NONE,
-                    move |result| {
-                        if let Ok(selected) = result {
-                            *color.borrow_mut() = selected;
-                            label.set_text(&Self::format(&selected));
-                            swatch.queue_draw();
-                        }
-                        active.set(false);
-                    },
-                );
+                Self::choose(button, &dialog, &active, &color, &label, &swatch);
             });
         }
 
@@ -205,6 +182,48 @@ impl ColorPicker {
         };
         picker.set_value(value);
         picker
+    }
+
+    fn choose(
+        button: &gtk::Button,
+        dialog: &gtk::ColorDialog,
+        active: &Rc<Cell<bool>>,
+        color: &Rc<RefCell<gtk::gdk::RGBA>>,
+        label: &gtk::Label,
+        swatch: &gtk::DrawingArea,
+    ) {
+        if active.replace(true) {
+            return;
+        }
+        let parent = button.root().and_downcast::<gtk::Window>();
+        let initial = *color.borrow();
+        let active = active.clone();
+        let color = color.clone();
+        let label = label.clone();
+        let swatch = swatch.clone();
+        dialog.choose_rgba(
+            parent.as_ref(),
+            Some(&initial),
+            gtk::gio::Cancellable::NONE,
+            move |result| {
+                Self::apply(result, &active, &color, &label, &swatch);
+            },
+        );
+    }
+
+    fn apply(
+        result: Result<gtk::gdk::RGBA, gtk::glib::Error>,
+        active: &Rc<Cell<bool>>,
+        color: &Rc<RefCell<gtk::gdk::RGBA>>,
+        label: &gtk::Label,
+        swatch: &gtk::DrawingArea,
+    ) {
+        if let Ok(selected) = result {
+            *color.borrow_mut() = selected;
+            label.set_text(&Self::format(&selected));
+            swatch.queue_draw();
+        }
+        active.set(false);
     }
 
     pub fn widget(&self) -> &gtk::Button {

@@ -31,36 +31,7 @@ pub(in super::super) async fn logs(
     let mut session = state.containers.follow(&id).await.map_err(ApiError::container)?;
     let history = options.replay(session.history().await.map_err(ApiError::container)?);
     let (sender, receiver) = tokio::sync::mpsc::channel(16);
-    tokio::spawn(async move {
-        let mut encoder = crate::api::model::LogEncoder::new(options.timestamps, terminal);
-        for entry in history {
-            if sender.send(encoder.frame(&entry)).await.is_err() {
-                return;
-            }
-        }
-        if !options.follow || options.until_ms.is_some_and(|until| until <= now_ms()) {
-            return;
-        }
-        loop {
-            let entry = if let Some(until) = options.until_ms {
-                let remaining = std::time::Duration::from_millis(until.saturating_sub(now_ms()));
-                tokio::select! {
-                    () = sender.closed() => return,
-                    () = tokio::time::sleep(remaining) => return,
-                    result = session.next() => result,
-                }
-            } else {
-                tokio::select! {
-                    () = sender.closed() => return,
-                    result = session.next() => result,
-                }
-            };
-            let Ok(Some(entry)) = entry else { return };
-            if options.accepts(&entry) && sender.send(encoder.frame(&entry)).await.is_err() {
-                return;
-            }
-        }
-    });
+    tokio::spawn(stream_logs(options, terminal, history, session, sender));
     let body = Body::from_stream(futures_util::stream::unfold(receiver, |mut receiver| async move {
         receiver
             .recv()
@@ -72,6 +43,43 @@ pub(in super::super) async fn logs(
         body,
     )
         .into_response())
+}
+
+async fn stream_logs(
+    options: LogOptions,
+    terminal: bool,
+    history: Vec<hl_container::Entry>,
+    mut session: hl_container::Session,
+    sender: tokio::sync::mpsc::Sender<Vec<u8>>,
+) {
+    let mut encoder = crate::api::model::LogEncoder::new(options.timestamps, terminal);
+    for entry in history {
+        let Ok(()) = sender.send(encoder.frame(&entry)).await else {
+            return;
+        };
+    }
+    if !options.follow || options.until_ms.is_some_and(|until| until <= now_ms()) {
+        return;
+    }
+    loop {
+        let entry = if let Some(until) = options.until_ms {
+            let remaining = std::time::Duration::from_millis(until.saturating_sub(now_ms()));
+            tokio::select! {
+                () = sender.closed() => return,
+                () = tokio::time::sleep(remaining) => return,
+                result = session.next() => result,
+            }
+        } else {
+            tokio::select! {
+                () = sender.closed() => return,
+                result = session.next() => result,
+            }
+        };
+        let Ok(Some(entry)) = entry else { return };
+        if options.accepts(&entry) && sender.send(encoder.frame(&entry)).await.is_err() {
+            return;
+        }
+    }
 }
 
 impl TryFrom<LogsQuery> for LogOptions {

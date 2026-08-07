@@ -252,9 +252,7 @@ impl Form {
                 if let Some(win) = b.root().and_downcast::<gtk::Window>() {
                     let architecture = if form2.cpu_amd.get() { Arch::Amd64 } else { Arch::Arm64 };
                     let image = form2.image.clone();
-                    ImagePicker::new(architecture).present(&win, move |reference| {
-                        image.set_text(reference);
-                    });
+                    ImagePicker::new(architecture).present(&win, move |reference| image.set_text(reference));
                 }
             });
         }

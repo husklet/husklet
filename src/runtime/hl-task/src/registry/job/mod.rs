@@ -621,12 +621,13 @@ impl PreparedTerminalTransition<'_> {
     pub fn commit(self) -> TerminalTransitionEffects {
         let mut state = self.registry.lock();
         if self.effects.session_wide {
-            for entry in &mut state.processes {
-                if let Some(process) = &mut entry.value
-                    && process.session == self.effects.session
-                {
-                    process.terminal_detached = true;
-                }
+            for process in state
+                .processes
+                .iter_mut()
+                .filter_map(|entry| entry.value.as_mut())
+                .filter(|process| process.session == self.effects.session)
+            {
+                process.terminal_detached = true;
             }
         } else if let Ok(process) = TaskRegistry::process_mut(&mut state, self.caller)
             && process.session == self.effects.session

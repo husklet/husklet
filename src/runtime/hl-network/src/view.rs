@@ -43,14 +43,12 @@ impl NetworkCatalog {
         for (index, slot) in slots.iter().enumerate() {
             let Some(socket) = slot.socket.as_deref() else { continue };
             match socket {
-                CatalogSocket::UnixPair { endpoints, .. } => {
-                    if let Some(snapshot) = endpoints
+                CatalogSocket::UnixPair { endpoints, .. } => unix.extend(
+                    endpoints
                         .iter()
                         .find(|snapshot| usize::from(snapshot.id.slot) - 1 == index)
-                    {
-                        unix.push(Self::unix_view(snapshot));
-                    }
-                }
+                        .map(|snapshot| Self::unix_view(snapshot)),
+                ),
                 CatalogSocket::Unix { snapshot, .. } => unix.push(Self::unix_view(snapshot)),
                 CatalogSocket::Host { snapshot, .. } if snapshot.family == crate::AddressFamily::Unix => {
                     unix.push(Self::unix_view(snapshot));

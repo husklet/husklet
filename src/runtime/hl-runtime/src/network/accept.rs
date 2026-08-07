@@ -33,6 +33,29 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         result
     }
 
+    fn await_unix_pending(&self, named: &hl_network::UnixNamedSocket, nonblocking: bool) -> Option<LinuxResult> {
+        let queue = named.wait_queue();
+        loop {
+            let observed = queue.observation();
+            match named.accept(true) {
+                Ok(_) => return None,
+                Err(hl_network::UnixNamedSocketError::WouldBlock) if !nonblocking => {}
+                Err(hl_network::UnixNamedSocketError::WouldBlock) => {
+                    return Some(LinuxResult::Error(Errno::EAGAIN));
+                }
+                Err(_) => return Some(LinuxResult::Error(Errno::EINVAL)),
+            }
+            let Some(wait) = &self.wait else {
+                return Some(LinuxResult::Error(Errno::EAGAIN));
+            };
+            match wait.wait(&queue, observed, None) {
+                Ok(hl_sync::WaitOutcome::Notified) => {}
+                Ok(hl_sync::WaitOutcome::Interrupted) => return Some(LinuxResult::Error(Errno::EINTR)),
+                Ok(hl_sync::WaitOutcome::TimedOut) | Err(_) => return Some(LinuxResult::Error(Errno::EIO)),
+            }
+        }
+    }
+
     fn accept4_result(&self, descriptor: i32, address_pointer: u64, length_pointer: u64, flags: u32) -> LinuxResult {
         if flags & !(0x800 | 0x8_0000) != 0 {
             return LinuxResult::Error(Errno::EINVAL);
@@ -50,23 +73,8 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .nonblocking;
-            let queue = named.wait_queue();
-            loop {
-                let observed = queue.observation();
-                match named.accept(true) {
-                    Ok(_) => break,
-                    Err(hl_network::UnixNamedSocketError::WouldBlock) if !nonblocking => {}
-                    Err(hl_network::UnixNamedSocketError::WouldBlock) => return LinuxResult::Error(Errno::EAGAIN),
-                    Err(_) => return LinuxResult::Error(Errno::EINVAL),
-                }
-                let Some(wait) = &self.wait else {
-                    return LinuxResult::Error(Errno::EAGAIN);
-                };
-                match wait.wait(&queue, observed, None) {
-                    Ok(hl_sync::WaitOutcome::Notified) => {}
-                    Ok(hl_sync::WaitOutcome::Interrupted) => return LinuxResult::Error(Errno::EINTR),
-                    Ok(hl_sync::WaitOutcome::TimedOut) | Err(_) => return LinuxResult::Error(Errno::EIO),
-                }
+            if let Some(error) = self.await_unix_pending(&named, nonblocking) {
+                return error;
             }
             let Ok(id) = self.current_catalog().accept_pending_unix(listener.id) else {
                 return LinuxResult::Error(Errno::EIO);

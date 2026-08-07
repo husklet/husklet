@@ -251,40 +251,49 @@ impl NetworkPlan {
             Err(ContainerError::NetworkNotFound(_)) => {}
             Err(error) => return Err(ApiError::container(error)),
         }
-        for second in [31_u8, 30, 29, 28] {
-            for third in 0_u8..=255 {
-                let subnet =
-                    Subnet::new(std::net::Ipv4Addr::new(172, second, third, 0), 24).map_err(ApiError::container)?;
-                match containers
-                    .networks()
-                    .create(NetworkSpec::bridge(DEFAULT_NETWORK, subnet))
-                    .await
-                {
-                    Ok(_) => return Ok(()),
-                    Err(ContainerError::InvalidNetwork(message)) if message.contains("overlaps") => {}
-                    Err(ContainerError::NetworkConflict(_)) => {
-                        return containers
-                            .networks()
-                            .inspect(DEFAULT_NETWORK)
-                            .await
-                            .and_then(|network| {
-                                if network.driver == NetworkDriver::Bridge {
-                                    Ok(network)
-                                } else {
-                                    Err(ContainerError::NetworkConflict(DEFAULT_NETWORK.into()))
-                                }
-                            })
-                            .map(|_| ())
-                            .map_err(ApiError::container);
-                    }
-                    Err(error) => return Err(ApiError::container(error)),
-                }
+        let octets = [31_u8, 30, 29, 28]
+            .into_iter()
+            .flat_map(|second| (0_u8..=255).map(move |third| (second, third)));
+        for (second, third) in octets {
+            if let Some(result) = Self::claim_bridge(containers, second, third).await {
+                return result;
             }
         }
         Err(ApiError::new(
             StatusCode::CONFLICT,
             "no non-overlapping default bridge subnet is available",
         ))
+    }
+
+    async fn claim_bridge(containers: &hl_container::Containers, second: u8, third: u8) -> Option<ApiResult<()>> {
+        let subnet = match Subnet::new(std::net::Ipv4Addr::new(172, second, third, 0), 24) {
+            Ok(subnet) => subnet,
+            Err(error) => return Some(Err(ApiError::container(error))),
+        };
+        match containers
+            .networks()
+            .create(NetworkSpec::bridge(DEFAULT_NETWORK, subnet))
+            .await
+        {
+            Ok(_) => Some(Ok(())),
+            Err(ContainerError::InvalidNetwork(message)) if message.contains("overlaps") => None,
+            Err(ContainerError::NetworkConflict(_)) => Some(
+                containers
+                    .networks()
+                    .inspect(DEFAULT_NETWORK)
+                    .await
+                    .and_then(|network| {
+                        if network.driver == NetworkDriver::Bridge {
+                            Ok(network)
+                        } else {
+                            Err(ContainerError::NetworkConflict(DEFAULT_NETWORK.into()))
+                        }
+                    })
+                    .map(|_| ())
+                    .map_err(ApiError::container),
+            ),
+            Err(error) => Some(Err(ApiError::container(error))),
+        }
     }
 }
 

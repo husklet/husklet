@@ -85,37 +85,43 @@ impl PortBindings {
             let port = Self::port(key)?;
             ports.insert(port);
             for binding in bindings.as_deref().unwrap_or_default() {
-                let host_ip = if binding.host_ip.is_empty() {
-                    std::net::Ipv4Addr::UNSPECIFIED
-                } else {
-                    binding
-                        .host_ip
-                        .parse::<std::net::Ipv4Addr>()
-                        .map_err(|_| format!("HostIp {:?} is not an IPv4 address", binding.host_ip))?
-                };
-                let host = if binding.host_port.is_empty() || binding.host_port == "0" {
-                    (49152..=65535)
-                        .find(|candidate| !Self::conflicts(&used, host_ip, *candidate))
-                        .ok_or_else(|| "no ephemeral host ports are available".to_owned())?
-                } else {
-                    binding
-                        .host_port
-                        .parse::<u16>()
-                        .map_err(|_| format!("invalid HostPort {:?}", binding.host_port))?
-                };
-                if host == 0 {
-                    return Err("HostPort must be nonzero or empty for automatic allocation".into());
-                }
-                if Self::conflicts(&used, host_ip, host) {
-                    return Err(format!("host TCP address {host_ip}:{host} is already allocated"));
-                }
-                used.insert((host_ip, host));
-                publish.push(
-                    hl_container::Publication::tcp(host_ip, host, port.guest).map_err(|error| error.to_string())?,
-                );
+                publish.push(Self::publication(binding, port, &mut used)?);
             }
         }
         Ok((ports, publish))
+    }
+
+    fn publication(
+        binding: &PortBinding,
+        port: hl_container::Port,
+        used: &mut BTreeSet<(std::net::Ipv4Addr, u16)>,
+    ) -> Result<hl_container::Publication, String> {
+        let host_ip = if binding.host_ip.is_empty() {
+            std::net::Ipv4Addr::UNSPECIFIED
+        } else {
+            binding
+                .host_ip
+                .parse::<std::net::Ipv4Addr>()
+                .map_err(|_| format!("HostIp {:?} is not an IPv4 address", binding.host_ip))?
+        };
+        let host = if binding.host_port.is_empty() || binding.host_port == "0" {
+            (49152..=65535)
+                .find(|candidate| !Self::conflicts(used, host_ip, *candidate))
+                .ok_or_else(|| "no ephemeral host ports are available".to_owned())?
+        } else {
+            binding
+                .host_port
+                .parse::<u16>()
+                .map_err(|_| format!("invalid HostPort {:?}", binding.host_port))?
+        };
+        if host == 0 {
+            return Err("HostPort must be nonzero or empty for automatic allocation".into());
+        }
+        if Self::conflicts(used, host_ip, host) {
+            return Err(format!("host TCP address {host_ip}:{host} is already allocated"));
+        }
+        used.insert((host_ip, host));
+        hl_container::Publication::tcp(host_ip, host, port.guest).map_err(|error| error.to_string())
     }
 
     fn conflicts(used: &BTreeSet<(std::net::Ipv4Addr, u16)>, address: std::net::Ipv4Addr, port: u16) -> bool {

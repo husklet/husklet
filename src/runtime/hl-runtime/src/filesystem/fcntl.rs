@@ -79,12 +79,13 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                     } else {
                         0
                     };
-                    let mut status = lease.status().bits();
-                    if self.architecture == GuestArchitecture::Aarch64
-                        && status & hl_descriptor::StatusFlags::DIRECT != 0
-                    {
-                        status = status & !hl_descriptor::StatusFlags::DIRECT | 0x1_0000;
-                    }
+                    let raw = lease.status().bits();
+                    let status = match self.architecture {
+                        GuestArchitecture::Aarch64 if raw & hl_descriptor::StatusFlags::DIRECT != 0 => {
+                            raw & !hl_descriptor::StatusFlags::DIRECT | 0x1_0000
+                        }
+                        _ => raw,
+                    };
                     LinuxResult::Value((status | largefile) as u64)
                 }
                 Err(error) => LinuxResult::Error(FileErrno::descriptor(error)),

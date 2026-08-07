@@ -20,83 +20,82 @@ impl Builder {
         remotes: &RemoteSources,
     ) -> Result<(), BuildError> {
         for (step, inherited) in steps {
-            match &step {
-                Step::Copy { .. } => {
-                    self.copy_step(
-                        CopyContext {
-                            context,
-                            built,
-                            root,
-                            inherited: &inherited,
-                            remotes,
-                        },
-                        &step,
-                        ownerships,
-                    )?;
-                }
-                Step::Run {
-                    command,
-                    environment,
-                    directory,
-                    shell,
-                    user,
-                    mounts,
-                } => {
-                    let directory = directory.as_deref().unwrap_or(&inherited.working_directory);
-                    let runtime = inherited.merge(RuntimeOverrides {
-                        environment: environment.clone(),
-                        working_directory: Some(directory.into()),
-                        ..RuntimeOverrides::default()
-                    })?;
-                    tokio::fs::create_dir_all(root.join(directory.trim_start_matches('/'))).await?;
-                    let program = shell
-                        .first()
-                        .ok_or_else(|| hl_images::Error::MalformedOci("RUN shell is empty".into()))?;
-                    let mut arguments = shell.iter().skip(1).cloned().collect::<Vec<_>>();
-                    arguments.push(command.clone());
-                    let mut process = Process::new(program).args(arguments).working_dir(directory);
-                    for (name, value) in runtime.environment {
-                        process = process.env(name, value);
-                    }
-                    let user = user.as_deref().unwrap_or(&inherited.user);
-                    if !user.is_empty() {
-                        let (uid, gid) = Process::resolve_user(user, root)?;
-                        process = process.user(uid, gid);
-                    }
-                    let (mounts, _locks) = self.run_mounts(context, built, mounts).await?;
-                    let spec = mounts.into_iter().fold(
-                        ContainerSpec::from_directory(root, process).guest(self.guest()?),
-                        ContainerSpec::mount,
-                    );
-                    let spec = self.network.container(spec);
-                    let container = self.containers.create(spec).await?;
-                    let id = container.id.to_string();
-                    let result = async {
-                        if let BuildNetwork::Named(network) = &self.network {
-                            self.containers
-                                .networks()
-                                .connect(network, &id, hl_container::EndpointSpec::default())
-                                .await?;
-                        }
-                        self.containers.start(&id).await?;
-                        let status = self.containers.wait(&id).await?;
-                        if status == ExitStatus::Code(0) {
-                            Ok(())
-                        } else {
-                            Err(BuildError::Run(status))
-                        }
-                    }
-                    .await;
-                    let cleanup = self.containers.remove_force(&id).await;
-                    match (result, cleanup) {
-                        (Ok(()), Ok(_)) => {}
-                        (Err(error), _) => return Err(error),
-                        (Ok(()), Err(error)) => return Err(error.into()),
-                    }
-                }
+            let Step::Run {
+                command,
+                environment,
+                directory,
+                shell,
+                user,
+                mounts,
+            } = &step
+            else {
+                self.copy_step(
+                    CopyContext {
+                        context,
+                        built,
+                        root,
+                        inherited: &inherited,
+                        remotes,
+                    },
+                    &step,
+                    ownerships,
+                )?;
+                continue;
+            };
+            let directory = directory.as_deref().unwrap_or(&inherited.working_directory);
+            let runtime = inherited.merge(RuntimeOverrides {
+                environment: environment.clone(),
+                working_directory: Some(directory.into()),
+                ..RuntimeOverrides::default()
+            })?;
+            tokio::fs::create_dir_all(root.join(directory.trim_start_matches('/'))).await?;
+            let program = shell
+                .first()
+                .ok_or_else(|| hl_images::Error::MalformedOci("RUN shell is empty".into()))?;
+            let mut arguments = shell.iter().skip(1).cloned().collect::<Vec<_>>();
+            arguments.push(command.clone());
+            let mut process = Process::new(program).args(arguments).working_dir(directory);
+            for (name, value) in runtime.environment {
+                process = process.env(name, value);
+            }
+            let user = user.as_deref().unwrap_or(&inherited.user);
+            if !user.is_empty() {
+                let (uid, gid) = Process::resolve_user(user, root)?;
+                process = process.user(uid, gid);
+            }
+            let (mounts, _locks) = self.run_mounts(context, built, mounts).await?;
+            let spec = mounts.into_iter().fold(
+                ContainerSpec::from_directory(root, process).guest(self.guest()?),
+                ContainerSpec::mount,
+            );
+            let spec = self.network.container(spec);
+            let container = self.containers.create(spec).await?;
+            let id = container.id.to_string();
+            let result = self.run_container(&id).await;
+            let cleanup = self.containers.remove_force(&id).await;
+            match (result, cleanup) {
+                (Ok(()), Ok(_)) => {}
+                (Err(error), _) => return Err(error),
+                (Ok(()), Err(error)) => return Err(error.into()),
             }
         }
         Ok(())
+    }
+
+    async fn run_container(&self, id: &str) -> Result<(), BuildError> {
+        if let BuildNetwork::Named(network) = &self.network {
+            self.containers
+                .networks()
+                .connect(network, id, hl_container::EndpointSpec::default())
+                .await?;
+        }
+        self.containers.start(id).await?;
+        let status = self.containers.wait(id).await?;
+        if status == ExitStatus::Code(0) {
+            Ok(())
+        } else {
+            Err(BuildError::Run(status))
+        }
     }
 
     async fn run_mounts(
@@ -114,17 +113,29 @@ impl Builder {
                     mounts.push(Mount::read_only(Context::new(source_root).source(source)?, target));
                 }
                 RunMount::Cache { id, target, sharing } => {
-                    let scope = id.as_deref().unwrap_or(target);
-                    let name = cache_volume_name(scope, target, *sharing);
-                    if matches!(sharing, CacheSharing::Locked | CacheSharing::Private) {
-                        locks.push(Caches::lock(&name).await);
-                    }
-                    self.containers.volumes().create(VolumeSpec::new(&name)).await?;
-                    mounts.push(Mount::volume_read_write(name, target));
+                    let (mount, lock) = self.cache_mount(id.as_deref(), target, *sharing).await?;
+                    locks.extend(lock);
+                    mounts.push(mount);
                 }
             }
         }
         Ok((mounts, locks))
+    }
+
+    async fn cache_mount(
+        &self,
+        id: Option<&str>,
+        target: &str,
+        sharing: CacheSharing,
+    ) -> Result<(Mount, Option<tokio::sync::OwnedMutexGuard<()>>), BuildError> {
+        let scope = id.unwrap_or(target);
+        let name = cache_volume_name(scope, target, sharing);
+        let lock = match sharing {
+            CacheSharing::Locked | CacheSharing::Private => Some(Caches::lock(&name).await),
+            CacheSharing::Shared => None,
+        };
+        self.containers.volumes().create(VolumeSpec::new(&name)).await?;
+        Ok((Mount::volume_read_write(name, target), lock))
     }
 
     fn guest(&self) -> Result<Guest, BuildError> {

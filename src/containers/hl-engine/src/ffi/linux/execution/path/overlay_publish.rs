@@ -255,28 +255,33 @@ fn copy_content(source: &File, target: &File) -> io::Result<()> {
             return Ok(());
         }
         let count = usize::try_from(count).expect("positive read count fits usize");
-        let mut written = 0;
-        while written < count {
-            // SAFETY: the unwritten buffer suffix is readable and target lives.
-            let result = unsafe {
-                libc::write(
-                    target.as_raw_fd(),
-                    buffer[written..count].as_ptr().cast(),
-                    count - written,
-                )
-            };
-            if result < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if result == 0 {
-                return Err(io::Error::from(io::ErrorKind::WriteZero));
-            }
-            written += usize::try_from(result).expect("positive write count fits usize");
-        }
+        write_all(target, &buffer[..count])?;
         offset = offset
             .checked_add(i64::try_from(count).expect("read count fits offset"))
             .ok_or_else(|| io::Error::from_raw_os_error(libc::EFBIG))?;
     }
+}
+
+fn write_all(target: &File, data: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < data.len() {
+        // SAFETY: the unwritten buffer suffix is readable and target lives.
+        let result = unsafe {
+            libc::write(
+                target.as_raw_fd(),
+                data[written..].as_ptr().cast(),
+                data.len() - written,
+            )
+        };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if result == 0 {
+            return Err(io::Error::from(io::ErrorKind::WriteZero));
+        }
+        written += usize::try_from(result).expect("positive write count fits usize");
+    }
+    Ok(())
 }
 
 fn copy_metadata(source: &File, target: &File) -> io::Result<()> {

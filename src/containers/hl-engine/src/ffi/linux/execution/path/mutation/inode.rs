@@ -217,18 +217,26 @@ impl PendingInodeLink {
             if count == 0 {
                 return Ok(());
             }
-            let mut written = 0;
-            while written < count {
-                let count = target
-                    .write_at(&buffer[written..count], offset + written as u64)
-                    .map_err(HostError::map)?;
-                if count == 0 {
-                    return Err(RuntimePathError::Io);
-                }
-                written += count;
-            }
+            Self::write_all_at(target, &buffer[..count], offset)?;
             offset = offset.checked_add(count as u64).ok_or(RuntimePathError::TooLarge)?;
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_all_at(target: &std::fs::File, data: &[u8], offset: u64) -> Result<(), RuntimePathError> {
+        use std::os::unix::fs::FileExt;
+
+        let mut written = 0;
+        while written < data.len() {
+            let count = target
+                .write_at(&data[written..], offset + written as u64)
+                .map_err(HostError::map)?;
+            if count == 0 {
+                return Err(RuntimePathError::Io);
+            }
+            written += count;
+        }
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]

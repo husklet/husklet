@@ -10,6 +10,18 @@ use crate::{
 const RESERVATION_GRANULE: u64 = 64;
 
 impl<H: MemoryAccessHost> MappingCoordinator<H> {
+    /// Selects the epoch table a reservation belongs to, which is the shared store's only for
+    /// shared coordinates backed by one.
+    fn reservation_epochs(&self, shared: bool) -> std::sync::Arc<crate::ReservationEpochs> {
+        if !shared {
+            return std::sync::Arc::clone(&self.host.reservations);
+        }
+        self.shared.as_ref().map_or_else(
+            || std::sync::Arc::clone(&self.host.reservations),
+            |store| store.reservation_epochs(),
+        )
+    }
+
     pub fn load_ordered(&self, address: GuestAddress, bytes: u8, _order: AtomicOrder) -> Result<u64, MemoryError> {
         let _admission = self.activity.admit_memory()?;
         let _transaction = self
@@ -259,16 +271,7 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
                     resolution.backing_offset + (address - base),
                     address,
                 )?;
-                let table = epochs.get_or_insert_with(|| {
-                    if coordinate.shared() {
-                        self.shared.as_ref().map_or_else(
-                            || std::sync::Arc::clone(&self.host.reservations),
-                            |store| store.reservation_epochs(),
-                        )
-                    } else {
-                        std::sync::Arc::clone(&self.host.reservations)
-                    }
-                });
+                let table = epochs.get_or_insert_with(|| self.reservation_epochs(coordinate.shared()));
                 table.invalidate_at(coordinate);
                 let next = (address | (RESERVATION_GRANULE - 1)).saturating_add(1);
                 if next <= address {

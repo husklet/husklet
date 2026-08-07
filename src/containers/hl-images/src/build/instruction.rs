@@ -30,20 +30,7 @@ impl<'a> InstructionParser<'a> {
                 continue;
             }
             if line.is_empty() && raw.trim_start().starts_with('#') {
-                let comment = raw.trim_start().trim_start_matches('#').trim();
-                if !self.started
-                    && let Some(value) = comment.strip_prefix("escape=")
-                {
-                    let mut characters = value.chars();
-                    self.escape = match (characters.next(), characters.next()) {
-                        (Some(value @ ('\\' | '`')), None) => value,
-                        _ => {
-                            return Err(Error::MalformedOci(
-                                "Dockerfile escape directive must be ` or backslash".into(),
-                            ));
-                        }
-                    };
-                }
+                self.escape = Self::escape_directive(raw, self.started)?.unwrap_or(self.escape);
                 continue;
             }
             self.started = true;
@@ -69,6 +56,20 @@ impl<'a> InstructionParser<'a> {
             return Err(Error::MalformedOci("Dockerfile ends in a continuation".into()));
         }
         Ok(output)
+    }
+
+    fn escape_directive(raw: &str, started: bool) -> Result<Option<char>> {
+        let comment = raw.trim_start().trim_start_matches('#').trim();
+        let Some(value) = comment.strip_prefix("escape=").filter(|_| !started) else {
+            return Ok(None);
+        };
+        let mut characters = value.chars();
+        match (characters.next(), characters.next()) {
+            (Some(value @ ('\\' | '`')), None) => Ok(Some(value)),
+            _ => Err(Error::MalformedOci(
+                "Dockerfile escape directive must be ` or backslash".into(),
+            )),
+        }
     }
 }
 
@@ -101,17 +102,17 @@ impl<'a> Words<'a> {
             } else if character == '\\' {
                 escaped = true;
             } else if matches!(character, '\'' | '"') {
-                if quote == Some(character) {
-                    quote = None;
-                } else if quote.is_none() {
-                    quote = Some(character);
-                } else {
-                    word.push(character);
-                }
+                quote = match quote {
+                    Some(open) if open == character => None,
+                    None => Some(character),
+                    open => {
+                        word.push(character);
+                        open
+                    }
+                };
             } else if character.is_whitespace() && quote.is_none() {
-                if !word.is_empty() {
-                    output.push(std::mem::take(&mut word));
-                }
+                let flushed = std::mem::take(&mut word);
+                output.extend((!flushed.is_empty()).then_some(flushed));
             } else {
                 word.push(character);
             }

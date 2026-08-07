@@ -869,17 +869,15 @@ impl ThreadSet {
                 .collect::<Vec<_>>();
             for (thread, generation) in release {
                 state.gated.remove(&thread);
+                // A waiter lane still owes a completion for a syscall-parked run, and `resume_run`
+                // is the only transition that may unpark it; clearing the park here strands it.
                 if state
                     .machines
                     .get(&thread)
                     .is_some_and(|run| run.process == process && run.generation == generation)
+                    && !state.syscall_parked.contains(&thread)
                 {
-                    // A waiter lane still owes a completion for a syscall-parked
-                    // run, and `resume_run` is the only transition that may
-                    // unpark it; clearing the park here strands it in `Waiter`.
-                    if !state.syscall_parked.contains(&thread) {
-                        state.parked.remove(&thread);
-                    }
+                    state.parked.remove(&thread);
                 }
             }
         }

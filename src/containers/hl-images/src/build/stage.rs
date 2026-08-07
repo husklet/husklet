@@ -188,9 +188,7 @@ impl Draft {
                 false
             } else if let Some(value) = word.strip_prefix("--exclude=") {
                 let value = value.trim_start_matches('/').trim_end_matches('/');
-                if !value.is_empty() {
-                    excludes.push(value.to_owned());
-                }
+                excludes.extend((!value.is_empty()).then(|| value.to_owned()));
                 false
             } else if word == "--parents" || word == "--parents=true" {
                 parents = true;

@@ -301,6 +301,62 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
         result
     }
 
+    fn override_port(address: &mut SocketAddress, port: u16) {
+        match address {
+            SocketAddress::Inet4 { port: current, .. } | SocketAddress::Inet6 { port: current, .. } => {
+                *current = port;
+            }
+            SocketAddress::Unix(_) => unreachable!(),
+        }
+    }
+
+    fn reserve_unix_connect(
+        &self,
+        client: &Arc<hl_network::UnixNamedSocket>,
+        listener: &Arc<hl_network::UnixNamedSocket>,
+        nonblocking: bool,
+    ) -> Result<hl_network::UnixConnectReservation, LinuxResult> {
+        let queue = listener.wait_queue();
+        loop {
+            let observed = queue.observation();
+            match client.reserve_connect(listener, true) {
+                Ok(value) => return Ok(value),
+                Err(hl_network::UnixNamedSocketError::WouldBlock) if !nonblocking => {}
+                Err(hl_network::UnixNamedSocketError::WouldBlock) => {
+                    return Err(LinuxResult::Error(Errno::EAGAIN));
+                }
+                Err(_) => return Err(LinuxResult::Error(Errno::ECONNREFUSED)),
+            }
+            let Some(wait) = &self.wait else {
+                return Err(LinuxResult::Error(Errno::EAGAIN));
+            };
+            match wait.wait(&queue, observed, None) {
+                Ok(hl_sync::WaitOutcome::Notified) => {}
+                Ok(hl_sync::WaitOutcome::Interrupted) => return Err(LinuxResult::Error(Errno::EINTR)),
+                Ok(hl_sync::WaitOutcome::TimedOut) | Err(_) => return Err(LinuxResult::Error(Errno::EIO)),
+            }
+        }
+    }
+
+    fn prepare_bind_path(&self, raw: &[u8]) -> Result<Option<Box<dyn crate::PreparedUnixSocketPathBind>>, Errno> {
+        if raw.is_empty() || raw[0] == 0 {
+            return Ok(None);
+        }
+        let Some(paths) = &self.unix_socket_paths else {
+            return Ok(None);
+        };
+        let Ok(pathname) = hl_vfs::GuestPathBytes::new(raw) else {
+            return Err(Errno::EINVAL);
+        };
+        paths.prepare_bind(&pathname).map(Some)
+    }
+
+    fn rollback_prepared_bind(prepared: &mut Option<Box<dyn crate::PreparedUnixSocketPathBind>>) {
+        if let Some(prepared) = prepared.take() {
+            prepared.rollback();
+        }
+    }
+
     fn bind_result(&self, descriptor: i32, pointer: u64, length: u32) -> LinuxResult {
         if let Ok(socket) = self.lookup(descriptor) {
             if socket.netlink_socket().is_some() {
@@ -326,20 +382,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let SocketAddress::Unix(raw) = address else {
                 return LinuxResult::Error(Errno::EINVAL);
             };
-            let mut prepared_path = if !raw.is_empty() && raw[0] != 0 {
-                if let Some(paths) = &self.unix_socket_paths {
-                    let Ok(pathname) = hl_vfs::GuestPathBytes::new(&raw) else {
-                        return LinuxResult::Error(Errno::EINVAL);
-                    };
-                    match paths.prepare_bind(&pathname) {
-                        Ok(prepared) => Some(prepared),
-                        Err(error) => return LinuxResult::Error(error),
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
+            let mut prepared_path = match self.prepare_bind_path(&raw) {
+                Ok(value) => value,
+                Err(error) => return LinuxResult::Error(error),
             };
             let requested = if raw.is_empty() {
                 UnixAddress::Unnamed
@@ -351,32 +396,25 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let bound = match socket.bind_unix(self.sockets.unix_namespace(), requested) {
                 Ok(value) => value,
                 Err(hl_network::UnixNamespaceError::AddressInUse) => {
-                    if let Some(prepared) = prepared_path.take() {
-                        prepared.rollback();
-                    }
+                    Self::rollback_prepared_bind(&mut prepared_path);
                     return LinuxResult::Error(Errno::EADDRINUSE);
                 }
                 Err(hl_network::UnixNamespaceError::Invalid) => {
-                    if let Some(prepared) = prepared_path.take() {
-                        prepared.rollback();
-                    }
+                    Self::rollback_prepared_bind(&mut prepared_path);
                     return LinuxResult::Error(Errno::EINVAL);
                 }
                 Err(hl_network::UnixNamespaceError::Exhausted) => {
-                    if let Some(prepared) = prepared_path.take() {
-                        prepared.rollback();
-                    }
+                    Self::rollback_prepared_bind(&mut prepared_path);
                     return LinuxResult::Error(Errno::ENOSPC);
                 }
             };
-            if let Some(named) = socket.named_unix() {
-                if named.bind(bound.clone()).is_err() {
-                    socket.rollback_unix_bind();
-                    if let Some(prepared) = prepared_path.take() {
-                        prepared.rollback();
-                    }
-                    return LinuxResult::Error(Errno::EINVAL);
-                }
+            if socket
+                .named_unix()
+                .is_some_and(|named| named.bind(bound.clone()).is_err())
+            {
+                socket.rollback_unix_bind();
+                Self::rollback_prepared_bind(&mut prepared_path);
+                return LinuxResult::Error(Errno::EINVAL);
             }
             let local = match bound {
                 UnixAddress::Unnamed => SocketAddress::Unix(Vec::new()),
@@ -398,9 +436,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 }
                 Err(_) => {
                     socket.rollback_unix_bind();
-                    if let Some(prepared) = prepared_path.take() {
-                        prepared.rollback();
-                    }
+                    Self::rollback_prepared_bind(&mut prepared_path);
                     LinuxResult::Error(Errno::EIO)
                 }
             };
@@ -432,12 +468,7 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             };
             if port == 0 {
                 port = 32_768_u16.saturating_add(socket.id.slot);
-                match &mut address {
-                    SocketAddress::Inet4 { port: current, .. } | SocketAddress::Inet6 { port: current, .. } => {
-                        *current = port;
-                    }
-                    SocketAddress::Unix(_) => unreachable!(),
-                }
+                Self::override_port(&mut address, port);
             }
             snapshot.local = Some(address);
             snapshot.state = SocketState::Bound;
@@ -633,10 +664,12 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
             let Some(listener) = self.sockets.get_id(listener_id) else {
                 return LinuxResult::Error(Errno::ECONNREFUSED);
             };
-            if let Some(datagram) = socket.unix_datagram() {
-                if listener.unix_datagram().is_none() || datagram.connect(target).is_err() {
-                    return LinuxResult::Error(Errno::ECONNREFUSED);
-                }
+            if let Some(datagram) = socket.unix_datagram()
+                && (listener.unix_datagram().is_none() || datagram.connect(target).is_err())
+            {
+                return LinuxResult::Error(Errno::ECONNREFUSED);
+            }
+            if socket.unix_datagram().is_some() {
                 let mut snapshot = socket
                     .snapshot
                     .lock()
@@ -667,23 +700,9 @@ impl<H: RuntimeNetworkHost, M: GuestMemory> RuntimeNetworkSyscalls<H, M> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
             let nonblocking = current.nonblocking;
-            let queue = listener_named.wait_queue();
-            let reservation = loop {
-                let observed = queue.observation();
-                match client_named.reserve_connect(&listener_named, true) {
-                    Ok(value) => break value,
-                    Err(hl_network::UnixNamedSocketError::WouldBlock) if !nonblocking => {}
-                    Err(hl_network::UnixNamedSocketError::WouldBlock) => return LinuxResult::Error(Errno::EAGAIN),
-                    Err(_) => return LinuxResult::Error(Errno::ECONNREFUSED),
-                }
-                let Some(wait) = &self.wait else {
-                    return LinuxResult::Error(Errno::EAGAIN);
-                };
-                match wait.wait(&queue, observed, None) {
-                    Ok(hl_sync::WaitOutcome::Notified) => {}
-                    Ok(hl_sync::WaitOutcome::Interrupted) => return LinuxResult::Error(Errno::EINTR),
-                    Ok(hl_sync::WaitOutcome::TimedOut) | Err(_) => return LinuxResult::Error(Errno::EIO),
-                }
+            let reservation = match self.reserve_unix_connect(&client_named, &listener_named, nonblocking) {
+                Ok(value) => value,
+                Err(result) => return result,
             };
             let flags = StatusFlags::from_bits(if nonblocking { StatusFlags::NONBLOCKING } else { 0 });
             let pair = match UnixSocketPair::new(current.socket_type, flags) {

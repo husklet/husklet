@@ -317,6 +317,37 @@ fn pin_inode(
     })
 }
 
+/// Rejects a trailing-slash operand whose final component is not a directory.
+fn require_trailing_slash_directory(
+    parent: &impl AsRawFd,
+    name: &CString,
+    missing: bool,
+) -> Result<(), RuntimePathError> {
+    let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: the pinned parent and terminated final name remain live and
+    // status is writable; fstatat retains none of them.
+    let result = unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            status.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if !missing || error.raw_os_error() != Some(libc::ENOENT) {
+            return Err(HostError::map(error));
+        }
+        return Ok(());
+    }
+    // SAFETY: successful fstatat initialized the complete status.
+    if unsafe { status.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(RuntimePathError::NotDirectory);
+    }
+    Ok(())
+}
+
 fn pin_entry(
     host: &NativePath,
     base: &DirectoryBaseLease,
@@ -344,28 +375,7 @@ fn pin_entry(
     let name = CString::new(resolved.final_name().ok_or(RuntimePathError::Invalid)?.as_bytes())
         .map_err(|_| RuntimePathError::Invalid)?;
     if operand.path.as_bytes().ends_with(b"/") {
-        let mut status = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: the pinned parent and terminated final name remain live and
-        // status is writable; fstatat retains none of them.
-        let result = unsafe {
-            libc::fstatat(
-                parent.as_raw_fd(),
-                name.as_ptr(),
-                status.as_mut_ptr(),
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        };
-        if result == 0 {
-            // SAFETY: successful fstatat initialized the complete status.
-            if unsafe { status.assume_init() }.st_mode & libc::S_IFMT != libc::S_IFDIR {
-                return Err(RuntimePathError::NotDirectory);
-            }
-        } else {
-            let error = std::io::Error::last_os_error();
-            if !missing || error.raw_os_error() != Some(libc::ENOENT) {
-                return Err(HostError::map(error));
-            }
-        }
+        require_trailing_slash_directory(&parent, &name, missing)?;
     }
     let path = if missing {
         pin::Host::path(&parent, &name).or_else(|error| {

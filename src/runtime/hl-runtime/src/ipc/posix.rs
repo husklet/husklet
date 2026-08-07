@@ -193,22 +193,21 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
                 .map_err(Self::mq_marshal)?;
             loop {
                 let observed = description.wait_queue().observation();
-                match description.send(&bytes, priority) {
-                    Ok(event) => break Ok(event),
-                    Err(MqError::Again) if !description.attributes().nonblocking => {
-                        let wait = self.wait.as_ref().ok_or(Errno::ENOSYS)?;
-                        match description
-                            .wait_queue()
-                            .wait(observed, wait.interruption().as_ref(), deadline, self.clock.as_ref())
-                            .map_err(|_| Errno::EIO)?
-                        {
-                            WaitOutcome::Notified => {}
-                            WaitOutcome::Interrupted => break Err(Errno::EINTR),
-                            WaitOutcome::TimedOut => break Err(Errno::ETIMEDOUT),
-                        }
-                    }
-                    Err(error) => break Err(Self::mq_error(error)),
-                }
+                let sent = match description.send(&bytes, priority) {
+                    Ok(event) => Some(Ok(event)),
+                    Err(MqError::Again) if !description.attributes().nonblocking => None,
+                    Err(error) => Some(Err(Self::mq_error(error))),
+                };
+                let Some(sent) = sent else {
+                    let wait = self.wait.as_ref().ok_or(Errno::ENOSYS)?;
+                    let outcome = description
+                        .wait_queue()
+                        .wait(observed, wait.interruption().as_ref(), deadline, self.clock.as_ref())
+                        .map_err(|_| Errno::EIO)?;
+                    Self::mq_wait_outcome(outcome)?;
+                    continue;
+                };
+                break sent;
             }
         });
         match result {
@@ -269,29 +268,30 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
             let capacity = usize::try_from(arguments[2]).map_err(|_| Errno::EMSGSIZE)?;
             let receipt = loop {
                 let observed = description.wait_queue().observation();
-                match description.receive_transactional(capacity, |receipt| {
-                    let staged = abi
-                        .stage_receive(arguments[1], receipt.bytes.len(), arguments[3])
-                        .map_err(|_| MqError::Fault)?;
-                    staged
-                        .commit(&receipt.bytes, receipt.priority)
+                let attempt = description.receive_transactional(capacity, |receipt| {
+                    abi.stage_receive(arguments[1], receipt.bytes.len(), arguments[3])
                         .map_err(|_| MqError::Fault)
-                }) {
-                    Ok(receipt) => break receipt,
-                    Err(MqError::Again) if !description.attributes().nonblocking => {
-                        let wait = self.wait.as_ref().ok_or(Errno::ENOSYS)?;
-                        match description
-                            .wait_queue()
-                            .wait(observed, wait.interruption().as_ref(), deadline, self.clock.as_ref())
-                            .map_err(|_| Errno::EIO)?
-                        {
-                            WaitOutcome::Notified => {}
-                            WaitOutcome::Interrupted => return Err(Errno::EINTR),
-                            WaitOutcome::TimedOut => return Err(Errno::ETIMEDOUT),
-                        }
-                    }
+                        .and_then(|staged| {
+                            staged
+                                .commit(&receipt.bytes, receipt.priority)
+                                .map_err(|_| MqError::Fault)
+                        })
+                });
+                let received = match attempt {
+                    Ok(receipt) => Some(receipt),
+                    Err(MqError::Again) if !description.attributes().nonblocking => None,
                     Err(error) => return Err(Self::mq_error(error)),
-                }
+                };
+                let Some(received) = received else {
+                    let wait = self.wait.as_ref().ok_or(Errno::ENOSYS)?;
+                    let outcome = description
+                        .wait_queue()
+                        .wait(observed, wait.interruption().as_ref(), deadline, self.clock.as_ref())
+                        .map_err(|_| Errno::EIO)?;
+                    Self::mq_wait_outcome(outcome)?;
+                    continue;
+                };
+                break received;
             };
             Ok(receipt.bytes.len())
         });
@@ -370,6 +370,14 @@ impl<M: GuestMemory> RuntimeIpcSyscalls<M> {
         match result {
             Ok(()) => LinuxResult::Value(0),
             Err(error) => LinuxResult::Error(error),
+        }
+    }
+
+    const fn mq_wait_outcome(outcome: WaitOutcome) -> Result<(), Errno> {
+        match outcome {
+            WaitOutcome::Notified => Ok(()),
+            WaitOutcome::Interrupted => Err(Errno::EINTR),
+            WaitOutcome::TimedOut => Err(Errno::ETIMEDOUT),
         }
     }
 

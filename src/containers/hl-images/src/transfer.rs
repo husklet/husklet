@@ -75,9 +75,7 @@ pub async fn copy_graph(
             let bytes = DescriptorGraph::collect(stream, &descriptor).await?;
             queue.extend(DescriptorGraph::successors(&descriptor, &bytes)?);
             report.bytes += bytes.len() as u64;
-            target
-                .push(&descriptor, Box::pin(stream::once(async move { Ok(bytes) })))
-                .await?;
+            target.push(&descriptor, DescriptorGraph::collected(bytes)).await?;
         } else {
             report.bytes += descriptor.size();
             target.push(&descriptor, stream).await?;
@@ -90,6 +88,10 @@ pub async fn copy_graph(
 /// Deterministic depth-first descriptor graph traversal with cycle and duplicate suppression.
 pub struct DescriptorGraph;
 impl DescriptorGraph {
+    fn collected(bytes: Bytes) -> BlobStream {
+        Box::pin(stream::once(async move { Ok(bytes) }))
+    }
+
     async fn collect(mut stream: BlobStream, descriptor: &Descriptor) -> Result<Bytes> {
         const MAX_DOCUMENT: u64 = 16 * 1024 * 1024;
         if descriptor.size() > MAX_DOCUMENT {

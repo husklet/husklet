@@ -58,44 +58,7 @@ impl Recipe {
                 continue;
             }
             if name == "FROM" {
-                if let Some(stage) = current.take() {
-                    stages.push(stage.finish());
-                }
-                let value = Environment::new(&globals).expand(&raw)?;
-                let mut words = Words::new(&value).parse();
-                if words.is_empty() {
-                    return Err(Error::MalformedOci("FROM requires an image".into()));
-                }
-                let platform = words
-                    .first()
-                    .and_then(|word| word.strip_prefix("--platform="))
-                    .map(str::parse::<Platform>)
-                    .transpose()
-                    .map_err(|error| Error::MalformedOci(error.to_string()))?;
-                if words.first().is_some_and(|word| word.starts_with("--platform=")) {
-                    words.remove(0);
-                }
-                let name = if words.len() == 3 && words[1].eq_ignore_ascii_case("AS") {
-                    Some(words[2].clone())
-                } else if words.len() == 1 {
-                    None
-                } else {
-                    return Err(Error::MalformedOci("invalid FROM syntax".into()));
-                };
-                let base = names
-                    .get(&words[0])
-                    .copied()
-                    .or_else(|| words[0].parse::<usize>().ok().filter(|index| *index < stages.len()))
-                    .map_or_else(|| words[0].parse().map(Base::Image), |index| Ok(Base::Stage(index)))?;
-                let index = stages.len();
-                if let Some(name) = &name
-                    && names.insert(name.clone(), index).is_some()
-                {
-                    return Err(Error::MalformedOci(format!("duplicate stage {name}")));
-                }
-                let mut draft = Draft::new(index, name, base, platform);
-                draft.stage.history.push(History::instruction("FROM", &raw, true));
-                current = Some(draft);
+                Self::begin_stage(&raw, &globals, &mut stages, &mut names, &mut current)?;
                 continue;
             }
             let stage = current
@@ -111,6 +74,54 @@ impl Recipe {
         }
         let selected = Self::selected_stage(target, &names, stages.len())?;
         Ok(Self { stages, selected })
+    }
+
+    fn begin_stage(
+        raw: &str,
+        globals: &BTreeMap<String, String>,
+        stages: &mut Vec<Stage>,
+        names: &mut BTreeMap<String, usize>,
+        current: &mut Option<Draft>,
+    ) -> Result<()> {
+        if let Some(stage) = current.take() {
+            stages.push(stage.finish());
+        }
+        let value = Environment::new(globals).expand(raw)?;
+        let mut words = Words::new(&value).parse();
+        if words.is_empty() {
+            return Err(Error::MalformedOci("FROM requires an image".into()));
+        }
+        let platform = words
+            .first()
+            .and_then(|word| word.strip_prefix("--platform="))
+            .map(str::parse::<Platform>)
+            .transpose()
+            .map_err(|error| Error::MalformedOci(error.to_string()))?;
+        if words.first().is_some_and(|word| word.starts_with("--platform=")) {
+            words.remove(0);
+        }
+        let name = if words.len() == 3 && words[1].eq_ignore_ascii_case("AS") {
+            Some(words[2].clone())
+        } else if words.len() == 1 {
+            None
+        } else {
+            return Err(Error::MalformedOci("invalid FROM syntax".into()));
+        };
+        let base = names
+            .get(&words[0])
+            .copied()
+            .or_else(|| words[0].parse::<usize>().ok().filter(|index| *index < stages.len()))
+            .map_or_else(|| words[0].parse().map(Base::Image), |index| Ok(Base::Stage(index)))?;
+        let index = stages.len();
+        if let Some(name) = &name
+            && names.insert(name.clone(), index).is_some()
+        {
+            return Err(Error::MalformedOci(format!("duplicate stage {name}")));
+        }
+        let mut draft = Draft::new(index, name, base, platform);
+        draft.stage.history.push(History::instruction("FROM", raw, true));
+        *current = Some(draft);
+        Ok(())
     }
 
     fn platform_arguments(build: Option<&Platform>, target: Option<&Platform>) -> BTreeMap<String, String> {

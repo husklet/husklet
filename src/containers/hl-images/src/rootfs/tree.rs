@@ -81,6 +81,13 @@ impl Tree {
         Ok(())
     }
 
+    fn whiteout_target(name: &str) -> Result<&str> {
+        if name.is_empty() {
+            return Err(Error::InvalidMetadata("empty overlay whiteout target".into()));
+        }
+        Ok(name)
+    }
+
     fn walk_overlay(
         view: &SnapshotView,
         physical: &Path,
@@ -102,9 +109,7 @@ impl Tree {
                 continue;
             }
             if let Some(name) = name.strip_prefix(".wh.") {
-                if name.is_empty() {
-                    return Err(Error::InvalidMetadata("empty overlay whiteout target".into()));
-                }
+                let name = Self::whiteout_target(name)?;
                 whiteouts.insert(guest.parent().unwrap_or(Path::new("")).join(name));
                 continue;
             }

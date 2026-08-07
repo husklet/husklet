@@ -158,12 +158,9 @@ impl<M: GuestMemory> RuntimeFilesystemSyscalls<M> {
                 .map_err(|_| Errno::ENAMETOOLONG)?;
             return host
                 .working_base(rooted)
-                .map(|base| {
-                    if self.fs_context.root().as_str() == "/" {
-                        base
-                    } else {
-                        DirectoryBaseLease::confined_root(base.path().clone())
-                    }
+                .map(|base| match self.fs_context.root().as_str() {
+                    "/" => base,
+                    _ => DirectoryBaseLease::confined_root(base.path().clone()),
                 })
                 .map_err(|error| error.errno());
         }

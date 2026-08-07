@@ -248,11 +248,14 @@ impl Images {
                     size = size
                         .checked_add(bytes)
                         .ok_or_else(|| Error::MalformedOci("image size overflow".into()))?;
-                    if references.get(&digest).is_some_and(|count| *count > 1) {
-                        shared = shared
-                            .checked_add(bytes)
-                            .ok_or_else(|| Error::MalformedOci("shared image size overflow".into()))?;
-                    }
+                    let counted = if references.get(&digest).is_some_and(|count| *count > 1) {
+                        bytes
+                    } else {
+                        0
+                    };
+                    shared = shared
+                        .checked_add(counted)
+                        .ok_or_else(|| Error::MalformedOci("shared image size overflow".into()))?;
                 }
                 Ok((target, ImageUsage { size, shared }))
             })

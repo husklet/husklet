@@ -356,31 +356,33 @@ impl Snapshots {
                 .open(&lock_path)
                 .at(&lock_path)?;
             match lock.try_lock_exclusive() {
-                Ok(()) => {
-                    let owner_path = drafts.join(format!("{name}.json"));
-                    // The owner completed and reclaimed its own record between this
-                    // scan and this read; there is nothing abandoned to recover.
-                    let bytes = match fs::read(&owner_path) {
-                        Ok(bytes) => bytes,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                        Err(error) => return Err(error).at(&owner_path),
-                    };
-                    if bytes.len() > 4096 {
-                        return Err(Error::InvalidMetadata("snapshot draft owner exceeds 4 KiB".into()));
-                    }
-                    let target = serde_json::from_slice::<DraftOwner>(&bytes)
-                        .map_err(|error| Error::InvalidMetadata(format!("malformed snapshot draft owner: {error}")))?
-                        .validate(&key)?;
-                    self.cleanup_active(&key)?;
-                    if let Some(target) = target
-                        && !self.contains(&target)
-                    {
-                        self.remove(&target)?;
-                    }
-                }
+                Ok(()) => self.recover_draft(&drafts.join(format!("{name}.json")), &key)?,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(error) => return Err(error).at(lock_path),
             }
+        }
+        Ok(())
+    }
+
+    fn recover_draft(&self, owner_path: &std::path::Path, key: &Id) -> Result<()> {
+        // The owner completed and reclaimed its own record between the scan and this
+        // read; there is nothing abandoned to recover.
+        let bytes = match fs::read(owner_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).at(owner_path),
+        };
+        if bytes.len() > 4096 {
+            return Err(Error::InvalidMetadata("snapshot draft owner exceeds 4 KiB".into()));
+        }
+        let target = serde_json::from_slice::<DraftOwner>(&bytes)
+            .map_err(|error| Error::InvalidMetadata(format!("malformed snapshot draft owner: {error}")))?
+            .validate(key)?;
+        self.cleanup_active(key)?;
+        if let Some(target) = target
+            && !self.contains(&target)
+        {
+            self.remove(&target)?;
         }
         Ok(())
     }

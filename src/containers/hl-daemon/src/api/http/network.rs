@@ -211,25 +211,26 @@ pub(super) async fn prune(
     let service = state.containers.networks();
     let mut deleted = Vec::new();
     for network in service.list().await.map_err(ApiError::container)? {
-        if !network.predefined() && network.endpoints.is_empty() && filters.matches(&network) {
-            match service.remove(network.id.as_str()).await {
-                Ok(network) => {
-                    state.events.object(
-                        "network",
-                        "destroy",
-                        network.id.to_string(),
-                        [
-                            ("name".into(), network.name.clone()),
-                            ("reclaimed".into(), "true".into()),
-                        ]
-                        .into_iter()
-                        .collect(),
-                    );
-                    deleted.push(network.name);
-                }
-                Err(hl_container::Error::NetworkInUse(_) | hl_container::Error::NetworkNotFound(_)) => {}
-                Err(error) => return Err(ApiError::container(error)),
+        if network.predefined() || !network.endpoints.is_empty() || !filters.matches(&network) {
+            continue;
+        }
+        match service.remove(network.id.as_str()).await {
+            Ok(network) => {
+                state.events.object(
+                    "network",
+                    "destroy",
+                    network.id.to_string(),
+                    [
+                        ("name".into(), network.name.clone()),
+                        ("reclaimed".into(), "true".into()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                );
+                deleted.push(network.name);
             }
+            Err(hl_container::Error::NetworkInUse(_) | hl_container::Error::NetworkNotFound(_)) => {}
+            Err(error) => return Err(ApiError::container(error)),
         }
     }
     Ok(Json(NetworkPrune {

@@ -251,6 +251,13 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
         }
     }
 
+    fn advance_vector(index: &mut usize, offset: &mut u64, left: u64) {
+        if left == 0 {
+            *index += 1;
+            *offset = 0;
+        }
+    }
+
     fn copy_vectors(&self, source: &[GuestIovec], destination: &[GuestIovec]) -> LinuxResult {
         let mut source_index = 0;
         let mut destination_index = 0;
@@ -263,14 +270,8 @@ impl<H: MappingHost, M: GuestMemory> RuntimeMemorySyscalls<H, M> {
             let destination_left = destination[destination_index].length - destination_offset;
             let amount = source_left.min(destination_left).min(buffer.len() as u64) as usize;
             if amount == 0 {
-                if source_left == 0 {
-                    source_index += 1;
-                    source_offset = 0;
-                }
-                if destination_left == 0 {
-                    destination_index += 1;
-                    destination_offset = 0;
-                }
+                Self::advance_vector(&mut source_index, &mut source_offset, source_left);
+                Self::advance_vector(&mut destination_index, &mut destination_offset, destination_left);
                 continue;
             }
             let Some(source_address) = source[source_index].base.checked_add(source_offset) else {

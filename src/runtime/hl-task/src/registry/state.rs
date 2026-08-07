@@ -395,18 +395,25 @@ impl TaskRegistry {
         let mut stopped = Vec::new();
         for (slot, session, members) in groups {
             let orphaned = Self::group_is_orphaned(state, session, &members);
-            if let Some(group) = state.process_groups[slot].value.as_mut() {
-                let became_orphaned = !group.orphaned && orphaned;
-                group.orphaned = orphaned;
-                if became_orphaned {
-                    stopped.extend(members.iter().copied().filter(|member| {
-                        Self::process(state, *member)
-                            .is_ok_and(|process| process.lifecycle == ProcessLifecycle::Stopped)
-                    }));
-                }
+            let Some(group) = state.process_groups[slot].value.as_mut() else {
+                continue;
+            };
+            let became_orphaned = !group.orphaned && orphaned;
+            group.orphaned = orphaned;
+            if became_orphaned {
+                stopped.extend(
+                    members
+                        .iter()
+                        .copied()
+                        .filter(|member| Self::process_is_stopped(state, *member)),
+                );
             }
         }
         Ok(stopped)
+    }
+
+    fn process_is_stopped(state: &State, process: ProcessId) -> bool {
+        Self::process(state, process).is_ok_and(|process| process.lifecycle == ProcessLifecycle::Stopped)
     }
 
     fn group_is_orphaned(state: &State, session: SessionId, members: &std::collections::BTreeSet<ProcessId>) -> bool {
