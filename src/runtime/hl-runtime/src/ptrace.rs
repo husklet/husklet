@@ -87,7 +87,7 @@ impl RuntimeSafepoint {
         }
         let event = match self.tasks.trace_syscall_stop(self.process, exit) {
             Ok(Some(event)) => event,
-            Ok(None) | Err(TraceError::InvalidLink) => return Ok(TraceBoundary::Continue),
+            Ok(None) | Err(TraceError::InvalidLink(_)) => return Ok(TraceBoundary::Continue),
             Err(error) => return Err(error),
         };
         self.publish(cpu, original)?;
@@ -108,7 +108,7 @@ impl RuntimeSafepoint {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_some()
         {
-            return Err(TraceError::AlreadyStopped);
+            return Err(TraceError::AlreadyStopped(event.link));
         }
         self.publish(cpu, original)?;
         *self.pending.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingStop {
@@ -148,7 +148,7 @@ impl RuntimeSafepoint {
     ) -> Result<Option<TraceResume>, TraceError> {
         let event = match self.tasks.trace_syscall_stop(self.process, exit) {
             Ok(Some(event)) => event,
-            Ok(None) | Err(TraceError::InvalidLink) => return Ok(None),
+            Ok(None) | Err(TraceError::InvalidLink(_)) => return Ok(None),
             Err(error) => return Err(error),
         };
         self.exchange(cpu, original, event)
@@ -162,7 +162,7 @@ impl RuntimeSafepoint {
     ) -> Result<Option<TraceResume>, TraceError> {
         let event = match self.tasks.trace_stop(self.process, stop) {
             Ok(event) => event,
-            Err(TraceError::InvalidLink) => return Ok(None),
+            Err(TraceError::InvalidLink(_)) => return Ok(None),
             Err(error) => return Err(error),
         };
         self.exchange(cpu, original, event)
@@ -430,12 +430,12 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
     const fn trace_errno(error: TraceError) -> Errno {
         match error {
             TraceError::Capacity => Errno::ENOMEM,
-            TraceError::Denied | TraceError::AlreadyTraced | TraceError::WrongTracer => Errno::EPERM,
+            TraceError::Denied(_) | TraceError::AlreadyTraced(_) | TraceError::WrongTracer { .. } => Errno::EPERM,
             TraceError::InvalidSnapshot => Errno::EFAULT,
-            TraceError::InvalidLink
-            | TraceError::InvalidProcess
-            | TraceError::NotStopped
-            | TraceError::AlreadyStopped => Errno::ESRCH,
+            TraceError::InvalidLink(_)
+            | TraceError::InvalidProcess(_)
+            | TraceError::NotStopped(_)
+            | TraceError::AlreadyStopped(_) => Errno::ESRCH,
         }
     }
 }

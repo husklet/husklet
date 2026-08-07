@@ -34,7 +34,7 @@ pub use fork_model::{
 };
 pub use identity::{ProcessGroupId, ProcessId, SessionId, ThreadId};
 pub use model::{
-    CancellationEvent, CloneThreadPlan, CpuAccount, CpuUsage, ExitStatus, ForkProcessPlan, ProcessLifecycle,
+    CancellationEvent, CloneThreadPlan, CpuAccount, CpuUsage, Denial, ExitStatus, ForkProcessPlan, ProcessLifecycle,
     RegistryConfig, SignalPendingEvent, TaskError, ThreadLifecycle,
 };
 pub use namespace::{
@@ -62,5 +62,6 @@ pub use snapshot::{
     ProcessGroupSnapshot, ProcessObservation, ProcessSnapshot, RegistrySnapshot, SessionSnapshot, ThreadSnapshot,
 };
 pub use trace::{
-    TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission, TraceResume, TraceSnapshot, TraceStop, TraceWait,
+    LinkFault, TraceDenial, TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission, TraceResume,
+    TraceSnapshot, TraceStop, TraceSubject, TraceWait,
 };

@@ -111,7 +111,7 @@ fn setsid_creates_new() {
     assert_eq!(replacement_session.number(), replacement.number());
     assert_ne!(replacement_session.number(), session.number());
     assert_ne!(replacement_session, session);
-    assert_eq!(registry.session_id(child), Err(TaskError::InvalidProcess));
+    assert_eq!(registry.session_id(child), Err(TaskError::InvalidProcess(child)));
     assert_eq!(
         registry.request_cancellation(child_thread),
         Err(TaskError::InvalidThread)

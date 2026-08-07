@@ -15,7 +15,7 @@ use crate::{
 
 impl TaskRegistry {
     pub(super) fn allocate_session(state: &mut State, leader: ProcessId) -> Result<SessionId, TaskError> {
-        let (slot, _) = leader.parts().ok_or(TaskError::InvalidProcess)?;
+        let (slot, _) = leader.parts().ok_or(TaskError::InvalidProcess(leader))?;
         let entry = state.sessions.get_mut(slot).ok_or(TaskError::ProcessLimit)?;
         if entry.value.is_some() || entry.generation == u16::MAX {
             return Err(TaskError::ProcessLimit);
@@ -25,7 +25,7 @@ impl TaskRegistry {
     }
 
     pub(super) fn allocate_process_group(state: &mut State, leader: ProcessId) -> Result<ProcessGroupId, TaskError> {
-        let (slot, _) = leader.parts().ok_or(TaskError::InvalidProcess)?;
+        let (slot, _) = leader.parts().ok_or(TaskError::InvalidProcess(leader))?;
         let entry = state.process_groups.get_mut(slot).ok_or(TaskError::ProcessLimit)?;
         if entry.value.is_some() || entry.generation == u16::MAX {
             return Err(TaskError::ProcessLimit);
@@ -168,7 +168,7 @@ impl TaskRegistry {
         process_state.execed = true;
         drop(state);
         if let Err(error) = self.trace_stop(process, crate::TraceStop::Exec)
-            && error != crate::TraceError::InvalidLink
+            && !matches!(error, crate::TraceError::InvalidLink(_))
         {
             return Err(TaskError::InvalidLifecycle);
         }

@@ -1,6 +1,6 @@
 use crate::{
-    ProcessId, ProcessLifecycle, TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission, TraceResume,
-    TraceStop, TraceWait,
+    ProcessId, ProcessLifecycle, TraceDenial, TraceError, TraceEvent, TraceImage, TraceLinkId, TracePermission,
+    TraceResume, TraceStop, TraceSubject, TraceWait,
 };
 
 use super::TaskRegistry;
@@ -13,10 +13,15 @@ impl TaskRegistry {
         permission: TracePermission,
     ) -> Result<TraceLinkId, TraceError> {
         let state = self.lock();
-        let tracer_state = Self::process(&state, tracer).map_err(|_| TraceError::InvalidProcess)?;
-        let tracee_state = Self::process(&state, tracee).map_err(|_| TraceError::InvalidProcess)?;
-        if tracer_state.lifecycle != ProcessLifecycle::Running || tracee_state.lifecycle != ProcessLifecycle::Running {
-            return Err(TraceError::InvalidProcess);
+        let tracer_state =
+            Self::process(&state, tracer).map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracer(tracer)))?;
+        let tracee_state =
+            Self::process(&state, tracee).map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracee(tracee)))?;
+        if tracer_state.lifecycle != ProcessLifecycle::Running {
+            return Err(TraceError::InvalidProcess(TraceSubject::Tracer(tracer)));
+        }
+        if tracee_state.lifecycle != ProcessLifecycle::Running {
+            return Err(TraceError::InvalidProcess(TraceSubject::Tracee(tracee)));
         }
         drop(state);
         self.traces.attach(tracer, tracee, permission, true)
@@ -25,9 +30,9 @@ impl TaskRegistry {
     pub fn trace_me(&self, tracee: ProcessId) -> Result<TraceLinkId, TraceError> {
         let state = self.lock();
         let tracer = Self::process(&state, tracee)
-            .map_err(|_| TraceError::InvalidProcess)?
+            .map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracee(tracee)))?
             .parent
-            .ok_or(TraceError::Denied)?;
+            .ok_or(TraceError::Denied(TraceDenial::NoParent))?;
         drop(state);
         self.traces.attach(tracer, tracee, TracePermission::Granted, false)
     }
@@ -39,8 +44,8 @@ impl TaskRegistry {
         permission: TracePermission,
     ) -> Result<TraceLinkId, TraceError> {
         let state = self.lock();
-        Self::process(&state, tracer).map_err(|_| TraceError::InvalidProcess)?;
-        Self::process(&state, tracee).map_err(|_| TraceError::InvalidProcess)?;
+        Self::process(&state, tracer).map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracer(tracer)))?;
+        Self::process(&state, tracee).map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracee(tracee)))?;
         drop(state);
         self.traces.attach(tracer, tracee, permission, false)
     }
@@ -58,7 +63,7 @@ impl TaskRegistry {
 
     pub fn trace_stop(&self, tracee: ProcessId, stop: TraceStop) -> Result<TraceEvent, TraceError> {
         let state = self.lock();
-        Self::process(&state, tracee).map_err(|_| TraceError::InvalidProcess)?;
+        Self::process(&state, tracee).map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracee(tracee)))?;
         drop(state);
         let event = self.traces.stop(tracee, stop)?;
         let mut state = self.lock();
@@ -70,7 +75,7 @@ impl TaskRegistry {
 
     pub fn trace_wait(&self, tracer: ProcessId, tracee: Option<ProcessId>) -> Result<TraceWait, TraceError> {
         let state = self.lock();
-        Self::process(&state, tracer).map_err(|_| TraceError::InvalidProcess)?;
+        Self::process(&state, tracer).map_err(|_| TraceError::InvalidProcess(TraceSubject::Tracer(tracer)))?;
         drop(state);
         self.traces.wait(tracer, tracee)
     }
@@ -115,7 +120,7 @@ impl TaskRegistry {
                 let id = ProcessId::new(slot as u32, entry.generation);
                 (id.number() == number).then_some(id)
             })
-            .ok_or(TraceError::InvalidProcess)
+            .ok_or(TraceError::InvalidProcess(TraceSubject::Number(number)))
     }
 
     #[must_use]

@@ -175,6 +175,13 @@ impl SignalPendingEvent {
     }
 }
 
+/// Names the authority a denied operation lacked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Denial {
+    Capability(u64),
+    NamespaceNotVisible(crate::NamespaceId),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskError {
     InvalidCapacity,
@@ -182,7 +189,7 @@ pub enum TaskError {
     ThreadLimit,
     SignalQueueLimit,
     GroupLimit,
-    InvalidProcess,
+    InvalidProcess(ProcessId),
     InvalidThread,
     InvalidSession,
     InvalidProcessGroup,
@@ -197,7 +204,7 @@ pub enum TaskError {
     NotWaitable,
     InitExited,
     InvalidSnapshot,
-    PermissionDenied,
+    PermissionDenied(Denial),
 }
 
 impl fmt::Display for TaskError {

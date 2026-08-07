@@ -168,11 +168,11 @@ fn task_oom_access_is_atomic_with_exit_and_rejects_reuse() {
     assert_eq!(replacement_thread.number(), child_thread.number());
     assert_eq!(
         registry.set_task_oom_score_adj(child, Some(child_thread), 999),
-        Err(TaskError::InvalidProcess)
+        Err(TaskError::InvalidProcess(child))
     );
     assert_eq!(
         registry.task_oom_score_adj(child, Some(child_thread)),
-        Err(TaskError::InvalidProcess)
+        Err(TaskError::InvalidProcess(child))
     );
     assert_eq!(
         registry.task_oom_score_adj(replacement, Some(replacement_thread)),
@@ -392,7 +392,7 @@ fn process_snapshot_is_exact_and_generation_qualified() {
 
     let (slot, generation) = process.wire_parts();
     let stale = ProcessId::from_wire(slot, generation.checked_add(1).unwrap()).unwrap();
-    assert_eq!(registry.process_snapshot(stale), Err(TaskError::InvalidProcess));
+    assert_eq!(registry.process_snapshot(stale), Err(TaskError::InvalidProcess(stale)));
 }
 
 #[test]
@@ -411,7 +411,10 @@ fn process_observation_is_exact_and_generation_qualified() {
 
     let (slot, generation) = process.wire_parts();
     let stale = ProcessId::from_wire(slot, generation.checked_add(1).unwrap()).unwrap();
-    assert_eq!(registry.process_observation(stale), Err(TaskError::InvalidProcess));
+    assert_eq!(
+        registry.process_observation(stale),
+        Err(TaskError::InvalidProcess(stale))
+    );
 }
 
 #[test]
@@ -994,7 +997,7 @@ fn zombie_wait_status() {
     assert_eq!(registry.wait(parent, WaitSelector::Any).unwrap(), Some(event));
     assert_eq!(registry.reap(parent, child), Ok(status));
     assert_eq!(registry.wait(parent, WaitSelector::Any), Err(TaskError::NoChildren));
-    assert_eq!(registry.reap(parent, child), Err(TaskError::InvalidProcess));
+    assert_eq!(registry.reap(parent, child), Err(TaskError::InvalidProcess(child)));
 }
 
 #[test]

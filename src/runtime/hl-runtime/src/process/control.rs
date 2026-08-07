@@ -488,7 +488,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
             Err(hl_task::TaskError::ProcessExeced) => LinuxResult::Error(Errno::EACCES),
             Err(
                 hl_task::TaskError::WrongProcess
-                | hl_task::TaskError::InvalidProcess
+                | hl_task::TaskError::InvalidProcess(_)
                 | hl_task::TaskError::InvalidLifecycle,
             ) => LinuxResult::Error(Errno::ESRCH),
             Err(_) => LinuxResult::Error(Errno::EPERM),

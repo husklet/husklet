@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use hl_execution::{StoppedRegisterImage, TraceRegisterError, TraceSafepointPort};
 use hl_linux::{GuestMemory, PtraceOptions};
-use hl_task::{ProcessId, TraceError, TraceEvent, TraceLinkId, TracePermission, TraceStop};
+use hl_task::{LinkFault, ProcessId, TraceError, TraceEvent, TraceLinkId, TracePermission, TraceStop, TraceSubject};
 
 use super::PtracePort;
 use super::{RuntimeSafepoint, TraceWake};
@@ -22,12 +22,12 @@ impl TraceExchange {
         })
     }
 
-    fn current(&self) -> Result<StoppedRegisterImage, TraceError> {
+    fn current(&self, link: TraceLinkId) -> Result<StoppedRegisterImage, TraceError> {
         self.image
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
-            .ok_or(TraceError::NotStopped)
+            .ok_or(TraceError::NotStopped(link))
     }
 
     fn replace(&self, image: StoppedRegisterImage) {
@@ -108,8 +108,16 @@ impl Catalog {
 
     fn exchange(&self, link: TraceLinkId) -> Result<Arc<TraceExchange>, TraceError> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let process = state.links.get(&link).ok_or(TraceError::InvalidLink)?.tracee;
-        state.processes.get(&process).cloned().ok_or(TraceError::InvalidProcess)
+        let process = state
+            .links
+            .get(&link)
+            .ok_or(TraceError::InvalidLink(LinkFault::Stale(link)))?
+            .tracee;
+        state
+            .processes
+            .get(&process)
+            .cloned()
+            .ok_or(TraceError::InvalidProcess(TraceSubject::Tracee(process)))
     }
 }
 
@@ -137,7 +145,7 @@ impl PtracePort for Catalog {
     }
 
     fn registers(&self, link: TraceLinkId) -> Result<StoppedRegisterImage, TraceError> {
-        self.exchange(link)?.current()
+        self.exchange(link)?.current(link)
     }
 
     fn set_registers(&self, link: TraceLinkId, image: StoppedRegisterImage) -> Result<(), TraceError> {
@@ -147,13 +155,21 @@ impl PtracePort for Catalog {
 
     fn options(&self, link: TraceLinkId, options: PtraceOptions) -> Result<(), TraceError> {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.links.get_mut(&link).ok_or(TraceError::InvalidLink)?.options = options;
+        state
+            .links
+            .get_mut(&link)
+            .ok_or(TraceError::InvalidLink(LinkFault::Stale(link)))?
+            .options = options;
         Ok(())
     }
 
     fn event_message(&self, link: TraceLinkId) -> Result<u64, TraceError> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        Ok(state.links.get(&link).ok_or(TraceError::InvalidLink)?.event_message)
+        Ok(state
+            .links
+            .get(&link)
+            .ok_or(TraceError::InvalidLink(LinkFault::Stale(link)))?
+            .event_message)
     }
 
     fn read(&self, link: TraceLinkId, address: u64, bytes: &mut [u8]) -> Result<(), TraceError> {

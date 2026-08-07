@@ -63,7 +63,7 @@ impl TaskRegistry {
             .processes
             .into_iter()
             .find(|candidate| candidate.id == process)
-            .ok_or(TaskError::InvalidProcess)?
+            .ok_or(TaskError::InvalidProcess(process))?
             .arguments;
         self.prepare_image(process, thread, name, arguments)
     }

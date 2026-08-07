@@ -54,7 +54,9 @@ impl TaskRegistry {
         let process = Self::process(&state, actor)?;
         let current_user = process.namespaces.user;
         if !process.credentials.has_capability(crate::CapabilitySets::SYS_ADMIN) {
-            return Err(TaskError::PermissionDenied);
+            return Err(TaskError::PermissionDenied(crate::Denial::Capability(
+                crate::CapabilitySets::SYS_ADMIN,
+            )));
         }
         let existing = state
             .uts_namespaces
@@ -71,7 +73,9 @@ impl TaskRegistry {
             owner = state.user_namespaces.get(&namespace).and_then(|value| value.parent);
         }
         if !visible {
-            return Err(TaskError::PermissionDenied);
+            return Err(TaskError::PermissionDenied(crate::Denial::NamespaceNotVisible(
+                existing.owner(),
+            )));
         }
         let existing_owner = existing.owner();
         let replacement = crate::UtsIdentity::owned(

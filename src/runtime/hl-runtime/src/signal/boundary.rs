@@ -48,7 +48,7 @@ impl<M: GuestMemory> RuntimeProcessSyscalls<M> {
                         signal: signal.get(),
                     });
                 }
-                Err(TraceError::InvalidLink) => {}
+                Err(TraceError::InvalidLink(_)) => {}
                 Err(_) => return Err(Errno::ESRCH),
             }
         }

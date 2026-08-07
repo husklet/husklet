@@ -255,14 +255,14 @@ impl TaskRegistry {
         Self::process_slot(state, id)?
             .value
             .as_ref()
-            .ok_or(TaskError::InvalidProcess)
+            .ok_or(TaskError::InvalidProcess(id))
     }
 
     pub(super) fn process_mut(state: &mut State, id: ProcessId) -> Result<&mut Process, TaskError> {
         Self::process_slot_mut(state, id)?
             .value
             .as_mut()
-            .ok_or(TaskError::InvalidProcess)
+            .ok_or(TaskError::InvalidProcess(id))
     }
 
     pub(super) fn thread(state: &State, id: ThreadId) -> Result<&Thread, TaskError> {
@@ -308,19 +308,19 @@ impl TaskRegistry {
     }
 
     fn process_slot(state: &State, id: ProcessId) -> Result<&Slot<Process>, TaskError> {
-        let (slot, generation) = id.parts().ok_or(TaskError::InvalidProcess)?;
-        let entry = state.processes.get(slot).ok_or(TaskError::InvalidProcess)?;
+        let (slot, generation) = id.parts().ok_or(TaskError::InvalidProcess(id))?;
+        let entry = state.processes.get(slot).ok_or(TaskError::InvalidProcess(id))?;
         if entry.generation != generation {
-            return Err(TaskError::InvalidProcess);
+            return Err(TaskError::InvalidProcess(id));
         }
         Ok(entry)
     }
 
     fn process_slot_mut(state: &mut State, id: ProcessId) -> Result<&mut Slot<Process>, TaskError> {
-        let (slot, generation) = id.parts().ok_or(TaskError::InvalidProcess)?;
-        let entry = state.processes.get_mut(slot).ok_or(TaskError::InvalidProcess)?;
+        let (slot, generation) = id.parts().ok_or(TaskError::InvalidProcess(id))?;
+        let entry = state.processes.get_mut(slot).ok_or(TaskError::InvalidProcess(id))?;
         if entry.generation != generation {
-            return Err(TaskError::InvalidProcess);
+            return Err(TaskError::InvalidProcess(id));
         }
         Ok(entry)
     }

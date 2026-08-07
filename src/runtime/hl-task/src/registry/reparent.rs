@@ -23,7 +23,7 @@ impl TaskRegistry {
     }
 
     fn reparent_target(state: &State, process: ProcessId) -> Result<ProcessId, TaskError> {
-        let init = state.init.ok_or(TaskError::InvalidProcess)?;
+        let init = state.init.ok_or(TaskError::InvalidSnapshot)?;
         let mut ancestor = Self::process(state, process)?.parent;
         while let Some(candidate) = ancestor {
             let parent = Self::process(state, candidate)?;

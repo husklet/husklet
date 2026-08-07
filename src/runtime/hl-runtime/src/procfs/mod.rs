@@ -648,8 +648,8 @@ impl ProcfsSource for TaskProcfs {
         self.tasks
             .replace_uts_namespace(process, thread, identifier, values.0, values.1)
             .map_err(|error| match error {
-                hl_task::TaskError::PermissionDenied => hl_descriptor::ObjectError::PermissionDenied,
-                hl_task::TaskError::InvalidProcess
+                hl_task::TaskError::PermissionDenied(_) => hl_descriptor::ObjectError::PermissionDenied,
+                hl_task::TaskError::InvalidProcess(_)
                 | hl_task::TaskError::InvalidThread
                 | hl_task::TaskError::WrongProcess => hl_descriptor::ObjectError::PermissionDenied,
                 hl_task::TaskError::InvalidCapacity => hl_descriptor::ObjectError::InvalidArgument,

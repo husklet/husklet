@@ -47,16 +47,40 @@ pub enum TraceWait {
     WouldBlock,
 }
 
+/// Names which end of the trace relationship failed to resolve.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraceSubject {
+    Tracer(ProcessId),
+    Tracee(ProcessId),
+    Number(u32),
+}
+
+/// Distinguishes the lookup behind an unusable link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkFault {
+    Untraced(ProcessId),
+    Stale(TraceLinkId),
+    Unqueued(TraceLinkId),
+}
+
+/// Names why an attach was refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TraceDenial {
+    Permission,
+    SelfTrace,
+    NoParent,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TraceError {
     Capacity,
-    Denied,
-    InvalidLink,
-    InvalidProcess,
-    AlreadyTraced,
-    NotStopped,
-    AlreadyStopped,
-    WrongTracer,
+    Denied(TraceDenial),
+    InvalidLink(LinkFault),
+    InvalidProcess(TraceSubject),
+    AlreadyTraced(ProcessId),
+    NotStopped(TraceLinkId),
+    AlreadyStopped(TraceLinkId),
+    WrongTracer { expected: ProcessId, actual: ProcessId },
     InvalidSnapshot,
 }
 
@@ -131,14 +155,14 @@ impl Registry {
         pending_attach: bool,
     ) -> Result<TraceLinkId, TraceError> {
         if permission == TracePermission::Denied {
-            return Err(TraceError::Denied);
+            return Err(TraceError::Denied(TraceDenial::Permission));
         }
         if tracer == tracee {
-            return Err(TraceError::Denied);
+            return Err(TraceError::Denied(TraceDenial::SelfTrace));
         }
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.tracees.contains_key(&tracee) {
-            return Err(TraceError::AlreadyTraced);
+            return Err(TraceError::AlreadyTraced(tracee));
         }
         let (index, slot) = state
             .slots
@@ -164,20 +188,26 @@ impl Registry {
     }
 
     fn link_mut(state: &mut State, id: TraceLinkId) -> Result<&mut Link, TraceError> {
-        let slot = state.slots.get_mut(id.slot as usize).ok_or(TraceError::InvalidLink)?;
+        let slot = state
+            .slots
+            .get_mut(id.slot as usize)
+            .ok_or(TraceError::InvalidLink(LinkFault::Stale(id)))?;
         if slot.generation != id.generation {
-            return Err(TraceError::InvalidLink);
+            return Err(TraceError::InvalidLink(LinkFault::Stale(id)));
         }
-        slot.link.as_mut().ok_or(TraceError::InvalidLink)
+        slot.link.as_mut().ok_or(TraceError::InvalidLink(LinkFault::Stale(id)))
     }
 
     pub(crate) fn stop(&self, tracee: ProcessId, stop: TraceStop) -> Result<TraceEvent, TraceError> {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let id = *state.tracees.get(&tracee).ok_or(TraceError::InvalidLink)?;
+        let id = *state
+            .tracees
+            .get(&tracee)
+            .ok_or(TraceError::InvalidLink(LinkFault::Untraced(tracee)))?;
         let tracer = {
             let link = Self::link_mut(&mut state, id)?;
             if link.stopped.is_some() {
-                return Err(TraceError::AlreadyStopped);
+                return Err(TraceError::AlreadyStopped(id));
             }
             link.stopped = Some(stop);
             link.reported = false;
@@ -222,11 +252,14 @@ impl Registry {
             event.tracer == tracer && event.link == selected.link && event.sequence == selected.sequence
         });
         let Some(position) = position else {
-            return Err(TraceError::InvalidLink);
+            return Err(TraceError::InvalidLink(LinkFault::Unqueued(selected.link)));
         };
-        let queued = state.events.remove(position).ok_or(TraceError::InvalidLink)?;
+        let queued = state
+            .events
+            .remove(position)
+            .ok_or(TraceError::InvalidLink(LinkFault::Unqueued(selected.link)))?;
         if queued != selected {
-            return Err(TraceError::InvalidLink);
+            return Err(TraceError::InvalidLink(LinkFault::Unqueued(selected.link)));
         }
         Self::link_mut(&mut state, selected.link)?.reported = true;
         Ok(())
@@ -239,13 +272,19 @@ impl Registry {
         require_stop: bool,
     ) -> Result<TraceLinkId, TraceError> {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let id = *state.tracees.get(&tracee).ok_or(TraceError::InvalidLink)?;
+        let id = *state
+            .tracees
+            .get(&tracee)
+            .ok_or(TraceError::InvalidLink(LinkFault::Untraced(tracee)))?;
         let link = Self::link_mut(&mut state, id)?;
         if link.tracer != tracer {
-            return Err(TraceError::WrongTracer);
+            return Err(TraceError::WrongTracer {
+                expected: link.tracer,
+                actual: tracer,
+            });
         }
         if require_stop && link.stopped.is_none() {
-            return Err(TraceError::NotStopped);
+            return Err(TraceError::NotStopped(id));
         }
         Ok(id)
     }
@@ -255,10 +294,13 @@ impl Registry {
         let tracee = {
             let link = Self::link_mut(&mut state, id)?;
             if link.tracer != tracer {
-                return Err(TraceError::WrongTracer);
+                return Err(TraceError::WrongTracer {
+                    expected: link.tracer,
+                    actual: tracer,
+                });
             }
             if link.stopped.is_none() || !link.reported {
-                return Err(TraceError::NotStopped);
+                return Err(TraceError::NotStopped(id));
             }
             link.stopped = None;
             link.reported = false;
@@ -277,7 +319,10 @@ impl Registry {
     pub(crate) fn syscall_stop(&self, tracee: ProcessId, exit: bool) -> Result<Option<TraceEvent>, TraceError> {
         let stop = {
             let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let id = *state.tracees.get(&tracee).ok_or(TraceError::InvalidLink)?;
+            let id = *state
+                .tracees
+                .get(&tracee)
+                .ok_or(TraceError::InvalidLink(LinkFault::Untraced(tracee)))?;
             let link = Self::link_mut(&mut state, id)?;
             if link.pending_attach {
                 link.pending_attach = false;
@@ -302,7 +347,7 @@ impl Registry {
                 return Ok(command);
             }
             if state.tracees.get(&tracee) != Some(&id) {
-                return Err(TraceError::InvalidLink);
+                return Err(TraceError::InvalidLink(LinkFault::Untraced(tracee)));
             }
             state = match self.ready.wait(state) {
                 Ok(state) => state,
@@ -317,7 +362,7 @@ impl Registry {
             return Ok(Some(command));
         }
         if state.tracees.get(&tracee) != Some(&id) {
-            return Err(TraceError::InvalidLink);
+            return Err(TraceError::InvalidLink(LinkFault::Untraced(tracee)));
         }
         Ok(None)
     }
@@ -325,9 +370,12 @@ impl Registry {
     fn remove(state: &mut State, id: TraceLinkId, tracee: ProcessId) -> Result<(), TraceError> {
         state.tracees.remove(&tracee);
         state.events.retain(|event| event.link != id);
-        let slot = state.slots.get_mut(id.slot as usize).ok_or(TraceError::InvalidLink)?;
+        let slot = state
+            .slots
+            .get_mut(id.slot as usize)
+            .ok_or(TraceError::InvalidLink(LinkFault::Stale(id)))?;
         if slot.generation != id.generation {
-            return Err(TraceError::InvalidLink);
+            return Err(TraceError::InvalidLink(LinkFault::Stale(id)));
         }
         slot.link = None;
         Ok(())
@@ -452,8 +500,8 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     use crate::{
-        ExitStatus, ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry, TraceError, TracePermission,
-        TraceResume, TraceStop, TraceWait,
+        ExitStatus, LinkFault, ProcessCredentials, ProcessLimits, RegistryConfig, TaskRegistry, TraceDenial,
+        TraceError, TracePermission, TraceResume, TraceStop, TraceWait,
     };
 
     fn family() -> (TaskRegistry, crate::ProcessId, crate::ProcessId, crate::ProcessId) {
@@ -492,7 +540,7 @@ mod tests {
         );
         assert_eq!(
             registry.trace_stop(tracee, TraceStop::Group(19)),
-            Err(TraceError::InvalidLink)
+            Err(TraceError::InvalidLink(LinkFault::Untraced(tracee)))
         );
     }
 
@@ -501,23 +549,35 @@ mod tests {
         let (registry, tracer, tracee, other) = family();
         assert_eq!(
             registry.trace_attach(tracer, tracee, TracePermission::Denied),
-            Err(TraceError::Denied),
+            Err(TraceError::Denied(TraceDenial::Permission)),
         );
         let link = registry.trace_attach(tracer, tracee, TracePermission::Granted).unwrap();
         assert_eq!(registry.trace_link(tracer, tracee, false), Ok(link));
-        assert_eq!(registry.trace_link(tracer, tracee, true), Err(TraceError::NotStopped));
+        assert_eq!(
+            registry.trace_link(tracer, tracee, true),
+            Err(TraceError::NotStopped(link))
+        );
         assert_eq!(
             registry.trace_attach(other, tracee, TracePermission::Granted),
-            Err(TraceError::AlreadyTraced),
+            Err(TraceError::AlreadyTraced(tracee)),
         );
         registry.trace_stop(tracee, TraceStop::Signal(5)).unwrap();
         assert_eq!(registry.trace_link(tracer, tracee, true), Ok(link));
-        assert_eq!(registry.trace_link(other, tracee, true), Err(TraceError::WrongTracer));
+        assert_eq!(
+            registry.trace_link(other, tracee, true),
+            Err(TraceError::WrongTracer {
+                expected: tracer,
+                actual: other
+            })
+        );
         assert_eq!(registry.trace_wait(other, None), Ok(TraceWait::WouldBlock));
         assert!(matches!(registry.trace_wait(tracer, None), Ok(TraceWait::Event(_))));
         assert_eq!(
             registry.trace_resume(other, link, TraceResume::Continue(None)),
-            Err(TraceError::WrongTracer),
+            Err(TraceError::WrongTracer {
+                expected: tracer,
+                actual: other
+            }),
         );
     }
 
@@ -534,7 +594,7 @@ mod tests {
         registry.exit_process(tracee, ExitStatus::Code(0)).unwrap();
         assert_eq!(
             registry.trace_stop(tracee, TraceStop::Signal(5)),
-            Err(TraceError::InvalidLink)
+            Err(TraceError::InvalidLink(LinkFault::Untraced(tracee)))
         );
         assert!(registry.trace_image().links.is_empty());
     }
