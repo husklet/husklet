@@ -79,6 +79,21 @@ pub trait MemoryAccessHost: Host {
         }
         Ok(())
     }
+    /// Compare-exchanges an already validated, naturally aligned one-, two-,
+    /// four-, or eight-byte word with a single host atomic instruction. Native
+    /// execution runs guest atomics directly on this same storage, so a
+    /// coordinator read-modify-write serialized only against other coordinator
+    /// callers silently loses those updates. Returns `None` when the host
+    /// cannot address the range directly, leaving the caller its serialized
+    /// fallback.
+    fn compare_exchange_atomic(
+        &self,
+        _range: AddressRange,
+        _expected: u64,
+        _replacement: u64,
+    ) -> Result<Option<u64>, MemoryError> {
+        Ok(None)
+    }
     /// Finalizes a write performed directly into the reserved host mapping.
     ///
     /// Implementations must only accept a prefix of the range supplied to

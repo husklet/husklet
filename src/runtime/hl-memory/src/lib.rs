@@ -60,6 +60,8 @@ pub use shared_model::{
 pub use test_host::TestMappingHost;
 
 #[cfg(test)]
+mod atomic_access_test;
+#[cfg(test)]
 mod batch_test;
 #[cfg(test)]
 mod checkpoint_test;
