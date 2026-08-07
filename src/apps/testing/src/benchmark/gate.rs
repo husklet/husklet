@@ -143,6 +143,7 @@ pub(crate) struct Provenance {
     build_id: String,
     revision: String,
     rust_sha256: String,
+    host_load: String,
 }
 
 impl Provenance {
@@ -152,10 +153,45 @@ impl Provenance {
 
     fn print(&self, workload: &str, cpu: usize, repeats: usize) {
         println!(
-            "provenance\tworkload={workload}\trust_revision={}\trust_sha256={}\tc_build_id={}\tcpu={cpu}\trepeats={repeats}",
-            self.revision, self.rust_sha256, self.build_id
+            "provenance\tworkload={workload}\trust_revision={}\trust_sha256={}\tc_build_id={}\tcpu={cpu}\trepeats={repeats}\thost_load={}",
+            self.revision, self.rust_sha256, self.build_id, self.host_load
         );
     }
+}
+
+/// The `hl-engine` binary is produced by the `engine` package, so `cargo build -p hl-engine`
+/// builds only the library and leaves whatever binary a previous or foreign build left behind.
+pub(crate) const ENGINE_BUILD: [&str; 7] = ["build", "--release", "--locked", "-p", "engine", "--bin", "hl-engine"];
+
+/// Builds the engine binary and reports where cargo put it, so the gate measures this tree's
+/// binary instead of trusting a path another lane may have written.
+fn build_engine() -> Result<PathBuf, String> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let output = std::process::Command::new(cargo)
+        .args(ENGINE_BUILD)
+        .arg("--message-format=json-render-diagnostics")
+        .output()
+        .map_err(|error| format!("build the engine binary: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo {} failed:\n{}",
+            ENGINE_BUILD.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    artifact(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| format!("cargo {} produced no hl-engine executable", ENGINE_BUILD.join(" ")))
+}
+
+/// Extracts the `hl-engine` executable path from a cargo JSON artifact stream.
+fn artifact(stream: &str) -> Option<PathBuf> {
+    stream
+        .lines()
+        .filter_map(|line| line.split("\"executable\":\"").nth(1))
+        .filter_map(|tail| tail.split('"').next())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .find(|path| path.file_name().is_some_and(|name| name == "hl-engine"))
 }
 
 /// The source revision the Rust engine under test was built from.
@@ -225,8 +261,9 @@ pub(crate) fn missing(guest: &Path, rust_engine: &Path, c_engine: &Path, runner:
     }
     if !rust_engine.is_file() {
         missing.push(format!(
-            "rust engine {} is missing: cargo build --release -p engine --bins --locked",
-            rust_engine.display()
+            "rust engine {} is missing: cargo {}",
+            rust_engine.display(),
+            ENGINE_BUILD.join(" ")
         ));
     }
     if !c_engine.is_file() {
@@ -252,6 +289,8 @@ pub(crate) fn wiring(root: &Path, isa: Isa) -> (PathBuf, PathBuf) {
 
 impl Gate {
     pub(super) fn execute(self, process: &super::adapter::Process) -> Result<(), String> {
+        // Before the repin, so a cold engine build does not run on the single pinned CPU.
+        build_engine()?;
         if let Some(status) = self.repin()? {
             std::process::exit(status);
         }
@@ -276,14 +315,24 @@ impl Gate {
                 self.isa.public()
             );
         }
+        let built = build_engine()?;
         let missing = missing(&self.binary, &self.rust_engine, &engine, &runner, self.isa.public());
         if !missing.is_empty() {
             return Err(format!("gate prerequisites are not built:\n  {}", missing.join("\n  ")));
         }
+        let rust_sha256 = super::file_identity(&self.rust_engine)?;
+        if rust_sha256 != super::file_identity(&built)? {
+            return Err(format!(
+                "--rust-engine {} is not the binary this tree builds ({}); it is stale or from another lane",
+                self.rust_engine.display(),
+                built.display()
+            ));
+        }
         let provenance = Provenance {
             build_id: super::matrix::build_identity(&engine)?,
             revision: revision(),
-            rust_sha256: super::file_identity(&self.rust_engine)?,
+            rust_sha256,
+            host_load: crate::runtime::load::sample(),
         };
         let (cpu, _) = pinning(&super::host_affinity(), self.cpu)?;
         provenance.print(self.workload.name(), cpu, self.repeats);
@@ -437,6 +486,12 @@ impl Gate {
             baseline.revision.as_deref().unwrap_or("none"),
             provenance.revision
         );
+        if crate::runtime::load::saturated(&provenance.host_load) {
+            println!(
+                "verdict\tsuspect\thost_load={} is too contended to compare timings against",
+                provenance.host_load
+            );
+        }
         if regressed.is_empty() {
             println!("verdict\tpass\t{} phases within {:.3}", rust.len(), self.tolerance);
             Ok(())
@@ -499,14 +554,33 @@ fn collect(paths: &[PathBuf]) -> Result<Series, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Baseline, Isa, Provenance, Statistics, collect, pinning, revision, wiring};
+    use super::{Baseline, ENGINE_BUILD, Isa, Provenance, Statistics, artifact, collect, pinning, revision, wiring};
 
     fn provenance() -> Provenance {
         Provenance {
             build_id: "abc".into(),
             revision: "0123456789ab".into(),
             rust_sha256: "feed".into(),
+            host_load: "0.10/8".into(),
         }
+    }
+
+    #[test]
+    fn the_engine_binary_is_built_from_its_own_package_not_the_library() {
+        let package = ENGINE_BUILD.iter().position(|argument| *argument == "-p").unwrap() + 1;
+        assert_eq!(ENGINE_BUILD[package], "engine");
+        assert_eq!(ENGINE_BUILD[ENGINE_BUILD.len() - 2..], ["--bin", "hl-engine"]);
+    }
+
+    #[test]
+    fn the_artifact_stream_yields_only_the_engine_executable() {
+        let stream = concat!(
+            "{\"reason\":\"compiler-artifact\",\"executable\":null}\n",
+            "{\"reason\":\"compiler-artifact\",\"executable\":\"/t/release/hl-aarch64\"}\n",
+            "{\"reason\":\"compiler-artifact\",\"executable\":\"/t/release/hl-engine\"}\n",
+        );
+        assert_eq!(artifact(stream), Some(std::path::PathBuf::from("/t/release/hl-engine")));
+        assert_eq!(artifact("{\"reason\":\"build-finished\"}\n"), None);
     }
 
     #[test]
@@ -545,7 +619,7 @@ mod tests {
         let missing = super::missing(absent, absent, absent, absent, "amd64");
         assert_eq!(missing.len(), 4);
         assert!(missing[0].contains("make bench-guest BENCH_ARCH=amd64"));
-        assert!(missing[1].contains("cargo build --release -p engine"));
+        assert!(missing[1].contains("cargo build --release --locked -p engine --bin hl-engine"));
     }
 
     #[test]
