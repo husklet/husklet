@@ -234,6 +234,29 @@ impl Domain {
         ))
     }
 
+    /// Checkpoints and publishes the outcome; `None` asks the caller to wait for another stop signal.
+    async fn stop_checkpoint(
+        containers: &hl_container::Containers,
+        docker: Option<&crate::runtime::resources::Daemon>,
+        close_result: &ResultFile,
+    ) -> Option<io::Result<()>> {
+        let workspace = Runtime::checkpoint(containers, docker).await;
+        if let Err(error) = close_result.publish(&workspace) {
+            return Some(Err(error));
+        }
+        if workspace.is_err() {
+            return None;
+        }
+        Some(workspace)
+    }
+
+    /// Publishes the shutdown outcome, leaving it unset when the lock is poisoned.
+    fn record_cleanup(completed: &std::sync::Mutex<Option<io::Result<()>>>, outcome: io::Result<()>) {
+        if let Ok(mut result) = completed.lock() {
+            *result = Some(outcome);
+        }
+    }
+
     pub async fn serve(workspace: &WorkspaceConfig) -> io::Result<()> {
         let owner = Self::new(workspace);
         tokio::fs::create_dir_all(&owner.directory).await?;
@@ -289,22 +312,14 @@ impl Domain {
                             docker.and_then(|()| workspace.map_err(io::Error::other))
                         }
                         Disposition::Checkpoint => {
-                            let workspace = Runtime::checkpoint(&stopping, docker.as_ref()).await;
-                            if let Err(error) = close_result.publish(&workspace) {
-                                if let Ok(mut result) = completed.lock() {
-                                    *result = Some(Err(error));
-                                }
-                                break;
-                            }
-                            if workspace.is_err() {
+                            let Some(stopped) = Self::stop_checkpoint(&stopping, docker.as_ref(), &close_result).await
+                            else {
                                 continue;
-                            }
-                            workspace
+                            };
+                            stopped
                         }
                     };
-                    if let Ok(mut result) = completed.lock() {
-                        *result = Some(stopped);
-                    }
+                    Self::record_cleanup(&completed, stopped);
                     break;
                 }
             })

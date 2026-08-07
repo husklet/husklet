@@ -33,19 +33,18 @@ impl Peer {
         let process = self.process;
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            match reconnect() {
+            let connection = match reconnect() {
                 Err(error) if Self::offline(&error) => return Ok(()),
                 Err(error) => return Err(error),
-                Ok(connection) => {
-                    let peer = Self::new(connection)?;
-                    if peer.process != process {
-                        return Ok(());
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        peer.signal(libc::SIGKILL)?;
-                        return Self::wait_offline(reconnect, std::time::Duration::from_secs(2));
-                    }
-                }
+                Ok(connection) => connection,
+            };
+            let peer = Self::new(connection)?;
+            if peer.process != process {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                peer.signal(libc::SIGKILL)?;
+                return Self::wait_offline(reconnect, std::time::Duration::from_secs(2));
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }

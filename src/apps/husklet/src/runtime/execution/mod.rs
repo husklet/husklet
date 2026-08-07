@@ -178,10 +178,13 @@ pub fn launch(
     let lifecycle_tx = output_tx.clone();
     let exited = std::sync::Arc::new(std::sync::Mutex::new(None));
     runtime.spawn(async move {
-        while let Ok(Some(entry)) = stream.next().await {
-            if output_tx.send(entry.into_bytes().to_vec()).is_err() {
-                return;
-            }
+        // Stop forwarding as soon as the stream ends or the reader hangs up.
+        let mut open = true;
+        while open {
+            let Ok(Some(entry)) = stream.next().await else {
+                break;
+            };
+            open = output_tx.send(entry.into_bytes().to_vec()).is_ok();
         }
     });
     let waiting = client.clone();
@@ -189,23 +192,22 @@ pub fn launch(
     let waiting_pane = pane.clone();
     let exit = std::sync::Arc::clone(&exited);
     runtime.spawn(async move {
-        match waiting.executions().wait(&waiting_id).await {
-            Ok(status) => {
-                let code = i32::try_from(status.status_code).unwrap_or(70);
-                if let Err(error) = waiting.executions().remove(&waiting_id).await {
-                    let _ =
-                        lifecycle_tx.send(format!("\r\nworkspace execution cleanup failed: {error}\r\n").into_bytes());
-                }
-                if let Some(pane) = waiting_pane {
-                    let _ = pane.clear(&waiting_id);
-                }
-                *exit.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(code);
-            }
+        let status = match waiting.executions().wait(&waiting_id).await {
+            Ok(status) => status,
             Err(error) => {
                 let _ = lifecycle_tx.send(format!("\r\nworkspace execution wait failed: {error}\r\n").into_bytes());
                 *exit.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(70);
+                return;
             }
+        };
+        let code = i32::try_from(status.status_code).unwrap_or(70);
+        if let Err(error) = waiting.executions().remove(&waiting_id).await {
+            let _ = lifecycle_tx.send(format!("\r\nworkspace execution cleanup failed: {error}\r\n").into_bytes());
         }
+        if let Some(pane) = waiting_pane {
+            let _ = pane.clear(&waiting_id);
+        }
+        *exit.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(code);
     });
 
     Ok(Box::new(ExecPty {
