@@ -241,15 +241,41 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
     }
 
     pub(crate) fn invalidate_exclusive(&self, range: AddressRange) -> Result<(), MemoryError> {
+        // Native exits invalidate whole projections, so resolve once per region
+        // rather than once per granule.
         let mut address = range.start().get();
         while address < range.end().get() {
-            let (epochs, coordinate) = self.exclusive_key(GuestAddress::new(address))?;
-            epochs.invalidate_at(coordinate);
-            let next = (address | (RESERVATION_GRANULE - 1)).saturating_add(1);
-            if next <= address {
-                break;
+            let resolution = self
+                .ledger
+                .resolve(GuestAddress::new(address), Protection::NONE)
+                .ok_or(MemoryError::NoAddressSpace)?;
+            let backing = resolution.region.backing();
+            let region_end = resolution.region.range().end().get().min(range.end().get());
+            let base = address;
+            let mut epochs = None;
+            while address < region_end {
+                let coordinate = ReservationCoordinate::from_mapping(
+                    backing,
+                    resolution.backing_offset + (address - base),
+                    address,
+                )?;
+                let table = epochs.get_or_insert_with(|| {
+                    if coordinate.shared() {
+                        self.shared.as_ref().map_or_else(
+                            || std::sync::Arc::clone(&self.host.reservations),
+                            |store| store.reservation_epochs(),
+                        )
+                    } else {
+                        std::sync::Arc::clone(&self.host.reservations)
+                    }
+                });
+                table.invalidate_at(coordinate);
+                let next = (address | (RESERVATION_GRANULE - 1)).saturating_add(1);
+                if next <= address {
+                    return Ok(());
+                }
+                address = next.min(region_end);
             }
-            address = next.min(range.end().get());
         }
         Ok(())
     }

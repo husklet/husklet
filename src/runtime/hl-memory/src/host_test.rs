@@ -587,6 +587,30 @@ fn projection_bounded_span() {
     );
 }
 
+/// The native operand resolver passes an unbounded span so one view covers a
+/// whole mapping; the clamp must still stop at the resolved region.
+#[test]
+fn projection_unbounded_span_stops_at_region() {
+    let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));
+    coordinator.map(request()).unwrap();
+    let mut mapped = request();
+    mapped.placement = Placement::Fixed(GuestAddress::new(0x3000));
+    mapped.length = 0x4000;
+    mapped.backing = Backing::Anonymous {
+        identity: 72,
+        shared: false,
+    };
+    coordinator.map(mapped).unwrap();
+    let mut lease = coordinator
+        .project_contiguous(GuestAddress::new(0x1000), 8, Protection::READ, 1)
+        .unwrap();
+    let view = lease
+        .project_bounded(GuestAddress::new(0x5180), 8, Protection::READ, u64::MAX)
+        .unwrap();
+    assert_eq!(view.range.start(), GuestAddress::new(0x3000));
+    assert_eq!(view.range.end(), GuestAddress::new(0x7000));
+}
+
 #[test]
 fn projection_rollback_epoch() {
     let coordinator = MappingCoordinator::new(FakeHost::failing(usize::MAX));

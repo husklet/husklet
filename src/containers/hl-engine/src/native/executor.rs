@@ -956,7 +956,9 @@ unsafe extern "C" fn resolve_operand<H: MemoryAccessHost>(
     let Some(required) = Protection::from_bits(u8::try_from(access).ok().unwrap_or(u8::MAX)) else {
         return 0;
     };
-    const OPERAND_SPAN: u64 = 1 << 20;
+    /// `project_bounded` clamps to the resolved region, so an unbounded span
+    /// projects the whole containing mapping in one view.
+    const OPERAND_SPAN: u64 = u64::MAX;
     let projection = provider
         .lease
         .project_bounded(hl_isa::GuestAddress::new(address), size, required, OPERAND_SPAN);
@@ -2232,7 +2234,7 @@ impl Executor {
         };
         let primary_range = (primary.guest_first, primary.guest_last);
         let mut views = vec![primary];
-        const OPERAND_SPAN: u64 = 1 << 20;
+        const OPERAND_SPAN: u64 = u64::MAX;
         let mut live_hints = Vec::new();
         let mut warm_write = None;
         for (address, required) in hints {
@@ -2612,7 +2614,7 @@ impl Executor {
         };
         let primary_range = (primary.guest_first, primary.guest_last);
         let mut views = vec![primary];
-        const OPERAND_SPAN: u64 = 1 << 20;
+        const OPERAND_SPAN: u64 = u64::MAX;
         for (address, required) in hints {
             let Ok(view) = lease.project_bounded(hl_isa::GuestAddress::new(address), 1, required, OPERAND_SPAN) else {
                 continue;
