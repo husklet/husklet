@@ -13,12 +13,16 @@ struct Row {
     checksum: u64,
     wall: u64,
     execution: String,
+    diagnostics: String,
+    context: String,
 }
 
 struct Columns {
     count: usize,
     wall: Option<usize>,
     execution: Option<usize>,
+    diagnostics: Option<usize>,
+    context: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -87,6 +91,8 @@ impl Columns {
             count: columns.len(),
             wall: columns.iter().position(|column| *column == "wall_us"),
             execution: columns.iter().position(|column| *column == "execution"),
+            diagnostics: columns.iter().position(|column| *column == "diagnostics"),
+            context: columns.iter().position(|column| *column == "phase_context"),
         }
     }
 
@@ -101,8 +107,8 @@ impl Columns {
             .map_err(|_| "invalid wall time".to_string())
     }
 
-    fn execution(&self, fields: &[&str]) -> String {
-        self.execution
+    fn named(index: Option<usize>, fields: &[&str]) -> String {
+        index
             .and_then(|index| fields.get(index))
             .map_or_else(|| "unspecified".into(), |value| (*value).into())
     }
@@ -121,7 +127,9 @@ impl Row {
             time: fields[3].parse().map_err(|_| "invalid time".to_string())?,
             checksum: fields[4].parse().map_err(|_| "invalid checksum".to_string())?,
             wall: columns.wall(&fields)?,
-            execution: columns.execution(&fields),
+            execution: Columns::named(columns.execution, &fields),
+            diagnostics: Columns::named(columns.diagnostics, &fields),
+            context: Columns::named(columns.context, &fields),
         })
     }
 }
@@ -160,7 +168,7 @@ impl Output {
 
     fn header(&self) {
         println!(
-            "provider,arch,phase,execution,us,wall_us,x_{},wall_x_{},checksum",
+            "provider,arch,phase,execution,diagnostics,phase_context,us,wall_us,x_{},wall_x_{},checksum",
             self.baseline, self.baseline
         );
     }
@@ -178,8 +186,18 @@ impl Output {
             return Err(format!("checksum divergence: {}/{}", row.arch, row.phase));
         }
         println!(
-            "{},{},{},{},{},{},{},{},{}",
-            row.provider, row.arch, row.phase, row.execution, row.time, row.wall, ratio, wall_ratio, row.checksum
+            "{},{},{},{},{},{},{},{},{},{},{}",
+            row.provider,
+            row.arch,
+            row.phase,
+            row.execution,
+            row.diagnostics,
+            row.context,
+            row.time,
+            row.wall,
+            ratio,
+            wall_ratio,
+            row.checksum
         );
         Ok(())
     }
@@ -205,6 +223,8 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].wall, 12);
         assert_eq!(parsed[0].execution, "jit");
+        assert_eq!(parsed[0].diagnostics, "unspecified");
+        assert_eq!(parsed[0].context, "unspecified");
     }
 
     #[test]

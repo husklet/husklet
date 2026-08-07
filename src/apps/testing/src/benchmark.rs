@@ -63,7 +63,7 @@ impl Provider {
     }
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 pub(crate) struct Run {
     #[arg(long, value_enum)]
     provider: Provider,
@@ -231,7 +231,7 @@ impl Application {
 }
 
 impl Run {
-    fn validate(mut self) -> Result<Self, String> {
+    fn validate(self) -> Result<Self, String> {
         if self.repeats == 0 || self.repeats > LIMIT {
             return Err(format!("repeats must be between 1 and {LIMIT}"));
         }
@@ -260,20 +260,34 @@ impl Run {
         if self.provider != Provider::Rust && !self.engine_options.is_empty() {
             return Err("--engine-option is supported only by rust-engine".into());
         }
-        let native = self
-            .engine_options
+        // The engine reads these only from --engine-option, so accepting them as
+        // guest environment would apply nothing while looking like it did.
+        if let Some((name, _)) = self
+            .environment
             .iter()
-            .any(|(name, value)| name == "HL_NATIVE_EXECUTION" && value == "1");
-        if native
-            && !self.diagnostics_proven
-            && !self
-                .engine_options
-                .iter()
-                .any(|(name, value)| name == "HL_NATIVE_DIAGNOSTICS" && value == "1")
+            .find(|(name, _)| name.starts_with("HL_NATIVE_"))
         {
-            self.engine_options.push(("HL_NATIVE_DIAGNOSTICS".into(), "1".into()));
+            return Err(format!("{name} is honoured only as --engine-option, not --env"));
         }
         Ok(self)
+    }
+
+    /// A native timing row must be proven native, but proving it turns on
+    /// per-boundary capture, so the proof runs as its own throwaway sample.
+    fn diagnostics_probe(&self) -> Option<Self> {
+        if !self.native_requested() || self.diagnostics_proven || self.native_diagnostics_requested() {
+            return None;
+        }
+        let mut probe = self.clone();
+        probe.engine_options.push(("HL_NATIVE_DIAGNOSTICS".into(), "1".into()));
+        probe.diagnostics_proven = true;
+        probe.repeats = 1;
+        probe.output = None;
+        Some(probe)
+    }
+
+    fn diagnostics_mode(&self) -> &'static str {
+        if self.native_diagnostics_requested() { "on" } else { "off" }
     }
 
     fn native_requested(&self) -> bool {
@@ -315,6 +329,10 @@ impl Run {
             .map_err(|error| format!("runner executable: {error}"))
             .and_then(|path| file_identity(&path))?;
         let options_identity = self.options_identity();
+        if let Some(probe) = self.diagnostics_probe() {
+            process.sample(&probe)?;
+            eprintln!("diagnostic native-proof=ok diagnostics=off-for-timed-samples");
+        }
         let mut phases: BTreeMap<String, Summary> = BTreeMap::new();
         let mut walls = Vec::with_capacity(self.repeats);
         for repetition in 0..self.repeats {
@@ -370,16 +388,22 @@ impl Run {
             }
             None => Box::new(io::stdout()),
         };
-        writeln!(writer, "env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution,guest_sha256,engine_sha256,runner_sha256,options_sha256,cpu_affinity")
+        writeln!(writer, "env,arch,phase,us,ok,us_min,us_max,repeats,wall_us,execution,diagnostics,phase_context,guest_sha256,engine_sha256,runner_sha256,options_sha256,cpu_affinity")
             .map_err(|error| error.to_string())?;
         let wall = Summary::median(&mut walls);
+        // A phase run alone in its process is cold; one run mid-sequence inherits
+        // translations and suppression state, so the two are not comparable.
+        let context = match phases.len() {
+            1 => "isolated".to_owned(),
+            count => format!("sequence-of-{count}"),
+        };
         for (name, mut phase) in phases {
             let minimum = *phase.times.iter().min().expect("nonempty phase");
             let maximum = *phase.times.iter().max().expect("nonempty phase");
             let time = Summary::median(&mut phase.times);
             writeln!(
                 writer,
-                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 self.provider.name(),
                 self.isa.public(),
                 name,
@@ -390,6 +414,8 @@ impl Run {
                 self.repeats,
                 wall,
                 self.execution_mode(),
+                self.diagnostics_mode(),
+                context,
                 guest_identity,
                 engine_identity,
                 runner_identity,
@@ -407,6 +433,7 @@ impl Run {
             self.provider.name(),
             self.isa.public(),
             self.execution_mode(),
+            self.diagnostics_mode(),
             &self.repeats.to_string(),
             &self.timeout.as_nanos().to_string(),
         ] {
@@ -597,14 +624,19 @@ mod test {
         .validate()
         .unwrap();
         assert!(run.native_requested());
-        assert!(run.native_diagnostics_requested());
+        assert!(!run.native_diagnostics_requested());
         assert_eq!(run.execution_mode(), "native-verified");
+        assert_eq!(run.diagnostics_mode(), "off");
         assert!(
-            run.engine_options
+            !run.engine_options
                 .iter()
-                .any(|(name, value)| name == "HL_NATIVE_DIAGNOSTICS" && value == "1")
+                .any(|(name, _)| name == "HL_NATIVE_DIAGNOSTICS")
         );
-        let command = adapter::Process::new(None).command(&run).unwrap();
+        let probe = run.diagnostics_probe().expect("native run proves itself");
+        assert!(probe.native_diagnostics_requested());
+        assert_eq!(probe.repeats, 1);
+        assert!(probe.diagnostics_probe().is_none());
+        let command = adapter::Process::new(None).command(&probe).unwrap();
         let arguments = command
             .get_args()
             .map(|value| value.to_string_lossy().into_owned())
@@ -618,6 +650,16 @@ mod test {
             arguments
                 .windows(2)
                 .any(|pair| { pair == ["--engine-option", "HL_NATIVE_DIAGNOSTICS=1"] })
+        );
+    }
+
+    #[test]
+    fn native_settings_are_rejected_where_they_would_not_apply() {
+        let mut run = command_run(Provider::Rust, "/bin/sh".into(), Some("/bin/sh".into()));
+        run.environment = vec![("HL_NATIVE_EXECUTION".into(), "1".into())];
+        assert_eq!(
+            run.validate().unwrap_err(),
+            "HL_NATIVE_EXECUTION is honoured only as --engine-option, not --env"
         );
     }
 

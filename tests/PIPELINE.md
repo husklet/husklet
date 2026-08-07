@@ -417,6 +417,25 @@ repeat requests over a pipe or socket. This measures repeated payload execution;
 provider, container, process, and image startup remain separately reported. A
 benchmark's persistent state must never be reused as compatibility evidence.
 
+The harness never silently changes what it measures. `HL_NATIVE_DIAGNOSTICS=1`
+enables per-boundary capture, which dominates runtime and can invert phase
+rankings, so it is never added to a timed run. A native row proves itself with
+one separate diagnostics-on probe and then takes its samples with diagnostics
+off; a run that cannot prove nativeness fails instead of reporting. `HL_NATIVE_*`
+settings are honoured only as `--engine-option`, and passing one as `--env` is
+rejected rather than ignored.
+
+Every row states what it measured. `diagnostics` is `on` or `off`, and
+`phase_context` is `isolated` for a phase that ran alone in its process or
+`sequence-of-N` for one measured after N-1 others. The two are not comparable: a
+phase run mid-sequence inherits translations, suppression state and IBTC
+contents, so isolated numbers can understate cost. Compare only rows whose
+`diagnostics` and `phase_context` agree.
+
+Rebuilding the native engine for a benchmark needs the release profile.
+`cargo clean -p hl-native` only removes debug artifacts and rebuilds nothing the
+benchmark uses; use `cargo clean --release -p hl-native`.
+
 ## CI profiles
 
 Local and CI execution use the same binary:
