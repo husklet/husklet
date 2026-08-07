@@ -170,6 +170,72 @@ impl Memory {
         }
         Ok(())
     }
+    /// Compare-exchanges a naturally aligned one-, two-, four-, or eight-byte
+    /// word with a host atomic instruction, which is the only form of the
+    /// update native execution cannot lose while running a guest atomic of its
+    /// own on the same bytes.
+    pub(super) fn compare_exchange_untracked(
+        &self,
+        offset: u64,
+        width: u64,
+        expected: u64,
+        replacement: u64,
+    ) -> Result<u64, MemoryError> {
+        use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
+
+        if !matches!(width, 1 | 2 | 4 | 8) || !offset.is_multiple_of(width) {
+            return Err(MemoryError::InvalidRange);
+        }
+        let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.poisoned {
+            return Err(MemoryError::Poisoned);
+        }
+        state.mappings.access(offset, width, Protection::WRITE)?;
+        let (address, _) = self.host_range(offset, width)?;
+        // SAFETY: the ledger proves the aligned word writable, the arena mutex
+        // excludes mapping transitions, and the borrowed atomic reference lives
+        // only for this call. Native execution addresses the same storage, so
+        // the access must be one host atomic rather than a read then a write.
+        Ok(unsafe {
+            match width {
+                1 => {
+                    let word = &*address.cast::<AtomicU8>();
+                    let (expected, replacement) = (expected as u8, replacement as u8);
+                    u64::from(match word.compare_exchange(expected, replacement, Ordering::AcqRel, Ordering::Acquire) {
+                        Ok(previous) | Err(previous) => previous,
+                    })
+                }
+                2 => {
+                    let word = &*address.cast::<AtomicU16>();
+                    let (expected, replacement) = ((expected as u16).to_le(), (replacement as u16).to_le());
+                    u64::from(u16::from_le(
+                        match word.compare_exchange(expected, replacement, Ordering::AcqRel, Ordering::Acquire) {
+                            Ok(previous) | Err(previous) => previous,
+                        },
+                    ))
+                }
+                4 => {
+                    let word = &*address.cast::<AtomicU32>();
+                    let (expected, replacement) = ((expected as u32).to_le(), (replacement as u32).to_le());
+                    u64::from(u32::from_le(
+                        match word.compare_exchange(expected, replacement, Ordering::AcqRel, Ordering::Acquire) {
+                            Ok(previous) | Err(previous) => previous,
+                        },
+                    ))
+                }
+                _ => {
+                    let word = &*address.cast::<AtomicU64>();
+                    let (expected, replacement) = (expected.to_le(), replacement.to_le());
+                    u64::from_le(
+                        match word.compare_exchange(expected, replacement, Ordering::AcqRel, Ordering::Acquire) {
+                            Ok(previous) | Err(previous) => previous,
+                        },
+                    )
+                }
+            }
+        })
+    }
+
     pub(super) fn compare_write(&self, writes: &[AtomicU32Write]) -> Result<(), MemoryError> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.poisoned {

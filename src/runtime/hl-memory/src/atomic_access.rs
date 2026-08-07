@@ -159,11 +159,53 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
             .transaction
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let expected = Self::masked_value(expected, element_bytes, pair);
+        if let Some((range, resolution)) = self.host_atomic_site(address, element_bytes, pair) {
+            let replacement = Self::masked_value(replacement, element_bytes, pair);
+            if let Some(observed) = self.host.host.compare_exchange_atomic(range, expected.low, replacement.low)? {
+                if observed == expected.low {
+                    self.publish_atomic(range, resolution)?;
+                }
+                return Ok(AtomicValue { low: observed, high: 0 });
+            }
+        }
         let observed = self.read_atomic(address, element_bytes, pair)?;
-        if observed == Self::masked_value(expected, element_bytes, pair) {
+        if observed == expected {
             self.write_atomic(address, element_bytes, pair, replacement)?;
         }
         Ok(observed)
+    }
+
+    /// Resolves the site of a guest atomic that a single host atomic
+    /// instruction can perform in place, which is the only form of the update
+    /// native execution cannot lose while running a guest atomic of its own on
+    /// the same bytes. Anything else keeps the serialized fallback.
+    fn host_atomic_site(
+        &self,
+        address: GuestAddress,
+        element_bytes: u8,
+        pair: bool,
+    ) -> Option<(AddressRange, crate::Resolution)> {
+        if pair || !address.get().is_multiple_of(u64::from(element_bytes)) {
+            return None;
+        }
+        let range = self
+            .validate_atomic(address, element_bytes, pair, Protection::WRITE)
+            .ok()?;
+        let resolution = self.ledger.resolve(address, Protection::WRITE)?;
+        if matches!(resolution.region.backing(), Backing::Shared(_)) {
+            return None;
+        }
+        Some((range, resolution))
+    }
+
+    fn publish_atomic(&self, range: AddressRange, resolution: crate::Resolution) -> Result<(), MemoryError> {
+        self.invalidate_exclusive(range)?;
+        self.host
+            .executable
+            .publish(self.executable_write_ranges(range.start(), resolution, range.length()));
+        self.host.epoch.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 
     pub fn fetch_update(
@@ -179,6 +221,23 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
             .transaction
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A host compare-exchange retry loop is the atomic form of every
+        // operation here, including the maxima and minima the host has no
+        // dedicated primitive for.
+        if let Some((range, resolution)) = self.host_atomic_site(address, bytes, false) {
+            let mut observed = self.read_atomic(address, bytes, false)?.low;
+            loop {
+                let replacement = Self::updated(observed, operand, bytes, operation)?;
+                let Some(current) = self.host.host.compare_exchange_atomic(range, observed, replacement)? else {
+                    break;
+                };
+                if current == observed {
+                    self.publish_atomic(range, resolution)?;
+                    return Ok(observed);
+                }
+                observed = current;
+            }
+        }
         let observed = self.read_atomic(address, bytes, false)?.low;
         let replacement = Self::updated(observed, operand, bytes, operation)?;
         self.write_atomic(
@@ -244,12 +303,7 @@ impl<H: MemoryAccessHost> MappingCoordinator<H> {
             }
             return Err(error);
         }
-        self.invalidate_exclusive(range)?;
-        self.host
-            .executable
-            .publish(self.executable_write_ranges(range.start(), resolution, range.length()));
-        self.host.epoch.fetch_add(1, Ordering::AcqRel);
-        Ok(())
+        self.publish_atomic(range, resolution)
     }
 
     pub(crate) fn invalidate_exclusive(&self, range: AddressRange) -> Result<(), MemoryError> {

@@ -113,6 +113,25 @@ impl MemoryAccessHost for MappingHostAdapter {
             .map_err(|_| MemoryError::NoAddressSpace)
     }
 
+    fn compare_exchange_atomic(
+        &self,
+        range: AddressRange,
+        expected: u64,
+        replacement: u64,
+    ) -> Result<Option<u64>, MemoryError> {
+        // A sparse lease or a bus-fault hole is not directly addressable, so
+        // the coordinator keeps its serialized fallback for those.
+        if self.sparse.pin(range).map_err(Self::memory_error)?.is_some()
+            || self.arena.bus_fault(range.start().get(), range.length()).is_some()
+        {
+            return Ok(None);
+        }
+        self.arena
+            .compare_exchange_untracked(range.start().get(), range.length(), expected, replacement)
+            .map(Some)
+            .map_err(|_| MemoryError::NoAddressSpace)
+    }
+
     fn commit_external_write(&self, reservation: u64, length: u64) -> Result<(), MemoryError> {
         let range = self
             .writes
