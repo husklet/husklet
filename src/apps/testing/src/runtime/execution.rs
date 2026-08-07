@@ -46,6 +46,9 @@ pub(crate) async fn worker(options: WorkerOptions) -> Result<(), Error> {
 
 async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Result<Vec<CaseResult>, Error> {
     let execution = app.execution.container()?;
+    if let Some(unwired) = app.cases[case_index].engine_options.unwired() {
+        return Err(unwired.into());
+    }
     let building = Arc::clone(&app);
     let artifact = tokio::task::spawn_blocking(move || {
         building
@@ -58,9 +61,11 @@ async fn run_case_inner(app: Arc<App>, case_index: usize, target: Target) -> Res
         .await
         .map_err(|error| format!("materialize image {} for {}: {error}", app.image, target.name()))?;
     let state = tempfile::tempdir().map_err(|error| format!("create container state directory: {error}"))?;
-    let containers = hl_container::Containers::builder(Config::new(state.path()))
-        .build()
-        .await?;
+    let mut config = Config::new(state.path());
+    if let Some(cache) = case.engine_options.translation_cache() {
+        config = config.translation_cache(cache);
+    }
+    let containers = hl_container::Containers::builder(config).build().await?;
     let destination = fixture.path().join(case.destination.trim_start_matches('/'));
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| context("create staging directory", parent, &error))?;
@@ -176,14 +181,23 @@ impl<'a> CaseExecution<'a> {
         for entry in &self.case.environment {
             process = process.env_bytes(entry.name().to_vec(), entry.value().to_vec());
         }
-        let spec = ContainerSpec::from_directory(self.fixture, process)
+        let options = &self.case.engine_options;
+        if let Some((uid, gid)) = options.user() {
+            process = process.user(uid, gid);
+        }
+        let mut spec = ContainerSpec::from_directory(self.fixture, process)
             .name(&name)
             .guest(self.target.guest())
             .execution(self.execution)
-            .isolation(Isolation {
+            .isolation(options.isolation(Isolation {
                 sandbox: Sandbox::Disabled,
                 ..Isolation::default()
-            });
+            }))
+            .network_mode(options.network_mode())
+            .resources(options.resources());
+        for mount in options.mounts() {
+            spec = spec.mount(mount.clone());
+        }
         let outcome = self
             .execute(spec, &name, timeout)
             .await

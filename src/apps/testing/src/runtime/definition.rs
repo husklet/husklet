@@ -1,10 +1,12 @@
 use crate::suite::SafePath as _;
 use super::{scheduler, workspace};
+mod engine_options;
 mod environment;
 mod host;
 pub(super) mod input;
 mod manifest;
 use crate::suite::{Commands, Error, Execution, Target};
+pub(crate) use engine_options::EngineOptions;
 pub(crate) use environment::EnvironmentEntry;
 pub(crate) use host::EngineHost;
 use host::HostExclusion;
@@ -25,6 +27,7 @@ pub struct RuntimeCase {
     pub id: String,
     pub arguments: Vec<String>,
     pub environment: Vec<EnvironmentEntry>,
+    pub engine_options: EngineOptions,
     pub timeout: u64,
     pub exit: i32,
     pub golden: PathBuf,
@@ -131,10 +134,13 @@ impl App {
                     return Err(format!("{} has duplicate case output or destination", definition.display()).into());
                 }
                 let golden = validate_golden(directory, &case.expect.stdout)?;
+                let (environment, engine_options) = EngineOptions::split(&case.environment)
+                    .map_err(|error| format!("{}: {error}", case.id))?;
                 Ok(RuntimeCase {
                     id: case.id,
                     arguments: case.run,
-                    environment: case.environment,
+                    environment,
+                    engine_options,
                     timeout: case.timeout,
                     exit: case.expect.exit,
                     golden,

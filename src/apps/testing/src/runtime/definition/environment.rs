@@ -8,6 +8,11 @@ pub(crate) struct EnvironmentEntry {
 }
 
 impl EnvironmentEntry {
+    #[cfg(test)]
+    pub(crate) const fn owned(name: Vec<u8>, value: Vec<u8>) -> Self {
+        Self { name, value }
+    }
+
     pub(crate) fn name(&self) -> &[u8] {
         &self.name
     }
