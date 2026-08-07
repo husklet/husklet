@@ -84,7 +84,17 @@ impl Images {
     /// Returns an error when snapshot validation or durable lease creation fails.
     pub fn rootfs(&self, image: &UnpackedImage) -> Result<RootReference> {
         let _operation = crate::storage::ExclusiveLock::acquire(&self.operation_lock)?;
+        self.fork_locked(image)
+    }
+
+    pub(super) fn fork_locked(&self, image: &UnpackedImage) -> Result<RootReference> {
         Roots::new(self.snapshots.clone(), self.leases.clone()).fork(image.snapshot())
+    }
+
+    /// Report whether any durable lease pins this snapshot.
+    pub(super) fn pinned(&self, snapshot: &Id) -> Result<bool> {
+        let resource = format!("snapshot:{}", snapshot.as_str());
+        Ok(self.leases.list()?.iter().any(|lease| lease.owns(&resource)))
     }
 
     #[must_use]

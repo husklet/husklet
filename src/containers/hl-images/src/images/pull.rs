@@ -139,10 +139,26 @@ impl Images {
     /// Returns an error for missing/corrupt content, invalid configuration, unsafe layers, or snapshot failures.
     pub fn unpack(&self, image: &Image, platform: &Platform) -> Result<UnpackedImage> {
         self.mirror(image)?;
-        // Publishing an immutable chain and pinning it must be one operation with
-        // respect to GC.  Without this lock GC can remove the newly committed,
-        // not-yet-leased chain while rootfs() is about to fork it.
         let _operation = crate::storage::ExclusiveLock::acquire(&self.operation_lock)?;
+        self.unpack_locked(image, platform)
+    }
+
+    /// Unpack an image and fork a private writable rootfs from it as one operation.
+    ///
+    /// Concurrent workers materializing the same image must not observe the chain
+    /// between its publication and the fork that pins it.
+    ///
+    /// # Errors
+    /// Returns unpack failures, or snapshot and durable lease failures from the fork.
+    pub fn materialize(&self, image: &Image, platform: &Platform) -> Result<(UnpackedImage, RootReference)> {
+        self.mirror(image)?;
+        let _operation = crate::storage::ExclusiveLock::acquire(&self.operation_lock)?;
+        let unpacked = self.unpack_locked(image, platform)?;
+        let reference = self.fork_locked(&unpacked)?;
+        Ok((unpacked, reference))
+    }
+
+    pub(super) fn unpack_locked(&self, image: &Image, platform: &Platform) -> Result<UnpackedImage> {
         let root_bytes = self.content.read_document(&image.target)?;
         let manifest = if image.target.is_index() {
             let index: IndexDocument = serde_json::from_slice(&root_bytes)?;
@@ -182,15 +198,22 @@ impl Images {
         // immutable empty root, just as equal non-empty chains share a snapshot.
         let snapshot = parent.unwrap_or(Id::new("chain-empty")?);
 
+        // A chain another worker already pinned is live, never salvage: repairing it
+        // here would delete the tree that worker is about to fork.
+        let pinned = self.pinned(&snapshot)?;
+
         // A publication record is written last. Any same-key tree left without it
         // is an interrupted commit (or a legacy unaccounted chain), never a cache hit.
-        self.snapshots.discard_unpublished(&snapshot)?;
+        if !pinned {
+            self.snapshots.discard_unpublished(&snapshot)?;
+        }
 
         // Older stores may contain a directory and metadata sidecars left behind
         // by the former unpack/GC race, but no filesystem entries.  A non-empty
         // OCI diff chain cannot use that as a cache hit.  Remove the unusable
         // publication while holding the shared operation lock and reconstruct it.
-        if !chain.is_empty()
+        if !pinned
+            && !chain.is_empty()
             && self.snapshots.contains(&snapshot)
             && self.snapshots.is_empty(&snapshot)?
         {

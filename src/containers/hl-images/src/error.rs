@@ -37,14 +37,34 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
-    #[error("{0}")]
-    Io(
-        #[from]
+    #[error("{}{source}", path.as_ref().map_or_else(String::new, |path| format!("{}: ", path.display())))]
+    Io {
+        path: Option<PathBuf>,
         #[source]
-        std::io::Error,
-    ),
+        source: std::io::Error,
+    },
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io { path: None, source }
+    }
+}
+
+/// Name the file an io failure refers to; the caller cannot reconstruct it from an `errno`.
+pub(crate) trait At<T> {
+    fn at(self, path: impl Into<PathBuf>) -> Result<T>;
+}
+
+impl<T> At<T> for std::result::Result<T, std::io::Error> {
+    fn at(self, path: impl Into<PathBuf>) -> Result<T> {
+        self.map_err(|source| Error::Io {
+            path: Some(path.into()),
+            source,
+        })
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -77,5 +97,21 @@ mod tests {
         let error: Error = source.into();
         assert_eq!(error.to_string(), expected);
         assert!(std::error::Error::source(&error).is_some());
+    }
+
+    #[test]
+    fn io_names_the_path_it_failed_on() {
+        use super::At as _;
+
+        let error = std::result::Result::<(), _>::Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no such file",
+        ))
+        .at("/store/snapshots/committed/chain-abc")
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "/store/snapshots/committed/chain-abc: no such file"
+        );
     }
 }

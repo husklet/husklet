@@ -44,7 +44,7 @@ impl ApiError {
             | hl_images::Error::Registry(_)
             | hl_images::Error::UnsupportedPlatform { .. }
             | hl_images::Error::LayerFilesystem { .. }
-            | hl_images::Error::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | hl_images::Error::Io { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         };
         drop(error);
         Self::new(status, message)

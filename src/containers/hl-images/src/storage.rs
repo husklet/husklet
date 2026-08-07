@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 
-use crate::Result;
+use crate::{Result, error::At as _};
 
 /// Durable filesystem operations used at image metadata and content commit boundaries.
 ///
@@ -63,8 +63,9 @@ impl ExclusiveLock {
             .truncate(false)
             .read(true)
             .write(true)
-            .open(path)?;
-        fs2::FileExt::lock_exclusive(&file)?;
+            .open(path)
+            .at(path)?;
+        fs2::FileExt::lock_exclusive(&file).at(path)?;
         Ok(Self { _file: file })
     }
 }
@@ -80,12 +81,12 @@ impl Persistence for Native {
             uuid::Uuid::new_v4()
         ));
         let result = (|| {
-            let mut file = File::create(&temporary)?;
-            file.write_all(bytes)?;
-            file.sync_all()?;
+            let mut file = File::create(&temporary).at(&temporary)?;
+            file.write_all(bytes).at(&temporary)?;
+            file.sync_all().at(&temporary)?;
             drop(file);
-            fs::rename(&temporary, path)?;
-            File::open(parent)?.sync_all()?;
+            fs::rename(&temporary, path).at(path)?;
+            File::open(parent).at(parent)?.sync_all().at(parent)?;
             Ok(())
         })();
         if result.is_err() {
@@ -100,11 +101,11 @@ impl Persistence for Native {
                 let parent = path
                     .parent()
                     .ok_or_else(|| crate::Error::InvalidMetadata("blob path has no parent".into()))?;
-                File::open(parent)?.sync_all()?;
+                File::open(parent).at(parent)?.sync_all().at(parent)?;
                 Ok(true)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error).at(path),
         }
     }
 }

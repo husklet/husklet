@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     Error, LeaseStore, Leases, Result,
+    error::At as _,
     snapshot::{Id, Snapshots, View as SnapshotView},
 };
 
@@ -320,7 +321,7 @@ impl Roots {
             }
         }
         let work = self.snapshots.root().join("work").join(&overlay.work);
-        std::fs::create_dir_all(&work)?;
+        std::fs::create_dir_all(&work).at(&work)?;
         Ok(OverlayView {
             reference: reference.clone(),
             lower: self.snapshots.view(&overlay.lower)?,

@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{Digest, Error, Result};
+use crate::{Digest, Error, Result, error::At as _};
 
 mod ownership;
 pub use ownership::{Ownership, Ownerships};
@@ -106,16 +106,21 @@ impl Snapshots {
         // live drafts in this directory, so startup cleanup here would destroy
         // snapshots underneath running containers. Draft rollback and explicit
         // garbage collection own cleanup instead.
-        fs::create_dir_all(root.as_ref().join("active"))?;
-        fs::create_dir_all(root.as_ref().join("committed"))?;
-        fs::create_dir_all(root.as_ref().join("ownership/active"))?;
-        fs::create_dir_all(root.as_ref().join("ownership/committed"))?;
-        fs::create_dir_all(root.as_ref().join("names/active"))?;
-        fs::create_dir_all(root.as_ref().join("names/committed"))?;
-        fs::create_dir_all(root.as_ref().join("publication/committed"))?;
-        fs::create_dir_all(root.as_ref().join("drafts"))?;
-        fs::create_dir_all(root.as_ref().join("draft-locks"))?;
-        fs::create_dir_all(root.as_ref().join("work"))?;
+        for directory in [
+            "active",
+            "committed",
+            "ownership/active",
+            "ownership/committed",
+            "names/active",
+            "names/committed",
+            "publication/committed",
+            "drafts",
+            "draft-locks",
+            "work",
+        ] {
+            let directory = root.as_ref().join(directory);
+            fs::create_dir_all(&directory).at(directory)?;
+        }
         let snapshots = Self {
             root: root.as_ref().to_owned(),
         };
@@ -131,8 +136,9 @@ impl Snapshots {
             .truncate(false)
             .read(true)
             .write(true)
-            .open(lock_path)?;
-        lock.lock_exclusive()?;
+            .open(&lock_path)
+            .at(&lock_path)?;
+        lock.lock_exclusive().at(&lock_path)?;
         self.cleanup_active(&key)?;
         Native.replace(
             &self.root.join("drafts").join(format!("{}.json", key.as_str())),
@@ -141,7 +147,7 @@ impl Snapshots {
         let path = self.root.join("active").join(key.as_str());
         if let Err(error) = fs::create_dir(&path) {
             let _ = Native.remove(&self.root.join("drafts").join(format!("{}.json", key.as_str())));
-            return Err(error.into());
+            return Err(error).at(path);
         }
         let ownership_path = self.ownership_path("active", &key);
         let names_path = self.names_path("active", &key);
@@ -236,7 +242,7 @@ impl Snapshots {
     /// Returns an error when the committed snapshot cannot be enumerated.
     pub(crate) fn is_empty(&self, id: &Id) -> Result<bool> {
         let path = self.root.join("committed").join(id.as_str());
-        Ok(fs::read_dir(path)?.next().transpose()?.is_none())
+        Ok(fs::read_dir(&path).at(&path)?.next().transpose().at(&path)?.is_none())
     }
 
     /// List committed snapshots in deterministic identifier order.
@@ -245,9 +251,10 @@ impl Snapshots {
     /// Returns an error when the snapshot directory is unreadable or malformed.
     pub fn committed(&self) -> Result<Vec<Id>> {
         let mut snapshots = Vec::new();
-        for entry in fs::read_dir(self.root.join("committed"))? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
+        let committed = self.root.join("committed");
+        for entry in fs::read_dir(&committed).at(&committed)? {
+            let entry = entry.at(&committed)?;
+            if entry.file_type().at(entry.path())?.is_dir() {
                 let name = entry
                     .file_name()
                     .into_string()
@@ -266,12 +273,13 @@ impl Snapshots {
     pub fn remove(&self, id: &Id) -> Result<bool> {
         let path = self.root.join("committed").join(id.as_str());
         Tree::from(path.as_path()).writable()?;
-        match fs::remove_dir_all(path) {
+        match fs::remove_dir_all(&path) {
             Ok(()) => {
-                match fs::remove_file(self.ownership_path("committed", id)) {
+                let ownership = self.ownership_path("committed", id);
+                match fs::remove_file(&ownership) {
                     Ok(()) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
+                    Err(error) => return Err(error).at(ownership),
                 }
                 let _ = fs::remove_file(self.names_path("committed", id));
                 let _ = Native.remove(&self.publication_path(id));
@@ -283,7 +291,7 @@ impl Snapshots {
                 let _ = Native.remove(&self.publication_path(id));
                 Ok(false)
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error).at(path),
         }
     }
 
@@ -312,12 +320,15 @@ impl Snapshots {
             if error.kind() == std::io::ErrorKind::NotFound {
                 Error::InvalidMetadata(format!("snapshot {} is not completely published", id.as_str()))
             } else {
-                error.into()
+                Error::Io {
+                    path: Some(path.clone()),
+                    source: error,
+                }
             }
         })?;
         const MAX_PUBLICATION_BYTES: u64 = 128 * 1024;
         let mut bytes = Vec::new();
-        file.take(MAX_PUBLICATION_BYTES + 1).read_to_end(&mut bytes)?;
+        file.take(MAX_PUBLICATION_BYTES + 1).read_to_end(&mut bytes).at(&path)?;
         if bytes.len() as u64 > MAX_PUBLICATION_BYTES {
             return Err(Error::InvalidMetadata("snapshot publication exceeds 128 KiB".into()));
         }
@@ -329,23 +340,32 @@ impl Snapshots {
     }
 
     fn recover_abandoned_drafts(&self) -> Result<()> {
-        for entry in fs::read_dir(self.root.join("drafts"))? {
-            let entry = entry?;
+        let drafts = self.root.join("drafts");
+        for entry in fs::read_dir(&drafts).at(&drafts)? {
+            let entry = entry.at(&drafts)?;
             let file_name = entry.file_name();
             let Some(name) = file_name.to_str().and_then(|name| name.strip_suffix(".json")) else {
                 continue;
             };
             let key = Id::new(name)?;
+            let lock_path = self.root.join("draft-locks").join(format!("{name}.lock"));
             let lock = fs::OpenOptions::new()
                 .create(true)
                 .truncate(false)
                 .read(true)
                 .write(true)
-                .open(self.root.join("draft-locks").join(format!("{name}.lock")))?;
+                .open(&lock_path)
+                .at(&lock_path)?;
             match lock.try_lock_exclusive() {
                 Ok(()) => {
-                    let owner_path = self.root.join("drafts").join(format!("{name}.json"));
-                    let bytes = fs::read(&owner_path)?;
+                    let owner_path = drafts.join(format!("{name}.json"));
+                    // The owner completed and reclaimed its own record between this
+                    // scan and this read; there is nothing abandoned to recover.
+                    let bytes = match fs::read(&owner_path) {
+                        Ok(bytes) => bytes,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error).at(&owner_path),
+                    };
                     if bytes.len() > 4096 {
                         return Err(Error::InvalidMetadata("snapshot draft owner exceeds 4 KiB".into()));
                     }
@@ -360,7 +380,7 @@ impl Snapshots {
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error).at(lock_path),
             }
         }
         Ok(())
@@ -369,16 +389,16 @@ impl Snapshots {
     fn cleanup_active(&self, key: &Id) -> Result<()> {
         let path = self.root.join("active").join(key.as_str());
         Tree::from(path.as_path()).writable()?;
-        match fs::remove_dir_all(path) {
+        match fs::remove_dir_all(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error).at(path),
         }
         for path in [self.ownership_path("active", key), self.names_path("active", key)] {
-            match fs::remove_file(path) {
+            match fs::remove_file(&path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error).at(path),
             }
         }
         let _ = Native.remove(&self.root.join("drafts").join(format!("{}.json", key.as_str())))?;
@@ -450,14 +470,14 @@ impl Draft {
             .join("ownership/committed")
             .join(format!("{}.json", id.as_str()));
         let names_target = self.root.join("names/committed").join(format!("{}.json", id.as_str()));
-        fs::rename(&self.path, &target)?;
+        fs::rename(&self.path, &target).at(&target)?;
         let ownership_path = self
             .ownership
             .path()
             .ok_or_else(|| Error::InvalidMetadata("draft ownership sidecar is absent".into()))?;
         if let Err(error) = fs::rename(ownership_path, &ownership_target) {
             let _ = fs::rename(&target, &self.path);
-            return Err(error.into());
+            return Err(error).at(ownership_target);
         }
         let names_path = self
             .names
@@ -471,14 +491,15 @@ impl Draft {
                     .join(format!("{}.json", self.key.as_str())),
             );
             let _ = fs::rename(&target, &self.path);
-            return Err(error.into());
+            return Err(error).at(names_target);
         }
         self.ownership.relocate(ownership_target);
         self.names.relocate(names_target);
         self.finished = true;
         Self::sync(&target)?;
-        File::open(self.root.join("ownership/committed"))?.sync_all()?;
-        File::open(self.root.join("names/committed"))?.sync_all()?;
+        for directory in [self.root.join("ownership/committed"), self.root.join("names/committed")] {
+            File::open(&directory).at(&directory)?.sync_all().at(&directory)?;
+        }
         Native.replace(
             &self
                 .root
@@ -498,25 +519,26 @@ impl Draft {
     /// Returns an error when the active snapshot cannot be removed.
     pub fn abort(mut self) -> Result<()> {
         Tree::from(self.path.as_path()).writable()?;
-        fs::remove_dir_all(&self.path)?;
+        fs::remove_dir_all(&self.path).at(&self.path)?;
         let ownership_path = self
             .ownership
             .path()
             .ok_or_else(|| Error::InvalidMetadata("draft ownership sidecar is absent".into()))?;
-        fs::remove_file(ownership_path)?;
+        fs::remove_file(&ownership_path).at(ownership_path)?;
         let names_path = self
             .names
             .path()
             .ok_or_else(|| Error::InvalidMetadata("draft names sidecar is absent".into()))?;
-        fs::remove_file(names_path)?;
+        fs::remove_file(&names_path).at(names_path)?;
         self.finished = true;
         Native.remove(&self.root.join("drafts").join(format!("{}.json", self.key.as_str())))?;
         Ok(())
     }
 
     fn sync(path: &Path) -> Result<()> {
-        std::fs::File::open(path)?.sync_all()?;
-        std::fs::File::open(path.parent().expect("snapshot parent"))?.sync_all()?;
+        let parent = path.parent().expect("snapshot parent");
+        File::open(path).at(path)?.sync_all().at(path)?;
+        File::open(parent).at(parent)?.sync_all().at(parent)?;
         Ok(())
     }
 }

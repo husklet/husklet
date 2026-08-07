@@ -440,3 +440,115 @@ fn explicit_entrypoint_obeys_docker_command_merge_rules() {
         ["image-command"]
     );
 }
+
+#[test]
+fn materialize_publishes_and_forks_the_chain_in_one_operation() {
+    let root = tempfile::tempdir().unwrap();
+    let platform = Platform::linux_arm64();
+    let runtime = RuntimeConfig {
+        entrypoint: vec!["/bin/sh".into()],
+        command: Vec::new(),
+        environment: std::collections::BTreeMap::new(),
+        working_directory: "/".into(),
+        user: String::new(),
+    };
+    let name: Reference = "library/alpine:3.20".parse().unwrap();
+    let images = Images::open(root.path()).unwrap();
+    let image = images
+        .commit(&layer("bin/sh", b"shell"), &runtime, &platform, &name)
+        .unwrap();
+
+    let (unpacked, reference) = images.materialize(&image, &platform).unwrap();
+    let view = images.roots().open(&reference).unwrap();
+    assert_eq!(std::fs::read(view.path().join("bin/sh")).unwrap(), b"shell");
+    assert!(images.pinned(unpacked.snapshot()).unwrap());
+    images.roots().release(&reference).unwrap();
+}
+
+#[test]
+fn concurrent_workers_materialize_one_image_without_losing_the_chain() {
+    let root = tempfile::tempdir().unwrap();
+    let platform = Platform::linux_arm64();
+    let runtime = RuntimeConfig {
+        entrypoint: vec!["/bin/sh".into()],
+        command: Vec::new(),
+        environment: std::collections::BTreeMap::new(),
+        working_directory: "/".into(),
+        user: String::new(),
+    };
+    let name: Reference = "library/alpine:3.20".parse().unwrap();
+    let image = Images::open(root.path())
+        .unwrap()
+        .commit(&layer("bin/sh", b"shell"), &runtime, &platform, &name)
+        .unwrap();
+
+    const WORKERS: usize = 6;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(WORKERS * 2));
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let failures = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = |failures: &std::sync::Mutex<Vec<String>>, message: String| {
+        failures.lock().unwrap().push(message);
+    };
+    std::thread::scope(|scope| {
+        // Every worker reopens the shared store while others are mid-chain, so store
+        // recovery races the publication and fork of the snapshot they all depend on.
+        for _ in 0..WORKERS {
+            let (barrier, done, failures, root) =
+                (barrier.clone(), done.clone(), failures.clone(), root.path().to_owned());
+            scope.spawn(move || {
+                barrier.wait();
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Err(error) = Images::open(&root) {
+                        record(&failures, format!("open image cache: {error}"));
+                    }
+                }
+            });
+        }
+        let mut workers = Vec::new();
+        for _ in 0..WORKERS {
+            let (barrier, failures, image, platform, root) = (
+                barrier.clone(),
+                failures.clone(),
+                image.clone(),
+                platform.clone(),
+                root.path().to_owned(),
+            );
+            workers.push(scope.spawn(move || {
+                barrier.wait();
+                for _ in 0..60 {
+                    let images = match Images::open(&root) {
+                        Ok(images) => images,
+                        Err(error) => {
+                            record(&failures, format!("open image cache: {error}"));
+                            continue;
+                        }
+                    };
+                    let unpacked = match images.unpack(&image, &platform) {
+                        Ok(unpacked) => unpacked,
+                        Err(error) => {
+                            record(&failures, format!("unpack: {error}"));
+                            continue;
+                        }
+                    };
+                    match images.rootfs(&unpacked) {
+                        Ok(reference) => {
+                            if let Err(error) = images.roots().open(&reference) {
+                                record(&failures, format!("open rootfs: {error}"));
+                            }
+                            if let Err(error) = images.roots().release(&reference) {
+                                record(&failures, format!("release rootfs: {error}"));
+                            }
+                        }
+                        Err(error) => record(&failures, format!("fork rootfs: {error}")),
+                    }
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let failures = failures.lock().unwrap();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
