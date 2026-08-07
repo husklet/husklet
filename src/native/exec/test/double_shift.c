@@ -305,7 +305,9 @@ static int exhaustive_register_counts(void) {
                     cpu.flags = prior;
                     hl_x86_test_enter(&cpu, code);
                     if (count == 0u || (bits == 16u && count > 16u)) {
-                        expected = destination;
+                        /* The destination is still written, so the 32-bit form clears the
+                           upper half while the 16-bit form preserves it. */
+                        expected = bits == 32u ? destination & mask : destination;
                     } else {
                         uint64_t low_destination = destination & mask;
                         uint64_t low_source = source & mask;

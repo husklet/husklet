@@ -2155,6 +2155,42 @@ fn x86_rotate_variable_count_matches_interpreter_at_each_boundary() {
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
 }
 
+/// `shld`/`shrd` counts either side of the operand-size mask, whose zero case skips the
+/// whole body including the destination writeback. Counts are chosen to mask down to 0 or
+/// 1 because x86 leaves OF undefined for any larger count.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_double_shift_count_matches_interpreter_at_each_boundary() {
+    let seed = 0x8877_6655_4433_2211_u64;
+    let mut program: Vec<Vec<u8>> = Vec::new();
+    for width in 0..3 {
+        let counts: &[u8] = if width == 2 {
+            &[0x00, 0x01, 0x40, 0x41, 0x80, 0x81]
+        } else {
+            &[0x00, 0x01, 0x20, 0x21, 0x40, 0x41]
+        };
+        for &count in counts {
+            for opcode in [0xa4_u8, 0xac] {
+                program.push(vec![0xb9, 0x0f, 0xf0, 0x5a, 0xa5]);
+                let mut load = vec![0x48, 0xb8];
+                load.extend_from_slice(&seed.to_le_bytes());
+                program.push(load);
+                program.push(match width {
+                    0 => vec![0x66, 0x0f, opcode, 0xc8, count],
+                    1 => vec![0x0f, opcode, 0xc8, count],
+                    _ => vec![0x48, 0x0f, opcode, 0xc8, count],
+                });
+            }
+        }
+    }
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let initial = X86CpuState {
+        rip: 0x402720,
+        ..X86CpuState::default()
+    };
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &[0; 8]);
+}
+
 /// ALU immediates at each width, covering the imm8-sign-extended-to-operand-size form
 /// (0x83), the zero-extended byte form (0x80) and the imm32 form that sign-extends to 64.
 #[cfg(target_arch = "aarch64")]

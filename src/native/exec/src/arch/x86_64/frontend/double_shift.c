@@ -92,6 +92,7 @@ void hl_x86_emit_double_shift(uint32_t *words, uint32_t *cursor,
     uint64_t width_mask = item->width == 8u ? UINT64_MAX :
                           (UINT64_C(1) << bits) - 1u;
     uint32_t *preserved;
+    uint32_t *writeback = NULL;
     uint32_t *out_of_range = NULL;
     uint32_t *loop;
     uint32_t *again;
@@ -124,6 +125,9 @@ void hl_x86_emit_double_shift(uint32_t *words, uint32_t *cursor,
             store.source = 24u;
             store.memory_operand = 0u;
             hl_x86_emit_store(words, cursor, &store);
+        } else if (item->width == 4u) {
+            /* The destination is still written, and a 32-bit write clears the upper half. */
+            words[(*cursor)++] = move(item->destination, 18u, 0);
         }
         return;
     }
@@ -204,13 +208,16 @@ void hl_x86_emit_double_shift(uint32_t *words, uint32_t *cursor,
         words[(*cursor)++] = store_word(25u, offsetof(hl_native_x86_64_cpu, flags));
     } else {
         words[(*cursor)++] = store_word(20u, offsetof(hl_native_x86_64_cpu, flags));
+        writeback = &words[*cursor];
         if (item->width == 2u)
             words[(*cursor)++] = UINT32_C(0xb3403c00) | 18u << 5 | item->destination;
         else
             words[(*cursor)++] = move(item->destination, 18u, item->width == 8u);
     }
     if (preserved != NULL || out_of_range != NULL) {
-        uint32_t *done = &words[*cursor];
+        /* A zero count leaves flags alone but still writes a 32-bit destination, which
+           clears its upper half. */
+        uint32_t *done = writeback != NULL && item->width == 4u ? writeback : &words[*cursor];
         if (item->memory_operand != 0u) {
             instruction store = *item;
             uint32_t *skip_preserved = &words[(*cursor)++];
