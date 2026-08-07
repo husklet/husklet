@@ -1,5 +1,7 @@
 use super::ScalarInterpreter;
-use crate::{CpuState, ExecutionExit, GuestOperandMemory, ScalarOperand, ScalarRegister, ScalarWidth, Staged};
+use crate::{
+    CpuState, ExecutionExit, GuestOperandMemory, ScalarOperand, ScalarRegister, ScalarState, ScalarWidth, Staged,
+};
 
 impl ScalarInterpreter {
     pub(super) fn byte_swap(value: u64, width: ScalarWidth) -> u64 {
@@ -11,7 +13,7 @@ impl ScalarInterpreter {
     }
 
     pub(super) fn endian<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         cpu: &CpuState,
         memory: &M,
         register: ScalarRegister,

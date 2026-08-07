@@ -1,7 +1,7 @@
 use crate::{
     AccessKind, AluOperation, Arithmetic, AtomicOperation, AtomicValue, CpuState, EffectiveAddress, ExclusiveMemory,
     ExecutionExit, Flag, FlagState, GuestOperandMemory, IntegerWidth, MemoryOrder, ScalarOperand, ScalarRegister,
-    ScalarWidth, Staged,
+    ScalarState, ScalarWidth, Staged,
 };
 
 pub(crate) struct CompareExchange;
@@ -137,7 +137,7 @@ impl CompareExchange {
     }
 
     pub(crate) fn add<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         cpu: &CpuState,
         memory: &M,
         destination: ScalarOperand,
@@ -235,7 +235,7 @@ impl CompareExchange {
     }
 
     pub(crate) fn register(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         cpu: &CpuState,
         destination: ScalarRegister,
         source: ScalarRegister,

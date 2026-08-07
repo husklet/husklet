@@ -1,7 +1,7 @@
 use super::ScalarInterpreter;
 use crate::{
-    AccessKind, CpuState, ExecutionExit, GuestOperandMemory, IntegerWidth, ScalarOperand, ScalarRegister, ScalarWidth,
-    Staged,
+    AccessKind, CpuState, ExecutionExit, GuestOperandMemory, IntegerWidth, ScalarOperand, ScalarRegister, ScalarState,
+    ScalarWidth, Staged,
 };
 
 impl ScalarInterpreter {
@@ -53,7 +53,7 @@ impl ScalarInterpreter {
         ExecutionExit::Continue
     }
     pub(super) fn call<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         memory: &M,
         width: ScalarWidth,
         next: u64,
@@ -93,7 +93,7 @@ impl ScalarInterpreter {
         }
     }
     pub(crate) fn write<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         memory: &M,
         operand: ScalarOperand,
         width: ScalarWidth,

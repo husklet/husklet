@@ -6,6 +6,7 @@ mod access;
 mod endian;
 mod execute;
 mod flags;
+mod scalar;
 
 pub struct ScalarInterpreter;
 impl ScalarInterpreter {
@@ -139,56 +140,64 @@ impl ScalarInterpreter {
                 next,
             );
         }
+        let mut scalar = cpu.scalar.clone();
+        scalar.rip = next;
+        match Self::stage_scalar(cpu, &mut scalar, memory, ir, instruction, next) {
+            Ok(Some(staged)) => {
+                return match Self::commit(memory, staged, instruction) {
+                    Ok(()) => {
+                        cpu.scalar = scalar;
+                        ExecutionExit::Continue
+                    }
+                    Err(exit) => exit,
+                };
+            }
+            Ok(None) => {}
+            Err(exit) => return exit,
+        }
         let mut staged = cpu.clone();
         staged.rip = next;
-        match Self::stage(cpu, &mut staged, memory, ir, instruction, next) {
-            Ok(Staged::Cpu) => {
+        match Self::stage(cpu, &mut staged, memory, ir, instruction, next)
+            .and_then(|staged| Self::commit(memory, staged, instruction))
+        {
+            Ok(()) => {
                 *cpu = staged;
                 ExecutionExit::Continue
             }
-            Ok(Staged::Write(reservation, value, address, length)) => {
-                if memory.commit_write(reservation, value).is_err() {
-                    return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                        instruction,
-                        address,
-                        AccessKind::Write,
-                        u64::from(length),
-                    ));
-                }
-                *cpu = staged;
-                ExecutionExit::Continue
-            }
-            Ok(Staged::Batch(reservation, values, address, length)) => {
-                if memory
-                    .commit_write_batch(reservation, &values[..usize::from(length / 8)])
-                    .is_err()
-                {
-                    return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                        instruction,
-                        address,
-                        AccessKind::Write,
-                        u64::from(length),
-                    ));
-                }
-                *cpu = staged;
-                ExecutionExit::Continue
-            }
-            Ok(Staged::Sparse(reservations, values, count, address, length)) => {
-                for (reservation, value) in reservations.into_iter().flatten().zip(values).take(usize::from(count)) {
-                    if memory.commit_write(reservation, value).is_err() {
-                        return ExecutionExit::OperandFault(crate::FaultAccess::operand(
-                            instruction,
-                            address,
-                            AccessKind::Write,
-                            u64::from(length),
-                        ));
-                    }
-                }
-                *cpu = staged;
-                ExecutionExit::Continue
-            }
-            Ok(Staged::Exit(exit)) => exit,
             Err(exit) => exit,
+        }
+    }
+
+    /// Performs the deferred memory commit. `Ok` means the scratch is now the
+    /// architectural state and the caller must assign it.
+    fn commit<M: GuestOperandMemory>(
+        memory: &mut M,
+        staged: Staged<M::Reservation, M::BatchReservation>,
+        instruction: u64,
+    ) -> Result<(), ExecutionExit> {
+        let fault = |address, length: u8| {
+            ExecutionExit::OperandFault(crate::FaultAccess::operand(
+                instruction,
+                address,
+                AccessKind::Write,
+                u64::from(length),
+            ))
+        };
+        match staged {
+            Staged::Cpu => Ok(()),
+            Staged::Write(reservation, value, address, length) => {
+                memory.commit_write(reservation, value).map_err(|()| fault(address, length))
+            }
+            Staged::Batch(reservation, values, address, length) => memory
+                .commit_write_batch(reservation, &values[..usize::from(length / 8)])
+                .map_err(|()| fault(address, length)),
+            Staged::Sparse(reservations, values, count, address, length) => {
+                for (reservation, value) in reservations.into_iter().flatten().zip(values).take(usize::from(count)) {
+                    memory.commit_write(reservation, value).map_err(|()| fault(address, length))?;
+                }
+                Ok(())
+            }
+            Staged::Exit(exit) => Err(exit),
         }
     }
 }

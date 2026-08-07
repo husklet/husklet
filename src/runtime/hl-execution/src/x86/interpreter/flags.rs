@@ -1,11 +1,12 @@
 use super::ScalarInterpreter;
 use crate::{
-    ControlFlag, CpuState, ExecutionExit, Flag, FlagState, GuestOperandMemory, ScalarOperand, ScalarWidth, Staged,
+    ControlFlag, CpuState, ExecutionExit, Flag, FlagState, GuestOperandMemory, ScalarOperand, ScalarState, ScalarWidth,
+    Staged,
 };
 
 impl ScalarInterpreter {
     pub(super) fn push_flags<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         cpu: &CpuState,
         memory: &M,
         width: ScalarWidth,
@@ -31,7 +32,7 @@ impl ScalarInterpreter {
     }
 
     pub(super) fn pop_flags<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         cpu: &CpuState,
         memory: &M,
         width: ScalarWidth,
@@ -45,7 +46,7 @@ impl ScalarInterpreter {
     }
 
     pub(super) fn iret<M: GuestOperandMemory>(
-        staged: &mut CpuState,
+        staged: &mut ScalarState,
         cpu: &CpuState,
         memory: &M,
         instruction: u64,
@@ -68,7 +69,7 @@ impl ScalarInterpreter {
         Ok(Staged::Cpu)
     }
 
-    fn restore_flags(cpu: &mut CpuState, value: u64, width: ScalarWidth) {
+    fn restore_flags(cpu: &mut ScalarState, value: u64, width: ScalarWidth) {
         cpu.flags = FlagState::from_bits(value as u16 & 0x8d5);
         cpu.direction = value & (1 << 10) != 0;
         if width == ScalarWidth::Qword {
@@ -77,7 +78,7 @@ impl ScalarInterpreter {
         }
     }
 
-    pub(super) fn control(staged: &mut CpuState, cpu: &CpuState, operation: ControlFlag) {
+    pub(super) fn control(staged: &mut ScalarState, cpu: &CpuState, operation: ControlFlag) {
         match operation {
             ControlFlag::ComplementCarry => {
                 staged.flags = staged.flags.with(Flag::Carry, !cpu.flags.contains(Flag::Carry));

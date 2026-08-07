@@ -155,7 +155,7 @@ impl GuestFeaturePolicy {
         Err(XgetbvError::UndefinedInstruction)
     }
 
-    pub fn apply(self, cpu: &mut crate::CpuState) {
+    pub fn apply(self, cpu: &mut crate::ScalarState) {
         let registers = self.cpuid(cpu.registers[0] as u32, cpu.registers[1] as u32);
         [cpu.registers[0], cpu.registers[3], cpu.registers[1], cpu.registers[2]] = [
             u64::from(registers.eax),

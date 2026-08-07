@@ -17456,3 +17456,13 @@ fn vex_lane_extract_family() {
         assert_eq!(cpu.registers[0], legacy_cpu.registers[0], "vpextrw lane {lane}");
     }
 }
+
+/// The scalar staging scratch is what integer instructions copy in and out per step,
+/// so it must stay a small fraction of the full architectural state.
+#[test]
+fn scalar_state_is_a_small_fraction_of_cpu_state() {
+    let scalar = size_of::<ScalarState>();
+    let full = size_of::<CpuState>();
+    assert!(scalar <= 160, "scalar staging scratch grew to {scalar} bytes");
+    assert!(scalar * 4 < full, "scalar half {scalar} is no longer small next to {full}");
+}

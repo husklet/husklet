@@ -3023,3 +3023,42 @@ fn x86_load_string_merges_into_the_accumulator_at_each_boundary() {
     let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
     assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
 }
+
+/// Scalar instructions stage through the scalar half of `CpuState` alone, so the SIMD
+/// and x87 halves must survive them byte-identically, including across a transition
+/// into and back out of an instruction that does stage the full state.
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn x86_scalar_staging_preserves_vector_state_at_each_boundary() {
+    let mut initial = X86CpuState {
+        scalar: ScalarState {
+            rip: 0x402720,
+            ..Default::default()
+        },
+        mxcsr: 0x1fa0,
+        ..X86CpuState::default()
+    };
+    for index in 0..16 {
+        initial.vectors[index] = (index as u128) << 96 | 0x0f1e_2d3c_4b5a_6978_8796_a5b4_c3d2_e1f0;
+        initial.vector_upper[index] = (index as u128) << 64 | 0xdead_beef_cafe_f00d;
+    }
+    initial.registers[0] = 0x0123_4567_89ab_cdef;
+    initial.registers[3] = 0x1111_2222_3333_4444;
+    initial.registers[6] = 0x7040;
+    let program: Vec<Vec<u8>> = vec![
+        vec![0x48, 0x89, 0xc3],             // mov  %rax,%rbx
+        vec![0x48, 0x01, 0xd8],             // add  %rbx,%rax
+        vec![0x48, 0x8d, 0x04, 0x18],       // lea  (%rax,%rbx,1),%rax
+        vec![0x66, 0x0f, 0xd4, 0xc1],       // paddq %xmm1,%xmm0
+        vec![0x48, 0x29, 0xd8],             // sub  %rbx,%rax
+        vec![0x48, 0x0f, 0xc8],             // bswap %rax
+        vec![0x48, 0x0f, 0xaf, 0xc3],       // imul %rbx,%rax
+        vec![0x0f, 0x28, 0xd1],             // movaps %xmm1,%xmm2
+        vec![0x48, 0x21, 0xd8],             // and  %rbx,%rax
+        vec![0x48, 0x0f, 0xb6, 0xc3],       // movzbq %bl,%rax
+        vec![0x48, 0x31, 0xdb],             // xor  %rbx,%rbx
+    ];
+    let pieces: Vec<&[u8]> = program.iter().map(|piece| piece.as_slice()).collect();
+    let operand: Vec<u8> = (0..256_u32).map(|index| (index.wrapping_mul(11) ^ 0x3c) as u8).collect();
+    assert_x86_sequence(0x402720, &pieces, &initial, 0x7000, &operand);
+}
