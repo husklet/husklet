@@ -7,44 +7,6 @@ pub struct SchedulingProfile {
     reset_on_fork: bool,
 }
 
-#[cfg(test)]
-mod test {
-    use crate::{ProcessCredentials, ProcessLimits, RegistryConfig, SchedulingProfile, TaskRegistry};
-
-    #[test]
-    fn lifecycle_preserves_schedule() {
-        let registry = TaskRegistry::new(RegistryConfig {
-            online_cpus: 8,
-            ..RegistryConfig::default()
-        })
-        .unwrap();
-        let credentials = ProcessCredentials::new(0, 0, &[], 32).unwrap();
-        let (_, leader) = registry.create_init(credentials, ProcessLimits::default()).unwrap();
-        let batch = SchedulingProfile::non_realtime(3, false).unwrap().with_nice(5);
-        registry.set_schedule(leader, batch).unwrap();
-        let clone = registry
-            .commit_clone_thread(registry.begin_clone_thread(leader).unwrap())
-            .unwrap();
-        assert_eq!(registry.schedule(clone).unwrap(), batch);
-        let fork = registry.begin_fork_process(leader).unwrap();
-        let (_, child) = registry.commit_fork_process(fork).unwrap();
-        assert_eq!(registry.schedule(child).unwrap(), batch);
-
-        let reset = SchedulingProfile::non_realtime(5, true).unwrap().with_nice(5);
-        registry.set_schedule(leader, reset).unwrap();
-        let fork = registry.begin_fork_process(leader).unwrap();
-        let (_, child) = registry.commit_fork_process(fork).unwrap();
-        assert_eq!(registry.schedule(child).unwrap(), SchedulingProfile::OTHER.with_nice(5));
-        assert_eq!(registry.schedule(leader).unwrap(), reset);
-
-        let reset = reset.with_nice(-5);
-        registry.set_schedule(leader, reset).unwrap();
-        let fork = registry.begin_fork_process(leader).unwrap();
-        let (_, child) = registry.commit_fork_process(fork).unwrap();
-        assert_eq!(registry.schedule(child).unwrap(), SchedulingProfile::OTHER);
-    }
-}
-
 impl SchedulingProfile {
     pub const OTHER: Self = Self {
         policy: 0,
@@ -120,5 +82,43 @@ impl SchedulingProfile {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{ProcessCredentials, ProcessLimits, RegistryConfig, SchedulingProfile, TaskRegistry};
+
+    #[test]
+    fn lifecycle_preserves_schedule() {
+        let registry = TaskRegistry::new(RegistryConfig {
+            online_cpus: 8,
+            ..RegistryConfig::default()
+        })
+        .unwrap();
+        let credentials = ProcessCredentials::new(0, 0, &[], 32).unwrap();
+        let (_, leader) = registry.create_init(credentials, ProcessLimits::default()).unwrap();
+        let batch = SchedulingProfile::non_realtime(3, false).unwrap().with_nice(5);
+        registry.set_schedule(leader, batch).unwrap();
+        let clone = registry
+            .commit_clone_thread(registry.begin_clone_thread(leader).unwrap())
+            .unwrap();
+        assert_eq!(registry.schedule(clone).unwrap(), batch);
+        let fork = registry.begin_fork_process(leader).unwrap();
+        let (_, child) = registry.commit_fork_process(fork).unwrap();
+        assert_eq!(registry.schedule(child).unwrap(), batch);
+
+        let reset = SchedulingProfile::non_realtime(5, true).unwrap().with_nice(5);
+        registry.set_schedule(leader, reset).unwrap();
+        let fork = registry.begin_fork_process(leader).unwrap();
+        let (_, child) = registry.commit_fork_process(fork).unwrap();
+        assert_eq!(registry.schedule(child).unwrap(), SchedulingProfile::OTHER.with_nice(5));
+        assert_eq!(registry.schedule(leader).unwrap(), reset);
+
+        let reset = reset.with_nice(-5);
+        registry.set_schedule(leader, reset).unwrap();
+        let fork = registry.begin_fork_process(leader).unwrap();
+        let (_, child) = registry.commit_fork_process(fork).unwrap();
+        assert_eq!(registry.schedule(child).unwrap(), SchedulingProfile::OTHER);
     }
 }

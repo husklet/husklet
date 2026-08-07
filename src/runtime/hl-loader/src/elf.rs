@@ -81,6 +81,8 @@ impl ElfInspector {
         Ok(())
     }
 
+    // Receiver kept so the inspection steps read uniformly on the inspector.
+    #[allow(clippy::unused_self)]
     fn image_kind(self, view: &ElfView<'_>) -> Result<ImageKind, InspectError> {
         match view.u16(16) {
             2 => Ok(ImageKind::Executable),

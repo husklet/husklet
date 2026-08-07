@@ -73,11 +73,11 @@ impl ProcessLimits {
 
 impl Default for ProcessLimits {
     fn default() -> Self {
-        let mut limits = Self::empty();
         const INFINITY: Limit = Limit {
             soft: u64::MAX,
             hard: u64::MAX,
         };
+        let mut limits = Self::empty();
         for resource in [
             Resource::CpuTime,
             Resource::FileSize,

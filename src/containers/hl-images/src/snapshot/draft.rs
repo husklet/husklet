@@ -61,6 +61,8 @@ impl Draft {
         self.commit_with(id, publication)
     }
 
+    // Consumes the publication it commits, so a draft cannot be published twice.
+    #[allow(clippy::needless_pass_by_value)]
     fn commit_with(mut self, id: Id, publication: Publication) -> Result<View> {
         publication.validate_key(&id)?;
         Native.replace(
@@ -128,12 +130,12 @@ impl Draft {
             .ownership
             .path()
             .ok_or_else(|| Error::InvalidMetadata("draft ownership sidecar is absent".into()))?;
-        fs::remove_file(&ownership_path).at(ownership_path)?;
+        fs::remove_file(ownership_path).at(ownership_path)?;
         let names_path = self
             .names
             .path()
             .ok_or_else(|| Error::InvalidMetadata("draft names sidecar is absent".into()))?;
-        fs::remove_file(&names_path).at(names_path)?;
+        fs::remove_file(names_path).at(names_path)?;
         self.finished = true;
         Native.remove(&self.root.join("drafts").join(format!("{}.json", self.key.as_str())))?;
         Ok(())

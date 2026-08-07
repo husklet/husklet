@@ -306,10 +306,10 @@ pub(crate) fn fixture_with_tls(
     memory_size: u64,
     alignment: u64,
 ) -> Vec<u8> {
+    const TLS_OFFSET: usize = DATA_OFFSET + 0x40;
     let mut bytes = fixture(architecture, kind, interpreter);
     let index = if interpreter { 3 } else { 2 };
     put_u16(&mut bytes, 56, u16::try_from(index + 1).unwrap());
-    const TLS_OFFSET: usize = DATA_OFFSET + 0x40;
     bytes[TLS_OFFSET..TLS_OFFSET + initialized.len()].copy_from_slice(initialized);
     put_program_header(
         &mut bytes,

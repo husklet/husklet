@@ -43,11 +43,11 @@ where
         self
     }
 
-    fn phase_start(diagnostics: &Option<Arc<dyn LoaderDiagnostics>>) -> Option<Instant> {
-        diagnostics.as_ref().map(|_| Instant::now())
+    fn phase_start(diagnostics: Option<&Arc<dyn LoaderDiagnostics>>) -> Option<Instant> {
+        diagnostics.map(|_| Instant::now())
     }
 
-    fn phase_finish(diagnostics: &Option<Arc<dyn LoaderDiagnostics>>, phase: LoaderPhase, started: Option<Instant>) {
+    fn phase_finish(diagnostics: Option<&Arc<dyn LoaderDiagnostics>>, phase: LoaderPhase, started: Option<Instant>) {
         let (Some(diagnostics), Some(started)) = (diagnostics, started) else {
             return;
         };
@@ -55,17 +55,19 @@ where
         diagnostics.try_publish(LoaderDiagnostic { phase, elapsed_us });
     }
 
+    // Consumes the request so one transaction cannot load it twice.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn load(&mut self, request: LoadRequest<'_>) -> Result<LoadedProcess, LoadError> {
         let diagnostics = self.diagnostics.clone();
-        let started = Self::phase_start(&diagnostics);
+        let started = Self::phase_start(diagnostics.as_ref());
         let main_bytes = self.read(ImageRole::Main, request.image_path)?;
-        Self::phase_finish(&diagnostics, LoaderPhase::MainRead, started);
-        let started = Self::phase_start(&diagnostics);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::MainRead, started);
+        let started = Self::phase_start(diagnostics.as_ref());
         let main_plan = self.inspect(ImageRole::Main, request.architecture, &main_bytes)?;
-        Self::phase_finish(&diagnostics, LoaderPhase::MainInspect, started);
-        let started = Self::phase_start(&diagnostics);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::MainInspect, started);
+        let started = Self::phase_start(diagnostics.as_ref());
         let interpreter_image = self.prepare_interpreter(request.architecture, &main_plan)?;
-        Self::phase_finish(&diagnostics, LoaderPhase::InterpreterPrepare, started);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::InterpreterPrepare, started);
         let interpreter_plan = interpreter_image.as_ref().map(|(_, plan)| plan.clone());
         let mut transaction = MappingTransaction::new(&mut self.address_space);
         let main = Self::reserve_main(
@@ -75,7 +77,7 @@ where
             self.limits.pie_hint,
         )?;
         Self::validate_reservation(&main, main_plan.image_span())?;
-        let started = Self::phase_start(&diagnostics);
+        let started = Self::phase_start(diagnostics.as_ref());
         Self::stage_image(
             &mut transaction,
             &main,
@@ -83,9 +85,9 @@ where
             &main_bytes,
             self.limits.host_page_size,
         )?;
-        Self::phase_finish(&diagnostics, LoaderPhase::MainStage, started);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::MainStage, started);
 
-        let started = Self::phase_start(&diagnostics);
+        let started = Self::phase_start(diagnostics.as_ref());
         let interpreter = if let Some((bytes, plan)) = interpreter_image {
             let mapping = transaction.reserve(
                 MappingKind::Interpreter,
@@ -98,7 +100,7 @@ where
         } else {
             None
         };
-        Self::phase_finish(&diagnostics, LoaderPhase::InterpreterStage, started);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::InterpreterStage, started);
         let stack_overread_size = match request.architecture {
             GuestArchitecture::Aarch64 => 0,
             GuestArchitecture::X86_64 => self.limits.x86_stack_overread_size,
@@ -153,7 +155,7 @@ where
             &tls,
         )?;
         let main_projection = ImageProjection::build(&main_plan, &main)?;
-        let started = Self::phase_start(&diagnostics);
+        let started = Self::phase_start(diagnostics.as_ref());
         let initial_stack = StackPlanner::new(self.limits.stack).plan(StackRequest {
             image: &main_plan,
             load_bias: main_bias,
@@ -191,7 +193,7 @@ where
                 .ok_or(LoadError::InvalidReservation)?,
             Protection::from_bits(Protection::READ | Protection::WRITE),
         )?;
-        Self::phase_finish(&diagnostics, LoaderPhase::StackPlan, started);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::StackPlan, started);
         let usable_stack = LoadedMapping {
             address: stack_mapping
                 .address()
@@ -207,9 +209,9 @@ where
                 size: stack_overread_size,
             })
         };
-        let started = Self::phase_start(&diagnostics);
+        let started = Self::phase_start(diagnostics.as_ref());
         transaction.commit()?;
-        Self::phase_finish(&diagnostics, LoaderPhase::Commit, started);
+        Self::phase_finish(diagnostics.as_ref(), LoaderPhase::Commit, started);
         Ok(LoadedProcess {
             main: LoadedMapping::from_reserved(&main),
             interpreter: interpreter.as_ref().map(LoadedMapping::from_reserved),

@@ -178,6 +178,8 @@ impl StackPlanner {
         Self { limits }
     }
 
+    // Consumes the planner so one plan cannot be built twice from the same request.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn plan(self, request: StackRequest<'_>) -> Result<InitialStack, StackError> {
         self.validate_counts(&request)?;
         self.validate_strings(&request)?;

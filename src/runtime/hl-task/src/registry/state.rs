@@ -382,6 +382,8 @@ impl TaskRegistry {
         Ok(entry)
     }
 
+    // Result keeps this uniform with its fallible siblings in the same recovery path.
+    #[allow(clippy::unnecessary_wraps)]
     pub(super) fn refresh_orphaned_groups(state: &mut State) -> Result<Vec<ProcessId>, TaskError> {
         let groups = state
             .process_groups

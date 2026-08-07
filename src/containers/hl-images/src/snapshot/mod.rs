@@ -245,6 +245,7 @@ impl Snapshots {
     }
 
     fn publication(&self, id: &Id) -> Result<Publication> {
+        const MAX_PUBLICATION_BYTES: u64 = 128 * 1024;
         let path = self.publication_path(id);
         let file = File::open(&path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -256,7 +257,6 @@ impl Snapshots {
                 }
             }
         })?;
-        const MAX_PUBLICATION_BYTES: u64 = 128 * 1024;
         let mut bytes = Vec::new();
         file.take(MAX_PUBLICATION_BYTES + 1).read_to_end(&mut bytes).at(&path)?;
         if bytes.len() as u64 > MAX_PUBLICATION_BYTES {

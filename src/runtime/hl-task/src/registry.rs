@@ -54,6 +54,8 @@ struct Process {
     threads: BTreeSet<ThreadId>,
     leader: ThreadId,
     session: SessionId,
+    // Named for the POSIX concept, not for the struct.
+    #[allow(clippy::struct_field_names)]
     process_group: ProcessGroupId,
     /// `true` after this process alone has disassociated from its session's
     /// controlling terminal. The terminal-to-session binding is owned by the
@@ -247,6 +249,8 @@ impl TaskRegistry {
         })
     }
 
+    // Consumes the plan so it cannot be committed and rolled back both.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn commit_clone_thread(&self, plan: CloneThreadPlan) -> Result<ThreadId, TaskError> {
         let mut state = self.lock();
         let thread = Self::thread_mut(&mut state, plan.thread)?;
@@ -258,6 +262,8 @@ impl TaskRegistry {
         Ok(plan.thread)
     }
 
+    // Consumes the plan so it cannot be committed and rolled back both.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn rollback_clone_thread(&self, plan: CloneThreadPlan) -> Result<(), TaskError> {
         let mut state = self.lock();
         let thread = Self::thread(&state, plan.thread)?;
@@ -359,6 +365,8 @@ impl TaskRegistry {
         })
     }
 
+    // Consumes the plan so it cannot be committed and rolled back both.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn commit_fork_process(&self, plan: ForkProcessPlan) -> Result<(ProcessId, ThreadId), TaskError> {
         self.commit_fork(&plan, None)
     }
@@ -371,6 +379,8 @@ impl TaskRegistry {
         self.commit_fork(plan, Some(sink))
     }
 
+    // Takes the sink by value so a committed fork owns its share of the handle.
+    #[allow(clippy::needless_pass_by_value)]
     fn commit_fork(
         &self,
         plan: &ForkProcessPlan,
@@ -405,6 +415,8 @@ impl TaskRegistry {
         Ok((plan.process, plan.thread))
     }
 
+    // Consumes the plan so it cannot be committed and rolled back both.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn rollback_fork_process(&self, plan: ForkProcessPlan) -> Result<(), TaskError> {
         let mut state = self.lock();
         Self::validate_fork_plan(&state, &plan)?;

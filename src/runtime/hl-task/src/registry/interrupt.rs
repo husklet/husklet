@@ -4,6 +4,8 @@ use super::TaskRegistry;
 use crate::{InterruptSink, SignalDisposition, SignalMask, TaskError, ThreadId, ThreadLifecycle};
 
 impl TaskRegistry {
+    // Takes the sink by value so the registry owns its share of the handle.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn register_interrupt(&self, thread: ThreadId, sink: Arc<dyn InterruptSink>) -> Result<(), TaskError> {
         let state = self.lock();
         let task = Self::thread(&state, thread)?;

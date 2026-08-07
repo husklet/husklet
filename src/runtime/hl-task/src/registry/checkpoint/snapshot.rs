@@ -93,7 +93,7 @@ impl TaskRegistry {
                 || !user_namespaces.contains_key(&process.namespaces.user)
                 || !uts_namespaces.contains_key(&process.namespaces.uts)
                 || !Self::threads_match_process(process.id, &thread_set, &threads)
-                || sessions.get(&process.session).is_none()
+                || !sessions.contains_key(&process.session)
                 || !group_valid
             {
                 return Err(TaskError::InvalidSnapshot);
@@ -138,14 +138,14 @@ impl TaskRegistry {
             }
         }
         for event in &snapshot.wait_events {
-            if processes.get(&event.parent).is_none()
+            if !processes.contains_key(&event.parent)
                 || !Self::valid_child_link(event.parent, event.child, None, &processes)
             {
                 return Err(TaskError::InvalidSnapshot);
             }
         }
         for event in &snapshot.child_events {
-            if processes.get(&event.parent).is_none()
+            if !processes.contains_key(&event.parent)
                 || !Self::valid_child_link(event.parent, event.child, Some(event.process_group), &processes)
             {
                 return Err(TaskError::InvalidSnapshot);

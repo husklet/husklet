@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 const WORDS: usize = 16;
 
 /// Immutable logical CPU topology advertised by one engine instance.
@@ -83,7 +84,7 @@ impl CpuAffinity {
         let highest = groups.iter().rposition(|word| *word != 0).unwrap_or(0);
         let mut output = format!("{:x}", groups[highest]);
         for word in groups[..highest].iter().rev() {
-            output.push_str(&format!(",{word:08x}"));
+            let _ = write!(output, ",{word:08x}");
         }
         output
     }

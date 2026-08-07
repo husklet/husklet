@@ -236,6 +236,7 @@ impl Registry {
         Ok(TraceWait::Event(event))
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(crate) fn peek(&self, tracer: ProcessId, tracee: Option<ProcessId>) -> Result<TraceWait, TraceError> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         Ok(state

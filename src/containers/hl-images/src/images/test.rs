@@ -467,6 +467,7 @@ fn materialize_publishes_and_forks_the_chain_in_one_operation() {
 
 #[test]
 fn concurrent_workers_materialize_one_image_without_losing_the_chain() {
+    const WORKERS: usize = 6;
     let root = tempfile::tempdir().unwrap();
     let platform = Platform::linux_arm64();
     let runtime = RuntimeConfig {
@@ -482,7 +483,6 @@ fn concurrent_workers_materialize_one_image_without_losing_the_chain() {
         .commit(&layer("bin/sh", b"shell"), &runtime, &platform, &name)
         .unwrap();
 
-    const WORKERS: usize = 6;
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(WORKERS * 2));
     let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let failures = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

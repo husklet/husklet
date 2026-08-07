@@ -310,6 +310,8 @@ impl TaskRegistry {
         }))
     }
 
+    // Consumes the prepared wait so it cannot be committed twice.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn commit_signal_wait(&self, prepared: crate::PreparedSignalWait) -> Result<bool, TaskError> {
         let mut state = self.lock();
         Self::ensure_thread_unreserved(&state, prepared.thread)?;
