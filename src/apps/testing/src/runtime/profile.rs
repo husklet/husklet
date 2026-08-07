@@ -19,6 +19,13 @@ impl Requested {
         }
     }
 
+    const fn build(self) -> &'static str {
+        match self {
+            Self::Release => "cargo build --release -p testing --bins",
+            Self::Debug => "cargo build -p testing --bins",
+        }
+    }
+
     /// The engine is linked into this binary, so the requested profile is an assertion about it.
     pub(crate) fn require(self) -> Result<(), Error> {
         if self.name() == PROFILE {
@@ -26,10 +33,10 @@ impl Requested {
         }
         Err(format!(
             "runtime sweep requested a {} engine but this runner was built as {PROFILE}; \
-             build it with `cargo build --profile {} -p testing --bins` and run that binary, \
+             build it with `{}` and run that binary, \
              or pass --engine-profile {PROFILE} to accept {PROFILE} timings",
             self.name(),
-            self.name()
+            self.build()
         )
         .into())
     }
